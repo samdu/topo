@@ -544,14 +544,20 @@ final class Harness {
     /// app group under it before the app ever saw it — unless that nonce is already on the line
     /// or already in the log, so a cue drained twice is one turn. Answers whether the nonce is on
     /// the line or in the log now, which is when its record may go. Only a harness that has read
-    /// the log (`hasRead`) knows what the log holds.
+    /// the log (`hasRead`) knows what the log holds. `whole` words go on the line as they are,
+    /// their ends untrimmed: a share's, which are what the person and another app handed over.
     @discardableResult
-    func willSend(_ text: String, nonce: String) -> Bool {
-        if said(nonce) || pending.contains(where: { $0.nonce == nonce }) { return true }
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return false }
-        pending.append(Outgoing(text: text, nonce: nonce))
+    func willSend(_ text: String, nonce: String, whole: Bool = false) -> Bool {
+        if holds(nonce) { return true }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        pending.append(Outgoing(text: whole ? text : trimmed, nonce: nonce))
         return true
+    }
+
+    /// Whether a turn under `nonce` is on the line or in the log.
+    func holds(_ nonce: String) -> Bool {
+        said(nonce) || pending.contains { $0.nonce == nonce }
     }
 
     /// That turn was said into the microphone and its reply is one to read aloud, which is what

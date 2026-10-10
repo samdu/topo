@@ -92,6 +92,7 @@ targets:
       - package: TopoMascot
       # The home-screen and lock-screen widgets, embedded in the app.
       - target: TopoWidgets
+      - target: TopoShare
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -192,6 +193,41 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.widgets
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  # Topo in another app's share sheet (docs/harness.md, *The share sheet*): it keeps the one thing
+  # shared in the app group for the app to make a turn of, and nothing else. The activation rule
+  # is a dictionary naming what it takes, one of each, never a predicate that takes everything.
+  TopoShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Apps/Share
+      - Apps/Shared/ShareStore.swift
+      - Apps/Shared/ShareIntake.swift
+      - Apps/Shared/ShareSheetModel.swift
+    info:
+      path: Apps/Share/Info.plist
+      properties:
+        CFBundleDisplayName: Topo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsImageWithMaxCount: 1
+              NSExtensionActivationSupportsFileWithMaxCount: 1
+    entitlements:
+      path: Apps/Share/TopoShare.entitlements
+      properties:
+        com.apple.security.application-groups: [group.zone.hexagon.topo]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.share
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   TopoWatch:
