@@ -2,14 +2,17 @@
 # Reserves the one simulator an agent runs on through Xcode's MCP tools, `Topo Agent`
 # (docs/xcode-mcp.md), for the session that calls it.
 #
-#   scripts/agent-simulator.sh take      # prints the udid; exit 3 when another session holds it
+#   scripts/agent-simulator.sh take      # prints the udid; exit 3 when another session holds it,
+#                                        # 4 when this one already does
 #   scripts/agent-simulator.sh release   # shuts the device down and gives it up
-#   scripts/agent-simulator.sh holder    # who holds it, if anyone
+#   scripts/agent-simulator.sh holder    # who holds it, if anyone; runs from anywhere
 #
 # The holder is the session, not this script: an agent's shell lives for one command, so nothing
 # a command holds open outlasts it. The reservation is a file naming the session's process (the
-# nearest `claude` above this script, which an agent's subagents share with it) and when that
-# process started, and it stands for as long as that process lives. Run from anything else, the
+# nearest `claude` above this script) and when that process started, and it stands for as long
+# as that process lives. A session's subagents are that process too and cannot be told from it,
+# so the main session alone takes and releases, and a second take by the holder is refused: a
+# take that succeeded is the only thing that says the device is the caller's. Run from anything else, the
 # script wants TOPO_AGENT_SESSION_PID, the pid of a process that lasts as long as the use does:
 # the caller's own shell is gone at once under `$(...)`, and a holder that is gone holds nothing. A reservation whose process
 # is gone is nobody's, and `take` takes it over. Reading and writing the file happen under a
@@ -67,16 +70,22 @@ mkdir -p "$state"
 exec 9> "$state/mutex"
 lockf -s -t 30 9 || die "another agent-simulator.sh has held $state/mutex for 30 seconds."
 
+if [ "$cmd" = holder ]; then
+  if held; then echo "held by $(held_by)"; else echo "free"; fi
+  exit 0
+fi
+
 me="$(session_pid)" || exit 1
 my_start="$(started "$me")"
 [ -n "$my_start" ] || die "the session's process ($me) is not running."
 
 case "$cmd" in
-  holder)
-    if held; then echo "held by $(held_by)"; else echo "free"; fi ;;
-
   take)
-    if held && { [ "$(held_pid)" != "$me" ] || [ "$(held_start)" != "$my_start" ]; }; then
+    if held; then
+      if [ "$(held_pid)" = "$me" ] && [ "$(held_start)" = "$my_start" ]; then
+        echo "agent-simulator: $name is already this session's ($(held_by)), taken once and not again. A subagent leaves it to the main session." >&2
+        exit 4
+      fi
       echo "agent-simulator: $name is held by $(held_by). Do without it: build and read through the bridge, and run nothing." >&2
       exit 3
     fi
@@ -86,7 +95,7 @@ case "$cmd" in
       count=*) die "more than one simulator is named \"$name\" (${udid#count=}); there is to be one." ;;
     esac
     # Nobody holds it, so a booted device is what a session that died left running.
-    held || shutdown_if_booted "$udid"
+    shutdown_if_booted "$udid"
     printf '%s\n%s\n%s\n' "$me" "$my_start" \
       "pid $me, $(git rev-parse --abbrev-ref HEAD 2>/dev/null || basename "$PWD"), since $(date '+%H:%M')" > "$holder.new"
     mv "$holder.new" "$holder"

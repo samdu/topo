@@ -36,12 +36,12 @@ check "nobody holds it at first" "$(as "$a" holder)" free
 check "take prints the udid of the one device of that name" "$(as "$a" take)" UDID-1
 as "$b" take >/dev/null; check "a second session is refused" "$?" 3
 echo Booted > "$fake/state"
-check "the holder taking again keeps it" "$(as "$a" take)" UDID-1
-check "the holder taking again leaves its booted device alone" "$(cat "$fake/state")$(cat "$fake/calls")" Booted
+as "$a" take >/dev/null; check "the holder is refused a second take" "$?" 4
+check "and its booted device is left alone" "$(cat "$fake/state")$(cat "$fake/calls")" Booted
 # The holder is the same process whatever zone and locale a command reads its start time in.
 TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 as "$b" take >/dev/null; check "a session in another zone and locale is refused" "$?" 3
 check "and shut nothing down" "$(cat "$fake/state")$(cat "$fake/calls")" Booted
-check "the holder is still the holder there" "$(TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 as "$a" take)" UDID-1
+TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 as "$a" take >/dev/null; check "the holder is still the holder there" "$?" 4
 as "$b" release; check "a session cannot release another's" "$?" 3
 as "$a" holder | grep -q "pid $a" || { echo "FAIL: holder does not name the session"; fail=1; }
 
@@ -76,9 +76,16 @@ as "$a" bogus; check "an unknown command is a usage error" "$?" 2
 # Outside a Claude Code session with no pid named, there is no session to hold it.
 kill "${pids[@]}" 2>/dev/null; pids=()
 env -u TOPO_AGENT_SESSION_PID FAKE_DIR="$fake" PATH="$fake:$PATH" TOPO_AGENT_STATE="$fake/state.d" \
-  /usr/bin/perl -e 'use POSIX; if (fork) { exit } setsid; exec @ARGV' /bin/sh -c "scripts/agent-simulator.sh take >/dev/null 2>&1; echo \$? > '$fake/orphan'"
+  /usr/bin/perl -e 'use POSIX; if (fork) { exit } setsid; exec @ARGV' /bin/sh -c "scripts/agent-simulator.sh holder > '$fake/orphan-holder' 2>&1; scripts/agent-simulator.sh take >/dev/null 2>&1; echo \$? > '$fake/orphan'"
 n=0; while [ ! -s "$fake/orphan" ] && [ "$n" -lt 500 ]; do n=$((n + 1)); /bin/sleep 0.01; done
 check "a caller with no session is refused" "$(cat "$fake/orphan" 2>/dev/null)" 1
+check "and can still ask who holds it" "$(cat "$fake/orphan-holder" 2>/dev/null)" free
+
+# With no pid named, the session is the nearest process above the script that is named claude.
+env -u TOPO_AGENT_SESSION_PID FAKE_DIR="$fake" PATH="$fake:$PATH" TOPO_AGENT_STATE="$fake/state.d" \
+  /bin/bash -c "exec -a claude /bin/bash -c 'echo \$\$ > \"$fake/claude.pid\"; scripts/agent-simulator.sh take > \"$fake/claude.out\"; exit \$?'"
+check "a take under a process named claude succeeds" "$? $(cat "$fake/claude.out")" "0 UDID-1"
+check "and its holder is that process" "$(sed -n 1p "$fake/state.d/holder")" "$(cat "$fake/claude.pid")"
 
 [ "$fail" = 0 ] && echo "agent-simulator-test: ok"
 exit "$fail"
