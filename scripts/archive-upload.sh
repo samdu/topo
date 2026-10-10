@@ -52,36 +52,25 @@ commit="$(git rev-parse HEAD)"
 [ -n "$(git branch -r --contains "$commit")" ] \
   || { echo "$commit is on no remote branch; push it first, since the About screen points at it" >&2; exit 1; }
 
-rm -rf "$archive"
-xcodebuild archive \
-  -project "$project" \
-  -scheme "$scheme" \
-  -destination 'generic/platform=iOS' \
-  -archivePath "$archive" \
-  -allowProvisioningUpdates \
-  CURRENT_PROJECT_VERSION="$build" \
-  TOPO_SOURCE_COMMIT="$commit"
-
-xcodebuild -exportArchive \
-  -archivePath "$archive" \
-  -exportOptionsPlist "$export_options" \
-  -exportPath "$out/export" \
-  -allowProvisioningUpdates
-
-ipa="$(/usr/bin/find "$out/export" -maxdepth 1 -name '*.ipa' -print -quit)"
-[ -n "$ipa" ] || { echo "no .ipa in $out/export" >&2; exit 1; }
-echo "==> $ipa"
-
-[ "$upload" = yes ] || [ "$validate" = yes ] || exit 0
-
-# The key: from the environment, or from the login keychain, in that order.
-# Nothing here writes it anywhere; the .p8 is put where altool looks and
-# taken away again on the way out.
+# The key: from the environment, or from the login keychain, in that order,
+# and in whatever shape it was kept (scripts/asc-pem.sh). Nothing here writes
+# it anywhere but a folder of its own, which is where altool looks and which
+# is taken away on the way out. With it xcodebuild registers a new target's
+# App ID and makes its profile with no Apple ID signed in to Xcode; without it
+# the archive is whatever Xcode's own accounts allow, and there is no upload.
 key_id="${ASC_KEY_ID:-$(security find-generic-password -s topo-asc-key-id -w 2>/dev/null || true)}"
 issuer="${ASC_ISSUER_ID:-$(security find-generic-password -s topo-asc-issuer-id -w 2>/dev/null || true)}"
 private_key="${ASC_PRIVATE_KEY:-$(security find-generic-password -s topo-asc-private-key -w 2>/dev/null || true)}"
 
-if [ -z "$key_id" ] || [ -z "$issuer" ] || [ -z "$private_key" ]; then
+auth=()
+if [ -n "$key_id" ] && [ -n "$issuer" ] && [ -n "$private_key" ]; then
+  keys="$(mktemp -d)"
+  trap 'rm -rf "$keys"' EXIT
+  ( umask 077; printf '%s' "$private_key" | scripts/asc-pem.sh > "$keys/AuthKey_$key_id.p8" ) \
+    || { echo "the App Store Connect API key is not a .p8 in any shape scripts/asc-pem.sh reads" >&2; exit 1; }
+  export API_PRIVATE_KEYS_DIR="$keys"
+  auth=(-authenticationKeyPath "$keys/AuthKey_$key_id.p8" -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer")
+elif [ "$upload" = yes ] || [ "$validate" = yes ]; then
   cat >&2 <<'MISSING'
 No App Store Connect API key.
 
@@ -92,11 +81,27 @@ MISSING
   exit 1
 fi
 
-keys="$(mktemp -d)"
-trap 'rm -rf "$keys"' EXIT
-printf '%s\n' "$private_key" > "$keys/AuthKey_$key_id.p8"
-chmod 600 "$keys/AuthKey_$key_id.p8"
-export API_PRIVATE_KEYS_DIR="$keys"
+rm -rf "$archive"
+xcodebuild archive \
+  -project "$project" \
+  -scheme "$scheme" \
+  -destination 'generic/platform=iOS' \
+  -archivePath "$archive" \
+  -allowProvisioningUpdates ${auth[@]+"${auth[@]}"} \
+  CURRENT_PROJECT_VERSION="$build" \
+  TOPO_SOURCE_COMMIT="$commit"
+
+xcodebuild -exportArchive \
+  -archivePath "$archive" \
+  -exportOptionsPlist "$export_options" \
+  -exportPath "$out/export" \
+  -allowProvisioningUpdates ${auth[@]+"${auth[@]}"}
+
+ipa="$(/usr/bin/find "$out/export" -maxdepth 1 -name '*.ipa' -print -quit)"
+[ -n "$ipa" ] || { echo "no .ipa in $out/export" >&2; exit 1; }
+echo "==> $ipa"
+
+[ "$upload" = yes ] || [ "$validate" = yes ] || exit 0
 
 if [ "$validate" = yes ]; then
   echo "==> validating"

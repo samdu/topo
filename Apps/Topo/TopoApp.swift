@@ -103,7 +103,10 @@ struct TopoApp: App {
         harness.onLanded = { [weak harness] reply in defaultSurface.landed(reply, in: harness?.turns ?? []) }
         let widgetCues = WidgetCues(harness: harness)
         _widgetCues = State(initialValue: widgetCues)
-        _shares = State(initialValue: ShareInbox(line: harness))
+        let shares = ShareInbox(line: harness)
+        _shares = State(initialValue: shares)
+        ShortcutIntents.drain = { await shares.drain() }
+        ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared

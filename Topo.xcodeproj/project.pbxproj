@@ -169,6 +169,7 @@
 		525CF069E985418F523B38D8 /* GuestProcessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */; };
 		5266073D3EDF719493DE1B17 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
 		52E7F94C1E26D5AD0B6CA111 /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
+		536D00EDF961925362FB496C /* ShortcutIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6F7B81335EA2A24DA1EBA7C /* ShortcutIntents.swift */; };
 		540B63D1F31F1F2BCA246DBF /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A03D6163E6AC87912A0A8E /* SettingsView.swift */; };
 		5580D93D5A0D00C7C1E8A95C /* SpokenTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9217F79B47B4554A5839E32D /* SpokenTurnTests.swift */; };
 		55E52A029FCDDC4ACE968116 /* SettledSpeechTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */; };
@@ -853,6 +854,7 @@
 		C451F4F8393DE072AF04D71A /* GuestToolScriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestToolScriptTests.swift; sourceTree = "<group>"; };
 		C59D3ACBB326C6FA9743600D /* Scripted.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scripted.swift; sourceTree = "<group>"; };
 		C6BCB70D375EC37F314FCB10 /* VaultMount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMount.swift; sourceTree = "<group>"; };
+		C6F7B81335EA2A24DA1EBA7C /* ShortcutIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutIntents.swift; sourceTree = "<group>"; };
 		C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		C7BD599AC4315251579CE778 /* ControlDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlDefaults.swift; sourceTree = "<group>"; };
 		C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -1078,6 +1080,7 @@
 				9821C547C8C88D0A2C6D265A /* PerfRun.swift */,
 				B1FECB130A1FD32EF317BD69 /* ScreenShareSection.swift */,
 				99BDC10D89B3058B7BEDD787 /* ShareInbox.swift */,
+				C6F7B81335EA2A24DA1EBA7C /* ShortcutIntents.swift */,
 				DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */,
 				26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
@@ -2621,6 +2624,7 @@
 				CB39D4212AA7C90899CB9D17 /* ShareIntake.swift in Sources */,
 				AA9FF5984687F3FC10F4F1AE /* ShareSheetModel.swift in Sources */,
 				02DA0AFA59BA220F3523C0D7 /* ShareStore.swift in Sources */,
+				536D00EDF961925362FB496C /* ShortcutIntents.swift in Sources */,
 				3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */,
 				4D8CA320675F3FC531E9132D /* Speakable.swift in Sources */,
 				898DCC65F9AF024811776C52 /* Speaker.swift in Sources */,
