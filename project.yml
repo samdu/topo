@@ -92,6 +92,8 @@ targets:
       - package: TopoMascot
       # The home-screen and lock-screen widgets, embedded in the app.
       - target: TopoWidgets
+      # The screen share's broadcast extension, embedded in the app.
+      - target: TopoBroadcast
       - target: TopoShare
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
@@ -193,6 +195,36 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.widgets
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  # Topo's screen share (docs/guest.md, `topo screen`): a ReplayKit broadcast upload extension the
+  # person starts from the system's sheet. It keeps stills of the screen in the app group for
+  # `topo screen` and nothing else; it holds the app group and reaches no network.
+  TopoBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Apps/Broadcast
+      - Apps/Shared/ScreenStore.swift
+      - Apps/Shared/ScreenSampler.swift
+      - Apps/Shared/ScreenWatch.swift
+    info:
+      path: Apps/Broadcast/Info.plist
+      properties:
+        CFBundleDisplayName: Topo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    entitlements:
+      path: Apps/Broadcast/TopoBroadcast.entitlements
+      properties:
+        com.apple.security.application-groups: [group.zone.hexagon.topo]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.broadcast
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   # Topo in another app's share sheet (docs/harness.md, *The share sheet*): it keeps the one thing

@@ -85,6 +85,7 @@ struct TopoApp: App {
             homeTool,
             PhotosTool(library: PhotoKitLibrary(), authorizer: PhotosAuthorizer(), broker: broker),
             FilesTool(picker: DocumentPicker(), drop: GuestVaultDrop()),
+            ScreenTool(),
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
@@ -222,6 +223,9 @@ struct TopoApp: App {
             // The primary, signed in, takes what other phones' records left on the watch.
             .onChange(of: roleSelector.role == .primary && signIn.phase == .signedIn, initial: true) { _, owner in
                 if owner { SurfaceSync.shared.sweep() }
+                // A screen share is taken only where the guest lives, and its stills go with
+                // the login or the role.
+                ScreenTool.follow(owner: owner, store: ScreenStore.shared(), home: GuestResident.homeDirectory)
                 // An image or a file can be shared only where the guest's home is.
                 if signIn.phase == .signedIn { shares.follow(from: .signedIn, to: .signedIn, guestIsHere: owner) }
             }
@@ -232,6 +236,8 @@ struct TopoApp: App {
                     Task { await widgetCues.drain() }
                     // What was shared from another app while Topo was away becomes a turn now.
                     Task { await shares.drain() }
+                    // A copy of a still whose ten minutes ran out while Topo was suspended goes now.
+                    Task.detached(priority: .utility) { ScreenTool.sweep(under: GuestResident.homeDirectory) }
                     LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
                     speaker.prepare()

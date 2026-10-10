@@ -494,6 +494,8 @@ struct Look: Equatable, Sendable {
         var tint = Theme.primary
         /// A code the person types somewhere else, as the Connections screen shows GitHub's.
         var codeFont = Font.system(.title2, design: .monospaced)
+        /// The side of the button a screen share is started from, the system's own.
+        var broadcastButton: CGFloat = 44
     }
     /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
     /// carries two flanks and, set into the middle of it, the microphone in its well. With the

@@ -272,6 +272,8 @@ enum LookDocument {
     private static func settings(_ value: inout Look.Settings, _ r: Reader) {
         r.colour("tint", &value.tint)
         r.font("codeFont", &value.codeFont)
+        // No smaller than a finger takes: the button is the only way a share is started here.
+        r.bounded("broadcastButton", &value.broadcastButton, in: 44...88)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {
