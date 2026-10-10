@@ -29,7 +29,7 @@ print("-----BEGIN PRIVATE KEY-----", *textwrap.wrap(body, 64), "-----END PRIVATE
 ')"
 
 # Base64 between the lines is not yet a key: openssl says whether it is one, and of the curve
-# App Store Connect signs with.
-printf '%s\n' "$pem" | openssl pkey -noout -text 2>/dev/null | grep -q '^Private-Key: (256 bit)' \
+# App Store Connect signs with, by its name, since secp256k1 is 256 bits too.
+printf '%s\n' "$pem" | openssl pkey -noout -text 2>/dev/null | grep -q '^ASN1 OID: prime256v1$' \
     || { echo "asc-pem: not a private key: what is between the lines is not a P-256 key" >&2; exit 1; }
 printf '%s\n' "$pem"

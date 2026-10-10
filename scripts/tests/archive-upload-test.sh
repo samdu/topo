@@ -49,11 +49,16 @@ state=none
 [ -z "${API_PRIVATE_KEYS_DIR:-}" ] || state="$(ls "$API_PRIVATE_KEYS_DIR")"
 echo "xcrun [$state] $*" >> "$CALLS"
 FAKE
-# The keychain holds nothing: what the test gives is all there is.
-printf '#!/bin/sh\nexit 44\n' > "$work/bin/security"
+# The keychain: an item is a file under $KEYCHAIN named for its service, and with none set it
+# holds nothing.
+cat > "$work/bin/security" <<'FAKE'
+#!/usr/bin/env bash
+[ "$1" = find-generic-password ] && [ "$2" = -s ] && [ "$4" = -w ] && [ -f "${KEYCHAIN:-/nowhere}/$3" ] || exit 44
+cat "$KEYCHAIN/$3"
+FAKE
 chmod +x "$work/bin/xcodebuild" "$work/bin/xcrun" "$work/bin/security"
 
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$work/key.p8" 2>/dev/null \
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/key.p8" 2>/dev/null \
     || { echo "FAIL: could not make a key to test with" >&2; exit 1; }
 hex="$(xxd -p "$work/key.p8" | tr -d '\n')"
 
@@ -76,6 +81,19 @@ grep -q '^xcrun \[AuthKey_KEYID12345.p8\] altool --upload-app .* --apiKey KEYID1
     || fail "altool was not given the key where it looks: $(cat "$work/with")"
 [ -z "$(ls "$work/tmp")" ] || fail "the key outlived the run: $(ls "$work/tmp")"
 
+# With the key in the keychain, as hex, and nothing in the environment, validating.
+mkdir -p "$work/keychain"
+printf 'KEYID12345\n' > "$work/keychain/topo-asc-key-id"
+printf 'an-issuer\n' > "$work/keychain/topo-asc-issuer-id"
+printf '%s\n' "$hex" > "$work/keychain/topo-asc-private-key"
+KEYCHAIN="$work/keychain" run "$work/kept" --validate || fail "a validation with the keychain's key failed: $(cat "$work/out")"
+[ "$(grep -c -- '^xcodebuild \[key\] .* -authenticationKeyPath .*/AuthKey_KEYID12345.p8 -authenticationKeyID KEYID12345 -authenticationKeyIssuerID an-issuer' "$work/kept")" = 2 ] \
+    || fail "the archive and the export were not each handed the keychain's key: $(cat "$work/kept")"
+grep -q '^xcrun \[AuthKey_KEYID12345.p8\] altool --validate-app .* --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/kept" \
+    || fail "altool was not asked to validate with the keychain's key: $(cat "$work/kept")"
+grep -q -- '--upload-app' "$work/kept" && fail "a validation uploaded"
+[ -z "$(ls "$work/tmp")" ] || fail "the keychain's key outlived the run: $(ls "$work/tmp")"
+
 # A key that is no key stops it before anything is built.
 if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY=deadbeef run "$work/bad"; then
     fail "what is not a key was taken as one"
@@ -90,6 +108,9 @@ grep -q -- '-authenticationKey' "$work/without" && fail "an archive with no key 
 if run "$work/refused" --upload; then fail "an upload with no key was not refused"; fi
 [ ! -s "$work/refused" ] || fail "an upload with no key built something first: $(cat "$work/refused")"
 grep -q 'No App Store Connect API key' "$work/out" || fail "the refusal does not say there is no key: $(cat "$work/out")"
+if run "$work/unasked" --validate; then fail "a validation with no key was not refused"; fi
+[ ! -s "$work/unasked" ] || fail "a validation with no key built something first: $(cat "$work/unasked")"
+grep -q 'No App Store Connect API key' "$work/out" || fail "the refusal of a validation does not say there is no key: $(cat "$work/out")"
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed" >&2; exit 1; }
-echo "archive-upload.sh: with a key kept as hex the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload is refused before anything is built"
+echo "archive-upload.sh: with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built"

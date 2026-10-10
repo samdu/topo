@@ -14,7 +14,7 @@ trap 'rm -rf "$work"' EXIT
 failures=0
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$work/key.p8" 2>/dev/null \
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/key.p8" 2>/dev/null \
     || { echo "FAIL: could not make a key to test with" >&2; exit 1; }
 want="$(openssl pkey -in "$work/key.p8" -pubout 2>/dev/null)"
 
@@ -40,12 +40,15 @@ printf -- '-----BEGIN PRIVATE KEY----- not base64! -----END PRIVATE KEY-----' > 
 printf -- '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n' > "$work/base64-no-key"
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/rsa" 2>/dev/null \
     || { echo "FAIL: could not make an RSA key to test with" >&2; exit 1; }
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp256k1 -pkeyopt ec_param_enc:named_curve -out "$work/another-curve" 2>/dev/null \
+    && openssl pkey -in "$work/another-curve" -noout 2>/dev/null \
+    || { echo "FAIL: could not make a secp256k1 key to test with" >&2; exit 1; }
 printf -- '-----BEGIN PRIVATE KEY-----\nAAAA\n' > "$work/no-end"
 cat "$work/key.p8" "$work/key.p8" > "$work/two"
 { cat "$work/key.p8"; printf -- '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n'; } > "$work/then-a-certificate"
 { cat "$work/key.p8"; echo 'and a note'; } > "$work/then-words"
 { echo 'a note and'; cat "$work/key.p8"; } > "$work/words-first"
-refused="empty an-id other-hex not-base64 base64-no-key rsa no-end two then-a-certificate then-words words-first"
+refused="empty an-id other-hex not-base64 base64-no-key rsa another-curve no-end two then-a-certificate then-words words-first"
 for shape in $refused; do
     if "$pem" < "$work/$shape" > "$work/$shape.out" 2> "$work/$shape.err"; then
         fail "$shape was taken as a key"
