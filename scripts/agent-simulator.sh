@@ -8,8 +8,10 @@
 #
 # The holder is the session, not this script: an agent's shell lives for one command, so nothing
 # a command holds open outlasts it. The reservation is a file naming the session's process (the
-# nearest `claude` above this script, or the calling shell when there is none) and when that
-# process started, and it stands for as long as that process lives. A reservation whose process
+# nearest `claude` above this script, which an agent's subagents share with it) and when that
+# process started, and it stands for as long as that process lives. Run from anything else, the
+# script wants TOPO_AGENT_SESSION_PID, the pid of a process that lasts as long as the use does:
+# the caller's own shell is gone at once under `$(...)`, and a holder that is gone holds nothing. A reservation whose process
 # is gone is nobody's, and `take` takes it over. Reading and writing the file happen under a
 # kernel lock (lockf(1), on descriptor 9) held only while this script runs, so of two sessions
 # that take at once exactly one gets the device.
@@ -21,20 +23,21 @@ holder="$state/holder"
 
 die() { echo "agent-simulator: $*" >&2; exit 1; }
 
-# The session's pid: TOPO_AGENT_SESSION_PID, else the nearest ancestor named claude, else the caller.
+# The session's pid: TOPO_AGENT_SESSION_PID, else the nearest ancestor named claude.
 session_pid() {
   if [ -n "${TOPO_AGENT_SESSION_PID:-}" ]; then echo "$TOPO_AGENT_SESSION_PID"; return; fi
   local pid="$PPID" comm
   while [ "${pid:-0}" -gt 1 ]; do
     comm="$(ps -o comm= -p "$pid" 2>/dev/null)" || break
-    if [ "$(basename "$comm")" = claude ]; then echo "$pid"; return; fi
+    if [ "${comm##*/}" = claude ]; then echo "$pid"; return; fi
     pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
   done
-  echo "$PPID"
+  die "this is not run from a Claude Code session; set TOPO_AGENT_SESSION_PID to a process that lasts as long as the use does."
 }
 
 # When a pid started, which with the pid names one process and not whichever has the number now.
-started() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+# In C and UTC, so sessions with different locales and zones read the same words.
+started() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//' || true; }
 
 # The holder file is three lines: pid, when that process started, and a line for people.
 held_pid() { sed -n 1p "$holder" 2>/dev/null; }
@@ -52,7 +55,8 @@ device() { # <field>
 }
 
 shutdown_if_booted() {
-  [ "$(device state)" = Shutdown ] || xcrun simctl shutdown "$1" >/dev/null 2>&1 || true
+  # 9>&-: a simctl that hangs after this script is killed does not keep the lock.
+  [ "$(device state)" = Shutdown ] || xcrun simctl shutdown "$1" >/dev/null 2>&1 9>&- || true
   [ "$(device state)" = Shutdown ] || die "$name ($1) would not shut down."
 }
 
@@ -63,7 +67,7 @@ mkdir -p "$state"
 exec 9> "$state/mutex"
 lockf -s -t 30 9 || die "another agent-simulator.sh has held $state/mutex for 30 seconds."
 
-me="$(session_pid)"
+me="$(session_pid)" || exit 1
 my_start="$(started "$me")"
 [ -n "$my_start" ] || die "the session's process ($me) is not running."
 

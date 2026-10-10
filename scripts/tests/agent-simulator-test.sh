@@ -6,8 +6,8 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 fail=0
 fake="$(mktemp -d -t agent-simulator-test)"
-a="" b=""
-trap 'kill $a $b 2>/dev/null; rm -rf "$fake"' EXIT
+a="" b="" pids=()
+trap 'kill $a $b ${pids[@]+"${pids[@]}"} 2>/dev/null; rm -rf "$fake"' EXIT
 cat > "$fake/xcrun" <<'FAKE'
 #!/bin/bash
 case "$*" in
@@ -35,7 +35,13 @@ check() { # <what> <got> <want>
 check "nobody holds it at first" "$(as "$a" holder)" free
 check "take prints the udid of the one device of that name" "$(as "$a" take)" UDID-1
 as "$b" take >/dev/null; check "a second session is refused" "$?" 3
+echo Booted > "$fake/state"
 check "the holder taking again keeps it" "$(as "$a" take)" UDID-1
+check "the holder taking again leaves its booted device alone" "$(cat "$fake/state")$(cat "$fake/calls")" Booted
+# The holder is the same process whatever zone and locale a command reads its start time in.
+TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 as "$b" take >/dev/null; check "a session in another zone and locale is refused" "$?" 3
+check "and shut nothing down" "$(cat "$fake/state")$(cat "$fake/calls")" Booted
+check "the holder is still the holder there" "$(TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 as "$a" take)" UDID-1
 as "$b" release; check "a session cannot release another's" "$?" 3
 as "$a" holder | grep -q "pid $a" || { echo "FAIL: holder does not name the session"; fail=1; }
 
@@ -58,7 +64,7 @@ check "a reused pid does not hold it" "$(as "$b" take)" UDID-1
 as "$b" release
 
 # Of several sessions taking at once, one gets it.
-pids=() takes=() winners=0
+takes=() winners=0
 for i in 1 2 3 4 5 6; do sleep 600 & pids+=($!); disown; done
 for p in "${pids[@]}"; do ( as "$p" take >/dev/null ) & takes+=($!); done
 for t in "${takes[@]}"; do wait "$t" && winners=$((winners + 1)); done
@@ -66,6 +72,13 @@ kill "${pids[@]}" 2>/dev/null
 check "sessions that took at once and got it" "$winners" 1
 
 as "$a" bogus; check "an unknown command is a usage error" "$?" 2
+
+# Outside a Claude Code session with no pid named, there is no session to hold it.
+kill "${pids[@]}" 2>/dev/null; pids=()
+env -u TOPO_AGENT_SESSION_PID FAKE_DIR="$fake" PATH="$fake:$PATH" TOPO_AGENT_STATE="$fake/state.d" \
+  /usr/bin/perl -e 'use POSIX; if (fork) { exit } setsid; exec @ARGV' /bin/sh -c "scripts/agent-simulator.sh take >/dev/null 2>&1; echo \$? > '$fake/orphan'"
+n=0; while [ ! -s "$fake/orphan" ] && [ "$n" -lt 500 ]; do n=$((n + 1)); /bin/sleep 0.01; done
+check "a caller with no session is refused" "$(cat "$fake/orphan" 2>/dev/null)" 1
 
 [ "$fail" = 0 ] && echo "agent-simulator-test: ok"
 exit "$fail"
