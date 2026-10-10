@@ -207,6 +207,21 @@ else
     done
 fi
 
+# The Shortcuts actions, which reach the Shortcuts app only through the metadata the build
+# extracts: an intent the extraction skipped compiles and is offered nowhere.
+actions="$app/Metadata.appintents/extract.actionsdata"
+for intent in AskTopoIntent FollowUpIntent QuickTaskIntent; do
+    if [ "$(plutil -extract "actions.$intent.identifier" raw -o - -- "$actions" 2>/dev/null || true)" != "$intent" ]; then
+        echo "$app's App Intents metadata does not name $intent; Shortcuts would not offer it" >&2
+        status=1
+    fi
+done
+shortcuts="$(plutil -extract autoShortcuts raw -o - -- "$actions" 2>/dev/null || true)"
+if [ "$shortcuts" != "3" ]; then
+    echo "$app's App Intents metadata holds '${shortcuts:-no}' App Shortcuts, not the three Topo offers" >&2
+    status=1
+fi
+
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2

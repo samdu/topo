@@ -118,7 +118,12 @@ final class ShareInbox {
                 }
                 path = placed.path
             }
-            guard let text = Self.text(share, path: path), line.willSend(text, nonce: share.nonce, whole: true) else { continue }
+            guard let text = Self.text(share, path: path) else {
+                // A task this build does not name has no words and never will.
+                if share.kind == .task { store.remove(nonce: share.nonce) }
+                continue
+            }
+            guard line.willSend(text, nonce: share.nonce, whole: true) else { continue }
             store.remove(nonce: share.nonce)
             queued = true
         }
@@ -156,6 +161,12 @@ final class ShareInbox {
         case .link:
             guard let link = share.text?.trimmingCharacters(in: .whitespacesAndNewlines), !link.isEmpty else { return nil }
             shared = "[Shared with Topo from another app: a link]\n\(link)"
+        case .prompt:
+            guard let text = share.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            shared = "[Sent to Topo by a Shortcut]\n\(text)"
+        case .task:
+            // The app's own words, so nothing marks them.
+            return share.text.flatMap(QuickTask.init(rawValue:))?.words
         case .image, .file:
             guard let path else { return nil }
             let what = share.kind == .image ? "an image" : "a file"

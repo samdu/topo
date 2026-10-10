@@ -42,6 +42,9 @@ make_app() {
     plutil -insert CFBundleExecutable -string TopoShare "$app/PlugIns/TopoShare.appex/Info.plist"
     plutil -insert CFBundleIdentifier -string zone.hexagon.topo.share "$app/PlugIns/TopoShare.appex/Info.plist"
     plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.share-services","NSExtensionPrincipalClass":"TopoShare.ShareViewController","NSExtensionAttributes":{"NSExtensionActivationRule":{"NSExtensionActivationSupportsText":true,"NSExtensionActivationSupportsWebURLWithMaxCount":1,"NSExtensionActivationSupportsImageWithMaxCount":1,"NSExtensionActivationSupportsFileWithMaxCount":1}}}' "$app/PlugIns/TopoShare.appex/Info.plist"
+    mkdir -p "$app/Metadata.appintents"
+    printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent"},"FollowUpIntent":{"identifier":"FollowUpIntent"},"QuickTaskIntent":{"identifier":"QuickTaskIntent"}},"autoShortcuts":[{},{},{}]}' \
+        > "$app/Metadata.appintents/extract.actionsdata"
     printf '                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n' > "$app/LICENSE"
 }
 
@@ -137,6 +140,24 @@ for case in $cases; do
         fail "a product whose share extension's rule is wrong ($case) passed"
     elif [[ "$errors" != *"TopoShare.appex"* ]]; then
         fail "the refusal of $case does not name TopoShare.appex: $errors"
+    fi
+done
+
+# The Shortcuts actions: metadata the build did not make, one that leaves an action out, and one
+# with an App Shortcut short.
+make_app "$work/no-intents/Topo.app"
+rm -r "$work/no-intents/Topo.app/Metadata.appintents"
+make_app "$work/intent-short/Topo.app"
+printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent"},"QuickTaskIntent":{"identifier":"QuickTaskIntent"}},"autoShortcuts":[{},{},{}]}' \
+    > "$work/intent-short/Topo.app/Metadata.appintents/extract.actionsdata"
+make_app "$work/shortcut-short/Topo.app"
+printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent"},"FollowUpIntent":{"identifier":"FollowUpIntent"},"QuickTaskIntent":{"identifier":"QuickTaskIntent"}},"autoShortcuts":[{},{}]}' \
+    > "$work/shortcut-short/Topo.app/Metadata.appintents/extract.actionsdata"
+for case in no-intents intent-short shortcut-short; do
+    if errors="$("$check" "$work/$case/Topo.app" 2>&1 >/dev/null)"; then
+        fail "a product whose App Intents metadata is wrong ($case) passed"
+    elif [[ "$errors" != *"App Intents metadata"* ]]; then
+        fail "the refusal of $case does not name the App Intents metadata: $errors"
     fi
 done
 
@@ -238,4 +259,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex or TopoShare.appex fails, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex or TopoShare.appex fails, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions or holds fewer than three App Shortcuts fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
