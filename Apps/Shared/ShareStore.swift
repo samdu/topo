@@ -1,15 +1,20 @@
 #if os(iOS)
 import Foundation
 
-/// One thing the person shared with Topo from another app's share sheet: what it is, what they
-/// wrote about it, and never a turn's text, which the app writes when it puts the share on the
-/// line (`ShareInbox`).
+/// One thing handed to Topo from outside it, to be a turn: what the person shared from another
+/// app's share sheet, with what they wrote about it, or what a Shortcut sent (`ShortcutIntents`).
+/// Never a turn's text, which the app writes when it puts the share on the line (`ShareInbox`).
 struct Share: Codable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case text, link, image, file
+        /// A Shortcut's prompt, in `text`: words from wherever the Shortcut took them.
+        case prompt
+        /// A quick task a Shortcut asked for, its `QuickTask` name in `text`: the words are the
+        /// app's own.
+        case task
     }
 
-    /// The nonce the share's turn goes under, minted by the extension, so a share drained twice
+    /// The nonce the share's turn goes under, minted by the extension or the intent that kept it, so a share drained twice
     /// is one turn.
     var nonce: String
     /// The login it was shared under (`ShareStore.Door.login`): a share of any other is never sent.
@@ -56,6 +61,20 @@ struct Share: Codable, Equatable, Sendable {
     }
 }
 
+/// The tasks a Shortcut can ask for by name. A task carries no words from outside: the turn it
+/// becomes is written here.
+enum QuickTask: String, CaseIterable, Sendable {
+    case today, due, forgot
+
+    var words: String {
+        switch self {
+        case .today: "Give me today's briefing: what is on my calendar, what is due, and anything else I should know about today."
+        case .due: "What is due? Go through my reminders and my calendar and tell me what needs doing first."
+        case .forgot: "What did I forget this week?"
+        }
+    }
+}
+
 /// Why a share was not kept, in words the sheet shows the person.
 enum ShareRefusal: Error, Equatable {
     case signedOut
@@ -80,7 +99,7 @@ enum ShareRefusal: Error, Equatable {
 }
 
 /// What the person has shared and the app has not yet put on the line: the `Shares` folder in the
-/// app group, which the share extension writes and the app reads and empties.
+/// app group, which the share extension and the app's Shortcuts intents write and the app reads and empties.
 ///
 /// - `_open.json`, there while this phone is signed in, saying whether it takes images and files
 ///   (it does where the guest lives). The extension keeps nothing without it;
@@ -194,9 +213,16 @@ struct ShareStore: Sendable {
         guard let door = door(), door.login == share.login else { throw .signedOut }
         guard share.note.count <= Share.noteLimit, (share.text?.utf8.count ?? 0) <= Share.textLimit else { throw .tooLong }
         switch share.kind {
+        case .prompt:
+            // A Shortcut has no note: nothing goes ahead of the line that says a Shortcut sent it.
+            guard attachment == nil, share.file == nil, share.note.isEmpty,
+                  share.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { throw .nothing }
         case .text, .link:
             guard attachment == nil, share.file == nil,
                   share.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { throw .nothing }
+        case .task:
+            guard attachment == nil, share.file == nil, share.note.isEmpty,
+                  share.text.flatMap(QuickTask.init(rawValue:)) != nil else { throw .nothing }
         case .image, .file:
             guard door.files else { throw .anotherPhone }
             guard let attachment, let name = share.file, name == Share.name(name),
