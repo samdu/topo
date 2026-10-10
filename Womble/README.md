@@ -16,7 +16,7 @@ It writes into a zone of its own, named for the run and deleted at the end wheth
 
 It does say where it is. While it is on screen it advertises itself on the local network as a surface — a screen in the house — carrying its name and the agents registered to it, so a hub can list the house without anything being written anywhere. Joining that roster takes a tap on this screen; `docs/surfaces.md` is the whole of the protocol, and `Sources/Net` is the whole of the code.
 
-Deployment target is **iOS 12.0**, so the whole target is UIKit and completion handlers — no SwiftUI, no `async`/`await`, no scene lifecycle. Universal: iPhone and iPad, portrait and landscape.
+Deployment target is **iOS 15.0**, the lowest Xcode 27 builds for, and the whole target is UIKit and completion handlers — no SwiftUI, no `async`/`await`, no scene lifecycle — as written for iOS 12. Universal: iPhone and iPad, portrait and landscape.
 
 ## Building
 

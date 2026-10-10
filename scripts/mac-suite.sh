@@ -43,7 +43,7 @@ cd "$root" || exit 2
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
 # change what it is compiled and run with. XcodeGen's is the version the committed projects are
 # generated with.
-XCODE_VERSION="26.6"
+XCODE_VERSION="27.0"
 IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
 XCODEGEN_VERSION="2.46.0"
@@ -381,7 +381,7 @@ suite_others() {
   done
 
   # Womble is an Xcode project, not a package, so it needs a simulator rather than
-  # `swift test`. Its deployment target is iOS 12.
+  # `swift test`. Its deployment target is iOS 15.
   say "xcodebuild test (Womble)"
   rm -rf "$RESULTS/Womble.xcresult"
   if new_simulator womble "$IOS_SIMULATOR_RUNTIME" iPhone; then
