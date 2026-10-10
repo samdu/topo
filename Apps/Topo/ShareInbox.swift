@@ -115,13 +115,16 @@ final class ShareInbox {
                 // it for good only if that turn is in the log: one still on the line goes with
                 // the login.
                 let named = line.said(share.nonce)
-                guard let placed = await placing(share, store, home()) else { continue }
+                let placed = await placing(share, store, home())
+                // Judged whether or not the file was placed: a sign-out that took the file from
+                // under the placing leaves none, and the shares behind this one are not its to send.
                 guard store.door() == door else {
                     // The login ended: the file goes with the share. A phone that only stopped
                     // being the guest's keeps both for when it is again.
                     if store.door()?.login != door.login, !named { Self.unplace(share, under: home()) }
                     break
                 }
+                guard let placed else { continue }
                 path = placed.path
             }
             guard let text = Self.text(share, path: path) else {
