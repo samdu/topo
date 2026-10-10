@@ -52,6 +52,8 @@ rm ~/Downloads/AuthKey_THEKEYID.p8
 
 `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_PRIVATE_KEY` in the environment work too, and win over the keychain.
 
+The key is read in whatever shape it was kept (`scripts/asc-pem.sh`): the `.p8` as Apple gave it, the hex `security -w` prints for a secret that holds newlines, or the one line a password manager's field makes of it. Where the key is there, the archive and the export are given it too, so xcodebuild registers a new target's App ID and makes its profile with no Apple ID signed in to Xcode. A change to Apple's Program License Agreement stops that until the Account Holder has agreed to it at developer.apple.com/account.
+
 ## 4. The CloudKit schema
 
 Records written in development do not exist in production until the schema is promoted, and TestFlight builds talk to production. [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the container → **Schema** → **Deploy Schema Changes** → **Deploy** — for `iCloud.zone.hexagon.topo` and again for `iCloud.zone.hexagon.topo.board`.
