@@ -37,12 +37,19 @@ printf '' > "$work/empty"
 printf 'THEKEYID' > "$work/an-id"
 printf 'deadbeef' > "$work/other-hex"
 printf -- '-----BEGIN PRIVATE KEY----- not base64! -----END PRIVATE KEY-----' > "$work/not-base64"
+printf -- '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n' > "$work/base64-no-key"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/rsa" 2>/dev/null \
+    || { echo "FAIL: could not make an RSA key to test with" >&2; exit 1; }
 printf -- '-----BEGIN PRIVATE KEY-----\nAAAA\n' > "$work/no-end"
 cat "$work/key.p8" "$work/key.p8" > "$work/two"
-for shape in empty an-id other-hex not-base64 no-end two; do
-    if out="$("$pem" < "$work/$shape" 2> "$work/$shape.err")"; then
+{ cat "$work/key.p8"; printf -- '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n'; } > "$work/then-a-certificate"
+{ cat "$work/key.p8"; echo 'and a note'; } > "$work/then-words"
+{ echo 'a note and'; cat "$work/key.p8"; } > "$work/words-first"
+refused="empty an-id other-hex not-base64 base64-no-key rsa no-end two then-a-certificate then-words words-first"
+for shape in $refused; do
+    if "$pem" < "$work/$shape" > "$work/$shape.out" 2> "$work/$shape.err"; then
         fail "$shape was taken as a key"
-    elif [ -n "$out" ]; then
+    elif [ -s "$work/$shape.out" ]; then
         fail "$shape was refused with something written to stdout"
     elif ! grep -q '^asc-pem: ' "$work/$shape.err"; then
         fail "the refusal of $shape does not say why: $(cat "$work/$shape.err")"
@@ -50,4 +57,4 @@ for shape in empty an-id other-hex not-base64 no-end two; do
 done
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed against $pem" >&2; exit 1; }
-echo "asc-pem.sh: a .p8 as given, as the hex security prints, on one line, padded and with CRLF each comes out as the same PEM and the same key; an empty input, an id, other hex, a body that is not base64, a key with no END line and two keys are refused with nothing written"
+echo "asc-pem.sh: a .p8 as given, as the hex security prints, on one line, padded and with CRLF each comes out as the same PEM and the same key; refused with nothing written: $refused"

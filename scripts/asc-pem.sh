@@ -6,23 +6,30 @@
 # Three shapes come in: the .p8 as Apple gave it; hex, which is how `security -w` prints a secret
 # that holds newlines; and one line with spaces where the newlines were, which is what a .p8
 # pasted into a one-line password field becomes. xcodebuild and altool take only the first.
-# Anything that is not a key in one of those shapes is refused, with nothing written.
+# Anything that is not one P-256 private key in one of those shapes, and nothing else, is refused
+# with nothing written.
 set -euo pipefail
 
-python3 -c '
+pem="$(python3 -c '
 import re, sys, textwrap
 
 text = sys.stdin.read().strip()
 if re.fullmatch(r"(?:[0-9a-fA-F]{2})+", text):
     try:
-        text = bytes.fromhex(text).decode()
+        text = bytes.fromhex(text).decode().strip()
     except UnicodeDecodeError:
         sys.exit("asc-pem: the key is hex that is not text")
-if text.count("-----BEGIN PRIVATE KEY-----") != 1 or text.count("-----END PRIVATE KEY-----") != 1:
-    sys.exit("asc-pem: not a private key: no BEGIN PRIVATE KEY and END PRIVATE KEY lines")
-inside = text.split("-----BEGIN PRIVATE KEY-----")[1].split("-----END PRIVATE KEY-----")[0]
-body = re.sub(r"\s", "", inside)
+whole = re.fullmatch(r"-----BEGIN PRIVATE KEY-----(.*)-----END PRIVATE KEY-----", text, re.S)
+if not whole or "-----" in whole[1]:
+    sys.exit("asc-pem: not a private key: it is not one BEGIN PRIVATE KEY line, a body and one END PRIVATE KEY line, with nothing before, between or after")
+body = re.sub(r"\s", "", whole[1])
 if not body or len(body) % 4 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", body):
     sys.exit("asc-pem: not a private key: what is between the lines is not base64")
 print("-----BEGIN PRIVATE KEY-----", *textwrap.wrap(body, 64), "-----END PRIVATE KEY-----", sep="\n")
-'
+')"
+
+# Base64 between the lines is not yet a key: openssl says whether it is one, and of the curve
+# App Store Connect signs with.
+printf '%s\n' "$pem" | openssl pkey -noout -text 2>/dev/null | grep -q '^Private-Key: (256 bit)' \
+    || { echo "asc-pem: not a private key: what is between the lines is not a P-256 key" >&2; exit 1; }
+printf '%s\n' "$pem"
