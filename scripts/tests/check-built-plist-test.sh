@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key; so does one without the topo URL scheme, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads or the widget extension. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, or the broadcast extension as one that takes sample buffers and has a program and a principal class; nor one whose broadcast extension is signed without the app group. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -34,6 +34,14 @@ make_app() {
     plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo","CFBundleURLSchemes":["topo"]}]' "$app/Info.plist"
     mkdir -p "$app/PlugIns/TopoWidgets.appex"
     plutil -create xml1 "$app/PlugIns/TopoWidgets.appex/Info.plist"
+    mkdir -p "$app/PlugIns/TopoBroadcast.appex"
+    plutil -create xml1 "$app/PlugIns/TopoBroadcast.appex/Info.plist"
+    # A program with no signature: a copy of a system one carries Apple's.
+    cp /usr/bin/true "$app/PlugIns/TopoBroadcast.appex/TopoBroadcast"
+    codesign --remove-signature "$app/PlugIns/TopoBroadcast.appex/TopoBroadcast"
+    plutil -insert CFBundleExecutable -string TopoBroadcast "$app/PlugIns/TopoBroadcast.appex/Info.plist"
+    plutil -insert CFBundleIdentifier -string zone.hexagon.topo.broadcast "$app/PlugIns/TopoBroadcast.appex/Info.plist"
+    plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.broadcast-services-upload","NSExtensionPrincipalClass":"TopoBroadcast.SampleHandler","RPBroadcastProcessMode":"RPBroadcastProcessModeSampleBuffer"}' "$app/PlugIns/TopoBroadcast.appex/Info.plist"
     printf '                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n' > "$app/LICENSE"
 }
 
@@ -94,12 +102,42 @@ elif [[ "$errors" != *"TopoWidgets.appex"* ]]; then
     fail "the refusal of a product without TopoWidgets.appex does not name it: $errors"
 fi
 
+# The broadcast extension: absent, of another kind, handed no sample buffers, or with no program
+# or no class to handle a share.
+bplist="PlugIns/TopoBroadcast.appex/Info.plist"
+make_app "$work/no-broadcast/Topo.app"
+rm -r "$work/no-broadcast/Topo.app/PlugIns/TopoBroadcast.appex"
+make_app "$work/broadcast-kind/Topo.app"
+plutil -replace NSExtension.NSExtensionPointIdentifier -string com.apple.broadcast-services-setupui "$work/broadcast-kind/Topo.app/$bplist"
+make_app "$work/broadcast-mode/Topo.app"
+plutil -replace NSExtension.RPBroadcastProcessMode -string RPBroadcastProcessModeMP4Clip "$work/broadcast-mode/Topo.app/$bplist"
+make_app "$work/broadcast-no-program/Topo.app"
+rm "$work/broadcast-no-program/Topo.app/PlugIns/TopoBroadcast.appex/TopoBroadcast"
+make_app "$work/broadcast-no-principal/Topo.app"
+plutil -remove NSExtension.NSExtensionPrincipalClass "$work/broadcast-no-principal/Topo.app/$bplist"
+for case in no-broadcast broadcast-kind broadcast-mode broadcast-no-program broadcast-no-principal; do
+    if errors="$("$check" "$work/$case/Topo.app" 2>&1 >/dev/null)"; then
+        fail "a product whose broadcast extension is wrong ($case) passed"
+    elif [[ "$errors" != *"TopoBroadcast.appex"* ]]; then
+        fail "the refusal of $case does not name TopoBroadcast.appex: $errors"
+    fi
+done
+
 # Signed ad hoc, with and without the entitlement: codesign wants an executable to sign.
 sign() {
-    local app="$1" homekit="$2"
+    local app="$1" homekit="$2" group="${3:-yes}"
+    # Inside out: the app's signature seals the extension's.
+    local granted="$work/entitlements-broadcast-$group.plist"
+    rm -f "$granted"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.security.application-groups array" "$granted" >/dev/null
+    if [ "$group" = yes ]; then
+        /usr/libexec/PlistBuddy -c "Add :com.apple.security.application-groups:0 string group.zone.hexagon.topo" "$granted" >/dev/null
+    fi
+    codesign --force --sign - --entitlements "$granted" "$app/PlugIns/TopoBroadcast.appex" 2>/dev/null
     cp /usr/bin/true "$app/Topo"
     plutil -insert CFBundleExecutable -string Topo "$app/Info.plist"
     local entitlements="$work/entitlements-$homekit.plist"
+    rm -f "$entitlements"
     # PlistBuddy, since plutil reads the dots of an entitlement's name as a key path.
     /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-services array" \
         -c "Add :com.apple.developer.icloud-services:0 string CloudKit" "$entitlements" >/dev/null
@@ -123,6 +161,14 @@ if errors="$("$check" "$work/no-homekit/Topo.app" 2>&1 >/dev/null)"; then
     fail "a product signed without the HomeKit entitlement passed"
 elif [[ "$errors" != *"com.apple.developer.homekit"* ]]; then
     fail "the refusal of a product signed without the HomeKit entitlement does not name it: $errors"
+fi
+
+make_app "$work/broadcast-no-group/Topo.app"
+sign "$work/broadcast-no-group/Topo.app" yes no
+if errors="$("$check" "$work/broadcast-no-group/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product whose broadcast extension is signed without the app group passed"
+elif [[ "$errors" != *"TopoBroadcast.appex is signed without"* ]]; then
+    fail "the refusal of a broadcast extension signed without the app group does not name it: $errors"
 fi
 
 out="$("$check" "$work/whole/Topo.app" 2>&1)"
@@ -175,4 +221,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads or TopoWidgets.appex fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads or TopoWidgets.appex or TopoBroadcast.appex, or with a broadcast extension of another kind, handed no sample buffers, with no program or principal class or signed without the app group fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"

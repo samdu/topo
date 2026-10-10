@@ -155,6 +155,41 @@ if [ ! -f "$app/PlugIns/TopoWidgets.appex/Info.plist" ]; then
     status=1
 fi
 
+# The screen share's broadcast extension: one that takes sample buffers, with a program and a
+# principal class, and, where the product is signed, the app group its stills are kept in.
+broadcast="$app/PlugIns/TopoBroadcast.appex"
+point="$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+if [ "$point" != "com.apple.broadcast-services-upload" ]; then
+    echo "$app does not embed PlugIns/TopoBroadcast.appex as a broadcast upload extension (${point:-no extension}); the screen could not be shared with Topo" >&2
+    status=1
+else
+    mode="$(plutil -extract NSExtension.RPBroadcastProcessMode raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+    if [ "$mode" != "RPBroadcastProcessModeSampleBuffer" ]; then
+        echo "TopoBroadcast.appex's RPBroadcastProcessMode is '${mode:-absent}', not RPBroadcastProcessModeSampleBuffer; it would be handed no frames" >&2
+        status=1
+    fi
+    program="$(plutil -extract CFBundleExecutable raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+    if [ -z "$program" ] || [ ! -x "$broadcast/$program" ]; then
+        echo "TopoBroadcast.appex has no executable named by its CFBundleExecutable ('${program:-absent}'); a share would not start" >&2
+        status=1
+    fi
+    principal="$(plutil -extract NSExtension.NSExtensionPrincipalClass raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+    if [ -z "$principal" ]; then
+        echo "TopoBroadcast.appex names no NSExtensionPrincipalClass; a share would have no handler" >&2
+        status=1
+    fi
+    if codesign -d "$broadcast" >/dev/null 2>&1; then
+        granted="$(mktemp)"
+        codesign -d --entitlements - --xml "$broadcast" > "$granted" 2>/dev/null || true
+        if ! /usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$granted" 2>/dev/null \
+            | grep -qx '[[:space:]]*group\.zone\.hexagon\.topo'; then
+            echo "TopoBroadcast.appex is signed without the group.zone.hexagon.topo app group; it would refuse every share as signed out" >&2
+            status=1
+        fi
+        rm -f "$granted"
+    fi
+fi
+
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2

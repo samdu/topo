@@ -84,6 +84,7 @@ struct TopoApp: App {
             homeTool,
             PhotosTool(library: PhotoKitLibrary(), authorizer: PhotosAuthorizer(), broker: broker),
             FilesTool(picker: DocumentPicker(), drop: GuestVaultDrop()),
+            ScreenTool(),
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
@@ -216,6 +217,9 @@ struct TopoApp: App {
             // The primary, signed in, takes what other phones' records left on the watch.
             .onChange(of: roleSelector.role == .primary && signIn.phase == .signedIn, initial: true) { _, owner in
                 if owner { SurfaceSync.shared.sweep() }
+                // A screen share is taken only where the guest lives, and its stills go with
+                // the login or the role.
+                ScreenStore.shared()?.follow(owner: owner)
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)

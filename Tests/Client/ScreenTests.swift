@@ -1,0 +1,302 @@
+import CoreVideo
+import Foundation
+import ImageIO
+import TopoTools
+import XCTest
+
+@testable import Topo
+
+/// The screen share's kept stills (`ScreenStore`), which frames become one (`ScreenSampler`) and
+/// what the mind is given of them (`ScreenTool`). The broadcast extension itself runs on no
+/// simulator: what it calls is here.
+final class ScreenTests: XCTestCase {
+    private var root: URL!
+    private var store: ScreenStore { ScreenStore(folder: root.appendingPathComponent("Screen")) }
+    private var home: URL { root.appendingPathComponent("home") }
+    private let jpeg = Data([0xFF, 0xD8, 0xFF, 0xD9])
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("screen-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("home"), withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private var folderExists: Bool { FileManager.default.fileExists(atPath: store.folder.path) }
+
+    private func refusal(_ body: () throws -> Void) -> ScreenRefusal? {
+        do { try body(); return nil } catch { return error as? ScreenRefusal }
+    }
+
+    // MARK: The store
+
+    func testNothingIsKeptWithoutADoorAndTheExtensionNeverMakesTheFolder() throws {
+        XCTAssertEqual(refusal { _ = try store.begin() }, .signedOut)
+        let door = ScreenStore.Door(login: "a login")
+        XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(), under: door) }, .signedOut)
+        XCTAssertFalse(store.beat(at: Date(), since: Date(), under: door))
+        store.end()
+        XCTAssertFalse(folderExists, "the extension's side made the folder")
+        XCTAssertNil(store.live())
+        XCTAssertEqual(store.stills(), [])
+    }
+
+    func testABroadcastKeepsStillsOldestFirstAndHoldsTheNewestOfTheRing() throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_000_000)
+        let door = try store.begin(at: began)
+        XCTAssertEqual(store.live(now: began)?.since, began)
+        for index in 0..<(ScreenStore.ring + 5) {
+            try store.keep(jpeg, at: began.addingTimeInterval(Double(index) * 1.5), under: door)
+        }
+        let stills = store.stills()
+        XCTAssertEqual(stills.count, ScreenStore.ring)
+        XCTAssertEqual(stills.first?.time, began.addingTimeInterval(5 * 1.5))
+        XCTAssertEqual(stills.last?.time, began.addingTimeInterval(Double(ScreenStore.ring + 4) * 1.5))
+        XCTAssertEqual(stills.map(\.time), stills.map(\.time).sorted())
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(stills.last).url), jpeg)
+    }
+
+    func testABroadcastIsLiveWhileItsExtensionSeesFramesAndItsStillsOutliveIt() throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        XCTAssertNotNil(store.live(now: began.addingTimeInterval(ScreenStore.stale - 1)))
+        XCTAssertNil(store.live(now: began.addingTimeInterval(ScreenStore.stale)), "a broadcast whose extension went quiet is still live")
+        XCTAssertTrue(store.beat(at: began.addingTimeInterval(60), since: began, under: door))
+        XCTAssertEqual(store.live(now: began.addingTimeInterval(61))?.since, began)
+        store.end()
+        XCTAssertNil(store.live(now: began.addingTimeInterval(61)))
+        XCTAssertEqual(store.stills().count, 1)
+
+        // The next broadcast begins with none of the last one's.
+        _ = try store.begin(at: began.addingTimeInterval(120))
+        XCTAssertEqual(store.stills(), [])
+    }
+
+    func testASignOutEndsTheBroadcastAndTakesTheStills() throws {
+        try store.open()
+        let door = try store.begin()
+        try store.keep(jpeg, at: Date(), under: door)
+        store.close()
+        XCTAssertFalse(folderExists)
+        XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(), under: door) }, .signedOut)
+        XCTAssertFalse(store.beat(at: Date(), since: Date(), under: door))
+        XCTAssertFalse(folderExists, "a frame after the sign-out brought the folder back")
+
+        // The next login's door is another: the broadcast still running under the last keeps nothing.
+        try store.open()
+        XCTAssertNotEqual(store.door(), door)
+        XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(), under: door) }, .signedOut)
+        XCTAssertFalse(store.beat(at: Date(), since: Date(), under: door))
+        XCTAssertNil(store.live())
+        XCTAssertEqual(store.stills(), [])
+    }
+
+    /// A still written between the old door's last check and the new login's opening carries the
+    /// old login's name, and is no still of the new one.
+    func testAStillOfAnotherLoginIsNoStill() throws {
+        try store.open()
+        try jpeg.write(to: store.folder.appendingPathComponent(ScreenStore.name(login: "an earlier login", at: Date())))
+        try jpeg.write(to: store.folder.appendingPathComponent("notes.jpg"))
+        XCTAssertEqual(store.stills(), [])
+        let door = try store.begin()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path).filter { $0.hasSuffix(".jpg") }, [])
+        try store.keep(jpeg, at: Date(), under: door)
+        XCTAssertEqual(store.stills().count, 1)
+    }
+
+    func testTheDoorFollowsTheOwnerAndKeepsItsLoginWhileOpen() throws {
+        store.follow(owner: true)
+        let door = try XCTUnwrap(store.door())
+        store.follow(owner: true)
+        XCTAssertEqual(store.door(), door)
+        XCTAssertEqual(try store.folder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        store.follow(owner: false)
+        XCTAssertFalse(folderExists)
+        store.follow(owner: false)
+        XCTAssertFalse(folderExists)
+    }
+
+    func testAStillsNameIsItsLoginAndItsTime() {
+        let time = Date(timeIntervalSince1970: 1_760_000_000.123)
+        let name = ScreenStore.name(login: "login", at: time)
+        XCTAssertEqual(name, "login-1760000000123.jpg")
+        XCTAssertEqual(try XCTUnwrap(ScreenStore.time(of: name, login: "login")).timeIntervalSince1970, 1_760_000_000.123, accuracy: 0.0005)
+        for other in ["other-1760000000123.jpg", "login-1760000000123.png", "login-abc.jpg", "login--5.jpg", "login-.jpg", "_open.json"] {
+            XCTAssertNil(ScreenStore.time(of: other, login: "login"), other)
+        }
+    }
+
+    // MARK: The sampler
+
+    /// A BGRA frame of one grey, with a patch of another where asked.
+    private func frame(width: Int = 400, height: Int = 800, grey: UInt8 = 200, patch: CGRect? = nil, patchGrey: UInt8 = 0,
+                       format: OSType = kCVPixelFormatType_32BGRA) throws -> CVPixelBuffer {
+        var made: CVPixelBuffer?
+        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
+        XCTAssertEqual(CVPixelBufferCreate(nil, width, height, format, attributes, &made), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(made)
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        let planar = format != kCVPixelFormatType_32BGRA
+        let base = try XCTUnwrap(planar ? CVPixelBufferGetBaseAddressOfPlane(buffer, 0) : CVPixelBufferGetBaseAddress(buffer))
+            .assumingMemoryBound(to: UInt8.self)
+        let row = planar ? CVPixelBufferGetBytesPerRowOfPlane(buffer, 0) : CVPixelBufferGetBytesPerRow(buffer)
+        let step = planar ? 1 : 4
+        for y in 0..<height {
+            for x in 0..<width {
+                let value = patch?.contains(CGPoint(x: x, y: y)) == true ? patchGrey : grey
+                for byte in 0..<step { base[y * row + x * step + byte] = byte == 3 ? 255 : value }
+            }
+        }
+        if planar, let chroma = CVPixelBufferGetBaseAddressOfPlane(buffer, 1) {
+            memset(chroma, 128, CVPixelBufferGetBytesPerRowOfPlane(buffer, 1) * CVPixelBufferGetHeightOfPlane(buffer, 1))
+        }
+        return buffer
+    }
+
+    private func size(of jpeg: Data) throws -> CGSize {
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        return CGSize(width: image.width, height: image.height)
+    }
+
+    func testAStillIsKeptOnlyWhenTheScreenChangedAndNoSoonerThanTheInterval() throws {
+        var sampler = ScreenSampler()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let plain = try frame()
+        let first = try XCTUnwrap(sampler.take(plain, at: start))
+        XCTAssertEqual(try size(of: first), CGSize(width: 400, height: 800))
+        // One typed character's worth: a 10 by 16 patch.
+        let typed = try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16))
+        XCTAssertNil(sampler.take(typed, at: start.addingTimeInterval(ScreenSampler.interval - 0.1)), "a still was kept inside the interval")
+        XCTAssertNil(sampler.take(plain, at: start.addingTimeInterval(10)), "a screen that had not changed was kept again")
+        XCTAssertNil(sampler.take(try frame(), at: start.addingTimeInterval(20)))
+        XCTAssertNotNil(sampler.take(typed, at: start.addingTimeInterval(30)), "a changed screen was not kept")
+        XCTAssertNil(sampler.take(typed, at: start.addingTimeInterval(40)))
+        // The interval counts from the last kept, not the last seen.
+        XCTAssertNotNil(sampler.take(plain, at: start.addingTimeInterval(30 + ScreenSampler.interval)))
+    }
+
+    func testAStillIsNoLargerThanItsLongSideAndTurnedAsTheScreenWasHeld() throws {
+        var sampler = ScreenSampler()
+        let large = try frame(width: 1200, height: 2600)
+        let still = try size(of: try XCTUnwrap(sampler.take(large, at: Date(timeIntervalSince1970: 0))))
+        XCTAssertEqual(max(still.width, still.height), ScreenSampler.longSide, accuracy: 1)
+        XCTAssertEqual(still.width / still.height, 1200.0 / 2600.0, accuracy: 0.01)
+
+        var turned = ScreenSampler()
+        let sideways = try size(of: try XCTUnwrap(turned.take(try frame(), orientation: .right, at: Date(timeIntervalSince1970: 0))))
+        XCTAssertEqual(sideways, CGSize(width: 800, height: 400))
+    }
+
+    func testTheFramesReplayKitHandsOverAreJudgedByTheirLuma() throws {
+        for format in [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange] {
+            let plain = try XCTUnwrap(ScreenSampler.mark(of: try frame(format: format)))
+            XCTAssertEqual(plain.count, ScreenSampler.grid * ScreenSampler.grid)
+            XCTAssertTrue(plain.allSatisfy { abs($0 - 200) < 0.001 })
+            let typed = try XCTUnwrap(ScreenSampler.mark(of: try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16), format: format)))
+            XCTAssertTrue(ScreenSampler.changed(from: plain, to: typed))
+            XCTAssertFalse(ScreenSampler.changed(from: plain, to: plain))
+            var sampler = ScreenSampler()
+            XCTAssertNotNil(sampler.take(try frame(format: format), at: Date(timeIntervalSince1970: 0)))
+        }
+        XCTAssertNil(ScreenSampler.mark(of: try frame(format: kCVPixelFormatType_32ARGB)))
+    }
+
+    // MARK: The tool
+
+    private func tool(now: Date = Date()) -> ScreenTool {
+        let store = store, home = home
+        return ScreenTool(store: { store }, home: { home }, now: { now })
+    }
+
+    func testTheToolTakesStatusAndLookAndNothingElse() throws {
+        let tool = tool()
+        XCTAssertEqual(try tool.parse(["status"]), .status)
+        XCTAssertEqual(try tool.parse(["look"]), .look(last: 1))
+        XCTAssertEqual(try tool.parse(["look", "--last", "6"]), .look(last: 6))
+        for bad in [[], ["start"], ["stop"], ["status", "x"], ["look", "--last"], ["look", "--last", "0"], ["look", "--last", "7"],
+                    ["look", "--last", "two"], ["look", "3"]] {
+            XCTAssertThrowsError(try tool.parse(bad), "\(bad)")
+        }
+    }
+
+    func testNothingSharedIsSaidAsThatAndNeverAsAnEmptyAnswer() async throws {
+        for call in [["status"], ["look"]] {
+            let signedOut = await tool().run(call)
+            XCTAssertEqual(signedOut.status, ToolReply.failed)
+            XCTAssertTrue(signedOut.text.contains("not being shared"), signedOut.text)
+        }
+        try store.open()
+        for call in [["status"], ["look"]] {
+            let unshared = await tool().run(call)
+            XCTAssertEqual(unshared.status, ToolReply.failed)
+            XCTAssertTrue(unshared.text.contains("Only the person can share it"), unshared.text)
+        }
+        let began = Date(timeIntervalSince1970: 1_000_000)
+        _ = try store.begin(at: began)
+        let early = await tool(now: began.addingTimeInterval(1)).run(["look"])
+        XCTAssertEqual(early.status, ToolReply.failed)
+        XCTAssertTrue(early.text.contains("no still is kept yet"), early.text)
+        let status = await tool(now: began.addingTimeInterval(1)).run(["status"])
+        XCTAssertEqual(status.status, ToolReply.ok)
+        XCTAssertTrue(status.text.hasPrefix("sharing since "), status.text)
+        XCTAssertTrue(status.text.contains("0 stills"), status.text)
+    }
+
+    func testLookCopiesTheNewestStillsIntoTheHomeAndRemovesNone() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        for index in 0..<4 {
+            try store.keep(jpeg + Data([UInt8(index)]), at: began.addingTimeInterval(Double(index) * 2), under: door)
+        }
+        let now = began.addingTimeInterval(10)
+        let one = await tool(now: now).run(["look"])
+        XCTAssertEqual(one.status, ToolReply.ok, one.text)
+        let lines = one.text.split(separator: "\n").map(String.init)
+        guard lines.count == 2 else { return XCTFail(one.text) }
+        XCTAssertTrue(lines[0].contains("4 stills") && lines[0].contains("newest 4 s ago"), lines[0])
+        let newest = ScreenTool.name(of: began.addingTimeInterval(6))
+        XCTAssertEqual(newest, "20251009T085326.000Z.jpg")
+        XCTAssertTrue(lines[1].hasPrefix("/home/topo/screen/\(newest) | "), lines[1])
+        XCTAssertTrue(lines[1].hasSuffix(" | 4 s ago"), lines[1])
+        XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent("screen/\(newest)")), jpeg + Data([3]))
+
+        // The same still again, and the two before it: one file each, none taken away.
+        let three = await tool(now: now).run(["look", "--last", "3"])
+        XCTAssertEqual(three.status, ToolReply.ok, three.text)
+        XCTAssertEqual(three.text.split(separator: "\n").count, 4)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("screen").path).count, 3)
+        XCTAssertEqual(store.stills().count, 4, "looking took a still out of the ring")
+
+        // After the share ends the stills are still there to look at, and the answer says so.
+        store.end()
+        let after = await tool(now: now).run(["look"])
+        XCTAssertEqual(after.status, ToolReply.ok)
+        XCTAssertTrue(after.text.hasPrefix("not sharing now; the stills are from the last share"), after.text)
+
+        store.close()
+        let gone = await tool(now: now).run(["look"])
+        XCTAssertEqual(gone.status, ToolReply.failed)
+    }
+
+    func testLookWritesOverNothingOfTheGuests() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        let folder = home.appendingPathComponent("screen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let theirs = Data("the guest's own".utf8)
+        try theirs.write(to: folder.appendingPathComponent(ScreenTool.name(of: began)))
+        let reply = await tool(now: began).run(["look"])
+        XCTAssertEqual(reply.status, ToolReply.ok)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(ScreenTool.name(of: began))), theirs)
+    }
+}

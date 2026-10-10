@@ -22,6 +22,9 @@ struct SettingsView: View {
                 // First: where Topo sits, and the Reset for this device's hand on the look.
                 PlacementSection()
                 // One row each, named for what is behind it, so no heading says it again.
+                #if os(iOS)
+                ScreenShareSection()
+                #endif
                 Section {
                     Button("Vocabulary") { showVocabulary = true }
                     Button("Memory") { showMemory = true }
