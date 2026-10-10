@@ -8,11 +8,13 @@ import TopoUserland
 /// starts nothing, and where nothing is shared it says so and how they would.
 ///
 /// `look` copies stills into a folder of the tool's own in the guest's home through `HomeFile`,
-/// each under the time it was kept: a still already there under its name is that still. The
+/// each under the time it was kept and a name of that `look`'s own, so no two looks write one
+/// name and a copy is as old as the look that made it; a name already taken is the guest's file,
+/// which is left and not answered. The
 /// copies are the person's screen as much as the stills are, so they do not pile up and do not
 /// outlast the login. A copy more than `copiesLast` old is taken away by the `look` that made it,
-/// that long after, by any later `look`, and by `sweep` when Topo comes to the front, which
-/// covers the time it was suspended. `forget`, which `follow` calls with the door shut, takes
+/// that long after and whether or not it went on to answer, by any later `look`, and by `sweep`
+/// when Topo comes to the front, which covers the time it was suspended. `forget`, which `follow` calls with the door shut, takes
 /// away all of them, and a `look` reads the door again after its copies are made, so one that
 /// ran across a sign-out leaves none.
 struct ScreenTool: Tool {
@@ -25,6 +27,10 @@ struct ScreenTool: Tool {
     /// Called once a `look` has made its copies and before it reads the door again, for a suite
     /// to shut the door there.
     var copied: @Sendable () -> Void = {}
+    /// A name for one `look`, which its copies carry.
+    var mark: @Sendable () -> String = { String(UUID().uuidString.prefix(8)).lowercased() }
+    /// Writes one copy beneath the home, which a suite has fail.
+    var create: @Sendable (Data, String, URL) throws -> HomeFile.Outcome = { try HomeFile.create($0, named: $1, in: [ScreenTool.folder], under: $2) }
 
     static let guestHome = ClaudeLauncher.home
     /// The folder under the home a still is copied into.
@@ -103,7 +109,7 @@ struct ScreenTool: Tool {
 
     func run(_ arguments: [String]) async -> ToolReply {
         await PhoneTool.run({ _ in nil }, broker: PermissionBroker(), usage: usage, parse: { try parse(arguments) }) { call in
-            let store = store(), home = home(), now = now(), lasts = lasts, copied = copied
+            let store = store(), home = home(), now = now(), lasts = lasts, copied = copied, mark = mark(), create = create
             // The folder's listing and the stills' bytes are a few small files, read in a task of their own.
             return try await Task.detached(priority: .userInitiated) {
                 guard let store, let door = store.door() else { throw ToolFailure(Self.notShared) }
@@ -117,13 +123,20 @@ struct ScreenTool: Tool {
                         throw ToolFailure(live == nil ? Self.notShared : "the screen is being shared and no still is kept yet; look again in a moment")
                     }
                     Self.sweep(under: home, olderThan: lasts)
+                    // Set before a copy is made, so the copies of a look that fails partway go at
+                    // their time too. A second past, since a file's time is kept in whole seconds.
+                    Task.detached(priority: .utility) {
+                        try? await Task.sleep(for: .seconds(lasts + 1))
+                        Self.sweep(under: home, olderThan: lasts)
+                    }
                     var lines = [Self.status(live: live, stills: stills, now: now)]
                     for still in stills.suffix(last) {
                         // One the ring let go of between the listing and here is skipped, as is one that
                         // cannot be read because the phone is locked.
                         guard let data = try? Data(contentsOf: still.url, options: .mappedIfSafe), data.count <= Self.stillBytes else { continue }
-                        let name = Self.name(of: still.time)
-                        _ = try HomeFile.create(data, named: name, in: [Self.folder], under: home)
+                        let name = Self.name(of: still.time, look: mark)
+                        // A name already there is not this look's: the guest's own file, left as it is.
+                        guard try create(data, name, home) == .created else { continue }
                         lines.append(PhoneTool.line(["\(Self.guestHome)/\(Self.folder)/\(name)", Self.stamp(still.time), Self.age(of: still.time, now: now)]))
                     }
                     // The door goes before the copies do (`follow`), so a sign-out or a demotion that
@@ -134,11 +147,6 @@ struct ScreenTool: Tool {
                         throw ToolFailure(Self.notShared)
                     }
                     guard lines.count > 1 else { throw ToolFailure("no still could be read: they went as they were being read, or the phone is locked. Look again once it is unlocked") }
-                    Task.detached(priority: .utility) {
-                        // A second past, since a file's time is kept in whole seconds.
-                        try? await Task.sleep(for: .seconds(lasts + 1))
-                        Self.sweep(under: home, olderThan: lasts)
-                    }
                     return ToolReply(status: ToolReply.ok, text: lines.joined(separator: "\n") + "\n")
                 }
             }.value
@@ -151,13 +159,14 @@ struct ScreenTool: Tool {
         return PhoneTool.line([sharing, "\(stills.count) still\(stills.count == 1 ? "" : "s")", newest])
     }
 
-    /// The name a still is copied under: when it was kept, in UTC, to the millisecond.
-    static func name(of time: Date) -> String {
+    /// The name a still is copied under: when it was kept, in UTC, to the millisecond, and the
+    /// look that copied it.
+    static func name(of time: Date, look: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.dateFormat = "yyyyMMdd'T'HHmmss.SSS'Z'"
-        return formatter.string(from: time) + ".jpg"
+        return "\(formatter.string(from: time))-\(look).jpg"
     }
 
     static func stamp(_ time: Date) -> String {

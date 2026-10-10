@@ -222,6 +222,17 @@ final class ScreenTests: XCTestCase {
         }
     }
 
+    /// How light a JPEG is at a point counted from its top left, of 255.
+    private func grey(of jpeg: Data, at point: CGPoint) throws -> Int {
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let context = try XCTUnwrap(CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: -point.x, y: point.y - CGFloat(image.height) + 1, width: CGFloat(image.width), height: CGFloat(image.height)))
+        return (Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2])) / 3
+    }
+
     private func size(of jpeg: Data) throws -> CGSize {
         let source = try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData, nil))
         let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
@@ -292,14 +303,23 @@ final class ScreenTests: XCTestCase {
         XCTAssertNil(keep(red, in: &sampler, at: start.addingTimeInterval(10)))
         XCTAssertNotNil(keep(blue, in: &sampler, at: start.addingTimeInterval(20)), "a patch gone from red to blue was not a change")
 
+        // Each channel alone, so a reader of one or two of them does not pass for a reader of all.
+        let base = try XCTUnwrap(ScreenSampler.mark(of: try frame()))
+        for (channel, colour) in [("blue", [90, 200, 200]), ("green", [200, 90, 200]), ("red", [200, 200, 90])] as [(String, [UInt8])] {
+            let moved = try frame()
+            try paint(moved, patch, colour)
+            XCTAssertTrue(ScreenSampler.changed(from: base, to: try XCTUnwrap(ScreenSampler.mark(of: moved))), "\(channel) alone was not a change")
+        }
+        let cells = ScreenSampler.grid * ScreenSampler.grid
         for format in [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange] {
-            let one = try frame(format: format), other = try frame(format: format)
-            try paint(one, patch, [90, 240])
-            try paint(other, patch, [240, 110])
-            let before = try XCTUnwrap(ScreenSampler.mark(of: one)), after = try XCTUnwrap(ScreenSampler.mark(of: other))
-            let cells = ScreenSampler.grid * ScreenSampler.grid
-            XCTAssertEqual(Array(before.prefix(cells)), Array(after.prefix(cells)), "the luma moved, so this shows nothing of the chroma")
-            XCTAssertTrue(ScreenSampler.changed(from: before, to: after), "a patch whose colour alone changed was not a change")
+            let before = try XCTUnwrap(ScreenSampler.mark(of: try frame(format: format)))
+            for (channel, chroma) in [("Cb", [200, 128]), ("Cr", [128, 200])] as [(String, [UInt8])] {
+                let moved = try frame(format: format)
+                try paint(moved, patch, chroma)
+                let after = try XCTUnwrap(ScreenSampler.mark(of: moved))
+                XCTAssertEqual(Array(before.prefix(cells)), Array(after.prefix(cells)), "the luma moved, so this shows nothing of the chroma")
+                XCTAssertTrue(ScreenSampler.changed(from: before, to: after), "\(channel) alone was not a change")
+            }
         }
     }
 
@@ -342,9 +362,10 @@ final class ScreenTests: XCTestCase {
         XCTAssertNil(watch.tick(at: rest))
         XCTAssertEqual(store.stills().map(\.time.timeIntervalSince1970), [start.timeIntervalSince1970, rest.timeIntervalSince1970],
                        "the frame the screen came to rest on was never kept")
-        var judge = ScreenSampler()
-        _ = keep(more, in: &judge, at: start)
-        XCTAssertNil(judge.take(more, at: start.addingTimeInterval(10)))
+        // The still is the last frame held, not the first: dark where only the last was.
+        let rested = try XCTUnwrap(store.stills().last)
+        XCTAssertLessThan(try grey(of: Data(contentsOf: rested.url), at: CGPoint(x: 150, y: 308)), 80, "the still kept is not the frame the screen came to rest on")
+        XCTAssertGreaterThan(try grey(of: Data(contentsOf: rested.url), at: CGPoint(x: 150, y: 400)), 150)
         // It is held once: the ticks after keep nothing more, and each marks the broadcast live.
         XCTAssertNil(watch.tick(at: rest.addingTimeInterval(5)))
         XCTAssertEqual(store.stills().count, 2)
@@ -371,9 +392,15 @@ final class ScreenTests: XCTestCase {
 
     // MARK: The tool
 
-    private func tool(now: Date = Date()) -> ScreenTool {
+    private func tool(now: Date = Date(), mark: String? = nil) -> ScreenTool {
         let store = store, home = home
-        return ScreenTool(store: { store }, home: { home }, now: { now })
+        var tool = ScreenTool(store: { store }, home: { home }, now: { now })
+        if let mark { tool.mark = { mark } }
+        return tool
+    }
+
+    private var copies: [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("screen").path)) ?? []).sorted()
     }
 
     func testTheToolTakesStatusAndLookAndNothingElse() throws {
@@ -418,22 +445,27 @@ final class ScreenTests: XCTestCase {
             try store.keep(jpeg + Data([UInt8(index)]), at: began.addingTimeInterval(Double(index) * 2), under: door)
         }
         let now = began.addingTimeInterval(10)
-        let one = await tool(now: now).run(["look"])
+        let one = await tool(now: now, mark: "one").run(["look"])
         XCTAssertEqual(one.status, ToolReply.ok, one.text)
         let lines = one.text.split(separator: "\n").map(String.init)
         guard lines.count == 2 else { return XCTFail(one.text) }
         XCTAssertTrue(lines[0].contains("4 stills") && lines[0].contains("newest 4 s ago"), lines[0])
-        let newest = ScreenTool.name(of: began.addingTimeInterval(6))
-        XCTAssertEqual(newest, "20251009T085326.000Z.jpg")
+        let newest = ScreenTool.name(of: began.addingTimeInterval(6), look: "one")
+        XCTAssertEqual(newest, "20251009T085326.000Z-one.jpg")
         XCTAssertTrue(lines[1].hasPrefix("/home/topo/screen/\(newest) | "), lines[1])
         XCTAssertTrue(lines[1].hasSuffix(" | 4 s ago"), lines[1])
         XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent("screen/\(newest)")), jpeg + Data([3]))
 
-        // The same still again, and the two before it: one file each, none taken away.
+        // The same still again, and the two before it: each look's copies are its own, none taken away.
         let three = await tool(now: now).run(["look", "--last", "3"])
         XCTAssertEqual(three.status, ToolReply.ok, three.text)
         XCTAssertEqual(three.text.split(separator: "\n").count, 4)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("screen").path).count, 3)
+        XCTAssertEqual(copies.count, 4)
+        XCTAssertEqual(copies.filter { $0.hasPrefix("20251009T085326.000Z-") }.count, 2, "two looks wrote one name")
+        for line in three.text.split(separator: "\n").dropFirst() {
+            let path = String(line.prefix { $0 != " " }).replacingOccurrences(of: "/home/topo/", with: "")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent(path).path), "a look answered a path that is not there: \(line)")
+        }
         XCTAssertEqual(store.stills().count, 4, "looking took a still out of the ring")
 
         // After the share ends the stills are still there to look at, and the answer says so.
@@ -443,19 +475,21 @@ final class ScreenTests: XCTestCase {
         XCTAssertTrue(after.text.hasPrefix("not sharing now; the stills are from the last share"), after.text)
 
         // A copy lasts ten minutes: a look after that takes it away and makes the one asked for.
-        let copies = home.appendingPathComponent("screen")
-        let old = copies.appendingPathComponent(ScreenTool.name(of: began))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: old.path) == false)
-        _ = await tool(now: now).run(["look", "--last", "4"])
+        // Nor the copy a look makes of the same still just as the old one goes.
+        let folder = home.appendingPathComponent("screen")
+        let old = folder.appendingPathComponent(ScreenTool.name(of: began.addingTimeInterval(6), look: "old"))
+        _ = await tool(now: now, mark: "old").run(["look", "--last", "4"])
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-ScreenTool.copiesLast - 60)], ofItemAtPath: old.path)
-        _ = await tool(now: now).run(["look"])
+        let fresh = await tool(now: now, mark: "fresh").run(["look"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path), "a copy outlasted its ten minutes")
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: copies.path).count, 3)
+        XCTAssertTrue(copies.contains(ScreenTool.name(of: began, look: "old")), "a copy inside its ten minutes was taken with the one past them")
+        XCTAssertTrue(fresh.text.contains("/home/topo/screen/\(ScreenTool.name(of: began.addingTimeInterval(6), look: "fresh")) | "), fresh.text)
+        XCTAssertTrue(copies.contains(ScreenTool.name(of: began.addingTimeInterval(6), look: "fresh")), "the sweep of an old copy took the new one of the same still")
 
         // Signed out, or no longer the guest's phone: the stills and every copy go.
         ScreenTool.follow(owner: false, store: store, home: home)
         XCTAssertFalse(folderExists)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: copies.path), [], "a copy of the person's screen outlived the login")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [], "a copy of the person's screen outlived the login")
         let gone = await tool(now: now).run(["look"])
         XCTAssertEqual(gone.status, ToolReply.failed)
         ScreenTool.follow(owner: true, store: store, home: home)
@@ -473,7 +507,7 @@ final class ScreenTests: XCTestCase {
         let across = ScreenTool(store: { store }, home: { home }, now: { began }, copied: {
             ScreenTool.follow(owner: false, store: store, home: home)
             // The copy this look had already made lands after the sweep, as a slower write would.
-            try? Data([1]).write(to: home.appendingPathComponent("screen/\(ScreenTool.name(of: began))"))
+            try? Data([1]).write(to: home.appendingPathComponent("screen/late.jpg"))
         })
         let reply = await across.run(["look"])
         XCTAssertEqual(reply.status, ToolReply.failed)
@@ -490,8 +524,8 @@ final class ScreenTests: XCTestCase {
         let door = try store.begin(at: began)
         try store.keep(jpeg, at: began, under: door)
         let store = store, home = home
-        let copy = home.appendingPathComponent("screen/\(ScreenTool.name(of: began))")
-        let brief = ScreenTool(store: { store }, home: { home }, now: { began }, lasts: 1)
+        let copy = home.appendingPathComponent("screen/\(ScreenTool.name(of: began, look: "brief"))")
+        let brief = ScreenTool(store: { store }, home: { home }, now: { began }, lasts: 1, mark: { "brief" })
         let reply = await brief.run(["look"])
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
         XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path))
@@ -499,7 +533,7 @@ final class ScreenTests: XCTestCase {
         while FileManager.default.fileExists(atPath: copy.path), clock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
         XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path), "a copy outlasted its time with no later look")
 
-        _ = await tool(now: began).run(["look"])
+        _ = await tool(now: began, mark: "brief").run(["look"])
         ScreenTool.sweep(under: home)
         XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path), "a copy inside its ten minutes was swept")
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-ScreenTool.copiesLast - 60)], ofItemAtPath: copy.path)
@@ -515,9 +549,38 @@ final class ScreenTests: XCTestCase {
         let folder = home.appendingPathComponent("screen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let theirs = Data("the guest's own".utf8)
-        try theirs.write(to: folder.appendingPathComponent(ScreenTool.name(of: began)))
-        let reply = await tool(now: began).run(["look"])
-        XCTAssertEqual(reply.status, ToolReply.ok)
-        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(ScreenTool.name(of: began))), theirs)
+        try theirs.write(to: folder.appendingPathComponent(ScreenTool.name(of: began, look: "taken")))
+        let reply = await tool(now: began, mark: "taken").run(["look"])
+        XCTAssertEqual(reply.status, ToolReply.failed, "the guest's own file was answered as a still")
+        XCTAssertFalse(reply.text.contains("/home/topo/screen/"), reply.text)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(ScreenTool.name(of: began, look: "taken"))), theirs)
+    }
+
+    /// A look that fails after its first copy (the disk full at the second) still takes that copy
+    /// away when its time is up.
+    func testTheCopiesOfALookThatFailedPartwayGoAtTheirTime() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        try store.keep(jpeg, at: began.addingTimeInterval(2), under: door)
+        let store = store, home = home
+        let made = Made()
+        let failing = ScreenTool(store: { store }, home: { home }, now: { began }, lasts: 1, mark: { "half" }, create: { data, name, home in
+            guard made.next() == 1 else { throw ToolFailure("no room") }
+            return try HomeFile.create(data, named: name, in: [ScreenTool.folder], under: home)
+        })
+        let reply = await failing.run(["look", "--last", "2"])
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertEqual(copies, [ScreenTool.name(of: began, look: "half")])
+        let clock = ContinuousClock(), deadline = clock.now + .seconds(10)
+        while !copies.isEmpty, clock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertEqual(copies, [], "the copy of a look that failed partway outlasted its time")
+    }
+
+    private final class Made: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func next() -> Int { lock.withLock { count += 1; return count } }
     }
 }
