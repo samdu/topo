@@ -176,9 +176,10 @@ struct ScreenStore: Sendable {
     /// The still is written in the folder under a hidden name and renamed to its own, so no
     /// reader sees half a picture, no copy of it is anywhere else, and the folder is never made.
     /// The door is read again once the still has its name: a sign-out between the first reading
-    /// and the rename would otherwise leave a still nothing takes away.
+    /// and the rename would otherwise leave a still nothing takes away. `landed` is called between
+    /// the rename and that reading, for a suite to shut the door there.
     @discardableResult
-    func keep(_ jpeg: Data, at time: Date, under door: Door) throws(ScreenRefusal) -> Bool {
+    func keep(_ jpeg: Data, at time: Date, under door: Door, landed: () -> Void = {}) throws(ScreenRefusal) -> Bool {
         guard self.door() == door else { throw .signedOut }
         let part = folder.appendingPathComponent(".\(UUID().uuidString).part")
         let still = folder.appendingPathComponent(Self.name(login: door.login, at: time))
@@ -190,6 +191,7 @@ struct ScreenStore: Sendable {
             guard self.door() == door else { throw .signedOut }
             return false
         }
+        landed()
         guard self.door() == door else {
             try? FileManager.default.removeItem(at: still)
             throw .signedOut

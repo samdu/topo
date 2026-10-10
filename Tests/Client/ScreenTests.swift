@@ -149,6 +149,25 @@ final class ScreenTests: XCTestCase {
         XCTAssertFalse(folderExists)
     }
 
+    /// The sign-out that lands after the still has its name: the door is read once more, and the
+    /// still that finds it gone takes itself away.
+    func testAStillNamedAsTheDoorGoesIsTakenAway() throws {
+        try store.open()
+        let door = try store.begin()
+        let open = store.folder.appendingPathComponent("_open.json")
+        let landed = { try? FileManager.default.removeItem(at: open) }
+        XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(timeIntervalSince1970: 1), under: door, landed: { _ = landed() }) }, .signedOut)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path).filter { $0 != "_live.json" }, [],
+                       "a still that landed as the door went stayed")
+        // The same with the door opened again meanwhile, which is another door.
+        try store.open()
+        let next = try store.begin()
+        let store = store
+        XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(timeIntervalSince1970: 2), under: next, landed: { store.close(); try? store.open() }) },
+                       .signedOut)
+        XCTAssertEqual(store.stills().count, 0)
+    }
+
     func testAKeptStillLeavesNothingButItself() throws {
         try store.open()
         let door = try store.begin()
@@ -184,6 +203,23 @@ final class ScreenTests: XCTestCase {
             memset(chroma, 128, CVPixelBufferGetBytesPerRowOfPlane(buffer, 1) * CVPixelBufferGetHeightOfPlane(buffer, 1))
         }
         return buffer
+    }
+
+    /// Paints a patch of a BGRA frame one colour, or of a planar frame's chroma one pair of values,
+    /// leaving its luma as it was.
+    private func paint(_ buffer: CVPixelBuffer, _ patch: CGRect, _ bytes: [UInt8]) throws {
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        let planar = CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA
+        let base = try XCTUnwrap(planar ? CVPixelBufferGetBaseAddressOfPlane(buffer, 1) : CVPixelBufferGetBaseAddress(buffer))
+            .assumingMemoryBound(to: UInt8.self)
+        let row = planar ? CVPixelBufferGetBytesPerRowOfPlane(buffer, 1) : CVPixelBufferGetBytesPerRow(buffer)
+        let scale = planar ? 2 : 1, size = planar ? 2 : 4
+        for y in Int(patch.minY) / scale..<Int(patch.maxY) / scale {
+            for x in Int(patch.minX) / scale..<Int(patch.maxX) / scale {
+                for (index, byte) in bytes.enumerated() { base[y * row + x * size + index] = byte }
+            }
+        }
     }
 
     private func size(of jpeg: Data) throws -> CGSize {
@@ -243,11 +279,37 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(sideways, CGSize(width: 800, height: 400))
     }
 
-    func testTheFramesReplayKitHandsOverAreJudgedByTheirLuma() throws {
+    /// A change of colour alone is a change: a patch gone from red to blue at the same green, and
+    /// the same in a planar frame, where the luma does not move at all.
+    func testAChangeOfColourAloneIsAChange() throws {
+        let patch = CGRect(x: 120, y: 300, width: 40, height: 40)
+        let red = try frame(), blue = try frame()
+        try paint(red, patch, [0, 90, 255])
+        try paint(blue, patch, [255, 90, 0])
+        var sampler = ScreenSampler()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertNotNil(keep(red, in: &sampler, at: start))
+        XCTAssertNil(keep(red, in: &sampler, at: start.addingTimeInterval(10)))
+        XCTAssertNotNil(keep(blue, in: &sampler, at: start.addingTimeInterval(20)), "a patch gone from red to blue was not a change")
+
+        for format in [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange] {
+            let one = try frame(format: format), other = try frame(format: format)
+            try paint(one, patch, [90, 240])
+            try paint(other, patch, [240, 110])
+            let before = try XCTUnwrap(ScreenSampler.mark(of: one)), after = try XCTUnwrap(ScreenSampler.mark(of: other))
+            let cells = ScreenSampler.grid * ScreenSampler.grid
+            XCTAssertEqual(Array(before.prefix(cells)), Array(after.prefix(cells)), "the luma moved, so this shows nothing of the chroma")
+            XCTAssertTrue(ScreenSampler.changed(from: before, to: after), "a patch whose colour alone changed was not a change")
+        }
+    }
+
+    func testTheFramesReplayKitHandsOverAreJudgedByEveryChannel() throws {
         for format in [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange] {
             let plain = try XCTUnwrap(ScreenSampler.mark(of: try frame(format: format)))
-            XCTAssertEqual(plain.count, ScreenSampler.grid * ScreenSampler.grid)
-            XCTAssertTrue(plain.allSatisfy { abs($0 - 200) < 0.001 })
+            let cells = ScreenSampler.grid * ScreenSampler.grid
+            XCTAssertEqual(plain.count, cells * 3)
+            XCTAssertTrue(plain.prefix(cells).allSatisfy { abs($0 - 200) < 0.001 })
+            XCTAssertTrue(plain.suffix(cells * 2).allSatisfy { abs($0 - 128) < 0.001 })
             let typed = try XCTUnwrap(ScreenSampler.mark(of: try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16), format: format)))
             XCTAssertTrue(ScreenSampler.changed(from: plain, to: typed))
             XCTAssertFalse(ScreenSampler.changed(from: plain, to: plain))
@@ -255,6 +317,56 @@ final class ScreenTests: XCTestCase {
             XCTAssertNotNil(sampler.take(try frame(format: format), at: Date(timeIntervalSince1970: 0)))
         }
         XCTAssertNil(ScreenSampler.mark(of: try frame(format: kCVPixelFormatType_32ARGB)))
+    }
+
+    // MARK: The watch
+
+    /// What the extension does with a frame that arrives inside the interval and is followed by
+    /// none: the tick past the interval judges it, so the screen as it came to rest is kept.
+    func testTheLastFrameInsideTheIntervalIsKeptAtTheTickPastIt() throws {
+        try store.open()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let door = try store.begin(at: start)
+        var watch = ScreenWatch(store: store, door: door, since: start)
+        let typed = try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16))
+        let more = try frame(patch: CGRect(x: 120, y: 300, width: 40, height: 16))
+        XCTAssertNil(watch.frame(try frame(), orientation: .up, at: start))
+        XCTAssertEqual(store.stills().count, 1)
+        // Two frames inside the interval, and then the screen rests.
+        XCTAssertNil(watch.frame(typed, orientation: .up, at: start.addingTimeInterval(0.4)))
+        XCTAssertNil(watch.frame(more, orientation: .up, at: start.addingTimeInterval(0.8)))
+        XCTAssertEqual(store.stills().count, 1, "a still was kept inside the interval")
+        XCTAssertNil(watch.tick(at: start.addingTimeInterval(1)))
+        XCTAssertEqual(store.stills().count, 1, "a tick inside the interval kept the frame held")
+        let rest = start.addingTimeInterval(ScreenSampler.interval + 0.1)
+        XCTAssertNil(watch.tick(at: rest))
+        XCTAssertEqual(store.stills().map(\.time.timeIntervalSince1970), [start.timeIntervalSince1970, rest.timeIntervalSince1970],
+                       "the frame the screen came to rest on was never kept")
+        var judge = ScreenSampler()
+        _ = keep(more, in: &judge, at: start)
+        XCTAssertNil(judge.take(more, at: start.addingTimeInterval(10)))
+        // It is held once: the ticks after keep nothing more, and each marks the broadcast live.
+        XCTAssertNil(watch.tick(at: rest.addingTimeInterval(5)))
+        XCTAssertEqual(store.stills().count, 2)
+        XCTAssertEqual(store.live(now: rest.addingTimeInterval(6))?.beat, rest.addingTimeInterval(5))
+        // A frame past the interval is judged as it arrives and leaves none held.
+        XCTAssertNil(watch.frame(try frame(), orientation: .up, at: rest.addingTimeInterval(10)))
+        XCTAssertEqual(store.stills().count, 3)
+        XCTAssertNil(watch.tick(at: rest.addingTimeInterval(20)))
+        XCTAssertEqual(store.stills().count, 3)
+    }
+
+    /// A share of a resting screen ends at the tick after the door goes, and a frame after it is refused.
+    func testATickOrAFrameAfterTheDoorGoesEndsTheBroadcast() throws {
+        try store.open()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let door = try store.begin(at: start)
+        var watch = ScreenWatch(store: store, door: door, since: start)
+        XCTAssertNil(watch.tick(at: start.addingTimeInterval(2)))
+        store.close()
+        XCTAssertEqual(watch.tick(at: start.addingTimeInterval(4)), .signedOut)
+        XCTAssertEqual(watch.frame(try frame(), orientation: .up, at: start.addingTimeInterval(5)), .signedOut)
+        XCTAssertFalse(folderExists)
     }
 
     // MARK: The tool
@@ -348,6 +460,51 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(gone.status, ToolReply.failed)
         ScreenTool.follow(owner: true, store: store, home: home)
         XCTAssertNotNil(store.door())
+    }
+
+    /// The sign-out or demotion that runs while a `look` is making its copies: the door is shut
+    /// and the copies taken away before the look's own lands, and the look takes it away itself.
+    func testACopyMadeAcrossASignOutDoesNotStay() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        let store = store, home = home
+        let across = ScreenTool(store: { store }, home: { home }, now: { began }, copied: {
+            ScreenTool.follow(owner: false, store: store, home: home)
+            // The copy this look had already made lands after the sweep, as a slower write would.
+            try? Data([1]).write(to: home.appendingPathComponent("screen/\(ScreenTool.name(of: began))"))
+        })
+        let reply = await across.run(["look"])
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertTrue(reply.text.contains("not being shared"), reply.text)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("screen").path), [],
+                       "a copy of the person's screen made across a sign-out stayed")
+    }
+
+    /// A copy goes when its time is up with no later `look`, and one whose time ran out while
+    /// Topo was suspended goes at the sweep it makes on coming to the front.
+    func testACopyGoesWhenItsTimeIsUpWithNoLaterLook() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        let store = store, home = home
+        let copy = home.appendingPathComponent("screen/\(ScreenTool.name(of: began))")
+        let brief = ScreenTool(store: { store }, home: { home }, now: { began }, lasts: 1)
+        let reply = await brief.run(["look"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path))
+        let clock = ContinuousClock(), deadline = clock.now + .seconds(10)
+        while FileManager.default.fileExists(atPath: copy.path), clock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path), "a copy outlasted its time with no later look")
+
+        _ = await tool(now: began).run(["look"])
+        ScreenTool.sweep(under: home)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path), "a copy inside its ten minutes was swept")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-ScreenTool.copiesLast - 60)], ofItemAtPath: copy.path)
+        ScreenTool.sweep(under: home)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path), "a copy past its ten minutes outlasted the sweep")
     }
 
     func testLookWritesOverNothingOfTheGuests() async throws {

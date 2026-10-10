@@ -10,13 +10,21 @@ import TopoUserland
 /// `look` copies stills into a folder of the tool's own in the guest's home through `HomeFile`,
 /// each under the time it was kept: a still already there under its name is that still. The
 /// copies are the person's screen as much as the stills are, so they do not pile up and do not
-/// outlast the login: a `look` takes away the copies more than `copiesLast` old, and `forget`,
-/// which `follow` calls with the door shut, takes away all of them.
+/// outlast the login. A copy more than `copiesLast` old is taken away by the `look` that made it,
+/// that long after, by any later `look`, and by `sweep` when Topo comes to the front, which
+/// covers the time it was suspended. `forget`, which `follow` calls with the door shut, takes
+/// away all of them, and a `look` reads the door again after its copies are made, so one that
+/// ran across a sign-out leaves none.
 struct ScreenTool: Tool {
     var store: @Sendable () -> ScreenStore? = { ScreenStore.shared() }
     /// The guest's home on the host, which `guestHome` names in the guest.
     var home: @Sendable () -> URL = { GuestResident.homeDirectory }
     var now: @Sendable () -> Date = { Date() }
+    /// How long this tool's copies last.
+    var lasts: TimeInterval = Self.copiesLast
+    /// Called once a `look` has made its copies and before it reads the door again, for a suite
+    /// to shut the door there.
+    var copied: @Sendable () -> Void = {}
 
     static let guestHome = ClaudeLauncher.home
     /// The folder under the home a still is copied into.
@@ -26,7 +34,7 @@ struct ScreenTool: Tool {
     /// The most bytes of one still: far past what the extension writes, so a file that is not
     /// one of its stills is not read whole.
     static let stillBytes = 8 * 1024 * 1024
-    /// How long a copy in the guest's home lasts before a later `look` takes it away.
+    /// How long a copy in the guest's home lasts.
     static let copiesLast: TimeInterval = 10 * 60
 
     /// Follows the login and the role, as `ScreenStore.follow` does, and with the door shut takes
@@ -40,6 +48,12 @@ struct ScreenTool: Tool {
     /// Takes away every copy a `look` made.
     static func forget(under home: URL) {
         HomeFile.clear([folder], under: home, olderThan: -1)
+    }
+
+    /// Takes away the copies past their time: at each `look`, when a `look`'s own copies come to
+    /// it, and when Topo comes to the front.
+    static func sweep(under home: URL, olderThan age: TimeInterval = copiesLast) {
+        HomeFile.clear([folder], under: home, olderThan: age)
     }
 
     static let notShared = """
@@ -89,10 +103,10 @@ struct ScreenTool: Tool {
 
     func run(_ arguments: [String]) async -> ToolReply {
         await PhoneTool.run({ _ in nil }, broker: PermissionBroker(), usage: usage, parse: { try parse(arguments) }) { call in
-            let store = store(), home = home(), now = now()
+            let store = store(), home = home(), now = now(), lasts = lasts, copied = copied
             // The folder's listing and the stills' bytes are a few small files, read in a task of their own.
             return try await Task.detached(priority: .userInitiated) {
-                guard let store, store.door() != nil else { throw ToolFailure(Self.notShared) }
+                guard let store, let door = store.door() else { throw ToolFailure(Self.notShared) }
                 let live = store.live(now: now), stills = store.stills()
                 switch call {
                 case .status:
@@ -102,7 +116,7 @@ struct ScreenTool: Tool {
                     guard !stills.isEmpty else {
                         throw ToolFailure(live == nil ? Self.notShared : "the screen is being shared and no still is kept yet; look again in a moment")
                     }
-                    HomeFile.clear([Self.folder], under: home, olderThan: Self.copiesLast)
+                    Self.sweep(under: home, olderThan: lasts)
                     var lines = [Self.status(live: live, stills: stills, now: now)]
                     for still in stills.suffix(last) {
                         // One the ring let go of between the listing and here is skipped, as is one that
@@ -112,7 +126,19 @@ struct ScreenTool: Tool {
                         _ = try HomeFile.create(data, named: name, in: [Self.folder], under: home)
                         lines.append(PhoneTool.line(["\(Self.guestHome)/\(Self.folder)/\(name)", Self.stamp(still.time), Self.age(of: still.time, now: now)]))
                     }
+                    // The door goes before the copies do (`follow`), so a sign-out or a demotion that
+                    // ran while these were being made is seen here, whichever side of it they landed.
+                    copied()
+                    guard store.door() == door else {
+                        Self.forget(under: home)
+                        throw ToolFailure(Self.notShared)
+                    }
                     guard lines.count > 1 else { throw ToolFailure("no still could be read: they went as they were being read, or the phone is locked. Look again once it is unlocked") }
+                    Task.detached(priority: .utility) {
+                        // A second past, since a file's time is kept in whole seconds.
+                        try? await Task.sleep(for: .seconds(lasts + 1))
+                        Self.sweep(under: home, olderThan: lasts)
+                    }
                     return ToolReply(status: ToolReply.ok, text: lines.joined(separator: "\n") + "\n")
                 }
             }.value

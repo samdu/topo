@@ -233,6 +233,8 @@ struct TopoApp: App {
                     Task { await widgetCues.drain() }
                     // What was shared from another app while Topo was away becomes a turn now.
                     Task { await shares.drain() }
+                    // A copy of a still whose ten minutes ran out while Topo was suspended goes now.
+                    Task.detached(priority: .utility) { ScreenTool.sweep(under: GuestResident.homeDirectory) }
                     LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
                     speaker.prepare()

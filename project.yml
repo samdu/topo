@@ -207,6 +207,7 @@ targets:
       - Apps/Broadcast
       - Apps/Shared/ScreenStore.swift
       - Apps/Shared/ScreenSampler.swift
+      - Apps/Shared/ScreenWatch.swift
     info:
       path: Apps/Broadcast/Info.plist
       properties:

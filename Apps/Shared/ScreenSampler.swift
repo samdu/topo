@@ -9,8 +9,9 @@ import ImageIO
 /// costs a still every second or two. Video is never kept: a frame is judged, encoded as a JPEG
 /// or dropped.
 ///
-/// A frame is judged by its brightness averaged over a grid of cells, which a typed character or
-/// a moved cursor changes and the sensor noise of nothing does, since a screen has none.
+/// A frame is judged by each of its channels averaged over a grid of cells, which a typed
+/// character or a moved cursor changes and the sensor noise of nothing does, since a screen has
+/// none. Every channel is read, so a change of colour alone is a change.
 ///
 /// A frame taken is not yet a still: `kept` is told once it is on disk, so a frame whose write
 /// was dropped is taken again the next time it is offered.
@@ -20,7 +21,7 @@ struct ScreenSampler {
     /// A still's long side, in pixels.
     static let longSide: CGFloat = 1568
     static let quality: CGFloat = 0.6
-    /// The grid a frame's brightness is averaged over, cells a side.
+    /// The grid a frame's channels are averaged over, cells a side.
     static let grid = 24
     /// How far one cell's average has to move, of 255, for the frame to count as changed.
     static let moved = 0.25
@@ -68,40 +69,51 @@ struct ScreenSampler {
         return zip(old, new).contains { abs($0 - $1) >= moved }
     }
 
-    /// The frame's brightness averaged over each cell of the grid, of 255: the luma plane of a
-    /// planar frame, the green of a BGRA one. Nil for any other format.
+    /// Each channel of the frame averaged over each cell of the grid, of 255, one channel after
+    /// another: luma, Cb and Cr of a planar frame, blue, green and red of a BGRA one. Nil for any
+    /// other format.
     static func mark(of frame: CVPixelBuffer) -> [Double]? {
-        let format = CVPixelBufferGetPixelFormatType(frame)
-        let step: Int, offset: Int, planar: Bool
-        switch format {
+        guard CVPixelBufferLockBaseAddress(frame, .readOnly) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
+        switch CVPixelBufferGetPixelFormatType(frame) {
         case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
-            (step, offset, planar) = (1, 0, true)
+            guard CVPixelBufferGetPlaneCount(frame) == 2,
+                  let luma = averages(CVPixelBufferGetBaseAddressOfPlane(frame, 0), width: CVPixelBufferGetWidthOfPlane(frame, 0),
+                                      height: CVPixelBufferGetHeightOfPlane(frame, 0), row: CVPixelBufferGetBytesPerRowOfPlane(frame, 0),
+                                      channels: 1, skipping: 2),
+                  // The chroma plane is already half the frame each way, so all of it is read.
+                  let chroma = averages(CVPixelBufferGetBaseAddressOfPlane(frame, 1), width: CVPixelBufferGetWidthOfPlane(frame, 1),
+                                        height: CVPixelBufferGetHeightOfPlane(frame, 1), row: CVPixelBufferGetBytesPerRowOfPlane(frame, 1),
+                                        channels: 2, skipping: 1) else { return nil }
+            return luma + chroma
         case kCVPixelFormatType_32BGRA:
-            (step, offset, planar) = (4, 1, false)
+            return averages(CVPixelBufferGetBaseAddress(frame), width: CVPixelBufferGetWidth(frame), height: CVPixelBufferGetHeight(frame),
+                            row: CVPixelBufferGetBytesPerRow(frame), channels: 3, of: 4, skipping: 2)
         default:
             return nil
         }
-        guard CVPixelBufferLockBaseAddress(frame, .readOnly) == kCVReturnSuccess else { return nil }
-        defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
-        let width = planar ? CVPixelBufferGetWidthOfPlane(frame, 0) : CVPixelBufferGetWidth(frame)
-        let height = planar ? CVPixelBufferGetHeightOfPlane(frame, 0) : CVPixelBufferGetHeight(frame)
-        let row = planar ? CVPixelBufferGetBytesPerRowOfPlane(frame, 0) : CVPixelBufferGetBytesPerRow(frame)
-        guard let base = planar ? CVPixelBufferGetBaseAddressOfPlane(frame, 0) : CVPixelBufferGetBaseAddress(frame),
-              width >= grid, height >= grid else { return nil }
+    }
+
+    /// The first `channels` bytes of each pixel of a plane, `of` bytes a pixel, each averaged over
+    /// each cell of the grid. Every `skipping`th pixel of every `skipping`th row is read: at two, a
+    /// quarter of the frame, which a character still moves.
+    private static func averages(_ base: UnsafeMutableRawPointer?, width: Int, height: Int, row: Int, channels: Int, of size: Int? = nil,
+                                 skipping: Int) -> [Double]? {
+        let size = size ?? channels, cells = grid * grid
+        guard let base, width * 2 / skipping >= grid, height * 2 / skipping >= grid else { return nil }
         let bytes = base.assumingMemoryBound(to: UInt8.self)
-        var sums = [Int](repeating: 0, count: grid * grid)
-        var counts = [Int](repeating: 0, count: grid * grid)
-        // Every other pixel of every other row: a quarter of the frame, which a character still moves.
-        for y in stride(from: 0, to: height, by: 2) {
+        var sums = [Int](repeating: 0, count: cells * channels)
+        var counts = [Int](repeating: 0, count: cells)
+        for y in stride(from: 0, to: height, by: skipping) {
             let cellRow = y * grid / height * grid
             let line = bytes + y * row
-            for x in stride(from: 0, to: width, by: 2) {
+            for x in stride(from: 0, to: width, by: skipping) {
                 let cell = cellRow + x * grid / width
-                sums[cell] += Int(line[x * step + offset])
+                for channel in 0..<channels { sums[channel * cells + cell] += Int(line[x * size + channel]) }
                 counts[cell] += 1
             }
         }
-        return zip(sums, counts).map { $1 == 0 ? 0 : Double($0) / Double($1) }
+        return sums.indices.map { counts[$0 % cells] == 0 ? 0 : Double(sums[$0]) / Double(counts[$0 % cells]) }
     }
 }
 #endif
