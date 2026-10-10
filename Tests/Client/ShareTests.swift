@@ -570,6 +570,25 @@ final class ShareTests: XCTestCase {
                        "the file of a share that was never sent was left in the home")
     }
 
+    /// A sign-out that takes the file before it is read leaves nothing to place, and what was
+    /// kept behind that share is the ended login's too.
+    func testASignOutThatTakesAFileBeforeItIsPlacedSendsNothingKeptBehindIt() async throws {
+        try store.open(files: true)
+        try store.keep(share(.file, file: "a.pdf", bytes: 3), attachment: try attachment("a.pdf", Data([1, 2, 3])))
+        try store.keep(share(.text, text: "kept behind the file"))
+        try store.keep(share(.text, text: "and another"))
+        let line = Line()
+        let store = store, home = home
+        let inbox = ShareInbox(line: line, store: { store }, home: { home }) { share, store, home in
+            store.close()
+            let placed = await ShareInbox.place(share, from: store, under: home)
+            XCTAssertNil(placed)
+            return placed
+        }
+        await inbox.drain()
+        XCTAssertTrue(line.sent.isEmpty, "a share was sent after the sign-out that took it")
+    }
+
     /// A drain killed after it placed a file leaves the file for the next to find. A sign-out
     /// that lands while that one waits takes the file away with the share, unless the killed
     /// drain's turn is in the log, naming it.
