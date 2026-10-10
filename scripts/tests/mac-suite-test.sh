@@ -62,7 +62,7 @@ fake "$tree/scripts/fetch-ear-models.sh" 'exit 0'
 fake "$tree/scripts/model-manifest.sh" 'exit 0'
 fake "$work/bin/xcodebuild" '
 case "$*" in
-  -version) echo "Xcode ${FAKE_XCODE:-26.6}"; echo "Build version 1" ;;
+  -version) echo "Xcode ${FAKE_XCODE:-27.0}"; echo "Build version 1" ;;
   *test-without-building*-only-testing:TopoUITests*) exit "${UI_TEST:-0}" ;;
   *) exit 0 ;;
 esac'
