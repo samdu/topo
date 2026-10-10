@@ -10,7 +10,7 @@ struct ScreenShareSection: View {
     var body: some View {
         Section {
             LabeledContent("Share the screen with Topo") {
-                BroadcastButton(tint: look.settings.tint)
+                BroadcastButton(tint: look.settings.tint, side: look.settings.broadcastButton)
                     .frame(width: look.settings.broadcastButton, height: look.settings.broadcastButton)
                     .accessibilityIdentifier("settings-screen-share")
             }
@@ -23,11 +23,14 @@ struct ScreenShareSection: View {
 /// `RPSystemBroadcastPickerView`, offering Topo's broadcast alone and no microphone.
 struct BroadcastButton: UIViewRepresentable {
     var tint: Color
+    var side: CGFloat
 
     static let broadcast = "zone.hexagon.topo.broadcast"
 
     func makeUIView(context: Context) -> RPSystemBroadcastPickerView {
-        let picker = RPSystemBroadcastPickerView(frame: .zero)
+        // The picker sizes its button from the frame it is made with and stretches it from there;
+        // made with none, the button has no size at any later frame and no press reaches it.
+        let picker = RPSystemBroadcastPickerView(frame: CGRect(origin: .zero, size: CGSize(width: side, height: side)))
         picker.preferredExtension = Self.broadcast
         picker.showsMicrophoneButton = false
         return picker
