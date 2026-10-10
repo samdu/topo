@@ -381,14 +381,17 @@ suite_others() {
   done
 
   # Womble is an Xcode project, not a package, so it needs a simulator rather than
-  # `swift test`. Its deployment target is iOS 12.
+  # `swift test`. Its deployment target is iOS 12, which Xcode 27 builds for no
+  # simulator (its floor is 15), so the test build alone is raised to that floor:
+  # the same sources, which use nothing newer than 12, on the oldest the toolchain has.
   say "xcodebuild test (Womble)"
   rm -rf "$RESULTS/Womble.xcresult"
   if new_simulator womble "$IOS_SIMULATOR_RUNTIME" iPhone; then
     run "$RESULTS/Womble.log" bounded 1200 xcodebuild test \
       -project Womble/Womble.xcodeproj -scheme Womble \
       -destination "platform=iOS Simulator,id=$udid" \
-      -resultBundlePath "$RESULTS/Womble.xcresult" || status=1
+      -resultBundlePath "$RESULTS/Womble.xcresult" \
+      IPHONEOS_DEPLOYMENT_TARGET=15.0 || status=1
   else
     status=1
   fi
