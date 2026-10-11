@@ -2,7 +2,7 @@
 
 Everything that can be ready is in the repository: the privacy manifests, the usage strings, the export options, and `scripts/archive-upload.sh`, which archives Topo for the App Store and can upload it. What is left needs Sam, because it needs an Apple account, and this is the list with what to click.
 
-Nothing here has been done yet. The archive and export have been run on buddybox and produce a signed App Store build; the upload has not been attempted.
+Of the steps below, the schema (4) is deployed for `iCloud.zone.hexagon.topo`. The archive and export have been run on buddybox and produce a signed App Store build; the upload has not been attempted.
 
 ## What is already handled
 
@@ -56,11 +56,45 @@ The key is read in whatever shape it was kept (`scripts/asc-pem.sh`): the `.p8` 
 
 ## 4. The CloudKit schema
 
-Records written in development do not exist in production until the schema is promoted, and TestFlight builds talk to production. [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the container → **Schema** → **Deploy Schema Changes** → **Deploy** — for `iCloud.zone.hexagon.topo` and again for `iCloud.zone.hexagon.topo.board`.
+Records written in development do not exist in production until the schema is deployed, and TestFlight builds talk to production. Production refuses a save that carries a record type or a field it does not have, and what is deployed there is permanent: a record type's name, a field's name and a field's type cannot be changed or removed afterwards, and a later deploy can only add: a type, a field, an index. So the development schema is checked against the table in `docs/cloudkit.md` (*The schema*) before the deploy, and the deploy is Sam's.
 
-Do this after running the app against development at least once, so there is a schema to promote: the record types and their fields are created by the first save of each. The reads ask by a field of ours rather than by record name, so the index that matters is the one behind `sequence`, which arrives with the field. The push subscription asks by `sequence` too, and a build on a container whose schema was never promoted cannot save it: that build answers a limb's turn on the five-second loop alone, with no error shown.
+**Reading the schema.** `cktool` reads a schema with a CloudKit management token, which is not the App Store Connect key: [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the account menu → **Settings** → **Tokens** → **Management Token**, kept in 1Password as `Topo CloudKit management token` in the Homelab vault.
 
-A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never promoted fails at the write, an entitlement that was never granted fails before that, at the account.
+```
+set -e
+export CLOUDKIT_MANAGEMENT_TOKEN="$(op read 'op://Homelab/Topo CloudKit management token/credential')"
+mkdir -p build/schema
+out="$(mktemp -d "build/schema/$(date -u +%Y%m%dT%H%M%SZ).XXXX")"
+for c in iCloud.zone.hexagon.topo iCloud.zone.hexagon.topo.board; do for e in development production; do
+  xcrun cktool export-schema --team-id 4A5NSJ6Y3G --container-id $c --environment $e --output-file "$out/$c.$e.ckdb"
+done; done
+```
+
+Each run exports into a directory of its own and stops at the first export that fails, so a file compared is one that run wrote.
+
+**Checking it.** The development export is compared with the table both ways, a `.ckdb` naming the table's types `STRING`, `INT64`, `TIMESTAMP`, `LIST<STRING>` and `LIST<ASSET>`. A row missing from it is a code path that has never run against development, which creates a type or a field at its first save and never sees an empty list, since the adapter leaves one off the wire:
+
+- `Surface` exists once a widget slot has been set, its `cleared` once one has been cleared, and `imageNames` and `images` once one has been saved with an image.
+- `Role` exists once a device has been made the primary from another.
+- `Device` and its `endpoints`, and `PrimaryLease.endpoint`, exist once a hub signed with the iCloud entitlement has launched with a LAN address.
+- `Turn.parents` and `Note.parents` exist once a second turn and a second revision have been written.
+- `Card`, less its `parents`, exists once Womble's self-test has run.
+
+Running the path on a debug build fills the gap and proves the type the code writes. No target calls the writer of `VaultRemote`, `CardWrite`, `Card.parents` or `Device.pairedWith`, so those, and an index, are added to the exported file and imported back into development:
+
+```
+xcrun cktool import-schema --team-id 4A5NSJ6Y3G --container-id <container> --environment development --validate --file <the export, with lines added>
+```
+
+An import can remove as well as add, and development holds the records of whoever runs debug builds, so the file imported is the whole export taken just before, with lines added, and its `diff` against that export is shown to Sam first: additions only, and a removed line is a stop. A record type or a field of ours in the export that the table does not have is removed from development before the deploy, since the deploy would make it permanent; what CloudKit put there itself stays: `Users`, the fields whose names begin `___`, the `GRANT` lines, and `cloudkit.share`, which development gains at the first share saved and the board container needs in production before `TopoBoard.share()` can save one.
+
+**Deploying.** Console → the container → **Development** → **Schema** → **Deploy Schema Changes…**. The sheet lists what will change; it should list additions only. Then **Deploy**, once for each container that has changes. `cktool` has no deploy. **Reset Environment**, and `cktool reset-schema`, delete every record in development, which is the transcript and the memory of whoever runs debug builds.
+
+**Proving it.** A production export taken after the deploy is compared with the development export, order aside, and with the table: the same record types, fields, types and indexes, and nothing else. `iCloud.zone.hexagon.topo` was deployed and compared this way on 2026-10-11, with the result in #381's Proof and in `progress-schema-prod.md`, the plan's ledger. `iCloud.zone.hexagon.topo.board` had no schema in either environment then, since nothing writes a card, and is deployed with the change that does. The archive is cut from the commit the table was checked at; at a later one, the diff between the two is read for record definitions, field mappings, queries and subscription predicates first.
+
+Production starts with no records: nothing of a development transcript, memory or pairing is there, and since no target sets `com.apple.developer.icloud-container-environment` the environment follows the signing, so a TestFlight phone and a debug-built hub never see each other's records. A phone that has run a debug build is signed out in it, and the app deleted, before the TestFlight build is installed: the app's container, the zone's copy on disk included, otherwise carries over from one environment to the other.
+
+A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never deployed fails at the write, an entitlement that was never granted fails before that, at the account. Its step *The board's container* saves a `Card`, so against production it fails there until the board container's schema is deployed; the steps before it are the ones that judge `iCloud.zone.hexagon.topo`. A push subscription that could not be saved shows no error at all: the build answers a limb's turn on the five-second loop alone, a note written on another device reaches the mirror at its next sync, and the watch fetches its surfaces only while open and on its refresh.
 
 ## 5. Upload
 
