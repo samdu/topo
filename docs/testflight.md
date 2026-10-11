@@ -61,12 +61,16 @@ Records written in development do not exist in production until the schema is de
 **Reading the schema.** `cktool` reads a schema with a CloudKit management token, which is not the App Store Connect key: [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the account menu → **Settings** → **Tokens** → **Management Token**, kept in 1Password as `Topo CloudKit management token` in the Homelab vault.
 
 ```
+set -e
 export CLOUDKIT_MANAGEMENT_TOKEN="$(op read 'op://Homelab/Topo CloudKit management token/credential')"
-mkdir -p build/schema
+out="build/schema/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$out"
 for c in iCloud.zone.hexagon.topo iCloud.zone.hexagon.topo.board; do for e in development production; do
-  xcrun cktool export-schema --team-id 4A5NSJ6Y3G --container-id $c --environment $e --output-file build/schema/$c.$e.ckdb
+  xcrun cktool export-schema --team-id 4A5NSJ6Y3G --container-id $c --environment $e --output-file "$out/$c.$e.ckdb"
 done; done
 ```
+
+Each run exports into a directory of its own and stops at the first export that fails, so a file compared is one that run wrote.
 
 **Checking it.** The development export is compared with the table both ways, a `.ckdb` naming the table's types `STRING`, `INT64`, `TIMESTAMP`, `LIST<STRING>` and `LIST<ASSET>`. A row missing from it is a code path that has never run against development, which creates a type or a field at its first save and never sees an empty list, since the adapter leaves one off the wire:
 
@@ -90,7 +94,7 @@ An import can remove as well as add, and development holds the records of whoeve
 
 Production starts with no records: nothing of a development transcript, memory or pairing is there, and since no target sets `com.apple.developer.icloud-container-environment` the environment follows the signing, so a TestFlight phone and a debug-built hub never see each other's records. A phone that has run a debug build is signed out in it, and the app deleted, before the TestFlight build is installed: the app's container, the zone's copy on disk included, otherwise carries over from one environment to the other.
 
-A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never deployed fails at the write, an entitlement that was never granted fails before that, at the account. A push subscription that could not be saved shows no error at all: the build answers a limb's turn on the five-second loop alone, a note written on another device reaches the mirror at its next sync, and the watch fetches its surfaces only while open and on its refresh.
+A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never deployed fails at the write, an entitlement that was never granted fails before that, at the account. Its step *The board's container* saves a `Card`, so against production it fails there until the board container's schema is deployed; the steps before it are the ones that judge `iCloud.zone.hexagon.topo`. A push subscription that could not be saved shows no error at all: the build answers a limb's turn on the five-second loop alone, a note written on another device reaches the mirror at its next sync, and the watch fetches its surfaces only while open and on its refresh.
 
 ## 5. Upload
 
