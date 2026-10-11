@@ -56,11 +56,27 @@ The key is read in whatever shape it was kept (`scripts/asc-pem.sh`): the `.p8` 
 
 ## 4. The CloudKit schema
 
-Records written in development do not exist in production until the schema is promoted, and TestFlight builds talk to production. [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the container → **Schema** → **Deploy Schema Changes** → **Deploy** — for `iCloud.zone.hexagon.topo` and again for `iCloud.zone.hexagon.topo.board`.
+Records written in development do not exist in production until the schema is deployed, and TestFlight builds talk to production. Production refuses a save that carries a record type or a field it does not have, and what is deployed there is permanent: a record type's name, a field's name and a field's type cannot be changed or removed afterwards, and only an index can be added later. So the development schema is checked against the table in `docs/cloudkit.md` (*The schema*) before the deploy, and the deploy is Sam's.
 
-Do this after running the app against development at least once, so there is a schema to promote: the record types and their fields are created by the first save of each. The reads ask by a field of ours rather than by record name, so the index that matters is the one behind `sequence`, which arrives with the field. The push subscription asks by `sequence` too, and a build on a container whose schema was never promoted cannot save it: that build answers a limb's turn on the five-second loop alone, with no error shown.
+**Reading the schema.** `cktool` reads a schema with a CloudKit management token, which is not the App Store Connect key: [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the account menu → **Settings** → **Tokens** → **Management Token**, kept in 1Password as `Topo CloudKit management token` in the Homelab vault.
 
-A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never promoted fails at the write, an entitlement that was never granted fails before that, at the account.
+```
+export CLOUDKIT_MANAGEMENT_TOKEN="$(op read 'op://Homelab/Topo CloudKit management token/credential')"
+mkdir -p build/schema
+for c in iCloud.zone.hexagon.topo iCloud.zone.hexagon.topo.board; do for e in development production; do
+  xcrun cktool export-schema --team-id 4A5NSJ6Y3G --container-id $c --environment $e --output-file build/schema/$c.$e.ckdb
+done; done
+```
+
+**Checking it.** The development export is compared with the table both ways. A row missing from it is a code path that has never run: development creates a type or a field at its first save, and the adapter leaves an empty list off the wire, so `Surface.cleared` exists only once a slot has been cleared, `Surface.imageNames` and `images` once a slot has been saved with an image, `PrimaryLease.endpoint` once a hub has claimed, `Device.endpoints` and `pairedWith` once a device has paired, and `Card` and `CardWrite` once the hub has written a card. Running the path on a debug build fills the gap and proves the type the code writes. What no path writes (`VaultRemote`, an index) is added to the exported file and imported back into development (`cktool import-schema --validate --environment development`); an import can remove as well as add, so the file imported is the whole export taken just before, with lines added. A type or a field in the export that the table does not have is removed from development before the deploy, since the deploy would make it permanent.
+
+**Deploying.** Console → the container → **Development** → **Schema** → **Deploy Schema Changes…**. The sheet lists what will change; it should list additions only. Then **Deploy**, for `iCloud.zone.hexagon.topo` and again for `iCloud.zone.hexagon.topo.board`. `cktool` has no deploy. **Reset Environment**, and `cktool reset-schema`, delete every record in development, which is the transcript and the memory of whoever runs debug builds.
+
+**Proving it.** The production export has every row of the table. The archive is cut from the commit the table was checked at; at a later one, the diff between the two is read for record definitions, field mappings, queries and subscription predicates first.
+
+Production starts with no records: nothing of a development transcript, memory or pairing is there, and since no target sets `com.apple.developer.icloud-container-environment` the environment follows the signing, so a TestFlight phone and a debug-built hub never see each other's records. A phone that has run a debug build is signed out in it, and the app deleted, before the TestFlight build is installed: the app's container, the zone's copy on disk included, otherwise carries over from one environment to the other.
+
+A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never deployed fails at the write, an entitlement that was never granted fails before that, at the account. A push subscription that could not be saved shows no error at all: the build answers a limb's turn on the five-second loop alone, and the watch fetches its surfaces only while open and on its refresh.
 
 ## 5. Upload
 
