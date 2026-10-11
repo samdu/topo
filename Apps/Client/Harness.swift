@@ -371,8 +371,9 @@ final class Harness {
         spokenNonces = []
         failedRetries = 0
         retryNotBefore = nil
-        UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
+        // An answer an earlier build kept under its own key is the last login's too.
+        UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         // What the guest kept of the last login's conversation goes with it.
         await brain.forget()
         #if canImport(CloudKit)
@@ -1218,6 +1219,10 @@ final class Harness {
     /// device never yielded to.
     func adopt(_ lease: PrimaryLease) {
         self.lease = lease
+        // What was read before this device was last primary says nothing of the log now: another
+        // device answered meanwhile. The transcript stays drawn; whether the log is empty is not
+        // decided again until it has been read again.
+        hasRead = false
     }
 
     private func makeRunner() async throws -> TurnRunner {

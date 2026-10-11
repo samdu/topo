@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 230
+    static let fields = 245
 
     static let full = """
     {
@@ -208,6 +208,12 @@ enum LookFixture {
         }
       },
       "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" },
+      "reading": { "markSize": 80, "spacing": 20, "font": { "style": "title3", "weight": "medium" },
+                   "ink": ["#203040", "#C0D0E0"], "surface": ["#F4F0E8", "#181410"] },
+      "setup": { "spacing": 14, "lineSpacing": 6, "horizontalPadding": 22, "verticalPadding": 12,
+                 "titleFont": { "style": "subheadline", "weight": "bold" }, "wordsFont": { "style": "footnote", "weight": "light" },
+                 "wordsInk": ["#405060", "#A0B0C0"], "troubleInk": ["#B03020", "#FF9080"],
+                 "tint": ["#207080", "#70D0E0"], "surface": ["#EEE8DC", "#22201C"] },
       "bar": { "font": { "style": "caption", "weight": "heavy" }, "ink": ["#102030", "#D0E0F0"],
                "slider": { "width": 150, "height": 30, "padding": 9, "drop": 4, "inset": 20, "track": 2, "stop": 5, "knob": 12,
                            "restOpacity": 0.5, "restLabelOpacity": 0.6,

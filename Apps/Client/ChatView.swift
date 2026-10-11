@@ -12,8 +12,10 @@ struct ChatView: View {
     @Environment(RoleSelector.self) private var roleSelector
     @Environment(Memory.self) private var memory
     @Environment(Connections.self) private var connections
-    @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
+    /// The first-run question has been answered on this device, so it is not asked twice.
     @AppStorage("firstRunAnswered") private var answered = false
+    /// Whether the setup card stood a moment ago (`Setup.standing`).
+    @State private var setupStood = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
     @Environment(\.look) private var look
@@ -122,6 +124,51 @@ struct ChatView: View {
             }
             .ignoresSafeArea(.keyboard)
         }
+        // Under the question the chat is not there to be read or pressed: one microphone, one
+        // field. The question never arrives over a press or a word of the chat's own
+        // (`FirstRun.asks`), so nothing is taken from a hand that is on it.
+        .accessibilityHidden(asking)
+        .onChange(of: !standingSetup.isEmpty, initial: true) { _, stands in setupStood = stands }
+        .allowsHitTesting(!asking)
+        .overlay {
+            if asking {
+                FirstRunView(setup: standingSetup) { text in
+                    if FirstRun.answer(text, answered: answered, via: harness, mark: { answered = true }) { Task { await harness.retry() } }
+                }
+            }
+        }
+    }
+
+    /// Whether the first-run question stands over the chat: over a log that has been read and
+    /// holds nothing, with nothing of the person's on its way and their hand not on the chat.
+    private var asking: Bool {
+        var fixture = false
+        #if DEBUG
+        fixture = DebugRun.transcript() != nil
+        #endif
+        // An answer said into the question's microphone is still being heard when its press
+        // ends: the question stands until it has been, so a turn the log brings meanwhile does
+        // not take the screen, and the answer with it, from under the person.
+        return FirstRun.stands(hearing: voice.owner == .firstRun, asks: FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+                             busy: harness.busy,
+                             engaged: FirstRun.engaged(voice: voice, row: row, focused: focused),
+                             answered: answered, fixture: fixture))
+    }
+
+    /// The setup card's lines while it stands, and none while it does not.
+    private var standingSetup: [Setup.Line] {
+        let lines = setupLines
+        return Setup.standing(lines, stood: setupStood) ? lines : []
+    }
+
+    /// What the setup card draws, or nothing in a debug build whose ear or voice is a stand-in,
+    /// which has no setup to show.
+    private var setupLines: [Setup.Line] {
+        #if DEBUG
+        if let fixture = DebugRun.setup() { return fixture }
+        if DebugRun.standsIn() { return [] }
+        #endif
+        return Setup.lines(ear: voice.ear, voice: speaker.voice)
     }
 
     private func chat(keyboard: Bool, keyboardTop: CGFloat?) -> some View {
@@ -144,6 +191,8 @@ struct ChatView: View {
                     }
                 }
             } card: {
+                // What a new install, or an updated one, is still fetching and preparing.
+                if !standingSetup.isEmpty { SetupCard(lines: standingSetup).mascotObstacle() }
                 // Once, and only while the memory is still in this app's own folder and has
                 // more than a handful in it. Not now is for good: no nag, no timer.
                 if memory.offersICloudDrive(answered: memoryOfferAnswered) {
@@ -166,7 +215,7 @@ struct ChatView: View {
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
             // under them and the glass leave him room, on the glass, or at a pin.
             .mascotRoams(mascot.drawn, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
-                         covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
+                         covered: showSettings || showDiagnostics || showMemory || asking, keyboardTop: keyboardTop,
                          stop: modelsOpen ? modelStop : nil, ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
                          face: { facing in Task { @MainActor in mascot.facing = facing } },
@@ -221,18 +270,7 @@ struct ChatView: View {
             // so the way back from a turn that never landed is where it always is.
             row.resume(from: harness)
             // Words on their way when the app last went away go first, under their own nonce.
-            // Otherwise the first-run answer is the first turn, once, only when the log is empty;
-            // it clears once it is in the log so a stale read on a later launch cannot resend it.
-            if harness.hasWaiting {
-                await harness.retry()
-            } else if harness.turns.isEmpty, !firstRunAnswer.isEmpty, !harness.busy {
-                let answer = firstRunAnswer
-                await harness.send(answer)
-                if harness.turns.contains(where: { $0.role == .person && $0.text == answer }) {
-                    answered = true
-                    firstRunAnswer = ""
-                }
-            }
+            if harness.hasWaiting { await harness.retry() }
             // From here the screen stays current and, as primary, answers what the other devices
             // write into the log. A limb's turn also wakes the loop by a silent push (`TurnPush`),
             // which runs its next pass now instead of beside it; the handler stands exactly as
@@ -499,6 +537,8 @@ struct ChatView: View {
     /// there is neither: nothing is measured and the pane is drawn whole, which is the pane as
     /// it was before it had a presence. This is the one availability branch on this screen.
     @ViewBuilder private func transcript(_ draft: Draft) -> some View {
+        let queued = row.queued(in: harness)
+        let drawn = !shownTurns.isEmpty || draft.drawer == .row || !queued.before.isEmpty || !queued.after.isEmpty
         let view = TranscriptView(turns: shownTurns, notice: harness.notice,
                                   // Holding one of Topo's turns says it again, which is how a
                                   // typed turn's reply — never read aloud as it lands — is heard.
@@ -507,8 +547,13 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draft, queued: row.queued(in: harness), answer: row.answer(in: harness),
+                                  draft: draft, queued: queued, answer: row.answer(in: harness),
                                   cue: speaker.cue)
+            // Until the first read of the log returns, the empty page says it is being read. A
+            // read that failed says so in the bar, and the loop's next pass reads again.
+            .overlay {
+                if ReadingLog.stands(read: transcriptRead, drawn: drawn) { ReadingLog().allowsHitTesting(false) }
+            }
             // An image in a reply is read as the guest reads it, once there is a guest.
             .environment(\.replyImages, GuestImages.reader(epoch: GuestImages.Mounts.shared.epoch))
             #if DEBUG
