@@ -15,13 +15,13 @@ struct SettingsView: View {
     @State private var showVocabulary = false
     @State private var showMemory = false
     @State private var showConnections = false
+    @State private var showContext = false
 
     var body: some View {
         NavigationStack {
             Form {
                 // First: where Topo sits, and the Reset for this device's hand on the look.
                 PlacementSection()
-                ContextSection()
                 // One row each, named for what is behind it, so no heading says it again.
                 #if os(iOS)
                 ScreenShareSection()
@@ -30,6 +30,7 @@ struct SettingsView: View {
                     Button("Vocabulary") { showVocabulary = true }
                     Button("Memory") { showMemory = true }
                     Button("Connections") { showConnections = true }
+                    Button("Context") { showContext = true }
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
@@ -51,8 +52,23 @@ struct SettingsView: View {
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
             .sheet(isPresented: $showMemory) { MemoryView() }
             .sheet(isPresented: $showConnections) { ConnectionsView() }
+            .sheet(isPresented: $showContext) { ContextView() }
         }
         .tint(look.settings.tint)
+    }
+}
+
+/// The context's sheet, behind its row in the settings.
+struct ContextView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form { ContextSection() }
+                .navigationTitle("Context")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
     }
 }
 
