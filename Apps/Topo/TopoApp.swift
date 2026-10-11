@@ -94,6 +94,7 @@ struct TopoApp: App {
                 ContextTool.Facts(context: harness?.context, window: harness?.window, setting: harness?.compaction ?? .auto,
                                   compacting: harness?.compacting ?? false, last: harness?.lastCompaction)
             }, set: { [weak harness] in harness?.compaction = $0 }, compact: { [weak harness] in harness?.compact() ?? false }),
+            VoiceTool(),
         ]
         // A control's request to the home network asks for local network access in the
         // foreground only, since a background one while it is undetermined is denied unasked.
