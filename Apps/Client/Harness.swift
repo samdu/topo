@@ -86,6 +86,15 @@ final class Harness {
     /// a sign-out, since the context was the last login's. A reply another primary wrote, or one found already in the log,
     /// says nothing of its context and leaves this as it was.
     private(set) var context: Int?
+    /// Counts sign-outs, so a compaction that ends after one says nothing to the next login.
+    private var logins = 0
+    /// The window of the model that answered last, as Claude Code reports it with a result; nil
+    /// until one has, and after a sign-out.
+    private(set) var window: Int?
+    /// A compaction asked for here is waiting for the guest's turn to end, or running.
+    private(set) var compacting = false
+    /// What the last compaction asked for here came to (`Compaction.Outcome.words`).
+    private(set) var lastCompaction: String?
     /// Told about every reply the log has brought, however it arrived: one this device wrote, or
     /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
     /// rather than a view's observer, because behind the lock nothing is drawn and whether a
@@ -344,6 +353,41 @@ final class Harness {
         }
     }
 
+    /// When the mind's context is compacted by itself. A change reaches the brain at once, as
+    /// the model's does, and replaces the resident process at its next idle moment.
+    var compaction: Compaction.Setting {
+        get { Compaction.Setting(kept: defaults.integer(forKey: Compaction.key)) }
+        set {
+            defaults.set(newValue.kept, forKey: Compaction.key)
+            let brain = brain
+            Task { [weak self] in
+                guard let self else { return }
+                await brain.use(compaction: self.compaction)
+            }
+        }
+    }
+
+    /// The tokens of context the mind is compacted at, once a reply has said the window.
+    var threshold: Int? { window.map { Compaction.threshold(window: $0, setting: compaction) } }
+
+    /// Asks the guest to compact its conversation now, and keeps what that came to. False, with
+    /// nothing asked, while one asked for here is still waiting or running, or with no guest.
+    /// One asked for during a turn waits for that turn's end (`GuestBridge.compact`).
+    @discardableResult
+    func compact() -> Bool {
+        guard let guest, !compacting else { return false }
+        compacting = true
+        let login = logins
+        Task { [weak self] in
+            let outcome = await guest.compact()
+            guard let self, self.logins == login else { return }
+            self.compacting = false
+            self.lastCompaction = outcome.words
+            if case .done(_, let post) = outcome { self.context = post }
+        }
+        return true
+    }
+
     /// Sign-out: the turn in flight and the answering pass in flight are cancelled and write
     /// nothing more, the answering loop ends, the runner and screen are cleared, and the next
     /// sign-in starts at the first question. Returns once the brain has forgotten the login's
@@ -366,6 +410,10 @@ final class Harness {
         forgetHeard()
         busy = false
         context = nil
+        window = nil
+        compacting = false
+        lastCompaction = nil
+        logins += 1
         unfinished = nil
         pending = []
         spokenNonces = []
@@ -1041,7 +1089,11 @@ final class Harness {
         case .update(.ended(let end)):
             // A turn that ended with no reply leaves nothing to land; one that answered is
             // replaced by its turn when that is shown.
-            if case .answered = end {} else { dropWriting() }
+            if case .answered(let result) = end {
+                if let window = result.window { self.window = window }
+            } else {
+                dropWriting()
+            }
         case .update, .gone:
             break
         }

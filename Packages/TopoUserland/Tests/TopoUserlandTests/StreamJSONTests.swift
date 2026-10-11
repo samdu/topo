@@ -165,6 +165,39 @@ final class StreamJSONTests: XCTestCase {
                        [.other("system/compact_boundary")])
     }
 
+    /// The lines 2.1.285 wrote in the guest for `/compact` and for a compaction at its threshold.
+    func testACompactBoundaryIsRead() {
+        let manual = #"{"type":"system","subtype":"compact_boundary","session_id":"S1","compact_metadata":{"trigger":"manual","pre_tokens":31502,"post_tokens":1471,"duration_ms":14021}}"#
+        let auto = #"{"type":"system","subtype":"compact_boundary","session_id":"S1","compact_metadata":{"trigger":"auto","pre_tokens":36237,"post_tokens":4386}}"#
+        XCTAssertEqual(StreamJSON.events(in: manual), [.compacted(.init(trigger: "manual", pre: 31_502, post: 1_471))])
+        XCTAssertEqual(StreamJSON.events(in: auto), [.compacted(.init(trigger: "auto", pre: 36_237, post: 4_386))])
+        // Its statuses are not events of a turn, save the one saying it failed.
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"status","status":"compacting"}"#), [.other("system/status")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"status","status":null,"compact_result":"success"}"#), [.other("system/status")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"too_few_groups"}"#),
+                       [.compactFailed("too_few_groups")])
+        // The result that ends `/compact` has no words, and is not an error.
+        guard case .result(let ended)? = StreamJSON.events(in: #"{"type":"result","subtype":"success","is_error":false,"result":"","num_turns":0,"session_id":"S1","modelUsage":{"claude-haiku-4-5-20251001":{"contextWindow":200000}}}"#).first else {
+            return XCTFail("the result was not read")
+        }
+        XCTAssertFalse(ended.isError)
+        XCTAssertEqual(ended.window, 200_000)
+    }
+
+    /// The threshold is the launcher's: the window always, the percent when one is set, and
+    /// neither is the callback's to say.
+    func testNoThresholdLeavesTheVariableOut() async throws {
+        let launcher = ClaudeLauncher { [ClaudeLauncher.compactAtVariable: "3", ClaudeLauncher.compactWindowVariable: "100000", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
+        let own = try await launcher.launchEnvironment(compactAt: nil)
+        XCTAssertNil(own[ClaudeLauncher.compactAtVariable], "Claude Code's own threshold was written as a number")
+        XCTAssertEqual(own[ClaudeLauncher.compactWindowVariable], "1000000")
+        let set = try await launcher.launchEnvironment(compactAt: 60)
+        XCTAssertEqual(set[ClaudeLauncher.compactAtVariable], "60")
+        XCTAssertEqual(set[ClaudeLauncher.compactWindowVariable], "1000000")
+        XCTAssertEqual(ClaudeLauncher.compactAtVariable, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+        XCTAssertEqual(ClaudeLauncher.compactWindowVariable, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    }
+
     func testAResultWithNoIsErrorIsAnErrorUnlessItSaysSuccess() {
         guard case .result(let failed)? = StreamJSON.events(in: #"{"type":"result","subtype":"error_max_turns"}"#).first,
               case .result(let fine)? = StreamJSON.events(in: #"{"type":"result","subtype":"success","result":"ok"}"#).first

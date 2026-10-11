@@ -102,6 +102,20 @@ final class GuestResident {
         return ClaudeModel.effective(setting ?? .default).rawValue
     }
 
+    /// The share of its window a process is started to compact at: this device's setting, or nil
+    /// for Claude Code's own. A debug build launched with `TOPO_DEBUG_COMPACT_AT=<percent>` takes
+    /// that instead, which is how a simulator run sees a compaction without filling a window.
+    static var compactAt: Int? {
+        #if DEBUG
+        if let word = ProcessInfo.processInfo.environment[compactAtVariable], let setting = Compaction.Setting(word) {
+            return setting.percent
+        }
+        #endif
+        return Compaction.Setting(kept: UserDefaults.standard.integer(forKey: Compaction.key)).percent
+    }
+
+    nonisolated static let compactAtVariable = "TOPO_DEBUG_COMPACT_AT"
+
     /// Brings the guest and the session up, once per process, and starts following the app's
     /// lifecycle from the foreground it is in now. A start that fails is not kept: the next call
     /// tries again from the step that failed (the kernel's own boot is once per process, and its
@@ -137,7 +151,7 @@ final class GuestResident {
                     .merging(toolsEnvironment) { own, _ in own }
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
-                                       memory: self.memoryAtStart(log: log), log: log)
+                                       memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in log("background: \(outcome)") })
@@ -281,6 +295,15 @@ struct ResidentConversation: GuestConversation {
     func use(model: String?) async {
         // A session not started yet starts with the setting (`GuestResident.model`).
         await GuestResident.shared.session?.use(model: model)
+    }
+
+    func use(compactAt: Int?) async {
+        // A session not started yet starts with the setting (`GuestResident.compactAt`). A debug
+        // launch's own threshold stands over the setting, as it does at the start.
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment[GuestResident.compactAtVariable] == nil else { return }
+        #endif
+        await GuestResident.shared.session?.use(compactAt: compactAt)
     }
 
     func sessionID() async -> String? {
@@ -451,6 +474,10 @@ extension DebugRun {
                     case .event(.toolResult(let isError, let text)):
                         let name = calls.isEmpty ? "(no call)" : calls.removeFirst()
                         say("guest turn \(number) " + toolResultLine(tool: name, isError: isError, text: text))
+                    case .event(.compacted(let compacted)):
+                        say("guest turn \(number) compacted: \(compacted.trigger), \(compacted.pre) → \(compacted.post)")
+                    case .event(.usage(let usage)):
+                        say("guest turn \(number) context: \(usage.context)")
                     case .event(.malformed(let line)):
                         say("guest turn \(number) malformed line: \(line)")
                     case .event:
@@ -460,6 +487,7 @@ extension DebugRun {
                         switch end {
                         case .answered(let result):
                             say("guest turn \(number) answered in \(seconds) s: \(result.text ?? "")")
+                            if let window = result.window { say("guest turn \(number) window: \(window)") }
                         case .failed(let failure):
                             say("guest turn \(number) failed in \(seconds) s: \(failure)")
                         case .abandoned:

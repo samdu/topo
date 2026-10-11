@@ -48,6 +48,13 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case said([Message], ending: Ending = .result)
         /// Received, and answered with a result line and no text event at all.
         case resultOnly(String)
+        /// `/compact` as Claude Code plays it: the boundary, then a result with no words and no
+        /// assistant message.
+        case compacts(pre: Int, post: Int)
+        /// A compaction Claude Code tried and gave up on, saying why, before its result.
+        case compactFails(String)
+        /// A turn Claude Code compacted at its threshold before answering.
+        case compactsThenReplies(String, pre: Int, post: Int)
     }
 
     /// One assistant message of a scripted turn.
@@ -79,6 +86,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private var _inputs: [String] = []
     private var _ids: [String] = []
     private var _models: [String?] = []
+    private var _thresholds: [Int?] = []
     private var refusal: String?
     /// Turns the guest still has: `settle` waits for them, as the resident session does.
     private var hanging: [(continuation: AsyncStream<GuestSession.TurnUpdate>.Continuation, id: String, text: String,
@@ -100,6 +108,8 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     var ids: [String] { lock.withLock { _ids } }
     /// Each model `use(model:)` was told.
     var models: [String?] { lock.withLock { _models } }
+    /// Each threshold `use(compactAt:)` was told.
+    var thresholds: [Int?] { lock.withLock { _thresholds } }
 
     /// Refuses every turn as not ready, with `why`, until it is nil again.
     func refuse(_ why: String?) { lock.withLock { refusal = why } }
@@ -163,6 +173,8 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     func warm() async {}
 
     func use(model: String?) async { lock.withLock { _models.append(model) } }
+
+    func use(compactAt: Int?) async { lock.withLock { _thresholds.append(compactAt) } }
 
     func sessionID() async -> String? { lock.withLock { session } }
 
@@ -260,6 +272,28 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
             write(input: text, id: id, session: session)
             write(reply: reply, model: "claude-haiku-4-5-20251001", session: session)
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
+            continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: reply, session: session,
+                                                      duration: .milliseconds(10)))))
+            continuation.finish()
+        case .compacts(let pre, let post):
+            continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
+            continuation.yield(.event(.compacted(.init(trigger: "manual", pre: pre, post: post))))
+            continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: "", session: session,
+                                                      duration: .milliseconds(10)))))
+            continuation.finish()
+        case .compactFails(let why):
+            continuation.yield(.event(.compactFailed(why)))
+            continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: "", session: session,
+                                                      duration: .milliseconds(10)))))
+            continuation.finish()
+        case .compactsThenReplies(let reply, let pre, let post):
+            let model = "claude-haiku-4-5-20251001"
+            write(input: text, id: id, session: session)
+            write(reply: reply, model: model, session: session)
+            continuation.yield(.event(.compacted(.init(trigger: "auto", pre: pre, post: post))))
+            continuation.yield(.event(.started(session: session, model: model)))
+            continuation.yield(.event(.text(reply)))
+            continuation.yield(.event(.usage(.init(model: model, context: post + 100, output: 5))))
             continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: reply, session: session,
                                                       duration: .milliseconds(10)))))
             continuation.finish()

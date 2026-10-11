@@ -51,6 +51,157 @@ final class GuestBridgeTests: XCTestCase {
         return try await log.writer(for: DeviceID(device)).append(role, text, continuing: try await log.read())
     }
 
+    // MARK: - Compaction
+
+    /// `/compact` is not a turn: the ledger on disk is the same bytes after it, nothing reaches
+    /// the log, and the guest's coverage of the log is what it was.
+    func testCompactingIsNotATurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("Noted."), .compacts(pre: 31_502, post: 1_471), .reply("Marmalade."))
+        _ = try await runner.run("the word is marmalade", model: .sonnet)
+        let ledger = try Data(contentsOf: ledgerFile)
+        let seen = await bridge.current.seen
+        let turns = try await log(db)
+
+        let outcome = await bridge.compact()
+        XCTAssertEqual(outcome, .done(pre: 31_502, post: 1_471))
+        XCTAssertEqual(guest.inputs.last, GuestBridge.compactCommand)
+        XCTAssertEqual(try Data(contentsOf: ledgerFile), ledger, "the compaction wrote the ledger")
+        let after = await bridge.current
+        XCTAssertEqual(after.seen, seen)
+        XCTAssertNil(after.pending)
+        let logged = try await log(db)
+        XCTAssertEqual(logged, turns, "the compaction reached the log")
+
+        // The conversation goes on in the same session, told nothing over again.
+        _ = try await runner.run("what was the word?", model: .sonnet)
+        XCTAssertEqual(guest.inputs.last, "what was the word?")
+        let texts = try await log(db).map(\.text)
+        XCTAssertEqual(texts, ["the word is marmalade", "Noted.", "what was the word?", "Marmalade."])
+    }
+
+    /// A turn asked while a compaction runs waits for it, and is answered by its own input.
+    func testATurnAskedDuringACompactionWaitsAndIsAnsweredByItsOwnInput() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .hang, .reply("Hello."))
+        let compacting = Task { await bridge.compact() }
+        try await eventually("the guest to take the compaction") { guest.inputs == [GuestBridge.compactCommand] }
+        let asking = Task { try await runner.run("hello", model: .sonnet) }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(guest.inputs.count, 1, "a turn went to the guest beside the compaction")
+        guest.finishHanging(with: "")
+        let outcome = await compacting.value
+        XCTAssertEqual(outcome, .failed("Claude Code answered without compacting"), "a result with no boundary was taken as done")
+        _ = try await asking.value
+        XCTAssertEqual(guest.inputs, [GuestBridge.compactCommand, "hello"])
+        let texts = try await log(db).map(\.text)
+        XCTAssertEqual(texts, ["hello", "Hello."])
+    }
+
+    /// A compaction asked for during a turn runs after it, never beside it.
+    func testACompactionAskedDuringATurnRunsAfterIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .hang, .compacts(pre: 900, post: 90))
+        let asking = Task { try await runner.run("a long one", model: .sonnet) }
+        try await eventually("the guest to take the turn") { guest.inputs.count == 1 }
+        let compacting = Task { await bridge.compact() }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(guest.inputs, ["a long one"], "the compaction went to the guest under a turn")
+        guest.finishHanging(with: "Done.")
+        _ = try await asking.value
+        let outcome = await compacting.value
+        XCTAssertEqual(outcome, .done(pre: 900, post: 90))
+        XCTAssertEqual(guest.inputs, ["a long one", GuestBridge.compactCommand])
+    }
+
+    /// A compaction that did not happen says so, with Claude Code's reason where it gave one.
+    func testAFailedCompactionSaysSo() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .compactFails("too_few_groups"), .notReceived("the process exited"),
+                                                  .errorResult("compaction is disabled"))
+        let refusedByClaude = await bridge.compact()
+        XCTAssertEqual(refusedByClaude, .failed("too_few_groups"))
+        let exited = await bridge.compact()
+        guard case .failed = exited else { return XCTFail("a process that exited was \(exited)") }
+        let errored = await bridge.compact()
+        guard case .failed = errored else { return XCTFail("an error result was \(errored)") }
+        guest.refuse("the userland is still downloading")
+        let notUp = await bridge.compact()
+        guard case .unavailable(let why) = notUp else { return XCTFail("a guest not up was \(notUp)") }
+        XCTAssertTrue(why.contains("still downloading"), why)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a compaction wrote a ledger")
+    }
+
+    /// A turn Claude Code compacted under before answering is answered with its own words.
+    func testATurnThatCompactedMidwayIsAnsweredWithItsOwnWords() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, _) = try await launch(db, .compactsThenReplies("Still here.", pre: 36_237, post: 4_386))
+        let result = try await runner.run("are you there?", model: .sonnet)
+        XCTAssertEqual(result.reply.text, "Still here.")
+        XCTAssertEqual(result.reply.context, 4_486)
+        let texts = try await log(db).map(\.text)
+        XCTAssertEqual(texts, ["are you there?", "Still here."])
+        let pending = await bridge.current.pending
+        XCTAssertNil(pending)
+    }
+
+    /// The setting reaches the guest as the percent, and Automatic as none.
+    func testTheCompactionSettingReachesTheGuest() async throws {
+        let (_, bridge, guest) = try await launch(InMemoryRecordDatabase())
+        await bridge.use(compaction: .percent(60))
+        await bridge.use(compaction: .auto)
+        XCTAssertEqual(guest.thresholds, [60, nil])
+    }
+
+    /// The harness's hand on it: the setting is kept and told to the guest, a compaction's end is
+    /// kept for Settings and `topo context` and sets the context, a second asked meanwhile asks
+    /// nothing, the window is the last result's, and a sign-out leaves none of it.
+    func testTheHarnessKeepsTheSettingAndWhatACompactionCameTo() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.hang, .compactFails("too_few_groups")])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let defaults = UserDefaults(suiteName: name)!
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: defaults, brain: bridge, relay: relay, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        XCTAssertEqual(harness.compaction, .auto)
+        XCTAssertNil(harness.threshold, "a threshold was said with no window known")
+        harness.compaction = .percent(60)
+        XCTAssertEqual(defaults.integer(forKey: Compaction.key), 60)
+        try await eventually("the guest to be told") { guest.thresholds == [60] }
+
+        XCTAssertTrue(harness.compact())
+        XCTAssertTrue(harness.compacting)
+        XCTAssertFalse(harness.compact(), "a second compaction was asked for beside the first")
+        try await eventually("the guest to take the compaction") { guest.inputs == [GuestBridge.compactCommand] }
+        relay.tell(.update(.event(.compacted(.init(trigger: "manual", pre: 31_502, post: 1_471)))))
+        relay.tell(.update(.ended(.answered(.init(isError: false, subtype: "success", text: "", session: "S1",
+                                                  duration: .milliseconds(10), window: 200_000)))))
+        XCTAssertEqual(harness.window, 200_000)
+        XCTAssertEqual(harness.threshold, 108_000)
+        guest.finishHanging(with: "")
+        try await eventually("the compaction to end") { !harness.compacting }
+        XCTAssertEqual(harness.lastCompaction, "failed: Claude Code answered without compacting")
+
+        XCTAssertTrue(harness.compact())
+        try await eventually("the second to end") { !harness.compacting }
+        XCTAssertEqual(harness.lastCompaction, "failed: too_few_groups")
+
+        // A compaction still running at a sign-out says nothing to the login after it.
+        guest.then(.hang)
+        XCTAssertTrue(harness.compact())
+        try await eventually("the guest to take the third") { guest.inputs.count == 3 }
+        await harness.forget()
+        guest.finishHanging(with: "")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(harness.compacting)
+        XCTAssertNil(harness.lastCompaction)
+        XCTAssertNil(harness.window)
+        XCTAssertEqual(harness.compaction, .percent(60), "the setting went with the login; the model's does not")
+    }
+
     // MARK: - Reconciliation, the function
 
     func testReconciliationOfEachVerdict() {
@@ -3682,6 +3833,7 @@ private final class PIDGatedGuest: GuestConversation, @unchecked Sendable {
     func ready() async throws { try await inner.ready() }
     func warm() async {}
     func use(model: String?) async { await inner.use(model: model) }
+    func use(compactAt: Int?) async { await inner.use(compactAt: compactAt) }
     func sessionID() async -> String? { await inner.sessionID() }
     func residentPID() async -> Int32? {
         if lock.withLock({ holding }) {

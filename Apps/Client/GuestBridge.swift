@@ -18,6 +18,9 @@ protocol GuestConversation: Sendable {
     func warm() async
     /// The model the resident process asks; a change replaces it once idle.
     func use(model: String?) async
+    /// The share of its window the resident process compacts at, nil for Claude Code's own; a
+    /// change replaces it once idle.
+    func use(compactAt: Int?) async
     /// The session id the resident process resumes, nil for a fresh one.
     func sessionID() async -> String?
     func residentPID() async -> Int32?
@@ -674,6 +677,55 @@ actor GuestBridge: Brain {
     func use(model: ClaudeModel) async {
         await conversation.use(model: ClaudeModel.effective(model).rawValue)
     }
+
+    func use(compaction: Compaction.Setting) async {
+        await conversation.use(compactAt: compaction.percent)
+    }
+
+    // MARK: - Compaction
+
+    /// Asks Claude Code to compact its conversation now. It is not a turn of the log: it has no
+    /// nonce, no record in the ledger, no reply and no coverage, so a crash under it owes
+    /// nothing and the next request reconciles exactly what it would have. It takes the
+    /// requests' one slot, so it never runs beside a turn and one asked for during a turn runs
+    /// when that turn has ended. Done only on Claude Code's own boundary followed by a result
+    /// that is not an error.
+    func compact() async -> Compaction.Outcome {
+        let login = self.login
+        if asking { await withCheckedContinuation { queue.append($0) } }
+        asking = true
+        defer { release() }
+        guard self.login == login else { return .unavailable(Self.signedOut) }
+        do {
+            try await conversation.ready()
+        } catch {
+            return .unavailable(String(describing: error))
+        }
+        guard self.login == login else { return .unavailable(Self.signedOut) }
+        let updates: AsyncStream<GuestSession.TurnUpdate>
+        do {
+            updates = try await conversation.send(Self.compactCommand, id: UUID().uuidString.lowercased())
+        } catch {
+            return .unavailable(String(describing: error))
+        }
+        var boundary: StreamEvent.Compacted?, reason: String?, end: GuestSession.TurnEnd?
+        for await update in updates {
+            switch update {
+            case .event(.compacted(let compacted)): boundary = compacted
+            case .event(.compactFailed(let why)): reason = why
+            case .ended(let ended): end = ended
+            case .event: break
+            }
+        }
+        guard self.login == login else { return .unavailable(Self.signedOut) }
+        if case .answered = end, let boundary { return .done(pre: boundary.pre, post: boundary.post) }
+        if let reason { return .failed(reason) }
+        if case .answered = end { return .failed("Claude Code answered without compacting") }
+        return .failed(end.map(Self.describe) ?? "the guest's turn ended with nothing said")
+    }
+
+    static let compactCommand = "/compact"
+    static let signedOut = "signed out"
 
     // MARK: - Words given ahead of their turn
 
