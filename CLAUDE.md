@@ -44,6 +44,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 | The CloudKit log and lease, the packages and their tests | `docs/cloudkit.md` |
 | The PR check, the debug launch environment | `docs/testing.md` |
 | Running signed in on a simulator | `docs/simulator.md` |
+| Xcode's MCP tools, the agent's simulator, Apple's skills | `docs/xcode-mcp.md` |
 | Pairing, LAN surfaces, the house board | `docs/pairing.md`, `docs/surfaces.md`, `docs/board.md` |
 | The home-screen and lock-screen widgets, the watch's complications, `topo widget`, the widget extensions | `docs/widgets.md` |
 | Installing on Sam's phone, republishing the install page on merge, TestFlight | `docs/install.md`, `docs/testflight.md` |
@@ -62,6 +63,7 @@ The process — who plans, who builds, who reviews, and in what order — is `do
     - Kill only pids you started, never by name (`pgrep`, `pkill`, `killall`): an `xcodebuild` matched by pattern is as likely a sibling session's run as yours. `scripts/simulator-run.sh` records its own in `build/sim/simulator-run.pids`.
     - Never quit Simulator.app: quitting it shuts down every booted simulator on the Mac. One device is stopped with `xcrun simctl shutdown <udid>`, and a tap goes through XCUITest, not the GUI.
     - Run `TopoUITests` on a simulator no other worktree is using, named by udid: two runs on one device share the bundle id and its container, and each fails on the other's state.
+    - Xcode's MCP tools (`mcp__xcode__*`, `docs/xcode-mcp.md`) are advisory: nothing in the merge gate reads them, and nothing an agent built or ran through the bridge is Proof. They run on the `Topo Agent` simulator and no other, and only by the session that holds it: the main session, never a subagent, runs `scripts/agent-simulator.sh take` before anything runs (a non-zero exit is not yours, so run nothing) and `release` when done. Straight after `XcodeOpenWorkspace`, `XcodeSwitchRunDestination` to it and check the destination the call returns before `RunProject`, `RunAllTests`, `RunSomeTests` or a `DeviceInteraction*` session, which is given the udid `take` printed. No other script is pointed at it. After each `DeviceInteractionSynthesize`, find the state change in the screenshot and hierarchy it returns the paths of before saying the interaction did anything.
     - Re-read a PR's body right before `gh pr edit --body` and edit what you read: the coordinator ticks Proof boxes in it, and a body written from an older copy unticks them.
     - Retarget a stacked PR to `main` (`gh pr edit <n> --base main`) before its base merges: automerge deletes the merged head branch, and GitHub closes a PR whose base branch is gone.
     - Name a scratch file for its PR or branch (`body-<topic>.md`): sessions can share a scratch directory, and a generic name is overwritten between your write and the command that reads it.
