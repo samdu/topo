@@ -408,8 +408,43 @@ final class ModelDownloads {
         }
         if statuses.contains(.waiting) { return "waiting for a network the data settings allow" }
         if statuses.contains(.verifying) { return "verifying the download" }
-        if statuses.allSatisfy({ $0 == .present }) { return "downloaded" }
+        if statuses.allSatisfy({ $0 == .present }) { return Self.downloaded }
         if statuses.allSatisfy({ $0 == .absent }) { return "not downloaded" }
+        let (done, total) = bytes(ids, statuses)
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return "downloading \(formatter.string(fromByteCount: done)) of \(formatter.string(fromByteCount: total))"
+    }
+
+    /// The share of those models' bytes on the phone, while `describe` says they are downloading
+    /// and from the same count, so a bar and the words beside it say one thing; nil in every
+    /// other state, which has no measure.
+    func fraction(_ ids: [String]) -> Double? {
+        let statuses = ids.map { status(for: $0) }
+        guard Self.measured(statuses) else { return nil }
+        let (done, total) = bytes(ids, statuses)
+        return Self.fraction(done: done, of: total)
+    }
+
+    /// What `describe` says of models that are all on the phone.
+    nonisolated static let downloaded = "downloaded"
+
+    /// Whether a set of models has a measure: some of it downloading, and none of it failed,
+    /// waiting on a network or being verified.
+    nonisolated static func measured(_ statuses: [Status]) -> Bool {
+        let unmeasured = statuses.contains { status in
+            if case .failed = status { return true }
+            return status == .waiting || status == .verifying
+        }
+        return !unmeasured && !statuses.allSatisfy({ $0 == .present }) && !statuses.allSatisfy({ $0 == .absent })
+    }
+
+    nonisolated static func fraction(done: Int64, of total: Int64) -> Double? {
+        total > 0 ? min(max(Double(done) / Double(total), 0), 1) : nil
+    }
+
+    /// The bytes of those models on the phone and the bytes they come to.
+    private func bytes(_ ids: [String], _ statuses: [Status]) -> (done: Int64, total: Int64) {
         var done: Int64 = 0, total: Int64 = 0
         for (id, status) in zip(ids, statuses) {
             guard let model = manifest?.model(id) else { continue }
@@ -420,9 +455,7 @@ final class ModelDownloads {
             default: break
             }
         }
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return "downloading \(formatter.string(fromByteCount: done)) of \(formatter.string(fromByteCount: total))"
+        return (done, total)
     }
 
     /// Runs `body` once every model in `ids` is present: now, if they already are. A failure
