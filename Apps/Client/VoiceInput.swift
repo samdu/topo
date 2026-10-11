@@ -74,6 +74,11 @@ final class VoiceInput {
     /// The microphone prompt's answer: the system's in production, injected by the suite so a
     /// press can be driven through `pressDown` and `pressUp` without TCC.
     private let permission: @MainActor () async -> Bool
+    /// Turns the input node's voice processing on or off, on an engine that is not running; the
+    /// system's in production, recorded by the suite, whose offline engine has no voice unit.
+    private let voiceProcessing: (AVAudioEngine, Bool) throws -> Void
+    /// Where `NoiseSuppression` is kept, read at every press.
+    private let defaults: UserDefaults
     /// True while a tap is on the input node, so a teardown that installed none never reads
     /// `inputNode`, which creates the hardware input on its first read.
     private(set) var tapped = false
@@ -103,7 +108,11 @@ final class VoiceInput {
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          formats: @escaping (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
              = VoiceInput.readFormats,
-         permission: @escaping @MainActor () async -> Bool = { await AVAudioApplication.requestRecordPermission() }) {
+         permission: @escaping @MainActor () async -> Bool = { await AVAudioApplication.requestRecordPermission() },
+         voiceProcessing: @escaping (AVAudioEngine, Bool) throws -> Void = VoiceInput.setVoiceProcessing,
+         defaults: UserDefaults = .standard) {
+        self.voiceProcessing = voiceProcessing
+        self.defaults = defaults
         self.audio = audio
         self.ear = ear
         self.makeEngine = makeEngine
@@ -239,10 +248,17 @@ final class VoiceInput {
             // A session that would not activate and an input node whose formats are dead are both
             // the same situation: the handles this press holds are no good and must not be reused.
             let dead: Bool
+            // An engine whose voice processing would not change is in neither state for certain,
+            // so it goes too; the session under it is as good as it was.
+            var dropped = false
             switch error {
             case is InputUnavailable:
                 refusal = Self.noInput
                 dead = true
+            case let refused as ProcessingRefused:
+                refusal = "noise suppression did not turn \(refused.on ? "on" : "off"): \(refused.underlying)"
+                dead = false
+                dropped = true
             case let inactive as SessionInactive:
                 refusal = "the audio session did not activate: \(inactive.underlying)"
                 dead = true
@@ -256,17 +272,16 @@ final class VoiceInput {
             owner = nil
             tearDown()
             audio.wantRecord(false, for: gate == .chat ? .chat : .firstRun)
-            if dead {
-                engine = nil
-                audio.invalidate()
-            }
+            if dead || dropped { engine = nil }
+            if dead { audio.invalidate() }
         }
     }
 
     /// The press proper, once both permissions are in: everything that is a handle into
     /// mediaserverd, in the one order that is safe. The session is claimed and activated before
-    /// an engine exists, the engine before its input node is read, and the formats before a tap
-    /// is installed on them; a throw anywhere leaves the press refused with nothing running.
+    /// an engine exists, the engine before its input node is read, voice processing set before
+    /// the formats are read, and the formats before a tap is installed on them; a throw anywhere
+    /// leaves the press refused with nothing running.
     private func startMicrophone(as gate: Gate, mine: Int) throws {
         audio.wantRecord(true, for: gate == .chat ? .chat : .firstRun)
         do { try audio.ensureActive() } catch { throw SessionInactive(underlying: error) }
@@ -276,6 +291,12 @@ final class VoiceInput {
             return made
         }()
         let input = engine.inputNode
+        // Before the formats, because voice processing changes them, and here because it can be
+        // changed only on an engine that is not running, which every press finds: a release and
+        // a teardown both stop it. The setting is read now and not again, so a change made
+        // mid-utterance is the next press's.
+        let suppress = NoiseSuppression.enabled(defaults)
+        do { try voiceProcessing(engine, suppress) } catch { throw ProcessingRefused(on: suppress, underlying: error) }
         // Read once. The format the tap is installed with is the very object the guard judged:
         // a route change between two reads would pass the guard on the first numbers and raise
         // on the second, which is the crash this guard exists to answer.
@@ -406,6 +427,8 @@ final class VoiceInput {
     }
 
     private struct InputUnavailable: Error {}
+    /// The input node would not take the voice processing the setting asks for.
+    private struct ProcessingRefused: Error { let on: Bool; let underlying: Error }
     /// `AudioSession.ensureActive` refused, carrying what it threw for the refusal line.
     private struct SessionInactive: Error { let underlying: Error }
 
@@ -433,6 +456,21 @@ final class VoiceInput {
         return (input.outputFormat(forBus: 0), input.inputFormat(forBus: 0))
     }
 
+    /// Apple's voice processing on the input node (noise suppression, echo cancellation and gain
+    /// control, one unit), as `NoiseSuppression` asks. Changing it rebuilds the node's unit, so
+    /// it is called only when the answer differs from the node's own. The voice unit ducks every
+    /// other sound on the phone by default, Topo's own reply among them, so it is told not to.
+    /// Off is the unit gone and not bypassed, which is the microphone as it comes.
+    static let setVoiceProcessing: (AVAudioEngine, Bool) throws -> Void = { engine, on in
+        let input = engine.inputNode
+        guard input.isVoiceProcessingEnabled != on else { return }
+        try input.setVoiceProcessingEnabled(on)
+        if on {
+            input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min)
+        }
+        AudioLog.say("noise suppression \(on ? "on" : "off"): the input's voice processing was changed")
+    }
+
     /// Whether a tap may be installed, as a function of the four numbers alone. A zero sample
     /// rate or no channel on either side is a session with no input; a client rate that is not
     /// the hardware's is a conversion `installTap` refuses. Both refusals are raised as
@@ -441,6 +479,17 @@ final class VoiceInput {
         client.rate > 0 && client.channels > 0
             && hardware.rate > 0 && hardware.channels > 0
             && client.rate == hardware.rate
+    }
+}
+
+/// Whether the microphone is heard through Apple's voice processing: Settings' Noise suppression,
+/// which the mind sets too (`topo voice`), kept in this device's defaults.
+enum NoiseSuppression {
+    static let key = "noiseSuppression"
+
+    /// On unless turned off: a phone that has never been asked suppresses.
+    static func enabled(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
     }
 }
 

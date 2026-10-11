@@ -94,7 +94,8 @@ final class PressRefusalTests: XCTestCase {
                             ear: Ear) -> VoiceInput {
         VoiceInput(audio: audio, ear: ear, center: center,
                    makeEngine: { seams.makeEngine() },
-                   formats: { seams.readFormats($0) })
+                   formats: { seams.readFormats($0) },
+                   voiceProcessing: { try seams.process($0, $1) })
     }
 
     /// A second of tone at the ear's rate, as the tap would have delivered it.

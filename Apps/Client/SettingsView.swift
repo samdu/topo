@@ -4,7 +4,7 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// diagnostics, the acknowledgements, and the way out.
+/// microphone's noise suppression, the diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
@@ -15,6 +15,10 @@ struct SettingsView: View {
     @State private var showVocabulary = false
     @State private var showMemory = false
     @State private var showConnections = false
+    @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+
+    /// The toggle's identifier, for the UI suite.
+    static let noiseSuppression = "settings-noise-suppression"
 
     var body: some View {
         NavigationStack {
@@ -29,6 +33,12 @@ struct SettingsView: View {
                     Button("Vocabulary") { showVocabulary = true }
                     Button("Memory") { showMemory = true }
                     Button("Connections") { showConnections = true }
+                }
+                Section {
+                    Toggle("Noise suppression", isOn: $noiseSuppression)
+                        .accessibilityIdentifier(SettingsView.noiseSuppression)
+                } footer: {
+                    Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }

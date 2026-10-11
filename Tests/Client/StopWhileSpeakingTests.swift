@@ -59,7 +59,8 @@ final class StopWhileSpeakingTests: XCTestCase {
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
-                               permission: permission)
+                               permission: permission,
+                               voiceProcessing: { try seams.process($0, $1) })
         speaker.microphoneOpen = { input.listening }
         return (speaker, input, seams)
     }
