@@ -1,0 +1,14 @@
+==> fetching e1d579480fba88e8f0428e3cf23811bcdd05421f from https://github.com/OpenMinis/ish-arm64.git
+==> applying 0001-memory-brake-refresh.patch
+==> applying 0002-meson-offsets.patch
+==> applying 0003-pidfd-open-zombie.patch
+==> applying 0004-guest-mount-real-refused.patch
+==> applying 0005-sqabs-sqneg-vector.patch
+==> applying 0006-dns-sentinel.patch
+==> meson (iphoneos)
+==> libarchive (iphoneos)
+==> importer and glue (iphoneos)
+==> meson (iphonesimulator)
+==> libarchive (iphonesimulator)
+==> importer and glue (iphonesimulator)
+build-ish: /Users/buddy/github/.worktrees/topo-maps-device/Packages/TopoUserland/Frameworks/TopoIsh.xcframework (d436746bb5ca1793296cbb6a2288a35c03d47fcd1d5588ab820548251c671500)
