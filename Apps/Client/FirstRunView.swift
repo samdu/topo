@@ -1,11 +1,14 @@
-#if os(iOS) || os(macOS)
+#if os(iOS)
 import SwiftUI
 
 /// The first ten minutes: one question, with the microphone asked for at the first press and
-/// nothing before it. The answer is kept in `firstRunAnswer` until the turn log takes it as the
-/// first turn; nothing said here is dropped.
+/// nothing before it. The answer is handed to `onDone`, which puts it on the harness's line as
+/// the first turn; nothing said here is dropped. It stands over the chat, opaque, while
+/// `FirstRun.asks`.
 struct FirstRunView: View {
-    @AppStorage("firstRunAnswer") private var storedAnswer = ""
+    /// What a new install is still fetching and preparing, drawn under the question.
+    var setup: [Setup.Line] = []
+    @Environment(\.look) private var look
     @State private var answer = ""
     #if os(iOS)
     @Environment(VoiceInput.self) private var voice
@@ -77,9 +80,13 @@ struct FirstRunView: View {
                     .disabled(answer.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .frame(maxWidth: 360)
+            SetupCard(lines: setup)
             Spacer().frame(height: 24)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(look.reading.surface)
+        .accessibilityIdentifier("first-run")
         #if os(iOS)
         .onDisappear { voice.cancel(.firstRun) }
         #endif
@@ -88,7 +95,6 @@ struct FirstRunView: View {
     private func submit() {
         let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        storedAnswer = text
         onDone(text)
     }
 

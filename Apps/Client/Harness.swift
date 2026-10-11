@@ -371,7 +371,6 @@ final class Harness {
         spokenNonces = []
         failedRetries = 0
         retryNotBefore = nil
-        UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
         // What the guest kept of the last login's conversation goes with it.
         await brain.forget()

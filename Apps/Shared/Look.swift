@@ -46,6 +46,10 @@ struct Look: Equatable, Sendable {
     var mascot: Mascot
     /// What the models the chat offers are called.
     var mind = Mind()
+    /// What stands in the transcript's place until the log has been read.
+    var reading = Reading()
+    /// The card that says what a new install is still fetching and preparing.
+    var setup = Setup()
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -783,6 +787,35 @@ struct Look: Equatable, Sendable {
 }
 
 extension Look {
+    /// The mark, the spinner and the line under them that stand where the transcript will, until
+    /// the first read of the log returns.
+    struct Reading: Equatable, Sendable {
+        var markSize: CGFloat = 64
+        var spacing: CGFloat = 12
+        var font: Font = .body
+        var ink = Theme.textMuted
+        /// What the first-run question stands on, over the chat: the page's own colour, opaque.
+        var surface = Theme.background
+    }
+
+    /// The setup card: a line for each part still on its way, its name on the leading side, where
+    /// it has got to on the trailing one, and a bar under both while there is something to measure.
+    struct Setup: Equatable, Sendable {
+        /// Between two lines, and between a line's words and its bar.
+        var spacing: CGFloat = 10
+        var lineSpacing: CGFloat = 4
+        var horizontalPadding: CGFloat = 16
+        var verticalPadding: CGFloat = 10
+        var titleFont: Font = .footnote.weight(.semibold)
+        var wordsFont: Font = .caption
+        var wordsInk = Theme.textMuted
+        /// A part that failed says why in the colour a failure is said in.
+        var troubleInk = Theme.signal
+        /// The bars are Topo's, so they take Topo's colour.
+        var tint = Theme.primary
+        var surface = Theme.surface
+    }
+
     /// The controls at the leading edge of the navigation bar, the mute and the model, each an
     /// item of the bar's own: drawn plainly in Topo's colour, and not etched, since the bar is
     /// not the glass. Their marks are `composer.flank`'s.

@@ -30,6 +30,7 @@ enum DebugRun {
     static let transcriptVariable = "TOPO_DEBUG_TRANSCRIPT"
     static let tuningVariable = "TOPO_DEBUG_TUNING"
     static let noticesVariable = "TOPO_DEBUG_NOTICES"
+    static let setupVariable = "TOPO_DEBUG_SETUP"
 
     #if os(iOS)
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
@@ -143,6 +144,34 @@ enum DebugRun {
         let folder = home.appendingPathComponent("charts", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? picture.pngData()?.write(to: folder.appendingPathComponent("sizes.png"))
+    }
+    #endif
+
+    #if os(iOS)
+    /// `TOPO_DEBUG_SETUP=<fetching|failed>`: the setup card draws these lines in place of the
+    /// app's own parts, so a suite reads the card without a download: one part downloading at a
+    /// known share, one being prepared and one ready, or one of them failed.
+    @MainActor
+    static func setup(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Setup.Line]? {
+        let fetch = Setup.Fetch(fraction: 0.25, words: "downloading 57 MB of 228 MB")
+        switch environment[setupVariable] {
+        case "fetching":
+            return Setup.lines(phase: .fetching, claude: .fetching, workspace: fetch,
+                               ear: .loading, earFetch: fetch, earLoading: Ear.preparing,
+                               voice: .ready, voiceFetch: fetch, voiceLoading: Voice.preparing)
+        case "failed":
+            return Setup.lines(phase: .failed("the download was refused"), claude: .fetching, workspace: fetch,
+                               ear: .ready, earFetch: fetch, earLoading: Ear.preparing,
+                               voice: .ready, voiceFetch: fetch, voiceLoading: Voice.preparing)
+        default:
+            return nil
+        }
+    }
+
+    /// The launch gave the ear or the voice a stand-in (`TOPO_DEBUG_EAR`, `TOPO_DEBUG_VOICE`), so
+    /// there is no setup of the app's own to show.
+    static func standsIn(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        [earVariable, voiceVariable].contains { !(environment[$0] ?? "").isEmpty }
     }
     #endif
 
