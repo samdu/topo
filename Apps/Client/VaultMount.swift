@@ -1,5 +1,6 @@
 #if os(iOS)
 import Foundation
+import TopoUserland
 
 /// The memory's folder as the guest reaches it: mounted at `ClaudeLauncher.vault` and linked from
 /// the home as `memory`, so an edit Claude Code makes there is an edit of the folder the mirror
@@ -163,6 +164,63 @@ extension VaultMount.Identity {
         }
         guard found, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
         return VaultMount.Identity(device: UInt64(bitPattern: Int64(info.st_dev)), inode: UInt64(info.st_ino))
+    }
+}
+
+/// The guest's turns and the memory's moves, one at a time. A turn is sent into a mount of the
+/// folder the home names at that moment, and the session told what the mount came to, with no move
+/// able to begin between the mount and the turn being in flight; a move (`Memory`, through
+/// `VaultWriter`) waits for a turn being sent and for the turn in flight to end, and the next turn
+/// waits for the move. So nothing a turn writes lands in a folder a move has carried and left.
+@MainActor
+final class MemoryTurns: VaultWriter {
+    /// The session a move waits on, nil before one is made.
+    private let session: @MainActor () -> GuestSession?
+    private var moves = 0
+    private var sending = 0
+    private var afterMove: [CheckedContinuation<Void, Never>] = []
+    private var afterSends: [CheckedContinuation<Void, Never>] = []
+
+    init(session: @escaping @MainActor () -> GuestSession?) {
+        self.session = session
+    }
+
+    /// Sends `text` as a turn once no move is running: `reconcile` brings the mount into line with
+    /// the home and answers whether it is mounted, the session is told that, and the turn goes to a
+    /// process told it (`GuestSession.use(memory:)`). What `reconcile` throws is thrown, and nothing
+    /// is sent.
+    func send(_ text: String, id: String, to session: GuestSession,
+              reconcile: @MainActor () throws -> Bool) async throws -> AsyncStream<GuestSession.TurnUpdate> {
+        while moves > 0 {
+            await withCheckedContinuation { afterMove.append($0) }
+        }
+        sending += 1
+        defer {
+            sending -= 1
+            if sending == 0 { wake(&afterSends) }
+        }
+        let mounted = try reconcile()
+        await session.use(memory: mounted)
+        return try await session.send(text, id: id)
+    }
+
+    func pause() async {
+        moves += 1
+        while sending > 0 {
+            await withCheckedContinuation { afterSends.append($0) }
+        }
+        _ = await session()?.settle()
+    }
+
+    func resume() {
+        moves -= 1
+        if moves == 0 { wake(&afterMove) }
+    }
+
+    private func wake(_ waiting: inout [CheckedContinuation<Void, Never>]) {
+        let all = waiting
+        waiting = []
+        all.forEach { $0.resume() }
     }
 }
 #endif
