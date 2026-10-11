@@ -4,7 +4,7 @@ How the devices on one Apple ID come to know each other. The records here live b
 
 ## The device record
 
-Every bundle that runs the client or the hub writes one record about itself at every launch, type `Device`, name `device/<id>`:
+The hub writes one record about itself at every launch, type `Device`, name `device/<id>` (`DeviceDirectory.register`). The client bundles do not call it yet, so the phone, pad, watch and television have no record of their own:
 
 | Field | Holds |
 | ----- | ----- |
