@@ -155,7 +155,7 @@ enum LookDocument {
     private static func reading(_ value: inout Look.Reading, _ r: Reader) {
         r.bounded("markSize", &value.markSize, in: 16...200)
         r.bounded("spacing", &value.spacing, in: 0...64)
-        r.font("font", &value.font)
+        r.font("font", &value.font, largest: Look.Reading.largestFont)
         r.colour("ink", &value.ink)
         r.colour("surface", &value.surface)
     }
@@ -165,8 +165,8 @@ enum LookDocument {
         r.bounded("lineSpacing", &value.lineSpacing, in: 0...24)
         r.bounded("horizontalPadding", &value.horizontalPadding, in: 0...64)
         r.bounded("verticalPadding", &value.verticalPadding, in: 0...40)
-        r.font("titleFont", &value.titleFont)
-        r.font("wordsFont", &value.wordsFont)
+        r.font("titleFont", &value.titleFont, largest: Look.Setup.largestFont)
+        r.font("wordsFont", &value.wordsFont, largest: Look.Setup.largestFont)
         r.colour("wordsInk", &value.wordsInk)
         r.colour("troubleInk", &value.troubleInk)
         r.colour("tint", &value.tint)

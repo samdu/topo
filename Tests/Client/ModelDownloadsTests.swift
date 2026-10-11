@@ -142,6 +142,24 @@ final class ModelDownloadsTests: XCTestCase {
 /// the ones waiting only for success to wait on.
 @MainActor
 final class ModelWaitersTests: XCTestCase {
+    /// The setup card's bar: a set of models has a measure only while some of it is downloading
+    /// and none of it failed, waits on a network or is being verified, and the share is the
+    /// bytes on the phone over the bytes in all, never outside 0 to 1.
+    func testASetOfModelsHasAMeasureOnlyWhileItDownloads() {
+        typealias Status = ModelDownloads.Status
+        XCTAssertTrue(ModelDownloads.measured([.downloading(done: 1, total: 4), .absent]))
+        XCTAssertTrue(ModelDownloads.measured([.present, .absent]), "one model on the phone and one to come is partway")
+        XCTAssertTrue(ModelDownloads.measured([.present, .downloading(done: 1, total: 4)]))
+        for unmeasured in [[Status.present, .present], [.absent, .absent], [.downloading(done: 1, total: 4), .failed("503")],
+                           [.downloading(done: 1, total: 4), .waiting], [.present, .verifying], []] {
+            XCTAssertFalse(ModelDownloads.measured(unmeasured), "\(unmeasured)")
+        }
+        XCTAssertEqual(ModelDownloads.fraction(done: 57, of: 228), 0.25)
+        XCTAssertEqual(ModelDownloads.fraction(done: 0, of: 228), 0)
+        XCTAssertEqual(ModelDownloads.fraction(done: 300, of: 228), 1)
+        XCTAssertNil(ModelDownloads.fraction(done: 0, of: 0))
+    }
+
     func testAFailureSettlesTheWaitersThatAskedForIt() {
         var waiters = ModelWaiters()
         var told: [Result<Void, ModelDownloadFailure>] = []

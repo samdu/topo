@@ -52,7 +52,7 @@ enum Setup {
         lines.contains { line in
             switch line.state {
             case .progress, .failed: true
-            case .waiting(let words): words != notStarted
+            case .waiting(let words): !launchWords.contains(words)
             case .working: line.title == workspace
             case .done: false
             }
@@ -64,6 +64,9 @@ enum Setup {
     static func standing(_ lines: [Line], stood: Bool) -> Bool { shows(lines) && (stood || installing(lines)) }
 
     static let notStarted = "not started"
+    /// What a part waiting says on a launch with nothing to fetch: not begun, or its files all on
+    /// the phone and its own state a moment behind them.
+    static let launchWords: Set<String> = [notStarted, ModelDownloads.downloaded]
 
     static func state(phase: Userland.Phase, claude: Userland.ClaudePhase, fetch: Fetch) -> State {
         // Every pair is named, so a phase added later is a line this has to be taught.

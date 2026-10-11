@@ -36,6 +36,15 @@ final class FirstRunTests: XCTestCase {
 
     /// Words said before the read are drawn as any turn on its way is, and the placeholder never
     /// stands over them; once the log is read it does not stand at all.
+    /// The question stands while it is asked, and while its own microphone's answer is still
+    /// being heard though a turn the log brought has ended the asking.
+    func testTheQuestionStandsUntilItsOwnAnswerIsHeard() {
+        XCTAssertTrue(FirstRun.stands(hearing: false, asks: true))
+        XCTAssertTrue(FirstRun.stands(hearing: true, asks: false), "a turn from another device took the question from under an answer being heard")
+        XCTAssertTrue(FirstRun.stands(hearing: true, asks: true))
+        XCTAssertFalse(FirstRun.stands(hearing: false, asks: false))
+    }
+
     func testThePlaceholderStandsOnlyOverAnUnreadEmptyPage() {
         XCTAssertTrue(ReadingLog.stands(read: false, drawn: false))
         XCTAssertFalse(ReadingLog.stands(read: false, drawn: true))

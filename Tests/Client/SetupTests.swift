@@ -77,6 +77,17 @@ final class SetupTests: XCTestCase {
             XCTAssertFalse(Setup.installing(launch))
             XCTAssertFalse(Setup.standing(launch, stood: false), "a launch's own loading drew the card")
         }
+        // A launch with every file on the phone and the parts' own states a moment behind them:
+        // the downloads say "downloaded" while the workspace, the ear and the voice still say
+        // fetching, and nothing is being installed.
+        let present = Setup.Fetch(fraction: nil, words: ModelDownloads.downloaded)
+        let behind = lines(.fetching, .fetching, .fetching, fetch: present)
+        XCTAssertEqual(behind.map(\.state), Array(repeating: .waiting(ModelDownloads.downloaded), count: 3))
+        XCTAssertFalse(Setup.installing(behind))
+        XCTAssertFalse(Setup.standing(behind, stood: false), "a launch with nothing to fetch drew the card")
+        let claudeBehind = Setup.lines(phase: .ready(.reused), claude: .fetching, workspace: present, ear: .loading, earFetch: present,
+                                       earLoading: Ear.preparing, voice: .cold, voiceFetch: present, voiceLoading: Voice.preparing)
+        XCTAssertFalse(Setup.standing(claudeBehind, stood: false))
         // An install: each of these brings it.
         for install in [lines(.fetching, .cold, .cold), lines(.importing, .cold, .cold), lines(.ready(.imported), .fetching, .cold),
                         lines(.ready(.reused), .ready, .fetching, fetch: held), lines(.ready(.reused), .failed("no room"), .ready),

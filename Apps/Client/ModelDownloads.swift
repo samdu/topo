@@ -408,7 +408,7 @@ final class ModelDownloads {
         }
         if statuses.contains(.waiting) { return "waiting for a network the data settings allow" }
         if statuses.contains(.verifying) { return "verifying the download" }
-        if statuses.allSatisfy({ $0 == .present }) { return "downloaded" }
+        if statuses.allSatisfy({ $0 == .present }) { return Self.downloaded }
         if statuses.allSatisfy({ $0 == .absent }) { return "not downloaded" }
         let (done, total) = bytes(ids, statuses)
         let formatter = ByteCountFormatter()
@@ -421,13 +421,26 @@ final class ModelDownloads {
     /// other state, which has no measure.
     func fraction(_ ids: [String]) -> Double? {
         let statuses = ids.map { status(for: $0) }
+        guard Self.measured(statuses) else { return nil }
+        let (done, total) = bytes(ids, statuses)
+        return Self.fraction(done: done, of: total)
+    }
+
+    /// What `describe` says of models that are all on the phone.
+    nonisolated static let downloaded = "downloaded"
+
+    /// Whether a set of models has a measure: some of it downloading, and none of it failed,
+    /// waiting on a network or being verified.
+    nonisolated static func measured(_ statuses: [Status]) -> Bool {
         let unmeasured = statuses.contains { status in
             if case .failed = status { return true }
             return status == .waiting || status == .verifying
         }
-        guard !unmeasured, !statuses.allSatisfy({ $0 == .present }), !statuses.allSatisfy({ $0 == .absent }) else { return nil }
-        let (done, total) = bytes(ids, statuses)
-        return total > 0 ? Double(done) / Double(total) : nil
+        return !unmeasured && !statuses.allSatisfy({ $0 == .present }) && !statuses.allSatisfy({ $0 == .absent })
+    }
+
+    nonisolated static func fraction(done: Int64, of total: Int64) -> Double? {
+        total > 0 ? min(max(Double(done) / Double(total), 0), 1) : nil
     }
 
     /// The bytes of those models on the phone and the bytes they come to.

@@ -792,9 +792,13 @@ extension Look {
     struct Reading: Equatable, Sendable {
         var markSize: CGFloat = 64
         var spacing: CGFloat = 12
+        /// `look.json` sets it no larger than `largestFont`.
         var font: Font = .body
+        static let largestFont: Double = 34
         var ink = Theme.textMuted
-        /// What the first-run question stands on, over the chat: the page's own colour, opaque.
+        /// What the first-run question stands on, over the chat: the page's own colour. Drawn
+        /// over an opaque base, so a surface a document makes clear shows the base and not the
+        /// chat.
         var surface = Theme.background
     }
 
@@ -806,8 +810,11 @@ extension Look {
         var lineSpacing: CGFloat = 4
         var horizontalPadding: CGFloat = 16
         var verticalPadding: CGFloat = 10
+        /// `look.json` sets neither larger than `largestFont`: the card stands over the composer
+        /// and under the first-run question, and three lines of it leave both in reach.
         var titleFont: Font = .footnote.weight(.semibold)
         var wordsFont: Font = .caption
+        static let largestFont: Double = 20
         var wordsInk = Theme.textMuted
         /// A part that failed says why in the colour a failure is said in.
         var troubleInk = Theme.signal

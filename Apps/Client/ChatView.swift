@@ -133,7 +133,7 @@ struct ChatView: View {
         .overlay {
             if asking {
                 FirstRunView(setup: standingSetup) { text in
-                    if FirstRun.answer(text, answered: &answered, via: harness) { Task { await harness.retry() } }
+                    if FirstRun.answer(text, answered: answered, via: harness, mark: { answered = true }) { Task { await harness.retry() } }
                 }
             }
         }
@@ -149,11 +149,10 @@ struct ChatView: View {
         // An answer said into the question's microphone is still being heard when its press
         // ends: the question stands until it has been, so a turn the log brings meanwhile does
         // not take the screen, and the answer with it, from under the person.
-        return voice.owner == .firstRun
-            || FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+        return FirstRun.stands(hearing: voice.owner == .firstRun, asks: FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
                              busy: harness.busy,
                              engaged: FirstRun.engaged(voice: voice, row: row, focused: focused),
-                             answered: answered, fixture: fixture)
+                             answered: answered, fixture: fixture))
     }
 
     /// The setup card's lines while it stands, and none while it does not.

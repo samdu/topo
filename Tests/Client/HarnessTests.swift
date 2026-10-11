@@ -233,13 +233,21 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(db, defaults: defaults, transport: ScriptedTransport())
         await harness.refresh()
         var answered = false
-        XCTAssertFalse(FirstRun.answer("  \n", answered: &answered, via: harness), "no words is no answer")
+        // What was on the line at the moment the question was marked answered.
+        var onTheLineAtTheMark: [String]?
+        func answer(_ text: String) -> Bool {
+            FirstRun.answer(text, answered: answered, via: harness) {
+                onTheLineAtTheMark = harness.waiting
+                answered = true
+            }
+        }
+        XCTAssertFalse(answer("  \n"), "no words is no answer")
         XCTAssertFalse(answered)
-        XCTAssertTrue(FirstRun.answer("The bins", answered: &answered, via: harness))
+        XCTAssertTrue(answer("The bins"))
         XCTAssertTrue(answered)
-        XCTAssertEqual(harness.waiting, ["The bins"], "the words were not on the line when the question went")
-        XCTAssertFalse(FirstRun.answer("The bins", answered: &answered, via: harness))
-        XCTAssertFalse(FirstRun.answer("And the post", answered: &answered, via: harness))
+        XCTAssertEqual(onTheLineAtTheMark, ["The bins"], "the question was marked answered before the words were on the line")
+        XCTAssertFalse(answer("The bins"))
+        XCTAssertFalse(answer("And the post"))
         XCTAssertEqual(harness.waiting, ["The bins"], "a second answer became a second turn")
         let relaunched = self.harness(db, defaults: defaults, transport: ScriptedTransport())
         await relaunched.refresh()

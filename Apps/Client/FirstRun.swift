@@ -23,15 +23,21 @@ enum FirstRun {
     }
 
     /// The answer becomes the first turn: on the line under one nonce before the question goes,
-    /// so the outbox is the one place it is kept. Answers false, and does nothing, for a second
-    /// answer or one with no words in it.
+    /// so the outbox is the one place it is kept. `mark` is what records the question as
+    /// answered, called once the words are on the line. Answers false, and does nothing, for a
+    /// second answer or one with no words in it.
     @MainActor
-    static func answer(_ text: String, answered: inout Bool, via harness: Harness) -> Bool {
+    static func answer(_ text: String, answered: Bool, via harness: Harness, mark: () -> Void) -> Bool {
         guard !answered, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         harness.willSend(text)
-        answered = true
+        mark()
         return true
     }
+
+    /// Whether the question stands: while it is asked, and until an answer said into its own
+    /// microphone has been heard, so a turn the log brings while the ear decodes does not take
+    /// the screen, and the answer with it, from under the person.
+    static func stands(hearing: Bool, asks: Bool) -> Bool { asks || hearing }
 }
 
 /// What stands where the transcript will, until the first read of the log returns.

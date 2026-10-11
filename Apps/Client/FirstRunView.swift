@@ -85,7 +85,9 @@ struct FirstRunView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The page's own colour under the look's, so the question is opaque whatever the look says.
         .background(look.reading.surface)
+        .background(Theme.background)
         .accessibilityIdentifier("first-run")
         #if os(iOS)
         .onDisappear { voice.cancel(.firstRun) }
