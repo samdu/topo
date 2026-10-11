@@ -701,6 +701,9 @@ actor GuestBridge: Brain {
         } catch {
             return .unavailable(String(describing: error))
         }
+        // A turn whose asker stopped listening gave the slot back while the guest is still on it:
+        // the compaction waits for the guest itself to be free, as a read of its transcript does.
+        _ = await conversation.settle()
         guard self.login == login else { return .unavailable(Self.signedOut) }
         let updates: AsyncStream<GuestSession.TurnUpdate>
         do {

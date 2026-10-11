@@ -56,7 +56,9 @@ public enum Compaction {
         let effective = window - reserved
         let own = effective - margin
         guard let percent = setting.percent else { return max(own, 0) }
-        return max(min(effective * percent / 100, own), 0)
+        // Claude Code's own arithmetic, in floating point as it does it, so the two never differ
+        // by a token.
+        return max(min(Int((Double(effective) * (Double(percent) / 100)).rounded(.down)), own), 0)
     }
 
     /// How full the context is on the threshold's scale: easy, getting close, or at it.

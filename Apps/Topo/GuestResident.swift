@@ -301,7 +301,7 @@ struct ResidentConversation: GuestConversation {
         // A session not started yet starts with the setting (`GuestResident.compactAt`). A debug
         // launch's own threshold stands over the setting, as it does at the start.
         #if DEBUG
-        guard ProcessInfo.processInfo.environment[GuestResident.compactAtVariable] == nil else { return }
+        guard ProcessInfo.processInfo.environment[GuestResident.compactAtVariable].flatMap(Compaction.Setting.init) == nil else { return }
         #endif
         await GuestResident.shared.session?.use(compactAt: compactAt)
     }

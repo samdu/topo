@@ -36,6 +36,11 @@ final class CompactionTests: XCTestCase {
         XCTAssertEqual(Compaction.threshold(window: 1_000_000, setting: .percent(50)), 490_000)
         XCTAssertEqual(Compaction.threshold(window: 1_000_000, setting: .percent(95)), 931_000)
         XCTAssertEqual(Compaction.threshold(window: 1_000_000, setting: .percent(100)), 967_000)
+        // Where integer arithmetic and Claude Code's floating point part by a token, it is Claude Code's.
+        for percent in 25...100 {
+            let own = min(Int((180_000.0 * (Double(percent) / 100)).rounded(.down)), 167_000)
+            XCTAssertEqual(Compaction.threshold(window: 200_000, setting: .percent(percent)), own, "\(percent)")
+        }
         XCTAssertEqual(Compaction.threshold(window: 10_000, setting: .auto), 0, "a window under what is reserved went negative")
     }
 

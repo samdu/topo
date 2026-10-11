@@ -202,6 +202,43 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(harness.compaction, .percent(60), "the setting went with the login; the model's does not")
     }
 
+    /// A compaction asked for while a sign-out is ending the guest asks the guest nothing and
+    /// says nothing to the login after it; nor does one asked for during a demotion, which
+    /// leaves nothing of the last compaction or the window standing.
+    func testACompactionAskedWhileTheGuestIsBeingForgottenAsksNothing() async throws {
+        let scripted = ScriptedGuest(home: home, script: [.compacts(pre: 900, post: 90), .resultOnly("")])
+        let guest = SlowForgetGuest(scripted)
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let harness = Harness(database: InMemoryRecordDatabase(), tokens: InMemoryTokenStore(nil).provider, device: phone,
+                              ensureZone: {}, defaults: UserDefaults(suiteName: name)!, brain: bridge, relay: relay,
+                              leaseSleep: parked, pause: { _ in throw CancellationError() })
+        XCTAssertTrue(harness.compact())
+        try await eventually("the first compaction to end") { !harness.compacting }
+        XCTAssertEqual(harness.lastCompaction, "900 → 90 tokens")
+        XCTAssertNil(harness.context, "the boundary's count was taken for the next reply's context")
+        relay.tell(.update(.ended(.answered(.init(isError: false, subtype: "success", text: "", session: "S1",
+                                                  duration: .milliseconds(10), window: 200_000)))))
+
+        for leave in [{ await harness.demote() }, { await harness.forget() }] as [@MainActor () async -> Void] {
+            let leaving = Task { await leave() }
+            try await eventually("the guest to be told to forget") { guest.forgetting }
+            XCTAssertNil(harness.lastCompaction)
+            XCTAssertNil(harness.window)
+            XCTAssertFalse(harness.compact(), "a compaction was asked for under a login on its way out")
+            try await Task.sleep(for: .milliseconds(50))
+            guest.release()
+            await leaving.value
+            XCTAssertEqual(scripted.inputs, [GuestBridge.compactCommand])
+            XCTAssertNil(harness.lastCompaction)
+            XCTAssertFalse(harness.compacting)
+            guest.hold()
+        }
+        guest.release()
+        XCTAssertEqual(harness.leaving, 0)
+    }
+
     // MARK: - Reconciliation, the function
 
     func testReconciliationOfEachVerdict() {
@@ -3804,6 +3841,56 @@ extension GuestBridgeTests {
         XCTAssertEqual(log.heads.count, 1)
         XCTAssertEqual(guest.inputs.filter { $0.contains("first question") }.count, 1, "the guest was given the words twice: \(guest.inputs)")
     }
+}
+
+// MARK: - A guest slow to forget
+
+/// A scripted guest whose `forget` is held, as the resident's is while its process is ended.
+private final class SlowForgetGuest: GuestConversation, @unchecked Sendable {
+    let inner: ScriptedGuest
+    private let lock = NSLock()
+    private var gate: CheckedContinuation<Void, Never>?
+    private var begun = false
+    private var released = false
+
+    init(_ inner: ScriptedGuest) { self.inner = inner }
+
+    var home: URL { inner.home }
+    var forgetting: Bool { lock.withLock { begun && !released } }
+    /// Holds the next `forget` again.
+    func hold() { lock.withLock { begun = false; released = false } }
+    func release() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            released = true
+            defer { gate = nil }
+            return gate
+        }
+        waiting?.resume()
+    }
+
+    func ready() async throws { try await inner.ready() }
+    func warm() async {}
+    func use(model: String?) async { await inner.use(model: model) }
+    func use(compactAt: Int?) async { await inner.use(compactAt: compactAt) }
+    func sessionID() async -> String? { await inner.sessionID() }
+    func residentPID() async -> Int32? { await inner.residentPID() }
+    func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
+        try await inner.send(text, id: id)
+    }
+    func settle() async -> Bool { await inner.settle() }
+    func forget() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let open = lock.withLock { () -> Bool in
+                begun = true
+                if released { return true }
+                gate = continuation
+                return false
+            }
+            if open { continuation.resume() }
+        }
+        await inner.forget()
+    }
+    func status() async -> String { await inner.status() }
 }
 
 // MARK: - A bind while a request waits for the guest

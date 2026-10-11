@@ -86,8 +86,12 @@ final class Harness {
     /// a sign-out, since the context was the last login's. A reply another primary wrote, or one found already in the log,
     /// says nothing of its context and leaves this as it was.
     private(set) var context: Int?
-    /// Counts sign-outs, so a compaction that ends after one says nothing to the next login.
+    /// Counts sign-outs and demotions, so a compaction that ends after one says nothing to the
+    /// login after it.
     private var logins = 0
+    /// A sign-out or a demotion is waiting on the guest to forget: nothing is asked of the guest
+    /// meanwhile, since what it would be asked under is a login on its way out.
+    private(set) var leaving = 0
     /// The window of the model that answered last, as Claude Code reports it with a result; nil
     /// until one has, and after a sign-out.
     private(set) var window: Int?
@@ -371,11 +375,12 @@ final class Harness {
     var threshold: Int? { window.map { Compaction.threshold(window: $0, setting: compaction) } }
 
     /// Asks the guest to compact its conversation now, and keeps what that came to. False, with
-    /// nothing asked, while one asked for here is still waiting or running, or with no guest.
+    /// nothing asked, while one asked for here is still waiting or running, with no guest, or
+    /// while a sign-out or a demotion is ending the guest.
     /// One asked for during a turn waits for that turn's end (`GuestBridge.compact`).
     @discardableResult
     func compact() -> Bool {
-        guard let guest, !compacting else { return false }
+        guard let guest, !compacting, leaving == 0 else { return false }
         compacting = true
         let login = logins
         Task { [weak self] in
@@ -383,7 +388,10 @@ final class Harness {
             guard let self, self.logins == login else { return }
             self.compacting = false
             self.lastCompaction = outcome.words
-            if case .done(_, let post) = outcome { self.context = post }
+            // What the boundary counts as left is the conversation's and leaves out Claude Code's
+            // fixed prefix, so it is not the context of the next reply: that is not known until
+            // one is answered.
+            if case .done = outcome { self.context = nil }
         }
         return true
     }
@@ -422,7 +430,9 @@ final class Harness {
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
         // What the guest kept of the last login's conversation goes with it.
+        leaving += 1
         await brain.forget()
+        leaving -= 1
         #if canImport(CloudKit)
         await CloudKitRecordDatabase.forgetMirrors()
         #endif
@@ -478,7 +488,14 @@ final class Harness {
         lease = nil
         writer = nil
         info = nil
+        // What was known of the guest's context and its last compaction was the login's.
+        window = nil
+        compacting = false
+        lastCompaction = nil
+        logins += 1
+        leaving += 1
         await brain.forget()
+        leaving -= 1
         // What the guest ended meanwhile, before it was told to forget, is not kept either.
         dropWriting()
         forgetHeard()

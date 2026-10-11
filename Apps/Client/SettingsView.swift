@@ -72,7 +72,7 @@ struct ContextSection: View {
             }
             .accessibilityIdentifier("context-compact-at")
             Button(harness.compacting ? "Compacting…" : "Compact now") { harness.compact() }
-                .disabled(harness.guest == nil || harness.compacting)
+                .disabled(harness.guest == nil || harness.compacting || harness.leaving > 0)
                 .accessibilityIdentifier("context-compact-now")
             if let last = harness.lastCompaction {
                 LabeledContent("Last compaction", value: last)
