@@ -2,7 +2,7 @@
 
 Everything that can be ready is in the repository: the privacy manifests, the usage strings, the export options, and `scripts/archive-upload.sh`, which archives Topo for the App Store and can upload it. What is left needs Sam, because it needs an Apple account, and this is the list with what to click.
 
-Nothing here has been done yet. The archive and export have been run on buddybox and produce a signed App Store build; the upload has not been attempted.
+Of the steps below, the schema (4) is deployed for `iCloud.zone.hexagon.topo`. The archive and export have been run on buddybox and produce a signed App Store build; the upload has not been attempted.
 
 ## What is already handled
 
@@ -84,9 +84,9 @@ xcrun cktool import-schema --team-id 4A5NSJ6Y3G --container-id <container> --env
 
 An import can remove as well as add, and development holds the records of whoever runs debug builds, so the file imported is the whole export taken just before, with lines added, and its `diff` against that export is shown to Sam first: additions only, and a removed line is a stop. A record type or a field of ours in the export that the table does not have is removed from development before the deploy, since the deploy would make it permanent; what CloudKit put there itself stays: `Users`, the fields whose names begin `___`, the `GRANT` lines, and `cloudkit.share`, which development gains at the first share saved and the board container needs in production before `TopoBoard.share()` can save one.
 
-**Deploying.** Console → the container → **Development** → **Schema** → **Deploy Schema Changes…**. The sheet lists what will change; it should list additions only. Then **Deploy**, for `iCloud.zone.hexagon.topo` and again for `iCloud.zone.hexagon.topo.board`. `cktool` has no deploy. **Reset Environment**, and `cktool reset-schema`, delete every record in development, which is the transcript and the memory of whoever runs debug builds.
+**Deploying.** Console → the container → **Development** → **Schema** → **Deploy Schema Changes…**. The sheet lists what will change; it should list additions only. Then **Deploy**, once for each container that has changes. `cktool` has no deploy. **Reset Environment**, and `cktool reset-schema`, delete every record in development, which is the transcript and the memory of whoever runs debug builds.
 
-**Proving it.** The production export has every row of the table. The archive is cut from the commit the table was checked at; at a later one, the diff between the two is read for record definitions, field mappings, queries and subscription predicates first.
+**Proving it.** The production export has every row of the table. `iCloud.zone.hexagon.topo`'s does, the three rows no target writes yet included; `iCloud.zone.hexagon.topo.board`'s has none in either environment, since nothing writes a card, and is deployed with the change that does. The archive is cut from the commit the table was checked at; at a later one, the diff between the two is read for record definitions, field mappings, queries and subscription predicates first.
 
 Production starts with no records: nothing of a development transcript, memory or pairing is there, and since no target sets `com.apple.developer.icloud-container-environment` the environment follows the signing, so a TestFlight phone and a debug-built hub never see each other's records. A phone that has run a debug build is signed out in it, and the app deleted, before the TestFlight build is installed: the app's container, the zone's copy on disk included, otherwise carries over from one environment to the other.
 
