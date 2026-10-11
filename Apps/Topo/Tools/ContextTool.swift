@@ -66,13 +66,13 @@ struct ContextTool: Tool {
     }
 
     static func show(_ facts: Facts) -> String {
-        var lines = ["context: \(facts.context.map { "\($0) tokens" } ?? "not known until a reply has been answered in this launch")"]
+        var lines = ["context: \(facts.context.map { "\($0) tokens" } ?? "not known until the next reply")"]
         if let window = facts.window {
             let limit = Compaction.threshold(window: window, setting: facts.setting)
             lines.append("window: \(window) tokens")
             lines.append("compacted at: \(limit) tokens (\(source(facts.setting)))")
         } else {
-            lines.append("window: not known until a reply has been answered in this launch")
+            lines.append("window: not known until the next reply")
             lines.append("compacted at: \(source(facts.setting))")
         }
         lines.append("last compaction: \(facts.compacting ? "waiting or running" : facts.last ?? "none asked for in this launch")")
