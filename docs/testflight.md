@@ -63,8 +63,8 @@ Records written in development do not exist in production until the schema is de
 ```
 set -e
 export CLOUDKIT_MANAGEMENT_TOKEN="$(op read 'op://Homelab/Topo CloudKit management token/credential')"
-out="build/schema/$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$out"
+mkdir -p build/schema
+out="$(mktemp -d "build/schema/$(date -u +%Y%m%dT%H%M%SZ).XXXX")"
 for c in iCloud.zone.hexagon.topo iCloud.zone.hexagon.topo.board; do for e in development production; do
   xcrun cktool export-schema --team-id 4A5NSJ6Y3G --container-id $c --environment $e --output-file "$out/$c.$e.ckdb"
 done; done
@@ -90,7 +90,7 @@ An import can remove as well as add, and development holds the records of whoeve
 
 **Deploying.** Console → the container → **Development** → **Schema** → **Deploy Schema Changes…**. The sheet lists what will change; it should list additions only. Then **Deploy**, once for each container that has changes. `cktool` has no deploy. **Reset Environment**, and `cktool reset-schema`, delete every record in development, which is the transcript and the memory of whoever runs debug builds.
 
-**Proving it.** The production export has every row of the table. `iCloud.zone.hexagon.topo`'s does, the three rows no target writes yet included; `iCloud.zone.hexagon.topo.board`'s has none in either environment, since nothing writes a card, and is deployed with the change that does. The archive is cut from the commit the table was checked at; at a later one, the diff between the two is read for record definitions, field mappings, queries and subscription predicates first.
+**Proving it.** A production export taken after the deploy is compared with the development export, order aside, and with the table: the same record types, fields, types and indexes, and nothing else. `iCloud.zone.hexagon.topo` was deployed and compared this way on 2026-10-11, with the result in #381's Proof and in `progress-schema-prod.md`, the plan's ledger. `iCloud.zone.hexagon.topo.board` had no schema in either environment then, since nothing writes a card, and is deployed with the change that does. The archive is cut from the commit the table was checked at; at a later one, the diff between the two is read for record definitions, field mappings, queries and subscription predicates first.
 
 Production starts with no records: nothing of a development transcript, memory or pairing is there, and since no target sets `com.apple.developer.icloud-container-environment` the environment follows the signing, so a TestFlight phone and a debug-built hub never see each other's records. A phone that has run a debug build is signed out in it, and the app deleted, before the TestFlight build is installed: the app's container, the zone's copy on disk included, otherwise carries over from one environment to the other.
 
