@@ -40,18 +40,13 @@ public struct ClaudeLauncher: ResidentLauncher {
     public let command: String
     public let home: String
     public let environment: @Sendable () async throws -> [String: String]
-    /// Asked at each launch whether the memory is mounted, after whatever it does to mount it:
-    /// true or false says so to the resident (`memoryPrompt`), nil says nothing.
-    public let memory: @Sendable () async -> Bool?
 
     public init(guest: Guest = .shared, command: String = ClaudeCodeInstaller.command,
                 home: String = ClaudeLauncher.home,
-                memory: @escaping @Sendable () async -> Bool? = { nil },
                 environment: @escaping @Sendable () async throws -> [String: String]) {
         self.guest = guest
         self.command = command
         self.home = home
-        self.memory = memory
         self.environment = environment
     }
 
@@ -91,9 +86,11 @@ public struct ClaudeLauncher: ResidentLauncher {
         return environment
     }
 
-    public func launch(resume session: String?, model: String?) async throws -> any ResidentProcess {
-        let memory = await self.memory()
-        return try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
+    /// `memory` is the session's (`GuestSession.use(memory:)`): true or false says so to the
+    /// resident (`memoryPrompt`), nil says nothing. A launch mounts nothing: what it says is what
+    /// the last reconcile of the mount found, and the session replaces a process told otherwise.
+    public func launch(resume session: String?, model: String?, memory: Bool?) async throws -> any ResidentProcess {
+        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
                               environment: try await launchEnvironment())
     }
 }

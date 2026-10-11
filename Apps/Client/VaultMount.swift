@@ -8,8 +8,8 @@ import Foundation
 /// The home can change under a live process — a move, a sign-out and a sign-in, a pick after a
 /// lost home — and a folder can be taken away and made again at the same path, which the mount
 /// (a descriptor on the directory it was made from) would never see. So the mount is not made once:
-/// `reconcile` is asked at every launch of the resident and before every turn, and compares the
-/// folder by its identity on disk, not its path. What it does to the guest and to the grant goes
+/// `reconcile` is asked when the resident's session is made and before every turn, and compares
+/// the folder by its identity on disk, not its path. What it does to the guest and to the grant goes
 /// through `Seam`, so the rule is held by a test with no guest in it.
 @MainActor
 final class VaultMount {
@@ -86,8 +86,7 @@ final class VaultMount {
 
         if let standing, let target, standing.folder == target, let identity = standing.identity,
            seam.identity(target) == identity {
-            try? seam.link()
-            return true
+            return linked()
         }
         try takeAway()
         guard let target else { return false }
@@ -106,20 +105,33 @@ final class VaultMount {
             throw Failure.mount("\(error)")
         }
         standing = Standing(folder: target, identity: identity, scope: scope)
-        do {
-            try seam.link()
-        } catch {
-            // The mount stands; the mind is told the path through the link, so a link that could
-            // not be made is a memory it cannot find, and the next reconcile makes it again.
-            throw Failure.mount("the home's memory link: \(error)")
-        }
-        return true
+        return linked()
     }
 
-    /// Sign-out: after the resident has been ended, the mount goes and then the grant it held. A
-    /// mount still held (a teardown that did not confirm) is left marked stale, so the next
+    /// Whether the home's `memory` link reaches the mount, made again when it does not. The mind
+    /// is told the path through the link, so a link that cannot be made — the guest has put a
+    /// folder of its own at that name — is a memory it cannot reach: the mount stands, the mind is
+    /// told so, and the next reconcile tries the link again.
+    private func linked() -> Bool {
+        do {
+            try seam.link()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Sign-out: `end` ends the resident, and once it has answered the mount goes and then the
+    /// grant it held — never before, since a mount the resident still holds cannot be taken away
+    /// and a grant stopped under it is access pulled from a process still running. A mount still
+    /// held after the end (a teardown that did not confirm) is left marked stale, so the next
     /// reconcile takes it away before anything else; the grant goes either way.
-    func forget() {
+    func forget(after end: @MainActor () async -> Void) async {
+        await end()
+        forget()
+    }
+
+    private func forget() {
         guard var standing else { return }
         do {
             try seam.unmount()

@@ -282,6 +282,28 @@ static ssize_t pack(const char *const *strings, char *out, size_t size, size_t *
     return (ssize_t) at;
 }
 
+// A task made for a program that could not be started ends as any task does, rather than being
+// left to init as one that never ran: a task like that takes no signal, so every termination after
+// it counts it as still running and none is ever confirmed. `do_exit` ends the thread it runs on,
+// so it runs on one of its own, as the task; the zombie it leaves is then reaped as init.
+static void *exit_unstarted(void *task) {
+    current = task;
+    do_exit(127 << 8);
+}
+
+static void end_unstarted(struct task *task) {
+    pid_t_ pid = task->pid;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, exit_unstarted, task) != 0)
+        return;
+    pthread_join(thread, NULL);
+    struct task *previous = current;
+    current = pid_get_task(1);
+    struct siginfo_ info = {0};
+    do_wait(TOPO_P_PID, pid, &info, NULL, TOPO_WEXITED);
+    current = previous;
+}
+
 int topo_ish_spawn(const char *path, const char *const *argv, const char *const *envp,
                    int *stdin_fd, int *stdout_fd, int *stderr_fd) {
     if (!booted)
@@ -341,8 +363,8 @@ int topo_ish_spawn(const char *path, const char *const *argv, const char *const 
 
     result = do_execve(path, argc, args, env);
     if (result < 0) {
-        // The task never ran; it is left to init as a child that never started, which is what the
-        // fork's own launcher does with one.
+        // The task never ran: it exits, closing the guest's ends of the pipes, and is reaped.
+        end_unstarted(task);
         goto fail;
     }
     int pid = task->pid;

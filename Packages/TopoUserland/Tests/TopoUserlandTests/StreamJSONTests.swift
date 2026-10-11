@@ -169,7 +169,8 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true).suffix(2), ["--resume", "S1"])
         XCTAssertEqual(ClaudeLauncher.memory, ClaudeLauncher.home + "/memory")
 
-        let launcher = ClaudeLauncher(memory: { true }) { [:] }
+        let launcher = ClaudeLauncher { [:] }
+        XCTAssertNotNil(prompt(launcher.commandLine(resume: nil, model: nil, memory: true)))
         let environment = try await launcher.launchEnvironment()
         XCTAssertFalse(environment.values.contains { $0.contains("Obsidian vault") },
                        "the memory line reached the environment, which what the resident starts inherits")
