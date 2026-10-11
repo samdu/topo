@@ -1,0 +1,17 @@
+==> applying 0001-memory-brake-refresh.patch
+==> applying 0002-meson-offsets.patch
+==> applying 0003-pidfd-open-zombie.patch
+==> applying 0004-guest-mount-real-refused.patch
+==> applying 0005-sqabs-sqneg-vector.patch
+==> applying 0006-dns-sentinel.patch
+==> applying 0007-chain-patch-free-slot.patch
+==> applying 0008-tmpfs-umount.patch
+==> applying 0009-smov.patch
+==> applying 0010-neon-decode-gaps.patch
+==> meson (iphoneos)
+==> libarchive (iphoneos)
+==> importer and glue (iphoneos)
+==> meson (iphonesimulator)
+==> libarchive (iphonesimulator)
+==> importer and glue (iphonesimulator)
+build-ish: /Users/buddy/github/.worktrees/topo-ish-tmpfs-umount/Packages/TopoUserland/Frameworks/TopoIsh.xcframework (9ac435430a4ea0678a11a5e8132c3968f43f99c5cb476c9a6e10f15213741746)
