@@ -12,21 +12,21 @@ A turn's round trips before its person's turn is in the log, on a device whose l
 
 What the code writes and asks for, and so what each environment's schema has to hold. `iCloud.zone.hexagon.topo` is the private database's zone `Topo`; `iCloud.zone.hexagon.topo.board` is the zone `Board`, in the private database of whoever made it and the shared database of everyone else. Promoting it to production is `docs/testflight.md`, *The CloudKit schema*.
 
-| Container | Type | Fields | Queryable |
+| Container | Type | Fields | Indexed |
 |---|---|---|---|
-| topo | `Turn` | `device` String, `sequence` Int64, `parents` List\<String>, `role` String, `text` String, `at` Date/Time, `nonce` String | `device`, `sequence` |
+| topo | `Turn` | `device` String, `sequence` Int64, `parents` List\<String>, `role` String, `text` String, `at` Date/Time, `nonce` String | `device` queryable; `sequence` queryable, sortable |
 | topo | `Append` | `turn` String | |
-| topo | `Note` | `device` String, `sequence` Int64, `path` String, `text` String, `deleted` Int64, `parents` List\<String>, `at` Date/Time, `nonce` String | `device`, `sequence` |
+| topo | `Note` | `device` String, `sequence` Int64, `path` String, `text` String, `deleted` Int64, `parents` List\<String>, `at` Date/Time, `nonce` String | `device` queryable; `sequence` queryable, sortable |
 | topo | `NoteWrite` | `note` String | |
 | topo | `VaultRemote` | `url` String, `branch` String | |
 | topo | `PrimaryLease` | `holder` String, `epoch` Int64, `expiresAt` Date/Time, `endpoint` String | |
 | topo | `Role` | `role` String, `setBy` String, `at` Date/Time | |
 | topo | `Device` | `name` String, `kind` String, `publicKey` String, `endpoints` List\<String>, `pairedWith` List\<String>, `registeredAt` Date/Time, `seenAt` Date/Time | |
-| topo | `Surface` | `slot` String, `document` String, `revision` Int64, `updated` Date/Time, `runner` String, `imageNames` List\<String>, `images` List\<Asset>, `cleared` Int64 | `updated` |
-| board | `Card` | `device` String, `sequence` Int64, `card` String, `owner` String, `body` String, `state` String, `parents` List\<String>, `at` Date/Time, `nonce` String | `device`, `sequence` |
+| topo | `Surface` | `slot` String, `document` String, `revision` Int64, `updated` Date/Time, `runner` String, `imageNames` List\<String>, `images` List\<Asset>, `cleared` Int64 | `updated` queryable, sortable |
+| board | `Card` | `device` String, `sequence` Int64, `card` String, `owner` String, `body` String, `state` String, `parents` List\<String>, `at` Date/Time, `nonce` String | `device` queryable; `sequence` queryable, sortable |
 | board | `CardWrite` | `card` String | |
 
-The queryable fields are the ones a query or a subscription names: one device's records after a sequence number (`read(device:after:)` on `Turn`, `Note` and `Card`), and the three push subscriptions, `turn-created` and `note-created` on `sequence > 0` and `surface-changes` on `updated`. Nothing is sorted or searched by the server, and nothing is asked for by record name. A record type, a field or a field's type added or changed here is a change to this table and a deploy before the build that carries it.
+The indexed fields are the ones a query or a subscription names: one device's records after a sequence number (`read(device:after:)` on `Turn`, `Note` and `Card`), and the three push subscriptions, `turn-created` and `note-created` on `sequence > 0` and `surface-changes` on `updated`. `device` is matched for equality, which is a queryable index; `sequence` and `updated` are compared, and a range is what a sortable index answers. No query sends a sort or a search, and no query or subscription predicate names the record name, so none needs an index on it. The board's zone is shared by a `CKShare` (`TopoBoard.share()`), which is CloudKit's own type `cloudkit.share` in that container's schema. A record type or a field added here is a row in this table and a deploy before the build that carries it; a name or a type already deployed stays as it is.
 
 ## The packages and their tests
 
