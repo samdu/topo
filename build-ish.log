@@ -1,0 +1,11 @@
+==> applying 0001-memory-brake-refresh.patch
+==> applying 0002-meson-offsets.patch
+==> applying 0003-pidfd-open-zombie.patch
+==> applying 0004-guest-mount-real-refused.patch
+==> meson (iphoneos)
+==> libarchive (iphoneos)
+==> importer and glue (iphoneos)
+==> meson (iphonesimulator)
+==> libarchive (iphonesimulator)
+==> importer and glue (iphonesimulator)
+build-ish: /Users/buddy/github/.worktrees/topo-device-main/Packages/TopoUserland/Frameworks/TopoIsh.xcframework (72a61cffe4416f01fd33176a1bc09925400d9b7028f1ed440395730d88ff42dd)
