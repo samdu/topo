@@ -14,6 +14,8 @@ struct ChatView: View {
     @Environment(Connections.self) private var connections
     /// The first-run question has been answered on this device, so it is not asked twice.
     @AppStorage("firstRunAnswered") private var answered = false
+    /// Whether the setup card stood a moment ago (`Setup.standing`).
+    @State private var setupStood = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
     @Environment(\.look) private var look
@@ -126,10 +128,11 @@ struct ChatView: View {
         // field. The question never arrives over a press or a word of the chat's own
         // (`FirstRun.asks`), so nothing is taken from a hand that is on it.
         .accessibilityHidden(asking)
+        .onChange(of: !standingSetup.isEmpty, initial: true) { _, stands in setupStood = stands }
         .allowsHitTesting(!asking)
         .overlay {
             if asking {
-                FirstRunView(setup: setupLines) { text in
+                FirstRunView(setup: standingSetup) { text in
                     if FirstRun.answer(text, answered: &answered, via: harness) { Task { await harness.retry() } }
                 }
             }
@@ -143,10 +146,20 @@ struct ChatView: View {
         #if DEBUG
         fixture = DebugRun.transcript() != nil
         #endif
-        return FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+        // An answer said into the question's microphone is still being heard when its press
+        // ends: the question stands until it has been, so a turn the log brings meanwhile does
+        // not take the screen, and the answer with it, from under the person.
+        return voice.owner == .firstRun
+            || FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
                              busy: harness.busy,
                              engaged: FirstRun.engaged(voice: voice, row: row, focused: focused),
                              answered: answered, fixture: fixture)
+    }
+
+    /// The setup card's lines while it stands, and none while it does not.
+    private var standingSetup: [Setup.Line] {
+        let lines = setupLines
+        return Setup.standing(lines, stood: setupStood) ? lines : []
     }
 
     /// What the setup card draws, or nothing in a debug build whose ear or voice is a stand-in,
@@ -179,10 +192,10 @@ struct ChatView: View {
                     }
                 }
             } card: {
+                // What a new install, or an updated one, is still fetching and preparing.
+                if !standingSetup.isEmpty { SetupCard(lines: standingSetup).mascotObstacle() }
                 // Once, and only while the memory is still in this app's own folder and has
                 // more than a handful in it. Not now is for good: no nag, no timer.
-                // What a new install, or an updated one, is still fetching and preparing.
-                if Setup.shows(setupLines) { SetupCard(lines: setupLines).mascotObstacle() }
                 if memory.offersICloudDrive(answered: memoryOfferAnswered) {
                     MemoryOfferCard(choose: {
                         memoryOfferAnswered = true

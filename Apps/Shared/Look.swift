@@ -798,7 +798,7 @@ extension Look {
         var surface = Theme.background
     }
 
-    /// The setup card: a line for each part still on its way, its name on the leading side, where
+    /// The setup card: a line for each part of an install, its name on the leading side, where
     /// it has got to on the trailing one, and a bar under both while there is something to measure.
     struct Setup: Equatable, Sendable {
         /// Between two lines, and between a line's words and its bar.

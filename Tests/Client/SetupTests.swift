@@ -64,6 +64,40 @@ final class SetupTests: XCTestCase {
         XCTAssertTrue(Setup.shows(lines(.ready(.reused), .ready, .failed("no room"))))
     }
 
+    /// A launch loads the ear and the voice every time, and that alone draws no card: it comes
+    /// for an install — a download, an unpacking, a failure — and then stands until every line is
+    /// done, so the models' first preparing on this phone is under it.
+    func testTheCardComesForAnInstallAndStaysUntilEveryLineIsDone() {
+        func lines(_ phase: Userland.Phase, _ ear: Setup.Stage, _ voice: Setup.Stage, fetch: Setup.Fetch? = nil) -> [Setup.Line] {
+            Setup.lines(phase: phase, claude: .fetched(pin), workspace: fetch ?? fetching, ear: ear, earFetch: fetch ?? fetching,
+                        earLoading: Ear.preparing, voice: voice, voiceFetch: fetch ?? fetching, voiceLoading: Voice.preparing)
+        }
+        // An ordinary launch: cold, then loading, then ready.
+        for launch in [lines(.ready(.reused), .cold, .cold), lines(.ready(.reused), .loading, .cold), lines(.ready(.reused), .ready, .loading)] {
+            XCTAssertFalse(Setup.installing(launch))
+            XCTAssertFalse(Setup.standing(launch, stood: false), "a launch's own loading drew the card")
+        }
+        // An install: each of these brings it.
+        for install in [lines(.fetching, .cold, .cold), lines(.importing, .cold, .cold), lines(.ready(.imported), .fetching, .cold),
+                        lines(.ready(.reused), .ready, .fetching, fetch: held), lines(.ready(.reused), .failed("no room"), .ready),
+                        lines(.failed("no room"), .ready, .ready)] {
+            XCTAssertTrue(Setup.standing(install, stood: false), "\(install)")
+        }
+        // Once it stands it stays through the preparing, and goes when all three are done.
+        XCTAssertTrue(Setup.standing(lines(.ready(.imported), .loading, .cold), stood: true))
+        XCTAssertFalse(Setup.standing(lines(.ready(.imported), .ready, .ready), stood: true))
+        XCTAssertFalse(Setup.standing([], stood: true))
+    }
+
+    /// A download that failed is a failure on the card, in the downloads' own words for why,
+    /// though the part is still waiting on it.
+    func testAFailedDownloadIsAFailure() {
+        let failed = Setup.Fetch(fraction: nil, words: "download failed: the server said 503")
+        XCTAssertEqual(Setup.state(.fetching, fetch: failed, loading: Ear.preparing), .failed("the server said 503"))
+        XCTAssertEqual(Setup.state(phase: .fetching, claude: .fetching, fetch: failed), .failed("the server said 503"))
+        XCTAssertEqual(Setup.state(.fetching, fetch: held, loading: Ear.preparing), .waiting(held.words))
+    }
+
     /// What a line says beside its name: where it has got to, that it is ready, or why it failed.
     func testALineSaysWhereItIsOrWhyItFailed() {
         XCTAssertEqual(SetupCard.words(.progress(0.25, "downloading 57 MB of 228 MB")), "downloading 57 MB of 228 MB")

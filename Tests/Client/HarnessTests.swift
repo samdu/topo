@@ -204,6 +204,27 @@ final class HarnessIntegrationTests: XCTestCase {
                                     busy: harness.busy, engaged: false, answered: false))
     }
 
+    /// A device that read an empty log, was demoted while another answered the question, and takes
+    /// primary back in the same process has not read the log as it is now: nothing is asked
+    /// until it has, and then the turns are there.
+    func testTakingPrimaryBackAsksNothingUntilTheLogIsReadAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await harness.refresh()
+        XCTAssertTrue(harness.hasRead)
+        await harness.demote()
+        let log = TurnLog(database: db)
+        try await log.writer(for: DeviceID("other")).append(.person, "the bins", continuing: try await log.read())
+        harness.adopt(PrimaryLease(database: db, device: DeviceID("phone"), endpoint: nil, probe: NoSocketProbe()))
+        XCTAssertFalse(FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+                                     busy: harness.busy, engaged: false, answered: false),
+                       "asked over a read made before the takeover")
+        await harness.refresh()
+        XCTAssertEqual(harness.turns.map(\.text), ["the bins"])
+        XCTAssertFalse(FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+                                     busy: harness.busy, engaged: false, answered: false))
+    }
+
     /// The answer is one turn: on the line under one nonce before the question goes, a second
     /// answer adding nothing, and a relaunch that finds it still waiting not asking again even
     /// with the device's own mark of having answered lost.

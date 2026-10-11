@@ -45,17 +45,39 @@ enum Setup {
     /// The card is drawn while any line is not done.
     static func shows(_ lines: [Line]) -> Bool { lines.contains { $0.state != .done } }
 
+    /// Whether the lines are an install's and not a launch's: something is downloading, being
+    /// unpacked, or failed. Every launch loads the ear and the voice, and that alone draws no
+    /// card; once an install has drawn one it stands until every line is done (`standing`).
+    static func installing(_ lines: [Line]) -> Bool {
+        lines.contains { line in
+            switch line.state {
+            case .progress, .failed: true
+            case .waiting(let words): words != notStarted
+            case .working: line.title == workspace
+            case .done: false
+            }
+        }
+    }
+
+    /// Whether the card stands, given whether it stood a moment ago: it comes for an install and
+    /// goes when every line is done, so the models' first preparing on this phone is under it.
+    static func standing(_ lines: [Line], stood: Bool) -> Bool { shows(lines) && (stood || installing(lines)) }
+
+    static let notStarted = "not started"
+
     static func state(phase: Userland.Phase, claude: Userland.ClaudePhase, fetch: Fetch) -> State {
-        if case .failed(let why) = phase { return .failed(why) }
-        if case .failed(let why) = claude { return .failed(why) }
-        if phase == .importing { return .working("unpacking") }
-        if phase == .fetching || claude == .fetching { return fetching(fetch) }
-        return .done
+        // Every pair is named, so a phase added later is a line this has to be taught.
+        switch (phase, claude) {
+        case (.failed(let why), _), (_, .failed(let why)): return .failed(why)
+        case (.importing, _): return .working("unpacking")
+        case (.fetching, _), (_, .fetching): return fetching(fetch)
+        case (.ready, .fetched): return .done
+        }
     }
 
     static func state(_ stage: Stage, fetch: Fetch, loading: String) -> State {
         switch stage {
-        case .cold: .waiting("not started")
+        case .cold: .waiting(notStarted)
         case .fetching: fetching(fetch)
         case .loading: .working(loading)
         case .ready: .done
@@ -63,9 +85,14 @@ enum Setup {
         }
     }
 
+    /// A download that failed is a failure, in the words the downloads have for it, though the
+    /// part itself is still waiting on it.
     private static func fetching(_ fetch: Fetch) -> State {
-        fetch.fraction.map { .progress($0, fetch.words) } ?? .waiting(fetch.words)
+        if fetch.words.hasPrefix(downloadFailed) { return .failed(String(fetch.words.dropFirst(downloadFailed.count))) }
+        return fetch.fraction.map { .progress($0, fetch.words) } ?? .waiting(fetch.words)
     }
+
+    static let downloadFailed = "download failed: "
 
     /// The lines as the app's own parts stand now.
     @MainActor
@@ -100,8 +127,9 @@ enum Setup {
     }
 }
 
-/// The setup's lines, drawn while any is not done: over the composer in the chat, where an
-/// updated app that already has a log finds it, and under the question on the first run.
+/// The setup's lines, the done ones among them, drawn while any is not done: over the composer in
+/// the chat while the keyboard is down, where an updated app that already has a log finds it,
+/// and under the question on the first run. Whether it stands at all is `Setup.standing`.
 struct SetupCard: View {
     var lines: [Setup.Line]
     @Environment(\.look) private var look
@@ -114,6 +142,8 @@ struct SetupCard: View {
                         HStack {
                             Text(line.title).font(look.setup.titleFont)
                             Spacer()
+                            // A step with no measure turns; a bar with no value would stand still.
+                            if case .working = line.state { ProgressView().controlSize(.mini) }
                             Text(Self.words(line.state))
                                 .font(look.setup.wordsFont)
                                 .foregroundStyle(Self.failed(line.state) ? look.setup.troubleInk : look.setup.wordsInk)
@@ -137,8 +167,7 @@ struct SetupCard: View {
     @ViewBuilder private func bar(_ state: Setup.State) -> some View {
         switch state {
         case .progress(let fraction, _): ProgressView(value: min(max(fraction, 0), 1))
-        case .working: ProgressView().progressViewStyle(.linear)
-        case .waiting, .done, .failed: EmptyView()
+        case .working, .waiting, .done, .failed: EmptyView()
         }
     }
 

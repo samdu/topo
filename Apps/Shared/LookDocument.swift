@@ -148,6 +148,29 @@ enum LookDocument {
         r.object("mascot") { mascot(&look.mascot, $0) }
         r.object("mind") { mind(&look.mind, $0) }
         r.object("bar") { bar(&look.bar, $0) }
+        r.object("reading") { reading(&look.reading, $0) }
+        r.object("setup") { setup(&look.setup, $0) }
+    }
+
+    private static func reading(_ value: inout Look.Reading, _ r: Reader) {
+        r.bounded("markSize", &value.markSize, in: 16...200)
+        r.bounded("spacing", &value.spacing, in: 0...64)
+        r.font("font", &value.font)
+        r.colour("ink", &value.ink)
+        r.colour("surface", &value.surface)
+    }
+
+    private static func setup(_ value: inout Look.Setup, _ r: Reader) {
+        r.bounded("spacing", &value.spacing, in: 0...40)
+        r.bounded("lineSpacing", &value.lineSpacing, in: 0...24)
+        r.bounded("horizontalPadding", &value.horizontalPadding, in: 0...64)
+        r.bounded("verticalPadding", &value.verticalPadding, in: 0...40)
+        r.font("titleFont", &value.titleFont)
+        r.font("wordsFont", &value.wordsFont)
+        r.colour("wordsInk", &value.wordsInk)
+        r.colour("troubleInk", &value.troubleInk)
+        r.colour("tint", &value.tint)
+        r.colour("surface", &value.surface)
     }
 
     private static func bar(_ value: inout Look.Bar, _ r: Reader) {

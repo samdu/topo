@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The first ten minutes: one question, with the microphone asked for at the first press and
 /// nothing before it. The answer is handed to `onDone`, which puts it on the harness's line as
-/// the first turn; nothing said here is dropped. It stands over the chat, opaque, while
-/// `FirstRun.asks`.
+/// the first turn. It stands over the chat, opaque, while `FirstRun.asks` and until an answer
+/// said into its microphone has been heard.
 struct FirstRunView: View {
     /// What a new install is still fetching and preparing, drawn under the question.
     var setup: [Setup.Line] = []

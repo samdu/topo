@@ -149,7 +149,7 @@ enum DebugRun {
 
     #if os(iOS)
     /// `TOPO_DEBUG_SETUP=<fetching|failed>`: the setup card draws these lines in place of the
-    /// app's own parts, so a suite reads the card without a download: one part downloading at a
+    /// app's own parts, so a run draws the card without a download: one part downloading at a
     /// known share, one being prepared and one ready, or one of them failed.
     @MainActor
     static func setup(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Setup.Line]? {
