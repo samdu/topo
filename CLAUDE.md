@@ -56,7 +56,8 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 
 The process — who plans, who builds, who reviews, and in what order — is `docs/process.md`. The short form:
 
-- Every change lands as a PR on a `buddy/<topic>` branch from its own worktree, opened as a draft. The description is the contract: what was done, and a **Proof** section as a checklist of what was verified. A test only a physical device can show is an unchecked `- [ ] device: …` box; auto-merge waits until it is ticked.
+- Every change lands as a PR on a `buddy/<topic>` branch from its own worktree, opened as a draft. The description is the contract: what was done, and a **Proof** section as a checklist of what was verified. A test only a physical device can show is an unchecked `- [ ] device: …` box, worded for a person holding the device, or `- [ ] device(2): …` when it wants two independent verifications; auto-merge waits until it is ticked.
+- When a build has device boxes to run, it is one dev build for the batch and one issue for the build (`docs/process.md`, *Device checks*): publish with `publish-topo.sh --dev <ref>`, from a throwaway branch with every PR of the batch merged in when there is more than one; open `Build <number> (<commit>)` in samdu/topo-link with a `## check:` section per box; report the build and the issue to the coordinator, who points Sam at both. Topo answers on the issue from the device, and the janitor ticks a box its results verify.
 - One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
 - Push with `scripts/validate-and-push.sh`, from a worktree on buddybox: it runs the suites the commit needs, pushes only a green commit, and posts the result to it, which is what the PR's `test` check reads (`docs/testing.md`). A commit pushed with a bare `git push` has no result and holds its PR red.
 - **Other engineer sessions share this Mac and this repo**, so:

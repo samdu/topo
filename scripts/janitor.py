@@ -36,7 +36,8 @@ judgement:
      PR itself changes: a verdict that blocks, a green PR with Proof boxes
      unticked, a ready PR with no validate run, a run cancelled with nothing
      after it, and a PR nothing has touched for `IDLE` while no run is in
-     progress. A draft is gate one's and is never read or reported;
+     progress. A draft is gate one's and is never read or reported by
+     this step;
   6. reports each open issue that is untriaged — no `triaged` label and no
      comment — once it is older than `GRACE`, and again only when its labels
      or its updated-at change. A paged GraphQL read (at most `ISSUES_PAGES`
@@ -50,7 +51,19 @@ judgement:
      as fixed by a commit that is in the list the model was given; or put it
      to Sam, which changes nothing on GitHub. `allowed()` is every `gh` call
      the step can make. `--triage N…` runs this step alone on the issues
-     named, and `--no-triage` leaves it out of a pass.
+     named, and `--no-triage` leaves it out of a pass;
+  8. ticks a `- [ ] device: …` box of an open PR's description once the
+     build issue that names it in samdu/topo-link (`Build N (commit)`, one
+     `## check:` section per box, quoting the box and the head the build
+     carried) holds enough `## result:` comments that pass: one, or the
+     count the box asks for as `device(2):`, each from another respondent —
+     another author, or the same author on another device. A pass is read
+     from the lines directly under a comment's first, and anything else of
+     a respondent's that reads as a result for the check is a fail. A fail at the PR's head, and passes on a
+     head that has moved since the build, tick nothing and are reported. The body is read again right before the write, one line of it
+     changes, and a comment on the PR cites the results; `allowed_pr()` is
+     every write the step can make. It merges nothing: the box is what
+     automerge and step 1 were waiting on.
 
 What was last said of each PR and issue is kept as a fingerprint in the state
 file (`reported`), and an item whose fingerprint has not moved is silent
@@ -128,6 +141,17 @@ ISSUES_PAGES = 5                   # pages read before the list is taken as unwh
 ISSUE_LINES = 60                   # issue lines one pass says, so a report is mostly PR lines
 TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
+LINK = "samdu/topo-link"           # the mailbox repository: an issue per build that carries device checks
+BUILDS_LIMIT = 50                  # open issues read there; a list that fills it is not read as whole
+BUILD_TITLE = re.compile(r"build \d+ \([0-9a-f]{7,40}\)", re.I)
+# An unticked device box: `- [ ] device: …` wants one verification, `- [ ] device(2): …` two.
+DEVICE_BOX = re.compile(r"^([ \t]*[-*] )\[ \]( device(?:\((\d{1,3})\))?:)(.*)$", re.M)
+CHECK = re.compile(r"^## check:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", re.M)
+RESULT = re.compile(r"## result:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*")   # a comment's first line, whole
+# Anything else of a respondent's that starts a line like a result's heading: it is no pass, and holds the box it names.
+ALMOST = re.compile(r"^[^\w\n]*result\s*:\s*([a-z0-9][a-z0-9-]*)", re.M | re.I)
+LINE_ENDS = re.compile(r"\r\n|[\r\x0b\x0c\x85\u2028\u2029]")
+RESPONDENTS = ("OWNER", "MEMBER", "COLLABORATOR")   # whose comment on a build issue can be a result
 CLAUDE = os.environ.get("TOPO_JANITOR_CLAUDE", "claude")
 TRIAGE_MODEL = "sonnet"
 TRIAGE_MAX = 10                    # issues one pass asks the model about
@@ -237,7 +261,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
     # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
-    # waits for ready, and nothing about it is the janitor's to say.
+    # waits for ready, and nothing about its runs is the janitor's to say.
     if pr["isDraft"]:
         return out
 
@@ -502,6 +526,136 @@ def allowed(argv):
     return False
 
 
+def device_boxes(body):
+    """A description's unticked device boxes as [(text, verifications wanted)]."""
+    return [(m.group(4).strip(), int(m.group(3) or 1)) for m in DEVICE_BOX.finditer(body or "")]
+
+
+def tick_box(body, text):
+    """`body` with its one unticked device box of exactly this text ticked, and
+    nothing else changed; None when no box has the text, or more than one."""
+    hits = [m for m in DEVICE_BOX.finditer(body or "") if m.group(4).strip() == text]
+    if len(hits) != 1:
+        return None
+    at = hits[0].start() + len(hits[0].group(1))
+    return body[:at] + "[x]" + body[at + 3:]
+
+
+def build_checks(body):
+    """A build issue's checks as {name: {number, head, box}}: each `## check:
+    name` section's `pr: samdu/topo#N at <head>` line, the PR and the head of it
+    the build carried, and its `box:` line, the box's text. A section without
+    both lines is no check, and a name given twice is none, whichever of its
+    sections is whole."""
+    parts = CHECK.split((body or "").replace("\r\n", "\n"))
+    out, seen = {}, set()
+    for name, text in zip(parts[1::2], parts[2::2]):
+        pr = re.search(rf"^pr:[ \t]*{re.escape(REPO)}#(\d{{1,9}}) at ([0-9a-f]{{7,40}})[ \t]*$", text, re.M)
+        box = re.search(r"^box:(.+)$", text, re.M)
+        if name in seen:
+            out.pop(name, None)
+        elif pr and box and box.group(1).strip():
+            out[name] = {"number": int(pr.group(1)), "head": pr.group(2), "box": box.group(1).strip()}
+        seen.add(name)
+    return out
+
+
+def respondent(author, device):
+    """Who a result is from: its author, and the device it names with case,
+    spacing and punctuation dropped, so one device written two ways is one."""
+    return author, re.sub(r"[\W_]+", "", (device or "").casefold())
+
+
+def build_results(comments):
+    """The results on a build issue as {check: {respondent: (passed, url)}}, each
+    respondent's newest. A pass is a comment by someone with write access
+    whose first line is `## result: name`, with, in the lines directly under
+    that one and before the first blank line, one `device:` line that names a
+    device and a `status:` line, every one of which says `pass`. Nothing
+    after that blank line is read: what a comment pastes or quotes further
+    down is no part of it. Every other comment of theirs with a line that
+    starts like a result's heading for a check — another status, no status,
+    no device, a heading that is not the first line or is spelt another way —
+    is a fail for each check it names so, by the device it names if it names
+    one: a result that cannot be read as a pass holds the box and is said,
+    and is never passed over."""
+    out = {}
+    for c in sorted(comments or [], key=lambda c: str(c.get("createdAt") or "")):
+        author = (c.get("author") or {}).get("login")
+        if not isinstance(author, str) or not author or c.get("authorAssociation") not in RESPONDENTS:
+            continue
+        url = str(c.get("url") or "")
+        text = LINE_ENDS.sub("\n", str(c.get("body") or ""))
+        lines = [l.rstrip() for l in text.split("\n")]
+        head = RESULT.fullmatch(lines[0])
+        own = (lines[1:lines.index("", 1)] if "" in lines[1:] else lines[1:]) if head else []
+        said = [l.split(":", 1)[1].strip() for l in own if l.lower().startswith("status:")]
+        named = [l.split(":", 1)[1].strip() for l in own if l.lower().startswith("device:")]
+        who = respondent(author, named[0] if len(named) == 1 else "")
+        if said and who[1]:
+            mine = out.setdefault(head.group(1), {})
+            mine.pop((author, ""), None)   # what this author said before of no device, it says now of this one
+            mine[who] = (all(v.lower() == "pass" for v in said), url)
+            continue
+        device = re.search(r"^[^\w\n]*device\s*:(.*)$", text, re.M | re.I)
+        for name in {m.group(1).lower() for m in ALMOST.finditer(text)}:
+            out.setdefault(name, {})[respondent(author, device.group(1) if device else "")] = (False, url)
+    return out
+
+
+def decide_ticks(build, comments, prs):
+    """What one build issue's results want of the open PRs: a list of
+    {"kind": tick|report, "number", "head", "box", …}. A check counts for the
+    one unticked device box of its PR whose text is the check's `box:` line,
+    character for character, for no box two checks name, and only while the
+    PR's head is the one the build carried: results on another head say
+    nothing of this one, and passes that would have ticked the box are
+    reported instead. At that head, a respondent whose newest result fails
+    holds the box and is reported; otherwise it is ticked when as many
+    respondents as it asks for have a newest result that passes. Pure."""
+    checks = build_checks(build.get("body"))
+    results = build_results(comments)
+    by_number = {pr["number"]: pr for pr in prs}
+    named = [(c["number"], c["box"]) for c in checks.values()]
+    where = f"{LINK}#{build['number']}"
+    out = []
+    for name, c in checks.items():
+        pr = by_number.get(c["number"])
+        wanted = [need for text, need in device_boxes(pr.get("body")) if text == c["box"]] if pr else []
+        if len(wanted) != 1 or wanted[0] < 1 or named.count((c["number"], c["box"])) != 1:
+            continue
+        need, n, head = wanted[0], pr["number"], pr["headRefOid"]
+        title = f"#{n} ({pr['headRefName']})"
+        answers = results.get(name, {}).values()
+        passed = sorted(url for ok, url in answers if ok)
+        failed = sorted(url for ok, url in answers if not ok)
+        want = {"number": n, "head": head, "box": c["box"]}
+        if not head.startswith(c["head"]):
+            if not failed and len(passed) >= need:
+                out.append(dict(want, kind="report", why="moved", key=f"{n}:device-moved:{name}:{head}",
+                                text=f"{title}: device check {name} passed on {where} at {c['head'][:7]}, and the head is now {head[:7]}; "
+                                     "the box is not ticked, since the build did not carry what is there now."))
+        elif failed:
+            out.append(dict(want, kind="report", why="failed", key=f"{n}:device-failed:{build['number']}:{name}:{len(failed)}:{head}",
+                            text=f"{title}: device check {name} failed on {where} ({len(failed)} failing or not readable as a pass, {len(passed)} passing); it holds the box."))
+        elif len(passed) >= need:
+            who = "1 respondent" if len(passed) == 1 else f"{len(passed)} respondents"
+            cited = "\n".join(f"- {url}" for url in passed)
+            out.append(dict(want, kind="tick",
+                            text=f"ticked a device box of {title}: check {name} on {where} passed for {who}, {need} wanted.",
+                            comment=f"Ticked the device box that check `{name}` of {where} verifies, at {head[:7]}: "
+                                    f"{who} passed it and the box asks for {need}.\n\n{cited}\n\n"
+                                    "Ticked by the janitor (`docs/janitor.md`, step 8)."))
+    return out
+
+
+def allowed_pr(argv):
+    """Whether `argv` is one of the two `gh` calls the device-box step may make:
+    writing one PR of this repository's description, or commenting on it, from a file."""
+    return (len(argv) == 8 and argv[:2] == ["gh", "pr"] and argv[2] in ("edit", "comment") and argv[3].isdigit()
+            and argv[4:7] == ["--repo", REPO, "--body-file"])
+
+
 def decide_publish(published_commit, main_sha, state, now):
     """Whether to republish the install page. Returns a reason string or None."""
     if not main_sha:
@@ -705,6 +859,37 @@ class Shell:
         if not allowed(argv):
             raise RuntimeError(f"triage would run {shlex.join(argv[:3])}…, which it may not")
         self.run(argv, mutating=True)
+
+    def builds(self):
+        """The mailbox repository's open build issues: number, title and body."""
+        issues = self.gh_json("issue", "list", "--repo", LINK, "--state", "open", "--limit", str(BUILDS_LIMIT),
+                              "--json", "number,title,body") or []
+        if len(issues) >= BUILDS_LIMIT:
+            raise RuntimeError(f"gh issue list answered {len(issues)} issues, its limit; the list may not be whole")
+        return [i for i in issues if BUILD_TITLE.match(i.get("title") or "")]
+
+    def build_comments(self, number):
+        return (self.gh_json("issue", "view", str(number), "--repo", LINK, "--json", "comments") or {}).get("comments") or []
+
+    def pr_now(self, number):
+        return self.gh_json("pr", "view", str(number), "--repo", REPO, "--json", "state,headRefOid,body") or {}
+
+    def pr_write(self, verb, number, text):
+        """`gh pr edit` or `gh pr comment` with `text` as the body, from a file."""
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, newline="", encoding="utf-8") as f:
+                path = f.name
+                f.write(text)
+            argv = ["gh", "pr", verb, str(number), "--repo", REPO, "--body-file", path]
+            if not allowed_pr(argv):
+                raise RuntimeError(f"the device-box step would run {shlex.join(argv[:3])}…, which it may not")
+            self.run(argv, mutating=True)
+        except (OSError, ValueError) as ex:
+            raise RuntimeError(f"the body's file could not be written: {ex}")
+        finally:
+            if path and os.path.exists(path):
+                os.unlink(path)
 
     def main_sha(self):
         return self.run(["gh", "api", f"repos/{REPO}/commits/main", "--jq", ".sha"]).stdout.strip()
@@ -1049,6 +1234,72 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             tell(item, fp, texts, "prs")
     if prs_whole:
         seeded["prs"] = True
+
+    # 8: the device boxes a build issue's results have verified. Nothing is
+    # read of the mailbox while no open PR has such a box. An answer of the
+    # wrong shape is a read that failed, like any other.
+    BAD = (RuntimeError, KeyError, TypeError, AttributeError, ValueError)
+    if prs_ok and any(device_boxes(pr.get("body")) for pr in prs):
+        try:
+            builds = sh.builds()
+            wants, held = [], set()
+            for build in builds:
+                number = build["number"]
+                checks = build_checks(build.get("body")).values()
+                if not any(pr["number"] in {c["number"] for c in checks} and device_boxes(pr.get("body")) for pr in prs):
+                    continue
+                try:
+                    comments = sh.build_comments(number)
+                    wants += [dict(w, build=build, comments=comments) for w in decide_ticks(build, comments, prs)]
+                    state["fired"].pop(f"build:{number}:read", None)
+                except BAD as ex:
+                    # Results that could not be read may hold a fail: every box
+                    # this issue names waits for a pass that reads them.
+                    held |= {(c["number"], c["box"]) for c in checks}
+                    say(f"build:{number}:read", f"could not read the results on {LINK}#{number}: {type(ex).__name__}: {str(ex)[:200]}")
+            # A fail at this head holds the box whichever build's issue it is on.
+            held |= {(w["number"], w["box"]) for w in wants if w.get("why") == "failed"}
+            by_number = {pr["number"]: pr for pr in prs}
+            for w in wants:
+                n, head = w["number"], w["head"]
+                if w["kind"] == "report":
+                    say(w["key"], w["text"])
+                    continue
+                if (n, w["box"]) in held:
+                    quiet.append(f"#{n}: a box one build's results pass is held by another's fail, or by results that could not be read")
+                    continue
+                try:
+                    # The description is read again right before it is
+                    # written: the coordinator and the engineer edit it too,
+                    # and a body written from the list's copy would undo what
+                    # they wrote since. The decision is made again over what
+                    # that read shows — the box, the count it asks for, the
+                    # head — and a PR that closed or moved meanwhile is left.
+                    cur = sh.pr_now(n)
+                    now_pr = dict(by_number[n], headRefOid=cur.get("headRefOid") or "", body=cur.get("body"))
+                    again = [x for x in decide_ticks(w["build"], w["comments"], [now_pr])
+                             if x["kind"] == "tick" and x["box"] == w["box"]] if cur.get("state") == "OPEN" else []
+                    body = tick_box(cur.get("body"), w["box"]) if again and again[0]["head"] == head else None
+                    if body is None:
+                        quiet.append(f"#{n}: its head, its state or the box changed while the device step looked; left")
+                        continue
+                    sh.pr_write("edit", n, body)
+                    lines.append(again[0]["text"])
+                    persist()
+                    try:
+                        sh.pr_write("comment", n, again[0]["comment"])
+                    except RuntimeError as ex:
+                        lines.append(f"#{n}: the box is ticked, and the comment citing its results was refused: {ex}")
+                except BAD as ex:
+                    say(f"{n}:tick-refused:{head}", f"#{n}: its device box could not be ticked: {type(ex).__name__}: {str(ex)[:200]}")
+            listed = {f"build:{b['number']}:read" for b in builds}
+            state["fired"] = {k: v for k, v in state["fired"].items()
+                              if not (k.startswith("build:") and k.endswith(":read")) or k in listed}
+            state["fired"].pop("builds:read", None)   # only a list read and parsed whole ends its failure
+        except BAD as ex:
+            say("builds:read", f"could not read the build issues of {LINK}: {type(ex).__name__}: {str(ex)[:200]}")
+    elif prs_ok:
+        state["fired"] = {k: v for k, v in state["fired"].items() if not (k.startswith("build") and k.endswith(":read"))}
 
     # 3: the install page.
     try:

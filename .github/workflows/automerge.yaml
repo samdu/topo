@@ -74,8 +74,10 @@ jobs:
               echo "::endgroup::"; continue
             fi
             # An unchecked box in the description is a claim not yet proved —
-            # by convention a device test the coordinator runs with Sam before ticking
-            # it (docs/process.md, step 4). Nothing unproved merges unattended.
+            # by convention a device test, `- [ ] device: …` or `- [ ] device(2): …`,
+            # ticked by the janitor once the results on its build's issue verify
+            # it, or by the coordinator (docs/process.md, Device checks). Nothing
+            # unproved merges unattended.
             if jq -r .body <<<"$info" | grep -qE '^\s*[-*] \[ \]'; then
               echo "skip: the description has an unchecked box; a claim is still unproved"
               echo "::endgroup::"; continue
