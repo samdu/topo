@@ -494,6 +494,40 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(model, "claude-fable-5-1")
     }
 
+    /// A threshold changed during a turn replaces the process once the turn has ended, never
+    /// under it; the replacement is launched with the new one, and the same value again
+    /// replaces nothing.
+    func testAChangedThresholdReplacesTheResidentOnceIdle() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let (turn, done) = collect(try await session.send("a long one", id: "input-1"))
+        await eventually("written") { first.turns.count == 1 }
+
+        await session.use(compactAt: 60)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(first.terminated, "the threshold change ended the process mid-turn")
+        XCTAssertEqual(launcher.processes.count, 1)
+
+        answer(first, "done")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        await eventually("the process replaced after the turn") { launcher.processes.count == 2 }
+        XCTAssertTrue(first.terminated)
+        XCTAssertEqual(launcher.compactions, [nil, 60])
+        XCTAssertEqual(launcher.resumed, [nil, "S1"], "the replacement resumes the conversation")
+
+        try await session.ready()
+        await session.use(compactAt: 60)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(launcher.processes.count, 2, "the same threshold restarted the process")
+        await session.use(compactAt: nil)
+        await eventually("replaced for Claude Code's own") { launcher.processes.count == 3 }
+        XCTAssertEqual(launcher.compactions, [nil, 60, nil])
+    }
+
     /// Forgetting the conversation clears the kept id, and the next process starts fresh.
     func testForgettingTheConversationStartsAFreshSession() async throws {
         store.save("OLD")

@@ -1,5 +1,6 @@
 import Foundation
 import TopoUserland
+import TopoTurn
 import XCTest
 
 @testable import Topo
@@ -283,5 +284,26 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(mascot.facing, .right, "a turn's end or the harness turned him")
         mascot.facing = .left
         XCTAssertEqual(mascot.state.input.facing, "left")
+    }
+
+    /// His colour is the context's fill on the threshold's scale once the harness knows it: easy
+    /// under three quarters of the threshold, getting close from there, at it from the threshold.
+    /// With no threshold known, the engine's own scale over the tokens, as before.
+    func testTheLoadIsTheThresholdsScale() {
+        var state = MascotState(model: "claude-haiku-4-5-20251001")
+        state = MascotMapping.harness(state, model: state.model, tokens: 100_000, limit: nil)
+        XCTAssertEqual(state.input.tokens, 100_000)
+        XCTAssertNil(state.input.load)
+        let limit = Compaction.threshold(window: 200_000, setting: .auto)
+        XCTAssertEqual(limit, 167_000)
+        for (tokens, load) in [(0, "default"), (125_249, "default"), (125_250, "warning"), (166_999, "warning"), (167_000, "reset"), (400_000, "reset")] {
+            state = MascotMapping.harness(state, model: state.model, tokens: tokens, limit: limit)
+            XCTAssertEqual(state.input.load, load, "\(tokens)")
+            XCTAssertNil(state.input.tokens, "the engine was handed a second scale")
+        }
+        // A compaction under a turn leaves him carrying what is left.
+        state = MascotMapping.next(state, .event(.compacted(.init(trigger: "auto", pre: 167_200, post: 4_000))))
+        XCTAssertEqual(state.tokens, 4_000)
+        XCTAssertEqual(state.input.load, "default")
     }
 }

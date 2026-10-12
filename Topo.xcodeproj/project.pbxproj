@@ -105,6 +105,7 @@
 		315C04E58600D0CEECBFEAD6 /* ChatBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402DC40974C6C4DAF1B6B93F /* ChatBar.swift */; };
 		3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DE2B33A2255E112B603120 /* DraftTests.swift */; };
 		32830F67E46628FB06BD9EC0 /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
+		32A8232D7FDF934BB5928D81 /* ContextTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D69A78FA2EC3C07AC87C2955 /* ContextTool.swift */; };
 		33FADCED655202CC03DA3DE0 /* VaultDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E270E681606D89AAEA041E6 /* VaultDownloads.swift */; };
 		3437864E6AD2F3E01FA3D8B7 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		3535E85112598C5CFC84FDF5 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
@@ -319,6 +320,7 @@
 		9C3DBAD81CD9FEC783B43859 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A92EDFAF7BC94A3837BE8C2F /* LICENSE */; };
 		9C4656ACA5CED95740060C72 /* VaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0910114D0F4D264253EC5 /* VaultMigration.swift */; };
 		9D909CDBAEEC40672804C4FE /* ScreenWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996EA9E8F3A45CAAB86EE482 /* ScreenWatch.swift */; };
+		9DA33BA8920514669E568B0A /* ContextToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */; };
 		9DA6A053137FD71F82AEBFC3 /* PlacesDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 639E8B56AE56DB4807D9EFA0 /* PlacesDocument.swift */; };
 		9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		9E6150DB3D65DA733D3F3422 /* OnePasswordRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD966E9BCBE6057DEC5075E1 /* OnePasswordRunTests.swift */; };
@@ -752,6 +754,7 @@
 		6C7E1C60D34856E30862D65D /* TopoTurn */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoTurn; path = Packages/TopoTurn; sourceTree = SOURCE_ROOT; };
 		6CC10F86563FE12BC674EFBB /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		6D42B9802439D5A1AD7033D4 /* OnePasswordConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePasswordConnectionTests.swift; sourceTree = "<group>"; };
+		6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextToolTests.swift; sourceTree = "<group>"; };
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		738BC8AD7B6AE57B9135A057 /* TopoWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TopoWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettledSpeechTests.swift; sourceTree = "<group>"; };
@@ -882,6 +885,7 @@
 		D569E905DD82FD212A08DC02 /* WatchDefaultSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchDefaultSurfaceTests.swift; sourceTree = "<group>"; };
 		D56E758F45E3E653043D416F /* ControlRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlRequestTests.swift; sourceTree = "<group>"; };
 		D5D8E5964C0B2E93432931EE /* OnePassword.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePassword.swift; sourceTree = "<group>"; };
+		D69A78FA2EC3C07AC87C2955 /* ContextTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextTool.swift; sourceTree = "<group>"; };
 		D6A401F08D7A75D151418BFA /* ChatReading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatReading.swift; sourceTree = "<group>"; };
 		D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDocumentTests.swift; sourceTree = "<group>"; };
 		D7E1A5F0E00768D69191A35A /* models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = models.json; sourceTree = "<group>"; };
@@ -1335,6 +1339,7 @@
 			isa = PBXGroup;
 			children = (
 				13B1C43B8F1C775A87CD4F70 /* ContactsTool.swift */,
+				D69A78FA2EC3C07AC87C2955 /* ContextTool.swift */,
 				667A80E4EEE18FB3F1494035 /* ControlTool.swift */,
 				93B5621388A948B9C5F0BD7B /* EventKitTools.swift */,
 				1C9781748E990C71B5291594 /* FilesTool.swift */,
@@ -1377,6 +1382,7 @@
 				327323DA10D8649D7ED7A137 /* ComposerRenderTests.swift */,
 				2E3F7EEC977B79E8BB72BBDC /* ComposerStateTests.swift */,
 				53EE28CCE270949153C3E0BE /* ConnectionsTests.swift */,
+				6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */,
 				9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */,
 				621361E24A923844780887AC /* ControlCueTests.swift */,
 				0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */,
@@ -2434,6 +2440,7 @@
 				B671F1F9F691342A9216792C /* ComposerRenderTests.swift in Sources */,
 				A0CB70E9F5876CDC83B84D04 /* ComposerStateTests.swift in Sources */,
 				C1901D08A64A897C972B76E2 /* ConnectionsTests.swift in Sources */,
+				9DA33BA8920514669E568B0A /* ContextToolTests.swift in Sources */,
 				DAA85047031AD1661D0E8E48 /* ControlActionTests.swift in Sources */,
 				884C2A44B2BE25779EA4F3F7 /* ControlCueTests.swift in Sources */,
 				8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */,
@@ -2562,6 +2569,7 @@
 				B0670989F3CF8988A0109163 /* Connections.swift in Sources */,
 				D0076A594104D14F2C6E6E7E /* ConnectionsView.swift in Sources */,
 				EA62ABE92498980EC79A486C /* ContactsTool.swift in Sources */,
+				32A8232D7FDF934BB5928D81 /* ContextTool.swift in Sources */,
 				46900B879C0B64EE7C9F2995 /* ControlDefaults.swift in Sources */,
 				D925201A428816A89B31395C /* ControlDocument.swift in Sources */,
 				C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */,
