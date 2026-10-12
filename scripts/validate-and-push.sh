@@ -22,11 +22,12 @@
 #      warm; two runs at once are in two slots.
 #   3. Runs each suite under that suite's own lock (suite-<name>.lock beside the slots), one
 #      call of scripts/mac-suite.sh a suite, the commit's own copy: the first of the suites
-#      still to run whose lock is free, in the order topo_unit, topo_ui, others, so a run whose `topo_unit` is a
-#      sibling's goes on with its `others`. One suite of a name runs on this Mac at a time (the
-#      audio lane is one per Mac), and two runs overlap in two different suites. The waits for
-#      a slot and for a suite are LOCK_WAIT seconds between them (three hours); nothing makes
-#      them first come, first served.
+#      still to run whose lock is free, in the order they were chosen or asked for, so a run
+#      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on
+#      this Mac at a time (the audio lane is one per Mac), and two runs overlap in two
+#      different suites. The waits for a slot, for a suite and for a run of the script as it
+#      was are LOCK_WAIT seconds between them (three hours); nothing makes them first come,
+#      first served.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set; neither by default)
 #      `topo_unit` and `others` go there first, over ssh, and here only when it is busy or
@@ -52,7 +53,7 @@
 #
 # Each status's description says pass or fail, the lane, the minutes and where the logs are:
 # ~/Library/Logs/topo-validate/<sha>/ on this Mac, one directory per run inside it (named for
-# when its suites began, UTC, once the slot was this run's), so a head run again after a red
+# when the run began, UTC), so a head run again after a red
 # keeps the red run's logs. The ten newest commits are kept, and each one's five newest runs. It exits 0
 # when every suite passed and the statuses are posted, 1 on a red suite, 2 on anything that
 # stopped it earlier, and 143 when a signal ended it, its suite ended with it.
@@ -156,6 +157,7 @@ case "$suites_arg" in
   *)
     chosen=()
     for suite in $suites_arg; do
+      case " ${chosen[*]-} " in *" $suite "*) continue ;; esac
       case " ${SUITES[*]} " in *" $suite "*) chosen+=("$suite") ;; *) die "no such suite '$suite': one of ${SUITES[*]}, all or none." ;; esac
     done
     ;;
@@ -180,6 +182,21 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
   began="$(sed -n 2p "$1/suite")"
   [ -n "$pid" ] && [ -n "$began" ] && [ "$(began_of "$pid")" = "$began" ] || return 1
   echo "$pid $(sed -n 3p "$1/suite")"
+}
+# The script as it was looks for a suite left running in $cache/suite alone, once it has its
+# lock, so whatever suite a slot has on record is kept there too, marked as a slot's on a
+# fourth line it does not read: a run of it then refuses to start beside a suite a run of
+# this one left behind. Kept in step at every suite's start and end.
+mirror() {
+  local dir
+  [ ! -e "$cache/suite" ] || [ "$(sed -n 4p "$cache/suite")" = slot ] || return 0
+  for dir in "$cache"/slots/*/; do
+    if orphan_in "$dir" >/dev/null; then
+      { sed -n 1,3p "$dir/suite"; echo slot; } > "$cache/suite.$$" && mv -f "$cache/suite.$$" "$cache/suite"
+      return 0
+    fi
+  done
+  rm -f "$cache/suite"
 }
 # One look's wait at something held, against the LOCK_WAIT seconds the run has for all of them;
 # who holds it is said when the wait begins and every ten minutes after.
@@ -253,10 +270,11 @@ run_on() {
     || { echo "$at: would not take $short; it runs nothing of this validation."; return 2; }
   echo "$suite: began $(date '+%H:%M') on $at"
   suite_started=$SECONDS
+  # Ended there by the pid its own mac-suite.pids leads with, which stops what it is waiting on.
+  suite_pid=""
+  trap 'ssh_to "$at" "kill \$(head -n 1 $there/logs/$run/mac-suite.pids)" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; exit 143' TERM INT HUP
   ssh_to "$at" bash -s -- "$sha" "$lane" "$suite" "$run" <<<"$on_host" >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- 8>&- &
   suite_pid=$!
-  # Ended there by the pid its own mac-suite.pids leads with, which stops what it is waiting on.
-  trap 'ssh_to "$at" "kill \$(head -n 1 $there/logs/$run/mac-suite.pids)" 2>/dev/null || true; wait "$suite_pid" 2>/dev/null || true; exit 143' TERM INT HUP
   wait "$suite_pid" || status=$?
   trap 'exit 143' TERM INT HUP
   case "$status" in
@@ -316,7 +334,7 @@ take_slot() {
         ! perl -MFcntl=:flock -e 'open(my $lock, ">&=", 8) or exit 2; local $SIG{ALRM} = sub { exit 1 }; alarm shift; exit(flock($lock, LOCK_SH) ? 0 : 1)' "$nap"; do
     waiting "a run of the script as it was before slots" "$(cat "$cache/holder" 2>/dev/null || echo unknown)" "$nap"
   done
-  if orphan="$(orphan_in "$cache")"; then
+  if [ "$(sed -n 4p "$cache/suite" 2>/dev/null)" != slot ] && orphan="$(orphan_in "$cache")"; then
     die "the suite of an earlier validation is still running without its script (pid ${orphan%% *}; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill ${orphan%% *}\`, which stops its lane and deletes its simulators, and run again."
   fi
   echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/holder"
@@ -334,6 +352,7 @@ take_slot() {
   git -C "$checkout" clean --quiet -fd
   [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || die "$checkout is not at $short."
   echo "Slot $slot: $short in $checkout"
+  say_at="$waited"
 }
 
 # run_here <suite> — the suite in this run's checkout, its lock already on descriptor 6.
@@ -344,6 +363,10 @@ run_here() {
   suite_started=$SECONDS
   # The descriptors closed: nothing the suite leaves running holds a lock. `exec`, so the pid
   # is the suite's own and a signal to this script ends it by that pid.
+  # The trap before the suite it ends, so no signal finds a suite started and nothing to end
+  # it. `|| true`: under `set -e` the wait's own status, the signal's, would end the trap there.
+  suite_pid=""
+  trap '[ -z "$suite_pid" ] || kill "$suite_pid" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; rm -f "$slot_dir/suite"; mirror; exit 143' TERM INT HUP
   (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "$suite") \
     >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- 8>&- &
   suite_pid=$!
@@ -355,11 +378,11 @@ run_here() {
   else
     rm -f "$slot_dir/suite"
   fi
-  # `|| true`: under `set -e` the wait's own status, the signal's, would end the trap there.
-  trap 'kill "$suite_pid" 2>/dev/null || true; wait "$suite_pid" 2>/dev/null || true; rm -f "$slot_dir/suite"; exit 143' TERM INT HUP
+  mirror
   wait "$suite_pid" || suite_status=$?
   trap 'exit 143' TERM INT HUP
   rm -f "$slot_dir/suite"
+  mirror
   # mac-suite.sh starts its suites.txt afresh each call. The suite has a line, or it failed:
   # a call that died early wrote none.
   said="$(grep "^$suite=" "$logs/suites.txt" 2>/dev/null || true)"
@@ -382,6 +405,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   done
   logs="$commit_logs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir "$logs" || die "could not make $logs."
+  echo "$$" > "$logs/running"
   echo "Running ${chosen[*]} (lane $lane) at $short${hosts:+, here or on $hosts}; logs in $logs"
   started=$SECONDS
 
@@ -447,9 +471,15 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   minutes=$(((SECONDS - started) / 60))
   # Every suite's result in the one file, as each call left its own.
   printf '%s' "$results" > "$logs/suites.txt"
-  # The ten newest commits' logs are kept.
+  rm -f "$logs/running"
+  # The ten newest commits' logs are kept, and those of any commit a run is still writing: a
+  # sibling's run, begun before ten other commits went through the other slot.
   ls -1t "$logs_root" | tail -n "+$((KEEP_LOGS + 1))" | while IFS= read -r old; do
-    case "$old" in *[!0-9a-f]* | "") ;; *) rm -rf "${logs_root:?}/$old" ;; esac
+    case "$old" in *[!0-9a-f]* | "") continue ;; esac
+    for mark in "$logs_root/$old"/*/running; do
+      [ ! -s "$mark" ] || ! kill -0 "$(cat "$mark")" 2>/dev/null || continue 2
+    done
+    rm -rf "${logs_root:?}/$old"
   done
 fi
 
