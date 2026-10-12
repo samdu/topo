@@ -238,7 +238,8 @@ ssh_to() { ssh $ssh_options "$@"; }
 # What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under that
 # Mac's own lock, the commit checked out in its one validation worktree, mac-suite.sh asked
 # whether the Mac can run the suite, and then the suite, in the login session where there is a
-# way into it and held awake. It exits 75 when the Mac is busy, 76 when it cannot run the
+# way into it and held awake, its display too, so that it does not lock for idleness under
+# the suite. It exits 75 when the Mac is busy, 76 when it cannot run the
 # suite, each before anything ran, and otherwise as the suite did. Its pid is in the run's
 # host.pid from the moment it has the lock, and a TERM to that pid ends whatever it has
 # started: nothing more if the suite is not yet running, and otherwise the suite, by the pid
@@ -287,9 +288,9 @@ ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do rm -r
 command="cd \"$checkout\" && exec env GIT_CONFIG_GLOBAL=/dev/null scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
 session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
-  sudo -n "$session" /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &
+  sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 9>&- &
 else
-  /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &
+  /usr/bin/caffeinate -di /bin/bash -lc "$command" 9>&- &
 fi
 child=$!
 status=0

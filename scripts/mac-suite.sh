@@ -41,8 +41,8 @@
 # `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
-# counts it, purgeable space included), and a lid that is
-# open. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than
+# counts it, purgeable space included), a lid that is
+# open and, for `topo_unit` on a Mac whose disk is encrypted, a screen that is unlocked. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than
 # buddybox before it runs a suite there, and `topo_ui` is refused on any Mac it is asked of
 # this way: the audio lane installs a driver and takes the Mac's default input and output.
 set -uo pipefail
@@ -138,6 +138,17 @@ if [ "$check" = yes ]; then
   # closed pipe, which under pipefail is a failed pipeline, and that would read as open.
   lid="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null || true)"
   case "$lid" in *'"AppleClamshellState" = Yes'*) err "this Mac's lid is closed."; lacks=1 ;; esac
+  # A Mac whose disk is encrypted gives no file complete protection while its screen is
+  # locked, and TopoTests asks that of files in the simulator's home.
+  case " ${asked[*]} " in
+    *" topo_unit "*)
+      console="$(ioreg -n Root -d1 2>/dev/null || true)"
+      vault="$(fdesetup status 2>/dev/null || true)"
+      if awk 'BEGIN { RS = "}" } /"kCGSSessionOnConsoleKey"=Yes/ && /"CGSSessionScreenIsLocked"=Yes/ { found = 1 } END { exit !found }' <<<"$console"; then
+        case "$vault" in *"FileVault is On"*) err "this Mac's screen is locked and its disk is encrypted: no file can be given complete protection until it is unlocked, and topo_unit asks for that."; lacks=1 ;; esac
+      fi
+      ;;
+  esac
   [ "$lacks" = 0 ] && echo "this Mac can run ${asked[*]}."
   exit "$lacks"
 fi

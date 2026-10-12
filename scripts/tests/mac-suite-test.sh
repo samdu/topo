@@ -78,7 +78,8 @@ fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; e
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
 fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
 # As long as the real one's answer, the state near its head: a reader that stops early closes the pipe on it.
-fake "$work/bin/ioreg" 'echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
+fake "$work/bin/fdesetup" 'echo "FileVault is ${FAKE_VAULT:-Off}."'
+fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=No,\"CGSSessionScreenIsLocked\"=Yes},{\"kCGSSessionOnConsoleKey\"=Yes${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"; echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
@@ -226,6 +227,15 @@ names "check, a full disk: named" "9 GB available"
 FAKE_LID=Yes check lid topo_unit
 is "check, the lid closed: exits 1" "$status" 1
 names "check, the lid closed: named" "lid is closed"
+FAKE_LOCKED=1 FAKE_VAULT=On check locked topo_unit
+is "check, locked and encrypted: exits 1" "$status" 1
+names "check, locked and encrypted: named" "screen is locked"
+FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
+is "check, locked and encrypted, others: exits 0" "$status" 0
+FAKE_LOCKED=1 check locked-plain topo_unit
+is "check, locked and not encrypted: exits 0" "$status" 0
+FAKE_VAULT=On check unlocked topo_unit
+is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
 check ui topo_ui
 is "check, topo_ui: exits 1" "$status" 1
 names "check, topo_ui: named" "topo_ui runs on buddybox alone"
