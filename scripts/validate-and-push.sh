@@ -229,7 +229,8 @@ ssh_to() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$@"; }
 # Mac's own lock, the commit checked out in its one validation worktree, mac-suite.sh asked
 # whether the Mac can run the suite, and then the suite, in the login session where there is a
 # way into it and held awake. It exits 75 when the Mac is busy, 76 when it cannot run the
-# suite, each before anything ran, and otherwise as the suite did.
+# suite, each before anything ran, and otherwise as the suite did. TOPO_VALIDATE_SESSION_RUN in
+# that Mac's environment names another way into the session, or none when it is empty.
 on_host='
 sha="$1" lane="$2" suite="$3" run="$4"
 cache="$HOME/Library/Caches/topo-validate"
@@ -249,8 +250,9 @@ ls -1t "$cache/logs" 2>/dev/null | tail -n +5 | while IFS= read -r old; do rm -r
 results="$cache/logs/$run"
 mkdir -p "$results" || exit 76
 command="cd \"$checkout\" && exec scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
-if [ -x /usr/local/libexec/gui-session-run ]; then
-  sudo -n /usr/local/libexec/gui-session-run /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &
+session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
+if [ -n "$session" ] && [ -x "$session" ]; then
+  sudo -n "$session" /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &
 else
   /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &
 fi

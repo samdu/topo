@@ -43,6 +43,8 @@ trap 'rm -rf "$work"' EXIT
 unset TOPO_VALIDATE_SLOTS TOPO_VALIDATE_HOSTS TOPO_VALIDATE_REPO TOPO_VALIDATE_CACHE TOPO_VALIDATE_LOGS POST_RETRY \
   FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
 export LOCK_WAIT=60 LOCK_POLL=1
+# A Mac with a way into its login session is not asked for it by a fake suite.
+export TOPO_VALIDATE_SESSION_RUN=
 
 failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
@@ -470,6 +472,7 @@ for n in 1 2 3 4 5 6 7 8 9 a b c; do
   touch -t 202001010000 "$TOPO_VALIDATE_LOGS/${n}0000000"
 done
 echo $$ > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
+touch -t 201901010000 "$TOPO_VALIDATE_LOGS/10000000"   # the oldest of them: the first the prune would take
 echo x > "$repo/x"; g -C "$repo" add -A; g -C "$repo" commit -qm x; sha="$(git -C "$repo" rev-parse HEAD)"
 validate
 [ -d "$TOPO_VALIDATE_LOGS/10000000" ] && ok "old logs a run is still writing are kept" || fail "the logs of a run in flight were removed"
