@@ -18,6 +18,16 @@ final class ModelDownloadsTests: XCTestCase {
         XCTAssertTrue(configuration.sessionSendsLaunchEvents)
     }
 
+    /// The manifest fetches one stock speaker, and it is the one the voice asks the port for: a
+    /// speaker named in one place and fetched under another is a voice that never loads.
+    func testTheBundledManifestFetchesTheSpeakerTheVoiceAsksFor() throws {
+        let pocket = try XCTUnwrap(try ModelManifest.bundled().model(ModelManifest.pocket))
+        let speakers = pocket.files.map(\.path).filter { $0.hasSuffix(".safetensors") }
+        XCTAssertEqual(speakers, ["v2.1/english/constants_bin/\(Voice.speaker).safetensors"])
+        XCTAssertEqual(Voice.speaker, "marius")
+        XCTAssertEqual(Voice.tempo, 1.0, "marius is heard at the pace he speaks at")
+    }
+
     func testTheBundledManifestNamesEveryModelWithADigestForEveryFile() throws {
         let manifest = try ModelManifest.bundled()
         for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.pocket] {

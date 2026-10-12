@@ -136,7 +136,7 @@ fi
 #
 # Pocket TTS: the English v2.1 pack, and of it only what the `.ane` placement at fp16 loads —
 # `ModelNames.PocketTTS.requiredModels(precision:placement:)` names the four bundles, and
-# `PocketTtsConstantsLoader` the three files under `constants_bin/`, with `eponine.safetensors`
+# `PocketTtsConstantsLoader` the three files under `constants_bin/`, with `marius.safetensors`
 # the one stock speaker the voice asks for. Every other language, both other placements, the
 # `.mlpackage` sources CoreML never loads, the `constants/` intermediates and the other
 # twenty-four speakers stay on the Hub. `bos_before_voice.bin` is there so the loader finds its
@@ -144,7 +144,7 @@ fi
 models="
 parakeet-tdt-0.6b-v2|FluidInference/parakeet-tdt-0.6b-v2-coreml|ee09c569f73759e6d44c9bd16766f477b2b36d39|Preprocessor.mlmodelc/ Encoder.mlmodelc/ Decoder.mlmodelc/ JointDecision.mlmodelc/ parakeet_vocab.json
 parakeet-ctc-110m-coreml|FluidInference/parakeet-ctc-110m-coreml|accdafd8cf8a2ff1cabe3c11e54416b405d409aa|MelSpectrogram.mlmodelc/ AudioEncoder.mlmodelc/ vocab.json tokenizer.json
-pocket-tts-coreml|FluidInference/pocket-tts-coreml|91748676fe3c8b2eb3007b3125253bcd898202c3|v2.1/english/cond_prefill_ane.mlmodelc/ v2.1/english/flowlm_step_ane.mlmodelc/ v2.1/english/flow_decoder_fused.mlmodelc/ v2.1/english/mimi_decoder.mlmodelc/ v2.1/english/constants_bin/bos_emb.bin v2.1/english/constants_bin/bos_before_voice.bin v2.1/english/constants_bin/text_embed_table.bin v2.1/english/constants_bin/tokenizer.model v2.1/english/constants_bin/eponine.safetensors
+pocket-tts-coreml|FluidInference/pocket-tts-coreml|91748676fe3c8b2eb3007b3125253bcd898202c3|v2.1/english/cond_prefill_ane.mlmodelc/ v2.1/english/flowlm_step_ane.mlmodelc/ v2.1/english/flow_decoder_fused.mlmodelc/ v2.1/english/mimi_decoder.mlmodelc/ v2.1/english/constants_bin/bos_emb.bin v2.1/english/constants_bin/bos_before_voice.bin v2.1/english/constants_bin/text_embed_table.bin v2.1/english/constants_bin/tokenizer.model v2.1/english/constants_bin/marius.safetensors
 "
 
 # id | base URL | files: entries that are not on the Hub, fetched from the base URL plus each file
