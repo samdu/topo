@@ -734,6 +734,10 @@ def decide_ticks(builds, prs):
 BAD = (RuntimeError, KeyError, TypeError, AttributeError, ValueError)   # a read that failed, or answered in another shape
 
 
+class Unwritten(Exception):
+    """A tick whose write was refused and whose box reads unticked afterwards."""
+
+
 def read_device(sh, number, box):
     """What one device box of PR `number` is decided over, read now: every
     open build issue that names the PR with its comments, then the PR, last,
@@ -774,6 +778,10 @@ def tick_device_box(sh, pr, box, head):
       made in between, which the write put back to what it was, or a
       history that does not show the write, behind which one could hide.
 
+    A write `gh` answered with a failure is read back like any other, since
+    it may have landed: it is refused, for the caller to say, only when the
+    box then reads unticked.
+
     Otherwise the box is unticked again, in the description as it then
     reads, and that is said: an unticked box holds the merge until a person
     has read it. An overwritten edit is not reconstructed: its text is in
@@ -801,12 +809,18 @@ def tick_device_box(sh, pr, box, head):
     body = tick_box(cur["body"], box) if tick else None
     if body is None:
         return {"did": "left"}
-    sh.pr_write("edit", n, body)   # refused, nothing is written: the caller says so and the next pass tries again
+    refused = None
+    try:
+        sh.pr_write("edit", n, body)
+    except RuntimeError as ex:   # a write that answered badly, or not at all, may have landed: it is read back all the same
+        refused = ex
     if sh.dry:
         return {"did": "ticked", "tick": tick}
     try:
         read, cur, landed = read_back(cur["edits"])
         plain = untick_box(cur["body"], box)
+        if refused and plain is None:
+            raise Unwritten()
         tick = judged(read, cur, plain) if plain is not None else None
         if tick and landed == 1:
             return {"did": "ticked", "tick": tick}
@@ -835,9 +849,12 @@ def tick_device_box(sh, pr, box, head):
         more = "" if landed == 1 else " The untick was not the one edit since the read it was made from either, so read its Proof by hand."
         return {"did": "undone", "text": f"its device box was ticked at {head[:7]} and unticked again, since {why}. "
                                          f"The next pass ticks it again if its results then verify it.{more}"}
+    except Unwritten:   # the box reads unticked: nothing of the write stands, the caller says so and the next pass tries again
+        raise refused
     except BAD as ex:
+        wrote = f" The write itself answered: {str(refused)[:200]}" if refused else ""
         return {"did": "unconfirmed", "text": f"its device box was written at {head[:7]} and what followed failed, so the tick is not "
-                                              f"confirmed; read its Proof by hand: {type(ex).__name__}: {str(ex)[:200]}"}
+                                              f"confirmed; read its Proof by hand: {type(ex).__name__}: {str(ex)[:200]}{wrote}"}
 
 
 def allowed_pr(argv):

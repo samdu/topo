@@ -777,8 +777,8 @@ class Scripted:
     from then on) and recording what is written."""
     dry = False
 
-    def __init__(self, comments, body=None):
-        self.comments, self.reads, self.wrote = comments, 0, []
+    def __init__(self, comments, body=None, lands_refused=False):
+        self.comments, self.reads, self.wrote, self.lands_refused = comments, 0, [], lands_refused
         self.body = body or boxed()["body"]
 
     def builds(self):
@@ -795,6 +795,8 @@ class Scripted:
         self.wrote.append((verb, text))
         if verb == "edit":
             self.body = text
+            if self.lands_refused:
+                raise RuntimeError("gh pr edit… gave no answer in 120 s")
 
 
 FAKE = r'''#!/usr/bin/env python3
@@ -871,7 +873,7 @@ if tool == "gh":
     if a[:2] in (["pr", "edit"], ["pr", "comment"]):
         text = open(a[a.index("--body-file") + 1], newline="").read()
         with open(os.environ["FAKE_LOG"] + "." + a[1], "a", newline="") as f: f.write(text + "\n=====\n")
-        if a[1] == "edit" and not S.get("edit_exit"):
+        if a[1] == "edit" and (not S.get("edit_exit") or S.get("edit_lands")):   # a write can land and still answer with a failure
             w = world(); p = the_pr(w, a[2]); w["edits"] += 1
             for m in S.get("meanwhile", []):
                 if m.get("edit", 1) != w["edits"]: continue
@@ -882,6 +884,7 @@ if tool == "gh":
                 w["closed"] += m.get("close", [])
             edited(p, text, w, shown=not S.get("history_lag"))
             keep(w)
+        if a[1] == "edit" and S.get("edit_lands") and world()["edits"] > 1: sys.exit(0)   # only the first write's answer is lost
         sys.exit(S.get(a[1] + "_exit", 0))
     if a[:2] == ["issue", "view"]:
         i = S.get("views", {}).get(a[2])
@@ -2209,6 +2212,22 @@ class WholePass(unittest.TestCase):
         self.assertEqual(len(self.written("edit")), 5)
         self.assertEqual(len(self.told("The untick was not the one edit since the read it was made from either")), 2, "said of the history that showed nothing, too")
 
+    def test_a_tick_whose_write_fails_and_lands_all_the_same_is_read_back(self):
+        """`gh` can time out, or exit non-zero, on a write GitHub applied. The
+        failure is not taken for nothing written: the box is read back, and
+        stands and is cited, or is unticked, as after any other write."""
+        ticked = boxed()["body"].replace(self.UNTICKED, self.TICKED)
+        p, calls = self.run_pass(self.device_pass(edit_exit=1, edit_lands=True, meanwhile=[{"head": "fffffff0000"}]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.written("edit"), [ticked, boxed()["body"]], "landed on a head that moved: found on the read back and unticked")
+        self.assertEqual(self.written("comment"), [])
+        self.assertEqual(len(self.told("unticked again, since its head moved to fffffff")), 1)
+        self.assertFalse(self.told("could not be ticked"))
+        sh = Scripted(comments=[[result()]], lands_refused=True)
+        done = janitor.tick_device_box(sh, boxed(), " " + BOX, HEAD)
+        self.assertEqual(done["did"], "ticked", "landed alone on the head it was decided at: it stands, for the caller to cite")
+        self.assertEqual(sh.wrote, [("edit", ticked)])
+
     def test_a_pr_that_merges_as_its_box_is_ticked_is_cited_and_one_whose_head_moved_too_is_said(self):
         p, calls = self.run_pass(self.device_pass(meanwhile=[{"state": "MERGED"}]))
         self.assertEqual(len(self.written("edit")), 1)
@@ -2246,6 +2265,7 @@ class WholePass(unittest.TestCase):
         self.assertIn("its device box could not be ticked", Bridge.received[-1]["body"]["text"])
         self.assertNotIn("pr comment", calls)
         self.assertNotIn("ticked a device box", Bridge.received[-1]["body"]["text"])
+        self.assertEqual(calls.count("pr edit"), 1, "the box reads unticked after it: nothing to undo")
         p, calls = self.run_pass(self.device_pass(comment_exit=1))
         text = Bridge.received[-1]["body"]["text"]
         self.assertIn("ticked a device box of #7", text)
