@@ -40,7 +40,8 @@
 # --check runs nothing: it says whether this Mac can run the suites named, and exits 1 with an
 # `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
-# with unless the one here is current, MIN_FREE_GB of disk under --cache, and a lid that is
+# with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
+# counts it, purgeable space included), and a lid that is
 # open. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than
 # buddybox before it runs a suite there, and `topo_ui` is refused on any Mac it is asked of
 # this way: the audio lane installs a driver and takes the Mac's default input and output.
@@ -125,10 +126,12 @@ if [ "$check" = yes ]; then
       || { err "Homebrew's llvm and lld are not installed, and the guest's framework here is not current (brew install llvm lld)."; lacks=1; }
   fi
   mkdir -p "$cache" || exit 2
-  free="$(df -g "$cache" | awk 'NR == 2 { print $4 }')"
+  # What the disk has for a write that matters, the figure Finder shows: `df` leaves out what
+  # macOS purges as the room is wanted, which on a laptop is most of it.
+  free="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); function run(argv) { var value = $(); $.NSURL.fileURLWithPath(argv[0]).getResourceValueForKeyError(value, "NSURLVolumeAvailableCapacityForImportantUsageKey", null); return Math.floor(ObjC.unwrap(value) / 1e9); }' "$cache" 2>/dev/null)"
   case "$free" in
-    "" | *[!0-9]*) err "could not read the free disk under $cache."; lacks=1 ;;
-    *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB free under $cache, and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
+    "" | *[!0-9]*) err "could not read the disk's available space under $cache."; lacks=1 ;;
+    *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache, purgeable space included (Finder's figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
   esac
   # A laptop with its lid shut sleeps whatever holds it awake; a Mac with no lid has no such key.
   ! ioreg -r -k AppleClamshellState -d 4 2>/dev/null | grep -q '"AppleClamshellState" = Yes' \

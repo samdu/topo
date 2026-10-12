@@ -76,7 +76,7 @@ fake "$work/bin/sw_vers" 'exit 0'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
-fake "$work/bin/df" 'echo "Filesystem 1G-blocks Used Available Capacity"; echo "/dev/disk 460 400 ${FAKE_FREE:-60} 87%"'
+fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
 fake "$work/bin/ioreg" 'echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"'
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
@@ -213,7 +213,7 @@ FAKE_XCODE=26.4 check xcode others
 is "check, another Xcode: exits 1" "$status" 1
 names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
 FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
-names "check, no pinned runtime and a full disk: the disk is named too" "9 GB free"
+names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
 is "check, no pinned runtime: exits 1" "$status" 1
 names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
@@ -221,7 +221,7 @@ FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
 case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
 FAKE_FREE=9 check disk topo_unit
 is "check, a full disk: exits 1" "$status" 1
-names "check, a full disk: named" "9 GB free"
+names "check, a full disk: named" "9 GB available"
 FAKE_LID=Yes check lid topo_unit
 is "check, the lid closed: exits 1" "$status" 1
 names "check, the lid closed: named" "lid is closed"
