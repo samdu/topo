@@ -8,6 +8,8 @@ struct SignInView: View {
     @Environment(SignIn.self) private var signIn
     @State private var webAuth = WebAuth()
     @State private var pasted = ""
+    /// The guest's authorization this screen has opened, so it is opened once.
+    @State private var opened: URL?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -24,11 +26,12 @@ struct SignInView: View {
                 Button("Cancel") { webAuth.close(); signIn.cancel() }
             case .exchanging:
                 ProgressView("Signing in…")
-            case .approvingGuest(_, let pasteHint):
+            case .approvingGuest(let url, let pasteHint):
                 Text("Approve once more, for Claude Code on this phone.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if pasteHint { pasteField } else { ProgressView() }
+                Button("Open the page again") { webAuth.open(url) { signIn.cancel() } }
                 Button("Skip") { webAuth.close(); signIn.cancel() }
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -41,14 +44,17 @@ struct SignInView: View {
             Spacer().frame(height: 24)
         }
         .padding()
-        .onChange(of: signIn.phase) { _, phase in
+        .onChange(of: signIn.phase, initial: true) { _, phase in
             if phase == .signedIn || { if case .failed = phase { true } else { false } }() { webAuth.close() }
-            // The guest's authorization, in a sheet of its own in place of the login's.
-            if case .approvingGuest(let url, _) = phase {
+            // The guest's authorization, in a sheet of its own in place of the login's, once.
+            if case .approvingGuest(let url, _) = phase, opened != url {
+                opened = url
                 pasted = ""
                 webAuth.open(url) { signIn.cancel() }
             }
         }
+        // Signed in, this screen is gone before it hears of it: the sheet goes with it.
+        .onDisappear { webAuth.close() }
     }
 
     private var signInButton: some View {

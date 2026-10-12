@@ -40,9 +40,6 @@ public final class SignIn {
     private var loopback: LoopbackCallback?
     private var guestAttempt: ClaudeOAuth.Attempt?
     private var guestLoopback: LoopbackCallback?
-    /// The guest's authorization was declined while the ordinary exchange was still running.
-    private var guestDeclined = false
-    private var exchangingGuest = false
     /// Makes a loopback listener, nil when none binds. A test makes it nil to take the paste path.
     var makeListener: () -> LoopbackCallback?
 
@@ -96,18 +93,16 @@ public final class SignIn {
         await exchange(code: parsed.code, state: parsed.state)
     }
 
-    /// The browser was closed or Cancel pressed. Before the login lands that ends the attempt;
-    /// once it has, it declines the guest's authorization and the person is signed in without one.
+    /// The browser was closed or Cancel pressed. Before the login's callback that ends the
+    /// attempt; while the guest's authorization is up (Skip, or its sheet closed) it declines it
+    /// and the person is signed in without one. During an exchange it is nothing: the sheet up
+    /// then says the approval arrived and to go back, so closing it declines nothing.
     public func cancel() {
         switch phase {
         case .approvingGuest:
             finishSignIn()
         case .exchanging:
-            // The exchange in flight finishes either way; only the guest's authorization is dropped.
-            if !exchangingGuest {
-                guestDeclined = true
-                tearDownGuest()
-            }
+            break
         case .waiting:
             reset()
             phase = .idle
@@ -144,8 +139,7 @@ public final class SignIn {
         } catch {
             fail("Sign-in failed: \(error)"); return
         }
-        if guestDeclined { finishSignIn(); return }
-        prepareGuest()
+        if guestAttempt == nil { prepareGuest() }
         guard let guestAttempt else { finishSignIn(); return }
         phase = .approvingGuest(opening: guestAttempt.authorizeURL, pasteHint: guestAttempt.redirect == .manual)
     }
@@ -168,8 +162,8 @@ public final class SignIn {
     }
 
     private func guestCalledBack(code: String, state: String?) async {
-        // The attempt is made as the phase becomes `approvingGuest`, so a callback in any other
-        // phase is one a Skip, a sign-out or a new start has already answered.
+        // A Skip, a sign-out or a new start has let the attempt go, and its callback with it; one
+        // that is already being exchanged is not exchanged again.
         guard guestAttempt != nil, case .approvingGuest = phase else { return }
         await exchangeGuest(code: code, state: state)
     }
@@ -179,7 +173,6 @@ public final class SignIn {
     private func exchangeGuest(code: String, state: String?) async {
         guard let guestAttempt, let guestStore else { finishSignIn(); return }
         phase = .exchanging
-        exchangingGuest = true
         if var minted = try? await oauth.exchange(code: code, state: state, attempt: guestAttempt),
            self.guestAttempt == guestAttempt {
             minted.refreshToken = ""
@@ -192,8 +185,6 @@ public final class SignIn {
 
     private func finishSignIn() {
         tearDownGuest()
-        guestDeclined = false
-        exchangingGuest = false
         phase = .signedIn
     }
 
@@ -208,8 +199,6 @@ public final class SignIn {
         loopback = nil
         attempt = nil
         tearDownGuest()
-        guestDeclined = false
-        exchangingGuest = false
     }
 
     private func fail(_ message: String) {

@@ -57,7 +57,7 @@ enum GuestTokenSummary {
             let days = Int((held.expiresAt.timeIntervalSince(now) / 86_400).rounded(.down))
             return held.expiresAt > now ? "held, \(days) days left" : "held, expired"
         } catch {
-            return "unreadable: \(error.localizedDescription)"
+            return "unreadable: \(error)"
         }
     }
 }
