@@ -7,8 +7,16 @@ import Foundation
 /// the caller once the code has arrived rather than by a callback URL.
 @MainActor
 final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private var session: ASWebAuthenticationSession?
+    /// A sheet: started once, and cancelled by the app when it closes or replaces it.
+    protocol Sheet: AnyObject {
+        func begin()
+        func cancel()
+    }
+
+    private var session: Sheet?
     private var current: UUID?
+    /// Makes the sheet for a URL, given what to call when it has gone. A test makes its own.
+    var makeSheet: ((URL, @escaping @Sendable () -> Void) -> Sheet)?
 
     func open(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
         close()
@@ -17,7 +25,7 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
         let id = UUID()
         // `@Sendable` so the completion is not main-actor-isolated by inference: the framework
         // owns the thread it calls back on, and Swift 6 traps an isolated closure off it.
-        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { @Sendable _, _ in
+        let gone: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.current == id else { return }
                 self.session = nil
@@ -25,13 +33,17 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
                 onDismiss()
             }
         }
-        session.prefersEphemeralWebBrowserSession = false
-        #if os(iOS) || os(macOS)
-        session.presentationContextProvider = self
-        #endif
+        let session = makeSheet?(url, gone) ?? system(url, gone)
         self.session = session
         current = id
-        session.start()
+        session.begin()
+    }
+
+    private func system(_ url: URL, _ gone: @escaping @Sendable () -> Void) -> Sheet {
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { @Sendable _, _ in gone() }
+        session.prefersEphemeralWebBrowserSession = false
+        session.presentationContextProvider = self
+        return session
     }
 
     func close() {
@@ -52,5 +64,9 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
             #endif
         }
     }
+}
+
+extension ASWebAuthenticationSession: WebAuth.Sheet {
+    func begin() { start() }
 }
 #endif

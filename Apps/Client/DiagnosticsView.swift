@@ -1,5 +1,6 @@
 #if os(iOS)
 import SwiftUI
+import TopoAuth
 
 /// Why a turn did or did not go: the lease, the last CloudKit error, the last API answer, the
 /// token, whether the ear's and the voice's models are resident, when the memory's folder was
@@ -41,7 +42,23 @@ struct DiagnosticsView: View {
         rows = await harness.diagnostics().rows
             + [("speech", voice.ear.summary), ("voice", speaker.voice.summary),
                ("memory", memory.summary), ("look", memory.lookReading.summary),
-               ("userland", Userland.shared.summary)]
+               ("userland", Userland.shared.summary),
+               ("guest token", GuestTokenSummary.of { try KeychainTokenStore.guest.load() })]
+    }
+}
+
+/// Whether the guest's long-lived token is held, and for how long, with nothing of its value:
+/// Claude Code answers on the ordinary token without it (`GuestCredential`), so a turn answered
+/// does not say the second authorization of a sign-in landed, and this does.
+enum GuestTokenSummary {
+    static func of(now: Date = Date(), _ load: () throws -> Tokens?) -> String {
+        do {
+            guard let held = try load() else { return "none held; Claude Code runs on the ordinary token" }
+            let days = Int((held.expiresAt.timeIntervalSince(now) / 86_400).rounded(.down))
+            return held.expiresAt > now ? "held, \(days) days left" : "held, expired"
+        } catch {
+            return "unreadable: \(error.localizedDescription)"
+        }
     }
 }
 #endif

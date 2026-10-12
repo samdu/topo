@@ -57,16 +57,22 @@ extension Stubbed {
             for _ in 0..<200 where !done(signIn.phase) { try await Task.sleep(for: .milliseconds(10)) }
         }
 
-        /// Runs the ordinary authorization through the loopback listener and returns where its
-        /// callback sent the browser.
+        /// Runs the ordinary authorization through the loopback listener and returns the guest's
+        /// authorization, which the sign-in hands the view to open and the browser is not sent to:
+        /// the login's callback is answered with a page, whichever browser carried it.
         func approveTheLogin(_ signIn: SignIn, browser: Browser) async throws -> URL {
             let url = signIn.start()
             let response = try await browser.approve(url, code: "login-code")
-            #expect(response.statusCode == 302, "the login's callback did not send the browser on to the guest's authorization")
-            let next = try #require(response.value(forHTTPHeaderField: "Location").flatMap(URL.init(string:)))
+            #expect(response.statusCode == 200, "the login's callback sent the browser somewhere")
+            #expect(response.value(forHTTPHeaderField: "Location") == nil)
             try await settle(signIn) { if case .approvingGuest = $0 { true } else { false } }
+            guard case .approvingGuest(let next, pasteHint: false) = signIn.phase else {
+                throw Unopened(phase: signIn.phase)
+            }
             return next
         }
+
+        struct Unopened: Error { let phase: SignIn.Phase }
 
         @Test func theGuestsAuthorizationIsAskedForAsSetupTokenAsksForOne() async throws {
             StubURLProtocol.reset()
@@ -112,7 +118,7 @@ extension Stubbed {
             let browser = Browser()
 
             let next = try await approveTheLogin(signIn, browser: browser)
-            #expect(signIn.phase == .approvingGuest(opening: nil, pasteHint: false))
+            #expect(Self.query(next, "scope") == "user:inference")
             #expect(Self.query(next, "scope") == "user:inference")
             let ordinaryBefore = try #require(try store.load())
             #expect(ordinaryBefore.refreshToken == "first")
@@ -217,7 +223,7 @@ extension Stubbed {
             #expect(signIn.phase == .waiting(pasteHint: true))
             #expect(Self.query(login, "redirect_uri") == "https://platform.claude.com/oauth/code/callback")
             await signIn.finish(pasted: "login-code#\(try #require(Self.query(login, "state")))")
-            guard case .approvingGuest(let opening?, pasteHint: true) = signIn.phase else {
+            guard case .approvingGuest(let opening, pasteHint: true) = signIn.phase else {
                 Issue.record("the login's paste did not ask for the guest's authorization to be opened: \(signIn.phase)")
                 return
             }

@@ -11,7 +11,8 @@ public final class LoopbackCallback: @unchecked Sendable {
     private var sources: [DispatchSourceRead] = []
     private var continuation: CheckedContinuation<URL, Swift.Error>?
     private var finished = false
-    private var successRedirect: URL?
+    /// The page a callback is answered with.
+    private let page: String
     /// A callback that arrived before anyone waited for it, kept for the first `wait()`.
     private var caught: URL?
 
@@ -19,7 +20,10 @@ public final class LoopbackCallback: @unchecked Sendable {
 
     /// Binds an ephemeral port on 127.0.0.1 and, when it can, the same port on ::1, so the
     /// browser reaches it whichever address it resolves `localhost` to first.
-    public init() throws {
+    /// `back` is a link the page offers for going back to the app, where the app has a scheme
+    /// of its own to open: a callback that landed in another browser leaves the person there.
+    public init(back: URL? = nil) throws {
+        page = Self.received(back: back)
         let v4 = socket(AF_INET, SOCK_STREAM, 0)
         guard v4 >= 0 else { throw Error.bindFailed }
         var one: Int32 = 1
@@ -65,6 +69,15 @@ public final class LoopbackCallback: @unchecked Sendable {
 
     deinit { tearDown() }
 
+    /// What a callback is answered with. It is written before the code is exchanged, so it says
+    /// the approval arrived and not that the sign-in worked, and it carries nothing of the request.
+    static func received(back: URL?) -> String {
+        let link = back.map { "<p><a href=\"\($0.absoluteString)\" style=\"font-size:1.2em\">Back to Topo</a></p>" } ?? ""
+        return "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head>"
+            + "<body style=\"font-family:-apple-system,system-ui;text-align:center;padding-top:4em\">"
+            + "<h1>Approval received</h1><p>Go back to Topo to finish.</p>\(link)</body></html>"
+    }
+
     /// Resolves with the callback URL the browser hit, including one that arrived before the call.
     /// Cancel with `cancel()`.
     public func wait() async throws -> URL {
@@ -80,12 +93,6 @@ public final class LoopbackCallback: @unchecked Sendable {
                 }
             }
         }
-    }
-
-    /// Answers the callback with a redirect to `url` instead of the "Signed in" page, so the
-    /// browser goes straight on to the next authorization. Set it before the callback can arrive.
-    public func redirectOnSuccess(to url: URL) {
-        queue.sync { successRedirect = url }
     }
 
     public func cancel() {
@@ -114,14 +121,8 @@ public final class LoopbackCallback: @unchecked Sendable {
         let target = head.split(separator: " ", maxSplits: 2).dropFirst().first.map(String.init) ?? "/"
         let url = URL(string: "http://localhost:\(port)\(target)")
         let done = url.map { $0.path == "/callback" && ClaudeOAuth.parseCallback($0) != nil } ?? false
-        let body = done
-            ? "<html><body style=\"font-family:-apple-system,system-ui;text-align:center;padding-top:4em\"><h1>Signed in</h1><p>You can close this window and go back to Topo.</p></body></html>"
-            : "<html><body><h1>Not found</h1></body></html>"
-        let response = if done, let next = successRedirect {
-            "HTTP/1.1 302 Found\r\nLocation: \(next.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        } else {
-            "HTTP/1.1 \(done ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
-        }
+        let body = done ? page : "<html><body><h1>Not found</h1></body></html>"
+        let response = "HTTP/1.1 \(done ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
         _ = response.utf8CString.withUnsafeBufferPointer { write(client, $0.baseAddress, $0.count - 1) }
         close(client)
         if done, let url {

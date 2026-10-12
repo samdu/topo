@@ -43,8 +43,8 @@ struct SignInView: View {
         .padding()
         .onChange(of: signIn.phase) { _, phase in
             if phase == .signedIn || { if case .failed = phase { true } else { false } }() { webAuth.close() }
-            // The guest's authorization, when the browser is not already on its way to it.
-            if case .approvingGuest(let url?, _) = phase {
+            // The guest's authorization, in a sheet of its own in place of the login's.
+            if case .approvingGuest(let url, _) = phase {
                 pasted = ""
                 webAuth.open(url) { signIn.cancel() }
             }
