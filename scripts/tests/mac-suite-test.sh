@@ -212,7 +212,8 @@ is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen 
 FAKE_XCODE=26.4 check xcode others
 is "check, another Xcode: exits 1" "$status" 1
 names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
-FAKE_NO_RUNTIMES=1 check runtimes others
+FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
+names "check, no pinned runtime and a full disk: the disk is named too" "9 GB free"
 is "check, no pinned runtime: exits 1" "$status" 1
 names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-0"

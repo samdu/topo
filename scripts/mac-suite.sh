@@ -126,8 +126,10 @@ if [ "$check" = yes ]; then
   fi
   mkdir -p "$cache" || exit 2
   free="$(df -g "$cache" | awk 'NR == 2 { print $4 }')"
-  case "$free" in "" | *[!0-9]*) err "could not read the free disk under $cache."; lacks=1 ;; esac
-  [ "$lacks" = 1 ] || [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB free under $cache, and a suite wants $MIN_FREE_GB."; lacks=1; }
+  case "$free" in
+    "" | *[!0-9]*) err "could not read the free disk under $cache."; lacks=1 ;;
+    *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB free under $cache, and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
+  esac
   # A laptop with its lid shut sleeps whatever holds it awake; a Mac with no lid has no such key.
   ! ioreg -r -k AppleClamshellState -d 4 2>/dev/null | grep -q '"AppleClamshellState" = Yes' \
     || { err "this Mac's lid is closed."; lacks=1; }
