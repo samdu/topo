@@ -31,6 +31,13 @@ root="$here/../.."
 work="$(mktemp -d -t validate-and-push-test)"
 trap 'rm -rf "$work"' EXIT
 
+# What a session running this may have set for its own run is not this test's: every case
+# names what it means. A wait no case bounds is a minute, so a lock left held fails a case
+# and does not hang the test.
+unset TOPO_VALIDATE_SLOTS TOPO_VALIDATE_REPO TOPO_VALIDATE_CACHE TOPO_VALIDATE_LOGS POST_RETRY \
+  FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_POST FAKE_RUN FAKE_TEST_JOB
+export LOCK_WAIT=60 LOCK_POLL=1
+
 failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
 ok() { echo "ok   $*"; }
@@ -61,6 +68,7 @@ results=""; suites=()
 while [ $# -gt 0 ]; do
   case "$1" in --lane) lane="$2"; shift 2 ;; --results) results="$2"; shift 2 ;; --cache) shift 2 ;; *) suites+=("$1"); shift ;; esac
 done
+: > "$results/suites.txt"   # as the suite itself starts its results afresh, each call
 before="$(sed -n "s/^suites=//p" "$FAKE_RECORD" 2>/dev/null)"
 { echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=$before${before:+ }${suites[*]}"; echo "checkout=$(pwd -P)"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD.new"
 mv -f "$FAKE_RECORD.new" "$FAKE_RECORD"
@@ -327,6 +335,7 @@ begin "$repo" "$work/overlap/first" "$work/overlap/first.hold" FAKE_HOLD_SUITE=t
 first=$run
 out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/second" LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "overlap: the second run exits 0 with the first in its suite" "$status" 0
+lockf -s -t 0 "$TOPO_VALIDATE_CACHE/lock" true && fail "overlap: the lock of the script as it was is free while a suite runs" || ok "overlap: a run of the script as it was is held off while a suite runs"
 kill -0 "$(cat "$work/overlap/first.hold")" 2>/dev/null && ok "overlap: the first run's suite is still going" || fail "overlap: the first run's suite ended"
 is "overlap: the first run is in the first checkout" "$(sed -n 's/^checkout=//p' "$work/overlap/first")" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 is "overlap: the second in a checkout of its own" "$(sed -n 's/^checkout=//p' "$work/overlap/second")" "$(cd "$TOPO_VALIDATE_CACHE/slots/2/checkout" 2>/dev/null && pwd -P)"
@@ -351,6 +360,15 @@ release "$work/overlap/first.hold"
 for _ in $(seq 100); do grep -q '^suites=topo_unit topo_ui$' "$work/overlap/first" && break; perl -e 'select(undef,undef,undef,0.1)'; done
 is "others held by a sibling: the first run has run its other two" "$(sed -n 's/^suites=//p' "$work/overlap/first")" "topo_unit topo_ui"
 kill -0 "$first" 2>/dev/null && ok "others held by a sibling: the first run waits for it" || fail "others held by a sibling: the first run ended: $(cat "$work/overlap/first.out")"
+# Between two of its suites the first run still has its checkout, and a signal still ends it.
+out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/third.record" LOCK_WAIT=2 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "a run waiting between its suites: a third run exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout (slot 1: topic "*) ok "a run waiting between its suites: it still holds its checkout" ;; *) fail "a run waiting between its suites: $out" ;; esac
+(cd "$other" && exec env PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/third.record" TOPO_VALIDATE_SLOTS=3 scripts/validate-and-push.sh > "$work/overlap/third.out" 2>&1) &
+third=$!
+for _ in $(seq 100); do grep -q 'Waiting for a suite' "$work/overlap/third.out" && break; perl -e 'select(undef,undef,undef,0.1)'; done
+kill -TERM "$third"; wait "$third"
+is "a signal to a run waiting for a suite: exits 143" "$?" 143
 release "$work/overlap/second.hold"
 wait "$second"; is "the second run, released: exits 0" "$?" 0
 wait "$first"; is "the first run, its sibling done: exits 0" "$?" 0
@@ -366,6 +384,7 @@ FAKE_LEAVE="$work/left/pid" validate
 is "a process left behind: its run exits 0" "$status" 0
 left="$(cat "$work/left/pid" 2>/dev/null)"
 kill -0 "$left" 2>/dev/null && ok "a process left behind: it is still running" || fail "a process left behind: it is not running"
+lockf -s -t 0 "$TOPO_VALIDATE_CACHE/lock" true && ok "a process left behind: the lock of the script as it was is free" || fail "a process left behind: it holds the lock of the script as it was"
 echo y > "$repo/more"; g -C "$repo" add -A; g -C "$repo" commit -qm more; sha="$(git -C "$repo" rev-parse HEAD)"
 LOCK_WAIT=0 validate
 is "a process left behind: the next run waits for nothing" "$status" 0
@@ -393,6 +412,9 @@ scratch orphan Apps/Client/SettingsView.swift
 begin "$repo" "$work/orphan/first" "$work/orphan/hold" FAKE_HOLD_SUITE=topo_unit
 orphan="$(cat "$work/orphan/hold" 2>/dev/null)"
 kill -KILL "$run"; wait "$run" 2>/dev/null
+# The script as it was reads one record, beside its lock: the orphan is on it.
+is "orphan suite: on the record the script as it was reads" "$(sed -n 1p "$TOPO_VALIDATE_CACHE/suite" 2>/dev/null)" "$orphan"
+is "orphan suite: with when it began, as that script holds a pid to" "$(sed -n 2p "$TOPO_VALIDATE_CACHE/suite" 2>/dev/null)" "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$orphan")"
 TOPO_VALIDATE_SLOTS=1 validate
 is "orphan suite, one checkout: exits 2" "$status" 2
 is "orphan suite, one checkout: no suite ran" "$(recorded head)" ""
@@ -413,6 +435,17 @@ validate
 is "orphan gone: exits 0" "$status" 0
 is "orphan gone: in the first checkout again" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 is "orphan gone: pushed" "$(origin_head)" "$sha"
+[ ! -e "$TOPO_VALIDATE_CACHE/suite" ] && ok "orphan gone: nothing on the record the script as it was reads" || fail "orphan gone: $TOPO_VALIDATE_CACHE/suite is still there"
+# A commit whose logs a run is still writing keeps them, however many commits have run since.
+for n in 1 2 3 4 5 6 7 8 9 a b c; do
+  mkdir -p "$TOPO_VALIDATE_LOGS/${n}0000000/20200101T000000Z-1"
+  touch -t 202001010000 "$TOPO_VALIDATE_LOGS/${n}0000000"
+done
+echo $$ > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
+echo x > "$repo/x"; g -C "$repo" add -A; g -C "$repo" commit -qm x; sha="$(git -C "$repo" rev-parse HEAD)"
+validate
+[ -d "$TOPO_VALIDATE_LOGS/10000000" ] && ok "old logs a run is still writing are kept" || fail "the logs of a run in flight were removed"
+[ "$(ls -1 "$TOPO_VALIDATE_LOGS" | grep -c '0000000$')" -lt 12 ] && ok "old logs nobody is writing go" || fail "no old logs were removed"
 # The suite a run of the script as it was left going, on record beside its one lock.
 perl -e 'sleep 60' & stray=$!
 printf '%s\n%s\n' "$stray" "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$stray")" > "$TOPO_VALIDATE_CACHE/suite"
