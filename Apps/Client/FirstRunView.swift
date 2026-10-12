@@ -80,9 +80,9 @@ struct FirstRunView: View {
                     .disabled(answer.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .frame(maxWidth: 360)
-            SetupMeter(lines: setup)
+            if Setup.shows(setup) { SetupMeter(lines: setup) }
             if let trouble = Setup.trouble(setup) {
-                Text(trouble).font(.footnote).foregroundStyle(look.setup.troubleInk).multilineTextAlignment(.center)
+                Text(trouble).font(look.setup.troubleFont).foregroundStyle(look.setup.troubleInk).multilineTextAlignment(.center)
             }
             Spacer().frame(height: 24)
         }

@@ -113,8 +113,8 @@ final class StatusNoticeTests: XCTestCase {
 
     /// The setup's bars stand in the bar's middle when the chat has nothing to say: one for each
     /// part still to come and none for a part that is done, level with the badge and between
-    /// it and the model, and each says where its part has got to. A turn in flight takes the
-    /// middle from them, and a part that failed is said there in words.
+    /// it and the model, and each says where its part has got to. What the chat has to say takes
+    /// the middle from them, and a part that failed is said there in words.
     func testTheSetupsBarsAreInTheNavigationBar() throws {
         let app = launch("none", setup: "fetching")
         let workspace = app.descendants(matching: .any).matching(identifier: "setup-Topo's workspace").firstMatch

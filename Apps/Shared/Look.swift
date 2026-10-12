@@ -48,7 +48,7 @@ struct Look: Equatable, Sendable {
     var mind = Mind()
     /// What stands in the transcript's place until the log has been read.
     var reading = Reading()
-    /// The card that says what a new install is still fetching and preparing.
+    /// The bars that show what a new install is still fetching and preparing.
     var setup = Setup()
 
     init(_ screen: Screen = .current) {
@@ -805,16 +805,31 @@ extension Look {
     /// The setup's meter: a thin bar for each part of an install still to come, one over the
     /// other, each with its mark at its leading end. It stands in the middle of the chat's bar,
     /// which is a fixed height, so `look.json` sets no size past what three bars of it leave of
-    /// that height, and no width that takes the controls' or the badge's room.
+    /// that height, and no width that takes the controls' or the badge's room: the ranges below
+    /// are what `LookDocument` reads each in, and their largest come to no more than `tallest`
+    /// and `widest`.
     struct Setup: Equatable, Sendable {
         /// Between two bars.
         var spacing: CGFloat = 3
+        static let spacingRange: ClosedRange<Double> = 0...4
         /// Between a mark and its bar.
         var symbolSpacing: CGFloat = 6
+        static let symbolSpacingRange: ClosedRange<Double> = 0...8
         /// A mark's side, which is also the height of its row.
         var symbolSize: CGFloat = 11
+        static let symbolSizeRange: ClosedRange<Double> = 8...12
         var barWidth: CGFloat = 72
+        static let barWidthRange: ClosedRange<Double> = 24...80
         var barHeight: CGFloat = 3
+        static let barHeightRange: ClosedRange<Double> = 1...6
+        /// The navigation bar's own height, which three rows stay inside.
+        static let tallest: Double = 44
+        /// The room between the model's control and the badge in the narrowest window the chat
+        /// is laid out in, 320 points, less a margin at each end.
+        static let widest: Double = 100
+        /// A failure's words under the first-run question, no larger than `largestFont`.
+        var troubleFont: Font = .footnote
+        static let largestFont: Double = 20
         /// The bars are Topo's, so they take Topo's colour.
         var tint = Theme.primary
         /// What of a bar is still to come.

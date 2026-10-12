@@ -50,7 +50,7 @@ final class SetupTests: XCTestCase {
 
     /// The meter is there while any line is not done, and gone when all three are: a part that
     /// failed keeps it up, saying why.
-    func testTheCardStandsWhileAnyLineIsNotDone() {
+    func testTheMeterStandsWhileAnyLineIsNotDone() {
         func lines(_ phase: Userland.Phase, _ ear: Setup.Stage, _ voice: Setup.Stage) -> [Setup.Line] {
             Setup.lines(phase: phase, claude: .fetched(pin), workspace: fetching, ear: ear, earFetch: fetching,
                         earLoading: Ear.preparing, voice: voice, voiceFetch: fetching, voiceLoading: Voice.preparing)
@@ -67,7 +67,7 @@ final class SetupTests: XCTestCase {
     /// A launch loads the ear and the voice every time, and that alone draws no meter: it comes
     /// for an install — a download, an unpacking, a failure — and then stands until every line is
     /// done, so the models' first preparing on this phone is under it.
-    func testTheCardComesForAnInstallAndStaysUntilEveryLineIsDone() {
+    func testTheMeterComesForAnInstallAndStaysUntilEveryLineIsDone() {
         func lines(_ phase: Userland.Phase, _ ear: Setup.Stage, _ voice: Setup.Stage, fetch: Setup.Fetch? = nil) -> [Setup.Line] {
             Setup.lines(phase: phase, claude: .fetched(pin), workspace: fetch ?? fetching, ear: ear, earFetch: fetch ?? fetching,
                         earLoading: Ear.preparing, voice: voice, voiceFetch: fetch ?? fetching, voiceLoading: Voice.preparing)
@@ -135,12 +135,13 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(SetupMeter.fill(.working("unpacking")), 1)
         XCTAssertEqual(SetupMeter.fill(.failed("no room")), 1)
         XCTAssertTrue(SetupMeter.unmeasured(.working("unpacking")))
+        XCTAssertTrue(SetupMeter.unmeasured(.waiting("waiting for a network the data settings allow")))
         XCTAssertFalse(SetupMeter.unmeasured(.progress(0.5, "")))
+        XCTAssertFalse(SetupMeter.unmeasured(.failed("no room")))
     }
 
-    /// The bar's middle holds one thing: a failure or the turn in flight before the setup's bars,
-    /// a part that failed in words, the bars before a notice of something that went right, and
-    /// nothing when there is nothing.
+    /// The bar's middle holds one thing: what the chat has to say before anything of the setup,
+    /// then a part that failed in words, then the bars, and nothing when there is nothing.
     func testTheBarsMiddleTakesTurns() {
         let fetching = [Setup.Line(title: Setup.hearing, state: .progress(0.25, "downloading"))]
         let failed = [Setup.Line(title: Setup.hearing, state: .failed("no room"))]
@@ -153,8 +154,9 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(Setup.middle(said: busy, standing: fetching), .notices(busy))
         XCTAssertEqual(Setup.middle(said: trouble, standing: failed), .notices(trouble))
         XCTAssertEqual(Setup.middle(said: quiet, standing: failed), .notices(ChatNotices.Said(error: "Hearing you failed: no room")))
-        XCTAssertEqual(Setup.middle(said: info, standing: failed), .notices(ChatNotices.Said(error: "Hearing you failed: no room")))
-        XCTAssertEqual(Setup.middle(said: info, standing: fetching), .meter(fetching))
+        XCTAssertEqual(Setup.middle(said: info, standing: failed), .notices(info), "a part that failed hid what the chat had to say")
+        XCTAssertEqual(Setup.middle(said: info, standing: fetching), .notices(info))
+        XCTAssertEqual(Setup.middle(said: busy, standing: failed), .notices(busy))
         XCTAssertEqual(Setup.middle(said: info, standing: []), .notices(info))
         XCTAssertEqual(Setup.middle(said: info, standing: done), .notices(info))
         XCTAssertNil(Setup.middle(said: quiet, standing: []))
@@ -163,7 +165,7 @@ final class SetupTests: XCTestCase {
     }
 
     /// The fixtures a UI suite draws the meter from, and the launch that has none of its own.
-    func testTheDebugFixturesAreLinesTheCardDraws() {
+    func testTheDebugFixturesAreLinesTheMeterDraws() {
         XCTAssertEqual(DebugRun.setup(["TOPO_DEBUG_SETUP": "fetching"])?.map(\.state),
                        [.progress(0.25, "downloading 57 MB of 228 MB"), .working(Ear.preparing), .done])
         XCTAssertEqual(DebugRun.setup(["TOPO_DEBUG_SETUP": "failed"])?.first?.state, .failed("the download was refused"))

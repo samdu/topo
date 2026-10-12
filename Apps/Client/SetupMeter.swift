@@ -63,22 +63,18 @@ enum Setup {
         return nil
     }
 
-    /// What the middle of the chat's bar holds. It holds one thing: a failure or the turn in
-    /// flight first, then a part of the setup that failed, then the setup's bars, then a notice
-    /// that something went right another way.
+    /// What the middle of the chat's bar holds. It holds one thing: what the chat has to say
+    /// first, since each of its notices goes at the next send, then a part of the setup that
+    /// failed, which stands until it is tried again, then the setup's bars.
     enum Middle: Equatable {
         case notices(ChatNotices.Said)
         case meter([Line])
     }
 
     static func middle(said: ChatNotices.Said, standing lines: [Line]) -> Middle? {
-        switch said.notice {
-        case .trouble, .progress: return .notices(said)
-        case .info, nil: break
-        }
+        if said.any { return .notices(said) }
         if let trouble = trouble(lines) { return .notices(ChatNotices.Said(error: trouble)) }
-        if shows(lines) { return .meter(lines) }
-        return said.any ? .notices(said) : nil
+        return shows(lines) ? .meter(lines) : nil
     }
 
     /// Whether the lines are an install's and not a launch's: something is downloading, being
@@ -184,7 +180,8 @@ struct SetupMeter: View {
                         .scaledToFit()
                         .frame(width: look.setup.symbolSize, height: look.setup.symbolSize)
                         .foregroundStyle(ink)
-                        // A step with no measure has a bar that stands still, so its mark moves.
+                        // A step with no measure, or a part held up, has a bar that stands
+                        // still, so its mark moves.
                         .symbolEffect(.pulse, isActive: Self.unmeasured(line.state))
                     Capsule().fill(look.setup.track)
                         .overlay(alignment: .leading) {
@@ -213,8 +210,10 @@ struct SetupMeter: View {
     }
 
     static func unmeasured(_ state: Setup.State) -> Bool {
-        if case .working = state { return true }
-        return false
+        switch state {
+        case .working, .waiting: true
+        case .progress, .done, .failed: false
+        }
     }
 
     static func words(_ state: Setup.State) -> String {
