@@ -32,7 +32,8 @@
 #      was are LOCK_WAIT seconds between them (three hours); nothing makes them first come,
 #      first served.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
-#      ~/Library/Caches/topo-validate/hosts while the variable is not set; neither by default)
+#      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
+#      scripts/validate-host.sh writes; neither by default)
 #      `topo_unit` and `others` go there first, over ssh, and here only when it is busy or
 #      cannot be used: the commit is pushed to a repository of the Mac's own
 #      (~/Library/Caches/topo-validate/repo.git there), checked out in its one validation

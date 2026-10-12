@@ -53,6 +53,8 @@ expected=(
   'scripts/tests/janitor* others'
   'scripts/validate-and-push.sh others'
   'scripts/tests/validate-and-push-test.sh others'
+  'scripts/validate-host.sh others'
+  'scripts/tests/validate-host-test.sh others'
 )
 
 failures=0
@@ -107,6 +109,7 @@ selects false false true "the hub, the watch and the TV" $'Apps/TopoHub/HubApp.s
 selects false false true "the watch's widgets and its suite" $'Apps/TopoWatchWidgets/Info.plist\nApps/TopoWatch/WatchSurfaces.swift\nTests/Watch/WatchCueTests.swift\n'
 selects false false true "the janitor and its test" $'scripts/janitor.py\nscripts/tests/janitor_test.py\nscripts/tests/janitor-test.sh\ndocs/janitor.md\n'
 selects false false true "the push script and its test" $'scripts/validate-and-push.sh\nscripts/tests/validate-and-push-test.sh\n'
+selects false false true "the host switch and its test" $'scripts/validate-host.sh\nscripts/tests/validate-host-test.sh\n'
 selects false false true "Womble, its README and its web page included" $'Womble/Sources/App/AppDelegate.swift\nWomble/README.md\nWomble/Web/index.html\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
