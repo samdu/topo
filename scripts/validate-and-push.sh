@@ -230,8 +230,10 @@ done
 set +f
 ran_on=""   # `<suite>=<host>` lines, for a suite that ran on another Mac
 # Every connection gives up on a Mac that stops answering within a minute, so one that fell
-# asleep is found out and not waited on.
-ssh_options="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+# asleep is found out and not waited on; and each is a connection of its own, since one
+# carried by a shared master (ControlMaster) is the master's to give up on, which it does
+# not.
+ssh_options="-o BatchMode=yes -o ControlPath=none -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 ssh_to() { ssh $ssh_options "$@"; }
 # What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under that
 # Mac's own lock, the commit checked out in its one validation worktree, mac-suite.sh asked
@@ -256,7 +258,7 @@ child=""
 stop() {
   trap "" TERM INT HUP
   if [ -n "$child" ]; then
-    for _ in $(seq 40); do
+    for _ in $(seq 80); do
       [ ! -s "$results/mac-suite.pids" ] || break
       ps -p "$child" > /dev/null || break
       sleep 0.5
