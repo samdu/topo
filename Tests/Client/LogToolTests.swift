@@ -149,7 +149,11 @@ final class LogToolTests: XCTestCase {
         let logger = Logger(subsystem: "zone.hexagon.topo", category: "logtest")
         for index in 0..<300 { logger.error("\(mark, privacy: .public) before \(index, privacy: .public)") }
         Thread.sleep(forTimeInterval: 1.5)
-        let since = Date()
+        // The store stamps a line from its own time base, which the host's clock leaves by
+        // milliseconds as it is slewed, so a line written just after `Date()` can be dated just
+        // before it. The window opens inside the gap, a second after the lines before it and
+        // half a second before the one after.
+        let since = Date().addingTimeInterval(-0.5)
         logger.error("\(mark, privacy: .public) after")
         let lines = try UnifiedLogReader().lines(since: since)
         XCTAssertEqual(lines.filter { $0.message.contains(mark) }.map(\.message), ["\(mark) after"])
