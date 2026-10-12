@@ -23,6 +23,12 @@
 # earlier run left going keeps its checkout and its name, and is named with its pid; a process
 # a suite leaves behind holds nothing; and a signal in a run's second suite ends that suite.
 #
+# And of another Mac, behind a fake `ssh` that runs what it is given in a scratch home: none is
+# asked anything unless named; one named runs `topo_unit` and `others`, at the commit, and
+# never `topo_ui`; its name is in the status; a Mac that is not reached, is busy, says it
+# cannot run the suite or loses it partway runs nothing more and the suite runs here; a suite
+# red there is red; and a signal ends the suite there.
+#
 #   scripts/tests/validate-and-push-test.sh
 set -uo pipefail
 
@@ -53,14 +59,33 @@ case "$*" in
 esac
 GH
 chmod +x "$work/bin/gh"
+# ssh [-o option]... <host> <command> — the command, in that host's scratch home.
+cat > "$work/bin/ssh" <<'SSH'
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
+host="$1"; shift
+echo "$host $*" >> "$SSH_CALLS"
+[ "${FAKE_UNREACHABLE-}" != "$host" ] || exit 255
+mkdir -p "$FAKE_HOSTS/$host"
+cd "$FAKE_HOSTS/$host" && HOME="$FAKE_HOSTS/$host" exec bash -c "$*"
+SSH
+chmod +x "$work/bin/ssh"
 
 # The fake suite: records where it ran, then writes FAKE_SUITES' lines (`topo_unit=failure …`;
 # a suite it does not name succeeded) unless FAKE_SUITES is `died`.
 fake_suite='#!/usr/bin/env bash
-results=""; suites=()
+results=""; suites=(); check=no
 while [ $# -gt 0 ]; do
-  case "$1" in --lane) lane="$2"; shift 2 ;; --results) results="$2"; shift 2 ;; --cache) shift 2 ;; *) suites+=("$1"); shift ;; esac
+  case "$1" in --check) check=yes; shift ;; --lane) lane="$2"; shift 2 ;; --results) results="$2"; shift 2 ;; --cache) shift 2 ;; *) suites+=("$1"); shift ;; esac
 done
+if [ "$check" = yes ]; then
+  echo "check ${suites[*]}" >> "$FAKE_RECORD.checks"
+  [ -z "${FAKE_CHECK-}" ] || { echo "error: $FAKE_CHECK" >&2; exit 1; }
+  exit 0
+fi
+echo $$ > "$results/mac-suite.pids"
+# A Mac that loses the suite partway: no result, in a checkout under the path named.
+case "$(pwd -P)" in *"${FAKE_LOST_IN:-no such path}"*) exit 1 ;; esac
 before="$(sed -n "s/^suites=//p" "$FAKE_RECORD" 2>/dev/null)"
 { echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=$before${before:+ }${suites[*]}"; echo "checkout=$(pwd -P)"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD.new"
 mv -f "$FAKE_RECORD.new" "$FAKE_RECORD"
@@ -105,8 +130,10 @@ scratch() {
   sha="$(git -C "$repo" rev-parse HEAD)"
   : > "$work/$name/gh.calls"
   : > "$work/$name/gh.calls.origin"
+  : > "$work/$name/ssh.calls"
   export GH_CALLS="$work/$name/gh.calls" FAKE_ORIGIN="$work/$name/origin.git" FAKE_RECORD="$work/$name/record" \
-    TOPO_VALIDATE_CACHE="$work/$name/cache" TOPO_VALIDATE_LOGS="$work/$name/logs"
+    TOPO_VALIDATE_CACHE="$work/$name/cache" TOPO_VALIDATE_LOGS="$work/$name/logs" \
+    SSH_CALLS="$work/$name/ssh.calls" FAKE_HOSTS="$work/$name/hosts"
 }
 # sibling <name> <branch> <changed path>... — a second worktree of $repo, on a branch of its own
 # from main with one commit adding the paths: another session's, on the same Mac. Sets $other.
@@ -169,6 +196,7 @@ grep -q 'uncommitted changes or untracked files' <<<"$out" && ok "app: the uncom
 is "app: pushed the commit" "$(origin_head)" "$sha"
 is "app: one success per suite, on the commit, and no real ear" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
 is "app: no status on another commit" "$(posts_elsewhere)" 0
+is "app: no other Mac is asked anything" "$(wc -l < "$SSH_CALLS" | tr -d ' ')" 0
 is "app: origin's branch was at the commit as each status was posted" "$(sort -u "$GH_CALLS.origin")" "$sha"
 [ -d "$TOPO_VALIDATE_LOGS/$sha" ] && ok "app: the logs are kept under the commit" || fail "app: no $TOPO_VALIDATE_LOGS/$sha"
 # A second commit reuses the worktree, at the new commit.
@@ -466,6 +494,82 @@ for long in "$work/describe/$(printf 'l%.0s' $(seq 40))" "$work/describe/$(print
   is "a long logs root (${#long}): each ends in the commit" "$(grep -c "description=logs .*/$sha\$" "$GH_CALLS")" 4
   rm -rf "$work/describe-long"
 done
+
+# Another Mac, named: `topo_unit` and `others` run there at the commit, `topo_ui` here, and
+# each status says where.
+there() { (cd "$FAKE_HOSTS/$1/Library/Caches/topo-validate/checkout" 2>/dev/null && pwd -P); }
+said_on() { sed -n "s|.*context=local/$1 .* min on \([^;]*\);.*|\1|p" "$GH_CALLS"; }
+# The logs under the home's own root, so a description has room for more than their path.
+scratch host Apps/Client/SettingsView.swift
+mkdir -p "$work/host/home"
+TOPO_VALIDATE_LOGS="$work/host/home/Library/Logs/topo-validate"
+HOME="$work/host/home" TOPO_VALIDATE_HOSTS=laptop validate
+is "a host named: exits 0" "$status" 0
+is "a host named: the two it may run, then topo_ui" "$(recorded suites)" "topo_unit others topo_ui"
+is "a host named: it was asked whether it can run each" "$(tr '\n' ' ' < "$FAKE_RECORD.checks")" "check topo_unit check others "
+is "a host named: topo_ui ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+is "a host named: its checkout is at the commit" "$(git -C "$(there laptop)" rev-parse HEAD 2>/dev/null)" "$sha"
+is "a host named: pushed" "$(origin_head)" "$sha"
+is "a host named: one success per suite" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
+is "a host named: topo_unit's status names it" "$(said_on topo_unit)" laptop
+is "a host named: others' status names it" "$(said_on others)" laptop
+is "a host named: topo_ui's status names this Mac" "$(said_on topo_ui)" "$(hostname -s)"
+[ -f "$TOPO_VALIDATE_LOGS/$sha"/*/laptop/suites.txt ] && ok "a host named: its results are in the run's logs" || fail "a host named: no results from it in the logs"
+# A suite that needs nothing here takes no checkout here.
+scratch host-alone Packages/TopoLink/Package.swift
+TOPO_VALIDATE_HOSTS=laptop validate
+is "others alone on a host: exits 0" "$status" 0
+is "others alone on a host: ran there" "$(recorded checkout)" "$(there laptop)"
+[ ! -e "$TOPO_VALIDATE_CACHE/slots/1/checkout" ] && ok "others alone on a host: no checkout here" || fail "others alone on a host: a checkout was made here"
+# Named in the file, and not when the variable is set, to nothing included.
+mkdir -p "$TOPO_VALIDATE_CACHE"; printf '# an afternoon\nlaptop\n' > "$TOPO_VALIDATE_CACHE/hosts"
+echo y > "$repo/Packages/TopoLink/y"; g -C "$repo" add -A; g -C "$repo" commit -qm y; sha="$(git -C "$repo" rev-parse HEAD)"
+validate
+is "a host in the file: ran there" "$(recorded checkout)" "$(there laptop)"
+echo z > "$repo/Packages/TopoLink/z"; g -C "$repo" add -A; g -C "$repo" commit -qm z; sha="$(git -C "$repo" rev-parse HEAD)"
+TOPO_VALIDATE_HOSTS= validate
+is "the variable set to nothing: ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+TOPO_VALIDATE_HOSTS="lap;top" validate
+is "a name that is not a host: exits 2" "$status" 2
+# A red suite there is red: nothing pushed.
+scratch host-red Packages/TopoLink/Package.swift
+FAKE_SUITES="others=failure" TOPO_VALIDATE_HOSTS=laptop validate
+is "red on a host: exits 1" "$status" 1
+is "red on a host: nothing pushed" "$(origin_head)" ""
+# A Mac that cannot be used runs nothing, is asked once, and the suite runs here.
+for case in "not reached|FAKE_UNREACHABLE=laptop" "cannot run it|FAKE_CHECK=no iPhone simulator" "no result|FAKE_LOST_IN=/hosts/laptop/"; do
+  scratch host-unusable Packages/TopoLink/Package.swift Womble/x
+  mkdir -p "$work/host-unusable/home"
+  TOPO_VALIDATE_LOGS="$work/host-unusable/home/Library/Logs/topo-validate"
+  out="$(cd "$repo" && env PATH="$work/bin:$PATH" HOME="$work/host-unusable/home" "${case#*|}" TOPO_VALIDATE_HOSTS=laptop scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+  is "a host ${case%%|*}: exits 0" "$status" 0
+  is "a host ${case%%|*}: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+  is "a host ${case%%|*}: the status names this Mac" "$(said_on others)" "$(hostname -s)"
+  case "$out" in *"laptop"*"${case%%|*}"*) ok "a host ${case%%|*}: it is said" ;; *) fail "a host ${case%%|*}: $out" ;; esac
+  is "a host ${case%%|*}: asked to run a suite at most once" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" "$([ "${case%%|*}" = "not reached" ] && echo 0 || echo 1)"
+  rm -rf "$work/host-unusable"
+done
+# A Mac busy with another validation: the suite runs here and not beside it.
+scratch host-busy Packages/TopoLink/Package.swift
+mkdir -p "$FAKE_HOSTS/laptop/Library/Caches/topo-validate"
+lockf -k "$FAKE_HOSTS/laptop/Library/Caches/topo-validate/lock" sh -c "echo \$\$ > '$work/host-busy/held'; exec sleep 60" &
+holder=$!
+for _ in $(seq 100); do [ -s "$work/host-busy/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+TOPO_VALIDATE_HOSTS=laptop validate
+is "a host busy: exits 0" "$status" 0
+is "a host busy: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+[ ! -e "$FAKE_HOSTS/laptop/Library/Caches/topo-validate/checkout" ] && ok "a host busy: its checkout was not touched" || fail "a host busy: its checkout was made under the other run"
+kill "$(cat "$work/host-busy/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+# A signal ends the suite there.
+scratch host-signal Packages/TopoLink/Package.swift
+begin "$repo" "$work/host-signal/record" "$work/host-signal/hold" TOPO_VALIDATE_HOSTS=laptop
+held="$(cat "$work/host-signal/hold")"
+kill -TERM "$run"; wait "$run"
+is "a signal with a suite on a host: exits 143" "$?" 143
+for _ in $(seq 50); do kill -0 "$held" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+kill -0 "$held" 2>/dev/null && fail "a signal with a suite on a host: the suite is still running there" || ok "a signal with a suite on a host: the suite is ended there"
+is "a signal with a suite on a host: nothing pushed" "$(origin_head)" ""
+release "$work/host-signal/hold"
 
 # main is never pushed from here, and a detached HEAD has no branch to push to.
 scratch main docs/design.md
