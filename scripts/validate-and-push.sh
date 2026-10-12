@@ -243,7 +243,9 @@ ssh_to() { ssh $ssh_options "$@"; }
 # host.pid from the moment it has the lock, and a TERM to that pid ends whatever it has
 # started: nothing more if the suite is not yet running, and otherwise the suite, by the pid
 # its mac-suite.pids leads with (the way into the session is root's, and takes no signal from
-# here). TOPO_VALIDATE_SESSION_RUN in that Mac's environment names another way into the
+# here). The suite has no git configuration of that Mac's person: the tests commit in
+# scratch repositories, and a laptop that signs its owner's commits would ask a key of them
+# for each. TOPO_VALIDATE_SESSION_RUN in that Mac's environment names another way into the
 # session, or none when it is empty.
 on_host='
 sha="$1" lane="$2" suite="$3" run="$4"
@@ -282,7 +284,7 @@ git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 9>&-
 cd "$checkout" || refuse "could not enter $checkout"
 scripts/mac-suite.sh --check --cache "$cache" "$suite" 9>&- || exit 76
 ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do rm -rf "${cache:?}/logs/$old"; done
-command="cd \"$checkout\" && exec scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
+command="cd \"$checkout\" && exec env GIT_CONFIG_GLOBAL=/dev/null scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
 session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
   sudo -n "$session" /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &

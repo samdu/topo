@@ -102,7 +102,7 @@ echo $$ > "$results/mac-suite.pids"
 # A Mac that loses the suite partway: no result, in a checkout under the path named.
 case "$(pwd -P)" in *"${FAKE_LOST_IN:-no such path}"*) exit 1 ;; esac
 before="$(sed -n "s/^suites=//p" "$FAKE_RECORD" 2>/dev/null)"
-{ echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=$before${before:+ }${suites[*]}"; echo "checkout=$(pwd -P)"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD.new"
+{ echo "head=$(git rev-parse HEAD)"; echo "gitconfig=${GIT_CONFIG_GLOBAL-}"; echo "lane=$lane"; echo "suites=$before${before:+ }${suites[*]}"; echo "checkout=$(pwd -P)"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD.new"
 mv -f "$FAKE_RECORD.new" "$FAKE_RECORD"
 [ "${FAKE_SUITES-}" != died ] || exit 1
 # Left running after the suite, with whatever descriptors the suite was given.
@@ -561,6 +561,7 @@ scratch host-alone Packages/TopoLink/Package.swift
 TOPO_VALIDATE_HOSTS=laptop validate
 is "others alone on a host: exits 0" "$status" 0
 is "others alone on a host: ran there" "$(recorded checkout)" "$(there laptop)"
+is "others alone on a host: with none of its person's git configuration" "$(recorded gitconfig)" /dev/null
 [ ! -e "$TOPO_VALIDATE_CACHE/slots/1/checkout" ] && ok "others alone on a host: no checkout here" || fail "others alone on a host: a checkout was made here"
 # Named in the file, and not when the variable is set, to nothing included.
 mkdir -p "$TOPO_VALIDATE_CACHE"; printf '# an afternoon\nlaptop\n' > "$TOPO_VALIDATE_CACHE/hosts"
