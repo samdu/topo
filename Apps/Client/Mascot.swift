@@ -18,6 +18,9 @@ struct MascotState: Equatable, Sendable {
     var model: String
     /// The tokens of context the last message was written over: input and both cache counts.
     var tokens: Int = 0
+    /// The tokens at which the context is compacted, once a reply has said the model's window:
+    /// his colour is the context's fill on that scale. Nil, it is the engine's own scale.
+    var limit: Int?
     var activity: Activity = .idle
     /// The chat's harness has a turn open: sent, and not yet answered, failed or handed to another
     /// device. It is the turn's own life rather than anything the guest wrote, so the wait before
@@ -44,8 +47,9 @@ struct MascotState: Equatable, Sendable {
 
     /// What the engine is handed for this state, a frame at a time.
     var input: TopoInput {
-        TopoInput(model: model, tokens: Double(tokens), activity: sign == nil ? pose.rawValue : "sign", sign: sign,
-                  facing: facing.rawValue)
+        let load = limit.map { Compaction.load(context: tokens, limit: $0).rawValue }
+        return TopoInput(model: model, tokens: load == nil ? Double(tokens) : nil, load: load,
+                         activity: sign == nil ? pose.rawValue : "sign", sign: sign, facing: facing.rawValue)
     }
 }
 
@@ -111,7 +115,10 @@ enum MascotMapping {
         case .toolResult:
             // The tool is done and the model has what it found: the wait is on the model again.
             next.activity = .thinking
-        case .text, .writing, .writingBegan, .result, .other, .malformed:
+        case .compacted(let compacted):
+            // What he carries is what is left after it.
+            next.tokens = compacted.post
+        case .text, .writing, .writingBegan, .result, .compactFailed, .other, .malformed:
             break
         }
         return next
@@ -146,10 +153,11 @@ enum MascotMapping {
     /// no pose, since what a turn is doing comes from the guest's events. No context — no reply
     /// answered here yet, or a sign-out since — is an empty one: what he wore before was another
     /// login's.
-    static func harness(_ state: MascotState, model: String, tokens: Int?) -> MascotState {
+    static func harness(_ state: MascotState, model: String, tokens: Int?, limit: Int? = nil) -> MascotState {
         var next = state
         next.model = model
         next.tokens = tokens ?? 0
+        next.limit = limit
         return next
     }
 
@@ -213,8 +221,8 @@ final class Mascot {
     }
 
     /// The chat's harness: the model it asks, and the context of the last reply it got.
-    func harness(model: String, tokens: Int?) {
-        state = MascotMapping.harness(state, model: model, tokens: tokens)
+    func harness(model: String, tokens: Int?, limit: Int? = nil) {
+        state = MascotMapping.harness(state, model: model, tokens: tokens, limit: limit)
     }
 
     /// The side of the screen he stands on, as his roost decided it (`MascotRoam.facing`).

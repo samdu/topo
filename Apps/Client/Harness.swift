@@ -86,6 +86,19 @@ final class Harness {
     /// a sign-out, since the context was the last login's. A reply another primary wrote, or one found already in the log,
     /// says nothing of its context and leaves this as it was.
     private(set) var context: Int?
+    /// Counts sign-outs and demotions, so a compaction that ends after one says nothing to the
+    /// login after it.
+    private var logins = 0
+    /// A sign-out or a demotion is waiting on the guest to forget: nothing is asked of the guest
+    /// meanwhile, since what it would be asked under is a login on its way out.
+    private(set) var leaving = 0
+    /// The window of the model that answered last, as Claude Code reports it with a result; nil
+    /// until one has, and after a sign-out.
+    private(set) var window: Int?
+    /// A compaction asked for here is waiting for the guest's turn to end, or running.
+    private(set) var compacting = false
+    /// What the last compaction asked for here came to (`Compaction.Outcome.words`).
+    private(set) var lastCompaction: String?
     /// Told about every reply the log has brought, however it arrived: one this device wrote, or
     /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
     /// rather than a view's observer, because behind the lock nothing is drawn and whether a
@@ -344,6 +357,45 @@ final class Harness {
         }
     }
 
+    /// When the mind's context is compacted by itself. A change reaches the brain at once, as
+    /// the model's does, and replaces the resident process at its next idle moment.
+    var compaction: Compaction.Setting {
+        get { Compaction.Setting(kept: defaults.integer(forKey: Compaction.key)) }
+        set {
+            defaults.set(newValue.kept, forKey: Compaction.key)
+            let brain = brain
+            Task { [weak self] in
+                guard let self else { return }
+                await brain.use(compaction: self.compaction)
+            }
+        }
+    }
+
+    /// The tokens of context the mind is compacted at, once a reply has said the window.
+    var threshold: Int? { window.map { Compaction.threshold(window: $0, setting: compaction) } }
+
+    /// Asks the guest to compact its conversation now, and keeps what that came to. False, with
+    /// nothing asked, while one asked for here is still waiting or running, with no guest, or
+    /// while a sign-out or a demotion is ending the guest.
+    /// One asked for during a turn waits for that turn's end (`GuestBridge.compact`).
+    @discardableResult
+    func compact() -> Bool {
+        guard let guest, !compacting, leaving == 0 else { return false }
+        compacting = true
+        let login = logins
+        Task { [weak self] in
+            let outcome = await guest.compact()
+            guard let self, self.logins == login else { return }
+            self.compacting = false
+            self.lastCompaction = outcome.words
+            // What the boundary counts as left is the conversation's and leaves out Claude Code's
+            // fixed prefix, so it is not the context of the next reply: that is not known until
+            // one is answered.
+            if case .done = outcome { self.context = nil }
+        }
+        return true
+    }
+
     /// Sign-out: the turn in flight and the answering pass in flight are cancelled and write
     /// nothing more, the answering loop ends, the runner and screen are cleared, and the next
     /// sign-in starts at the first question. Returns once the brain has forgotten the login's
@@ -366,6 +418,10 @@ final class Harness {
         forgetHeard()
         busy = false
         context = nil
+        window = nil
+        compacting = false
+        lastCompaction = nil
+        logins += 1
         unfinished = nil
         pending = []
         spokenNonces = []
@@ -375,7 +431,9 @@ final class Harness {
         // An answer an earlier build kept under its own key is the last login's too.
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         // What the guest kept of the last login's conversation goes with it.
+        leaving += 1
         await brain.forget()
+        leaving -= 1
         #if canImport(CloudKit)
         await CloudKitRecordDatabase.forgetMirrors()
         #endif
@@ -431,7 +489,14 @@ final class Harness {
         lease = nil
         writer = nil
         info = nil
+        // What was known of the guest's context and its last compaction was the login's.
+        window = nil
+        compacting = false
+        lastCompaction = nil
+        logins += 1
+        leaving += 1
         await brain.forget()
+        leaving -= 1
         // What the guest ended meanwhile, before it was told to forget, is not kept either.
         dropWriting()
         forgetHeard()
@@ -1042,7 +1107,11 @@ final class Harness {
         case .update(.ended(let end)):
             // A turn that ended with no reply leaves nothing to land; one that answered is
             // replaced by its turn when that is shown.
-            if case .answered = end {} else { dropWriting() }
+            if case .answered(let result) = end {
+                if let window = result.window { self.window = window }
+            } else {
+                dropWriting()
+            }
         case .update, .gone:
             break
         }

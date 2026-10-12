@@ -4,7 +4,7 @@ How the devices on one Apple ID come to know each other. The records here live b
 
 ## The device record
 
-Every bundle that runs the client or the hub writes one record about itself at every launch, type `Device`, name `device/<id>`:
+The hub writes one record about itself at every launch, type `Device`, name `device/<id>` (`DeviceDirectory.register`). The client bundles do not call it yet, so the phone, pad, watch and television have no record of their own:
 
 | Field | Holds |
 | ----- | ----- |
@@ -24,7 +24,7 @@ Womble writes no record. Its access is the Apple ID it is signed into, which is 
 
 The hub shows a QR code carrying `topo://pair?v=1&d=<id>&n=<name>&k=<publicKey>&e=<endpoint>`. `d` and `k` are required; `n` defaults to the ID and `e` is the first LAN endpoint, offered so the scanner can reach the hub without waiting for a query.
 
-The phone scans it and runs the scanner's half, `DeviceDirectory.pair(_:as:)`:
+The scanner's half is `DeviceDirectory.pair(_:as:)`, built and tested in `TopoCore` but not yet called by any app: the phone has no scanner and nothing handles a `topo://pair` link, so no device records a pairing today. It waits on the hub running turns (parked in `docs/roadmap.md`). When wired, the phone scans the code and runs it:
 
 1. Fetch `device/<d>` by ID. Absent means the hub has not launched against this Apple ID, or its launch has not landed yet: `unknownDevice`.
 2. Require the record's `publicKey` to equal `k`. The code is on a screen in the room; the record is in iCloud. Agreement between the two is what the scan proves. A mismatch is `keyMismatch` and nothing is written.

@@ -30,7 +30,7 @@ public enum GuestTranscript {
     static let finished: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
 
     /// The verdict on the input `id` over a transcript's lines. Only what follows the input and
-    /// comes before the next prompt counts: the reply is the words of the main-chain assistant
+    /// comes before the next prompt counts (a compaction's boundary and summary are neither): the reply is the words of the main-chain assistant
     /// messages there, and it is finished when the last of them has a stop reason that ends a
     /// turn and holds text of its own. An error Claude
     /// Code wrote in the model's place (`isApiErrorMessage`, or the `<synthetic>` model) is no
@@ -135,10 +135,13 @@ public enum GuestTranscript {
         return (named + others.sorted { $0.1 > $1.1 }.map(\.0), listed)
     }
 
-    /// A `user` entry that is a prompt rather than tool results coming back, or a note Claude Code
-    /// adds for itself (`isMeta`): what starts the next turn.
+    /// A `user` entry that is a prompt rather than tool results coming back, a note Claude Code
+    /// adds for itself (`isMeta`), or the summary it writes in the conversation's place when it
+    /// compacts (`isCompactSummary`): what starts the next turn. A compaction at the threshold
+    /// comes between an input and its reply, so its summary ends nothing.
     private static func isPrompt(_ entry: [String: Any]) -> Bool {
         guard entry["isMeta"] as? Bool != true, entry["isSidechain"] as? Bool != true,
+              entry["isCompactSummary"] as? Bool != true,
               let message = entry["message"] as? [String: Any] else { return false }
         if message["content"] is String { return true }
         let blocks = (message["content"] as? [Any])?.compactMap { ($0 as? [String: Any])?["type"] as? String } ?? []
