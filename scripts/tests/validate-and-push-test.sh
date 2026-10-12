@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Holds scripts/validate-and-push.sh in scratch repositories with a bare `origin`, the real
 # select scripts and workflow, a fake `gh` that logs every call, and a fake scripts/mac-suite.sh
-# committed in the scratch repository, which records the commit and the files it was run in and
-# answers as the case says. No suite runs, nothing leaves the machine.
+# committed in the scratch repository, which records the commit, the checkout and the files it
+# was run in, once a suite, and answers as the case says. No suite runs, nothing leaves the
+# machine.
 #
 # What it holds: the suites and the lane are the ones the commit's paths select; the suite runs
 # in the validation worktree at exactly the commit, without the worktree's uncommitted or
@@ -11,10 +12,16 @@
 # red suite pushes nothing and posts nothing, unless origin's branch was already at the commit,
 # when it posts what happened; a suite that wrote no result is a failure; a push origin refuses
 # and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
-# branch is not at before any suite runs; a held lock is waited on and then given up on; a suite an earlier
-# run left going is not started beside; a suite with two results is red; a description keeps the
-# logs' path; a head run again keeps the earlier run's logs, five runs a commit; and the
+# branch is not at before any suite runs; a suite with two results is red; a description keeps
+# the logs' path; a head run again keeps the earlier run's logs, five runs a commit; and the
 # `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
+#
+# And of two runs at once: each is in a checkout of its own and a third waits for one; a run
+# whose first suite a sibling is running goes on with its next; one suite of a name runs at a
+# time; a wait that runs out exits 2 with nothing pushed or posted, the suites already green
+# included; a run of the script as it was, holding its one lock, holds a run off; a suite an
+# earlier run left going keeps its checkout and its name, and is named with its pid; a process
+# a suite leaves behind holds nothing; and a signal in a run's second suite ends that suite.
 #
 #   scripts/tests/validate-and-push-test.sh
 set -uo pipefail
@@ -54,9 +61,14 @@ results=""; suites=()
 while [ $# -gt 0 ]; do
   case "$1" in --lane) lane="$2"; shift 2 ;; --results) results="$2"; shift 2 ;; --cache) shift 2 ;; *) suites+=("$1"); shift ;; esac
 done
-{ echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=${suites[*]}"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD"
+before="$(sed -n "s/^suites=//p" "$FAKE_RECORD" 2>/dev/null)"
+{ echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=$before${before:+ }${suites[*]}"; echo "checkout=$(pwd -P)"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD.new"
+mv -f "$FAKE_RECORD.new" "$FAKE_RECORD"
 [ "${FAKE_SUITES-}" != died ] || exit 1
-if [ "${FAKE_SUITES-}" = held ]; then
+# Left running after the suite, with whatever descriptors the suite was given.
+[ -z "${FAKE_LEAVE-}" ] || { nohup perl -e "sleep 60" > /dev/null 2>&1 & echo $! > "$FAKE_LEAVE"; }
+# Held in every suite, or in the one FAKE_HOLD_SUITE names, for as long as the marker has its pid.
+if [ "${FAKE_SUITES-}" = held ] && case "${FAKE_HOLD_SUITE-}" in "" | "${suites[0]}") true ;; *) false ;; esac; then
   echo $$ > "$FAKE_HOLD"
   while [ -s "$FAKE_HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done
 fi
@@ -96,8 +108,30 @@ scratch() {
   export GH_CALLS="$work/$name/gh.calls" FAKE_ORIGIN="$work/$name/origin.git" FAKE_RECORD="$work/$name/record" \
     TOPO_VALIDATE_CACHE="$work/$name/cache" TOPO_VALIDATE_LOGS="$work/$name/logs"
 }
-# validate [args] — runs the script in $repo; its output in $out, its exit in $status.
+# sibling <name> <branch> <changed path>... — a second worktree of $repo, on a branch of its own
+# from main with one commit adding the paths: another session's, on the same Mac. Sets $other.
+sibling() {
+  local name="$1" branch="$2" path; shift 2
+  other="$work/$name/$branch"
+  git -C "$repo" worktree add -q -b "$branch" "$other" main
+  for path in "$@"; do mkdir -p "$other/$(dirname "$path")"; echo x > "$other/$path"; done
+  g -C "$other" add -A && g -C "$other" commit -qm change
+}
+# begin <directory> <record> <marker> [VAR=value...] — a run of the script there in the
+# background, held in its suite (FAKE_HOLD_SUITE, or every one) until `release`. Its pid in $run.
+begin() {
+  local at="$1" record="$2" marker="$3"; shift 3
+  : > "$marker"
+  (cd "$at" && exec env PATH="$work/bin:$PATH" FAKE_SUITES=held FAKE_RECORD="$record" FAKE_HOLD="$marker" "$@" scripts/validate-and-push.sh > "$record.out" 2>&1) &
+  run=$!
+  for _ in $(seq 300); do [ -s "$marker" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+  [ -s "$marker" ] || fail "a run in $at never reached the suite it was to be held in: $(cat "$record.out")"
+}
+release() { : > "$1"; }
+# validate [args] — runs the script in $repo; its output in $out, its exit in $status, and what
+# its suites recorded in place of any earlier run's.
 validate() {
+  rm -f "$FAKE_RECORD"
   out="$(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh "$@" 2>&1)" && status=0 || status=$?
 }
 origin_head() { git -C "$repo" ls-remote origin refs/heads/topic | cut -f1; }
@@ -252,7 +286,7 @@ is "a sixth run: a file that is not a run is left" "$(cat "$TOPO_VALIDATE_LOGS/$
 # Runs a signal ended are counted like any other: seven of them leave five.
 scratch signalled Packages/TopoLink/Package.swift
 git -C "$repo" push -q origin topic
-export FAKE_HOLD="$work/signalled/hold"
+export FAKE_HOLD="$work/signalled/hold" LOCK_POLL=1
 for _ in 1 2 3 4 5 6 7; do
   : > "$FAKE_HOLD"
   (cd "$repo" && PATH="$work/bin:$PATH" FAKE_SUITES=held exec scripts/validate-and-push.sh --no-push) > "$work/signalled/out" 2>&1 &
@@ -266,43 +300,129 @@ is "seven runs ended by a signal: five kept" "$(runs)" 5
 own="$(sed -n 's/^RED at .* Logs: \(.*\)\/mac-suite.log$/\1/p' <<<"$out")"
 is "a sixth run: the logs it names hold its own result" "$(cat "$own/suites.txt" 2>/dev/null)" "others=failure"
 
-# Another validation holds the Mac: waited on, then given up on, with no suite run.
+# A run of the script as it was holds its one lock for the whole of it: a run here waits on
+# that, then gives up, with no suite run.
 scratch locked Apps/Client/SettingsView.swift
 mkdir -p "$TOPO_VALIDATE_CACHE"
 lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "echo \$\$ > '$work/locked/held'; exec sleep 60" &
 holder=$!
-for _ in $(seq 100); do [ -s "$work/locked/held" ] && break; sleep 0.1; done
+for _ in $(seq 100); do [ -s "$work/locked/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
 [ -s "$work/locked/held" ] || fail "locked: the holder never took the lock"
 LOCK_WAIT=1 validate
 is "locked: exits 2" "$status" 2
 is "locked: no suite ran" "$(recorded head)" ""
 is "locked: nothing pushed" "$(origin_head)" ""
 kill "$(cat "$work/locked/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
-
-# A suite whose script was killed outright is still running with the lock free: the next run
-# refuses to start beside it, from a session in another time zone and locale as from this one,
-# and runs once it has gone. The record is the script's own, of the suite it started.
-scratch orphan Apps/Client/SettingsView.swift
-export FAKE_HOLD="$work/orphan/hold"
-(cd "$repo" && PATH="$work/bin:$PATH" FAKE_SUITES=held exec scripts/validate-and-push.sh) > "$work/orphan/first.out" 2>&1 &
-first=$!
-for _ in $(seq 300); do [ -s "$FAKE_HOLD" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
-orphan="$(cat "$FAKE_HOLD" 2>/dev/null)"
-[ -n "$orphan" ] || fail "orphan suite: the first run's suite never started"
-kill -KILL "$first"; wait "$first" 2>/dev/null
-rm -f "$FAKE_RECORD"
 validate
-is "orphan suite: exits 2" "$status" 2
-is "orphan suite: no suite ran" "$(recorded head)" ""
-is "orphan suite: nothing pushed" "$(origin_head)" ""
-case "$out" in *"kill $orphan"*) ok "orphan suite: names the pid to end" ;; *) fail "orphan suite: does not name pid $orphan: $out" ;; esac
-TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 validate
+is "the lock free again: exits 0" "$status" 0
+TOPO_VALIDATE_SLOTS=0 validate
+is "no slots at all: exits 2" "$status" 2
+
+# Two runs at once. The first is held in topo_unit, in the first checkout. The second, another
+# branch's whose paths need `others` alone, runs it in a checkout of its own and is pushed and
+# posted while the first is still in its suite.
+scratch overlap Apps/Client/SettingsView.swift
+sibling overlap theirs Packages/TopoLink/Package.swift
+begin "$repo" "$work/overlap/first" "$work/overlap/first.hold" FAKE_HOLD_SUITE=topo_unit
+first=$run
+out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/second" LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "overlap: the second run exits 0 with the first in its suite" "$status" 0
+kill -0 "$(cat "$work/overlap/first.hold")" 2>/dev/null && ok "overlap: the first run's suite is still going" || fail "overlap: the first run's suite ended"
+is "overlap: the first run is in the first checkout" "$(sed -n 's/^checkout=//p' "$work/overlap/first")" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+is "overlap: the second in a checkout of its own" "$(sed -n 's/^checkout=//p' "$work/overlap/second")" "$(cd "$TOPO_VALIDATE_CACHE/slots/2/checkout" 2>/dev/null && pwd -P)"
+is "overlap: the second ran its commit" "$(sed -n 's/^head=//p' "$work/overlap/second")" "$(git -C "$other" rev-parse HEAD)"
+is "overlap: the second is pushed" "$(git -C "$repo" ls-remote origin refs/heads/theirs | cut -f1)" "$(git -C "$other" rev-parse HEAD)"
+is "overlap: the second is posted" "$(grep -c "statuses/$(git -C "$other" rev-parse HEAD) -f context=local/others -f state=success" "$GH_CALLS")" 1
+# A second run of `others` while one is going waits for it, and a third run for a checkout.
+begin "$other" "$work/overlap/second" "$work/overlap/second.hold" FAKE_HOLD_SUITE=others
+second=$run
+sibling overlap third Packages/TopoLink/Package.swift
+out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/third.record" LOCK_WAIT=2 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "two checkouts held: a third run exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout (slot 1: topic "*"; slot 2: theirs "*) ok "two checkouts held: it says who holds them" ;; *) fail "two checkouts held: $out" ;; esac
+[ ! -e "$work/overlap/third.record" ] && ok "two checkouts held: no suite of the third ran" || fail "two checkouts held: a suite ran"
+out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/third.record" LOCK_WAIT=2 TOPO_VALIDATE_SLOTS=3 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "others held by a sibling: a run that needs it exits 2" "$status" 2
+case "$out" in *"Waiting for a suite (others: theirs "*) ok "others held by a sibling: it says who holds it" ;; *) fail "others held by a sibling: $out" ;; esac
+[ ! -e "$work/overlap/third.record" ] && ok "others held by a sibling: it did not run beside it" || fail "others held by a sibling: a second ran beside it"
+is "others held by a sibling: nothing pushed" "$(git -C "$repo" ls-remote origin refs/heads/third | cut -f1)" ""
+# The first run goes on past the suite its sibling holds, and comes back to it.
+release "$work/overlap/first.hold"
+for _ in $(seq 100); do grep -q '^suites=topo_unit topo_ui$' "$work/overlap/first" && break; perl -e 'select(undef,undef,undef,0.1)'; done
+is "others held by a sibling: the first run has run its other two" "$(sed -n 's/^suites=//p' "$work/overlap/first")" "topo_unit topo_ui"
+kill -0 "$first" 2>/dev/null && ok "others held by a sibling: the first run waits for it" || fail "others held by a sibling: the first run ended: $(cat "$work/overlap/first.out")"
+release "$work/overlap/second.hold"
+wait "$second"; is "the second run, released: exits 0" "$?" 0
+wait "$first"; is "the first run, its sibling done: exits 0" "$?" 0
+is "the first run: every suite, others last" "$(sed -n 's/^suites=//p' "$work/overlap/first")" "topo_unit topo_ui others"
+is "the first run: pushed" "$(origin_head)" "$sha"
+is "the first run: one success per suite" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
+is "the first run: its logs name every suite" "$(cat "$TOPO_VALIDATE_LOGS/$sha"/*/suites.txt | tr '\n' ' ')" "topo_unit=success topo_ui=success others=success "
+
+# A process a suite leaves running holds no lock: the next run takes the same checkout and
+# the same suite at once.
+scratch left Packages/TopoLink/Package.swift
+FAKE_LEAVE="$work/left/pid" validate
+is "a process left behind: its run exits 0" "$status" 0
+left="$(cat "$work/left/pid" 2>/dev/null)"
+kill -0 "$left" 2>/dev/null && ok "a process left behind: it is still running" || fail "a process left behind: it is not running"
+echo y > "$repo/more"; g -C "$repo" add -A; g -C "$repo" commit -qm more; sha="$(git -C "$repo" rev-parse HEAD)"
+LOCK_WAIT=0 validate
+is "a process left behind: the next run waits for nothing" "$status" 0
+is "a process left behind: the next run has the first checkout" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+kill "$left" 2>/dev/null
+
+# A signal in a run's second suite ends that suite and the run, and leaves nothing on record.
+scratch second-suite Apps/Client/SettingsView.swift
+begin "$repo" "$work/second-suite/record" "$work/second-suite/hold" FAKE_HOLD_SUITE=topo_ui
+held="$(cat "$work/second-suite/hold")"
+kill -TERM "$run"; wait "$run"
+is "a signal in the second suite: exits 143" "$?" 143
+kill -0 "$held" 2>/dev/null && fail "a signal in the second suite: the suite is still running" || ok "a signal in the second suite: the suite is ended"
+is "a signal in the second suite: no suite on record" "$(ls "$TOPO_VALIDATE_CACHE"/slots/*/suite 2>/dev/null)" ""
+is "a signal in the second suite: nothing pushed" "$(origin_head)" ""
+validate
+is "the run after the signal: exits 0" "$status" 0
+
+# A suite whose script was killed outright is still running with its locks free. With one
+# checkout the next run refuses to start beside it, from a session in another time zone and
+# locale as from this one. With two it takes the other, runs the suites the orphan is not in,
+# and waits for that one; and it runs whole once the orphan has gone. The record is the
+# script's own, of the suite it started.
+scratch orphan Apps/Client/SettingsView.swift
+begin "$repo" "$work/orphan/first" "$work/orphan/hold" FAKE_HOLD_SUITE=topo_unit
+orphan="$(cat "$work/orphan/hold" 2>/dev/null)"
+kill -KILL "$run"; wait "$run" 2>/dev/null
+TOPO_VALIDATE_SLOTS=1 validate
+is "orphan suite, one checkout: exits 2" "$status" 2
+is "orphan suite, one checkout: no suite ran" "$(recorded head)" ""
+is "orphan suite, one checkout: nothing pushed" "$(origin_head)" ""
+case "$out" in *"kill $orphan"*) ok "orphan suite, one checkout: names the pid to end" ;; *) fail "orphan suite: does not name pid $orphan: $out" ;; esac
+TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 TOPO_VALIDATE_SLOTS=1 validate
 is "orphan suite, from another zone and locale: exits 2" "$status" 2
-: > "$FAKE_HOLD"
+LOCK_WAIT=2 validate
+is "orphan suite, two checkouts: exits 2 once the wait for its suite runs out" "$status" 2
+is "orphan suite, two checkouts: the other two suites ran" "$(recorded suites)" "topo_ui others"
+is "orphan suite, two checkouts: in the other checkout" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/2/checkout" && pwd -P)"
+case "$out" in *"topo_unit: still running without its script, pid $orphan, end it with \`kill $orphan\`"*) ok "orphan suite, two checkouts: names the suite and the pid to end" ;; *) fail "orphan suite, two checkouts: $out" ;; esac
+is "orphan suite, two checkouts: nothing pushed, two suites green" "$(origin_head)" ""
+is "orphan suite, two checkouts: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+release "$work/orphan/hold"
 for _ in $(seq 100); do kill -0 "$orphan" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 validate
 is "orphan gone: exits 0" "$status" 0
+is "orphan gone: in the first checkout again" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 is "orphan gone: pushed" "$(origin_head)" "$sha"
+# The suite a run of the script as it was left going, on record beside its one lock.
+perl -e 'sleep 60' & stray=$!
+printf '%s\n%s\n' "$stray" "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$stray")" > "$TOPO_VALIDATE_CACHE/suite"
+echo z > "$repo/z"; g -C "$repo" add -A; g -C "$repo" commit -qm z; sha="$(git -C "$repo" rev-parse HEAD)"
+validate
+is "an orphan of the script as it was: exits 2" "$status" 2
+is "an orphan of the script as it was: no suite ran" "$(recorded head)" ""
+case "$out" in *"kill $stray"*) ok "an orphan of the script as it was: names the pid to end" ;; *) fail "an orphan of the script as it was: $out" ;; esac
+kill "$stray" 2>/dev/null; wait "$stray" 2>/dev/null
+rm -f "$TOPO_VALIDATE_CACHE/suite"
 unset FAKE_HOLD
 
 # A suite that cannot start is a red run like any other, and holds no later run off the Mac.
@@ -320,7 +440,7 @@ sha="$(git -C "$repo" rev-parse HEAD)"
 validate
 is "the run after it: exits 0" "$status" 0
 is "the run after it: pushed" "$(origin_head)" "$sha"
-[ ! -e "$TOPO_VALIDATE_CACHE/suite" ] && ok "a finished run leaves no suite on record" || fail "a finished run left $TOPO_VALIDATE_CACHE/suite"
+is "a finished run leaves no suite on record" "$(ls "$TOPO_VALIDATE_CACHE"/slots/*/suite 2>/dev/null)" ""
 
 # Two words for one suite, a failure and then a success: red, and posted as red.
 scratch twice Packages/TopoLink/Package.swift
