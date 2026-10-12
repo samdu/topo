@@ -161,16 +161,15 @@ enum LookDocument {
     }
 
     private static func setup(_ value: inout Look.Setup, _ r: Reader) {
-        r.bounded("spacing", &value.spacing, in: 0...40)
-        r.bounded("lineSpacing", &value.lineSpacing, in: 0...24)
-        r.bounded("horizontalPadding", &value.horizontalPadding, in: 0...64)
-        r.bounded("verticalPadding", &value.verticalPadding, in: 0...40)
-        r.font("titleFont", &value.titleFont, largest: Look.Setup.largestFont)
-        r.font("wordsFont", &value.wordsFont, largest: Look.Setup.largestFont)
-        r.colour("wordsInk", &value.wordsInk)
-        r.colour("troubleInk", &value.troubleInk)
+        // Three rows at the largest of each is 44 points, the bar's own height.
+        r.bounded("spacing", &value.spacing, in: 0...4)
+        r.bounded("symbolSpacing", &value.symbolSpacing, in: 0...12)
+        r.bounded("symbolSize", &value.symbolSize, in: 8...12)
+        r.bounded("barWidth", &value.barWidth, in: 24...120)
+        r.bounded("barHeight", &value.barHeight, in: 1...6)
         r.colour("tint", &value.tint)
-        r.colour("surface", &value.surface)
+        r.colour("track", &value.track)
+        r.colour("troubleInk", &value.troubleInk)
     }
 
     private static func bar(_ value: inout Look.Bar, _ r: Reader) {

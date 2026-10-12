@@ -8,6 +8,14 @@ enum Setup {
         let title: String
         let state: State
         var id: String { title }
+        /// The mark beside its bar, an SF Symbol's name.
+        var symbol: String {
+            switch title {
+            case Setup.hearing: "ear"
+            case Setup.speaking: "mouth"
+            default: "shippingbox"
+            }
+        }
     }
 
     enum State: Equatable {
@@ -42,12 +50,40 @@ enum Setup {
          Line(title: speaking, state: state(voice, fetch: voiceFetch, loading: voiceLoading))]
     }
 
-    /// The card is drawn while any line is not done.
+    /// The meter is drawn while any line is not done.
     static func shows(_ lines: [Line]) -> Bool { lines.contains { $0.state != .done } }
+
+    /// The lines that have a bar: the ones not done.
+    static func pending(_ lines: [Line]) -> [Line] { lines.filter { $0.state != .done } }
+
+    /// The first part that failed, in words: a bar has none, so the bar's notice or the
+    /// question says it.
+    static func trouble(_ lines: [Line]) -> String? {
+        for line in lines { if case .failed(let why) = line.state { return "\(line.title) failed: \(why)" } }
+        return nil
+    }
+
+    /// What the middle of the chat's bar holds. It holds one thing: a failure or the turn in
+    /// flight first, then a part of the setup that failed, then the setup's bars, then a notice
+    /// that something went right another way.
+    enum Middle: Equatable {
+        case notices(ChatNotices.Said)
+        case meter([Line])
+    }
+
+    static func middle(said: ChatNotices.Said, standing lines: [Line]) -> Middle? {
+        switch said.notice {
+        case .trouble, .progress: return .notices(said)
+        case .info, nil: break
+        }
+        if let trouble = trouble(lines) { return .notices(ChatNotices.Said(error: trouble)) }
+        if shows(lines) { return .meter(lines) }
+        return said.any ? .notices(said) : nil
+    }
 
     /// Whether the lines are an install's and not a launch's: something is downloading, being
     /// unpacked, or failed. Every launch loads the ear and the voice, and that alone draws no
-    /// card; once an install has drawn one it stands until every line is done (`standing`).
+    /// meter; once an install has drawn one it stands until every line is done (`standing`).
     static func installing(_ lines: [Line]) -> Bool {
         lines.contains { line in
             switch line.state {
@@ -59,7 +95,7 @@ enum Setup {
         }
     }
 
-    /// Whether the card stands, given whether it stood a moment ago: it comes for an install and
+    /// Whether the meter stands, given whether it stood a moment ago: it comes for an install and
     /// goes when every line is done, so the models' first preparing on this phone is under it.
     static func standing(_ lines: [Line], stood: Bool) -> Bool { shows(lines) && (stood || installing(lines)) }
 
@@ -130,48 +166,55 @@ enum Setup {
     }
 }
 
-/// The setup's lines, the done ones among them, drawn while any is not done: over the composer in
-/// the chat while the keyboard is down, where an updated app that already has a log finds it,
-/// and under the question on the first run. Whether it stands at all is `Setup.standing`.
-struct SetupCard: View {
+/// The setup's parts still to come, in the middle of the chat's bar and under the first-run
+/// question: a thin bar for each, one over the other, with its mark beside it (an ear, a mouth,
+/// a box for the workspace). A part that is done has no bar. Whether it stands at all is
+/// `Setup.standing`.
+struct SetupMeter: View {
     var lines: [Setup.Line]
     @Environment(\.look) private var look
 
     var body: some View {
-        if Setup.shows(lines) {
-            VStack(alignment: .leading, spacing: look.setup.spacing) {
-                ForEach(lines) { line in
-                    VStack(alignment: .leading, spacing: look.setup.lineSpacing) {
-                        HStack {
-                            Text(line.title).font(look.setup.titleFont)
-                            Spacer()
-                            // A step with no measure turns; a bar with no value would stand still.
-                            if case .working = line.state { ProgressView().controlSize(.mini) }
-                            Text(Self.words(line.state))
-                                .font(look.setup.wordsFont)
-                                .foregroundStyle(Self.failed(line.state) ? look.setup.troubleInk : look.setup.wordsInk)
-                                .multilineTextAlignment(.trailing)
+        VStack(alignment: .leading, spacing: look.setup.spacing) {
+            ForEach(Setup.pending(lines)) { line in
+                let ink = Self.failed(line.state) ? look.setup.troubleInk : look.setup.tint
+                HStack(spacing: look.setup.symbolSpacing) {
+                    Image(systemName: line.symbol)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: look.setup.symbolSize, height: look.setup.symbolSize)
+                        .foregroundStyle(ink)
+                        // A step with no measure has a bar that stands still, so its mark moves.
+                        .symbolEffect(.pulse, isActive: Self.unmeasured(line.state))
+                    Capsule().fill(look.setup.track)
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(ink).frame(width: look.setup.barWidth * Self.fill(line.state))
                         }
-                        bar(line.state)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("setup-\(line.title)")
+                        .frame(width: look.setup.barWidth, height: look.setup.barHeight)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(line.title)
+                .accessibilityValue(Self.words(line.state))
+                .accessibilityIdentifier("setup-\(line.title)")
             }
-            .tint(look.setup.tint)
-            .padding(.horizontal, look.setup.horizontalPadding)
-            .padding(.vertical, look.setup.verticalPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(look.setup.surface)
-            .accessibilityIdentifier("setup-card")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("setup-meter")
+    }
+
+    /// How much of its bar a part has: its bytes while it downloads, all of it while it is being
+    /// prepared or has failed, none before it has begun.
+    static func fill(_ state: Setup.State) -> Double {
+        switch state {
+        case .progress(let fraction, _): fraction.isFinite ? min(max(fraction, 0), 1) : 0
+        case .working, .failed, .done: 1
+        case .waiting: 0
         }
     }
 
-    @ViewBuilder private func bar(_ state: Setup.State) -> some View {
-        switch state {
-        case .progress(let fraction, _): ProgressView(value: min(max(fraction, 0), 1))
-        case .working, .waiting, .done, .failed: EmptyView()
-        }
+    static func unmeasured(_ state: Setup.State) -> Bool {
+        if case .working = state { return true }
+        return false
     }
 
     static func words(_ state: Setup.State) -> String {

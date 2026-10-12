@@ -3,8 +3,8 @@ import XCTest
 
 @testable import Topo
 
-/// The setup card's lines (`Setup`): each part's own state read as a line, a line done only when
-/// its part is, and the card there while any is not.
+/// The setup's lines (`Setup`): each part's own state read as a line, a line done only when
+/// its part is, and the meter there while any is not.
 @MainActor
 final class SetupTests: XCTestCase {
     private let fetching = Setup.Fetch(fraction: 0.25, words: "downloading 57 MB of 228 MB")
@@ -48,7 +48,7 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(Setup.stage(Voice.State.failed, trouble: nil), .failed("unknown"))
     }
 
-    /// The card is there while any line is not done, and gone when all three are: a part that
+    /// The meter is there while any line is not done, and gone when all three are: a part that
     /// failed keeps it up, saying why.
     func testTheCardStandsWhileAnyLineIsNotDone() {
         func lines(_ phase: Userland.Phase, _ ear: Setup.Stage, _ voice: Setup.Stage) -> [Setup.Line] {
@@ -58,13 +58,13 @@ final class SetupTests: XCTestCase {
         let done = lines(.ready(.reused), .ready, .ready)
         XCTAssertEqual(done.map(\.title), [Setup.workspace, Setup.hearing, Setup.speaking])
         XCTAssertFalse(Setup.shows(done))
-        XCTAssertFalse(Setup.shows([]), "a debug build with a stand-in has no card")
+        XCTAssertFalse(Setup.shows([]), "a debug build with a stand-in has no meter")
         XCTAssertTrue(Setup.shows(lines(.fetching, .ready, .ready)))
         XCTAssertTrue(Setup.shows(lines(.ready(.reused), .loading, .ready)))
         XCTAssertTrue(Setup.shows(lines(.ready(.reused), .ready, .failed("no room"))))
     }
 
-    /// A launch loads the ear and the voice every time, and that alone draws no card: it comes
+    /// A launch loads the ear and the voice every time, and that alone draws no meter: it comes
     /// for an install — a download, an unpacking, a failure — and then stands until every line is
     /// done, so the models' first preparing on this phone is under it.
     func testTheCardComesForAnInstallAndStaysUntilEveryLineIsDone() {
@@ -75,7 +75,7 @@ final class SetupTests: XCTestCase {
         // An ordinary launch: cold, then loading, then ready.
         for launch in [lines(.ready(.reused), .cold, .cold), lines(.ready(.reused), .loading, .cold), lines(.ready(.reused), .ready, .loading)] {
             XCTAssertFalse(Setup.installing(launch))
-            XCTAssertFalse(Setup.standing(launch, stood: false), "a launch's own loading drew the card")
+            XCTAssertFalse(Setup.standing(launch, stood: false), "a launch's own loading drew the meter")
         }
         // A launch with every file on the phone and the parts' own states a moment behind them:
         // the downloads say "downloaded" while the workspace, the ear and the voice still say
@@ -84,7 +84,7 @@ final class SetupTests: XCTestCase {
         let behind = lines(.fetching, .fetching, .fetching, fetch: present)
         XCTAssertEqual(behind.map(\.state), Array(repeating: .waiting(ModelDownloads.downloaded), count: 3))
         XCTAssertFalse(Setup.installing(behind))
-        XCTAssertFalse(Setup.standing(behind, stood: false), "a launch with nothing to fetch drew the card")
+        XCTAssertFalse(Setup.standing(behind, stood: false), "a launch with nothing to fetch drew the meter")
         let claudeBehind = Setup.lines(phase: .ready(.reused), claude: .fetching, workspace: present, ear: .loading, earFetch: present,
                                        earLoading: Ear.preparing, voice: .cold, voiceFetch: present, voiceLoading: Voice.preparing)
         XCTAssertFalse(Setup.standing(claudeBehind, stood: false))
@@ -100,7 +100,7 @@ final class SetupTests: XCTestCase {
         XCTAssertFalse(Setup.standing([], stood: true))
     }
 
-    /// A download that failed is a failure on the card, in the downloads' own words for why,
+    /// A download that failed is a failure on the meter, in the downloads' own words for why,
     /// though the part is still waiting on it.
     func testAFailedDownloadIsAFailure() {
         let failed = Setup.Fetch(fraction: nil, words: "download failed: the server said 503")
@@ -109,17 +109,60 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(Setup.state(.fetching, fetch: held, loading: Ear.preparing), .waiting(held.words))
     }
 
-    /// What a line says beside its name: where it has got to, that it is ready, or why it failed.
+    /// What a bar says to VoiceOver: where its part has got to, that it is ready, or why it failed.
     func testALineSaysWhereItIsOrWhyItFailed() {
-        XCTAssertEqual(SetupCard.words(.progress(0.25, "downloading 57 MB of 228 MB")), "downloading 57 MB of 228 MB")
-        XCTAssertEqual(SetupCard.words(.working("unpacking")), "unpacking")
-        XCTAssertEqual(SetupCard.words(.done), "ready")
-        XCTAssertEqual(SetupCard.words(.failed("no room")), "failed: no room")
-        XCTAssertTrue(SetupCard.failed(.failed("no room")))
-        XCTAssertFalse(SetupCard.failed(.waiting("not started")))
+        XCTAssertEqual(SetupMeter.words(.progress(0.25, "downloading 57 MB of 228 MB")), "downloading 57 MB of 228 MB")
+        XCTAssertEqual(SetupMeter.words(.working("unpacking")), "unpacking")
+        XCTAssertEqual(SetupMeter.words(.done), "ready")
+        XCTAssertEqual(SetupMeter.words(.failed("no room")), "failed: no room")
+        XCTAssertTrue(SetupMeter.failed(.failed("no room")))
+        XCTAssertFalse(SetupMeter.failed(.waiting("not started")))
     }
 
-    /// The fixtures a UI suite draws the card from, and the launch that has no card of its own.
+    /// A part has a bar until it is done, with its own mark, filled by its bytes while it
+    /// downloads, whole while it is prepared or has failed, and never past its ends.
+    func testAPartHasABarUntilItIsDone() {
+        let lines = [Setup.Line(title: Setup.workspace, state: .done),
+                     Setup.Line(title: Setup.hearing, state: .progress(0.25, "downloading")),
+                     Setup.Line(title: Setup.speaking, state: .working(Voice.preparing))]
+        XCTAssertEqual(Setup.pending(lines).map(\.title), [Setup.hearing, Setup.speaking])
+        XCTAssertEqual(lines.map(\.symbol), ["shippingbox", "ear", "mouth"])
+        XCTAssertEqual(SetupMeter.fill(.progress(0.25, "")), 0.25)
+        XCTAssertEqual(SetupMeter.fill(.progress(7, "")), 1)
+        XCTAssertEqual(SetupMeter.fill(.progress(-1, "")), 0)
+        XCTAssertEqual(SetupMeter.fill(.progress(.nan, "")), 0)
+        XCTAssertEqual(SetupMeter.fill(.waiting("not started")), 0)
+        XCTAssertEqual(SetupMeter.fill(.working("unpacking")), 1)
+        XCTAssertEqual(SetupMeter.fill(.failed("no room")), 1)
+        XCTAssertTrue(SetupMeter.unmeasured(.working("unpacking")))
+        XCTAssertFalse(SetupMeter.unmeasured(.progress(0.5, "")))
+    }
+
+    /// The bar's middle holds one thing: a failure or the turn in flight before the setup's bars,
+    /// a part that failed in words, the bars before a notice of something that went right, and
+    /// nothing when there is nothing.
+    func testTheBarsMiddleTakesTurns() {
+        let fetching = [Setup.Line(title: Setup.hearing, state: .progress(0.25, "downloading"))]
+        let failed = [Setup.Line(title: Setup.hearing, state: .failed("no room"))]
+        let done = [Setup.Line(title: Setup.hearing, state: .done)]
+        let quiet = ChatNotices.Said()
+        let busy = ChatNotices.Said(busy: true)
+        let trouble = ChatNotices.Said(error: "iCloud is not answering")
+        let info = ChatNotices.Said(info: "Answered from this phone")
+        XCTAssertEqual(Setup.middle(said: quiet, standing: fetching), .meter(fetching))
+        XCTAssertEqual(Setup.middle(said: busy, standing: fetching), .notices(busy))
+        XCTAssertEqual(Setup.middle(said: trouble, standing: failed), .notices(trouble))
+        XCTAssertEqual(Setup.middle(said: quiet, standing: failed), .notices(ChatNotices.Said(error: "Hearing you failed: no room")))
+        XCTAssertEqual(Setup.middle(said: info, standing: failed), .notices(ChatNotices.Said(error: "Hearing you failed: no room")))
+        XCTAssertEqual(Setup.middle(said: info, standing: fetching), .meter(fetching))
+        XCTAssertEqual(Setup.middle(said: info, standing: []), .notices(info))
+        XCTAssertEqual(Setup.middle(said: info, standing: done), .notices(info))
+        XCTAssertNil(Setup.middle(said: quiet, standing: []))
+        XCTAssertNil(Setup.middle(said: quiet, standing: done))
+        XCTAssertNil(Setup.trouble(fetching))
+    }
+
+    /// The fixtures a UI suite draws the meter from, and the launch that has none of its own.
     func testTheDebugFixturesAreLinesTheCardDraws() {
         XCTAssertEqual(DebugRun.setup(["TOPO_DEBUG_SETUP": "fetching"])?.map(\.state),
                        [.progress(0.25, "downloading 57 MB of 228 MB"), .working(Ear.preparing), .done])

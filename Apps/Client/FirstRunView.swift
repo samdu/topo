@@ -80,7 +80,10 @@ struct FirstRunView: View {
                     .disabled(answer.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .frame(maxWidth: 360)
-            SetupCard(lines: setup)
+            SetupMeter(lines: setup)
+            if let trouble = Setup.trouble(setup) {
+                Text(trouble).font(.footnote).foregroundStyle(look.setup.troubleInk).multilineTextAlignment(.center)
+            }
             Spacer().frame(height: 24)
         }
         .padding()

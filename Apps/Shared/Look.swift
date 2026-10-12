@@ -802,25 +802,25 @@ extension Look {
         var surface = Theme.background
     }
 
-    /// The setup card: a line for each part of an install, its name on the leading side, where
-    /// it has got to on the trailing one, and a bar under both while there is something to measure.
+    /// The setup's meter: a thin bar for each part of an install still to come, one over the
+    /// other, each with its mark at its leading end. It stands in the middle of the chat's bar,
+    /// which is a fixed height, so `look.json` sets no size past what three bars of it leave of
+    /// that height, and no width that takes the controls' or the badge's room.
     struct Setup: Equatable, Sendable {
-        /// Between two lines, and between a line's words and its bar.
-        var spacing: CGFloat = 10
-        var lineSpacing: CGFloat = 4
-        var horizontalPadding: CGFloat = 16
-        var verticalPadding: CGFloat = 10
-        /// `look.json` sets neither larger than `largestFont`: the card stands over the composer
-        /// and under the first-run question, and three lines of it leave both in reach.
-        var titleFont: Font = .footnote.weight(.semibold)
-        var wordsFont: Font = .caption
-        static let largestFont: Double = 20
-        var wordsInk = Theme.textMuted
-        /// A part that failed says why in the colour a failure is said in.
-        var troubleInk = Theme.signal
+        /// Between two bars.
+        var spacing: CGFloat = 3
+        /// Between a mark and its bar.
+        var symbolSpacing: CGFloat = 6
+        /// A mark's side, which is also the height of its row.
+        var symbolSize: CGFloat = 11
+        var barWidth: CGFloat = 72
+        var barHeight: CGFloat = 3
         /// The bars are Topo's, so they take Topo's colour.
         var tint = Theme.primary
-        var surface = Theme.surface
+        /// What of a bar is still to come.
+        var track = Theme.primary.opacity(0.25)
+        /// A part that failed is drawn in the colour a failure is said in.
+        var troubleInk = Theme.signal
     }
 
     /// The controls at the leading edge of the navigation bar, the mute and the model, each an

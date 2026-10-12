@@ -56,17 +56,19 @@ enum DebugRun {
     static let look: Look? = lookReading?.look
 
     #if os(iOS)
-    /// `TOPO_DEBUG_NOTICES=<busy|busy-long|error|info|busy-info|error-busy>`: the chat's notices
+    /// `TOPO_DEBUG_NOTICES=<none|busy|busy-long|error|info|busy-info|error-busy>`: the chat's notices
     /// (`ChatNotices`) say one of their three things whatever the harness is doing, so a UI suite
     /// can hold each in the bar on any host: a turn in flight with two behind it, the longest
     /// status the harness sets with eleven behind it, iCloud refusing the read, a turn left in the
-    /// log for another device's primary, and two of them at once, which the bar says one of. The
+    /// log for another device's primary, and two of them at once, which the bar says one of;
+    /// `none` is nothing to say, which leaves the bar's middle to the setup's bars. The
     /// words are the harness's own. Nil when the variable is absent or names none of them.
     @MainActor static var notices: ChatNotices.Said? { notices(ProcessInfo.processInfo.environment) }
 
     @MainActor static func notices(_ environment: [String: String]) -> ChatNotices.Said? {
         let refused = Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission)))
         return switch environment[noticesVariable] {
+        case "none": ChatNotices.Said()
         case "busy": ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 3)
         case "busy-long": ChatNotices.Said(busy: true, status: "Checking this device is primary…", waiting: 12)
         case "error": ChatNotices.Said(error: refused)
@@ -148,8 +150,8 @@ enum DebugRun {
     #endif
 
     #if os(iOS)
-    /// `TOPO_DEBUG_SETUP=<fetching|failed>`: the setup card draws these lines in place of the
-    /// app's own parts, so a run draws the card without a download: one part downloading at a
+    /// `TOPO_DEBUG_SETUP=<fetching|failed>`: the setup's meter draws these lines in place of the
+    /// app's own parts, so a run draws the meter without a download: one part downloading at a
     /// known share, one being prepared and one ready, or one of them failed.
     @MainActor
     static func setup(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Setup.Line]? {

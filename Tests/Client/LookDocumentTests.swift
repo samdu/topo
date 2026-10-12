@@ -76,21 +76,23 @@ final class LookDocumentTests: XCTestCase {
     /// The point of reading field by field rather than through `Codable`: one value the document
     /// gets wrong costs that value and nothing else. Everything the full fixture set still stands,
     /// the one bad field is the compiled default, and the row says which field and why.
-    /// The first run's fonts are bounded, so no document pushes the question's field or the
-    /// composer out of reach, and a surface made clear is still read: the question draws it over
-    /// an opaque base.
-    func testTheFirstRunsFontsAreBounded() {
-        let big = LookDocument.read(#"{"setup": {"titleFont": {"size": 400}, "wordsFont": "largeTitle", "spacing": 14}, "reading": {"font": {"size": 400}, "spacing": 20}}"#)
-        // A size is drawn at the most its place holds; a style larger than that is refused.
-        XCTAssertEqual(big.look.setup.titleFont, .system(size: Look.Setup.largestFont))
-        XCTAssertEqual(big.look.setup.wordsFont, Look().setup.wordsFont)
+    /// The first run's sizes are bounded, so no document pushes the question's field out of
+    /// reach or the setup's bars out of the chat's bar, and a surface made clear is still read:
+    /// the question draws it over an opaque base.
+    func testTheFirstRunsSizesAreBounded() {
+        let big = LookDocument.read(#"{"setup": {"symbolSize": 40, "barWidth": 900, "barHeight": 30, "spacing": 2}, "reading": {"font": {"size": 400}, "spacing": 20}}"#)
+        // A font's size is drawn at the most its place holds; a length past its range is refused.
+        XCTAssertEqual(big.look.setup.symbolSize, Look().setup.symbolSize)
+        XCTAssertEqual(big.look.setup.barWidth, Look().setup.barWidth)
+        XCTAssertEqual(big.look.setup.barHeight, Look().setup.barHeight)
         XCTAssertEqual(big.look.reading.font, .system(size: Look.Reading.largestFont))
-        XCTAssertEqual(big.look.setup.spacing, 14, "the good field was taken down with the font")
+        XCTAssertEqual(big.look.setup.spacing, 2, "the good field was taken down with the others")
         XCTAssertEqual(big.look.reading.spacing, 20)
-        let fits = LookDocument.read(#"{"setup": {"titleFont": {"size": 20}}, "reading": {"font": {"size": 34}}}"#)
-        XCTAssertEqual(fits.look.setup.titleFont, .system(size: 20))
+        let fits = LookDocument.read(#"{"setup": {"symbolSize": 12, "spacing": 4, "barWidth": 120}, "reading": {"font": {"size": 34}}}"#)
         XCTAssertEqual(fits.look.reading.font, .system(size: 34))
-        XCTAssertEqual(LookDocument.read(#"{"setup": {"wordsFont": {"size": 21}}}"#).look.setup.wordsFont, .system(size: 20))
+        // Three rows at the largest a document sets are no taller than the bar they stand in.
+        XCTAssertLessThanOrEqual(3 * fits.look.setup.symbolSize + 2 * fits.look.setup.spacing, 44)
+        XCTAssertEqual(fits.look.setup.barWidth, 120)
     }
 
     func testOneBadFieldKeepsEveryOtherOverrideAndReportsTheOne() throws {

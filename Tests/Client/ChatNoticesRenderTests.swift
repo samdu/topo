@@ -38,6 +38,7 @@ final class ChatNoticesRenderTests: XCTestCase {
     /// The fixtures the UI suite holds in the bar are the harness's own words.
     func testTheFixturesSayWhatTheHarnessSays() {
         let refused = ChatNotices.Notice.trouble("iCloud refused the read. Check you're signed in on this device.")
+        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "none"]), ChatNotices.Said())
         XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "error"])?.notice, refused)
         XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "error-busy"])?.notice, refused)
         XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "info"])?.notice,

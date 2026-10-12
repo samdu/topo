@@ -14,7 +14,7 @@ struct ChatView: View {
     @Environment(Connections.self) private var connections
     /// The first-run question has been answered on this device, so it is not asked twice.
     @AppStorage("firstRunAnswered") private var answered = false
-    /// Whether the setup card stood a moment ago (`Setup.standing`).
+    /// Whether the setup's meter stood a moment ago (`Setup.standing`).
     @State private var setupStood = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
@@ -156,13 +156,13 @@ struct ChatView: View {
                              answered: answered, fixture: fixture))
     }
 
-    /// The setup card's lines while it stands, and none while it does not.
+    /// The setup's lines while its meter stands, and none while it does not.
     private var standingSetup: [Setup.Line] {
         let lines = setupLines
         return Setup.standing(lines, stood: setupStood) ? lines : []
     }
 
-    /// What the setup card draws, or nothing in a debug build whose ear or voice is a stand-in,
+    /// What the setup's meter draws, or nothing in a debug build whose ear or voice is a stand-in,
     /// which has no setup to show.
     private var setupLines: [Setup.Line] {
         #if DEBUG
@@ -192,8 +192,6 @@ struct ChatView: View {
                     }
                 }
             } card: {
-                // What a new install, or an updated one, is still fetching and preparing.
-                if !standingSetup.isEmpty { SetupCard(lines: standingSetup).mascotObstacle() }
                 // Once, and only while the memory is still in this app's own folder and has
                 // more than a handful in it. Not now is for good: no nag, no timer.
                 if memory.offersICloudDrive(answered: memoryOfferAnswered) {
@@ -412,12 +410,17 @@ struct ChatView: View {
     private var sliderChoice: String? { modelsOpen ? chosenModel.rawValue : nil }
 
     /// The middle of the bar, between the controls and the badge: what the chat says it is doing
-    /// (`ChatNotices`). The item is there only while there is something to draw: an item the bar
-    /// first laid out empty is one it never draws, whatever it later holds.
+    /// (`ChatNotices`), or what a new install is still fetching and preparing (`SetupMeter`);
+    /// `Setup.middle` says which. The item is there only while there is something to draw: an
+    /// item the bar first laid out empty is one it never draws, whatever it later holds.
     @ToolbarContentBuilder private var middle: some ToolbarContent {
-        let said = shownNotices
-        if said.any {
-            ToolbarItem(placement: .principal) { ChatNotices(notices: said) }
+        if let middle = Setup.middle(said: shownNotices, standing: standingSetup) {
+            ToolbarItem(placement: .principal) {
+                switch middle {
+                case .notices(let said): ChatNotices(notices: said)
+                case .meter(let lines): SetupMeter(lines: lines)
+                }
+            }
         }
     }
 

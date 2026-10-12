@@ -142,7 +142,7 @@ final class ModelDownloadsTests: XCTestCase {
 /// the ones waiting only for success to wait on.
 @MainActor
 final class ModelWaitersTests: XCTestCase {
-    /// The setup card's bar: a set of models has a measure only while some of it is downloading
+    /// The setup meter's bar: a set of models has a measure only while some of it is downloading
     /// and none of it failed, waits on a network or is being verified, and the share is the
     /// bytes on the phone over the bytes in all, never outside 0 to 1.
     func testASetOfModelsHasAMeasureOnlyWhileItDownloads() {
