@@ -442,6 +442,7 @@ for n in 1 2 3 4 5 6 7 8 9 a b c; do
   touch -t 202001010000 "$TOPO_VALIDATE_LOGS/${n}0000000"
 done
 echo $$ > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
+touch -t 201901010000 "$TOPO_VALIDATE_LOGS/10000000"   # the oldest of them: the first the prune would take
 echo x > "$repo/x"; g -C "$repo" add -A; g -C "$repo" commit -qm x; sha="$(git -C "$repo" rev-parse HEAD)"
 validate
 [ -d "$TOPO_VALIDATE_LOGS/10000000" ] && ok "old logs a run is still writing are kept" || fail "the logs of a run in flight were removed"
