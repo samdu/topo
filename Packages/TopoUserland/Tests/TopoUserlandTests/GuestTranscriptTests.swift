@@ -12,6 +12,28 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: lines), .answered("marmalade"))
     }
 
+    /// What 2.1.285 wrote in the guest when it compacted at its threshold between an input and
+    /// its reply: the boundary, then the summary as a `user` entry, then the reply. The input is
+    /// still answered, by its own reply and no later one's; the input before it is too, and one
+    /// the transcript ends on is unresolved.
+    func testACompactionBetweenAnInputAndItsReplyIsStillAnswered() throws {
+        let lines = try Transcripts.lines("auto-compaction")
+        func input(_ number: Int) -> String { String(format: "00000000-0000-4000-8000-%012d", number) }
+        XCTAssertEqual(lines.filter { $0.contains(#""isCompactSummary":true"#) }.count, 2)
+        guard case .answered(let plain) = GuestTranscript.verdict(for: input(2), in: lines),
+              case .answered(let first) = GuestTranscript.verdict(for: input(6), in: lines),
+              case .answered(let second) = GuestTranscript.verdict(for: input(14), in: lines) else {
+            return XCTFail("an input answered across a compaction was not read as answered")
+        }
+        XCTAssertTrue(plain.hasPrefix("one, two, three"), plain)
+        XCTAssertTrue(first.hasPrefix("one, two, three"), first)
+        XCTAssertTrue(second.hasPrefix("one, two, three"), second)
+        XCTAssertEqual(GuestTranscript.verdict(for: input(21), in: lines), .unresolved)
+        // Cut after the summary and before the reply: received, and not answered.
+        let summary = try XCTUnwrap(lines.firstIndex { $0.contains(#""isCompactSummary":true"#) })
+        XCTAssertEqual(GuestTranscript.verdict(for: input(6), in: Array(lines[...summary])), .unresolved)
+    }
+
     func testAnInputNoEntryCarriesWasNotReceived() throws {
         let lines = try Transcripts.lines("answered-with-tool")
         XCTAssertEqual(GuestTranscript.verdict(for: "never-sent", in: lines), .notReceived)

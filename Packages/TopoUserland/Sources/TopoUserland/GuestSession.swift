@@ -26,7 +26,7 @@ extension GuestProcess: ResidentProcess {
 /// every turn of `model` (nil leaves the model to Claude Code), and telling it whether its memory
 /// is mounted (`memory`; nil tells it nothing).
 public protocol ResidentLauncher: Sendable {
-    func launch(resume session: String?, model: String?, memory: Bool?) async throws -> any ResidentProcess
+    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess
 }
 
 /// The one session id kept on disk: the id of the conversation the next process resumes. A file of
@@ -164,6 +164,8 @@ public actor GuestSession {
     private var model: String?
     /// What every process is told of its memory: mounted, not, or nothing.
     private var memory: Bool?
+    /// The share of the window every process is told to compact at, or nil for Claude Code's own.
+    private var compactAt: Int?
     /// Counts `forgetSession(then:)`: a process started under an older count holds a conversation
     /// that has been forgotten.
     private var conversation = 0
@@ -214,6 +216,7 @@ public actor GuestSession {
         /// count it was started under.
         let model: String?
         let memory: Bool?
+        let compactAt: Int?
         let conversation: Int
         var reader: Task<Void, Never>?
         var turn: Turn?
@@ -222,7 +225,8 @@ public actor GuestSession {
         /// A result that arrived with no turn in flight — what a failed resume writes before it exits.
         var strayResult: StreamEvent.TurnResult?
 
-        init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, conversation: Int) {
+        init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, conversation: Int) {
+            self.compactAt = compactAt
             self.process = process
             self.resumed = resumed
             self.model = model
@@ -244,6 +248,7 @@ public actor GuestSession {
     }
 
     public init(launcher: any ResidentLauncher, store: SessionFile, model: String? = nil, memory: Bool? = nil,
+                compactAt: Int? = nil,
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
@@ -251,6 +256,7 @@ public actor GuestSession {
         self.store = store
         self.model = model
         self.memory = memory
+        self.compactAt = compactAt
         self.turnBound = turnBound
         self.sleep = sleep
         self.log = log
@@ -296,6 +302,20 @@ public actor GuestSession {
         guard model != self.model else { return }
         self.model = model
         log("the model is now \(model ?? "Claude Code's own"); the resident process is replaced once idle")
+        renewIfStale()
+    }
+
+    /// What processes are told to compact at.
+    public var currentCompactAt: Int? { compactAt }
+
+    /// Every process from here on compacts at `compactAt` percent of its window, or at Claude
+    /// Code's own threshold for nil. It is told once, in its environment at its launch, so a
+    /// resident process told otherwise is replaced as a change of model replaces it: at the next
+    /// idle moment, never under a turn.
+    public func use(compactAt: Int?) {
+        guard compactAt != self.compactAt else { return }
+        self.compactAt = compactAt
+        log("the compaction threshold is now \(compactAt.map { "\($0)%" } ?? "Claude Code's own"); the resident process is replaced once idle")
         renewIfStale()
     }
 
@@ -507,23 +527,24 @@ public actor GuestSession {
         phase = .starting
         Perf.mark(resume == nil ? "resident.launch.begin fresh" : "resident.launch.begin resume")
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
-        let launcher = launcher, model = model, memory = memory, conversation = conversation
+        let launcher = launcher, model = model, memory = memory, compactAt = compactAt, conversation = conversation
         startTask = Task {
             let result: Result<any ResidentProcess, Error>
             do {
-                result = .success(try await launcher.launch(resume: resume, model: model, memory: memory))
+                result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt))
             } catch {
                 result = .failure(error)
             }
             if case .success = result { Perf.mark("resident.spawned") } else { Perf.mark("resident.launch.failed") }
-            await self.launched(result, resume: resume, model: model, memory: memory, conversation: conversation)
+            await self.launched(result, resume: resume, model: model, memory: memory, compactAt: compactAt, conversation: conversation)
         }
     }
 
     /// Whether `resident` was started with what the session now says: its model, what it was told
     /// of its memory, and the conversation that has not been forgotten since.
     private func isStale(_ resident: Resident) -> Bool {
-        resident.model != model || resident.memory != memory || resident.conversation != conversation
+        resident.model != model || resident.memory != memory || resident.compactAt != compactAt
+            || resident.conversation != conversation
     }
 
     /// Replaces a stale resident process, but only while it is idle and the app is in front: a
@@ -531,11 +552,11 @@ public actor GuestSession {
     /// the process is being ended anyway.
     private func renewIfStale() {
         guard inForeground, case .resident(let resident) = phase, resident.turn == nil, isStale(resident) else { return }
-        _ = end(resident, reason: "a change of model, memory or conversation", restart: true)
+        _ = end(resident, reason: "a change of model, memory, threshold or conversation", restart: true)
     }
 
     private func launched(_ result: Result<any ResidentProcess, Error>, resume: String?, model: String?,
-                          memory: Bool?, conversation: Int) async {
+                          memory: Bool?, compactAt: Int?, conversation: Int) async {
         startTask = nil
         switch result {
         case .failure(let error):
@@ -544,7 +565,7 @@ public actor GuestSession {
             settleReadiness(.failure(error))
         case .success(let process):
             let resident = Resident(process: process, resumed: resume, model: model, memory: memory,
-                                    conversation: conversation)
+                                    compactAt: compactAt, conversation: conversation)
             guard inForeground else {
                 // The app left while the start was pending: nothing may stay resident.
                 settleReadiness(.failure(Refusal.notResident))
@@ -561,7 +582,7 @@ public actor GuestSession {
             // What changed while it was starting replaces it before any turn goes to it; whoever
             // is waiting for a process waits for the replacement.
             if isStale(resident) {
-                _ = end(resident, reason: "a change of model, memory or conversation while it started", restart: true)
+                _ = end(resident, reason: "a change of model, memory, threshold or conversation while it started", restart: true)
                 return
             }
             settleReadiness(.success(()))

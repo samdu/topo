@@ -23,6 +23,7 @@ struct ChatView: View {
     /// The model chosen on the bar's slider, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
+    @AppStorage(Compaction.key) private var compactAt = 0
     /// The person's next turn: what is written, whether the keyboard is asked for, and the turn
     /// those words are on their way under. It is a `NextTurn` rather than this screen's own
     /// state because what it holds outlives the screen — an app killed with words on the line
@@ -278,7 +279,7 @@ struct ChatView: View {
         }
         // Topo on the glass wears the model the harness asks and the context of its last reply.
         .onChange(of: harnessFacts, initial: true) { _, facts in
-            mascot.harness(model: facts.model, tokens: facts.context)
+            mascot.harness(model: facts.model, tokens: facts.context, limit: facts.limit)
         }
         // And under the open model slider, the model chosen there, which no turn's events change.
         .onChange(of: sliderChoice, initial: true) { _, chosen in mascot.chosen = chosen }
@@ -592,12 +593,15 @@ struct ChatView: View {
     /// build's pin makes of the setting, since that is the model that answers.
     private var harnessFacts: HarnessFacts {
         let setting = ClaudeModel(setting: modelSetting) ?? .default
-        return HarnessFacts(model: ClaudeModel.effective(setting).rawValue, context: harness.context)
+        let limit = harness.window.map { Compaction.threshold(window: $0, setting: Compaction.Setting(kept: compactAt)) }
+        return HarnessFacts(model: ClaudeModel.effective(setting).rawValue, context: harness.context, limit: limit)
     }
 
     private struct HarnessFacts: Equatable {
         var model: String
         var context: Int?
+        /// The tokens the context is compacted at, once a reply has said the window.
+        var limit: Int?
     }
 
     /// Whether what the transcript draws is the log's: once it has been read, or at once for a

@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var showVocabulary = false
     @State private var showMemory = false
     @State private var showConnections = false
+    @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
 
     /// The toggle's identifier, for the UI suite.
@@ -33,6 +34,7 @@ struct SettingsView: View {
                     Button("Vocabulary") { showVocabulary = true }
                     Button("Memory") { showMemory = true }
                     Button("Connections") { showConnections = true }
+                    Button("Context") { showContext = true }
                 }
                 Section {
                     Toggle("Noise suppression", isOn: $noiseSuppression)
@@ -60,8 +62,67 @@ struct SettingsView: View {
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
             .sheet(isPresented: $showMemory) { MemoryView() }
             .sheet(isPresented: $showConnections) { ConnectionsView() }
+            .sheet(isPresented: $showContext) { ContextView() }
         }
         .tint(look.settings.tint)
+    }
+}
+
+/// The context's sheet, behind its row in the settings.
+struct ContextView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form { ContextSection() }
+                .navigationTitle("Context")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+/// The mind's context: how full it is, when Claude Code compacts it by itself, and compacting it
+/// now. The rows are the form's own controls.
+struct ContextSection: View {
+    @Environment(Harness.self) private var harness
+    @AppStorage(Compaction.key) private var kept = 0
+
+    var body: some View {
+        Section {
+            LabeledContent("Context", value: Self.fill(context: harness.context, window: harness.window))
+                .accessibilityIdentifier("context-fill")
+            Picker("Compact at", selection: Binding(get: { Compaction.Setting(kept: kept).kept },
+                                                    set: { harness.compaction = Compaction.Setting(kept: $0) })) {
+                ForEach(Self.stops(kept: kept), id: \.self) { Text(Self.title($0)).tag($0) }
+            }
+            .accessibilityIdentifier("context-compact-at")
+            Button(harness.compacting ? "Compacting…" : "Compact now") { harness.compact() }
+                .disabled(harness.guest == nil || harness.compacting || harness.leaving > 0)
+                .accessibilityIdentifier("context-compact-now")
+            if let last = harness.lastCompaction {
+                LabeledContent("Last compaction", value: last)
+                    .accessibilityIdentifier("context-last-compaction")
+            }
+        } footer: {
+            Text("Topo's context is summarised when it fills to this share of the model's window. Automatic is Claude Code's own.")
+        }
+    }
+
+    /// What the picker offers, as `Compaction.Setting.kept`: Automatic, half to 95% in fives, and
+    /// the kept value where it is none of those (one the mind set with `topo context`).
+    static func stops(kept: Int) -> [Int] {
+        let offered = [0] + Array(stride(from: 50, through: 95, by: 5))
+        let kept = Compaction.Setting(kept: kept).kept
+        return offered.contains(kept) ? offered : [0] + (offered.dropFirst() + [kept]).sorted()
+    }
+
+    static func title(_ kept: Int) -> String { kept == 0 ? "Automatic" : "\(kept)%" }
+
+    static func fill(context: Int?, window: Int?) -> String {
+        func thousands(_ tokens: Int) -> String { "\((tokens + 500) / 1000)k" }
+        guard let context else { return "not known yet" }
+        return window.map { "\(thousands(context)) of \(thousands($0))" } ?? thousands(context)
     }
 }
 
