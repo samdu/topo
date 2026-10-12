@@ -103,8 +103,9 @@ targets:
     # writes a turn (see TurnPush); `audio` is the reply to a spoken turn, heard behind the lock,
     # the process running while the play queue renders, which its keeper makes true from the
     # release of the press (Apps/Client/Speaker.swift). Both modes and the push entitlement
-    # (`aps-environment`, in this target's own entitlements) are the iOS target's only: the watch
-    # and the TV never answer and never speak.
+    # (`aps-environment`, in this target's own entitlements) are here for the answering loop and the
+    # voice: the watch and the TV never answer and never speak. The watch carries
+    # `remote-notification` and `aps-environment` for its own `Surface` push (below).
     info:
       path: Apps/Topo/Info.plist
       properties:

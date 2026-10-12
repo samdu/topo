@@ -34,7 +34,7 @@ A limb's turn wakes the answering loop by a silent CloudKit push rather than wai
 
 `TopoAppDelegate` (`Apps/Topo/TopoAppDelegate.swift`) registers for remote notifications and hands a push that is the subscription's to `PushWake.handler`, which the chat installs immediately around `Harness.answering(every:)` and removes when it returns, so a push after sign-out or a takeover reaches nothing. The handler calls `Harness.wake()`, which cuts the loop's pause short and returns once the next pass has run; it never runs a pass beside the loop's, so two passes never race to make a runner or call the model. The push carries nothing, so it needs no authentication, and the loop is the backstop for every push Apple drops.
 
-The iOS target alone has the `remote-notification` background mode (`Apps/Topo/Info.plist`) and `aps-environment` (`Apps/TopoiOS.entitlements`); the watch and TV keep `Apps/Topo.entitlements`, iCloud only. No suite delivers a real push: `TurnPushTests` holds the subscription's shape and the refusal of a push that is not ours, and `HarnessIntegrationTests` holds the wake.
+The iOS target has the `remote-notification` background mode (`Apps/Topo/Info.plist`) and `aps-environment` (`Apps/TopoiOS.entitlements`) for this push. The watch has both as well (`Apps/TopoWatch/Info.plist`, `Apps/TopoWatch.entitlements`), for its own `Surface` push, which fetches its slots (`docs/widgets.md`); it never subscribes to `TurnPush`, since it never answers. The TV keeps `Apps/Topo.entitlements`, iCloud only. No suite delivers a real push: `TurnPushTests` holds the subscription's shape and the refusal of a push that is not ours, and `HarnessIntegrationTests` holds the wake.
 
 ## The share sheet
 
