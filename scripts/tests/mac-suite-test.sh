@@ -77,7 +77,8 @@ fake "$work/bin/sw_vers" 'exit 0'
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
 fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
-fake "$work/bin/ioreg" 'echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"'
+# As long as the real one's answer, the state near its head: a reader that stops early closes the pipe on it.
+fake "$work/bin/ioreg" 'echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in

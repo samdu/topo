@@ -37,7 +37,9 @@
 #      the Mac can run the suite, and the suite run in its login session, held awake, its
 #      results copied into this run's logs. `topo_ui` runs here whatever is named: the audio
 #      lane is buddybox's. A Mac that is not reached, lacks something or loses the suite partway
-#      is said, runs nothing more of this validation, and is never a red suite.
+#      is said, runs nothing more of this validation, and is never a red suite: the suite
+#      runs here. A pass counts only when the connection outlived it. A red result the Mac
+#      wrote is red, as this Mac's would be, whatever there made it so.
 #   4. Pushes the commit to its branch on origin, without force, only when every suite passed.
 #      A red suite pushes nothing. --no-push never pushes.
 #   5. Posts the statuses to the commit, once origin's branch is at it: `local/<suite>` as
@@ -56,7 +58,8 @@
 # when the run began, UTC), so a head run again after a red
 # keeps the red run's logs. The ten newest commits are kept, and each one's five newest runs. It exits 0
 # when every suite passed and the statuses are posted, 1 on a red suite, 2 on anything that
-# stopped it earlier, and 143 when a signal ended it, its suite ended with it.
+# stopped it earlier, and 143 when a signal ended it, its suite ended with it (one on another
+# Mac while that Mac answers; within about a minute and a half, the signal is heard anyway).
 #
 # A SIGKILL ends the script and not its suite, and the kernel drops the locks with the script.
 # So the suite's pid and name are on record in its slot (slots/<n>/suite), and while that suite
@@ -219,36 +222,64 @@ if [ -n "${TOPO_VALIDATE_HOSTS+set}" ]; then
 else
   hosts="$(sed -e 's/#.*//' "$cache/hosts" 2>/dev/null | tr '\n' ' ' || true)"
 fi
+set -f   # a name is never a pattern over this directory
 hosts="$(echo $hosts)"
 for name in $hosts; do
   case "$name" in *[!A-Za-z0-9._-]* | -*) die "'$name' is not a host: TOPO_VALIDATE_HOSTS and $cache/hosts name ssh aliases." ;; esac
 done
+set +f
 ran_on=""   # `<suite>=<host>` lines, for a suite that ran on another Mac
-ssh_to() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$@"; }
+# Every connection gives up on a Mac that stops answering within a minute, so one that fell
+# asleep is found out and not waited on.
+ssh_options="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+ssh_to() { ssh $ssh_options "$@"; }
 # What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under that
 # Mac's own lock, the commit checked out in its one validation worktree, mac-suite.sh asked
 # whether the Mac can run the suite, and then the suite, in the login session where there is a
 # way into it and held awake. It exits 75 when the Mac is busy, 76 when it cannot run the
-# suite, each before anything ran, and otherwise as the suite did. TOPO_VALIDATE_SESSION_RUN in
-# that Mac's environment names another way into the session, or none when it is empty.
+# suite, each before anything ran, and otherwise as the suite did. Its pid is in the run's
+# host.pid from the moment it has the lock, and a TERM to that pid ends whatever it has
+# started: nothing more if the suite is not yet running, and otherwise the suite, by the pid
+# its mac-suite.pids leads with (the way into the session is root's, and takes no signal from
+# here). TOPO_VALIDATE_SESSION_RUN in that Mac's environment names another way into the
+# session, or none when it is empty.
 on_host='
 sha="$1" lane="$2" suite="$3" run="$4"
 cache="$HOME/Library/Caches/topo-validate"
+results="$cache/logs/$run"
+refuse() { echo "error: $1 on $(hostname -s)." >&2; exit 76; }
 exec 9>> "$cache/lock"
 lockf -s -t 0 9 || { echo "error: another validation is running on $(hostname -s)." >&2; exit 75; }
+rm -rf "$results"
+mkdir -p "$results" || refuse "could not make $results"
+child=""
+stop() {
+  trap "" TERM INT HUP
+  if [ -n "$child" ]; then
+    for _ in $(seq 40); do
+      [ ! -s "$results/mac-suite.pids" ] || break
+      ps -p "$child" > /dev/null || break
+      sleep 0.5
+    done
+    [ ! -s "$results/mac-suite.pids" ] || kill "$(head -n 1 "$results/mac-suite.pids")" 2>/dev/null
+    wait "$child" 2>/dev/null
+  fi
+  exit 143
+}
+trap stop TERM INT HUP
+echo $$ > "$results/host.pid"
 checkout="$cache/checkout"
 if [ ! -e "$checkout/.git" ]; then
-  git --git-dir="$cache/repo.git" worktree prune
-  git --git-dir="$cache/repo.git" worktree add --quiet --detach "$checkout" "$sha" || exit 76
+  git --git-dir="$cache/repo.git" worktree prune 9>&-
+  git --git-dir="$cache/repo.git" worktree add --quiet --detach "$checkout" "$sha" 9>&- || refuse "could not make a worktree at $checkout"
 fi
-git -C "$checkout" checkout --quiet --force --detach "$sha" && git -C "$checkout" clean --quiet -fd \
-  || { echo "error: could not check $sha out in $checkout on $(hostname -s)." >&2; exit 76; }
-git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha"
-cd "$checkout" || exit 76
-scripts/mac-suite.sh --check --cache "$cache" "$suite" || exit 76
-ls -1t "$cache/logs" 2>/dev/null | tail -n +5 | while IFS= read -r old; do rm -rf "${cache:?}/logs/$old"; done
-results="$cache/logs/$run"
-mkdir -p "$results" || exit 76
+git -C "$checkout" checkout --quiet --force --detach "$sha" 9>&- && git -C "$checkout" clean --quiet -fd 9>&- \
+  || refuse "could not check $sha out in $checkout"
+[ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
+git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 9>&-
+cd "$checkout" || refuse "could not enter $checkout"
+scripts/mac-suite.sh --check --cache "$cache" "$suite" 9>&- || exit 76
+ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do rm -rf "${cache:?}/logs/$old"; done
 command="cd \"$checkout\" && exec scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
 session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
@@ -256,7 +287,10 @@ if [ -n "$session" ] && [ -x "$session" ]; then
 else
   /usr/bin/caffeinate -i /bin/bash -lc "$command" 9>&- &
 fi
-wait $!
+child=$!
+status=0
+wait "$child" || status=$?
+exit "$status"
 '
 
 # run_on <host> <suite> — the suite on that Mac, its result gathered like one run here. It
@@ -266,15 +300,22 @@ wait $!
 run_on() {
   local at="$1" suite="$2" run="$short-$$-$2" status=0 began said
   local there="Library/Caches/topo-validate"
-  ssh_to "$at" "mkdir -p $there && { [ -d $there/repo.git ] || git init --quiet --bare $there/repo.git; }" \
+  ssh_to "$at" "mkdir -p $there/logs && { [ -d $there/repo.git ] || git init --quiet --bare $there/repo.git; }" \
     || { echo "$at: not reached; it runs nothing of this validation."; return 2; }
-  GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10" git push --quiet "$at:$there/repo.git" "+$sha:refs/validate/$sha" \
+  GIT_SSH_COMMAND="ssh $ssh_options" git push --quiet "$at:$there/repo.git" "+$sha:refs/validate/$sha" \
     || { echo "$at: would not take $short; it runs nothing of this validation."; return 2; }
   echo "$suite: began $(date '+%H:%M') on $at"
   suite_started=$SECONDS
-  # Ended there by the pid its own mac-suite.pids leads with, which stops what it is waiting on.
+  # Ended there by the pid the host's script left in host.pid, waited for a few seconds in
+  # case the signal came before it; then this end of the connection, a minute later at most,
+  # so a Mac that no longer answers does not hold the signal up.
   suite_pid=""
-  trap 'ssh_to "$at" "kill \$(head -n 1 $there/logs/$run/mac-suite.pids)" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; exit 143' TERM INT HUP
+  trap 'ssh_to "$at" "for _ in 1 2 3 4 5 6 7 8 9 10; do [ ! -s $there/logs/$run/host.pid ] || break; sleep 0.5; done; kill \$(cat $there/logs/$run/host.pid)" 2>/dev/null || true
+        if [ -n "$suite_pid" ]; then
+          for _ in $(seq 60); do kill -0 "$suite_pid" 2>/dev/null || break; sleep 1; done
+          kill "$suite_pid" 2>/dev/null || true; wait "$suite_pid" 2>/dev/null || true
+        fi
+        exit 143' TERM INT HUP
   ssh_to "$at" bash -s -- "$sha" "$lane" "$suite" "$run" <<<"$on_host" >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- 8>&- &
   suite_pid=$!
   wait "$suite_pid" || status=$?
@@ -284,13 +325,17 @@ run_on() {
     76) echo "$suite: $at cannot run it and runs nothing of this validation:"; sed -n '/^error: /p' "$logs/mac-suite.log" | tail -n 12; return 2 ;;
   esac
   mkdir -p "$logs/$at"
-  rsync -a --exclude '*.xcresult' -e "ssh -o BatchMode=yes -o ConnectTimeout=10" "$at:$there/logs/$run/" "$logs/$at/" 2>/dev/null || true
+  if ! rsync -a --exclude '*.xcresult' -e "ssh $ssh_options" "$at:$there/logs/$run/" "$logs/$at/" 2>/dev/null; then
+    echo "$suite: $at ran it and its results could not be copied back; it runs nothing more of this validation."
+    return 2
+  fi
+  # Its own line, from this run's directory there, and a connection that ended as the suite
+  # did: a pass the connection did not outlive is no result, and the suite is still to run.
   said="$(grep "^$suite=\(success\|failure\)$" "$logs/$at/suites.txt" 2>/dev/null || true)"
-  if [ -z "$said" ]; then
+  if [ -z "$said" ] || { [ "$status" != 0 ] && ! grep -q '=failure$' <<<"$said"; }; then
     echo "$suite: $at ended it with no result (ssh exited $status); it runs nothing more of this validation."
     return 2
   fi
-  [ "$status" = 0 ] || grep -q '=failure$' <<<"$said" || said="$suite=failure"
   results="$results$said"$'\n'
   took="$took$suite=$(((SECONDS - suite_started) / 60))"$'\n'
   ran_on="$ran_on$suite=$at"$'\n'

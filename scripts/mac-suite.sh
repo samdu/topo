@@ -37,7 +37,7 @@
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
 #
-# --check runs nothing: it says whether this Mac can run the suites named, and exits 1 with an
+# --check runs nothing: it says whether a Mac other than buddybox can run the suites named, and exits 1 with an
 # `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
@@ -134,8 +134,10 @@ if [ "$check" = yes ]; then
     *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache, purgeable space included (Finder's figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
   esac
   # A laptop with its lid shut sleeps whatever holds it awake; a Mac with no lid has no such key.
-  ! ioreg -r -k AppleClamshellState -d 4 2>/dev/null | grep -q '"AppleClamshellState" = Yes' \
-    || { err "this Mac's lid is closed."; lacks=1; }
+  # Read whole and then looked at: a reader that stops at the first match ends ioreg on a
+  # closed pipe, which under pipefail is a failed pipeline, and that would read as open.
+  lid="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null || true)"
+  case "$lid" in *'"AppleClamshellState" = Yes'*) err "this Mac's lid is closed."; lacks=1 ;; esac
   [ "$lacks" = 0 ] && echo "this Mac can run ${asked[*]}."
   exit "$lacks"
 fi
