@@ -114,6 +114,9 @@ final class VoiceInput {
         self.voiceProcessing = voiceProcessing
         self.defaults = defaults
         self.audio = audio
+        // Before any claim, so the record configuration the foreground warms is the one the
+        // first press wants.
+        audio.wantVoiceProcessing(NoiseSuppression.enabled(defaults))
         self.ear = ear
         self.makeEngine = makeEngine
         self.formats = formats
@@ -283,6 +286,9 @@ final class VoiceInput {
     /// the formats are read, and the formats before a tap is installed on them; a throw anywhere
     /// leaves the press refused with nothing running.
     private func startMicrophone(as gate: Gate, mine: Int) throws {
+        // The setting is read now and not again, so a change made mid-utterance is the next
+        // press's. The session hears of it first, because the mode is the session's.
+        audio.wantVoiceProcessing(NoiseSuppression.enabled(defaults))
         audio.wantRecord(true, for: gate == .chat ? .chat : .firstRun)
         do { try audio.ensureActive() } catch { throw SessionInactive(underlying: error) }
         let engine = engine ?? {
@@ -293,9 +299,9 @@ final class VoiceInput {
         let input = engine.inputNode
         // Before the formats, because voice processing changes them, and here because it can be
         // changed only on an engine that is not running, which every press finds: a release and
-        // a teardown both stop it. The setting is read now and not again, so a change made
-        // mid-utterance is the next press's.
-        let suppress = NoiseSuppression.enabled(defaults)
+        // a teardown both stop it. The unit follows the session and not the setting: under a
+        // hold the session's mode waits, and the unit waits with it.
+        let suppress = audio.voiceProcessed
         do { try voiceProcessing(engine, suppress) } catch { throw ProcessingRefused(on: suppress, underlying: error) }
         // Read once. The format the tap is installed with is the very object the guard judged:
         // a route change between two reads would pass the guard on the first numbers and raise
@@ -328,6 +334,7 @@ final class VoiceInput {
         }
         engine.prepare()
         try engine.start()
+        AudioLog.say("microphone open: noise suppression \(suppress ? "on" : "off")")
         listening = true
         sessions += 1
         audio.wantScreenAwake(true, for: .listening)
@@ -459,7 +466,8 @@ final class VoiceInput {
     /// Apple's voice processing on the input node (noise suppression, echo cancellation and gain
     /// control, one unit), as `NoiseSuppression` asks. Changing it rebuilds the node's unit, so
     /// it is called only when the answer differs from the node's own. The voice unit ducks every
-    /// other sound on the phone by default, Topo's own reply among them, so it is told not to.
+    /// other sound on the phone while it runs, Topo's own reply among them, so its ducking is
+    /// set to the least it allows; some remains for as long as the microphone is open.
     /// Off is the unit gone and not bypassed, which is the microphone as it comes.
     static let setVoiceProcessing: (AVAudioEngine, Bool) throws -> Void = { engine, on in
         let input = engine.inputNode

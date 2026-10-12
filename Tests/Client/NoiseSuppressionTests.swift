@@ -19,6 +19,10 @@ final class NoiseSuppressionTests: XCTestCase {
     }
 
     private func voiceInput(_ seams: Seams, defaults: UserDefaults, ready: Bool = true) async -> VoiceInput {
+        await pair(seams, defaults: defaults, ready: ready).voice
+    }
+
+    private func pair(_ seams: Seams, defaults: UserDefaults, ready: Bool = true) async -> (voice: VoiceInput, audio: AudioSession) {
         let ear = Ear(vocabulary: Vocabulary(defaults: defaults), engine: ScriptedEngine())
         if ready {
             let nowhere = URL(fileURLWithPath: "/dev/null")
@@ -26,11 +30,13 @@ final class NoiseSuppressionTests: XCTestCase {
             await settle("the ear is resident") { ear.ready }
         }
         let center = NotificationCenter()
-        return VoiceInput(audio: AudioSession(center: center, configure: seams.configure), ear: ear, center: center,
-                          makeEngine: { seams.makeEngine() },
-                          formats: { seams.readFormats($0) },
-                          voiceProcessing: { try seams.process($0, $1) },
-                          defaults: defaults)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let voice = VoiceInput(audio: audio, ear: ear, center: center,
+                               makeEngine: { seams.makeEngine() },
+                               formats: { seams.readFormats($0) },
+                               voiceProcessing: { try seams.process($0, $1) },
+                               defaults: defaults)
+        return (voice, audio)
     }
 
     private func defaults() -> UserDefaults {
@@ -89,6 +95,52 @@ final class NoiseSuppressionTests: XCTestCase {
         voice.press(as: .chat, mine: voice.generation)
         XCTAssertTrue(voice.listening)
         XCTAssertEqual(seams.engines.count, 2, "the refused engine was dropped")
+        voice.cancel()
+    }
+
+    /// The session's mode is the session's own: the record configuration is asked for with voice
+    /// processing when the setting is on and without it when it is off, and a change of setting
+    /// reconfigures before the unit is asked to follow, so the unit never makes a mode by itself
+    /// and `default` comes back when it goes.
+    func testTheSessionsModeChangesWithTheUnitAndBeforeIt() async {
+        let seams = Seams()
+        let defaults = defaults()
+        let voice = await voiceInput(seams, defaults: defaults)
+        voice.press(as: .chat, mine: 1)
+        XCTAssertEqual(seams.records, [true])
+        XCTAssertEqual(seams.modes, [true], "the record configuration is the voice processing one")
+        _ = await voice.end(as: .chat)
+        defaults.set(false, forKey: NoiseSuppression.key)
+        seams.forget()
+        voice.press(as: .chat, mine: voice.generation)
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(seams.records, [true])
+        XCTAssertEqual(seams.modes, [false], "off is the default mode, asked for by the session")
+        XCTAssertEqual(seams.processing.map(\.on), [true, false])
+        XCTAssertEqual(seams.processing.last?.configures, 1, "the session was configured before the unit was asked")
+        voice.cancel()
+    }
+
+    /// While a hold stands the session is not reconfigured, so a setting changed under one waits,
+    /// and the unit waits with it: a press there asks for the state the session is in.
+    func testUnderAHoldTheUnitFollowsTheSessionAsItWasLeft() async {
+        let seams = Seams()
+        let defaults = defaults()
+        let (voice, audio) = await pair(seams, defaults: defaults)
+        audio.wantRecord(true, for: .warm)
+        XCTAssertEqual(seams.modes, [true])
+        audio.wantAlive(true, for: .speaking)
+        defaults.set(false, forKey: NoiseSuppression.key)
+        seams.forget()
+        voice.press(as: .chat, mine: 1)
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(seams.records, [], "nothing is reconfigured under a hold")
+        XCTAssertEqual(seams.processing.map(\.on), [true], "the unit is asked for what the session is in")
+        _ = await voice.end(as: .chat)
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.modes.last, false, "the change is applied when the last hold goes")
+        voice.press(as: .chat, mine: voice.generation)
+        XCTAssertEqual(seams.processing.map(\.on), [true, false])
         voice.cancel()
     }
 
