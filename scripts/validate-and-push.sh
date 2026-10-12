@@ -185,14 +185,14 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
 # who holds it is said when the wait begins and every ten minutes after.
 waited=0
 say_at=0
-waiting() {  # waiting <for what> <who holds it>
+waiting() {  # waiting <for what> <who holds it> [seconds already waited, in place of the wait]
   [ "$waited" -lt "$LOCK_WAIT" ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $1 ($2). Nothing is pushed or posted."
   if [ "$waited" -ge "$say_at" ]; then
     echo "Waiting for $1 ($2); up to $(((LOCK_WAIT - waited) / 60)) min more."
     say_at=$((waited + 600))
   fi
-  sleep "$LOCK_POLL"
-  waited=$((waited + LOCK_POLL))
+  [ -n "${3-}" ] || sleep "$LOCK_POLL"
+  waited=$((waited + ${3:-$LOCK_POLL}))
 }
 
 # The other Macs a suite may run on, off unless named: TOPO_VALIDATE_HOSTS, or the lines of
@@ -309,8 +309,12 @@ take_slot() {
 
   exec 8>> "$cache/lock"
   say_at="$waited"
-  until perl -MFcntl=:flock -e 'open(my $lock, ">&=", 8) or exit 2; exit(flock($lock, LOCK_SH | LOCK_NB) ? 0 : 1)'; do
-    waiting "a run of the script as it was before slots" "$(cat "$cache/holder" 2>/dev/null || echo unknown)"
+  # Waited for as that run's siblings wait for it, asleep on the lock and not looking again
+  # every few seconds, so a queue of them does not always get there first; half a minute at a
+  # time, which is how long a signal to this script waits to be heard.
+  while nap=$((LOCK_WAIT - waited)); [ "$nap" -le 30 ] || nap=30; [ "$nap" -ge 1 ] || nap=1;
+        ! perl -MFcntl=:flock -e 'open(my $lock, ">&=", 8) or exit 2; local $SIG{ALRM} = sub { exit 1 }; alarm shift; exit(flock($lock, LOCK_SH) ? 0 : 1)' "$nap"; do
+    waiting "a run of the script as it was before slots" "$(cat "$cache/holder" 2>/dev/null || echo unknown)" "$nap"
   done
   if orphan="$(orphan_in "$cache")"; then
     die "the suite of an earlier validation is still running without its script (pid ${orphan%% *}; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill ${orphan%% *}\`, which stops its lane and deletes its simulators, and run again."
