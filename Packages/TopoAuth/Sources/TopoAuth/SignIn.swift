@@ -93,10 +93,22 @@ public final class SignIn {
         await exchange(code: parsed.code, state: parsed.state)
     }
 
-    /// The browser was closed or Cancel pressed. Before the login's callback that ends the
-    /// attempt; while the guest's authorization is up (Skip, or its sheet closed) it declines it
-    /// and the person is signed in without one. During an exchange it is nothing: the sheet up
-    /// then says the approval arrived and to go back, so closing it declines nothing.
+    /// The login's sheet was closed by the person. It ends the attempt only while the login is
+    /// still waited for: reported late, over an exchange or the guest's authorization, it is
+    /// nothing, since that sheet was never the guest's to decline.
+    public func loginSheetClosed() {
+        if case .waiting = phase { cancel() }
+    }
+
+    /// The sheet opened for the guest's authorization at `url` was closed by the person: that
+    /// declines it, while it is the one being asked.
+    public func guestSheetClosed(_ url: URL) {
+        if case .approvingGuest(url, _) = phase { cancel() }
+    }
+
+    /// Cancel or Skip pressed. Before the login's callback that ends the attempt; while the
+    /// guest's authorization is asked it declines it and the person is signed in without one.
+    /// During an exchange it is nothing: the approval is already given, and nothing is declined.
     public func cancel() {
         switch phase {
         case .approvingGuest:

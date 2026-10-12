@@ -31,7 +31,7 @@ struct SignInView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if pasteHint { pasteField } else { ProgressView() }
-                Button("Open the page again") { webAuth.open(url) { signIn.cancel() } }
+                Button("Open the page again") { webAuth.open(url) { signIn.guestSheetClosed(url) } }
                 Button("Skip") { webAuth.close(); signIn.cancel() }
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -50,7 +50,7 @@ struct SignInView: View {
             if case .approvingGuest(let url, _) = phase, opened != url {
                 opened = url
                 pasted = ""
-                webAuth.open(url) { signIn.cancel() }
+                webAuth.open(url) { signIn.guestSheetClosed(url) }
             }
         }
         // Signed in, this screen is gone before it hears of it: the sheet goes with it.
@@ -60,7 +60,7 @@ struct SignInView: View {
     private var signInButton: some View {
         Button {
             let url = signIn.start()
-            webAuth.open(url) { signIn.cancel() }
+            webAuth.open(url) { signIn.loginSheetClosed() }
         } label: {
             Text("Sign in with Claude")
                 .font(.headline)

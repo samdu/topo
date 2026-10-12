@@ -136,7 +136,7 @@ final class WebAuthTests: XCTestCase {
         await settle()
         XCTAssertEqual(stage.sheets.count, 0)
 
-        // Asked for again by hand, it is shown and a refusal is tried again afresh.
+        // Asked for again by hand, it is begun, and a refusal is tried once more afresh.
         stage.takes = false
         stage.open("guest")
         await settle()

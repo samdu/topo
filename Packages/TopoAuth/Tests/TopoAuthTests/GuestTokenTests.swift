@@ -204,6 +204,32 @@ extension Stubbed {
 
         @MainActor final class Closed { var phases: [SignIn.Phase] = [] }
 
+        /// A sheet's close answers only for what it was opened for. The login's, reported once the
+        /// guest's authorization is asked, declines nothing; neither does the close of a sheet for
+        /// another URL; the guest's own does.
+        @Test func aSheetsCloseAnswersOnlyForWhatItWasOpenedFor() async throws {
+            StubURLProtocol.reset()
+            defer { StubURLProtocol.reset() }
+            StubURLProtocol.responder = Self.tokenEndpoint()
+            let store = InMemoryTokenStore()
+            let guest = InMemoryTokenStore()
+            let signIn = SignIn(oauth: ClaudeOAuth(session: StubURLProtocol.session()), store: store, guestStore: guest)
+            let next = try await approveTheLogin(signIn, browser: Browser())
+            signIn.loginSheetClosed()
+            signIn.guestSheetClosed(URL(string: "https://example.com/another")!)
+            #expect(signIn.phase == .approvingGuest(opening: next, pasteHint: false), "a sheet that was not the guest's declined it")
+            signIn.guestSheetClosed(next)
+            #expect(signIn.phase == .signedIn)
+            #expect(try guest.load() == nil)
+
+            // Before its callback, the login's close ends the attempt.
+            _ = signIn.start()
+            signIn.guestSheetClosed(next)
+            #expect(signIn.phase == .waiting(pasteHint: false))
+            signIn.loginSheetClosed()
+            #expect(signIn.phase == .idle)
+        }
+
         /// A second exchange the endpoint refuses is the same fallback, and leaves the ordinary
         /// tokens as they were.
         @Test func aRefusedSecondExchangeStillSignsIn() async throws {

@@ -7,9 +7,9 @@ import Foundation
 /// the caller once the code has arrived rather than by a callback URL.
 ///
 /// Only the person closing the sheet that is up is a dismissal. A sheet the caller closed or
-/// replaced tells nobody, and neither does one the system would not present: it presents none
-/// while the app is not active, which is where a sign-in carried off to Safari comes back to, so
-/// a sheet asked for then is kept and shown when the app is active.
+/// replaced tells nobody, and neither does one the system would not present: on the phone it
+/// presents none while the app is not active, which is where a sign-in carried off to Safari comes
+/// back to, so a sheet asked for then is kept and shown when the app is active.
 @MainActor
 final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     /// A sheet: begun once, which answers whether the system took it, and cancelled by the app
@@ -100,8 +100,12 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
 
     /// The system would not present the sheet: it waits for the app's next activation. Refused
     /// while the app says it is active, it is tried once more and then waits, since nothing says
-    /// when a system that keeps refusing would stop.
+    /// when a system that keeps refusing would stop. The Mac has no activation to wait for, so
+    /// there a second refusal is the sheet gone.
     private func refused(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
+        #if !os(iOS)
+        if retried { onDismiss(); return }
+        #endif
         waiting = (url, onDismiss)
         guard isActive(), !retried else { return }
         retried = true
@@ -110,8 +114,8 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
 
     private func system(_ url: URL, _ ended: @escaping @Sendable (Ending) -> Void) -> Sheet {
         let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { @Sendable _, error in
-            // No callback scheme, so the only success is the person's own close; any error but
-            // that close is the system not presenting it.
+            // No callback scheme, so the session ends only by the person's close (`canceledLogin`)
+            // or by the system not presenting it, which is every other error.
             let closed = error == nil || (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin
             ended(closed ? .dismissed : .refused)
         }
