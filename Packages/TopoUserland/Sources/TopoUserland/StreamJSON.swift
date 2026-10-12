@@ -34,6 +34,11 @@ public enum StreamEvent: Sendable, Equatable {
     case thinking
     /// An assistant message's usage.
     case usage(Usage)
+    /// `system`/`compact_boundary`: the conversation was compacted, by `/compact` or by Claude
+    /// Code itself at its threshold, from `pre` tokens of context to `post`.
+    case compacted(Compacted)
+    /// `system`/`status` saying a compaction was tried and failed, with Claude Code's reason.
+    case compactFailed(String)
     /// The turn's end, answered or failed.
     case result(TurnResult)
     /// A well-formed event of a kind the app does not read — a hook's lines, a rate-limit notice,
@@ -42,6 +47,20 @@ public enum StreamEvent: Sendable, Equatable {
     /// A line that is not an event: not JSON, not an object, or an object with no `type`. It is
     /// reported and never read as anything.
     case malformed(String)
+
+    /// A compaction as Claude Code reports it.
+    public struct Compacted: Sendable, Equatable {
+        /// `manual` for `/compact`, `auto` for the threshold; whatever else Claude Code names.
+        public let trigger: String
+        public let pre: Int
+        public let post: Int
+
+        public init(trigger: String, pre: Int, post: Int) {
+            self.trigger = trigger
+            self.pre = pre
+            self.post = post
+        }
+    }
 
     /// An assistant message's usage: the model that wrote it, the tokens of context it was
     /// written over (input, cache written and cache read together) and the tokens it wrote.
@@ -68,9 +87,14 @@ public enum StreamEvent: Sendable, Equatable {
         public let duration: Duration?
         /// What an error result listed under `errors`, if anything.
         public let errors: [String]
+        /// The context window of the model that answered, as Claude Code reports it
+        /// (`modelUsage.<model>.contextWindow`, the largest where it names several); nil when it
+        /// names none.
+        public let window: Int?
 
         public init(isError: Bool, subtype: String, text: String?, session: String?, duration: Duration?,
-                    errors: [String] = []) {
+                    errors: [String] = [], window: Int? = nil) {
+            self.window = window
             self.isError = isError
             self.subtype = subtype
             self.text = text
@@ -99,6 +123,14 @@ public enum StreamJSON {
                 return [.malformed(clip(trimmed))]
             }
             return [.started(session: session, model: model)]
+        case ("system", "compact_boundary"):
+            guard let metadata = object["compact_metadata"] as? [String: Any],
+                  let pre = metadata["pre_tokens"] as? NSNumber, let post = metadata["post_tokens"] as? NSNumber else {
+                return [.other("system/compact_boundary")]
+            }
+            return [.compacted(.init(trigger: metadata["trigger"] as? String ?? "", pre: pre.intValue, post: post.intValue))]
+        case ("system", "status") where object["compact_result"] as? String == "failed":
+            return [.compactFailed(clip(object["compact_error"] as? String ?? "no reason given"))]
         case ("assistant", _):
             return assistant(object) ?? [.malformed(clip(trimmed))]
         case ("user", _):
@@ -203,8 +235,11 @@ public enum StreamJSON {
         let isError = (object["is_error"] as? Bool) ?? (subtype != "success")
         let duration = (object["duration_ms"] as? NSNumber).map { Duration.milliseconds($0.int64Value) }
         let errors = (object["errors"] as? [Any])?.compactMap { $0 as? String } ?? []
+        let windows = (object["modelUsage"] as? [String: Any])?.values
+            .compactMap { ($0 as? [String: Any])?["contextWindow"] as? NSNumber }.map(\.intValue).filter { $0 > 0 }
         return .init(isError: isError, subtype: subtype, text: object["result"] as? String,
-                     session: object["session_id"] as? String, duration: duration, errors: errors)
+                     session: object["session_id"] as? String, duration: duration, errors: errors,
+                     window: windows?.max())
     }
 
     private static func int(_ value: Any?) -> Int { (value as? NSNumber)?.intValue ?? 0 }

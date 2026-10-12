@@ -19,6 +19,7 @@ final class SignOutTests: XCTestCase {
     private func signOut() -> (SignOut, Calls) {
         let calls = Calls()
         let signOut = SignOut(stopSpeaking: { calls.ended.append("speaker") },
+                              forgetShares: { calls.ended.append("shares") },
                               forgetHarness: { calls.ended.append("harness") },
                               forgetMemory: { calls.ended.append("memory") },
                               forgetSurfaces: { calls.ended.append("surfaces") },
@@ -30,7 +31,15 @@ final class SignOutTests: XCTestCase {
     func testSigningOutEndsEveryOneOfThem() async {
         let (signOut, calls) = signOut()
         await signOut.act()
-        XCTAssertEqual(Set(calls.ended), ["speaker", "harness", "memory", "surfaces", "connections", "login"])
+        XCTAssertEqual(Set(calls.ended), ["speaker", "shares", "harness", "memory", "surfaces", "connections", "login"])
+    }
+
+    /// The door a share comes in by shuts before the harness is waited on: a share put on the line
+    /// while the harness forgets would be a turn of the login that just ended.
+    func testTheSharesGoBeforeTheHarnessIsWaitedOn() async {
+        let (signOut, calls) = signOut()
+        await signOut.act()
+        XCTAssertLessThan(calls.ended.firstIndex(of: "shares")!, calls.ended.firstIndex(of: "harness")!)
     }
 
     func testTheLoginGoesLast() async {
@@ -50,7 +59,7 @@ final class SignOutTests: XCTestCase {
     func testTheOrderIsTheWholeOrder() async {
         let (signOut, calls) = signOut()
         await signOut.act()
-        XCTAssertEqual(calls.ended, ["speaker", "harness", "memory", "surfaces", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["speaker", "shares", "harness", "memory", "surfaces", "connections", "login"])
     }
 
     /// The widgets go with the login: the app group's documents, images and pending taps
@@ -77,7 +86,7 @@ final class SignOutTests: XCTestCase {
                                defaults: UserDefaults(suiteName: "signout-\(UUID().uuidString)")!, reloader: reloader)
         guard case .record(let demo) = sync.snapshot(slot: "demo", store) else { return XCTFail("demo is not readable") }
         try await SurfaceRecords(database: records).save(demo, over: .none)
-        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
+        let signOut = SignOut(stopSpeaking: {}, forgetShares: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
                               forgetConnections: {}, forgetLogin: {})
         await signOut.act()
         await sync.flush()
@@ -104,7 +113,7 @@ final class SignOutTests: XCTestCase {
                                       clearControlSecrets: { try secrets.clearAll() })
         try secrets.set("tok", name: "ha")
         try secrets.set("other", name: "webhook")
-        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: {},
+        let signOut = SignOut(stopSpeaking: {}, forgetShares: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: {},
                               forgetConnections: { connections.forget() }, forgetLogin: {})
         await signOut.act()
         XCTAssertEqual(try secrets.names(), [], "a control secret outlived the login")
@@ -120,7 +129,8 @@ final class SignOutTests: XCTestCase {
     /// The far end of a takeover ends the same things, the connections among them, the login last.
     func testATakeoverForgetsTheConnectionsBeforeTheLogin() async {
         let calls = Calls()
-        let takeover = Takeover(demoteHarness: { calls.ended.append("harness") },
+        let takeover = Takeover(forgetShares: { calls.ended.append("shares") },
+                                demoteHarness: { calls.ended.append("harness") },
                                 acceptDemotion: { calls.ended.append("role") },
                                 stopSpeaking: { calls.ended.append("speaker") },
                                 forgetMemory: { calls.ended.append("memory") },
@@ -128,7 +138,7 @@ final class SignOutTests: XCTestCase {
                                 forgetConnections: { calls.ended.append("connections") },
                                 forgetLogin: { calls.ended.append("login") })
         await takeover.act()
-        XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "surfaces", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["shares", "harness", "role", "speaker", "memory", "surfaces", "connections", "login"])
     }
 
     /// A phone found a viewer at launch with a login or something waiting demotes, forgets the
@@ -136,7 +146,7 @@ final class SignOutTests: XCTestCase {
     func testAViewerWithALoginEndsItAllTheLoginLast() async {
         let calls = Calls()
         await arrival(calls, holdsLogin: true).act()
-        XCTAssertEqual(calls.ended, ["harness", "memory", "surfaces", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["shares", "harness", "memory", "surfaces", "connections", "login"])
     }
 
     /// One with no login and nothing waiting still forgets the surfaces and a connection's token,
@@ -145,11 +155,12 @@ final class SignOutTests: XCTestCase {
     func testAViewerWithNoLoginStillForgetsItsConnections() async {
         let calls = Calls()
         await arrival(calls, holdsLogin: false).act()
-        XCTAssertEqual(calls.ended, ["surfaces", "connections"])
+        XCTAssertEqual(calls.ended, ["shares", "surfaces", "connections"])
     }
 
     private func arrival(_ calls: Calls, holdsLogin: Bool) -> ViewerArrival {
-        ViewerArrival(holdsLogin: { holdsLogin },
+        ViewerArrival(forgetShares: { calls.ended.append("shares") },
+                      holdsLogin: { holdsLogin },
                       demoteHarness: { calls.ended.append("harness") },
                       forgetMemory: { calls.ended.append("memory") },
                       forgetSurfaces: { calls.ended.append("surfaces") },

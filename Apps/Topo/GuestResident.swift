@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import TopoAuth
 import TopoCore
 import TopoProxy
@@ -101,6 +102,20 @@ final class GuestResident {
         return ClaudeModel.effective(setting ?? .default).rawValue
     }
 
+    /// The share of its window a process is started to compact at: this device's setting, or nil
+    /// for Claude Code's own. A debug build launched with `TOPO_DEBUG_COMPACT_AT=<percent>` takes
+    /// that instead, which is how a simulator run sees a compaction without filling a window.
+    static var compactAt: Int? {
+        #if DEBUG
+        if let word = ProcessInfo.processInfo.environment[compactAtVariable], let setting = Compaction.Setting(word) {
+            return setting.percent
+        }
+        #endif
+        return Compaction.Setting(kept: UserDefaults.standard.integer(forKey: Compaction.key)).percent
+    }
+
+    nonisolated static let compactAtVariable = "TOPO_DEBUG_COMPACT_AT"
+
     /// Brings the guest and the session up, once per process, and starts following the app's
     /// lifecycle from the foreground it is in now. A start that fails is not kept: the next call
     /// tries again from the step that failed (the kernel's own boot is once per process, and its
@@ -136,7 +151,7 @@ final class GuestResident {
                     .merging(toolsEnvironment) { own, _ in own }
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
-                                       memory: self.memoryAtStart(log: log), log: log)
+                                       memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in log("background: \(outcome)") })
@@ -282,6 +297,15 @@ struct ResidentConversation: GuestConversation {
         await GuestResident.shared.session?.use(model: model)
     }
 
+    func use(compactAt: Int?) async {
+        // A session not started yet starts with the setting (`GuestResident.compactAt`). A debug
+        // launch's own threshold stands over the setting, as it does at the start.
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment[GuestResident.compactAtVariable].flatMap(Compaction.Setting.init) == nil else { return }
+        #endif
+        await GuestResident.shared.session?.use(compactAt: compactAt)
+    }
+
     func sessionID() async -> String? {
         if let session = await GuestResident.shared.session { return await session.sessionID }
         return GuestResident.sessionFile.load()
@@ -337,12 +361,35 @@ struct ResidentConversation: GuestConversation {
 }
 
 extension GuestResident {
-    /// Where the session's and the proxy's lines go: printed in a debug build, where a simulator
-    /// run reads them, and nowhere in a release one.
+    /// Where the session's, the proxy's and the tool service's lines go, and each way out's
+    /// outcome: the unified log, under the category `topo log --category resident` reads, the
+    /// proxy's starting `proxy:` and the tool service's `tools:`, and printed in a debug build,
+    /// where a simulator run reads them.
     nonisolated static let log: @Sendable (String) -> Void = { line in
+        let line = redacted(line)
+        Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
         #if DEBUG
         DebugRun.say("guest: \(line)")
         #endif
+    }
+
+    /// `text` with every credential a line of the guest's could hold hidden: an `sk-ant-` key, a `Bearer`
+    /// value, the guest's token variable and the tool service's, a GitHub token and a 1Password
+    /// service-account token. Every line the resident logs goes
+    /// through this, since `topo log` answers what the app logged.
+    nonisolated static func redacted(_ text: String) -> String {
+        var shown = text
+        for (pattern, replacement) in [
+            (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
+            (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
+            (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
+            (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
+            (#"\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"#, "$1[redacted]"),
+            (#"\bops_[A-Za-z0-9_\-.=]+"#, "ops_[redacted]"),
+        ] {
+            shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        return shown
     }
 }
 
@@ -427,6 +474,10 @@ extension DebugRun {
                     case .event(.toolResult(let isError, let text)):
                         let name = calls.isEmpty ? "(no call)" : calls.removeFirst()
                         say("guest turn \(number) " + toolResultLine(tool: name, isError: isError, text: text))
+                    case .event(.compacted(let compacted)):
+                        say("guest turn \(number) compacted: \(compacted.trigger), \(compacted.pre) → \(compacted.post)")
+                    case .event(.usage(let usage)):
+                        say("guest turn \(number) context: \(usage.context)")
                     case .event(.malformed(let line)):
                         say("guest turn \(number) malformed line: \(line)")
                     case .event:
@@ -436,6 +487,7 @@ extension DebugRun {
                         switch end {
                         case .answered(let result):
                             say("guest turn \(number) answered in \(seconds) s: \(result.text ?? "")")
+                            if let window = result.window { say("guest turn \(number) window: \(window)") }
                         case .failed(let failure):
                             say("guest turn \(number) failed in \(seconds) s: \(failure)")
                         case .abandoned:
@@ -464,24 +516,9 @@ extension DebugRun {
         return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
     }
 
-    /// `text` with every credential a debug run could print hidden: an `sk-ant-` key, a `Bearer`
-    /// value, the guest's token variable and the tool service's, a GitHub token and a 1Password
-    /// service-account token. Everything the guest writes goes
-    /// through this before it is printed.
-    static func redacted(_ text: String) -> String {
-        var shown = text
-        for (pattern, replacement) in [
-            (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
-            (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
-            (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
-            (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
-            (#"\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"#, "$1[redacted]"),
-            (#"\bops_[A-Za-z0-9_\-.=]+"#, "ops_[redacted]"),
-        ] {
-            shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
-        }
-        return shown
-    }
+    /// `GuestResident.redacted`, which everything the guest writes goes through before it is
+    /// printed.
+    static func redacted(_ text: String) -> String { GuestResident.redacted(text) }
 
     /// Waits until the app is in the foreground and the resident process is up.
     @MainActor

@@ -17,7 +17,8 @@ import TopoCore
 /// noticed: with every push dropped, the app answers on the loop's interval.
 ///
 /// The iOS target only. The watch and the TV read the log and never answer, so
-/// neither subscribes nor carries the push entitlement.
+/// neither subscribes to it. The watch carries the push entitlement for its own
+/// `Surface` push (`SurfacePush`), which fetches its slots; the TV carries none.
 enum TurnPush {
     /// Fixed, so the subscription is made once per Apple ID and every later
     /// launch finds it rather than making a second one.

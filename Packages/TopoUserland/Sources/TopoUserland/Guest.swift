@@ -219,7 +219,7 @@ public final class Guest: Sendable {
 
     /// Mounts the memory's folder `host` at `point` through the vault's own filesystem
     /// (`topo_ish_mount_vault`): realfs with every open of a regular file and every change made
-    /// under file coordination, each wait bounded, and the mirror's `.topo` at its root refused.
+    /// under file coordination, each wait bounded, and the mirror's `.topo` at its root hidden.
     /// The same folder at the same point again changes nothing; anything else there is refused.
     /// Requires a booted kernel.
     public func mountVault(_ host: URL, at point: String) throws {

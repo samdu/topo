@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var showVocabulary = false
     @State private var showMemory = false
     @State private var showConnections = false
+    @State private var showContext = false
 
     var body: some View {
         NavigationStack {
@@ -22,10 +23,14 @@ struct SettingsView: View {
                 // First: where Topo sits, and the Reset for this device's hand on the look.
                 PlacementSection()
                 // One row each, named for what is behind it, so no heading says it again.
+                #if os(iOS)
+                ScreenShareSection()
+                #endif
                 Section {
                     Button("Vocabulary") { showVocabulary = true }
                     Button("Memory") { showMemory = true }
                     Button("Connections") { showConnections = true }
+                    Button("Context") { showContext = true }
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
@@ -47,8 +52,67 @@ struct SettingsView: View {
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
             .sheet(isPresented: $showMemory) { MemoryView() }
             .sheet(isPresented: $showConnections) { ConnectionsView() }
+            .sheet(isPresented: $showContext) { ContextView() }
         }
         .tint(look.settings.tint)
+    }
+}
+
+/// The context's sheet, behind its row in the settings.
+struct ContextView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form { ContextSection() }
+                .navigationTitle("Context")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+/// The mind's context: how full it is, when Claude Code compacts it by itself, and compacting it
+/// now. The rows are the form's own controls.
+struct ContextSection: View {
+    @Environment(Harness.self) private var harness
+    @AppStorage(Compaction.key) private var kept = 0
+
+    var body: some View {
+        Section {
+            LabeledContent("Context", value: Self.fill(context: harness.context, window: harness.window))
+                .accessibilityIdentifier("context-fill")
+            Picker("Compact at", selection: Binding(get: { Compaction.Setting(kept: kept).kept },
+                                                    set: { harness.compaction = Compaction.Setting(kept: $0) })) {
+                ForEach(Self.stops(kept: kept), id: \.self) { Text(Self.title($0)).tag($0) }
+            }
+            .accessibilityIdentifier("context-compact-at")
+            Button(harness.compacting ? "Compacting…" : "Compact now") { harness.compact() }
+                .disabled(harness.guest == nil || harness.compacting || harness.leaving > 0)
+                .accessibilityIdentifier("context-compact-now")
+            if let last = harness.lastCompaction {
+                LabeledContent("Last compaction", value: last)
+                    .accessibilityIdentifier("context-last-compaction")
+            }
+        } footer: {
+            Text("Topo's context is summarised when it fills to this share of the model's window. Automatic is Claude Code's own.")
+        }
+    }
+
+    /// What the picker offers, as `Compaction.Setting.kept`: Automatic, half to 95% in fives, and
+    /// the kept value where it is none of those (one the mind set with `topo context`).
+    static func stops(kept: Int) -> [Int] {
+        let offered = [0] + Array(stride(from: 50, through: 95, by: 5))
+        let kept = Compaction.Setting(kept: kept).kept
+        return offered.contains(kept) ? offered : [0] + (offered.dropFirst() + [kept]).sorted()
+    }
+
+    static func title(_ kept: Int) -> String { kept == 0 ? "Automatic" : "\(kept)%" }
+
+    static func fill(context: Int?, window: Int?) -> String {
+        func thousands(_ tokens: Int) -> String { "\((tokens + 500) / 1000)k" }
+        guard let context else { return "not known yet" }
+        return window.map { "\(thousands(context)) of \(thousands($0))" } ?? thousands(context)
     }
 }
 
@@ -60,6 +124,10 @@ struct SignOut {
     /// The reply in the ear goes with the login: one still being read would otherwise carry on,
     /// holding the process open.
     var stopSpeaking: @MainActor () -> Void
+    /// What was shared from another app and not yet sent, and the door a share comes in by. Before
+    /// the harness, which is waited for: a share put on the line while it forgets would be a turn
+    /// of the login that just ended, kept in the outbox for the next.
+    var forgetShares: @MainActor () -> Void
     /// The transcript, the outbox and the spoken marks, the turn and the pass in flight, and what
     /// the guest kept of the conversation. Awaited, so the guest's session and the bridge's ledger
     /// are gone before the login is.
@@ -78,6 +146,7 @@ struct SignOut {
 
     @MainActor func act() async {
         stopSpeaking()
+        forgetShares()
         await forgetHarness()
         forgetMemory()
         forgetSurfaces()
@@ -91,6 +160,8 @@ struct SignOut {
 ///
 /// No step has a default, so a caller that leaves one out does not compile.
 struct Takeover {
+    /// What was shared and not yet sent goes, and its door shuts, before anything is waited for.
+    var forgetShares: @MainActor () -> Void
     /// What was waiting goes into the log first, while the chat and its task still stand.
     var demoteHarness: @MainActor () async -> Void
     /// Then the role flips.
@@ -107,6 +178,7 @@ struct Takeover {
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        forgetShares()
         await demoteHarness()
         acceptDemotion()
         stopSpeaking()
@@ -123,6 +195,7 @@ struct Takeover {
 /// connection's token go whether or not there was a login, since the app group and the keychain
 /// item are their own and outlive one.
 struct ViewerArrival {
+    var forgetShares: @MainActor () -> Void
     var holdsLogin: @MainActor () -> Bool
     var demoteHarness: @MainActor () async -> Void
     var forgetMemory: @MainActor () -> Void
@@ -131,6 +204,7 @@ struct ViewerArrival {
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        forgetShares()
         let held = holdsLogin()
         if held {
             await demoteHarness()

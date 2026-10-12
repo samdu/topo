@@ -102,6 +102,9 @@ final class Memory {
     /// What that read found, for the diagnostics `look` row: the file's state and every field it
     /// named and did not get.
     private(set) var lookReading = LookDocument.Reading(look: Look())
+    /// The places the vault's own `places.json` names, read where and when the look is, for
+    /// `topo location`; none until a pass has read one.
+    private(set) var places = PlacesDocument.Reading()
 
     /// What the last sync did, for the diagnostics screen.
     private(set) var lastReport: VaultMirror.Report?
@@ -307,6 +310,7 @@ final class Memory {
             // access of this folder taken while the sync still holds one is two accessors of it
             // from one process. The grant, where there is one, is the pass's and still held.
             await readLook(from: mirror, generation: mine)
+            await readPlaces(from: mirror, generation: mine)
         } catch is CancellationError {
             // Sign-out, or the screen going. The pass stopped at the last thing it did and
             // did nothing after it, and nobody is waiting on what it was going to do, so
@@ -343,6 +347,27 @@ final class Memory {
         guard mine == generation else { return }
         lookReading = reading
         look = reading.look
+    }
+
+    /// The places the vault holds, read as the look is: through the mirror's coordination, after
+    /// the pass, and written by no pass that has been superseded. A file that cannot be read is no
+    /// places and the reason.
+    private func readPlaces(from mirror: VaultMirror, generation mine: Int) async {
+        guard let path = VaultPath(PlacesDocument.name) else { return }
+        let reading: PlacesDocument.Reading
+        do {
+            switch try await mirror.contents(at: path) {
+            case .text(let text): reading = PlacesDocument.read(text)
+            case .missing: reading = PlacesDocument.read(nil)
+            case .blocked(let why): reading = PlacesDocument.Reading(unreadable: why)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            reading = PlacesDocument.Reading(unreadable: "could not be read: \(error)")
+        }
+        guard mine == generation else { return }
+        places = reading
     }
 
     /// The mirror for a folder, made the first time that folder is the home, and the presenter
@@ -397,6 +422,7 @@ final class Memory {
         // the compiled look and not the one the account it let go of was wearing.
         look = Look()
         lookReading = LookDocument.Reading(look: Look())
+        places = PlacesDocument.Reading()
         dropPresenter()
         // After the pass in flight has stopped, never during it: a folder taken away mid-write
         // is one a half-finished pass puts back. And only while this is still the newest thing

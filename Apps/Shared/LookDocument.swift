@@ -153,7 +153,23 @@ enum LookDocument {
     private static func bar(_ value: inout Look.Bar, _ r: Reader) {
         r.font("font", &value.font, largest: Look.Bar.largestFont)
         r.colour("ink", &value.ink)
-        r.barSpacing("spacing", &value.spacing)
+        r.retired("spacing")
+        r.object("slider") { slider(&value.slider, $0) }
+    }
+
+    private static func slider(_ value: inout Look.Bar.Slider, _ r: Reader) {
+        r.bounded("width", &value.width, in: 96...560)
+        r.bounded("height", &value.height, in: 24...44)
+        r.bounded("padding", &value.padding, in: 4...24)
+        r.bounded("drop", &value.drop, in: 0...24)
+        r.bounded("inset", &value.inset, in: 8...80)
+        r.outline("track", &value.track)
+        r.bounded("stop", &value.stop, in: 2...28)
+        r.bounded("knob", &value.knob, in: 2...28)
+        r.alpha("restOpacity", &value.restOpacity)
+        r.alpha("restLabelOpacity", &value.restLabelOpacity)
+        r.font("labelFont", &value.labelFont, largest: Look.Bar.Slider.largestLabel)
+        r.bounded("labelSpacing", &value.labelSpacing, in: 0...16)
     }
 
     private static func mind(_ value: inout Look.Mind, _ r: Reader) {
@@ -256,6 +272,8 @@ enum LookDocument {
     private static func settings(_ value: inout Look.Settings, _ r: Reader) {
         r.colour("tint", &value.tint)
         r.font("codeFont", &value.codeFont)
+        // No smaller than a finger takes: the button is the only way a share is started here.
+        r.bounded("broadcastButton", &value.broadcastButton, in: 44...88)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {
@@ -311,7 +329,7 @@ enum LookDocument {
         r.pixelScale("scale", &value.scale)
         r.clearance("clearance", &value.clearance)
         r.roamSpeed("roamSpeed", &value.roamSpeed)
-        r.retired("swimSpeed")
+        r.roamSpeed("swimSpeed", &value.swimSpeed)
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
@@ -347,7 +365,7 @@ enum LookDocument {
         r.symbol("speaking", &value.speaking)
         r.symbol("muted", &value.muted)
         r.symbol("models", &value.models)
-        r.retired("modelsOpen")
+        r.symbol("modelsOpen", &value.modelsOpen)
     }
 
     private static func well(_ value: inout Look.Composer.Well, _ r: Reader) {
@@ -507,14 +525,6 @@ enum LookDocument {
         /// floor of its own besides (`Look.Composer.Well.pressable`).
         func compactShare(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.5...1, "a share of the resting height between 0.5 and 1") {
-                took(key)
-                value = CGFloat(number)
-            }
-        }
-
-        /// The room between the bar's controls: none to `Look.Bar.widestSpacing`.
-        func barSpacing(_ key: String, _ value: inout CGFloat) {
-            if let number = amount(key, in: 0...Look.Bar.widestSpacing, "a length in points between 0 and 32") {
                 took(key)
                 value = CGFloat(number)
             }
@@ -743,7 +753,7 @@ enum LookDocument {
 
         /// What something is called: a line of text with something in it besides space, no longer
         /// than `Look.Mind.longest` characters and with no control character, a newline among
-        /// them, since it is drawn on one line of the notice and of the menu.
+        /// them, since it is drawn on one line of the notice and under a stop of the slider.
         func title(_ key: String, _ value: inout String) {
             guard let raw = take(key) else { return }
             guard let text = raw as? String else { return note(key, "is not a name") }

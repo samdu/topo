@@ -19,6 +19,7 @@ struct TopoApp: App {
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
+    @State private var shares: ShareInbox
     @State private var defaultSurface: DefaultSurface
     @State private var controlDefaults = ControlDefaults()
     private let tokens: StoredTokenProvider
@@ -79,12 +80,20 @@ struct TopoApp: App {
             SecretTool(store: connections.store, onePassword: GuestOnePassword(), leftBehind: connections.leftBehind,
                        requests: connections.secrets),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
-                         broker: broker),
+                         broker: broker, places: { memory.places }),
             MapsTool.standard(permission: location, broker: broker),
             homeTool,
+            PhotosTool(library: PhotoKitLibrary(), authorizer: PhotosAuthorizer(), broker: broker),
+            FilesTool(picker: DocumentPicker(), drop: GuestVaultDrop()),
+            ScreenTool(),
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
+            LogTool(reader: UnifiedLogReader()),
+            ContextTool(facts: { [weak harness] in
+                ContextTool.Facts(context: harness?.context, window: harness?.window, setting: harness?.compaction ?? .auto,
+                                  compacting: harness?.compacting ?? false, last: harness?.lastCompaction)
+            }, set: { [weak harness] in harness?.compaction = $0 }, compact: { [weak harness] in harness?.compact() ?? false }),
         ]
         // A control's request to the home network asks for local network access in the
         // foreground only, since a background one while it is undetermined is denied unasked.
@@ -98,6 +107,10 @@ struct TopoApp: App {
         harness.onLanded = { [weak harness] reply in defaultSurface.landed(reply, in: harness?.turns ?? []) }
         let widgetCues = WidgetCues(harness: harness)
         _widgetCues = State(initialValue: widgetCues)
+        let shares = ShareInbox(line: harness)
+        _shares = State(initialValue: shares)
+        ShortcutIntents.drain = { await shares.drain() }
+        ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
@@ -204,6 +217,7 @@ struct TopoApp: App {
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
                 defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
                 controlDefaults.follow(from: was, to: phase)
+                shares.follow(from: was, to: phase, guestIsHere: roleSelector.role == .primary)
                 guard phase == .signedIn else { return }
                 Task { try? await NotePush.ensureSubscription() }
                 // What the watch is owed of the slots: a sign-out's deletes, then any record
@@ -213,12 +227,21 @@ struct TopoApp: App {
             // The primary, signed in, takes what other phones' records left on the watch.
             .onChange(of: roleSelector.role == .primary && signIn.phase == .signedIn, initial: true) { _, owner in
                 if owner { SurfaceSync.shared.sweep() }
+                // A screen share is taken only where the guest lives, and its stills go with
+                // the login or the role.
+                ScreenTool.follow(owner: owner, store: ScreenStore.shared(), home: GuestResident.homeDirectory)
+                // An image or a file can be shared only where the guest's home is.
+                if signIn.phase == .signedIn { shares.follow(from: .signedIn, to: .signedIn, guestIsHere: owner) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)
                 if phase == .active {
                     Perf.mark("scene.active")
                     Task { await widgetCues.drain() }
+                    // What was shared from another app while Topo was away becomes a turn now.
+                    Task { await shares.drain() }
+                    // A copy of a still whose ten minutes ran out while Topo was suspended goes now.
+                    Task.detached(priority: .utility) { ScreenTool.sweep(under: GuestResident.homeDirectory) }
                     LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
                     speaker.prepare()
@@ -235,7 +258,10 @@ struct TopoApp: App {
             // A widget's cue waits for the harness's first read of the log, which is when it
             // can tell a cue it already sent; a link's cue arrives as a URL.
             .onChange(of: harness.hasRead) { _, read in
-                if read { Task { await widgetCues.drain() } }
+                if read {
+                    Task { await widgetCues.drain() }
+                    Task { await shares.drain() }
+                }
             }
             .onOpenURL { url in Task { await widgetCues.open(url) } }
             // Nothing unless a debug build was launched asking for a turn; the screen

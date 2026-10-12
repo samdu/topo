@@ -29,7 +29,7 @@ public struct ClaudeLauncher: ResidentLauncher {
                 + "It is yours to read and write: a note you keep there is what you remember between "
                 + "conversations, and it is synced to the person's other devices, where they read it in "
                 + "Obsidian. Link notes with relative paths inside the vault, never absolute ones. The "
-                + "hidden folders in it (.obsidian, .topo) are not yours to change."
+                + "hidden folder in it (.obsidian) is not yours to change."
         }
         return "Your memory, an Obsidian vault, cannot be reached on this phone right now. Nothing "
             + "written under \(memory) is kept, so if you are asked to remember something, say that "
@@ -79,19 +79,34 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// same sandbox (the bypass flag is an argument and is not inherited): the guest runs
     /// everything as root, and Claude Code refuses to bypass permissions as root unless it is told
     /// it is in a sandbox, which it is.
-    public func launchEnvironment() async throws -> [String: String] {
+    public func launchEnvironment(compactAt: Int? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
         environment["HOME"] = home
         environment["IS_SANDBOX"] = "1"
+        // The threshold is the launcher's too. The window is always given, because Claude Code
+        // enforces a threshold only over a window it was given: with none, a model whose window
+        // it resolves itself is compacted when the API refuses the prompt. A percent lowers the
+        // threshold, and none leaves that variable out, which is Claude Code's own number,
+        // whatever the callback supplied.
+        environment[Self.compactWindowVariable] = Self.compactWindow
+        environment[Self.compactAtVariable] = compactAt.map(String.init)
         return environment
     }
+
+    /// The share of its effective window, in whole percent, at which Claude Code compacts.
+    public static let compactAtVariable = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+
+    /// The window the threshold is taken over, which Claude Code clamps to the model's own: the
+    /// largest it accepts, so it is every model's whole window.
+    public static let compactWindowVariable = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+    public static let compactWindow = "1000000"
 
     /// `memory` is the session's (`GuestSession.use(memory:)`): true or false says so to the
     /// resident (`memoryPrompt`), nil says nothing. A launch mounts nothing: what it says is what
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
-    public func launch(resume session: String?, model: String?, memory: Bool?) async throws -> any ResidentProcess {
+    public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess {
         try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
-                              environment: try await launchEnvironment())
+                              environment: try await launchEnvironment(compactAt: compactAt))
     }
 }

@@ -207,7 +207,7 @@ final class ControlCueTests: XCTestCase {
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                        reloadEveryControl: {}, schedule: { _, _ in })
-        let takeover = Takeover(demoteHarness: {}, acceptDemotion: {}, stopSpeaking: {}, forgetMemory: {},
+        let takeover = Takeover(forgetShares: {}, demoteHarness: {}, acceptDemotion: {}, stopSpeaking: {}, forgetMemory: {},
                                 forgetSurfaces: { reloader.forget(store) }, forgetConnections: {}, forgetLogin: {})
         await takeover.act()
         XCTAssertTrue(ControlValue.read(slot: "button-1", store: store).signedOut)

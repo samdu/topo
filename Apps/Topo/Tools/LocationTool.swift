@@ -17,16 +17,52 @@ protocol Locator: Sendable {
     func fix() async throws -> LocationFix
 }
 
-/// `topo location`: where the phone is now, with a place name when one comes back in time.
+/// `topo location`: where the phone is now, with the place the person named when the phone is
+/// inside one (`PlacesDocument`), and the geocoder's nearest address when one comes back in time.
 struct LocationTool: Tool {
     let locator: any Locator
     let authorizer: any Authorizer
     let broker: PermissionBroker
+    /// What the vault's `places.json` said at the last sync: `Memory.places`.
+    var places: @MainActor @Sendable () -> PlacesDocument.Reading = { PlacesDocument.Reading() }
     var now: @Sendable () -> Date = { Date() }
 
     let name = "location"
     let summary = "where the phone is now, and the place's name"
-    let usage = "topo location                       latitude, longitude, accuracy, the fix's age, and a place name"
+    let usage = """
+    topo location                       latitude, longitude, accuracy, the fix's age, and the place
+
+    The place line is `place NAME (ADDRESS) — nearest address …` when the phone is inside a place the
+    vault's places.json names, and `place (nearest address) …` otherwise: the geocoder's house number
+    is its nearest guess, not a measurement, and for a flat above a shop it is the shop's.
+    places.json is yours to write, in the memory's root, when the person corrects a place:
+      {"home": {"latitude": 37.78167, "longitude": -122.45261, "radius": 30, "address": "3147 Geary Blvd"}}
+    radius is metres (5 to 5000, 50 when left out) and address is optional. It is read at the memory's
+    next sync, and a `note` line here says what in it was not read.
+    """
+
+    /// The most `note` lines about places.json one answer carries.
+    static let noted = 3
+
+    /// The named place the fix is inside, the nearest centre first when it is inside several. An
+    /// approximate fix is kilometres wide, so it is inside no place.
+    static func named(_ fix: LocationFix, among places: [PlacesDocument.Place]) -> PlacesDocument.Place? {
+        guard fix.precise else { return nil }
+        let here = CLLocation(latitude: fix.latitude, longitude: fix.longitude)
+        return places
+            .map { (place: $0, metres: here.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude))) }
+            .filter { $0.metres <= $0.place.radius }
+            .min { ($0.metres, $0.place.name) < ($1.metres, $1.place.name) }?
+            .place
+    }
+
+    /// The place line: the named place and the geocoder's address, either or neither.
+    static func placeLine(_ named: PlacesDocument.Place?, nearest: String?) -> String? {
+        let nearest = nearest.map(PhoneTool.flat)
+        guard let named else { return nearest.map { "place (nearest address) " + $0 } }
+        let place = "place " + named.name + (named.address.map { " (\($0))" } ?? "")
+        return place + (nearest.map { " — nearest address " + $0 } ?? "")
+    }
 
     func run(_ arguments: [String]) async -> ToolReply {
         await PhoneTool.run(authorizer, broker: broker, usage: usage, parse: {
@@ -39,7 +75,12 @@ struct LocationTool: Tool {
                 String(format: "accuracy %.0f m", fix.accuracy) + (fix.precise ? "" : " (approximate: the person allows only an approximate location)"),
                 "at \(ToolDates.write(fix.at)) (\(max(0, Int(now().timeIntervalSince(fix.at)))) s ago)",
             ]
-            if let place = fix.place { lines.append("place " + PhoneTool.flat(place)) }
+            let reading = await places()
+            if let line = Self.placeLine(Self.named(fix, among: reading.places), nearest: fix.place) { lines.append(line) }
+            var notes = reading.notes
+            if let why = reading.unreadable { notes.insert(why, at: 0) }
+            lines += notes.prefix(Self.noted).map { "note \(PlacesDocument.name): " + PhoneTool.flat($0) }
+            if notes.count > Self.noted { lines.append("note \(PlacesDocument.name): and \(notes.count - Self.noted) more") }
             return .ok(lines.joined(separator: "\n") + "\n")
         }
     }

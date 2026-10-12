@@ -16,8 +16,10 @@
 # Info.plist would beat it silently, so every build would carry the same number.
 #
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
-# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location or
-# HomeKit with no string saying why, and nothing shows it until the first call that asks.
+# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location,
+# HomeKit or Photos with no string saying why, and nothing shows it until the first call that asks.
+# `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is read beside them: without it a limited
+# photo library puts the system's sheet for choosing more up at a tool's call.
 #
 # `NSLocalNetworkUsageDescription` is one of them: a control's request to a device on the home
 # network is what asks for local network access. `NSAllowsArbitraryLoads` under
@@ -32,6 +34,8 @@
 # no setting generates the key, and without it a tap on a widget's link opens nothing. The
 # widget extension is read off the product too: `PlugIns/TopoWidgets.appex`, the one the widgets
 # are, embedded in the app.
+# The share extension likewise: `PlugIns/TopoShare.appex`, a share-services extension whose
+# activation rule is the dictionary of the four things Topo takes, one of each.
 #
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
@@ -103,9 +107,16 @@ for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
     fi
 done
 
+key=PHPhotoLibraryPreventAutomaticLimitedAccessAlert
+value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+if [ "$value" != "true" ] && [ "$value" != "1" ]; then
+    echo "$app/Info.plist does not set $key ( ${value:-absent} ); a limited photo library would put the system's sheet up at a tool's call" >&2
+    status=1
+fi
+
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
            NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \
-           NSLocalNetworkUsageDescription; do
+           NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
         echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
@@ -146,6 +157,122 @@ if [ ! -f "$app/PlugIns/TopoWidgets.appex/Info.plist" ]; then
     status=1
 fi
 
+# The screen share's broadcast extension: one that takes sample buffers, with a program and a
+# principal class, and, where the product is signed, the app group its stills are kept in.
+broadcast="$app/PlugIns/TopoBroadcast.appex"
+point="$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+if [ "$point" != "com.apple.broadcast-services-upload" ]; then
+    echo "$app does not embed PlugIns/TopoBroadcast.appex as a broadcast upload extension (${point:-no extension}); the screen could not be shared with Topo" >&2
+    status=1
+else
+    mode="$(plutil -extract NSExtension.RPBroadcastProcessMode raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+    if [ "$mode" != "RPBroadcastProcessModeSampleBuffer" ]; then
+        echo "TopoBroadcast.appex's RPBroadcastProcessMode is '${mode:-absent}', not RPBroadcastProcessModeSampleBuffer; it would be handed no frames" >&2
+        status=1
+    fi
+    program="$(plutil -extract CFBundleExecutable raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+    if [ -z "$program" ] || [ ! -x "$broadcast/$program" ]; then
+        echo "TopoBroadcast.appex has no executable named by its CFBundleExecutable ('${program:-absent}'); a share would not start" >&2
+        status=1
+    fi
+    principal="$(plutil -extract NSExtension.NSExtensionPrincipalClass raw -o - -- "$broadcast/Info.plist" 2>/dev/null || true)"
+    if [ -z "$principal" ]; then
+        echo "TopoBroadcast.appex names no NSExtensionPrincipalClass; a share would have no handler" >&2
+        status=1
+    fi
+    if codesign -d "$broadcast" >/dev/null 2>&1; then
+        granted="$(mktemp)"
+        codesign -d --entitlements - --xml "$broadcast" > "$granted" 2>/dev/null || true
+        if ! /usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$granted" 2>/dev/null \
+            | grep -qx '[[:space:]]*group\.zone\.hexagon\.topo'; then
+            echo "TopoBroadcast.appex is signed without the group.zone.hexagon.topo app group; it would refuse every share as signed out" >&2
+            status=1
+        fi
+        rm -f "$granted"
+    fi
+fi
+
+# The share extension, and that it takes only what it names: a predicate in place of the
+# dictionary would put Topo in every share sheet for everything.
+share="$app/PlugIns/TopoShare.appex/Info.plist"
+point="$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - -- "$share" 2>/dev/null || true)"
+if [ "$point" != "com.apple.share-services" ]; then
+    echo "$app does not embed PlugIns/TopoShare.appex as a share extension (${point:-no extension}); Topo would be in no share sheet" >&2
+    status=1
+else
+    # A plist with no program beside it is an extension the system lists and cannot run.
+    program="$(plutil -extract CFBundleExecutable raw -o - -- "$share" 2>/dev/null || true)"
+    if [ -z "$program" ] || [ ! -x "$app/PlugIns/TopoShare.appex/$program" ]; then
+        echo "TopoShare.appex has no executable named by its CFBundleExecutable ('${program:-absent}'); the sheet would not open" >&2
+        status=1
+    fi
+    principal="$(plutil -extract NSExtension.NSExtensionPrincipalClass raw -o - -- "$share" 2>/dev/null || true)"
+    if [ -z "$principal" ]; then
+        echo "TopoShare.appex names no NSExtensionPrincipalClass; the sheet would have no view controller" >&2
+        status=1
+    fi
+    # Signed, it is read for the app group: without it the sheet finds no store and takes nothing.
+    if codesign -d "$app/PlugIns/TopoShare.appex" >/dev/null 2>&1; then
+        granted="$(mktemp)"
+        codesign -d --entitlements - --xml "$app/PlugIns/TopoShare.appex" > "$granted" 2>/dev/null || true
+        if ! /usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$granted" 2>/dev/null \
+            | grep -qx '[[:space:]]*group\.zone\.hexagon\.topo'; then
+            echo "TopoShare.appex is signed without the group.zone.hexagon.topo app group; the sheet would say to sign in, always" >&2
+            status=1
+        fi
+        rm -f "$granted"
+    fi
+    rule="NSExtension.NSExtensionAttributes.NSExtensionActivationRule"
+    if [ "$(plutil -extract "$rule" raw -o - -- "$share" 2>/dev/null | sort | tr '\n' ' ')" != "NSExtensionActivationSupportsFileWithMaxCount NSExtensionActivationSupportsImageWithMaxCount NSExtensionActivationSupportsText NSExtensionActivationSupportsWebURLWithMaxCount " ]; then
+        echo "TopoShare.appex's NSExtensionActivationRule is not the dictionary of the four things Topo takes" >&2
+        status=1
+    fi
+    text="$(plutil -extract "$rule.NSExtensionActivationSupportsText" raw -o - -- "$share" 2>/dev/null || true)"
+    if [ "$text" != "true" ]; then
+        echo "TopoShare.appex's NSExtensionActivationSupportsText is '${text:-absent}', not true; Topo would not be offered text" >&2
+        status=1
+    fi
+    for key in NSExtensionActivationSupportsFileWithMaxCount NSExtensionActivationSupportsImageWithMaxCount \
+               NSExtensionActivationSupportsWebURLWithMaxCount; do
+        count="$(plutil -extract "$rule.$key" raw -o - -- "$share" 2>/dev/null || true)"
+        if [ "$count" != "1" ]; then
+            echo "TopoShare.appex's $key is '${count:-absent}', not 1; Topo takes one thing a share" >&2
+            status=1
+        fi
+    done
+fi
+
+# The Shortcuts actions, which reach the Shortcuts app only through the metadata the build
+# extracts: an intent the extraction skipped compiles and is offered nowhere.
+actions="$app/Metadata.appintents/extract.actionsdata"
+# Each action by name, whether it brings Topo forward, and that it asks for an unlocked phone
+# (authenticationPolicy 1): a prompt is words from whoever holds the phone.
+for action in AskTopoIntent:true FollowUpIntent:false QuickTaskIntent:false; do
+    intent="${action%%:*}"
+    opens="${action##*:}"
+    if [ "$(plutil -extract "actions.$intent.identifier" raw -o - -- "$actions" 2>/dev/null || true)" != "$intent" ]; then
+        echo "$app's App Intents metadata does not name $intent; Shortcuts would not offer it" >&2
+        status=1
+        continue
+    fi
+    got="$(plutil -extract "actions.$intent.openAppWhenRun" raw -o - -- "$actions" 2>/dev/null || true)"
+    if [ "$got" != "$opens" ]; then
+        echo "$app's App Intents metadata has $intent's openAppWhenRun as '${got:-absent}', not $opens" >&2
+        status=1
+    fi
+    policy="$(plutil -extract "actions.$intent.authenticationPolicy" raw -o - -- "$actions" 2>/dev/null || true)"
+    if [ "$policy" != "1" ]; then
+        echo "$app's App Intents metadata has $intent's authenticationPolicy as '${policy:-absent}', not 1 (requires authentication); it would run on a locked phone" >&2
+        status=1
+    fi
+done
+# One App Shortcut for each, and no two for one action.
+offered="$(plutil -extract autoShortcuts json -o - -- "$actions" 2>/dev/null | tr ',{}' '\n\n\n' | sed -n 's/.*"actionIdentifier":"\([A-Za-z]*\)".*/\1/p' | sort | tr '\n' ' ')"
+if [ "$offered" != "AskTopoIntent FollowUpIntent QuickTaskIntent " ]; then
+    echo "$app's App Intents metadata offers '${offered:-no}' as App Shortcuts, not one for each of the three actions" >&2
+    status=1
+fi
+
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2
@@ -160,5 +287,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' six usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex and TopoShare.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

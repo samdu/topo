@@ -13,7 +13,7 @@
 # and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
 # branch is not at before any suite runs; a held lock is waited on and then given up on; a suite an earlier
 # run left going is not started beside; a suite with two results is red; a description keeps the
-# logs' path; and the
+# logs' path; a head run again keeps the earlier run's logs, five runs a commit; and the
 # `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
 #
 #   scripts/tests/validate-and-push-test.sh
@@ -226,6 +226,45 @@ scratch redrerun Packages/TopoLink/Package.swift
 git -C "$repo" push -q origin topic
 FAKE_SUITES="others=failure" FAKE_RUN="99 completed" FAKE_TEST_JOB=4242 validate
 is "red suite: no rerun" "$(grep -c '^run rerun' "$GH_CALLS")" 0
+
+# A head run again after a red: each run has its own logs under the commit, and the red run's
+# are still there. Past five runs of a commit the oldest go.
+runs() { ls -1 "$TOPO_VALIDATE_LOGS/$sha" | grep -cE '^[0-9]{8}T[0-9]{6}Z-[0-9]+$'; }
+is "the red run: one run's logs under the commit" "$(runs)" 1
+red_run="$(ls -1 "$TOPO_VALIDATE_LOGS/$sha" | grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$')"
+validate
+is "run again: exits 0" "$status" 0
+is "run again: two runs' logs under the commit" "$(runs)" 2
+is "run again: the red run's result is kept" "$(cat "$TOPO_VALIDATE_LOGS/$sha/$red_run/suites.txt" 2>/dev/null)" "others=failure"
+[ -f "$TOPO_VALIDATE_LOGS/$sha/$red_run/mac-suite.log" ] && ok "run again: the red run's log is kept" || fail "run again: the red run's mac-suite.log is gone"
+# What is not a run is left where it is, and earlier runs made to look newer than the one in
+# hand do not have it removed in their place.
+for _ in 1 2 3; do validate; done
+echo kept > "$TOPO_VALIDATE_LOGS/$sha/notes.txt"
+touch -t 203001010000 "$TOPO_VALIDATE_LOGS/$sha"/*Z-*
+FAKE_SUITES="others=failure" validate
+is "a sixth run, red: exits 1" "$status" 1
+case "$out" in *"No such file"*) fail "a sixth run, red: its own logs were removed: $out" ;; *) ok "a sixth run, red: its own logs are there to read" ;; esac
+is "a sixth run: five kept" "$(runs)" 5
+[ ! -e "$TOPO_VALIDATE_LOGS/$sha/$red_run" ] && ok "a sixth run: the oldest is gone" || fail "a sixth run: the oldest run is still there"
+is "a sixth run: a file that is not a run is left" "$(cat "$TOPO_VALIDATE_LOGS/$sha/notes.txt" 2>/dev/null)" kept
+
+# Runs a signal ended are counted like any other: seven of them leave five.
+scratch signalled Packages/TopoLink/Package.swift
+git -C "$repo" push -q origin topic
+export FAKE_HOLD="$work/signalled/hold"
+for _ in 1 2 3 4 5 6 7; do
+  : > "$FAKE_HOLD"
+  (cd "$repo" && PATH="$work/bin:$PATH" FAKE_SUITES=held exec scripts/validate-and-push.sh --no-push) > "$work/signalled/out" 2>&1 &
+  held=$!
+  for _ in $(seq 300); do [ -s "$FAKE_HOLD" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+  [ -s "$FAKE_HOLD" ] || fail "signalled runs: a run's suite never started"
+  kill -TERM "$held"; wait "$held" 2>/dev/null
+done
+unset FAKE_HOLD
+is "seven runs ended by a signal: five kept" "$(runs)" 5
+own="$(sed -n 's/^RED at .* Logs: \(.*\)\/mac-suite.log$/\1/p' <<<"$out")"
+is "a sixth run: the logs it names hold its own result" "$(cat "$own/suites.txt" 2>/dev/null)" "others=failure"
 
 # Another validation holds the Mac: waited on, then given up on, with no suite run.
 scratch locked Apps/Client/SettingsView.swift

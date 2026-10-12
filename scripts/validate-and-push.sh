@@ -35,14 +35,16 @@
 #      on it.
 #
 # Each status's description says pass or fail, the lane, the minutes and where the logs are:
-# ~/Library/Logs/topo-validate/<sha>/ on this Mac, kept for the ten newest commits. It exits 0
+# ~/Library/Logs/topo-validate/<sha>/ on this Mac, one directory per run inside it (named for
+# when its suites began, UTC, once the lock was this run's), so a head run again after a red
+# keeps the red run's logs. The ten newest commits are kept, and each one's five newest runs. It exits 0
 # when every suite passed and the statuses are posted, 1 on a red suite, 2 on anything that
 # stopped it earlier, and 143 when a signal ended it, its suite ended with it.
 #
 # A SIGKILL ends the script and not its suite, and the kernel drops the lock with the script.
 # So the suite's pid is on record beside the lock ($cache/suite), and a run that finds that
-# suite still going refuses to start beside it: two suites in the one checkout and the one
-# logs directory would each answer for the other.
+# suite still going refuses to start beside it: the one checkout would be moved to another
+# commit under the suite already running in it.
 set -euo pipefail
 
 cache="${TOPO_VALIDATE_CACHE:-$HOME/Library/Caches/topo-validate}"
@@ -50,6 +52,7 @@ logs_root="${TOPO_VALIDATE_LOGS:-$HOME/Library/Logs/topo-validate}"
 repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 KEEP_LOGS=10
+KEEP_RUNS=5
 POST_RETRY="${POST_RETRY:-3}"   # seconds before a status is posted again, times the try
 SUITES=(topo_unit topo_ui others)
 
@@ -136,7 +139,8 @@ esac
 [ -z "$lane_arg" ] || lane="$lane_arg"
 [ -z "$suites_arg$lane_arg" ] || echo "asked for: ${chosen[*]:-no suite}; lane $lane"
 
-logs="$logs_root/$sha"
+commit_logs="$logs_root/$sha"
+logs=""   # this run's own directory under the commit's, made once the lock is held
 host="$(hostname -s)"
 results=""   # `<suite>=success|failure` lines, as mac-suite.sh wrote them
 minutes=0
@@ -173,8 +177,15 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   git -C "$checkout" clean --quiet -fd
   [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || die "$checkout is not at $short."
 
-  rm -rf "$logs"
-  mkdir -p "$logs"
+  # This run's logs, beside the four newest of the commit's earlier runs: by name, which is
+  # when each began, so the run in hand is never one of those removed, and before the suites,
+  # so a run a signal ends is counted by the next. Only what is named as a run is touched.
+  mkdir -p "$commit_logs"
+  ls -1 "$commit_logs" | { grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' || true; } | sort -t- -k1,1r -k2,2nr | tail -n "+$KEEP_RUNS" | while IFS= read -r old; do
+    rm -rf "${commit_logs:?}/$old"
+  done
+  logs="$commit_logs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  mkdir "$logs" || die "could not make $logs."
   echo "Running ${chosen[*]} (lane $lane) at $short in $checkout; logs in $logs"
   started=$SECONDS
   # 8>&-: nothing the suite leaves running holds the lock. `exec`, so the pid is the suite's
@@ -245,10 +256,10 @@ post() {
   done
   die "could not post $1 to $short; run again with --no-push once GitHub answers."
 }
-# The logs as a description names them, short enough that the 140 characters keep the path
-# under the default root.
-where="~${logs#"$HOME"}"
-[ "$where" != "~$logs" ] || where="$logs"
+# The logs as a description names them: the commit's directory and not the run's inside it,
+# which under the default root would take the description past the 140 characters.
+where="~${commit_logs#"$HOME"}"
+[ "$where" != "~$commit_logs" ] || where="$commit_logs"
 for suite in ${chosen[@]+"${chosen[@]}"}; do
   # Red by any line that says so, as `red` above is read: never the last word of several.
   if grep -q "^$suite=failure$" <<<"$results" || ! grep -q "^$suite=success$" <<<"$results"; then

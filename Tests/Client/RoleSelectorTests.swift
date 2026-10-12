@@ -23,6 +23,27 @@ final class RoleSelectorTests: XCTestCase {
         guard case .primary = try await lease.acquire() else { return XCTFail("claim") }
     }
 
+    private let mac = DeviceID("mac-test")
+
+    /// A hub as it brings itself up: its device record, then its lease.
+    private func hub(_ database: InMemoryRecordDatabase) async throws {
+        _ = try await DeviceDirectory(database: database).register(Device(
+            id: mac, name: "Mac", kind: .mac, publicKey: "key", registeredAt: Date(), seenAt: Date()))
+        try await lease(database, holder: mac)
+    }
+
+    /// A lease record with no epoch, which `Lease` does not read.
+    private func malformed() async throws -> InMemoryRecordDatabase {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("ios-phone"))
+        let current = await db.current(Lease.recordID)
+        var record = try XCTUnwrap(current)
+        record.fields["epoch"] = nil
+        _ = try await db.save(record)
+        XCTAssertNil(Lease(record: record))
+        return db
+    }
+
     func testNoLeaseRecordMeansPrimaryAndStakesTheLease() async throws {
         let db = InMemoryRecordDatabase()
         let s = selector(db)
@@ -55,18 +76,81 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(s.role, .viewer)
     }
 
-    func testOwnLeaseOrOwnLoginMeansPrimary() async throws {
+    func testOwnLeaseMeansPrimary() async throws {
         let db = InMemoryRecordDatabase()
         try await lease(db, holder: me)
         let own = selector(db)
         await own.decide()
         XCTAssertEqual(own.role, .primary)
+    }
 
-        let other = InMemoryRecordDatabase()
-        try await lease(other, holder: DeviceID("ipad"))
-        let signedIn = selector(other, signedIn: true)
-        await signedIn.decide()
-        XCTAssertEqual(signedIn.role, .primary)
+    /// #351: a pad whose keychain kept a login from an earlier install, launched beside the phone
+    /// that is primary. It was primary too, with no role record written for the phone.
+    func testALoginFoundBesideAnotherDevicesLeaseMeansViewer() async throws {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("ios-phone"))
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .viewer)
+        // Nothing of the phone's was touched: its lease stands and no role record demotes it.
+        let record = await db.current(Lease.recordID)
+        XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, DeviceID("ios-phone"))
+        let roles = try await db.records(ofType: DeviceRole.recordType)
+        XCTAssertTrue(roles.isEmpty)
+    }
+
+    func testALoginBesideAnotherDevicesLapsedLeaseMeansViewer() async throws {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("ios-phone"))
+        let current = await db.current(Lease.recordID)
+        var record = try XCTUnwrap(current)
+        record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -3600))
+        _ = try await db.save(record)
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .viewer)
+    }
+
+    /// A phone reinstalled while a hub holds the lease has a new name, and the records cannot
+    /// tell it from a second device carrying an old login: a viewer, like any other.
+    func testALoginBesideAHubsLeaseMeansViewer() async throws {
+        let db = InMemoryRecordDatabase()
+        try await hub(db)
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .viewer)
+        // Nothing of the hub's was touched: its lease stands and no role record is written.
+        let record = await db.current(Lease.recordID)
+        XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, mac)
+        let roles = try await db.records(ofType: DeviceRole.recordType)
+        XCTAssertTrue(roles.isEmpty)
+    }
+
+    /// A lease record that does not parse names nobody.
+    func testALoginBesideALeaseRecordThatDoesNotParseMeansPrimary() async throws {
+        let s = selector(try await malformed(), signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .primary)
+    }
+
+    func testNoLoginBesideALeaseRecordThatDoesNotParseMeansViewer() async throws {
+        let s = selector(try await malformed())
+        await s.decide()
+        XCTAssertEqual(s.role, .viewer)
+    }
+
+    func testALoginWithNoLeaseRecordMeansPrimary() async {
+        let s = selector(InMemoryRecordDatabase(), signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .primary)
+    }
+
+    /// A simulator with no iCloud account, and a phone out of reach at its first launch.
+    func testALoginWhereTheRecordCannotBeReadMeansPrimary() async {
+        let s = selector(Failing(), signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .primary)
+        XCTAssertNil(s.trouble)
     }
 
     func testADecisionIsKeptAcrossLaunches() async throws {
