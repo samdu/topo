@@ -728,6 +728,25 @@ class DeviceBoxes(unittest.TestCase):
         same = dict(result(status="fail"), createdAt=there(at=20)["createdAt"])
         self.assertEqual([x["kind"] for x in both([same], [there(at=20)])], ["report"], "of two at one moment the fail is the later")
 
+    def test_a_heading_that_names_a_check_wrongly_ends_the_section_above_and_is_no_check(self):
+        whole = "pr: samdu/topo#7 at abc1234\nbox: x\n"
+        for heading in ("## check: BAD", "## check:", "## check: two words", "## Check: log", "##check: log", "## check : log", "## check: -log"):
+            body = f"## check: log\nSteps, and no pr or box line.\n\n{heading}\n{whole}"
+            self.assertEqual(janitor.build_checks(body), {}, heading + ": the section above borrows nothing from under it")
+        self.assertEqual(janitor.build_checks(f"## check: log\nno lines\n## check: BAD\n{whole}"), {}, "the lines under a heading that names no check are nobody's")
+        self.assertEqual(list(janitor.build_checks(f"## check: BAD\n{whole}## check: log\n{whole}")), ["log"])
+
+    def test_passes_on_a_moved_head_are_counted_across_the_build_issues_that_carried_it(self):
+        old = build(checks=(("log", 7, "fffffff", BOX),))
+        other = dict(old, number=4, title="Build 404700 (fffffff)")
+        there = dict(result(device="iPad", at=20), url="https://github.com/samdu/topo-link/issues/4#issuecomment-20")
+        w = janitor.decide_ticks([(old, [result()]), (other, [there])], [boxed("(2)")])
+        self.assertEqual([(x["kind"], x["why"]) for x in w], [("report", "moved")], "one respondent on each is the two the box asks for")
+        self.assertIn("passed on samdu/topo-link#3 and samdu/topo-link#4 at fffffff", w[0]["text"])
+        self.assertEqual(janitor.decide_ticks([(old, [result()]), (other, [dict(there, body=there["body"].replace("pass", "fail"))])], [boxed("(2)")]), [],
+                         "a fail on another head says nothing of this one")
+        self.assertEqual(janitor.decide_ticks([(old, [result()]), (other, [dict(there, body=result()["body"])])], [boxed("(2)")]), [], "one respondent on two issues is one")
+
     def test_the_device_of_a_result_is_read_only_from_the_lines_under_its_heading(self):
         """Finding 6: `device:` in what a comment pastes below the blank line names nothing."""
         pasted = result(body="## result: log\nstatus: pass\n\n```\ndevice: iPad\n```\n")
@@ -770,8 +789,7 @@ class Scripted:
         return self.comments[min(self.reads, len(self.comments)) - 1]
 
     def pr_now(self, number):
-        return {"state": "OPEN", "headRefOid": HEAD, "body": self.body, "createdAt": "2026-09-26T10:00:00Z",
-                "edits": [{"id": f"E{i}", "editedAt": f"2026-09-26T20:00:{i:02d}Z", "diff": b} for i, (_, b) in reversed(list(enumerate(self.wrote, 1)))]}
+        return {"state": "OPEN", "headRefOid": HEAD, "body": self.body, "edits": len(self.wrote)}
 
     def pr_write(self, verb, number, text):
         self.wrote.append((verb, text))
@@ -786,7 +804,7 @@ with open(os.environ["FAKE_LOG"], "a") as f: f.write(tool + " " + " ".join(a) + 
 S = json.load(open(os.environ["FAKE_SCRIPT"]))
 def out(x): print(json.dumps(x) if not isinstance(x, str) else x); sys.exit(0)
 # What a write of this pass, or somebody else's beside it, has changed: one PR's
-# description with its edit history, its head and state, and the mailbox's
+# description with how many times it has been edited, its head and state, and the mailbox's
 # comments and closed issues. `meanwhile` is what others do as the janitor's
 # nth `pr edit` is on its way: after everything it read, before its write lands.
 WORLD = os.environ["FAKE_LOG"] + ".world"
@@ -797,14 +815,11 @@ def the_pr(w, n):
     if n not in w["prs"]:
         now = S.get("pr_now", {}).get(n) or next(p for p in S["prs"] if str(p["number"]) == n)
         w["prs"][n] = {"state": now.get("state", "OPEN"), "headRefOid": now["headRefOid"], "body": now["body"],
-                       "edits": list(S.get("pr_edits", {}).get(n, []))}
+                       "edits": S.get("pr_edits", {}).get(n, 0)}
     return w["prs"][n]
-CREATED = "2026-09-26T10:00:00Z"
 def edited(p, body, w, shown=True):
-    if not p["edits"] and shown: p["edits"] = [{"id": "E0", "editedAt": CREATED, "diff": p["body"]}]
     p["body"] = body
-    w["stamp"] = w.get("stamp", 0) + 1
-    if shown: p["edits"].insert(0, {"id": "E%d" % w["stamp"], "editedAt": "2026-09-26T20:00:%02dZ" % w["stamp"], "diff": body})
+    if shown: p["edits"] += 1
 if tool == "gh":
     limit = int(a[a.index("--limit") + 1]) if "--limit" in a else 10**9
     if a[:2] == ["pr", "list"] and "--state" in a and a[a.index("--state") + 1] == "open":
@@ -820,8 +835,10 @@ if tool == "gh":
         n = next(x.split("=", 1)[1] for x in a if x.startswith("number="))
         if n in S.get("pr_now_error", {}) and world()["edits"] >= S["pr_now_error"][n]: print("HTTP 502", file=sys.stderr); sys.exit(1)
         p = the_pr(world(), n)
+        # GitHub's history counts the PR's opening as an entry once there is any edit, and says so.
         out({"data": {"repository": {"pullRequest": {"state": p["state"], "headRefOid": p["headRefOid"], "body": p["body"],
-                                                     "createdAt": CREATED, "userContentEdits": {"nodes": p["edits"]}}}}})
+                                                     "includesCreatedEdit": p["edits"] > 0,
+                                                     "userContentEdits": {"totalCount": p["edits"] + (1 if p["edits"] else 0)}}}}})
     if a[:2] == ["api", "graphql"]:
         if S.get("issues_error"): print(S["issues_error"], file=sys.stderr); sys.exit(1)
         start = int(a[a.index("-f", 3) + 1].split("=", 1)[1]) if a.count("-f") > 1 else 0
@@ -2138,25 +2155,28 @@ class WholePass(unittest.TestCase):
         self.assertEqual(janitor.tick_device_box(sh, boxed(), " " + BOX, HEAD), {"did": "left"})
         self.assertEqual(sh.wrote, [])
 
-    def test_an_edit_made_between_the_read_and_the_write_is_kept(self):
-        mine = dict(boxed(), body=boxed()["body"] + "- [ ] by eye: the coordinator's to tick\r\n")
-        theirs = ["- [ ] by eye", "- [x] by eye"]
-        p, calls = self.run_pass(self.device_pass(pr_now={"7": mine}, meanwhile=[{"replace": theirs}]))
-        self.assertEqual(p.returncode, 0, p.stderr)
-        both = mine["body"].replace(self.UNTICKED, self.TICKED).replace(*theirs)
-        self.assertEqual(self.written("edit"), [mine["body"].replace(self.UNTICKED, self.TICKED), both],
-                         "the first write put the coordinator's box back to unticked; the second is their description with the tick")
-        self.assertEqual(len(self.written("comment")), 1)
-        self.assertEqual(len(self.told("an edit made to the description meanwhile was kept")), 1)
-        # An edit that takes the box away is kept too, and nothing is ticked in it.
-        gone = [self.UNTICKED, f"- [ ] device: {BOX}, reworded"]
-        p, calls = self.run_pass(self.device_pass(pr_now={"7": mine}, meanwhile=[{"replace": gone}]))
-        self.assertEqual(self.written("edit")[2:], [mine["body"].replace(self.UNTICKED, self.TICKED), mine["body"].replace(*gone)])
-        self.assertEqual(len(self.written("comment")), 1, "no second citation")
-        # One made before the read is simply what the read shows: one write.
-        p, calls = self.run_pass(self.device_pass(pr_now={"7": mine}, pr_edits={"7": [{"id": "X1", "editedAt": "2026-09-26T19:00:00Z", "diff": mine["body"]},
-                                                                                         {"id": "X0", "editedAt": "2026-09-26T10:00:00Z", "diff": "first"}]}))
-        self.assertEqual(self.written("edit")[4:], [mine["body"].replace(self.UNTICKED, self.TICKED)])
+    def test_an_edit_made_between_the_read_and_the_write_leaves_the_box_unticked_and_is_said(self):
+        """Finding 3. The janitor's write puts the coordinator's edit back to
+        what it was, and GitHub has no write that would not: so the count of
+        the description's edits is read with it and read back, and when more
+        than the janitor's own landed the box is unticked again, which holds
+        the merge until a person has read the PR, and that is said."""
+        mine = dict(boxed(), body=boxed()["body"] + "- [x] by eye: the coordinator unticks this as the janitor writes\r\n")
+        theirs = ["- [x] by eye", "- [ ] by eye"]
+        ticked = mine["body"].replace(self.UNTICKED, self.TICKED)
+        for i, earlier in enumerate((0, 1, 35)):   # never edited, edited once, and more edits than any page of the history
+            p, calls = self.run_pass(self.device_pass(pr_now={"7": mine}, pr_edits={"7": earlier}, meanwhile=[{"replace": theirs}]))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(self.written("edit")[2 * i:], [ticked, mine["body"]], f"{earlier} edits before: ticked, and unticked on reading the count back")
+            self.assertEqual(self.written("comment"), [], "no results are cited for a tick that did not stand")
+            self.assertEqual(len(self.told("somebody else edited the description between the read the tick was made from and the tick")), i + 1)
+            self.assertNotIn("diff", calls, "nothing of the history but its count is asked for: an edit's `diff` is a summary, not a description")
+        self.assertFalse(self.told("ticked a device box of"))
+        # An edit made before the read is simply what the read shows: one write, cited.
+        for earlier in (0, 1, 35):
+            p, calls = self.run_pass(self.device_pass(pr_now={"7": mine}, pr_edits={"7": earlier}))
+            self.assertEqual(self.written("edit")[-1], ticked)
+        self.assertEqual((len(self.written("edit")), len(self.written("comment"))), (9, 3))
 
     def test_a_build_issue_closed_since_the_list_is_not_read_and_holds_its_checks(self):
         p, calls = self.run_pass(self.device_pass(builds_closed=["3"]))
@@ -2168,25 +2188,26 @@ class WholePass(unittest.TestCase):
         self.assertEqual(self.written("edit"), [boxed()["body"].replace(self.UNTICKED, self.TICKED), boxed()["body"]],
                          "closed as the tick was on its way: unticked on reading the issue back")
         self.assertEqual(self.written("comment"), [])
-        self.assertEqual(len(self.told("unticked again, since what verified it no longer does")), 1)
+        self.assertEqual(len(self.told("unticked again, since what verified it no longer did when the tick landed")), 1)
         sh = Scripted(comments=[None])
         self.assertEqual(janitor.tick_device_box(sh, boxed(), " " + BOX, HEAD), {"did": "left"}, "closed between the pass's read and the read before the write")
         self.assertEqual(sh.wrote, [])
 
-    def test_a_tick_that_cannot_be_read_back_or_settled_is_said_and_not_cited(self):
+    def test_a_tick_that_cannot_be_read_back_is_said_and_not_cited(self):
         p, calls = self.run_pass(self.device_pass(pr_now_error={"7": 1}))
         self.assertEqual(len(self.written("edit")), 1)
         self.assertEqual(self.written("comment"), [])
         self.assertEqual(len(self.told("so the tick is not confirmed; read its Proof by hand")), 1)
-        flip = [{"edit": i, "replace": ["- [x] suite", "- [ ] suite"] if i % 2 else ["- [ ] suite", "- [x] suite"]} for i in (1, 2, 3)]
-        p, calls = self.run_pass(self.device_pass(meanwhile=flip))
-        self.assertEqual(len(self.written("edit")), 1 + janitor.TICK_WRITES, "bounded: an edit beside every write does not keep the pass writing")
-        self.assertEqual(self.written("comment"), [])
-        self.assertEqual(len(self.told("was not settled in 3 writes")), 1)
+        # A history that does not show the write could hide an edit it overwrote: asked twice, then unticked.
         p, calls = self.run_pass(self.device_pass(history_lag=True))
-        self.assertEqual(len(self.written("edit")), 2 + janitor.TICK_WRITES)
-        self.assertEqual(len(self.written("comment")), 1)
-        self.assertEqual(len(self.told("the description's edit history did not show the write")), 1)
+        self.assertEqual(self.written("edit")[1:], [boxed()["body"].replace(self.UNTICKED, self.TICKED), boxed()["body"]])
+        self.assertEqual(self.written("comment"), [])
+        self.assertEqual(len(self.told("the description's edit history did not show the tick")), 1)
+        # Somebody's edit beside the untick is said too: one write follows a tick, never a third.
+        beside = [{"head": "fffffff0000"}, {"edit": 2, "replace": ["- [x] suite", "- [ ] suite"]}]
+        p, calls = self.run_pass(self.device_pass(meanwhile=beside))
+        self.assertEqual(len(self.written("edit")), 5)
+        self.assertEqual(len(self.told("The untick was not the one edit since the read it was made from either")), 2, "said of the history that showed nothing, too")
 
     def test_a_pr_that_merges_as_its_box_is_ticked_is_cited_and_one_whose_head_moved_too_is_said(self):
         p, calls = self.run_pass(self.device_pass(meanwhile=[{"state": "MERGED"}]))

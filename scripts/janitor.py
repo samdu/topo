@@ -65,9 +65,10 @@ judgement:
      head that has moved since the build, tick nothing and are reported.
      GitHub writes a description whole and unconditionally, so the issues
      and the PR are read again right before the write, one line of the
-     body changes, and all of it is read back after: an edit the write
-     undid is put back with the tick, and a tick that a moved head, a
-     fail or a closed issue had already unseated is unticked
+     body changes, and all of it is read back after: the tick stands only
+     if the head, the results and the issues still verify it and the
+     description has had exactly one edit since the read, the tick's own.
+     Otherwise the box is unticked again and that is said
      (`tick_device_box`). A comment on the PR then cites the results;
      `allowed_pr()` is every write the step can make. It merges nothing:
      the box is what automerge and step 1 were waiting on.
@@ -150,12 +151,11 @@ TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
 LINK = "samdu/topo-link"           # the mailbox repository: an issue per build that carries device checks
 BUILDS_LIMIT = 50                  # open issues read there; a list that fills it is not read as whole
-EDITS_READ = 30                    # a description's newest edits read beside it
-TICK_WRITES = 3                    # writes one box's tick may take: the tick, and twice setting right what the read after it shows
 BUILD_TITLE = re.compile(r"build \d+ \([0-9a-f]{7,40}\)", re.I)
 # An unticked device box: `- [ ] device: …` wants one verification, `- [ ] device(2): …` two.
 DEVICE_BOX = re.compile(r"^([ \t]*[-*] )\[([ x])\]( device(?:\((\d{1,3})\))?:)(.*)$", re.M)
-CHECK = re.compile(r"^## check:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", re.M)
+CHECK = re.compile(r"^##[ \t]*check[ \t]*:(.*)$", re.M | re.I)   # any heading of a check's section, its name judged after
+CHECK_NAME = re.compile(r"[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*")
 RESULT = re.compile(r"## result:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*")   # a comment's first line, whole
 # Anything else of a respondent's that starts a line like a result's heading: it is no pass, and holds the box it names.
 ALMOST = re.compile(r"^[^\w\n]*result\s*:\s*([a-z0-9][a-z0-9-]*)", re.M | re.I)
@@ -200,14 +200,14 @@ ISSUES_QUERY = f"""query($owner: String!, $name: String!, $after: String) {{
 
 # --- time ------------------------------------------------------------------
 
-PR_QUERY = f"""query($owner: String!, $name: String!, $number: Int!) {{
-  repository(owner: $owner, name: $name) {{
-    pullRequest(number: $number) {{
-      state headRefOid body createdAt
-      userContentEdits(first: {EDITS_READ}) {{ nodes {{ id editedAt diff }} }}
-    }}
-  }}
-}}"""
+PR_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      state headRefOid body includesCreatedEdit
+      userContentEdits(first: 1) { totalCount }
+    }
+  }
+}"""
 
 
 def parse_time(s):
@@ -582,10 +582,16 @@ def build_checks(body):
     the build carried, and its `box:` line, the box's text: everything after
     that colon to the line's end, spacing included. A section without both
     lines is no check, and a name given twice is none, whichever of its
-    sections is whole."""
+    sections is whole. A heading that starts like a check's and names it
+    wrongly, or not at all, still ends the section above it, and its own
+    section is no check: its lines are nobody else's."""
     parts = CHECK.split((body or "").replace("\r\n", "\n"))
     out, seen = {}, set()
-    for name, text in zip(parts[1::2], parts[2::2]):
+    for heading, text in zip(parts[1::2], parts[2::2]):
+        name = CHECK_NAME.fullmatch(heading)
+        if not name:
+            continue
+        name = name.group(1)
         pr = re.search(rf"^pr:[ \t]*{re.escape(REPO)}#(\d{{1,9}}) at ([0-9a-f]{{7,40}})[ \t]*$", text, re.M)
         box = re.search(r"^box:(.+)$", text, re.M)
         if name in seen:
@@ -668,13 +674,13 @@ def decide_ticks(builds, prs):
     box two checks of one issue name, and only while the PR's head is the one
     the build carried: results on another head say nothing of this one, and
     passes that would have ticked the box are reported instead. The results
-    of every check that names one box at the PR's head are counted together,
+    of every check that names one box at one head are counted together,
     whichever issue each is on, so a respondent's newest result is its newest
     on any of them. A respondent whose newest result fails holds the box and
     is reported; otherwise it is ticked when as many respondents as it asks
     for have a newest result that passes. Pure."""
     by_number = {pr["number"]: pr for pr in prs}
-    out, pools = [], {}
+    out, pools, moved = [], {}, {}
     for build, comments in builds:
         checks = build_checks(build.get("body"))
         named = [(c["number"], c["box"]) for c in checks.values()]
@@ -690,12 +696,16 @@ def decide_ticks(builds, prs):
                 pool = pools.setdefault((n, c["box"]), {"pr": pr, "need": wanted[0], "results": []})
                 pool["results"] += mine
                 continue
-            answers = newest_results(mine).values()
-            if not [r for r in answers if not r["ok"]] and len([r for r in answers if r["ok"]]) >= wanted[0]:
-                out.append({"number": n, "head": head, "box": c["box"], "kind": "report", "why": "moved",
-                            "key": f"{n}:device-moved:{name}:{head}",
-                            "text": f"#{n} ({pr['headRefName']}): device check {name} passed on {LINK}#{build['number']} at {c['head'][:7]}, "
-                                    f"and the head is now {head[:7]}; the box is not ticked, since the build did not carry what is there now."})
+            moved.setdefault((n, c["box"], c["head"]), {"pr": pr, "need": wanted[0], "results": [], "name": name})["results"] += mine
+    for (n, box, built), pool in moved.items():
+        pr, answers = pool["pr"], newest_results(pool["results"]).values()
+        passed = [r for r in answers if r["ok"]]
+        if len(passed) == len(answers) and len(passed) >= pool["need"]:
+            head, issues = pr["headRefOid"], sorted({r["issue"] for r in passed})
+            out.append({"number": n, "head": head, "box": box, "kind": "report", "why": "moved",
+                        "key": f"{n}:device-moved:{pool['name']}:{head}",
+                        "text": f"#{n} ({pr['headRefName']}): device check {pool['name']} passed on {' and '.join(f'{LINK}#{i}' for i in issues)} "
+                                f"at {built[:7]}, and the head is now {head[:7]}; the box is not ticked, since the build did not carry what is there now."})
     for (n, box), pool in pools.items():
         pr, need = pool["pr"], pool["need"]
         head, title = pr["headRefOid"], f"#{n} ({pr['headRefName']})"
@@ -724,11 +734,6 @@ def decide_ticks(builds, prs):
 BAD = (RuntimeError, KeyError, TypeError, AttributeError, ValueError)   # a read that failed, or answered in another shape
 
 
-def same_body(a, b):
-    """Whether two descriptions are one, line endings and the blank lines at their ends aside."""
-    return (a or "").replace("\r\n", "\n").strip() == (b or "").replace("\r\n", "\n").strip()
-
-
 def read_device(sh, number, box):
     """What one device box of PR `number` is decided over, read now: every
     open build issue that names the PR with its comments, then the PR, last,
@@ -753,24 +758,28 @@ def read_device(sh, number, box):
 
 def tick_device_box(sh, pr, box, head):
     """Ticks the device box of `pr` with this text, for the head the pass
-    decided at, and answers {"did": ticked|left|undone|closed|unsettled|
-    unconfirmed, …}. GitHub writes a description whole and unconditionally,
-    so nothing read beforehand can keep a write from landing on a PR that
-    changed after the read. The tick is therefore decided over a read made
-    right before the write (the mailbox's open build issues, each one's
-    state and comments, then the PR), written, and then everything is read
-    again and the description set right by what that shows:
+    decided at, and answers {"did": ticked|left|undone|closed|unconfirmed, …}.
+    GitHub writes a description whole and unconditionally, so nothing read
+    beforehand can keep a write from landing on a PR that changed after the
+    read. The tick is therefore decided over a read made right before the
+    write (the mailbox's open build issues, each one's state and comments,
+    then the PR), written, and then everything is read again. The tick
+    stands only when that read back shows all of:
 
-    - an edit somebody else made between that read and the write, which the
-      write put back to what it was, is in the description's edit history
-      and not in the description: the tick is decided again over that edit's
-      text and written onto it, so their edit stands;
-    - a head that moved, a result that fails, a build issue that closed or a
-      box that changed, each of which was so before the write could be seen
-      to land: the box is unticked again, in the description as it now reads.
+    - the PR at the head the tick was decided for, and the results still
+      verifying the box: a head that moved, a result that fails or a build
+      issue that closed before the write could be seen to land unseats it;
+    - exactly one edit of the description since the read the write was made
+      from, which is the write. Any other count is an edit somebody else
+      made in between, which the write put back to what it was, or a
+      history that does not show the write, behind which one could hide.
 
-    Each write is read back the same way, and `TICK_WRITES` bounds them. The
-    comment citing the results is the caller's, and only for "ticked"."""
+    Otherwise the box is unticked again, in the description as it then
+    reads, and that is said: an unticked box holds the merge until a person
+    has read it. An overwritten edit is not reconstructed: its text is in
+    the description's edit history on GitHub, for whoever made it to make
+    again. The comment citing the results is the caller's, and only for
+    "ticked"."""
     n = pr["number"]
 
     def judged(read, cur, body):
@@ -779,58 +788,56 @@ def tick_device_box(sh, pr, box, head):
         ticks = [w for w in decide_ticks(read, [dict(pr, headRefOid=head, body=body)]) if w["kind"] == "tick" and w["box"] == box]
         return ticks[0] if ticks else None
 
+    def read_back(seen):
+        """Everything again, with how many edits the description has had since `seen` of them."""
+        for _ in range(2):   # a history that does not show the write yet is asked once more
+            read, cur = read_device(sh, n, box)
+            if cur["edits"] != seen:
+                break
+        return read, cur, cur["edits"] - seen
+
     read, cur = read_device(sh, n, box)
     tick = judged(read, cur, cur["body"]) if cur["state"] == "OPEN" else None
     body = tick_box(cur["body"], box) if tick else None
     if body is None:
         return {"did": "left"}
     sh.pr_write("edit", n, body)   # refused, nothing is written: the caller says so and the next pass tries again
-    writes, note = 1, ""
+    if sh.dry:
+        return {"did": "ticked", "tick": tick}
     try:
-        while True:
-            if sh.dry:
-                return {"did": "ticked", "tick": tick, "note": ""}
-            known = {e["id"] for e in cur["edits"]}
-            for _ in range(2):   # an edit history that does not show the write yet is asked once more
-                read, cur = read_device(sh, n, box)
-                new = [e for e in cur["edits"] if e["id"] not in known and e["editedAt"] != cur["createdAt"]]
-                if new:
-                    break
-            # With this write the newest, any other edit since the read it
-            # was made from is one it undid.
-            lost = [e for e in new if not same_body(e["diff"], body)] if same_body(cur["body"], body) else []
-            plain = lost[0]["diff"] if lost else untick_box(cur["body"], box) or cur["body"]
-            tick = judged(read, cur, plain)
-            want = tick_box(plain, box) if tick else plain
-            if lost:
-                note = "; an edit made to the description meanwhile was kept"
-            elif not new:
-                note = "; the description's edit history did not show the write, so an edit made beside it could not be ruled out"
-            if cur["state"] != "OPEN":   # nothing more is written to it: a tick that stands verified is cited, any other is said
-                if tick and same_body(want, cur["body"]):
-                    break
-                return {"did": "closed", "text": f"it closed or merged while its device box was being ticked at {head[:7]}, "
-                                                 "and what the tick stood on had changed; read its Proof by hand."}
-            if same_body(want, cur["body"]):
-                break
-            if writes == TICK_WRITES:
-                return {"did": "unsettled", "text": f"its device box's tick was not settled in {TICK_WRITES} writes, since the description "
-                                                    "or what verifies the box kept changing; read its Proof by hand."}
-            body = want
-            sh.pr_write("edit", n, body)
-            writes += 1
+        read, cur, landed = read_back(cur["edits"])
+        plain = untick_box(cur["body"], box)
+        tick = judged(read, cur, plain) if plain is not None else None
+        if tick and landed == 1:
+            return {"did": "ticked", "tick": tick}
+        if cur["headRefOid"] != head:
+            why = f"its head moved to {cur['headRefOid'][:7]}, which the build did not carry, before the tick landed"
+        elif plain is not None and any(w.get("why") == "failed" and w["box"] == box
+                                       for w in decide_ticks(read, [dict(pr, headRefOid=head, body=plain)])):
+            why = "a result that fails was posted before the tick landed"
+        elif plain is not None and not tick:
+            why = "what verified it no longer did when the tick landed: a build issue closed, or the box or the count it asks for changed"
+        elif landed > 1:
+            why = ("somebody else edited the description between the read the tick was made from and the tick, which overwrote "
+                   "their edit; it is in the description's edit history on GitHub, to be made again by hand")
+        elif landed < 1:
+            why = "the description's edit history did not show the tick, so an edit overwritten by it could not be ruled out"
+        else:
+            why = "the description read back did not show the box ticked"
+        if cur["state"] != "OPEN":
+            return {"did": "closed", "text": f"it closed or merged while its device box was being ticked at {head[:7]}, and {why}; "
+                                             "nothing more is written to it. Read its Proof by hand."}
+        if plain is None:
+            return {"did": "undone", "text": f"its device box was ticked at {head[:7]} and somebody else's edit since left it unticked; "
+                                             "the next pass decides again."}
+        sh.pr_write("edit", n, plain)
+        read, cur, landed = read_back(cur["edits"])
+        more = "" if landed == 1 else " The untick was not the one edit since the read it was made from either, so read its Proof by hand."
+        return {"did": "undone", "text": f"its device box was ticked at {head[:7]} and unticked again, since {why}. "
+                                         f"The next pass ticks it again if its results then verify it.{more}"}
     except BAD as ex:
         return {"did": "unconfirmed", "text": f"its device box was written at {head[:7]} and what followed failed, so the tick is not "
                                               f"confirmed; read its Proof by hand: {type(ex).__name__}: {str(ex)[:200]}"}
-    if tick:
-        return {"did": "ticked", "tick": tick, "note": note}
-    if cur["headRefOid"] != head:
-        why = f"its head moved to {cur['headRefOid'][:7]}, which the build did not carry"
-    elif any(w.get("why") == "failed" and w["box"] == box for w in decide_ticks(read, [dict(pr, headRefOid=head, body=plain)])):
-        why = "a result that fails was posted"
-    else:
-        why = "what verified it no longer does: a build issue closed, or the box or the count it asks for changed"
-    return {"did": "undone", "text": f"its device box was ticked at {head[:7]} and unticked again, since {why} before the tick landed{note}."}
 
 
 def allowed_pr(argv):
@@ -1061,16 +1068,16 @@ class Shell:
         return issue.get("comments") or []
 
     def pr_now(self, number):
-        """One PR as it stands: its state, head and description, when it was
-        opened, and the description's newest edits as [{id, editedAt, diff}],
-        each `diff` the whole description that edit left."""
+        """One PR as it stands: its state, head and description, and how many
+        times the description has been edited. The history's count has one
+        entry more for the PR's opening once there is any edit, which
+        `includesCreatedEdit` says; nothing else of the history is read."""
         owner, name = REPO.split("/")
         d = self.gh_json("api", "graphql", "-f", f"query={PR_QUERY}", "-F", f"owner={owner}", "-F", f"name={name}",
                          "-F", f"number={number}")
         pr = d["data"]["repository"]["pullRequest"]
-        return {"state": pr["state"], "headRefOid": pr["headRefOid"], "body": pr["body"], "createdAt": pr["createdAt"],
-                "edits": [{"id": e["id"], "editedAt": e["editedAt"], "diff": e["diff"]} for e in pr["userContentEdits"]["nodes"]
-                          if e["diff"] is not None]}   # an edit deleted from the history has no text left to keep
+        return {"state": pr["state"], "headRefOid": pr["headRefOid"], "body": pr["body"],
+                "edits": int(pr["userContentEdits"]["totalCount"]) - (1 if pr["includesCreatedEdit"] else 0)}
 
     def pr_write(self, verb, number, text):
         """`gh pr edit` or `gh pr comment` with `text` as the body, from a file."""
@@ -1477,7 +1484,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     lines.append(f"#{n}: {done['text']}")
                     persist()
                     continue
-                lines.append(done["tick"]["text"] + done["note"])
+                lines.append(done["tick"]["text"])
                 persist()
                 try:
                     sh.pr_write("comment", n, done["tick"]["comment"])
