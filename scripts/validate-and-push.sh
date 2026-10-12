@@ -233,14 +233,23 @@ take_slot() {
   echo "$branch $short, pid $$, since $(date '+%H:%M')" > "$slot_dir/holder"
 
   exec 8>> "$cache/lock"
-  say_at="$waited"
-  # Waited for as that run's siblings wait for it, asleep on the lock and not looking again
-  # every few seconds, so a queue of them does not always get there first; half a minute at a
-  # time, which is how long a signal to this script waits to be heard.
-  while nap=$((LOCK_WAIT - waited)); [ "$nap" -le 30 ] || nap=30; [ "$nap" -ge 1 ] || nap=1;
-        ! perl -MFcntl=:flock -e 'open(my $lock, ">&=", 8) or exit 2; local $SIG{ALRM} = sub { exit 1 }; alarm shift; exit(flock($lock, LOCK_SH) ? 0 : 1)' "$nap"; do
-    waiting "a run of the script as it was before slots" "$(cat "$cache/holder" 2>/dev/null || echo unknown)" "$nap"
-  done
+  # Waited for as that run's siblings wait for it: asleep on the lock in one request for all
+  # the time this run has left, since a request made again goes to the back of those waiting
+  # and a queue of them would always get there first. In the background, so a signal to this
+  # script is heard at once.
+  if ! perl -MFcntl=:flock -e 'open(my $lock, ">&=", 8) or exit 2; exit(flock($lock, LOCK_SH | LOCK_NB) ? 0 : 1)'; then
+    local left=$((LOCK_WAIT - waited)) asked=$SECONDS got=0 lock_pid
+    local whose="a run of the script as it was before slots ($(cat "$cache/holder" 2>/dev/null || echo unknown))"
+    [ "$left" -ge 1 ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $whose. Nothing is pushed or posted."
+    echo "Waiting for $whose and any waiting ahead; up to $((left / 60)) min more."
+    perl -MFcntl=:flock -e 'open(my $lock, ">&=", 8) or exit 2; local $SIG{ALRM} = sub { exit 1 }; alarm shift; exit(flock($lock, LOCK_SH) ? 0 : 1)' "$left" 6>&- 7>&- &
+    lock_pid=$!
+    trap 'kill "$lock_pid" 2>/dev/null || true; exit 143' TERM INT HUP
+    wait "$lock_pid" || got=$?
+    trap 'exit 143' TERM INT HUP
+    waited=$((waited + SECONDS - asked))
+    [ "$got" = 0 ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $whose. Nothing is pushed or posted."
+  fi
   if [ "$(sed -n 4p "$cache/suite" 2>/dev/null)" != slot ] && orphan="$(orphan_in "$cache")"; then
     die "the suite of an earlier validation is still running without its script (pid ${orphan%% *}; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill ${orphan%% *}\`, which stops its lane and deletes its simulators, and run again."
   fi
