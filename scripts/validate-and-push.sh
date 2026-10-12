@@ -13,19 +13,22 @@
 #      VOICE_PATHS lists read out of the commit's own .github/workflows/pr-validate.yaml.
 #      --suites and --lane override the choice, for a head whose `test` job names a status this
 #      choice left out (the two read different diffs once main has moved under the branch).
-#   2. Takes a slot, which is a checkout: one of TOPO_VALIDATE_SLOTS (two) directories under
+#   2. Takes a slot, which is a checkout: one of TOPO_VALIDATE_SLOTS directories under
 #      ~/Library/Caches/topo-validate/slots, each with a lock held for the run and a validation
-#      worktree of this repository, detached at the commit. So what runs is the commit and
+#      worktree of this repository, detached at the commit. There is one unless more are
+#      asked for, so one run's suite is on this Mac at a time and a second run waits: buddybox
+#      shares its memory with the house's voice assistant, and one suite's simulators are
+#      what it has room for. So what runs is the commit and
 #      nothing else: uncommitted changes and untracked files in the engineer's worktree are not
 #      in it, and the projects XcodeGen regenerates are not written over the engineer's. A
 #      slot's path never changes, so its DerivedData, the guest's framework and build/ stay
-#      warm; two runs at once are in two slots.
+#      warm; with TOPO_VALIDATE_SLOTS=2 two runs at once are in two slots.
 #   3. Runs each suite under that suite's own lock (suite-<name>.lock beside the slots), one
 #      call of scripts/mac-suite.sh a suite, the commit's own copy: the first of the suites
 #      still to run whose lock is free, in the order they were chosen or asked for, so a run
 #      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on
-#      this Mac at a time (the audio lane is one per Mac), and two runs overlap in two
-#      different suites. The waits for a slot, for a suite and for a run of the script as it
+#      this Mac at a time (the audio lane is one per Mac), and with more slots than one two
+#      runs overlap in two different suites. The waits for a slot, for a suite and for a run of the script as it
 #      was are LOCK_WAIT seconds between them (three hours); nothing makes them first come,
 #      first served.
 #   4. Pushes the commit to its branch on origin, without force, only when every suite passed.
@@ -64,7 +67,7 @@ logs_root="${TOPO_VALIDATE_LOGS:-$HOME/Library/Logs/topo-validate}"
 repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 LOCK_POLL="${LOCK_POLL:-5}"   # seconds between looks at a lock that is held
-SLOTS="${TOPO_VALIDATE_SLOTS:-2}"
+SLOTS="${TOPO_VALIDATE_SLOTS:-1}"
 KEEP_LOGS=10
 KEEP_RUNS=5
 POST_RETRY="${POST_RETRY:-3}"   # seconds before a status is posted again, times the try

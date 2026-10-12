@@ -326,6 +326,24 @@ is "the lock free again: exits 0" "$status" 0
 TOPO_VALIDATE_SLOTS=0 validate
 is "no slots at all: exits 2" "$status" 2
 
+# One checkout unless more are asked for: a second run waits for the first whatever its
+# suites are, so one suite's simulators are booted on this Mac at a time.
+scratch single Apps/Client/SettingsView.swift
+sibling single theirs Packages/TopoLink/Package.swift
+begin "$repo" "$work/single/first" "$work/single/first.hold" FAKE_HOLD_SUITE=topo_unit
+first=$run
+out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/single/second" LOCK_WAIT=2 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "one checkout by default: a second run exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout"*) ok "one checkout by default: it waited for the checkout" ;; *) fail "one checkout by default: $out" ;; esac
+[ ! -e "$work/single/second" ] && ok "one checkout by default: the second run started no suite" || fail "one checkout by default: a second suite ran beside the first"
+[ ! -e "$TOPO_VALIDATE_CACHE/slots/2" ] && ok "one checkout by default: no second checkout" || fail "one checkout by default: a second slot was made"
+release "$work/single/first.hold"
+wait "$first"; is "one checkout by default: the first run exits 0" "$?" 0
+out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/single/second" scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "one checkout by default: the second run, the first done, exits 0" "$status" 0
+
+# Two checkouts from here on, as an afternoon with room would ask for.
+export TOPO_VALIDATE_SLOTS=2
 # Two runs at once. The first is held in topo_unit, in the first checkout. The second, another
 # branch's whose paths need `others` alone, runs it in a checkout of its own and is pushed and
 # posted while the first is still in its suite.
