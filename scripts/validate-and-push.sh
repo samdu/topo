@@ -375,9 +375,9 @@ run_on() {
   echo "$suite: $(grep -q '=failure$' <<<"$said" && echo failure || echo success) in $(((SECONDS - suite_started) / 60)) min on $at"
 }
 
-# The line for a slot: a ticket a run, in $cache/queue, named for the second the run first
-# waited and its pid, of one width each, so the names' order under LC_ALL=C is the order of
-# arrival for every reader. It holds the pid, when that began and who it is. A run's ticket
+# The line for a slot: a ticket a run, in $cache/queue, named for the microsecond the run
+# began ($arrived) and its pid, of one width each, so the names' order under LC_ALL=C is the
+# order the runs began in for every reader. It holds the pid, when that began and who it is. A run's ticket
 # has one name for the run's life, and the file is there only while the run does nothing but
 # wait for a slot: it is out before a suite is tried on another Mac and back, under its own
 # name, when the run next waits here.
