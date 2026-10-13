@@ -70,7 +70,7 @@ case "$1" in
   *) exit 0 ;;
 esac'
 fake "$tree/scripts/build-ish.sh" 'exit 0'
-fake "$tree/scripts/ci-require-tests.sh" 'exit 0'
+fake "$tree/scripts/ci-require-tests.sh" '[ "$1" != "${REQUIRE_RED-}" ]'
 fake "$tree/scripts/check-built-plist.sh" 'exit 0'
 fake "$tree/scripts/fetch-pinned.sh" 'echo "$2"'
 fake "$tree/scripts/fetch-ear-models.sh" 'exit 0'
@@ -78,7 +78,9 @@ fake "$tree/scripts/model-manifest.sh" 'exit 0'
 fake "$work/bin/xcodebuild" '
 case "$*" in
   -version) echo "Xcode ${FAKE_XCODE:-27.0}"; echo "Build version 1" ;;
-  *test-without-building*-only-testing:TopoUITests*) exit "${UI_TEST:-0}" ;;
+  *test-without-building*-only-testing:TopoUITests*)
+    echo "ui flags: input=${TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT-} reset=${TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET-} models=${TEST_RUNNER_TOPO_UITEST_EAR_MODELS-}" >> "$CALLS"
+    exit "${UI_TEST:-0}" ;;
   *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
 esac'
@@ -130,7 +132,7 @@ suite() {
   local name="$1"; shift
   export CALLS="$work/$name.calls" RESULTS_DIR="$work/$name.results"
   : > "$CALLS"
-  (cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
+  (cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane "${LANE:-fast}" --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
     > "$work/$name.log" 2>&1 && status=0 || status=$?
 }
 calls() { grep -c "^$1" "$CALLS"; }
@@ -173,6 +175,59 @@ suite device-no-pins others
 is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
 is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
 echo "pins: one" > "$pins"
+
+# The quiet part of topo_ui: every UI class but the microphone's, with no lane, no hold, no
+# models, no grants cleared and neither flag, in results of its own, which are held to have
+# the target and not that class.
+ui_tests() { grep '^xcodebuild test-without-building' "$CALLS"; }
+ear=TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
+LANE=full suite quiet topo_ui:quiet
+is "the quiet part: exits 0" "$status" 0
+is "the quiet part: a result of its own name" "$(results)" "topo_ui:quiet=success "
+is "the quiet part: no lane" "$(calls ci-audio-lane.sh)" 0
+is "the quiet part: no hold on the display" "$(calls caffeinate)" 0
+is "the quiet part: no models, on the full lane too" "$(calls fetch-ear-models.sh)" 0
+is "the quiet part: no grants cleared" "$(calls 'xcrun simctl privacy')" 0
+is "the quiet part: one run of the tests" "$(ui_tests | wc -l | tr -d ' ')" 1
+case "$(ui_tests)" in *" -only-testing:TopoUITests -skip-testing:TopoUITests/MicrophonePressTests -resultBundlePath $RESULTS_DIR/Topo-ui-quiet.xcresult") ok "the quiet part: the target less the microphone's class, and nothing else left out" ;; *) fail "the quiet part: $(ui_tests)" ;; esac
+is "the quiet part: neither flag, and no models" "$(grep '^ui flags' "$CALLS")" "ui flags: input= reset= models="
+is "the quiet part: the target is required of its results" "$(calls "ci-require-tests.sh xcresult $RESULTS_DIR/Topo-ui-quiet.xcresult TopoUITests\$")" 1
+is "the quiet part: the microphone's class is required out of them" "$(calls "ci-require-tests.sh absent $RESULTS_DIR/Topo-ui-quiet.xcresult TopoUITests/MicrophonePressTests\$")" 1
+is "the quiet part: nothing is required by name" "$(calls 'ci-require-tests.sh named')" 0
+is "the quiet part: its simulator is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+REQUIRE_RED=absent suite quiet-has-mic topo_ui:quiet
+is "the quiet part with the microphone's class in its results: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
+UI_TEST=1 suite quiet-red topo_ui:quiet
+is "the quiet part red: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
+
+# The microphone part: that class alone, behind everything topo_ui has.
+suite mic topo_ui:mic
+is "the microphone part: exits 0" "$status" 0
+is "the microphone part: a result of its own name" "$(results)" "topo_ui:mic=success "
+is "the microphone part: the hold, then the lane" "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
+is "the microphone part: the lane is checked before and after, and stopped" "$(grep -c '^ci-audio-lane.sh check' "$CALLS"):$(calls 'ci-audio-lane.sh stop')" "2:1"
+is "the microphone part: the grants are cleared" "$(calls 'xcrun simctl privacy')" 1
+case "$(ui_tests)" in *" -only-testing:TopoUITests/MicrophonePressTests -skip-testing:$ear -resultBundlePath $RESULTS_DIR/Topo-ui-mic.xcresult") ok "the microphone part: its class alone, the real ear left out on the fast lane" ;; *) fail "the microphone part: $(ui_tests)" ;; esac
+is "the microphone part: both flags" "$(grep '^ui flags' "$CALLS")" "ui flags: input=1 reset=1 models="
+is "the microphone part: the target and the class are required of its results" "$(calls "ci-require-tests.sh xcresult $RESULTS_DIR/Topo-ui-mic.xcresult TopoUITests\$"):$(calls "ci-require-tests.sh named $RESULTS_DIR/Topo-ui-mic.xcresult TopoUITests/MicrophonePressTests\$")" "1:1"
+is "the microphone part: nothing is required out" "$(calls 'ci-require-tests.sh absent')" 0
+REQUIRE_RED=named suite mic-absent topo_ui:mic
+is "the microphone part without its class in its results: a failure" "$status:$(results)" "1:topo_ui:mic=failure "
+LANE=full suite mic-full topo_ui:mic
+case "$(ui_tests)" in *" -only-testing:TopoUITests/MicrophonePressTests -resultBundlePath $RESULTS_DIR/Topo-ui-mic.xcresult") ok "the microphone part, full lane: its class whole" ;; *) fail "the microphone part, full lane: $(ui_tests)" ;; esac
+is "the microphone part, full lane: the models" "$(grep '^ui flags' "$CALLS")" "ui flags: input=1 reset=1 models=$work/cache/ear-models"
+is "the microphone part, full lane: the real ear is required by name" "$(calls "ci-require-tests.sh named $RESULTS_DIR/Topo-ui-mic.xcresult $ear\$")" 1
+
+# The two parts in one call: quiet first, each its own result; and the whole suite is as it was.
+suite parts topo_ui:mic topo_ui:quiet
+is "both parts: quiet, then the microphone's" "$status:$(results)" "0:topo_ui:quiet=success topo_ui:mic=success "
+is "both parts: one lane" "$(calls 'ci-audio-lane.sh start')" 1
+suite whole topo_ui
+case "$(ui_tests)" in *" -only-testing:TopoUITests -skip-testing:$ear -resultBundlePath $RESULTS_DIR/Topo-ui.xcresult") ok "topo_ui whole: the target in one run" ;; *) fail "topo_ui whole: $(ui_tests)" ;; esac
+is "topo_ui whole: one result, under its own name" "$(results)" "topo_ui=success "
+is "topo_ui whole: nothing is required out or by class" "$(calls 'ci-require-tests.sh absent'):$(calls 'ci-require-tests.sh named')" "0:0"
+suite no-part topo_ui:loud
+is "a part that is none: exits 2 and runs nothing" "$status:$(wc -l < "$CALLS" | tr -d ' ')" "2:0"
 
 # No lane, no hold: the display is this Mac's own business under the other suites.
 suite no-lane topo_unit others
@@ -400,6 +455,19 @@ is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
 check ui topo_ui
 is "check, topo_ui: exits 1" "$status" 1
 names "check, topo_ui: named" "topo_ui runs on buddybox alone"
+check ui-mic topo_ui:mic
+is "check, the microphone part: exits 1" "$status" 1
+names "check, the microphone part: named" "topo_ui:mic runs on buddybox alone"
+# The quiet part is asked what topo_unit is, the unlocked session too.
+check ui-quiet topo_ui:quiet
+is "check, the quiet part: exits 0" "$status:$said" "0:this Mac can run topo_ui:quiet."
+FAKE_LOCKED=1 FAKE_VAULT=On check ui-quiet-locked topo_ui:quiet
+is "check, the quiet part, encrypted and locked: exits 1" "$status" 1
+names "check, the quiet part, encrypted and locked: named" "is locked"
+FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 check ui-quiet-bare topo_ui:quiet
+names "check, the quiet part: the Xcode is asked" "selected Xcode"
+names "check, the quiet part: the simulator is asked" "no iPhone simulator"
+names "check, the quiet part: the room is asked" "GB available"
 # The framework there is of other inputs: the tools that build it are asked for.
 echo other > "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
 PATH="$work/bin:/usr/bin:/bin" check tools topo_unit

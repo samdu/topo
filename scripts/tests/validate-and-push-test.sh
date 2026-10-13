@@ -25,7 +25,9 @@
 #
 # And of another Mac, behind a fake `ssh` that runs what it is given in a scratch home: none is
 # asked anything unless named; one named runs `topo_unit` and `others`, at the commit, and
-# never `topo_ui`; its name is in the status; a Mac that is not reached, says it cannot run
+# never `topo_ui` whole: its quiet part runs there and its microphone's part here, last, the
+# two one status that is a success when both are, and whole here when the Mac is busy or
+# loses the part; its name is in the status; a Mac that is not reached, says it cannot run
 # the suite, loses it partway or passes it as the connection drops runs nothing more and the
 # suite runs here; a busy one is left alone and the suite runs here; a suite red there is
 # red; and a signal ends the suite there, or comes before it and starts none.
@@ -691,8 +693,8 @@ for long in "$work/describe/$(printf 'l%.0s' $(seq 40))" "$work/describe/$(print
   rm -rf "$work/describe-long"
 done
 
-# Another Mac, named: `topo_unit` and `others` run there at the commit, `topo_ui` here, and
-# each status says where.
+# Another Mac, named: `topo_unit`, `others` and the quiet part of `topo_ui` run there at the
+# commit, the microphone's part here and last, and each status says where.
 there() { (cd "$FAKE_HOSTS/$1/Library/Caches/topo-validate/checkout" 2>/dev/null && pwd -P); }
 said_on() { sed -n "s|.*context=local/$1 .* min on \([^;]*\);.*|\1|p" "$GH_CALLS"; }
 # The logs under the home's own root, so a description has room for more than their path.
@@ -701,16 +703,72 @@ mkdir -p "$work/host/home"
 TOPO_VALIDATE_LOGS="$work/host/home/Library/Logs/topo-validate"
 HOME="$work/host/home" TOPO_VALIDATE_HOSTS=laptop validate
 is "a host named: exits 0" "$status" 0
-is "a host named: the two it may run, then topo_ui" "$(recorded suites)" "topo_unit others topo_ui"
-is "a host named: it was asked whether it can run each" "$(tr '\n' ' ' < "$FAKE_RECORD.checks")" "check topo_unit check others "
-is "a host named: topo_ui ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+is "a host named: what it may run, then the microphone's part of topo_ui" "$(recorded suites)" "topo_unit topo_ui:quiet others topo_ui:mic"
+is "a host named: it was asked whether it can run each" "$(tr '\n' ' ' < "$FAKE_RECORD.checks")" "check topo_unit check topo_ui:quiet check others "
+is "a host named: the microphone's part ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 is "a host named: its checkout is at the commit" "$(git -C "$(there laptop)" rev-parse HEAD 2>/dev/null)" "$sha"
 is "a host named: pushed" "$(origin_head)" "$sha"
 is "a host named: one success per suite" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
 is "a host named: topo_unit's status names it" "$(said_on topo_unit)" laptop
 is "a host named: others' status names it" "$(said_on others)" laptop
-is "a host named: topo_ui's status names this Mac" "$(said_on topo_ui)" "$(hostname -s)"
+is "a host named: topo_ui's one status names both Macs, the quiet part's first" "$(sed -n 's|.*context=local/topo_ui .*description=\(topo_ui [^;]*\);.*|\1|p' "$GH_CALLS")" "topo_ui passed, fast lane, 0 min on laptop + 0 min on $(hostname -s)"
+is "a host named: neither part is asked of the Mac as topo_ui, nor the microphone's at all" "$(grep -c '^laptop bash -s .* topo_ui\(:mic\)\{0,1\} ' "$SSH_CALLS")" 0
 [ -f "$TOPO_VALIDATE_LOGS/$sha"/*/laptop/suites.txt ] && ok "a host named: its results are in the run's logs" || fail "a host named: no results from it in the logs"
+# The full lane: the real ear rides on the two parts' one success.
+scratch host-ear Apps/Client/SettingsView.swift
+TOPO_VALIDATE_HOSTS=laptop validate --suites topo_ui --lane full
+is "a host named, the full lane: topo_ui and the real ear" "$status:$(posted)" "0:local/topo_ui=success local/real_ear=success "
+is "a host named, the full lane: both parts on that lane" "$(recorded suites):$(recorded lane)" "topo_ui:quiet topo_ui:mic:full"
+# A red part is a red topo_ui, whichever, and the other still runs; nothing is said of the real ear.
+for part in quiet mic; do
+  scratch host-part-red Apps/Client/SettingsView.swift
+  git -C "$repo" push -q origin topic
+  FAKE_SUITES="topo_ui:$part=failure" TOPO_VALIDATE_HOSTS=laptop validate --suites topo_ui --lane full
+  is "the $part part red: exits 1" "$status" 1
+  is "the $part part red: both parts ran" "$(recorded suites)" "topo_ui:quiet topo_ui:mic"
+  is "the $part part red: one failure, for topo_ui, and no real ear" "$(posted)" "local/topo_ui=failure "
+  case "$out" in *"RED at "*": topo_ui:$part."*) ok "the $part part red: named" ;; *) fail "the $part part red: $out" ;; esac
+  rm -rf "$work/host-part-red"
+done
+# A part with no result is no pass.
+scratch host-part-died Apps/Client/SettingsView.swift
+git -C "$repo" push -q origin topic
+FAKE_SUITES=died TOPO_VALIDATE_HOSTS=laptop validate --suites topo_ui
+is "the parts with no result: a failure" "$status:$(posted)" "1:local/topo_ui=failure "
+# The slot here is not taken while the quiet part is on the other Mac, and the microphone's
+# part holds topo_ui's name here, as the suite whole does.
+scratch host-order Apps/Client/SettingsView.swift
+begin "$repo" "$work/host-order/record" "$work/host-order/hold" TOPO_VALIDATE_HOSTS=laptop FAKE_HOLD_SUITE=topo_ui:quiet
+is "the quiet part on a host: it is what is running" "$(sed -n 's/^suites=//p' "$work/host-order/record")" "topo_unit topo_ui:quiet"
+[ ! -e "$TOPO_VALIDATE_CACHE/slots/1/holder" ] && ok "the quiet part on a host: no slot is held here meanwhile" || fail "the quiet part on a host: a slot is held here: $(cat "$TOPO_VALIDATE_CACHE/slots/1/holder")"
+release "$work/host-order/hold"; wait "$run"
+is "the quiet part on a host: the run exits 0" "$?" 0
+scratch host-mic Apps/Client/SettingsView.swift
+begin "$repo" "$work/host-mic/record" "$work/host-mic/hold" TOPO_VALIDATE_HOSTS=laptop FAKE_HOLD_SUITE=topo_ui:mic
+is "the microphone's part: last of the run" "$(sed -n 's/^suites=//p' "$work/host-mic/record")" "topo_unit topo_ui:quiet others topo_ui:mic"
+is "the microphone's part: topo_ui's name is held here under it" "$(lockf -s -t 0 "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" echo free 2>/dev/null || echo held)" held
+is "the microphone's part: no name of its own" "$(ls "$TOPO_VALIDATE_CACHE" | grep -c 'topo_ui:')" 0
+release "$work/host-mic/hold"; wait "$run"
+is "the microphone's part: the run exits 0" "$?" 0
+# The Mac busy, or losing the quiet part: topo_ui runs here whole, in one call, as with none named.
+scratch host-ui-busy Apps/Client/SettingsView.swift
+mkdir -p "$FAKE_HOSTS/laptop/Library/Caches/topo-validate"
+lockf -k "$FAKE_HOSTS/laptop/Library/Caches/topo-validate/lock" sh -c "echo \$\$ > '$work/host-ui-busy/held'; exec sleep 60" &
+holder=$!
+for _ in $(seq 100); do [ -s "$work/host-ui-busy/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+TOPO_VALIDATE_HOSTS=laptop validate
+is "a host busy, topo_ui: whole here, in its place" "$status:$(recorded suites)" "0:topo_unit topo_ui others"
+is "a host busy, topo_ui: one success per suite" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
+kill "$(cat "$work/host-ui-busy/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+scratch host-ui-lost Apps/Client/SettingsView.swift
+FAKE_LOST_IN=/hosts/laptop/ TOPO_VALIDATE_HOSTS=laptop validate --suites topo_ui
+is "a host that lost the quiet part: topo_ui whole here" "$status:$(recorded suites)" "0:topo_ui"
+is "a host that lost the quiet part: one success" "$(posted)" "local/topo_ui=success "
+is "a host that lost the quiet part: asked once" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" 1
+# With no Mac named, topo_ui is one call.
+scratch host-none Apps/Client/SettingsView.swift
+validate --suites topo_ui
+is "no host named: topo_ui whole" "$status:$(recorded suites)" "0:topo_ui"
 # A suite that needs nothing here takes no checkout here.
 scratch host-alone Packages/TopoLink/Package.swift
 TOPO_VALIDATE_HOSTS=laptop validate
