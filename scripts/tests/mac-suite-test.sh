@@ -14,8 +14,9 @@
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
 # the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
-# being buddybox; and the device build's directory is built over for the pins it was built
-# from and made afresh for any other.
+# being buddybox; the device build's directory is built over for the pins it was built from
+# and made afresh for any other; and the display is held on under `topo_ui`, from before its
+# lane starts.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -75,6 +76,7 @@ esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
 fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
+fake "$work/bin/caffeinate" 'exit 0'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
@@ -114,6 +116,8 @@ is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
 is "green: and stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+is "green: the display is held on for this script's life, from before the lane starts" \
+  "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
 
 # The device build's directory is kept for the pins it was built from, and no others.
@@ -138,6 +142,10 @@ suite device-no-pins others
 is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
 is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
 echo "pins: one" > "$pins"
+
+# No lane, no hold: the display is this Mac's own business under the other suites.
+suite no-lane topo_unit others
+is "no UI suite: the display is not held" "$(calls caffeinate)" 0
 
 # A start that failed may have pinned the devices and left a feeder: it is stopped.
 LANE_START=1 suite lane-failed topo_ui
