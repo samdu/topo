@@ -37,10 +37,20 @@ final class AudioSession {
     /// True while anything wants the process kept alive.
     var holding: Bool { !holds.isEmpty }
     private var recordMode: Bool { !recordClaims.isEmpty }
-    /// Sets the session's category for record mode (true) or the quiet one (false) and activates
-    /// it, throwing when either refuses: activation is commonly refused while another app is in
-    /// front, which is exactly where a media services reset is asked for.
-    private let configure: (Bool) throws -> Void
+    /// Whether the record configuration is the one for a microphone heard through Apple's voice
+    /// processing (`NoiseSuppression`), which is its mode: `voiceChat` with, `default` without.
+    /// The mode is this object's to set and never the voice unit's: a unit made on a session in
+    /// no chat mode has the system put the session in `voiceChat` by itself, under a session
+    /// this object believes it configured, and nothing puts it back when the unit goes.
+    private var processed = false
+    /// What the last configuration that activated set: the state the session is in, which is
+    /// what a press hands the input node's voice unit, so the two change together or not at all.
+    private(set) var voiceProcessed = false
+    /// Sets the session's category for record mode (true) or the quiet one (false), the record
+    /// configuration's mode for voice processing or without it, and activates it, throwing when
+    /// either refuses: activation is commonly refused while another app is in front, which is
+    /// exactly where a media services reset is asked for.
+    private let configure: (Bool, Bool) throws -> Void
     /// Whether the app is in front, which is the only place a configuration is worth attempting:
     /// iOS refuses one from the background for a non-mixable session.
     private let isActive: @MainActor () -> Bool
@@ -63,7 +73,7 @@ final class AudioSession {
     /// the configuration the claims asked for is applied again; a session never configured is left
     /// alone, since activating it is not the reset's to decide.
     init(center: NotificationCenter = .default,
-         configure: @escaping (Bool) throws -> Void = AudioSession.configureSession(record:),
+         configure: @escaping (Bool, Bool) throws -> Void = AudioSession.configureSession(record:processed:),
          isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive) {
         self.configure = configure
         self.isActive = isActive
@@ -110,6 +120,23 @@ final class AudioSession {
         guard !holding else {
             deferredClaims = true
             AudioLog.say("record \(recordMode ? "claimed" : "dropped") while a hold stands; the session is left as it is")
+            return
+        }
+        applyOrRemember()
+    }
+
+    /// Says whether the microphone is to be heard through voice processing, which is the record
+    /// configuration's mode. Like a claim: the session is touched only when its configuration
+    /// would change — never for the quiet one, which has no such mode — a failure is recorded
+    /// rather than thrown, and while a hold stands the change waits for the last hold to go, so
+    /// a press under a hold finds `voiceProcessed` as the session was left.
+    func wantVoiceProcessing(_ on: Bool) {
+        guard processed != on else { return }
+        processed = on
+        guard recordMode else { return }
+        guard !holding else {
+            deferredClaims = true
+            AudioLog.say("voice processing \(on ? "wanted" : "dropped") while a hold stands; the session is left as it is")
             return
         }
         applyOrRemember()
@@ -179,7 +206,8 @@ final class AudioSession {
     private func apply() throws {
         applied = true
         valid = false
-        try configure(recordMode)
+        try configure(recordMode, processed)
+        voiceProcessed = recordMode && processed
         valid = true
     }
 
@@ -188,13 +216,16 @@ final class AudioSession {
     /// stop what else the phone is playing; the record configuration takes the route outright.
     /// HFP is the AirPods mic; without it iOS never offers a headset's input. Deliberately
     /// without `.bluetoothHighQualityRecording`: the wideband link's input latency lands on
-    /// AirPods as a press that lags and an utterance that starts clipped.
+    /// AirPods as a press that lags and an utterance that starts clipped. The record
+    /// configuration's mode is `voiceChat` when the microphone is heard through voice processing:
+    /// the mode the system would set by itself for the voice unit, set here so that it is this
+    /// object's, and so that `default` comes back when the unit is turned off.
     static func appIsActive() -> Bool { UIApplication.shared.applicationState == .active }
 
-    nonisolated static func configureSession(record: Bool) throws {
+    nonisolated static func configureSession(record: Bool, processed: Bool) throws {
         let session = AVAudioSession.sharedInstance()
         if record {
-            try session.setCategory(.playAndRecord, mode: .default,
+            try session.setCategory(.playAndRecord, mode: processed ? .voiceChat : .default,
                                     options: [.defaultToSpeaker, .allowBluetoothA2DP, .allowBluetoothHFP])
         } else {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
