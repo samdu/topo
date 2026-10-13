@@ -146,6 +146,10 @@ tests_named="$(ls "$tree/scripts/tests" | wc -l | tr -d ' ')"
 FAKE_XCODE=99.0 suite scripts-alone scripts
 is "scripts alone: exits 0" "$status" 0
 is "scripts alone: a success" "$(results)" "scripts=success "
+# The list is the directory: a test added to scripts/tests and to no list is run by nothing.
+is "every test in scripts/tests is one the suite names" \
+  "$(cd "$root/scripts/tests" && ls ./*-test.sh | sed 's|^\./||; s|-test\.sh$||' | sort | tr '\n' ' ')" \
+  "$(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')"
 is "scripts alone: every script's test ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
 is "scripts alone: nothing generated, built, booted or prepared" "$(grep -cE '^(xcodegen|xcodebuild|xcrun|swift|build-ish\.sh|ci-audio-lane\.sh|model-manifest\.sh) ' "$CALLS")" 0
 is "others: every script's test runs there too" "$(grep -c -- '-test.sh' "$work/green.calls")" "$tests_named"
@@ -278,6 +282,13 @@ case "$said" in *"node is not"* | *"python3 is the stub"*) fail "check, topo_uni
 BARE_PATH="$work/stock:/usr/bin:/bin" check scripts-tools scripts
 names "check, scripts alone, developer tools and no node: node is named" "node is not installed"
 case "$said" in *"python3 is the stub"*) fail "check, developer tools there: python3 refused: $said" ;; *) ok "check, developer tools there: python3 is taken" ;; esac
+# A Mac with no jq: everything macOS has but that.
+mkdir -p "$work/no-jq" && for tool in /usr/bin/* /bin/*; do [ "$(basename "$tool")" = jq ] || ln -sf "$tool" "$work/no-jq/"; done
+ln -sf "$(command -v node)" "$work/no-jq/node"
+BARE_PATH="$work/no-jq" check scripts-no-jq scripts
+is "check, scripts alone, no jq: exits 1" "$status" 1
+names "check, scripts alone, no jq: named" "jq is not installed"
+case "$said" in *"node is not"*) fail "check, no jq: node there and refused: $said" ;; *) ok "check, no jq: nothing else is named" ;; esac
 FAKE_LID=Yes check scripts-lid scripts
 is "check, scripts alone, the lid closed: exits 1" "$status" 1
 FAKE_XCODE=26.4 check scripts-beside scripts others
