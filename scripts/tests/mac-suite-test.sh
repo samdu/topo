@@ -277,14 +277,32 @@ names "check, scripts alone, no node: named" "node is not installed"
 names "check, scripts alone, python3 a stub: named" "python3 is the stub"
 BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check others-stock others
 names "check, others, no node: named" "node is not installed"
+names "check, others, python3 a stub: named" "python3 is the stub"
 BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check unit-stock topo_unit
 case "$said" in *"node is not"* | *"python3 is the stub"*) fail "check, topo_unit alone: asked for what the scripts' tests run under: $said" ;; *) ok "check, topo_unit alone: not asked for what the scripts' tests run under" ;; esac
 BARE_PATH="$work/stock:/usr/bin:/bin" check scripts-tools scripts
 names "check, scripts alone, developer tools and no node: node is named" "node is not installed"
 case "$said" in *"python3 is the stub"*) fail "check, developer tools there: python3 refused: $said" ;; *) ok "check, developer tools there: python3 is taken" ;; esac
-# A Mac with no jq: everything macOS has but that.
-mkdir -p "$work/no-jq" && for tool in /usr/bin/* /bin/*; do [ "$(basename "$tool")" = jq ] || ln -sf "$tool" "$work/no-jq/"; done
-ln -sf "$(command -v node)" "$work/no-jq/node"
+# without <tool> — a directory of everything macOS has but that, and node, in $work/no-<tool>.
+without() {
+  local tool
+  mkdir -p "$work/no-$1"
+  for tool in /usr/bin/* /bin/*; do [ "$(basename "$tool")" = "$1" ] || ln -sf "$tool" "$work/no-$1/"; done
+  ln -sf "$(command -v node)" "$work/no-$1/node"
+}
+# A Mac with no python3, and one whose python3 does not run: each refused, for either suite.
+without python3
+for asked_suite in scripts others; do
+  BARE_PATH="$work/no-python3" check "no-python-$asked_suite" "$asked_suite"
+  is "check, $asked_suite, no python3: exits 1" "$status" 1
+  names "check, $asked_suite, no python3: named" "python3 is not installed"
+  mkdir -p "$work/broken" && printf '#!/bin/sh\nexit 1\n' > "$work/broken/python3" && chmod +x "$work/broken/python3"
+  BARE_PATH="$work/broken:$work/no-python3" check "broken-python-$asked_suite" "$asked_suite"
+  is "check, $asked_suite, a python3 that exits 1: exits 1" "$status" 1
+  names "check, $asked_suite, a python3 that exits 1: named" "does not run"
+done
+# A Mac with no jq.
+without jq
 BARE_PATH="$work/no-jq" check scripts-no-jq scripts
 is "check, scripts alone, no jq: exits 1" "$status" 1
 names "check, scripts alone, no jq: named" "jq is not installed"

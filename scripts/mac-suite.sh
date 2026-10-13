@@ -122,8 +122,14 @@ if [ "$check" = yes ]; then
     case "$suite" in
       scripts | others)
         command -v node >/dev/null || { err "node is not installed, and the scripts' tests run one under it (brew install node)."; lacks=1; }
-        if [ "$(command -v python3)" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then
+        # The stub is not run to find out: it answers with a dialog on the Mac's screen.
+        python="$(command -v python3 || true)"
+        if [ -z "$python" ]; then
+          err "python3 is not installed, and the scripts' tests run one under it."; lacks=1
+        elif [ "$python" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then
           err "python3 is the stub of a Mac with no developer tools, and the scripts' tests run one under it (xcode-select --install)."; lacks=1
+        elif ! python3 -c 'import unittest' >/dev/null 2>&1; then
+          err "python3 ($python) does not run, and the scripts' tests run one under it."; lacks=1
         fi
         break
         ;;
