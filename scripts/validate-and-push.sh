@@ -27,15 +27,16 @@
 #   3. Runs each suite under that suite's own lock (suite-<name>.lock beside the slots), one
 #      call of scripts/mac-suite.sh a suite, the commit's own copy: the first of the suites
 #      still to run whose lock is free, in the order they were chosen or asked for, so a run
-#      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on
-#      this Mac at a time (the audio lane is one per Mac), and with more slots than one two
-#      runs overlap in two different suites. The waits for a slot, for a suite and for a run of
-#      the script as it was are LOCK_WAIT seconds between them (three hours). The wait for a
-#      slot is in the order the runs began: a run that has to wait takes a ticket in
-#      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began and its
-#      pid, and only the run whose ticket is first asks for a slot. A ticket whose process is
-#      gone holds nobody. A run that reached the line within one look of another, and a run of a branch
-#      that has not merged main, which knows of no line, can still take a slot out of turn.
+#      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on this
+#      Mac at a time (the audio lane is one per Mac), and with more slots than one two runs
+#      overlap in two different suites. The waits for a slot, for a suite and for a run of the
+#      script as it was are LOCK_WAIT seconds between them (three hours). The wait for a slot
+#      is in the order the runs began: a run that has to wait takes a ticket in
+#      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began (since
+#      this Mac started) and its pid, and only the run whose ticket is first asks for a slot. A
+#      ticket whose process is gone holds nobody. A run that reached the line within one look
+#      of another, and a run of a branch that has not merged main, which knows of no line, can
+#      still take a slot out of turn.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
 #      scripts/validate-host.sh writes; neither by default)
@@ -94,8 +95,11 @@ repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 LOCK_POLL="${LOCK_POLL:-5}"   # seconds between looks at a lock that is held
 HOST_RETRY="${HOST_RETRY:-60}"   # seconds before a Mac found busy is asked again
-# When this run began, in microseconds: its place in the line for a slot, whenever it gets there.
-arrived="$(perl -MTime::HiRes=time -e 'printf "%.0f", time * 1e6')"
+# When this run began, in microseconds: its place in the line for a slot, whenever it gets
+# there. By the clock that counts from this Mac's start and is never set, so no correction of
+# the time of day puts a later run first; a ticket from before a restart is of a pid long gone.
+arrived="$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.0f", clock_gettime(CLOCK_MONOTONIC) * 1e6')"
+[[ "$arrived" =~ ^[0-9]{1,16}$ ]] || { echo "error: could not read this Mac's clock for a place in the line." >&2; exit 2; }
 SLOTS="${TOPO_VALIDATE_SLOTS:-1}"
 KEEP_LOGS=10
 KEEP_RUNS=5

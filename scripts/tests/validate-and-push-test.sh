@@ -834,9 +834,14 @@ later="$other"
 begin "$repo" "$work/line/first" "$work/line/first.hold" FAKE_HOLD_SUITE=topo_unit
 first=$run
 is "the first run, nobody waiting: it took no place in the line" "$(tickets)" ""
+clock() { perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.0f", clock_gettime(CLOCK_MONOTONIC) * 1e6'; }
+clock_before="$(clock)"
 waiter "$theirs" a LOCK_POLL=5; a=$run
 until_true has_ticket "$a" || fail "the line: a run that waits has no ticket: $(cat "$work/line/a.out")"
 a_ticket="$(ticket_of "$a")"
+# Its place is by the clock that is never set, not the time of day, which can be put back.
+a_at="$((10#${a_ticket%%-*}))"
+[ "$a_at" -ge "$clock_before" ] && [ "$a_at" -le "$(clock)" ] && ok "the line: a ticket is named by the clock that counts from this Mac's start" || fail "the line: the ticket $a_ticket is not between $clock_before and $(clock)"
 waiter "$later" b LOCK_POLL=1; b=$run
 until_true has_ticket "$b" || fail "the line: a second run that waits has no ticket: $(cat "$work/line/b.out")"
 is "the line: in the order they came" "$(tickets)" "$a_ticket $(ticket_of "$b") "
@@ -996,10 +1001,12 @@ is "the command left behind ended: the next validation runs" "$status" 0
 # tree, origin and the commit's statuses are as they were.
 git -C "$repo" checkout -q --detach
 echo dirt >> "$repo/scripts/ci-select-lane.sh"; echo x > "$repo/untracked"
-tree_before="$(git -C "$repo" status --porcelain; git -C "$repo" rev-parse HEAD)" origin_before="$(git -C "$work/hold/origin.git" for-each-ref)" posted_before="$(grep -c . "$GH_CALLS")"
-(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh --hold -- sh -c 'exit 3') > "$work/hold/detached.out" 2>&1 && status=0 || status=$?
+tree() { git -C "$repo" status --porcelain; git -C "$repo" rev-parse HEAD; cat "$repo/scripts/ci-select-lane.sh" "$repo/untracked" | shasum; }
+tree_before="$(tree)" origin_before="$(git -C "$work/hold/origin.git" for-each-ref)" posted_before="$(grep -c . "$GH_CALLS")"
+(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh --hold -- sh -c "echo ran > '$work/hold/detached.ran'; exit 3") > "$work/hold/detached.out" 2>&1 && status=0 || status=$?
 is "a hold from a detached, dirty worktree: the command's exit" "$status" 3
-is "a hold from a detached, dirty worktree: the tree is as it was" "$(git -C "$repo" status --porcelain; git -C "$repo" rev-parse HEAD)" "$tree_before"
+is "a hold from a detached, dirty worktree: the command ran" "$(cat "$work/hold/detached.ran" 2>/dev/null)" "ran"
+is "a hold from a detached, dirty worktree: the tree is as it was, its files' contents too" "$(tree)" "$tree_before"
 is "a hold from a detached, dirty worktree: origin is as it was" "$(git -C "$work/hold/origin.git" for-each-ref)" "$origin_before"
 is "a hold from a detached, dirty worktree: nothing posted" "$(grep -c . "$GH_CALLS")" "$posted_before"
 (cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh) > "$work/hold/detached.out" 2>&1 && status=0 || status=$?
