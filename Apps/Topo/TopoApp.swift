@@ -37,7 +37,7 @@ struct TopoApp: App {
         DebugRun.seedOutbox()
         #endif
         // The phone runs the guest, so its sign-in mints the guest's long-lived token too.
-        _signIn = State(initialValue: SignIn(guestStore: KeychainTokenStore.guest))
+        _signIn = State(initialValue: SignIn(guestStore: KeychainTokenStore.guest, back: URL(string: "topo://open")))
         // The one provider over the ordinary tokens, shared by the chat and the guest's hand-over
         // so a refresh is in flight once for the process: a refresh token is single-use.
         let tokens = StoredTokenProvider(store: KeychainTokenStore())
