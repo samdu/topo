@@ -115,9 +115,10 @@ import Testing
     }
 
     /// A flood of questions answered at once holds nothing past its answers: no bound is left
-    /// waiting per question for its 4 s.
+    /// waiting per question. The bound is longer than any flood, so whatever a question left
+    /// waiting for it is still held when the footprint is read, however slowly the flood ran.
     @Test func aFloodHoldsNothingPerQuestion() async throws {
-        let forwarder = DNSForwarder(resolver: InstantResolver(), log: { _ in })
+        let forwarder = DNSForwarder(resolver: InstantResolver(), queryBound: .seconds(3600), log: { _ in })
         let port = try await forwarder.start()
         defer { Task { await forwarder.stop() } }
         let clients = try (0..<8).map { _ in try UDPClient(port: port) }
@@ -128,18 +129,26 @@ import Testing
         var answered = 0
         let before = footprint()
         // The flood is a count of answers and not a length of time, so a loaded machine makes it
-        // slower and no smaller; the deadline only ends a forwarder that has stopped answering.
-        let flood = 10_000
-        let deadline = Date().addingTimeInterval(30)
-        while answered < flood, Date() < deadline {
+        // slower and no smaller. It ends early only when the forwarder has stopped answering:
+        // the patience is for one answer, never for the flood.
+        let flood = 100_000
+        let patience: TimeInterval = 10
+        var heard = Date()
+        while answered < flood, Date().timeIntervalSince(heard) < patience {
             for client in clients {
                 _ = withAddress("127.0.0.1", port) { sendto(client.fd, bytes, bytes.count, 0, $0, $1) }
-                while recv(client.fd, &sink, sink.count, 0) > 0 { answered += 1 }
+                while recv(client.fd, &sink, sink.count, 0) > 0 {
+                    answered += 1
+                    heard = Date()
+                }
             }
         }
-        let grown = (footprint() - before) / 1_000_000
-        #expect(answered >= flood, "the flood never got its answers: \(answered) in 30 s")
-        #expect(grown < 30, "grew \(grown) MB over \(answered) answers")
+        let grown = footprint() - before
+        #expect(answered >= flood, "the forwarder stopped answering after \(answered)")
+        // What one question may leave behind, in bytes: a timer of its own is over 400, and the
+        // flood itself about 5. The rest is room for the suites running beside this one.
+        let each = 250
+        #expect(grown < answered * each, "grew \(grown / 1_000_000) MB, \(grown / max(answered, 1)) bytes a question over \(answered)")
     }
 
     /// Over UDP a reply of exactly the limit goes whole and one a byte longer truncated: 512 with no
