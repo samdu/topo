@@ -14,7 +14,8 @@
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
 # the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
-# being buddybox.
+# being buddybox; and the device build's directory is built over for the pins it was built
+# from and made afresh for any other.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -68,6 +69,7 @@ fake "$work/bin/xcodebuild" '
 case "$*" in
   -version) echo "Xcode ${FAKE_XCODE:-27.0}"; echo "Build version 1" ;;
   *test-without-building*-only-testing:TopoUITests*) exit "${UI_TEST:-0}" ;;
+  *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
 esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
@@ -113,6 +115,29 @@ is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=succes
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
 is "green: and stopped" "$(calls 'ci-audio-lane.sh stop')" 1
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+
+# The device build's directory is kept for the pins it was built from, and no others.
+pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+mkdir -p "$(dirname "$pins")" && echo "pins: one" > "$pins"
+rm -rf "$tree/build/device"
+suite device-first others
+is "a first device build: exits 0" "$status" 0
+is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "pins: one"
+suite device-same others
+is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
+echo "pins: two" > "$pins"
+suite device-moved others
+is "pins that moved: exits 0" "$status" 0
+is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
+is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
+rm -f "$tree/build/device/Package.resolved"
+suite device-unknown others
+is "a directory that says no pins: made afresh" "$(calls 'device-build over what was there')" 0
+rm -f "$pins"
+suite device-no-pins others
+is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
+is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
+echo "pins: one" > "$pins"
 
 # A start that failed may have pinned the devices and left a feeder: it is stopped.
 LANE_START=1 suite lane-failed topo_ui

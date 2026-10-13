@@ -68,6 +68,7 @@ MIN_FREE_GB=10
 check=no
 lane=fast
 RESULTS="$root/build/validate"
+PACKAGE_PINS=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 cache="$HOME/Library/Caches/topo-validate"
 asked=()
 while [ $# -gt 0 ]; do
@@ -518,6 +519,13 @@ suite_others() {
   # distribution signing: no certificate, profile or entitlement is checked with
   # CODE_SIGNING_ALLOWED=NO.
   say "xcodebuild build (Topo Release for iOS devices, TopoHub), unsigned"
+  # The device build's derived data outlives the commit that made it, and what it keeps of a
+  # package is wrong once the pins move: a Swift module scan still names the headers of the
+  # version before, and a package whose headers moved fails the build. So it is kept only for
+  # the pins it was built from, a copy of which is in it, and is made afresh for any other.
+  cmp -s "$PACKAGE_PINS" build/device/Package.resolved || rm -rf build/device
+  mkdir -p build/device
+  cp "$PACKAGE_PINS" build/device/Package.resolved 2>/dev/null || true
   run "$RESULTS/Topo-iOS-Release-build.log" xcodebuild build -project Topo.xcodeproj -scheme Topo \
     -configuration Release -destination 'generic/platform=iOS' \
     -derivedDataPath build/device \
