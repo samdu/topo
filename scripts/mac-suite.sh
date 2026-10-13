@@ -365,6 +365,18 @@ suite_topo_unit() {
 # The UI tests (TopoUITests), behind the input-capable audio lane on every lane: the press tests
 # over the stub and loading ears need no model, but `MicrophonePressTests` asserts buffers and
 # samples reached the tap, which only a host with an input delivers.
+# Whether the display's hold stands: its `caffeinate` running, and the assertion it takes among
+# the ones the system counts. Asked for three seconds, since the assertion follows the start.
+display_hold=""
+display_held() {
+  local n
+  for n in $(seq 30); do
+    kill -0 "$display_hold" 2>/dev/null || return 1
+    ! pmset -g assertions 2>/dev/null | grep -q "pid $display_hold(caffeinate).*PreventUserIdleDisplaySleep" || return 0
+    perl -e 'select(undef,undef,undef,0.1)'
+  done
+  return 1
+}
 suite_topo_ui() {
   local status=0 udid models="" lane_status
   ui_steps() {
@@ -375,8 +387,10 @@ suite_topo_ui() {
     say "Audio loopback for the microphone test"
     # The display is kept on for as long as this script lives: when it sleeps the loopback's
     # input goes silent and stays so until the lane is started again, and the microphone test
-    # hears nothing.
+    # hears nothing. No lane is started without the hold, and a suite it ended under is red.
     caffeinate -d -w $$ &
+    display_hold=$!
+    display_held || { err "the display could not be held on: \`caffeinate -d\` (pid $display_hold) is not running with its hold among \`pmset -g assertions\`. No audio lane was started."; return 1; }
     # Ours to stop from the moment `start` is called, not from its success: one that fails
     # after pinning the devices, or a signal while it is under way, leaves a feeder and the
     # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
@@ -443,6 +457,7 @@ suite_topo_ui() {
 
     say "Audio lane holds after the microphone test"
     scripts/ci-audio-lane.sh check after || ui_status=1
+    display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended under the suite, so the display could sleep and silence the loopback."; ui_status=1; }
     return "$ui_status"
   }
   ui_steps || status=1

@@ -17,7 +17,9 @@
 # being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
 # and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
 # build's directory is built over for the pins it was built from and made afresh for any
-# other; and the display is held on under `topo_ui`, from before its lane starts.
+# other; and the display is held on under `topo_ui`, by a hold that waits on the script's own
+# pid and is running from before its lane starts to after it stops: one that did not start or
+# took no assertion starts no lane, and one that ended under the suite is red.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -56,9 +58,13 @@ fake() {
 }
 # Waits, on a marker holding its own pid, for as long as the case wants a command to be running.
 hold='if [ -n "${HOLD-}" ]; then echo $$ > "$HOLD"; while [ -e "$HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done; fi'
+# The lane notes, at its start and its stop, whether the display's hold is running then.
 fake "$tree/scripts/ci-audio-lane.sh" '
+held() { kill -0 "$(cat "$CALLS.hold" 2>/dev/null)" 2>/dev/null && echo "display held at $1" >> "$CALLS"; }
 case "$1" in
-  start) [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  start) held start; [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  stop) held stop; exit 0 ;;
+  check) [ "${FAKE_HOLD-}" != ends ] || [ "$2" != after ] || kill "$(cat "$CALLS.hold")"; exit 0 ;;
   *) exit 0 ;;
 esac'
 fake "$tree/scripts/build-ish.sh" 'exit 0'
@@ -77,7 +83,20 @@ esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
 fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
-fake "$work/bin/caffeinate" 'exit 0'
+# The display's hold: it lives while the pid `-w` names does, as the real one, and says whether
+# that pid is the script this run started (the script's pid is this one's parent's: the hold is
+# started from the suite's own shell or a subshell of it). FAKE_HOLD=dies ends it at once, and
+# FAKE_HOLD=unheld leaves it running with no assertion for `pmset` to list; FAKE_HOLD=ends is
+# the lane's fake ending it once the tests have run.
+fake "$work/bin/caffeinate" '
+[ "${FAKE_HOLD-}" != dies ] || exit 1
+echo $$ > "$CALLS.hold"
+at=$$
+while [ "$at" -gt 1 ] && [ "$at" != "$3" ]; do at="$(ps -o ppid= -p "$at" | tr -d " ")"; done
+case "$(ps -o args= -p "$3")" in *"scripts/mac-suite.sh "*) [ "$at" != "$3" ] || echo "hold waits on the script that started it" >> "$CALLS" ;; esac
+while kill -0 "$3" 2>/dev/null; do perl -e "select(undef,undef,undef,0.1)"; done'
+fake "$work/bin/pmset" '
+[ "${FAKE_HOLD-}" = unheld ] || echo "   pid $(cat "$CALLS.hold" 2>/dev/null)(caffeinate): [0x0] 00:00:01 PreventUserIdleDisplaySleep named: \"caffeinate command-line tool\""'
 fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
@@ -120,6 +139,11 @@ is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
 is "green: and stopped" "$(calls 'ci-audio-lane.sh stop')" 1
 is "green: the display is held on for this script's life, from before the lane starts" \
   "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
+is "green: the hold waits on the script's own pid" "$(calls 'hold waits on the script that started it')" 1
+is "green: the hold is running when the lane starts and when it stops" "$(grep '^display held' "$CALLS" | tr '\n' '|')" "display held at start|display held at stop|"
+hold_pid="$(cat "$CALLS.hold")"
+for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
 
 # The device build's directory is kept for the pins it was built from, and no others.
@@ -148,6 +172,21 @@ echo "pins: one" > "$pins"
 # No lane, no hold: the display is this Mac's own business under the other suites.
 suite no-lane topo_unit others
 is "no UI suite: the display is not held" "$(calls caffeinate)" 0
+
+# A hold that did not start, or took no assertion: no lane, and red by name.
+for broken in dies unheld; do
+  FAKE_HOLD=$broken suite "hold-$broken" topo_ui
+  is "a hold that $broken: exits 1" "$status" 1
+  is "a hold that $broken: topo_ui is a failure" "$(results)" "topo_ui=failure "
+  is "a hold that $broken: no lane is started" "$(calls 'ci-audio-lane.sh start')" 0
+  grep -q 'the display could not be held on' "$work/hold-$broken.log" && ok "a hold that $broken: it is said" || fail "a hold that $broken: $(tail -3 "$work/hold-$broken.log")"
+done
+# One that ended under the suite: red, the lane stopped.
+FAKE_HOLD=ends suite hold-ends topo_ui
+is "a hold that ended under the suite: exits 1" "$status" 1
+is "a hold that ended under the suite: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended under the suite: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended under the suite" "$work/hold-ends.log" && ok "a hold that ended under the suite: it is said" || fail "a hold that ended under the suite: $(tail -3 "$work/hold-ends.log")"
 
 # A start that failed may have pinned the devices and left a feeder: it is stopped.
 LANE_START=1 suite lane-failed topo_ui
