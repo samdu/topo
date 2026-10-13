@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 import TopoAuth
 import XCTest
@@ -123,6 +124,35 @@ final class WebAuthTests: XCTestCase {
             await settle()
             XCTAssertEqual(stage.dismissed, ["guest"])
         }
+    }
+
+    /// Refused for good, a sheet is still nobody declining: it waits for the app to close it.
+    func testASheetRefusedTwiceStaysTheAppsToClose() async {
+        let stage = Stage()
+        stage.takes = false
+        stage.open("login")
+        await settle()
+        XCTAssertEqual(stage.sheets.count, 2)
+        stage.web.activated()
+        stage.web.activated()
+        await settle()
+        XCTAssertEqual(stage.sheets.count, 4, "an activation did not show the sheet that was waiting")
+        XCTAssertEqual(stage.dismissed, [], "a refusal was taken for the person closing the sheet")
+        stage.web.close()
+        stage.web.activated()
+        await settle()
+        XCTAssertEqual(stage.sheets.count, 4)
+        XCTAssertEqual(stage.dismissed, [])
+    }
+
+    /// What the system's own completion says: only the person's close is a dismissal.
+    func testOnlyAClosedSessionIsADismissal() {
+        func error(_ code: ASWebAuthenticationSessionError.Code) -> any Error { ASWebAuthenticationSessionError(code) }
+        XCTAssertEqual(WebAuth.ending(nil), .dismissed)
+        XCTAssertEqual(WebAuth.ending(error(.canceledLogin)), .dismissed)
+        XCTAssertEqual(WebAuth.ending(error(.presentationContextNotProvided)), .refused)
+        XCTAssertEqual(WebAuth.ending(error(.presentationContextInvalid)), .refused)
+        XCTAssertEqual(WebAuth.ending(URLError(.cancelled)), .refused)
     }
 
     /// Closed by the app, a sheet still waiting is never shown.

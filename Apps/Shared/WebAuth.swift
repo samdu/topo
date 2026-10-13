@@ -9,7 +9,8 @@ import Foundation
 /// Only the person closing the sheet that is up is a dismissal. A sheet the caller closed or
 /// replaced tells nobody, and neither does one the system would not present: on the phone it
 /// presents none while the app is not active, which is where a sign-in carried off to Safari comes
-/// back to, so a sheet asked for then is kept and shown when the app is active.
+/// back to, so a sheet asked for then is kept and shown when the app is active. A sheet refused
+/// stays the caller's to close, on either platform.
 @MainActor
 final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     /// A sheet: begun once, which answers whether the system took it, and cancelled by the app
@@ -43,11 +44,13 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     override init() {
         super.init()
         #if os(iOS)
-        observer = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
-                                                          object: nil, queue: .main) { [weak self] _ in
+        let becameActive = UIApplication.didBecomeActiveNotification
+        #else
+        let becameActive = NSApplication.didBecomeActiveNotification
+        #endif
+        observer = NotificationCenter.default.addObserver(forName: becameActive, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.activated() }
         }
-        #endif
     }
 
     deinit {
@@ -100,12 +103,8 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
 
     /// The system would not present the sheet: it waits for the app's next activation. Refused
     /// while the app says it is active, it is tried once more and then waits, since nothing says
-    /// when a system that keeps refusing would stop. The Mac has no activation to wait for, so
-    /// there a second refusal is the sheet gone.
+    /// when a system that keeps refusing would stop. It is never the person's dismissal.
     private func refused(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
-        #if !os(iOS)
-        if retried { onDismiss(); return }
-        #endif
         waiting = (url, onDismiss)
         guard isActive(), !retried else { return }
         retried = true
@@ -114,14 +113,19 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
 
     private func system(_ url: URL, _ ended: @escaping @Sendable (Ending) -> Void) -> Sheet {
         let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { @Sendable _, error in
-            // No callback scheme, so the session ends only by the person's close (`canceledLogin`)
-            // or by the system not presenting it, which is every other error.
-            let closed = error == nil || (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin
-            ended(closed ? .dismissed : .refused)
+            ended(Self.ending(error))
         }
         session.prefersEphemeralWebBrowserSession = false
         session.presentationContextProvider = self
         return session
+    }
+
+    /// What a session's completion says of its sheet. There is no callback scheme, so it ends
+    /// only by the person's close (`canceledLogin`) or by the system not presenting it, which is
+    /// every other error.
+    nonisolated static func ending(_ error: (any Error)?) -> Ending {
+        guard let error else { return .dismissed }
+        return (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin ? .dismissed : .refused
     }
 
     func close() {
