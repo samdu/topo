@@ -7,7 +7,7 @@ import FluidAudio
 #endif
 
 /// Text to speech on this phone: Kyutai's Pocket TTS through FluidAudio's CoreML port, speaking
-/// its stock `eponine`. The measured reason for a voice on the device (Daphne's voice bench):
+/// its stock `marius`. The measured reason for a voice on the device (Daphne's voice bench):
 /// 0.04–0.18s to the first sound here against about 3s for a server's audio over the network the
 /// phone is on, the difference being a round trip and a download that do not exist on this path.
 ///
@@ -53,16 +53,17 @@ final class Voice {
 
     /// The speaker: one of the pack's stock voices, resolved by the port against the language
     /// pack's `constants_bin/`. The manifest fetches this one only.
-    nonisolated static let speaker = "eponine"
+    nonisolated static let speaker = "marius"
 
     /// Mimi's rate, which is every frame's rate: 80 ms of audio in 1920 samples.
     nonisolated static let rate = 24_000
 
     /// The pacing: the rate of the play queue's `AVAudioUnitTimePitch`, with the pitch untouched.
-    /// A per-speaker constant rather than a per-clip calculation: measured on one script, eponine
-    /// articulates 4.28 words per voiced second against Kokoro at Sam's pace on 5.32, and 1.20
-    /// brings her to about 5.02, just under his baseline rather than past it.
-    nonisolated static let tempo: Float = 1.20
+    /// A per-speaker constant rather than a per-clip calculation, and for marius it is 1: he is
+    /// heard at the pace he speaks at, which Sam chose by ear, so the unit stretches nothing.
+    /// Measured on CPU Pocket rather than a phone, he articulates about 5.3 words per voiced
+    /// second, where a slower stock voice (eponine, about 4.0 by the same measure) wants 1.20.
+    nonisolated static let tempo: Float = 1.0
 
     var ready: Bool { state == .ready }
 
