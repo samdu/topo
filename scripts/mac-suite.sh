@@ -46,7 +46,7 @@
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
 # counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
 # whose disk is encrypted, this user's session on the screen and unlocked; of `scripts` alone
-# it asks jq and the lid. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
+# it asks jq, node, a python3 that runs and the lid. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
 # a suite there, and `topo_ui` is refused on any Mac it is asked of this way: the audio lane
 # installs a driver and takes the Mac's default input and output.
 set -uo pipefail
@@ -115,9 +115,23 @@ for suite in "${asked[@]}"; do [ "$suite" = scripts ] || builds=yes; done
 if [ "$check" = yes ]; then
   lacks=0
   command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
+  # What the scripts' tests run under beside bash: review-prompt's runs a workflow step's
+  # script under node, and the janitor's is python, which on a Mac with no developer tools is
+  # a stub at /usr/bin that asks to install them.
+  for suite in "${asked[@]}"; do
+    case "$suite" in
+      scripts | others)
+        command -v node >/dev/null || { err "node is not installed, and the scripts' tests run one under it (brew install node)."; lacks=1; }
+        if [ "$(command -v python3)" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then
+          err "python3 is the stub of a Mac with no developer tools, and the scripts' tests run one under it (xcode-select --install)."; lacks=1
+        fi
+        break
+        ;;
+    esac
+  done
 fi
 # The toolchain, the simulators, the guest's framework and the disk are what a suite that
-# builds wants; the scripts' tests want what any Mac has.
+# builds wants; the scripts' tests want none of them.
 if [ "$check" = yes ] && [ "$builds" = yes ]; then
   [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; lacks=1; }
   pinned_tools || lacks=1

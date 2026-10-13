@@ -15,7 +15,7 @@
 # the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
 # being buddybox; and `scripts` runs each script's test and prepares, builds and boots nothing,
-# and is asked by --check for jq and an open lid alone.
+# and is asked by --check for jq, node, a python3 that runs and an open lid alone.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -74,6 +74,7 @@ esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
 fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
+fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
@@ -224,7 +225,7 @@ check() {  # check <case> [suite...] — its exit in $status, what it said in $s
   local name="$1"; shift
   export CALLS="$work/$name.calls"
   : > "$CALLS"
-  said="$(cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
+  said="$(cd "$tree" && PATH="$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
 }
 names() { case "$said" in *"error: "*"$2"*) ok "$1" ;; *) fail "$1: $said" ;; esac; }
 mkdir -p "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
@@ -259,10 +260,24 @@ FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
 is "check, locked and encrypted, others: exits 0" "$status" 0
 FAKE_LOCKED=1 check locked-plain topo_unit
 is "check, locked and not encrypted: exits 0" "$status" 0
-# `scripts` alone asks a Mac for jq and an open lid, whatever else it lacks.
+# `scripts` alone asks a Mac for jq, node, python3 and an open lid, whatever else it lacks.
 FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 FAKE_LOCKED=1 FAKE_VAULT=On check scripts-bare scripts
 is "check, scripts alone on a Mac with no toolchain, runtime or room: exits 0" "$status" 0
 is "check, scripts alone: nothing asked of Xcode, simctl or the disk" "$(grep -cE '^(xcodebuild|xcodegen|xcrun|osascript)' "$CALLS")" 0
+# A Mac with what macOS has and nothing installed: no node, and a python3 that is a stub.
+mkdir -p "$work/stock" && for tool in bash env dirname basename cat grep sed tr uname id git; do ln -sf "$(command -v "$tool")" "$work/stock/$tool"; done
+ln -sf "$(command -v jq)" "$work/stock/jq"
+BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check scripts-stock scripts
+is "check, scripts alone, no node and no developer tools: exits 1" "$status" 1
+names "check, scripts alone, no node: named" "node is not installed"
+names "check, scripts alone, python3 a stub: named" "python3 is the stub"
+BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check others-stock others
+names "check, others, no node: named" "node is not installed"
+BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check unit-stock topo_unit
+case "$said" in *"node is not"* | *"python3 is the stub"*) fail "check, topo_unit alone: asked for what the scripts' tests run under: $said" ;; *) ok "check, topo_unit alone: not asked for what the scripts' tests run under" ;; esac
+BARE_PATH="$work/stock:/usr/bin:/bin" check scripts-tools scripts
+names "check, scripts alone, developer tools and no node: node is named" "node is not installed"
+case "$said" in *"python3 is the stub"*) fail "check, developer tools there: python3 refused: $said" ;; *) ok "check, developer tools there: python3 is taken" ;; esac
 FAKE_LID=Yes check scripts-lid scripts
 is "check, scripts alone, the lid closed: exits 1" "$status" 1
 FAKE_XCODE=26.4 check scripts-beside scripts others
