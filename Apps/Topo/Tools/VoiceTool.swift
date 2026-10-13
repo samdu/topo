@@ -4,7 +4,7 @@ import TopoTools
 /// `topo voice`: the mind's hand on how this phone hears and speaks. Two settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press, and
-/// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for.
+/// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's.
 struct VoiceTool: Tool {
     /// The defaults are read and written from the service's own task; `UserDefaults` is safe there.
     private let defaults: Defaults
@@ -29,8 +29,8 @@ struct VoiceTool: Tool {
     topo voice temperature [status]         how much chance your voice is drawn with
     topo voice temperature VALUE            set it: a number from \(VoiceTemperature.said(VoiceTemperature.range.lowerBound)) to \(VoiceTemperature.said(VoiceTemperature.range.upperBound)); lower is steadier, higher livelier
 
-    \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. A change applies from the next sentence read aloud, on this phone only, and
-    they can change it back in Settings.
+    \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. A change applies from the next reply read aloud, on this phone only, and they
+    can change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -67,6 +67,6 @@ struct VoiceTool: Tool {
         // Judged as the voice judges what it reads, so nothing is kept that it would not speak at.
         guard let value = VoiceTemperature.judged(Double(arguments[1])) else { return .usage(usage + "\n") }
         defaults.store.set(value, forKey: VoiceTemperature.key)
-        return .ok("temperature \(VoiceTemperature.said(value)), from the next sentence\n")
+        return .ok("temperature \(VoiceTemperature.said(value)), from the next reply\n")
     }
 }

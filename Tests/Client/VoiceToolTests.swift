@@ -63,7 +63,7 @@ final class VoiceToolTests: XCTestCase {
         let tool = VoiceTool(defaults: defaults)
         for (asked, said, kept) in [("0.7", "0.70", Float(0.7)), ("0", "0.00", 0), ("1", "1.00", 1), ("0.3", "0.30", 0.3)] {
             var reply = await tool.run(["temperature", asked])
-            XCTAssertEqual(reply, .ok("temperature \(said), from the next sentence\n"))
+            XCTAssertEqual(reply, .ok("temperature \(said), from the next reply\n"))
             XCTAssertEqual(VoiceTemperature.value(defaults), kept)
             reply = await tool.run(["temperature"])
             XCTAssertEqual(reply, .ok("temperature \(said)\n"))
@@ -72,12 +72,26 @@ final class VoiceToolTests: XCTestCase {
 
     func testAValueKeptThatTheVoiceCannotTakeIsReadAsTheStandardOne() {
         let defaults = defaults()
-        for kept: Any in [-0.1, 1.5, Double.nan, Double.infinity, "0.7", Data()] {
+        for kept: Any in [-0.1, 1.5, Double.nan, Double.infinity, "0.7", Data(), true, false] {
             defaults.set(kept, forKey: VoiceTemperature.key)
             XCTAssertEqual(VoiceTemperature.value(defaults), 0.5, "\(kept)")
         }
         defaults.set(0.7, forKey: VoiceTemperature.key)
         XCTAssertEqual(VoiceTemperature.value(defaults), 0.7, "what the settings sheet's slider writes")
+    }
+
+    @MainActor func testTheVoiceHandsItsEngineTheTemperatureKeptAsEachSentenceIsAskedFor() async throws {
+        let defaults = defaults()
+        let engine = TemperatureRecorder()
+        let voice = Voice(engine: engine, defaults: defaults)
+        _ = try await voice.synthesise("Never asked.")
+        defaults.set(0.7, forKey: VoiceTemperature.key)
+        _ = try await voice.synthesise("Set in Settings.")
+        _ = await VoiceTool(defaults: defaults).run(["temperature", "0.2"])
+        _ = try await voice.synthesise("Set by the mind.")
+        defaults.set(7.0, forKey: VoiceTemperature.key)
+        _ = try await voice.synthesise("Kept out of range.")
+        XCTAssertEqual(engine.handed, [0.5, 0.7, 0.2, 0.5])
     }
 
     @MainActor func testTheToolIsInTheTableWithItsUsageAndTheSkillNamesIt() async {
@@ -89,5 +103,18 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertTrue(usage.text.contains("topo voice temperature VALUE"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice noise-suppression`"), "the mind is not told the tool exists")
         XCTAssertTrue(GuestTools.skill.contains("`topo voice temperature`"), "the mind is not told of the temperature")
+    }
+}
+
+/// An engine that keeps the temperature each sentence was asked for at and makes no audio.
+final class TemperatureRecorder: VoiceEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var temperatures: [Float] = []
+    var handed: [Float] { lock.withLock { temperatures } }
+
+    func load(base: URL) async throws {}
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+        lock.withLock { temperatures.append(temperature) }
+        return AsyncThrowingStream { $0.finish() }
     }
 }
