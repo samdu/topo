@@ -17,6 +17,9 @@
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
 #              watch's suite, and the builds no suite hosts: the watch and TV for their own
 #              simulators, a Release build for iOS devices, and the hub.
+#   scripts    the scripts' own tests and nothing else: each runs against fakes, so the suite
+#              boots no simulator, builds nothing and needs no toolchain prepared. It is what
+#              a change to the harness alone needs, and `others` runs the same tests.
 #
 # Green means the named suites ran, not that nothing complained: every package and project is
 # named and a missing one fails, and scripts/ci-require-tests.sh reads each result and fails on a
@@ -42,8 +45,8 @@
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
 # counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
-# whose disk is encrypted, this user's session on the screen and unlocked. It makes, builds
-# and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
+# whose disk is encrypted, this user's session on the screen and unlocked; of `scripts` alone
+# it asks jq and the lid. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
 # a suite there, and `topo_ui` is refused on any Mac it is asked of this way: the audio lane
 # installs a driver and takes the Mac's default input and output.
 set -uo pipefail
@@ -60,7 +63,7 @@ WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
-SUITES=(topo_unit topo_ui others)
+SUITES=(topo_unit topo_ui others scripts)
 # What --check asks of the disk: a runtime's simulators, a cold DerivedData and the pinned
 # downloads are most of it, and a Mac somebody else is using is not left full.
 MIN_FREE_GB=10
@@ -105,11 +108,19 @@ has_simulator() {
     '[.devices[$rt] // [] | .[] | select(.name | startswith($p))] | length > 0' >/dev/null 2>&1
 }
 
+# Whether anything asked for builds or boots: `scripts` alone does neither.
+builds=no
+for suite in "${asked[@]}"; do [ "$suite" = scripts ] || builds=yes; done
+
 if [ "$check" = yes ]; then
   lacks=0
+  command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
+fi
+# The toolchain, the simulators, the guest's framework and the disk are what a suite that
+# builds wants; the scripts' tests want what any Mac has.
+if [ "$check" = yes ] && [ "$builds" = yes ]; then
   [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; lacks=1; }
   pinned_tools || lacks=1
-  command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
   has_simulator "$IOS_SIMULATOR_RUNTIME" iPhone || { err "no iPhone simulator of $IOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; }
   for suite in "${asked[@]}"; do
     case "$suite" in
@@ -134,6 +145,8 @@ if [ "$check" = yes ]; then
     "" | *[!0-9]*) err "could not read the disk's available space under $cache."; lacks=1 ;;
     *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache, purgeable space included (Finder's figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
   esac
+fi
+if [ "$check" = yes ]; then
   # A laptop with its lid shut sleeps whatever holds it awake; a Mac with no lid has no such key.
   # Read whole and then looked at: a reader that stops at the first match ends ioreg on a
   # closed pipe, which under pipefail is a failed pipeline, and that would read as open.
@@ -423,12 +436,11 @@ suite_topo_ui() {
   return "$status"
 }
 
-# Everything that is not the Topo scheme's suite. Every step runs after an earlier one failed.
-suite_others() {
-  local status=0 udid test package
-
-  # Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
-  # Named, not globbed, so a test that disappears fails here.
+# Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
+# Named, not globbed, so a test that disappears fails here. Every one runs after an earlier
+# one failed.
+suite_scripts() {
+  local status=0 test
   for test in simulator-run perf-run review-verdict ci-select-lane ci-audio-lane ci-select-suites asc-pem archive-upload \
               suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
               model-manifest review-prompt review-cap janitor validate-and-push validate-host mac-suite agent-simulator; do
@@ -440,6 +452,14 @@ suite_others() {
       run "$RESULTS/script-$test.log" "scripts/tests/$test-test.sh" || { err "scripts/tests/$test-test.sh failed."; status=1; }
     fi
   done
+  return "$status"
+}
+
+# Everything that is not the Topo scheme's suite. Every step runs after an earlier one failed.
+suite_others() {
+  local status=0 udid package
+
+  suite_scripts || status=1
 
   # The committed manifest is what scripts/model-manifest.sh writes from its pins today: every
   # file fetched and hashed (kept in build/models), every package checked against Alpine's
@@ -536,7 +556,9 @@ suite_others() {
 }
 
 overall=0
-if prepare; then
+if [ "$builds" = no ]; then
+  prepared=yes
+elif prepare; then
   prepared=yes
 else
   prepared=no

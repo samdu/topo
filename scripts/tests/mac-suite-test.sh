@@ -14,7 +14,8 @@
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
 # the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
-# being buddybox.
+# being buddybox; and `scripts` runs each script's test and prepares, builds and boots nothing,
+# and is asked by --check for jq and an open lid alone.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -138,6 +139,28 @@ is "photos grant not full access: exits 1" "$status" 1
 is "photos grant not full access: topo_unit is a failure" "$(results)" "topo_unit=failure "
 is "photos grant not full access: no test ran" "$(calls 'xcodebuild test-without-building')" 0
 
+# The scripts' tests alone: each of them, and nothing generated, built, booted or prepared,
+# on a Mac whose toolchain is off its pin as on any other. `others` runs the same tests.
+tests_named="$(ls "$tree/scripts/tests" | wc -l | tr -d ' ')"
+FAKE_XCODE=99.0 suite scripts-alone scripts
+is "scripts alone: exits 0" "$status" 0
+is "scripts alone: a success" "$(results)" "scripts=success "
+is "scripts alone: every script's test ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
+is "scripts alone: nothing generated, built, booted or prepared" "$(grep -cE '^(xcodegen|xcodebuild|xcrun|swift|build-ish\.sh|ci-audio-lane\.sh|model-manifest\.sh) ' "$CALLS")" 0
+is "others: every script's test runs there too" "$(grep -c -- '-test.sh' "$work/green.calls")" "$tests_named"
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 1'
+suite scripts-red scripts
+is "a script's test red: exits 1" "$status" 1
+is "a script's test red: scripts is a failure" "$(results)" "scripts=failure "
+is "a script's test red: the others still ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
+suite others-red others
+is "a script's test red: others is a failure too" "$(results)" "others=failure "
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 0'
+rm -f "$tree/scripts/tests/review-cap-test.sh"
+suite scripts-missing scripts
+is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure "
+fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
+
 # A toolchain off its pin: no suite runs, and each one asked for is a failure.
 FAKE_XCODE=99.0 suite off-pin topo_unit others
 is "off the pin: exits 1" "$status" 1
@@ -236,6 +259,14 @@ FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
 is "check, locked and encrypted, others: exits 0" "$status" 0
 FAKE_LOCKED=1 check locked-plain topo_unit
 is "check, locked and not encrypted: exits 0" "$status" 0
+# `scripts` alone asks a Mac for jq and an open lid, whatever else it lacks.
+FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 FAKE_LOCKED=1 FAKE_VAULT=On check scripts-bare scripts
+is "check, scripts alone on a Mac with no toolchain, runtime or room: exits 0" "$status" 0
+is "check, scripts alone: nothing asked of Xcode, simctl or the disk" "$(grep -cE '^(xcodebuild|xcodegen|xcrun|osascript)' "$CALLS")" 0
+FAKE_LID=Yes check scripts-lid scripts
+is "check, scripts alone, the lid closed: exits 1" "$status" 1
+FAKE_XCODE=26.4 check scripts-beside scripts others
+is "check, scripts beside others on another Xcode: exits 1" "$status" 1
 FAKE_VAULT=On check unlocked topo_unit
 is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
 check ui topo_ui
