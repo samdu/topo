@@ -79,7 +79,7 @@ fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_is
 fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
 # As long as the real one's answer, the state near its head: a reader that stops early closes the pipe on it.
 fake "$work/bin/fdesetup" 'echo "FileVault is ${FAKE_VAULT:-Off}."'
-fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=No,\"CGSSessionScreenIsLocked\"=Yes},{\"kCGSSessionOnConsoleKey\"=Yes${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"; echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
+fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=${FAKE_OTHER_CONSOLE:-No},\"kCGSSessionUserNameKey\"=\"another\"${FAKE_OTHER_UNLOCKED:-,\"CGSSessionScreenIsLocked\"=Yes}},{\"kCGSSessionOnConsoleKey\"=${FAKE_AWAY:-Yes},\"kCGSSessionUserNameKey\"=\"$(id -un)\"${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"; echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
@@ -229,7 +229,9 @@ is "check, the lid closed: exits 1" "$status" 1
 names "check, the lid closed: named" "lid is closed"
 FAKE_LOCKED=1 FAKE_VAULT=On check locked topo_unit
 is "check, locked and encrypted: exits 1" "$status" 1
-names "check, locked and encrypted: named" "screen is locked"
+names "check, locked and encrypted: named" "is locked, or is not the one on the screen"
+FAKE_AWAY=No FAKE_OTHER_CONSOLE=Yes FAKE_OTHER_UNLOCKED= FAKE_VAULT=On check away topo_unit
+is "check, encrypted and another user's session on the screen: exits 1" "$status" 1
 FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
 is "check, locked and encrypted, others: exits 0" "$status" 0
 FAKE_LOCKED=1 check locked-plain topo_unit

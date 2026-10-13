@@ -41,10 +41,11 @@
 # `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
-# counts it, purgeable space included), a lid that is
-# open and, for `topo_unit` on a Mac whose disk is encrypted, a screen that is unlocked. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than
-# buddybox before it runs a suite there, and `topo_ui` is refused on any Mac it is asked of
-# this way: the audio lane installs a driver and takes the Mac's default input and output.
+# counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
+# whose disk is encrypted, this user's session on the screen and unlocked. It makes, builds
+# and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
+# a suite there, and `topo_ui` is refused on any Mac it is asked of this way: the audio lane
+# installs a driver and takes the Mac's default input and output.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -142,10 +143,18 @@ if [ "$check" = yes ]; then
   # locked, and TopoTests asks that of files in the simulator's home.
   case " ${asked[*]} " in
     *" topo_unit "*)
-      console="$(ioreg -n Root -d1 2>/dev/null || true)"
+      # The session of the user the suite runs as, by name: open when it is the one on the
+      # screen and not locked. Another user's, or the login window's, is not this one's.
+      sessions="$(ioreg -n Root -d1 2>/dev/null | tr '}' '\n' || true)"
+      mine="$(grep -F "\"kCGSSessionUserNameKey\"=\"$(id -un)\"" <<<"$sessions" || true)"
       vault="$(fdesetup status 2>/dev/null || true)"
-      if awk 'BEGIN { RS = "}" } /"kCGSSessionOnConsoleKey"=Yes/ && /"CGSSessionScreenIsLocked"=Yes/ { found = 1 } END { exit !found }' <<<"$console"; then
-        case "$vault" in *"FileVault is On"*) err "this Mac's screen is locked and its disk is encrypted: no file can be given complete protection until it is unlocked, and topo_unit asks for that."; lacks=1 ;; esac
+      case "$mine" in
+        *'"CGSSessionScreenIsLocked"=Yes'*) open=no ;;
+        *'"kCGSSessionOnConsoleKey"=Yes'*) open=yes ;;
+        *) open=no ;;
+      esac
+      if [ "$open" = no ]; then
+        case "$vault" in *"FileVault is On"*) err "this Mac's disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen: no file can be given complete protection until it is unlocked, and topo_unit asks for that."; lacks=1 ;; esac
       fi
       ;;
   esac
