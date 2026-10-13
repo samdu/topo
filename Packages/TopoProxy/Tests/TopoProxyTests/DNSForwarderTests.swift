@@ -127,15 +127,18 @@ import Testing
         var sink = [UInt8](repeating: 0, count: 2048)
         var answered = 0
         let before = footprint()
-        let end = Date().addingTimeInterval(3)
-        while Date() < end {
+        // The flood is a count of answers and not a length of time, so a loaded machine makes it
+        // slower and no smaller; the deadline only ends a forwarder that has stopped answering.
+        let flood = 10_000
+        let deadline = Date().addingTimeInterval(30)
+        while answered < flood, Date() < deadline {
             for client in clients {
                 _ = withAddress("127.0.0.1", port) { sendto(client.fd, bytes, bytes.count, 0, $0, $1) }
                 while recv(client.fd, &sink, sink.count, 0) > 0 { answered += 1 }
             }
         }
         let grown = (footprint() - before) / 1_000_000
-        #expect(answered > 10_000, "the flood was \(answered) answers")
+        #expect(answered >= flood, "the flood never got its answers: \(answered) in 30 s")
         #expect(grown < 30, "grew \(grown) MB over \(answered) answers")
     }
 
