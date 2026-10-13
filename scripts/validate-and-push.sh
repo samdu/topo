@@ -31,10 +31,10 @@
 #      this Mac at a time (the audio lane is one per Mac), and with more slots than one two
 #      runs overlap in two different suites. The waits for a slot, for a suite and for a run of
 #      the script as it was are LOCK_WAIT seconds between them (three hours). The wait for a
-#      slot is in order of arrival: a run that has to wait takes a ticket in
-#      ~/Library/Caches/topo-validate/queue, named for the second it began waiting and its
+#      slot is in the order the runs began: a run that has to wait takes a ticket in
+#      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began and its
 #      pid, and only the run whose ticket is first asks for a slot. A ticket whose process is
-#      gone holds nobody. A run that arrived within one look of another, and a run of a branch
+#      gone holds nobody. A run that reached the line within one look of another, and a run of a branch
 #      that has not merged main, which knows of no line, can still take a slot out of turn.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
@@ -94,6 +94,8 @@ repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 LOCK_POLL="${LOCK_POLL:-5}"   # seconds between looks at a lock that is held
 HOST_RETRY="${HOST_RETRY:-60}"   # seconds before a Mac found busy is asked again
+# When this run began, in microseconds: its place in the line for a slot, whenever it gets there.
+arrived="$(perl -MTime::HiRes=time -e 'printf "%.0f", time * 1e6')"
 SLOTS="${TOPO_VALIDATE_SLOTS:-1}"
 KEEP_LOGS=10
 KEEP_RUNS=5
@@ -378,7 +380,7 @@ run_on() {
 queue="$cache/queue"
 ticket=""
 ticket_in() {
-  [ -n "$ticket" ] || ticket="$queue/$(printf '%010d-%07d' "$(date +%s)" "$$")"
+  [ -n "$ticket" ] || ticket="$queue/$(printf '%016d-%07d' "$arrived" "$$")"
   [ ! -s "$ticket" ] || return 0
   # Whole or not at all: under a name no reader takes for a ticket, then its own.
   mkdir -p "$queue" && printf '%s\n%s\n%s\n' "$$" "$(began_of $$)" "$branch $short" > "$queue/.new.$$" \
@@ -393,7 +395,7 @@ ahead() {
   local name pid began who
   [ -d "$queue" ] || return 0
   LC_ALL=C ls -1 "$queue" | LC_ALL=C sort | while IFS= read -r name; do
-    [[ "$name" =~ ^[0-9]{10}-[0-9]{7}$ ]] || continue
+    [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
     [ "$queue/$name" != "$ticket" ] || break
     pid="$(sed -n 1p "$queue/$name" 2>/dev/null)" began="$(sed -n 2p "$queue/$name" 2>/dev/null)" who="$(sed -n 3p "$queue/$name" 2>/dev/null)"
     if [ -n "$pid" ] && [ -n "$began" ] && [ -n "$who" ] && [ "$(began_of "$pid")" = "$began" ]; then

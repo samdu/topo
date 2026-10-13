@@ -30,8 +30,8 @@
 # suite runs here; a busy one is left alone and the suite runs here; a suite red there is
 # red; and a signal ends the suite there, or comes before it and starts none.
 #
-# And of the line for a slot: runs that wait have it in the order they came, whichever asks
-# oftener; a run's ticket taken from under it is back under its own name; a ticket of a pid
+# And of the line for a slot: runs that wait have it in the order they began, whichever asks
+# oftener or reached the line first; a run's ticket taken from under it is back under its own name; a ticket of a pid
 # that is gone or another's, or one not whole, is removed and holds nobody, and a file that is
 # no ticket is left; a run signalled in the line leaves no ticket; a run trying a busy Mac
 # keeps its place, and is out of the line while its suite runs there. And of --hold: the
@@ -812,7 +812,7 @@ is "detached: exits 2" "$status" 2
 # has waited longest: the second run here looks five times as often as the first, and would
 # have the checkout nearly every time were it only a matter of who asks first.
 export TOPO_VALIDATE_SLOTS=1
-tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{10}-[0-9]{7}$' | LC_ALL=C sort | tr '\n' ' '; }
+tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{16}-[0-9]{7}$' | LC_ALL=C sort | tr '\n' ' '; }
 ticket_of() { tickets | tr ' ' '\n' | grep -- "-0*$1\$" || true; }
 until_true() { local n; for n in $(seq 100); do "$@" && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
 has_ticket() { [ -n "$(ticket_of "$1")" ]; }
@@ -862,21 +862,21 @@ q="$TOPO_VALIDATE_CACHE/queue"
 began() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1"; }
 sleep 30 & gone=$!; gone_began="$(began "$gone")"; kill "$gone"; wait "$gone" 2>/dev/null
 sleep 30 & alive=$!
-printf '%s\n%s\n%s\n' "$gone" "$gone_began" "ended 0000001" > "$q/0000000001-0000001"
-printf '%s\n%s\n%s\n' "$alive" "Thu Jan  1 00:00:00 1970" "another 0000002" > "$q/0000000002-0000002"
-: > "$q/0000000003-0000003"
-echo "$alive" > "$q/0000000004-0000004"
-echo keep > "$q/notes"; echo keep > "$q/.new.99999"; echo keep > "$q/0000000005-5"
+printf '%s\n%s\n%s\n' "$gone" "$gone_began" "ended 0000001" > "$q/0000000000000001-0000001"
+printf '%s\n%s\n%s\n' "$alive" "Thu Jan  1 00:00:00 1970" "another 0000002" > "$q/0000000000000002-0000002"
+: > "$q/0000000000000003-0000003"
+echo "$alive" > "$q/0000000000000004-0000004"
+echo keep > "$q/notes"; echo keep > "$q/.new.99999"; echo keep > "$q/0000000000000005-5"
 LOCK_WAIT=0 validate
 is "dead tickets ahead: the run waits for nothing" "$status" 0
 is "dead tickets ahead: each is removed" "$(tickets)" ""
-is "dead tickets ahead: what is not a ticket is left" "$(ls -A "$q" | LC_ALL=C sort | tr '\n' ' ')" ".new.99999 0000000005-5 notes "
-printf '%s\n%s\n%s\n' "$alive" "$(began "$alive")" "ahead 0000006" > "$q/0000000006-0000006"
+is "dead tickets ahead: what is not a ticket is left" "$(ls -A "$q" | LC_ALL=C sort | tr '\n' ' ')" ".new.99999 0000000000000005-5 notes "
+printf '%s\n%s\n%s\n' "$alive" "$(began "$alive")" "ahead 0000006" > "$q/0000000000000006-0000006"
 LOCK_WAIT=2 validate
 is "a live ticket ahead: exits 2" "$status" 2
 case "$out" in *"Waiting for a checkout (1 ahead in the line, the first ahead 0000006, pid "*")"*) ok "a live ticket ahead: it is waited behind, by name" ;; *) fail "a live ticket ahead: $out" ;; esac
 is "a live ticket ahead: no suite ran" "$(recorded suites)" ""
-is "a wait that ran out: the run's own ticket is gone, the one ahead left" "$(tickets)" "0000000006-0000006 "
+is "a wait that ran out: the run's own ticket is gone, the one ahead left" "$(tickets)" "0000000000000006-0000006 "
 # A signal while in the line.
 waiter "$theirs" term; term=$run
 until_true has_ticket "$term" || fail "a signal in the line: the run never took a place: $(cat "$work/line/term.out")"
@@ -922,6 +922,27 @@ release "$work/line/away-a.hold"; release "$work/line/away-b.hold"
 wait "$a"; is "a suite on another Mac: its run exits 0" "$?" 0
 wait "$b"; is "a suite on another Mac: the run behind exits 0" "$?" 0
 is "the line: empty when all are done" "$(tickets)" ""
+
+# A run's place is when it began, not when it reached the line: one that began first and was
+# slow to get there (its first `git` takes two seconds) is ahead of one that began after it
+# and was waiting already.
+mkdir -p "$work/slowbin"
+printf '#!/usr/bin/env bash\n[ -e "%s" ] || { : > "%s"; perl -e "select(undef,undef,undef,2)"; }\nexec "%s" "$@"\n' "$work/line/slowed" "$work/line/slowed" "$(command -v git)" > "$work/slowbin/git"
+chmod +x "$work/slowbin/git"
+waiter "$repo" slow-first FAKE_HOLD_SUITE=topo_unit TOPO_VALIDATE_HOSTS=; first=$run
+until_true reached "$work/line/slow-first.hold" || fail "began first: the holder never started: $(cat "$work/line/slow-first.out")"
+waiter "$theirs" slow-a PATH="$work/slowbin:$work/bin:$PATH" LOCK_POLL=1 TOPO_VALIDATE_HOSTS=; a=$run
+perl -e 'select(undef,undef,undef,0.3)'
+waiter "$later" slow-b LOCK_POLL=1 TOPO_VALIDATE_HOSTS=; b=$run
+until_true has_ticket "$b" || fail "began first: the later run took no place: $(cat "$work/line/slow-b.out")"
+[ -z "$(ticket_of "$a")" ] && ok "began first: the later run is in the line before it" || fail "began first: the slow run was in the line already"
+until_true has_ticket "$a" || fail "began first: the slow run took no place: $(cat "$work/line/slow-a.out")"
+is "began first, reached the line second: ahead" "$(tickets)" "$(ticket_of "$a") $(ticket_of "$b") "
+release "$work/line/slow-first.hold"; wait "$first" 2>/dev/null
+until_true reached "$work/line/slow-a.hold" && [ ! -s "$work/line/slow-b.hold" ] && ok "began first: it has the checkout first" || fail "began first: the later run took the checkout: $(cat "$work/line/slow-a.out")"
+release "$work/line/slow-a.hold"; wait "$a" 2>/dev/null
+until_true reached "$work/line/slow-b.hold" || fail "began first: the later run never had the checkout"
+release "$work/line/slow-b.hold"; wait "$b" 2>/dev/null
 
 # By hand: a command with the checkout held, in the line as a validation is. It asks nothing
 # of where it is run from, has the command's output and exit, starts no suite and posts and
@@ -971,6 +992,18 @@ kill "$held_pid" 2>/dev/null
 until_true eval "! kill -0 $held_pid 2>/dev/null"
 LOCK_WAIT=5 validate
 is "the command left behind ended: the next validation runs" "$status" 0
+# From a worktree no validation would run in, detached and dirty: the command runs, and the
+# tree, origin and the commit's statuses are as they were.
+git -C "$repo" checkout -q --detach
+echo dirt >> "$repo/scripts/ci-select-lane.sh"; echo x > "$repo/untracked"
+tree_before="$(git -C "$repo" status --porcelain; git -C "$repo" rev-parse HEAD)" origin_before="$(git -C "$work/hold/origin.git" for-each-ref)" posted_before="$(grep -c . "$GH_CALLS")"
+(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh --hold -- sh -c 'exit 3') > "$work/hold/detached.out" 2>&1 && status=0 || status=$?
+is "a hold from a detached, dirty worktree: the command's exit" "$status" 3
+is "a hold from a detached, dirty worktree: the tree is as it was" "$(git -C "$repo" status --porcelain; git -C "$repo" rev-parse HEAD)" "$tree_before"
+is "a hold from a detached, dirty worktree: origin is as it was" "$(git -C "$work/hold/origin.git" for-each-ref)" "$origin_before"
+is "a hold from a detached, dirty worktree: nothing posted" "$(grep -c . "$GH_CALLS")" "$posted_before"
+(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh) > "$work/hold/detached.out" 2>&1 && status=0 || status=$?
+is "a validation from that worktree: refused" "$status" 2
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
