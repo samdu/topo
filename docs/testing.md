@@ -35,3 +35,11 @@ scripts/validate-and-push.sh --suites all --lane full
 The reviewer runs only on a PR that is ready and whose `test` is green, so a suite that did not pass spends no round. A run learns whether the PR is ready from the API as it starts (`review_cap`), never from the event that started it: marking a PR ready and pushing to it a second apart start two runs on one head, the later one cancels the other (one run per PR, `cancel-in-progress`), and whichever survives reads the PR as ready.
 
 A PR opened from a host with no Mac passes `test` only when its paths need no suite; anything else is validated from a worktree on buddybox. Nothing runs the suites on main on a schedule: a regression in recognition from a change off the voice path shows at the next commit whose paths take the full lane, or when a branch's pushed head is run through it by hand (`scripts/validate-and-push.sh --no-push --suites topo_ui --lane full`, from that branch's worktree; the script refuses main and a detached HEAD).
+
+## What the UI tests can and cannot see
+
+**`.accessibilityHidden(true)` does not take a view out of the XCUITest tree.** The element stays queryable, so a control that must be absent to a UI test has to leave the layout (an `if` around the view), not be hidden in place. Probed unconditionally; there is no modifier that does it.
+
+**A headless simulator has no hardware keyboard and no route to connect one.** CI refuses `XCTSkip`, so a path that only exists with a keyboard focused (the composer taking focus with no bar press) has no UI proof; its claim rests on unit tests and a device box.
+
+**A plan that promises bar room measures it first.** On a 402 pt phone the bar holds 196 pt beside its model and mute controls, so a plan written as "notices fit whole at the largest font" could not hold. Measure on the smallest supported phone at the largest Dynamic Type before writing the plan line.
