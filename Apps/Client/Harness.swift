@@ -320,6 +320,9 @@ final class Harness {
     static func standard(tokens: StoredTokenProvider,
                          database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database()) -> Harness {
         let (bridge, relay) = guestBrain(ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile)
+        #if DEBUG
+        if let debug = DebugRun.log() { return Harness(database: debug, tokens: tokens, brain: bridge, relay: relay) }
+        #endif
         return Harness(database: database(), tokens: tokens, brain: bridge, relay: relay)
     }
 

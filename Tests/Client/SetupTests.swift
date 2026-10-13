@@ -1,3 +1,4 @@
+import SwiftUI
 import TopoUserland
 import XCTest
 
@@ -9,6 +10,59 @@ import XCTest
 final class SetupTests: XCTestCase {
     private let fetching = Setup.Fetch(fraction: 0.25, words: "downloading 57 MB of 228 MB")
     private let held = Setup.Fetch(fraction: nil, words: "waiting for a network the data settings allow")
+    /// The meter as drawn: a part a quarter downloaded has a quarter of its bar in the tint and
+    /// the rest in the track, a part being prepared a whole bar, and one not begun an empty one.
+    func testABarIsFilledToItsPartsShare() throws {
+        var look = Look()
+        look.setup.tint = Color(red: 0, green: 1, blue: 0)
+        look.setup.track = Color(red: 0, green: 0, blue: 1)
+        look.setup.barWidth = 72
+        look.setup.barHeight = 6
+        func bar(_ state: Setup.State) throws -> (filled: Int, empty: Int) {
+            let renderer = ImageRenderer(content: SetupMeter(lines: [Setup.Line(title: Setup.hearing, state: state)])
+                .environment(\.look, look).padding(8).background(Color.white))
+            renderer.scale = 3
+            let image = try XCTUnwrap(renderer.uiImage?.cgImage, "the meter rendered to nothing")
+            var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            let context = try XCTUnwrap(CGContext(
+                data: &bytes, width: image.width, height: image.height, bitsPerComponent: 8,
+                bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            func tint(_ x: Int, _ y: Int) -> Bool {
+                let at = (y * image.width + x) * 4
+                return bytes[at] < 60 && bytes[at + 1] > 180 && bytes[at + 2] < 60
+            }
+            func track(_ x: Int, _ y: Int) -> Bool {
+                let at = (y * image.width + x) * 4
+                return bytes[at] < 60 && bytes[at + 1] < 60 && bytes[at + 2] > 180
+            }
+            // The bar is the widest run of its two inks on any row; the mark beside it is the
+            // tint's too, and is narrower and apart from it.
+            var widest = (filled: 0, empty: 0)
+            for y in 0..<image.height {
+                var x = 0
+                while x < image.width {
+                    var filled = 0, empty = 0
+                    while x < image.width, tint(x, y) { filled += 1; x += 1 }
+                    while x < image.width, track(x, y) { empty += 1; x += 1 }
+                    if filled + empty > widest.filled + widest.empty { widest = (filled, empty) }
+                    if filled + empty == 0 { x += 1 }
+                }
+            }
+            return widest
+        }
+        let whole = 72 * 3
+        let quarter = try bar(.progress(0.25, "downloading 57 MB of 228 MB"))
+        XCTAssertEqual(quarter.filled + quarter.empty, whole, accuracy: 6, "the bar is not the look's width")
+        XCTAssertEqual(Double(quarter.filled) / Double(whole), 0.25, accuracy: 0.04, "a quarter downloaded drew \(quarter)")
+        let prepared = try bar(.working("loading"))
+        XCTAssertEqual(prepared.filled, whole, accuracy: 6, "a part being prepared drew \(prepared)")
+        let waiting = try bar(.waiting("not started"))
+        XCTAssertEqual(waiting.filled, 0, accuracy: 3, "a part not begun drew \(waiting)")
+        XCTAssertEqual(waiting.empty, whole, accuracy: 6)
+    }
+
     private let pin = ClaudeCodePin(version: "2.1.285", size: 1, sha256: String(repeating: "0", count: 64))
 
     /// The workspace is done only with the rootfs imported and Claude Code on the phone; either

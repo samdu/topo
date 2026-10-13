@@ -82,6 +82,9 @@ targets:
         buildPhase: resources
     dependencies:
       - package: TopoCore
+      # The in-memory database, for a debug launch that reads a log of its own (`DebugRun.log`).
+      - package: TopoCore
+        product: TopoCoreTesting
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio

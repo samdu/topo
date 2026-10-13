@@ -38,6 +38,19 @@ enum FirstRun {
     /// microphone has been heard, so a turn the log brings while the ear decodes does not take
     /// the screen, and the answer with it, from under the person.
     static func stands(hearing: Bool, asks: Bool) -> Bool { asks || hearing }
+
+    /// Whether the question stands over the chat, from what the chat holds: the voice, whose
+    /// session is the question's own while an answer said into it is open or being heard, the
+    /// row and the field, and what the harness says of the log and the line. The chat draws the
+    /// question while this is true and asks nothing else.
+    @MainActor
+    static func standing(voice: VoiceInput, row: NextTurn, focused: Bool, read: Bool, empty: Bool,
+                         waiting: Bool, busy: Bool, answered: Bool, fixture: Bool) -> Bool {
+        stands(hearing: voice.owner == .firstRun,
+               asks: asks(read: read, empty: empty, waiting: waiting, busy: busy,
+                          engaged: engaged(voice: voice, row: row, focused: focused),
+                          answered: answered, fixture: fixture))
+    }
 }
 
 /// What stands where the transcript will, until the first read of the log returns.

@@ -97,23 +97,31 @@ struct FirstRunView: View {
         #endif
     }
 
-    private func submit() {
-        let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func submit() { submit(answer) }
+
+    private func submit(_ words: String) {
+        let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         onDone(text)
     }
 
     /// Hold to talk, release to answer; on this screen a tap is a short hold, not a hands-free
     /// press, since one answer is all it takes.
+    ///
+    /// What was heard is answered as it was returned, in the turn of the main actor that
+    /// returned it and not through the field: the session's end is what lets a turn from
+    /// another device take the question away (`FirstRun.standing`), and by then the answer is
+    /// on the line.
     private func pressed(_ down: Bool) async {
         #if os(iOS)
         let heard = down ? await voice.pressDown(as: .firstRun) : await voice.pressUp(as: .firstRun)
         if let heard {
             answer = heard
-            submit()
+            submit(heard)
         } else if !down, voice.handsFree {
-            answer = await voice.pressDown(as: .firstRun) ?? ""
-            submit()
+            let heard = await voice.pressDown(as: .firstRun) ?? ""
+            answer = heard
+            submit(heard)
         }
         #endif
     }

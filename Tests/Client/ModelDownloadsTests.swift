@@ -170,6 +170,23 @@ final class ModelWaitersTests: XCTestCase {
         XCTAssertNil(ModelDownloads.fraction(done: 0, of: 0))
     }
 
+    /// The bar and the words beside it are one count: a model on the phone counts whole, one
+    /// downloading by what has arrived, one not begun adds only to the total, and one the
+    /// manifest does not name is not counted.
+    func testTheBarsShareIsTheBytesTheWordsSay() throws {
+        typealias Status = ModelDownloads.Status
+        let megabyte: Int64 = 1_000_000
+        let sizes: [Int64?] = [100 * megabyte, 300 * megabyte, 100 * megabyte, nil]
+        let statuses: [Status] = [.present, .downloading(done: 30 * megabyte, total: 300 * megabyte), .absent, .absent]
+        let bytes = ModelDownloads.bytes(sizes, statuses)
+        XCTAssertEqual(bytes.done, 130 * megabyte)
+        XCTAssertEqual(bytes.total, 500 * megabyte)
+        XCTAssertEqual(try XCTUnwrap(ModelDownloads.fraction(sizes, statuses)), 0.26, accuracy: 0.0001)
+        XCTAssertEqual(ModelDownloads.downloading(bytes), "downloading 130 MB of 500 MB")
+        XCTAssertNil(ModelDownloads.fraction(sizes, [.present, .verifying, .absent, .absent]), "a set being verified has no measure")
+        XCTAssertNil(ModelDownloads.fraction([nil], [.downloading(done: 1, total: 2)]), "a model the manifest does not name has no size to be a share of")
+    }
+
     func testAFailureSettlesTheWaitersThatAskedForIt() {
         var waiters = ModelWaiters()
         var told: [Result<Void, ModelDownloadFailure>] = []
