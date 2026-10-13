@@ -24,7 +24,7 @@ final class BadgeGestureTests: XCTestCase {
         // at all is cheap enough to hold here. The form builds a row as it nears the screen, so
         // one below the sheet's foot is looked for again after a scroll.
         for row in ["Topo sits", "Vocabulary", "Memory", "Connections", "Context", "Noise suppression",
-                    "Diagnostics", "About Topo", "Sign out"] {
+                    "settings-voice-temperature", "Diagnostics", "About Topo", "Sign out"] {
             let found = app.descendants(matching: .any)[row]
             if !found.exists { app.swipeUp() }
             XCTAssertTrue(found.exists, "the settings have no \(row)")
