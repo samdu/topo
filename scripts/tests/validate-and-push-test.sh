@@ -243,6 +243,26 @@ scratch link Packages/TopoLink/Sources/TopoLink/Probe.swift
 validate
 is "link: others alone" "$(recorded suites)" others
 is "link: one status" "$(posted)" "local/others=success "
+# The harness alone: the scripts' tests, one status, and no other suite.
+scratch harness scripts/janitor.py scripts/tests/janitor_test.py
+validate
+is "harness: exits 0" "$status" 0
+is "harness: scripts alone" "$(recorded suites)" scripts
+is "harness: one status" "$(posted)" "local/scripts=success "
+is "harness: pushed" "$(origin_head)" "$sha"
+scratch harness-red scripts/janitor.py
+FAKE_SUITES="scripts=failure" validate
+is "harness, red: exits 1" "$status" 1
+is "harness, red: nothing pushed" "$(origin_head)" ""
+# Beside a change `others` covers, `others` runs the scripts' tests: one suite, one status.
+scratch harness-link scripts/janitor.py Packages/TopoLink/Package.swift
+validate
+is "harness beside TopoLink: others alone" "$(recorded suites)" others
+is "harness beside TopoLink: one status" "$(posted)" "local/others=success "
+validate --suites all
+is "--suites all: the three that cover the product" "$(recorded suites)" "topo_unit topo_ui others"
+validate --suites scripts
+is "--suites scripts: the scripts' tests alone" "$(recorded suites)" scripts
 # --suites and --lane override the choice.
 scratch override Packages/TopoLink/Sources/TopoLink/Probe.swift
 validate --suites "topo_ui others" --lane full
@@ -687,6 +707,11 @@ is "others alone on a host: exits 0" "$status" 0
 is "others alone on a host: ran there" "$(recorded checkout)" "$(there laptop)"
 is "others alone on a host: with none of its person's git configuration" "$(recorded gitconfig)" /dev/null
 [ ! -e "$TOPO_VALIDATE_CACHE/slots/1/checkout" ] && ok "others alone on a host: no checkout here" || fail "others alone on a host: a checkout was made here"
+scratch host-harness scripts/janitor.py
+TOPO_VALIDATE_HOSTS=laptop validate
+is "scripts alone on a host: exits 0" "$status" 0
+is "scripts alone on a host: ran there" "$(recorded checkout)" "$(there laptop)"
+is "scripts alone on a host: its status" "$(posted)" "local/scripts=success "
 # Named in the file, and not when the variable is set, to nothing included.
 mkdir -p "$TOPO_VALIDATE_CACHE"; printf '# an afternoon\nlaptop\n' > "$TOPO_VALIDATE_CACHE/hosts"
 echo y > "$repo/Packages/TopoLink/y"; g -C "$repo" add -A; g -C "$repo" commit -qm y; sha="$(git -C "$repo" rev-parse HEAD)"
