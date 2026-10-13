@@ -246,6 +246,8 @@ jobs:
             scripts/tests/janitor* others
             scripts/validate-and-push.sh others
             scripts/tests/validate-and-push-test.sh others
+            scripts/validate-host.sh others
+            scripts/tests/validate-host-test.sh others
         run: |
           set -euo pipefail
           # A diff that cannot be read selects every suite, inside the script.

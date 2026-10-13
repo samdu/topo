@@ -9,8 +9,12 @@
 # `start` was under way, and is left alone when `start` refused because another run's lane is
 # up; a suite whose test run fails is `failure` in suites.txt with the suites after it still
 # run; a toolchain off its pin runs no suite and fails each one asked for; a signal while the
-# lane's start is refusing another run's lane leaves that lane alone; and a signal ends the
-# command the run is waiting on, a bounded one included.
+# lane's start is refusing another run's lane leaves that lane alone; a signal ends the
+# command the run is waiting on, a bounded one included; and --check makes, builds and boots
+# nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
+# the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
+# with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
+# being buddybox.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -72,9 +76,14 @@ fake "$work/bin/sw_vers" 'exit 0'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
+fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
+# As long as the real one's answer, the state near its head: a reader that stops early closes the pipe on it.
+fake "$work/bin/fdesetup" 'echo "FileVault is ${FAKE_VAULT:-Off}."'
+fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=${FAKE_OTHER_CONSOLE:-No},\"kCGSSessionUserNameKey\"=\"another\"${FAKE_OTHER_UNLOCKED:-,\"CGSSessionScreenIsLocked\"=Yes}},{\"kCGSSessionOnConsoleKey\"=${FAKE_AWAY:-Yes},\"kCGSSessionUserNameKey\"=\"$(id -un)\"${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"; echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
+fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
-  "simctl list") echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-26-5\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-26-5\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
+  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-26-5\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-26-5\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
 esac'
 # The scripts' own tests are not this test's to run again: each is a fake that passes.
@@ -186,6 +195,59 @@ else
 fi
 rm -f "$work/bounded-signal.hold"
 is "signal during a bounded command: its pids file is gone" "$([ -e "$work/bounded-signal.results/mac-suite.pids" ] && echo there || echo gone)" gone
+
+# --check: a Mac with everything, the guest's framework current, is passed with nothing run.
+check() {  # check <case> [suite...] — its exit in $status, what it said in $said
+  local name="$1"; shift
+  export CALLS="$work/$name.calls"
+  : > "$CALLS"
+  said="$(cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
+}
+names() { case "$said" in *"error: "*"$2"*) ok "$1" ;; *) fail "$1: $said" ;; esac; }
+mkdir -p "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
+fake "$tree/scripts/build-ish.sh" '[ "${1-}" != inputs ] || echo digest'
+echo digest > "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
+check can topo_unit others
+is "check: a Mac with everything exits 0" "$status" 0
+is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen generate|xcodebuild (build|test)|xcrun simctl (create|boot)|build-ish.sh$|ci-audio-lane)' "$CALLS")" 0
+[ ! -e "$work/can.results" ] && ok "check: no results are written" || fail "check: results were written"
+FAKE_XCODE=26.4 check xcode others
+is "check, another Xcode: exits 1" "$status" 1
+names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
+FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
+names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
+is "check, no pinned runtime: exits 1" "$status" 1
+names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
+case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
+FAKE_FREE=9 check disk topo_unit
+is "check, a full disk: exits 1" "$status" 1
+names "check, a full disk: named" "9 GB available"
+FAKE_LID=Yes check lid topo_unit
+is "check, the lid closed: exits 1" "$status" 1
+names "check, the lid closed: named" "lid is closed"
+FAKE_LOCKED=1 FAKE_VAULT=On check locked topo_unit
+is "check, locked and encrypted: exits 1" "$status" 1
+names "check, locked and encrypted: named" "is locked, or is not the one on the screen"
+FAKE_AWAY=No FAKE_OTHER_CONSOLE=Yes FAKE_OTHER_UNLOCKED= FAKE_VAULT=On check away topo_unit
+is "check, encrypted and another user's session on the screen: exits 1" "$status" 1
+FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
+is "check, locked and encrypted, others: exits 0" "$status" 0
+FAKE_LOCKED=1 check locked-plain topo_unit
+is "check, locked and not encrypted: exits 0" "$status" 0
+FAKE_VAULT=On check unlocked topo_unit
+is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
+check ui topo_ui
+is "check, topo_ui: exits 1" "$status" 1
+names "check, topo_ui: named" "topo_ui runs on buddybox alone"
+# The framework there is of other inputs: the tools that build it are asked for.
+echo other > "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
+PATH="$work/bin:/usr/bin:/bin" check tools topo_unit
+is "check, a stale framework and no tools: exits 1" "$status" 1
+names "check, a stale framework and no tools: meson is named" "meson is not installed"
+names "check, a stale framework and no tools: llvm and lld are named" "llvm and lld are not installed"
+fake "$tree/scripts/build-ish.sh" 'exit 0'
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
