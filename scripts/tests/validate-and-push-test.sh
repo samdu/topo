@@ -430,9 +430,10 @@ scratch orphan Apps/Client/SettingsView.swift
 begin "$repo" "$work/orphan/first" "$work/orphan/hold" FAKE_HOLD_SUITE=topo_unit
 orphan="$(cat "$work/orphan/hold" 2>/dev/null)"
 kill -KILL "$run"; wait "$run" 2>/dev/null
-# The script as it was reads one record, beside its lock: the orphan is on it.
-is "orphan suite: on the record the script as it was reads" "$(sed -n 1p "$TOPO_VALIDATE_CACHE/suite" 2>/dev/null)" "$orphan"
-is "orphan suite: with when it began, as that script holds a pid to" "$(sed -n 2p "$TOPO_VALIDATE_CACHE/suite" 2>/dev/null)" "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$orphan")"
+# The script as it was knows nothing of slots: its one lock is still held while the orphan lives.
+free() { lockf -s -t 0 "$TOPO_VALIDATE_CACHE/lock" true 2>/dev/null; }
+freed() { for _ in $(seq 50); do free && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
+free && fail "orphan suite: the lock of the script as it was is free beside it" || ok "orphan suite: a run of the script as it was is held off while it lives"
 TOPO_VALIDATE_SLOTS=1 validate
 is "orphan suite, one checkout: exits 2" "$status" 2
 is "orphan suite, one checkout: no suite ran" "$(recorded head)" ""
@@ -453,7 +454,73 @@ validate
 is "orphan gone: exits 0" "$status" 0
 is "orphan gone: in the first checkout again" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 is "orphan gone: pushed" "$(origin_head)" "$sha"
-[ ! -e "$TOPO_VALIDATE_CACHE/suite" ] && ok "orphan gone: nothing on the record the script as it was reads" || fail "orphan gone: $TOPO_VALIDATE_CACHE/suite is still there"
+freed && ok "orphan gone: the lock of the script as it was is free" || fail "orphan gone: the lock of the script as it was is still held"
+# Two suites left behind by two killed runs: the lock is held until the last of them has gone.
+scratch orphans Apps/Client/SettingsView.swift
+sibling orphans theirs Packages/TopoLink/Package.swift
+begin "$repo" "$work/orphans/first" "$work/orphans/first.hold" FAKE_HOLD_SUITE=topo_unit
+first=$run
+begin "$other" "$work/orphans/second" "$work/orphans/second.hold"
+kill -KILL "$first" "$run"; wait "$first" "$run" 2>/dev/null
+one="$(cat "$work/orphans/first.hold")"; two="$(cat "$work/orphans/second.hold")"
+release "$work/orphans/first.hold"
+for _ in $(seq 100); do kill -0 "$one" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+perl -e 'select(undef,undef,undef,2.5)'
+free && fail "two orphan suites: the lock of the script as it was is free with one still going" || ok "two orphan suites: the lock is held while the second lives"
+release "$work/orphans/second.hold"
+for _ in $(seq 100); do kill -0 "$two" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+freed && ok "two orphan suites: free once both have gone" || fail "two orphan suites: the lock is still held with both gone"
+# A run still going keeps its logs however many runs of its commit have begun since.
+scratch sameprune Apps/Client/SettingsView.swift
+begin "$repo" "$work/sameprune/first" "$work/sameprune/first.hold" FAKE_HOLD_SUITE=topo_unit
+first=$run
+live="$(ls -1 "$TOPO_VALIDATE_LOGS/$sha")"
+for n in 1 2 3 4 5; do mkdir -p "$TOPO_VALIDATE_LOGS/$sha/2999010${n}T000000Z-1"; done
+out="$(cd "$repo" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/sameprune/second" scripts/validate-and-push.sh --suites others 2>&1)" && status=0 || status=$?
+is "a sixth run of a commit beside a live one: exits 0" "$status" 0
+[ -d "$TOPO_VALIDATE_LOGS/$sha/$live" ] && ok "a sixth run of a commit beside a live one: the live run's logs are kept" || fail "a sixth run of a commit removed the logs of one still going"
+release "$work/sameprune/first.hold"; wait "$first" 2>/dev/null
+# In its turn among runs of the script as it was: behind one that was waiting before it, and
+# ahead of one that came after.
+scratch turn Packages/TopoLink/Package.swift
+mkdir -p "$TOPO_VALIDATE_CACHE"
+lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "echo \$\$ > '$work/turn/held'; exec sleep 60" &
+holder=$!
+for _ in $(seq 100); do [ -s "$work/turn/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+: > "$work/turn/order"
+lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "echo before >> '$work/turn/order'; sleep 1" &
+before=$!
+perl -e 'select(undef,undef,undef,0.5)'
+: > "$work/turn/hold"
+(cd "$repo" && exec env PATH="$work/bin:$PATH" FAKE_SUITES=held FAKE_HOLD="$work/turn/hold" scripts/validate-and-push.sh > "$work/turn/out" 2>&1) &
+run=$!
+for _ in $(seq 200); do grep -q 'Waiting for a run of the script as it was' "$work/turn/out" 2>/dev/null && break; perl -e 'select(undef,undef,undef,0.1)'; done
+perl -e 'select(undef,undef,undef,0.5)'
+lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "echo after >> '$work/turn/order'; sleep 1" &
+after=$!
+perl -e 'select(undef,undef,undef,0.5)'
+kill "$(cat "$work/turn/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+for _ in $(seq 300); do [ -s "$work/turn/hold" ] && break; grep -q after "$work/turn/order" && break; perl -e 'select(undef,undef,undef,0.1)'; done
+[ -s "$work/turn/hold" ] && ok "in its turn: the run's suite began" || fail "in its turn: the run's suite never began: $(cat "$work/turn/out")"
+is "in its turn: after the run that waited before it, ahead of the one that came after" "$(tr '\n' ' ' < "$work/turn/order")" "before "
+release "$work/turn/hold"
+wait "$run"; is "in its turn: exits 0" "$?" 0
+wait "$before" "$after" 2>/dev/null
+is "in its turn: the later run of the script as it was went last" "$(tr '\n' ' ' < "$work/turn/order")" "before after "
+# One allowance for every wait: what a checkout took of it is not there for a suite.
+scratch budget Packages/TopoLink/Package.swift
+mkdir -p "$TOPO_VALIDATE_CACHE/slots/1"
+lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" sleep 6 &
+slot_holder=$!
+lockf -k "$TOPO_VALIDATE_CACHE/suite-others.lock" sh -c "echo \$\$ > '$work/budget/held'; exec sleep 60" &
+holder=$!
+for _ in $(seq 100); do [ -s "$work/budget/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+began=$SECONDS
+LOCK_WAIT=10 TOPO_VALIDATE_SLOTS=1 validate
+is "one allowance: exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout"*"Waiting for a suite"*"gave up after waiting"*) ok "one allowance: it waited for a checkout, then a suite, then gave up" ;; *) fail "one allowance: $out" ;; esac
+[ $((SECONDS - began)) -lt 14 ] && ok "one allowance: within the ten seconds and not six and ten" || fail "one allowance: gave up after $((SECONDS - began)) s"
+kill "$(cat "$work/budget/held")" "$holder" "$slot_holder" 2>/dev/null; wait "$holder" "$slot_holder" 2>/dev/null
 # A commit whose logs a run is still writing keeps them, however many commits have run since.
 for n in 1 2 3 4 5 6 7 8 9 a b c; do
   mkdir -p "$TOPO_VALIDATE_LOGS/${n}0000000/20200101T000000Z-1"
