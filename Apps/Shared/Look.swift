@@ -46,6 +46,10 @@ struct Look: Equatable, Sendable {
     var mascot: Mascot
     /// What the models the chat offers are called.
     var mind = Mind()
+    /// What stands in the transcript's place until the log has been read.
+    var reading = Reading()
+    /// The bars that show what a new install is still fetching and preparing.
+    var setup = Setup()
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -783,6 +787,57 @@ struct Look: Equatable, Sendable {
 }
 
 extension Look {
+    /// The mark, the spinner and the line under them that stand where the transcript will, until
+    /// the first read of the log returns.
+    struct Reading: Equatable, Sendable {
+        var markSize: CGFloat = 64
+        var spacing: CGFloat = 12
+        /// `look.json` sets it no larger than `largestFont`.
+        var font: Font = .body
+        static let largestFont: Double = 34
+        var ink = Theme.textMuted
+        /// What the first-run question stands on, over the chat: the page's own colour. Drawn
+        /// over an opaque base, so a surface a document makes clear shows the base and not the
+        /// chat.
+        var surface = Theme.background
+    }
+
+    /// The setup's meter: a thin bar for each part of an install still to come, one over the
+    /// other, each with its mark at its leading end. It stands in the middle of the chat's bar,
+    /// which is a fixed height, so `look.json` sets no size past what three bars of it leave of
+    /// that height, and no width that takes the controls' or the badge's room: the ranges below
+    /// are what `LookDocument` reads each in, and their largest come to no more than `tallest`
+    /// and `widest`.
+    struct Setup: Equatable, Sendable {
+        /// Between two bars.
+        var spacing: CGFloat = 3
+        static let spacingRange: ClosedRange<Double> = 0...4
+        /// Between a mark and its bar.
+        var symbolSpacing: CGFloat = 6
+        static let symbolSpacingRange: ClosedRange<Double> = 0...8
+        /// A mark's side, which is also the height of its row.
+        var symbolSize: CGFloat = 11
+        static let symbolSizeRange: ClosedRange<Double> = 8...12
+        var barWidth: CGFloat = 72
+        static let barWidthRange: ClosedRange<Double> = 24...80
+        var barHeight: CGFloat = 3
+        static let barHeightRange: ClosedRange<Double> = 1...6
+        /// The navigation bar's own height, which three rows stay inside.
+        static let tallest: Double = 44
+        /// The room between the model's control and the badge in the narrowest window the chat
+        /// is laid out in, 320 points, less a margin at each end.
+        static let widest: Double = 100
+        /// A failure's words under the first-run question, no larger than `largestFont`.
+        var troubleFont: Font = .footnote
+        static let largestFont: Double = 20
+        /// The bars are Topo's, so they take Topo's colour.
+        var tint = Theme.primary
+        /// What of a bar is still to come.
+        var track = Theme.primary.opacity(0.25)
+        /// A part that failed is drawn in the colour a failure is said in.
+        var troubleInk = Theme.signal
+    }
+
     /// The controls at the leading edge of the navigation bar, the mute and the model, each an
     /// item of the bar's own: drawn plainly in Topo's colour, and not etched, since the bar is
     /// not the glass. Their marks are `composer.flank`'s.

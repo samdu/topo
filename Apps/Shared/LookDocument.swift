@@ -148,6 +148,28 @@ enum LookDocument {
         r.object("mascot") { mascot(&look.mascot, $0) }
         r.object("mind") { mind(&look.mind, $0) }
         r.object("bar") { bar(&look.bar, $0) }
+        r.object("reading") { reading(&look.reading, $0) }
+        r.object("setup") { setup(&look.setup, $0) }
+    }
+
+    private static func reading(_ value: inout Look.Reading, _ r: Reader) {
+        r.bounded("markSize", &value.markSize, in: 16...200)
+        r.bounded("spacing", &value.spacing, in: 0...64)
+        r.font("font", &value.font, largest: Look.Reading.largestFont)
+        r.colour("ink", &value.ink)
+        r.colour("surface", &value.surface)
+    }
+
+    private static func setup(_ value: inout Look.Setup, _ r: Reader) {
+        r.bounded("spacing", &value.spacing, in: Look.Setup.spacingRange)
+        r.bounded("symbolSpacing", &value.symbolSpacing, in: Look.Setup.symbolSpacingRange)
+        r.bounded("symbolSize", &value.symbolSize, in: Look.Setup.symbolSizeRange)
+        r.bounded("barWidth", &value.barWidth, in: Look.Setup.barWidthRange)
+        r.bounded("barHeight", &value.barHeight, in: Look.Setup.barHeightRange)
+        r.font("troubleFont", &value.troubleFont, largest: Look.Setup.largestFont)
+        r.colour("tint", &value.tint)
+        r.colour("track", &value.track)
+        r.colour("troubleInk", &value.troubleInk)
     }
 
     private static func bar(_ value: inout Look.Bar, _ r: Reader) {
