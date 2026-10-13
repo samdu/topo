@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Chooses which of the PR check's three Mac suites — `topo_unit`, `topo_ui` and `others`
+# Chooses which of the PR check's Mac suites — `topo_unit`, `topo_ui`, `others` and `scripts`
 # (scripts/mac-suite.sh) — a change needs, from the paths it touches. A suite left out is not run
 # by scripts/validate-and-push.sh, and the `test` job asks for no status for it only because
 # this said `false` for it.
@@ -13,24 +13,29 @@
 # unknown, which selects every suite and says why. Without it, the paths come on stdin.
 #
 # SUITE_RULES is the rule list, one rule per line: a bash glob (`*` crosses `/`) and then the
-# suites a path matching it needs — suite names, `all` or `none`. Blank lines and lines starting
+# suites a path matching it needs — suite names, `all` or `none`. `all` is the three that
+# cover the product, `topo_unit`, `topo_ui` and `others`; `scripts`, the scripts' own tests alone,
+# is part of `others`, so it is said `false` whenever `others` is chosen. Blank lines and lines starting
 # with `#` are ignored. A path takes the first rule it matches, and a path no rule matches needs
 # every suite, so a new directory runs everything until a rule says otherwise. The list lives in
 # .github/workflows/pr-validate.yaml, on the step that calls this, and
 # scripts/tests/ci-select-suites-test.sh reads it from there.
 #
-# Writes `topo_unit=`, `topo_ui=` and `others=` (each `true` or `false`) and `reason=<one line>`
+# Writes `topo_unit=`, `topo_ui=`, `others=` and `scripts=` (each `true` or `false`) and `reason=<one line>`
 # to stdout, in $GITHUB_OUTPUT's form. It fails toward running, never toward skipping: no changed
 # paths at all selects every suite, since an empty list is as likely a diff that could not be read
 # as a change that touches nothing. An empty SUITE_RULES, or a rule naming no suite or one that
 # does not exist, is a broken workflow and exits 2.
 set -euo pipefail
 
-jobs=(topo_unit topo_ui others)
+jobs=(topo_unit topo_ui others scripts)
+# What `all` names, and what a path no rule matches needs.
+every=(topo_unit topo_ui others)
 
 all() {
   local job
-  for job in "${jobs[@]}"; do echo "$job=true"; done
+  for job in "${every[@]}"; do echo "$job=true"; done
+  echo "scripts=false"
   echo "reason=$1"
   exit 0
 }
@@ -53,7 +58,7 @@ while IFS= read -r line; do
     *" all "* | *" none "*) [ "$suites" = all ] || [ "$suites" = none ] \
       || { echo "::error::The SUITE_RULES line '$line' mixes all or none with other suites." >&2; exit 2; } ;;
   esac
-  [ "$suites" = all ] && suites="${jobs[*]}"
+  [ "$suites" = all ] && suites="${every[*]}"
   [ "$suites" = none ] && suites=""
   globs+=("$glob")
   needs+=("$suites")
@@ -81,10 +86,10 @@ done <<< "$changed"
 
 # Each suite with the first path that asked for it, which is the reason given for it: why[i] is
 # jobs[i]'s. (Indexed, not associative: the test also runs under macOS's bash 3.2.)
-why=("" "" "")
+why=("" "" "" "")
 for path in "${paths[@]}"; do
   rule="no rule"
-  wanted="${jobs[*]}"
+  wanted="${every[*]}"
   for i in "${!globs[@]}"; do
     # shellcheck disable=SC2053 # the pattern is a glob on purpose
     if [[ "$path" == ${globs[$i]} ]]; then
@@ -100,6 +105,8 @@ for path in "${paths[@]}"; do
   done
 done
 
+# `others` runs the scripts' tests itself: `scripts` is for a change that needs nothing more.
+[ -z "${why[2]}" ] || why[3]=""
 for j in "${!jobs[@]}"; do
   if [ -n "${why[$j]}" ]; then echo "${jobs[$j]}=true"; else echo "${jobs[$j]}=false"; fi
 done

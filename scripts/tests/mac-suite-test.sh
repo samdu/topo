@@ -14,7 +14,13 @@
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
 # the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
-# being buddybox.
+# being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
+# and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
+# build's directory is built over for the pins it was built from and made afresh for any
+# other; and the display is held on under `topo_ui`, by a hold that waits on the script's own
+# pid and is running from before its lane starts to after it stops: one that did not start or
+# took no assertion starts no lane, one that ended before the tests runs none, and one that
+# ended under the tests is red.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -53,9 +59,14 @@ fake() {
 }
 # Waits, on a marker holding its own pid, for as long as the case wants a command to be running.
 hold='if [ -n "${HOLD-}" ]; then echo $$ > "$HOLD"; while [ -e "$HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done; fi'
+# The lane notes, at its start and its stop, whether the display's hold is running then.
 fake "$tree/scripts/ci-audio-lane.sh" '
+held() { kill -0 "$(cat "$CALLS.hold" 2>/dev/null)" 2>/dev/null && echo "display held at $1" >> "$CALLS"; }
 case "$1" in
-  start) [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  start) held start; [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  stop) held stop; exit 0 ;;
+  check) [ "${FAKE_HOLD-}" != ends ] || [ "$2" != after ] || kill "$(cat "$CALLS.hold")"
+    [ "${FAKE_HOLD-}" != ends-before ] || [ "$2" != before ] || kill "$(cat "$CALLS.hold")"; exit 0 ;;
   *) exit 0 ;;
 esac'
 fake "$tree/scripts/build-ish.sh" 'exit 0'
@@ -68,11 +79,30 @@ fake "$work/bin/xcodebuild" '
 case "$*" in
   -version) echo "Xcode ${FAKE_XCODE:-27.0}"; echo "Build version 1" ;;
   *test-without-building*-only-testing:TopoUITests*) exit "${UI_TEST:-0}" ;;
+  *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
 esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
 fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
+# The display's hold: it lives while the pid `-w` names does, as the real one, and says whether
+# that pid is the script this run started (the script's pid is this one's parent's: the hold is
+# started from the suite's own shell or a subshell of it). FAKE_HOLD=dies ends it at once, and
+# FAKE_HOLD=unheld leaves it running with no assertion for `pmset` to list; FAKE_HOLD=ends is
+# the lane's fake ending it once the tests have run, and FAKE_HOLD=ends-before just before them.
+fake "$work/bin/caffeinate" '
+[ "${FAKE_HOLD-}" != dies ] || exit 1
+echo $$ > "$CALLS.hold"
+at=$$
+while [ "$at" -gt 1 ] && [ "$at" != "$3" ]; do at="$(ps -o ppid= -p "$at" | tr -d " ")"; done
+case "$(ps -o args= -p "$3")" in *"scripts/mac-suite.sh "*) [ "$at" != "$3" ] || echo "hold waits on the script that started it" >> "$CALLS" ;; esac
+while kill -0 "$3" 2>/dev/null; do perl -e "select(undef,undef,undef,0.1)"; done'
+# As long as the real one's answer on a busy Mac: more after the hold's line than a pipe holds.
+fake "$work/bin/pmset" '
+echo "Assertion status system-wide:"
+[ "${FAKE_HOLD-}" = unheld ] || echo "   pid $(cat "$CALLS.hold" 2>/dev/null)(caffeinate): [0x0] 00:00:01 PreventUserIdleDisplaySleep named: \"caffeinate command-line tool\""
+for n in $(seq 20000); do echo "   pid $n(powerd): [0x0] 00:00:01 InternalPreventDisplaySleep named: \"one of many\""; done'
+fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
@@ -112,7 +142,63 @@ is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
 is "green: and stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+is "green: the display is held on for this script's life, from before the lane starts" \
+  "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
+is "green: the hold waits on the script's own pid" "$(calls 'hold waits on the script that started it')" 1
+is "green: the hold is running when the lane starts and when it stops" "$(grep '^display held' "$CALLS" | tr '\n' '|')" "display held at start|display held at stop|"
+hold_pid="$(cat "$CALLS.hold")"
+for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+
+# The device build's directory is kept for the pins it was built from, and no others.
+pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+mkdir -p "$(dirname "$pins")" && echo "pins: one" > "$pins"
+rm -rf "$tree/build/device"
+suite device-first others
+is "a first device build: exits 0" "$status" 0
+is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "pins: one"
+suite device-same others
+is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
+echo "pins: two" > "$pins"
+suite device-moved others
+is "pins that moved: exits 0" "$status" 0
+is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
+is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
+rm -f "$tree/build/device/Package.resolved"
+suite device-unknown others
+is "a directory that says no pins: made afresh" "$(calls 'device-build over what was there')" 0
+rm -f "$pins"
+suite device-no-pins others
+is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
+is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
+echo "pins: one" > "$pins"
+
+# No lane, no hold: the display is this Mac's own business under the other suites.
+suite no-lane topo_unit others
+is "no UI suite: the display is not held" "$(calls caffeinate)" 0
+
+# A hold that did not start, or took no assertion: no lane, and red by name.
+for broken in dies unheld; do
+  FAKE_HOLD=$broken suite "hold-$broken" topo_ui
+  is "a hold that $broken: exits 1" "$status" 1
+  is "a hold that $broken: topo_ui is a failure" "$(results)" "topo_ui=failure "
+  is "a hold that $broken: no lane is started" "$(calls 'ci-audio-lane.sh start')" 0
+  grep -q 'the display could not be held on' "$work/hold-$broken.log" && ok "a hold that $broken: it is said" || fail "a hold that $broken: $(tail -3 "$work/hold-$broken.log")"
+done
+# One that ended under the tests: red, the lane stopped.
+FAKE_HOLD=ends suite hold-ends topo_ui
+is "a hold that ended under the tests: exits 1" "$status" 1
+is "a hold that ended under the tests: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended under the tests: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended under the tests" "$work/hold-ends.log" && ok "a hold that ended under the tests: it is said" || fail "a hold that ended under the tests: $(tail -3 "$work/hold-ends.log")"
+# One that ended after the lane started and before the tests: no test is run.
+FAKE_HOLD=ends-before suite hold-ends-before topo_ui
+is "a hold that ended before the tests: exits 1" "$status" 1
+is "a hold that ended before the tests: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended before the tests: no test is run" "$(calls 'xcodebuild test-without-building')" 0
+is "a hold that ended before the tests: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended before the tests began" "$work/hold-ends-before.log" && ok "a hold that ended before the tests: it is said" || fail "a hold that ended before the tests: $(tail -3 "$work/hold-ends-before.log")"
 
 # A start that failed may have pinned the devices and left a feeder: it is stopped.
 LANE_START=1 suite lane-failed topo_ui
@@ -137,6 +223,32 @@ PHOTOS_GRANT="2|1" suite photos-grant topo_unit
 is "photos grant not full access: exits 1" "$status" 1
 is "photos grant not full access: topo_unit is a failure" "$(results)" "topo_unit=failure "
 is "photos grant not full access: no test ran" "$(calls 'xcodebuild test-without-building')" 0
+
+# The scripts' tests alone: each of them, and nothing generated, built, booted or prepared,
+# on a Mac whose toolchain is off its pin as on any other. `others` runs the same tests.
+tests_named="$(ls "$tree/scripts/tests" | wc -l | tr -d ' ')"
+FAKE_XCODE=99.0 suite scripts-alone scripts
+is "scripts alone: exits 0" "$status" 0
+is "scripts alone: a success" "$(results)" "scripts=success "
+# The list is the directory: a test added to scripts/tests and to no list is run by nothing.
+is "every test in scripts/tests is one the suite names" \
+  "$(cd "$root/scripts/tests" && ls ./*-test.sh | sed 's|^\./||; s|-test\.sh$||' | sort | tr '\n' ' ')" \
+  "$(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')"
+is "scripts alone: every script's test ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
+is "scripts alone: nothing generated, built, booted or prepared" "$(grep -cE '^(xcodegen|xcodebuild|xcrun|swift|build-ish\.sh|ci-audio-lane\.sh|model-manifest\.sh) ' "$CALLS")" 0
+is "others: every script's test runs there too" "$(grep -c -- '-test.sh' "$work/green.calls")" "$tests_named"
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 1'
+suite scripts-red scripts
+is "a script's test red: exits 1" "$status" 1
+is "a script's test red: scripts is a failure" "$(results)" "scripts=failure "
+is "a script's test red: the others still ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
+suite others-red others
+is "a script's test red: others is a failure too" "$(results)" "others=failure "
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 0'
+rm -f "$tree/scripts/tests/review-cap-test.sh"
+suite scripts-missing scripts
+is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure "
+fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
 
 # A toolchain off its pin: no suite runs, and each one asked for is a failure.
 FAKE_XCODE=99.0 suite off-pin topo_unit others
@@ -201,7 +313,7 @@ check() {  # check <case> [suite...] — its exit in $status, what it said in $s
   local name="$1"; shift
   export CALLS="$work/$name.calls"
   : > "$CALLS"
-  said="$(cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
+  said="$(cd "$tree" && PATH="$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
 }
 names() { case "$said" in *"error: "*"$2"*) ok "$1" ;; *) fail "$1: $said" ;; esac; }
 mkdir -p "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
@@ -236,6 +348,53 @@ FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
 is "check, locked and encrypted, others: exits 0" "$status" 0
 FAKE_LOCKED=1 check locked-plain topo_unit
 is "check, locked and not encrypted: exits 0" "$status" 0
+# `scripts` alone asks a Mac for jq, node, python3 and an open lid, whatever else it lacks.
+FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 FAKE_LOCKED=1 FAKE_VAULT=On check scripts-bare scripts
+is "check, scripts alone on a Mac with no toolchain, runtime or room: exits 0" "$status" 0
+is "check, scripts alone: nothing asked of Xcode, simctl or the disk" "$(grep -cE '^(xcodebuild|xcodegen|xcrun|osascript)' "$CALLS")" 0
+# A Mac with what macOS has and nothing installed: no node, and a python3 that is a stub.
+mkdir -p "$work/stock" && for tool in bash env dirname basename cat grep sed tr uname id git; do ln -sf "$(command -v "$tool")" "$work/stock/$tool"; done
+ln -sf "$(command -v jq)" "$work/stock/jq"
+BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check scripts-stock scripts
+is "check, scripts alone, no node and no developer tools: exits 1" "$status" 1
+names "check, scripts alone, no node: named" "node is not installed"
+names "check, scripts alone, python3 a stub: named" "python3 is the stub"
+BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check others-stock others
+names "check, others, no node: named" "node is not installed"
+names "check, others, python3 a stub: named" "python3 is the stub"
+BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check unit-stock topo_unit
+case "$said" in *"node is not"* | *"python3 is the stub"*) fail "check, topo_unit alone: asked for what the scripts' tests run under: $said" ;; *) ok "check, topo_unit alone: not asked for what the scripts' tests run under" ;; esac
+BARE_PATH="$work/stock:/usr/bin:/bin" check scripts-tools scripts
+names "check, scripts alone, developer tools and no node: node is named" "node is not installed"
+case "$said" in *"python3 is the stub"*) fail "check, developer tools there: python3 refused: $said" ;; *) ok "check, developer tools there: python3 is taken" ;; esac
+# without <tool> — a directory of everything macOS has but that, and node, in $work/no-<tool>.
+without() {
+  local tool
+  mkdir -p "$work/no-$1"
+  for tool in /usr/bin/* /bin/*; do [ "$(basename "$tool")" = "$1" ] || ln -sf "$tool" "$work/no-$1/"; done
+  ln -sf "$(command -v node)" "$work/no-$1/node"
+}
+# A Mac with no python3, and one whose python3 does not run: each refused, for either suite.
+without python3
+for asked_suite in scripts others; do
+  BARE_PATH="$work/no-python3" check "no-python-$asked_suite" "$asked_suite"
+  is "check, $asked_suite, no python3: exits 1" "$status" 1
+  names "check, $asked_suite, no python3: named" "python3 is not installed"
+  mkdir -p "$work/broken" && printf '#!/bin/sh\nexit 1\n' > "$work/broken/python3" && chmod +x "$work/broken/python3"
+  BARE_PATH="$work/broken:$work/no-python3" check "broken-python-$asked_suite" "$asked_suite"
+  is "check, $asked_suite, a python3 that exits 1: exits 1" "$status" 1
+  names "check, $asked_suite, a python3 that exits 1: named" "does not run"
+done
+# A Mac with no jq.
+without jq
+BARE_PATH="$work/no-jq" check scripts-no-jq scripts
+is "check, scripts alone, no jq: exits 1" "$status" 1
+names "check, scripts alone, no jq: named" "jq is not installed"
+case "$said" in *"node is not"*) fail "check, no jq: node there and refused: $said" ;; *) ok "check, no jq: nothing else is named" ;; esac
+FAKE_LID=Yes check scripts-lid scripts
+is "check, scripts alone, the lid closed: exits 1" "$status" 1
+FAKE_XCODE=26.4 check scripts-beside scripts others
+is "check, scripts beside others on another Xcode: exits 1" "$status" 1
 FAKE_VAULT=On check unlocked topo_unit
 is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
 check ui topo_ui

@@ -10,7 +10,11 @@ import TopoTools
 /// the query, the body, the response — goes nowhere: not the taps' log, not a log line (Review
 /// Focus 13).
 extension ControlRequest {
-    /// From the start to the answer, whatever the server trickles.
+    /// From the start to the answer, whatever the server trickles. Two clocks keep it at the same
+    /// seconds, a sleep beside the request and the session's own timeouts, and they land together:
+    /// either can be first, so both answer `timedOut`. Neither bounds the answer while the
+    /// cooperative pool or the caller's actor is held, since the request's child resumes on the
+    /// same pool as the sleep.
     static let deadline: Duration = .seconds(10)
 
     /// A request's status as A's taps record a run's: `0` for a 2xx, `1` for anything else or
@@ -21,7 +25,7 @@ extension ControlRequest {
     }
 
     static func perform(_ form: Form, secrets: ControlSecrets, leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind(),
-                        deadline: Duration = deadline) async -> Answer {
+                        deadline: Duration = deadline, sessionTimeout: Duration? = nil) async -> Answer {
         // While a clear of the control secrets refused at a sign-out stands, what the keychain
         // holds is an earlier login's, so a request naming one sends nothing.
         if !form.secrets.isEmpty, leftBehind.controlSecrets != nil { return Answer(status: ToolReply.failed) }
@@ -32,7 +36,9 @@ extension ControlRequest {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.waitsForConnectivity = false
-        let seconds = Double(deadline.components.seconds) + Double(deadline.components.attoseconds) / 1e18
+        // The session's clock is the deadline's; a test sets it apart to say which one answered.
+        let timeout = sessionTimeout ?? deadline
+        let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
         configuration.timeoutIntervalForRequest = seconds
         configuration.timeoutIntervalForResource = seconds
         let session = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
@@ -45,7 +51,7 @@ extension ControlRequest {
                     let code = (response as? HTTPURLResponse)?.statusCode
                     return Answer(status: (200..<300).contains(code ?? 0) ? 0 : ToolReply.failed, code: code)
                 } catch {
-                    return Task.isCancelled ? nil : Answer(status: ToolReply.failed)
+                    return Task.isCancelled ? nil : Answer(failure: error)
                 }
             }
             group.addTask {
@@ -69,6 +75,12 @@ extension ControlRequest {
 
 extension ControlRequest.Answer {
     init(status: Int32) { self.init(status: status, code: nil) }
+
+    /// A request that threw: the session's own timeout is the deadline seen by its clock, and
+    /// anything else is a failure. Nothing of the error is kept.
+    init(failure: any Error) {
+        self.init(status: (failure as? URLError)?.code == .timedOut ? ToolReply.timedOut : ToolReply.failed)
+    }
 }
 
 extension ControlRequest.Form {

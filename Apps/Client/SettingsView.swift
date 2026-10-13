@@ -4,7 +4,7 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// microphone's noise suppression, the diagnostics, the acknowledgements, and the way out.
+/// microphone's noise suppression, the voice's temperature, the diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
@@ -17,9 +17,12 @@ struct SettingsView: View {
     @State private var showConnections = false
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+    @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
+    /// The slider's identifier, for the UI suite.
+    static let voiceTemperature = "settings-voice-temperature"
 
     var body: some View {
         NavigationStack {
@@ -41,6 +44,19 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
                     Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
+                }
+                Section {
+                    // The value as the voice reads it, so one kept out of range shows as the
+                    // standard it speaks at.
+                    let worn = VoiceTemperature.judged(voiceTemperature) ?? VoiceTemperature.standard
+                    LabeledContent("Voice temperature", value: VoiceTemperature.said(worn))
+                    Slider(
+                        value: Binding(get: { worn }, set: { voiceTemperature = $0 }),
+                        in: VoiceTemperature.range, step: VoiceTemperature.step)
+                        .accessibilityIdentifier(SettingsView.voiceTemperature)
+                        .accessibilityLabel("Voice temperature")
+                } footer: {
+                    Text("How much chance Topo's voice is drawn with: lower is steadier, higher livelier. \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. Applies from the next sentence. Kept on this device.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }

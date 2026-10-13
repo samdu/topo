@@ -5,9 +5,12 @@
 # first match wins, so a rule deleted, added or moved in the workflow fails here rather than
 # silently changing what runs. Then each rule is exercised with a path under it, and the cases
 # that matter by name — a documentation change runs nothing, a hub, watch, TV, Womble, TopoLink
-# janitor or push-script change runs `others` alone, a change to the app, a package the app links, the tests, the
-# project, a guest patch, the workflow or its scripts runs all three, a path no rule names runs all
-# three — and every way the inputs can be missing runs all three or fails, never fewer. Then it
+# change runs `others` alone, a change to the harness alone (the janitor, the push script, the
+# host switch, the selectors, the reviewer's scripts, and their tests) runs `scripts` alone, a
+# change to the app, a package the app links, the tests, the project, a guest patch, the workflow
+# or a script the product suites prove runs the three that cover the product, a path no rule names
+# runs those three, `scripts` is never chosen beside `others` — and every way the inputs can be
+# missing runs those three or fails, never fewer. Then it
 # runs the select step itself out of the workflow on a pull_request event in scratch repositories,
 # a diff producer that fails among them.
 #
@@ -49,12 +52,22 @@ expected=(
   'scripts/archive-upload.sh none'
   'scripts/plan-review.sh none'
   '.gitignore none'
-  'scripts/janitor.py others'
-  'scripts/tests/janitor* others'
-  'scripts/validate-and-push.sh others'
-  'scripts/tests/validate-and-push-test.sh others'
-  'scripts/validate-host.sh others'
-  'scripts/tests/validate-host-test.sh others'
+  'scripts/janitor.py scripts'
+  'scripts/tests/janitor* scripts'
+  'scripts/validate-and-push.sh scripts'
+  'scripts/tests/validate-and-push-test.sh scripts'
+  'scripts/validate-host.sh scripts'
+  'scripts/tests/validate-host-test.sh scripts'
+  'scripts/ci-select-suites.sh scripts'
+  'scripts/tests/ci-select-suites-test.sh scripts'
+  'scripts/ci-select-lane.sh scripts'
+  'scripts/tests/ci-select-lane-test.sh scripts'
+  'scripts/review-cap.sh scripts'
+  'scripts/tests/review-cap-test.sh scripts'
+  'scripts/review-prompt.sh scripts'
+  'scripts/tests/review-prompt-test.sh scripts'
+  'scripts/review-verdicts.sh scripts'
+  'scripts/tests/review-verdict-test.sh scripts'
 )
 
 failures=0
@@ -71,14 +84,15 @@ else
   fail "the workflow's SUITE_RULES differ from this test's: $(diff <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${declared[@]}"))"
 fi
 
-# selects <topo_unit> <topo_ui> <others> <case> <paths, one per line> — runs the script with the
-# workflow's rules. Each flag is `true` or `false`.
+# selects <topo_unit> <topo_ui> <others> <case> <paths, one per line> [scripts] — runs the
+# script with the workflow's rules. Each flag is `true` or `false`; `scripts` is `false` unless
+# a sixth argument says otherwise.
 selects() {
-  local unit="$1" ui="$2" others="$3" name="$4" paths="$5" out status got
+  local unit="$1" ui="$2" others="$3" name="$4" paths="$5" scripts="${6:-false}" out status got
   out="$(printf '%s' "$paths" | SUITE_RULES="$rules" "$script" 2>&1)" && status=0 || status=$?
-  got="$(sed -n 's/^topo_unit=//p' <<<"$out") $(sed -n 's/^topo_ui=//p' <<<"$out") $(sed -n 's/^others=//p' <<<"$out")"
-  if [ "$status" != 0 ] || [ "$got" != "$unit $ui $others" ]; then
-    fail "$name: wanted topo_unit topo_ui others = $unit $ui $others, got exit $status: $out"
+  got="$(sed -n 's/^topo_unit=//p' <<<"$out") $(sed -n 's/^topo_ui=//p' <<<"$out") $(sed -n 's/^others=//p' <<<"$out") $(sed -n 's/^scripts=//p' <<<"$out")"
+  if [ "$status" != 0 ] || [ "$got" != "$unit $ui $others $scripts" ]; then
+    fail "$name: wanted topo_unit topo_ui others scripts = $unit $ui $others $scripts, got exit $status: $out"
   elif ! grep -q '^reason=.' <<<"$out"; then
     fail "$name: no reason line: $out"
   else
@@ -94,6 +108,7 @@ for rule in "${expected[@]}"; do
     all) selects true true true "$glob alone ($example)" "$example"$'\n' ;;
     none) selects false false false "$glob alone ($example)" "$example"$'\n' ;;
     others) selects false false true "$glob alone ($example)" "$example"$'\n' ;;
+    scripts) selects false false false "$glob alone ($example)" "$example"$'\n' true ;;
     *) fail "no case for the rule '$rule'" ;;
   esac
 done
@@ -107,10 +122,14 @@ selects false false false "agent hooks and TestFlight tooling" $'.claude/hooks/p
 selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.swift\ndocs/pairing.md\n'
 selects false false true "the hub, the watch and the TV" $'Apps/TopoHub/HubApp.swift\nApps/TopoWatch/WatchApp.swift\nApps/TopoTV/TVApp.swift\n'
 selects false false true "the watch's widgets and its suite" $'Apps/TopoWatchWidgets/Info.plist\nApps/TopoWatch/WatchSurfaces.swift\nTests/Watch/WatchCueTests.swift\n'
-selects false false true "the janitor and its test" $'scripts/janitor.py\nscripts/tests/janitor_test.py\nscripts/tests/janitor-test.sh\ndocs/janitor.md\n'
-selects false false true "the push script and its test" $'scripts/validate-and-push.sh\nscripts/tests/validate-and-push-test.sh\n'
-selects false false true "the host switch and its test" $'scripts/validate-host.sh\nscripts/tests/validate-host-test.sh\n'
 selects false false true "Womble, its README and its web page included" $'Womble/Sources/App/AppDelegate.swift\nWomble/README.md\nWomble/Web/index.html\n'
+
+# `scripts` alone: the harness, whose own tests fake everything it touches.
+selects false false false "the janitor and its test" $'scripts/janitor.py\nscripts/tests/janitor_test.py\nscripts/tests/janitor-test.sh\ndocs/janitor.md\n' true
+selects false false false "the push script and its test" $'scripts/validate-and-push.sh\nscripts/tests/validate-and-push-test.sh\n' true
+selects false false false "the host switch and its test" $'scripts/validate-host.sh\nscripts/tests/validate-host-test.sh\n' true
+selects false false false "the selectors and their tests" $'scripts/ci-select-suites.sh\nscripts/ci-select-lane.sh\nscripts/tests/ci-select-suites-test.sh\nscripts/tests/ci-select-lane-test.sh\n' true
+selects false false false "the reviewer's scripts and their tests" $'scripts/review-cap.sh\nscripts/review-prompt.sh\nscripts/review-verdicts.sh\nscripts/tests/review-cap-test.sh\nscripts/tests/review-prompt-test.sh\nscripts/tests/review-verdict-test.sh\n' true
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
 selects true true true "the app's client code" $'Apps/Client/SettingsView.swift\n'
@@ -131,7 +150,8 @@ selects true true true "the bundled licences" $'THIRD-PARTY\nLICENSE\n'
 selects true true true "the icon the targets bundle" $'Design/topo-mark.svg\n'
 selects true true true "this workflow" $'.github/workflows/pr-validate.yaml\n'
 selects true true true "the Mac suites' script" $'scripts/mac-suite.sh\n'
-selects true true true "a CI script" $'scripts/ci-select-suites.sh\n'
+selects true true true "the audio lane's script" $'scripts/ci-audio-lane.sh\n'
+selects true true true "the script that reads the suites' results" $'scripts/ci-require-tests.sh\n'
 selects true true true "a script's test" $'scripts/tests/suite-gate-test.sh\n'
 selects true true true "a build script" $'scripts/build-ish.sh\n'
 selects true true true "a path no rule names" $'Somewhere/New.swift\n'
@@ -139,6 +159,11 @@ selects true true true "a path no rule names" $'Somewhere/New.swift\n'
 # A union: each path's suites.
 selects false false true "TopoLink beside documentation" $'docs/design.md\nPackages/TopoLink/Package.swift\n'
 selects true true true "Womble beside the app" $'Womble/Sources/App/AppDelegate.swift\nApps/Client/Ear.swift\n'
+# `others` runs the scripts' tests, so `scripts` is never chosen beside it.
+selects false false true "the push script beside the hub" $'scripts/validate-and-push.sh\nApps/TopoHub/HubApp.swift\n'
+selects true true true "the push script beside the app" $'scripts/validate-and-push.sh\nApps/Client/Ear.swift\n'
+selects true true true "the push script beside the suites' script" $'scripts/validate-and-push.sh\nscripts/mac-suite.sh\n'
+selects false false false "the push script beside documentation" $'scripts/validate-and-push.sh\ndocs/testing.md\n' true
 
 # Nothing read: every suite, since an empty list is as likely a diff that failed.
 selects true true true "no changed paths" ""
@@ -166,14 +191,14 @@ step_run="$(ruby -ryaml -e '
 scratch="$(mktemp -d -t ci-select-suites-test)"
 trap 'rm -rf "$scratch"' EXIT
 
-# run_step <case> <repo> <expected "unit ui others"> <expected reason pattern>
+# run_step <case> <repo> <expected "unit ui others scripts"> <expected reason pattern>
 run_step() {
   local name="$1" repo="$2" want="$3" match="$4" out status got reason
   : > "$scratch/output"
   out="$(cd "$repo" && SUITE_RULES="$rules" \
     RUNNER_TEMP="$scratch" GITHUB_OUTPUT="$scratch/output" GITHUB_STEP_SUMMARY="$scratch/summary" \
     bash -eo pipefail -c "$step_run" 2>&1)" && status=0 || status=$?
-  got="$(sed -n 's/^topo_unit=//p' "$scratch/output") $(sed -n 's/^topo_ui=//p' "$scratch/output") $(sed -n 's/^others=//p' "$scratch/output")"
+  got="$(sed -n 's/^topo_unit=//p' "$scratch/output") $(sed -n 's/^topo_ui=//p' "$scratch/output") $(sed -n 's/^others=//p' "$scratch/output") $(sed -n 's/^scripts=//p' "$scratch/output")"
   reason="$(sed -n 's/^reason=//p' "$scratch/output")"
   if [ "$status" != 0 ] || [ "$got" != "$want" ] || ! grep -q -- "$match" <<<"$reason"; then
     fail "step, $name: wanted $want and a reason matching '$match', got exit $status, $got, reason=$reason: $out"
@@ -202,20 +227,22 @@ repo() {
 }
 
 repo "$scratch/docs" docs/design.md README.md
-run_step "a documentation change" "$scratch/docs" "false false false" "none of the 2 changed paths needs a suite"
+run_step "a documentation change" "$scratch/docs" "false false false false" "none of the 2 changed paths needs a suite"
 repo "$scratch/link" Packages/TopoLink/Sources/TopoLink/Probe.swift
-run_step "a TopoLink change" "$scratch/link" "false false true" "others for Packages/TopoLink/Sources/TopoLink/Probe.swift"
+run_step "a TopoLink change" "$scratch/link" "false false true false" "others for Packages/TopoLink/Sources/TopoLink/Probe.swift"
 repo "$scratch/app" Apps/Client/Ear.swift
-run_step "an app change" "$scratch/app" "true true true" "topo_unit, topo_ui, others for Apps/Client/Ear.swift"
+run_step "an app change" "$scratch/app" "true true true false" "topo_unit, topo_ui, others for Apps/Client/Ear.swift"
+repo "$scratch/harness" scripts/validate-and-push.sh scripts/tests/validate-and-push-test.sh
+run_step "a harness change" "$scratch/harness" "false false false true" "scripts for scripts/"
 repo "$scratch/shallow"
-run_step "a diff producer that fails (no HEAD^1)" "$scratch/shallow" "true true true" "changed paths are unknown"
+run_step "a diff producer that fails (no HEAD^1)" "$scratch/shallow" "true true true false" "changed paths are unknown"
 
 # A rename out of the app: the source is the path that needs the suites.
 repo "$scratch/rename" Apps/Client/Ear.swift
 mkdir -p "$scratch/rename/docs"
 git -C "$scratch/rename" mv Apps/Client/Ear.swift docs/Ear.swift
 git -C "$scratch/rename" -c user.name=t -c user.email=t@t commit -qm rename
-run_step "an app file renamed into docs" "$scratch/rename" "true true true" "Apps/Client/Ear.swift"
+run_step "an app file renamed into docs" "$scratch/rename" "true true true false" "Apps/Client/Ear.swift"
 
 
 if [ "$failures" -ne 0 ]; then

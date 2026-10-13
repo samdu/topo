@@ -48,7 +48,7 @@ jobs = workflow.fetch("jobs")
 suite = %w[select test]
 review = %w[review_cap codex_wait codex post_feedback reviewer_ran review_gate]
 # The suites select chooses among, which run on the Mac and reach `test` as statuses.
-selectable = %w[topo_unit topo_ui others]
+selectable = %w[topo_unit topo_ui others scripts]
 bad = 0
 check = lambda do |ok, msg|
   if ok then puts "ok   #{msg}" else puts "FAIL #{msg}"; bad += 1 end
@@ -172,21 +172,21 @@ printf '%s' "${FAKE_STATUSES-}"
 GH
 chmod +x "$work/gh/gh"
 head_sha=0123456789abcdef0123456789abcdef01234567
-all=$'local/topo_unit success\nlocal/topo_ui success\nlocal/others success\n'
+all=$'local/topo_unit success\nlocal/topo_ui success\nlocal/others success\nlocal/scripts success\n'
 # gate <want> <case> <match> — STATUS_WAIT is 0 unless a case sets it: one read, then the verdict.
 gate() {
   : > "$work/gh.calls"
   PATH="$work/gh:$PATH" GH_CALLS="$work/gh.calls" GITHUB_REPOSITORY=samdu/topo GH_TOKEN=x \
     FAKE_HEAD="${FAKE_HEAD:-$head_sha}" HEAD_SHA="${HEAD_SHA-$head_sha}" SELECT_RESULT="${SELECT_RESULT-success}" \
-    SELECTED="${SELECTED-topo_unit=true topo_ui=true others=true}" LANE="${LANE-fast}" SUITES_REASON="the reason" \
+    SELECTED="${SELECTED-topo_unit=true topo_ui=true others=true scripts=true}" LANE="${LANE-fast}" SUITES_REASON="the reason" \
     STATUS_WAIT="${STATUS_WAIT:-0}" expect "$1" "test: $2" "$3" "$work/gate.sh"
 }
 unread() {  # the case before it made no call at all
   [ ! -s "$work/gh.calls" ] && echo "ok   test: $1 reads no status" || fail "test: $1 read a status: $(cat "$work/gh.calls")"
 }
 
-FAKE_STATUSES="$all" gate pass "every suite's status is success" "local/others: success on $head_sha"
-for context in local/topo_unit local/topo_ui local/others; do
+FAKE_STATUSES="$all" gate pass "every suite's status is success" "local/scripts: success on $head_sha"
+for context in local/topo_unit local/topo_ui local/others local/scripts; do
   for state in failure error; do
     FAKE_STATUSES="${all/$context success/$context $state}" STATUS_WAIT=4 \
       gate fail "$context is $state, red at once" "did not pass on the Mac.* $context ($state)"
@@ -200,7 +200,7 @@ done
 FAKE_STATUSES="" gate fail "no status at all" "Run scripts/validate-and-push.sh"
 FAKE_STATUSES=fail gate fail "a read that fails" "No passing status"
 # The newest status of a context is the first the API lists; a later line is not read over it.
-FAKE_STATUSES=$'local/topo_unit failure\nlocal/topo_unit success\nlocal/topo_ui success\nlocal/others success\n' \
+FAKE_STATUSES=$'local/topo_unit failure\nlocal/topo_unit success\nlocal/topo_ui success\nlocal/others success\nlocal/scripts success\n' \
   gate fail "the first status of a context is the one read" "local/topo_unit (failure)"
 
 # The real ear: required beside topo_ui on any lane but fast.
@@ -208,19 +208,26 @@ for lane in full "" Fast; do
   LANE="$lane" FAKE_STATUSES="$all" gate fail "lane '${lane:-empty}' without the real ear's status" "local/real_ear (no status)"
   LANE="$lane" FAKE_STATUSES="${all}local/real_ear success"$'\n' gate pass "lane '${lane:-empty}' with the real ear's status" "local/real_ear: success"
 done
-LANE=full SELECTED="topo_unit=false topo_ui=false others=true" FAKE_STATUSES=$'local/others success\n' \
+LANE=full SELECTED="topo_unit=false topo_ui=false others=true scripts=false" FAKE_STATUSES=$'local/others success\n' \
   gate pass "the full lane with topo_ui left out needs no real ear" ""
+# A change to the harness alone: the scripts' tests and nothing a simulator ran, on either lane.
+for lane in fast full; do
+  LANE="$lane" SELECTED="topo_unit=false topo_ui=false others=false scripts=true" FAKE_STATUSES=$'local/scripts success\n' \
+    gate pass "scripts alone on the $lane lane needs its one status" "local/scripts: success on $head_sha"
+done
+SELECTED="topo_unit=false topo_ui=false others=false scripts=true" FAKE_STATUSES=$'local/others success\n' \
+  gate fail "scripts alone is not answered by others" "local/scripts (no status)"
 
 # Left out by select: no status is needed for it, and a status that is there and red is not read.
-for suite_name in topo_unit topo_ui others; do
-  off="topo_unit=true topo_ui=true others=true"; off="${off/$suite_name=true/$suite_name=false}"
+for suite_name in topo_unit topo_ui others scripts; do
+  off="topo_unit=true topo_ui=true others=true scripts=true"; off="${off/$suite_name=true/$suite_name=false}"
   SELECTED="$off" FAKE_STATUSES="${all/local\/$suite_name success$'\n'/}" gate pass "$suite_name left out by select needs no status" "$suite_name: not needed by this PR's paths (the reason)"
   for sel in "${off/$suite_name=false/$suite_name=}" "${off/$suite_name=false/}" "${off/$suite_name=false/$suite_name=False}"; do
     SELECTED="$sel" FAKE_STATUSES="$all" gate fail "$suite_name with SELECTED='$sel'" "neither true nor false for $suite_name"
     unread "$suite_name with SELECTED='$sel'"
   done
 done
-SELECTED="topo_unit=false topo_ui=false others=false" FAKE_STATUSES=fail gate pass "every suite left out, as for a documentation change" "No suite is needed"
+SELECTED="topo_unit=false topo_ui=false others=false scripts=false" FAKE_STATUSES=fail gate pass "every suite left out, as for a documentation change" "No suite is needed"
 unread "every suite left out"
 
 for result in failure cancelled skipped ""; do

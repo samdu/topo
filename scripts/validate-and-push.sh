@@ -34,7 +34,7 @@
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
 #      scripts/validate-host.sh writes; neither by default)
-#      `topo_unit` and `others` go there first, over ssh, and here only when it is busy or
+#      `topo_unit`, `others` and `scripts` go there first, over ssh, and here only when it is busy or
 #      cannot be used: the commit is pushed to a repository of the Mac's own
 #      (~/Library/Caches/topo-validate/repo.git there), checked out in its one validation
 #      worktree under its own lock, the commit's `scripts/mac-suite.sh --check` asked whether
@@ -86,7 +86,9 @@ SLOTS="${TOPO_VALIDATE_SLOTS:-1}"
 KEEP_LOGS=10
 KEEP_RUNS=5
 POST_RETRY="${POST_RETRY:-3}"   # seconds before a status is posted again, times the try
-SUITES=(topo_unit topo_ui others)
+SUITES=(topo_unit topo_ui others scripts)
+# What `--suites all` runs: `others` runs the tests `scripts` is.
+EVERY=(topo_unit topo_ui others)
 
 push=yes
 suites_arg=""
@@ -168,7 +170,7 @@ done
 echo "select: ${chosen[*]:-no suite} ($(sed -n 's/^reason=//p' <<<"$selection")); lane $lane"
 case "$suites_arg" in
   "") ;;
-  all) chosen=("${SUITES[@]}") ;;
+  all) chosen=("${EVERY[@]}") ;;
   none) chosen=() ;;
   *)
     chosen=()
