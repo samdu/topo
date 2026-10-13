@@ -4,7 +4,8 @@
 # head the green run was read for, a run with no verdict has one reviewer job
 # rerun once per head, the
 # install page is republished from origin/main, a merged branch's worktree is
-# swept, an issue is triaged by one allowed gh call or none, and an
+# swept, an issue is triaged by one allowed gh call or none, a device box is
+# ticked on its build issue's results counted by respondent, and an
 # undelivered report is kept. No network, no repository, no session.
 #
 #   scripts/tests/janitor-test.sh
