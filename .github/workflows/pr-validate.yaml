@@ -1,7 +1,7 @@
 # The merge gate. No hosted runner runs the suites: they run on buddybox, at
 # the commit being pushed, and scripts/validate-and-push.sh posts each one's
 # result to that commit as a status (`local/topo_unit`, `local/topo_ui`,
-# `local/others`, and `local/real_ear` on the full lane). Here `select` says
+# `local/others`, `local/scripts`, and `local/real_ear` on the full lane). Here `select` says
 # which of them the PR's paths need, `test` reads those statuses off the PR
 # head and is red on one that is missing or failed, and Codex reviews every
 # non-draft PR whose `test` is green; its verdict is what gates. `review_gate`
@@ -9,8 +9,9 @@
 # on this workflow's latest pull_request run concluding green — so a suite
 # that did not pass on the Mac holds the merge by both routes, and spends no
 # reviewer round. Every job here runs on ubuntu-latest: a macOS runner bills
-# at ten times a Linux one, and the three suites are about 77 runner-minutes
-# a push against the account's 2,000 free minutes a month.
+# at ten times a Linux one, and the three suites that cover the product are
+# about 77 runner-minutes a push against the account's 2,000 free minutes a
+# month.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the current `auth.json` of that login, written
@@ -148,11 +149,15 @@ jobs:
   # The suites are the ones the changed paths need
   # (scripts/ci-select-suites.sh against SUITE_RULES below, whose test reads
   # the rules and runs that step): documentation and tooling no suite covers
-  # need none of the three, a change only the hub, watch, TV, Womble or
-  # TopoLink compile needs `others` alone, and anything else — the app, a
-  # package the app links, the tests, the project, this workflow and its
-  # scripts, a path no rule names, or a diff that cannot be read — needs all
-  # three.
+  # need none, a change only the hub, watch, TV, Womble or TopoLink compile
+  # needs `others` alone, a change to the harness alone — a script whose own
+  # test fakes everything it touches, named below one by one — needs
+  # `scripts` alone, which is those tests with no simulator and no build, and
+  # anything else — the app, a package the app links, the tests, the project,
+  # this workflow, a script the product suites are what prove, a path no rule
+  # names, or a diff that cannot be read — needs `topo_unit`, `topo_ui` and
+  # `others`. `others` runs the scripts' tests too, so `scripts` is `false`
+  # beside it.
   #
   # The PR's own changes are `HEAD^1..HEAD` of GitHub's test merge commit,
   # whose first parent is main: what merging the PR would change on main.
@@ -165,6 +170,7 @@ jobs:
       topo_unit: ${{ steps.suites.outputs.topo_unit }}
       topo_ui: ${{ steps.suites.outputs.topo_ui }}
       others: ${{ steps.suites.outputs.others }}
+      scripts: ${{ steps.suites.outputs.scripts }}
       suites_reason: ${{ steps.suites.outputs.reason }}
     steps:
       - uses: actions/checkout@v4
@@ -242,16 +248,28 @@ jobs:
             scripts/archive-upload.sh none
             scripts/plan-review.sh none
             .gitignore none
-            scripts/janitor.py others
-            scripts/tests/janitor* others
-            scripts/validate-and-push.sh others
-            scripts/tests/validate-and-push-test.sh others
+            scripts/janitor.py scripts
+            scripts/tests/janitor* scripts
+            scripts/validate-and-push.sh scripts
+            scripts/tests/validate-and-push-test.sh scripts
+            scripts/validate-host.sh scripts
+            scripts/tests/validate-host-test.sh scripts
+            scripts/ci-select-suites.sh scripts
+            scripts/tests/ci-select-suites-test.sh scripts
+            scripts/ci-select-lane.sh scripts
+            scripts/tests/ci-select-lane-test.sh scripts
+            scripts/review-cap.sh scripts
+            scripts/tests/review-cap-test.sh scripts
+            scripts/review-prompt.sh scripts
+            scripts/tests/review-prompt-test.sh scripts
+            scripts/review-verdicts.sh scripts
+            scripts/tests/review-verdict-test.sh scripts
         run: |
           set -euo pipefail
           # A diff that cannot be read selects every suite, inside the script.
           scripts/ci-select-suites.sh --git HEAD^1 HEAD > "$RUNNER_TEMP/suites.txt"
           cat "$RUNNER_TEMP/suites.txt" >> "$GITHUB_OUTPUT"
-          run="$(grep -E '^(topo_unit|topo_ui|others)=true$' "$RUNNER_TEMP/suites.txt" | cut -d= -f1 | tr '\n' ' ' || true)"
+          run="$(grep -E '^(topo_unit|topo_ui|others|scripts)=true$' "$RUNNER_TEMP/suites.txt" | cut -d= -f1 | tr '\n' ' ' || true)"
           run="${run% }"
           reason="$(sed -n 's/^reason=//p' "$RUNNER_TEMP/suites.txt")"
           echo "::notice title=Suites: ${run:-none}::$reason"
@@ -260,8 +278,9 @@ jobs:
   # The gate over the suites, and the required status check on main that holds
   # a red suite out. The suites ran on buddybox before the push, and
   # scripts/validate-and-push.sh posted one commit status per suite to the
-  # commit it ran: `local/topo_unit`, `local/topo_ui`, `local/others`, and
-  # `local/real_ear` when the UI tests took the full lane. This job is green
+  # commit it ran: `local/topo_unit`, `local/topo_ui`, `local/others`,
+  # `local/scripts`, and `local/real_ear` when the UI tests took the full
+  # lane. This job is green
   # only when every one of those `select` says the PR needs is `success` on
   # the PR's head (`pull_request.head.sha`, never the merge commit), and it
   # names each that is not. A suite `select` output `false` for needs no
@@ -298,6 +317,7 @@ jobs:
             topo_unit=${{ needs.select.outputs.topo_unit }}
             topo_ui=${{ needs.select.outputs.topo_ui }}
             others=${{ needs.select.outputs.others }}
+            scripts=${{ needs.select.outputs.scripts }}
           LANE: ${{ needs.select.outputs.lane }}
           SUITES_REASON: ${{ needs.select.outputs.suites_reason }}
           STATUS_WAIT: "120"
@@ -313,7 +333,7 @@ jobs:
 
           required=""
           unread=0
-          for suite in topo_unit topo_ui others; do
+          for suite in topo_unit topo_ui others scripts; do
             case " $SELECTED " in
               *" $suite=true "*) required="$required local/$suite" ;;
               *" $suite=false "*) echo "$suite: not needed by this PR's paths ($SUITES_REASON)" ;;

@@ -1620,7 +1620,8 @@ final class HarnessIntegrationTests: XCTestCase {
         ear.load(parakeet: URL(fileURLWithPath: "/dev/null"), ctc: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the ear to load") { ear.ready }
         let voice = VoiceInput(audio: audio, ear: ear, center: center, makeEngine: { seams.makeEngine() },
-                               formats: { seams.readFormats($0) }, permission: { true })
+                               formats: { seams.readFormats($0) }, permission: { true },
+                               voiceProcessing: { try seams.process($0, $1) })
         defer { speaker.stop(); voice.cancel() }
         speaker.microphoneOpen = { voice.listening }
         harness.onReply = { SpokenReply.read($0, harness: harness, speaker: speaker) }
