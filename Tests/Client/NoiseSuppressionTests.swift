@@ -22,7 +22,8 @@ final class NoiseSuppressionTests: XCTestCase {
         await pair(seams, defaults: defaults, ready: ready).voice
     }
 
-    private func pair(_ seams: Seams, defaults: UserDefaults, ready: Bool = true) async -> (voice: VoiceInput, audio: AudioSession) {
+    private func pair(_ seams: Seams, defaults: UserDefaults, ready: Bool = true,
+                      isActive: @escaping @MainActor () -> Bool = { true }) async -> (voice: VoiceInput, audio: AudioSession) {
         let ear = Ear(vocabulary: Vocabulary(defaults: defaults), engine: ScriptedEngine())
         if ready {
             let nowhere = URL(fileURLWithPath: "/dev/null")
@@ -30,7 +31,7 @@ final class NoiseSuppressionTests: XCTestCase {
             await settle("the ear is resident") { ear.ready }
         }
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: isActive)
         let voice = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
@@ -141,6 +142,55 @@ final class NoiseSuppressionTests: XCTestCase {
         XCTAssertEqual(seams.modes.last, false, "the change is applied when the last hold goes")
         voice.press(as: .chat, mine: voice.generation)
         XCTAssertEqual(seams.processing.map(\.on), [true, false])
+        voice.cancel()
+    }
+
+    /// An open microphone keeps the session as a hold does: its engine is running on the mode
+    /// its unit was made for, so a change that waited on a hold goes on waiting when that hold
+    /// drops over it, and is applied when the microphone closes.
+    func testAHoldDroppedOverAnOpenMicrophoneLeavesTheSessionUntilItCloses() async {
+        let seams = Seams()
+        let defaults = defaults()
+        let (voice, audio) = await pair(seams, defaults: defaults)
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .awaitingReply("a turn"))
+        defaults.set(false, forKey: NoiseSuppression.key)
+        seams.forget()
+        voice.press(as: .chat, mine: 1)
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(seams.processing.map(\.on), [true])
+        audio.wantAlive(false, for: .awaitingReply("a turn"))
+        XCTAssertEqual(seams.records, [], "nothing is reconfigured under a running engine")
+        XCTAssertTrue(audio.voiceProcessed, "the session is still in the mode the unit was made for")
+        _ = await voice.end(as: .chat)
+        XCTAssertEqual(seams.records, [true], "one configuration once the microphone has closed")
+        XCTAssertEqual(seams.modes, [false])
+        XCTAssertFalse(audio.voiceProcessed)
+        voice.press(as: .chat, mine: voice.generation)
+        XCTAssertEqual(seams.processing.map(\.on), [true, false])
+        voice.cancel()
+    }
+
+    /// A release with the app away leaves what waited for the next audio path: nothing is
+    /// configured from the background, and the next press configures before its unit is asked.
+    func testAMicrophoneClosedWithTheAppAwayLeavesTheChangeToTheNextPress() async {
+        let seams = Seams()
+        let defaults = defaults()
+        var active = true
+        let (voice, audio) = await pair(seams, defaults: defaults, isActive: { active })
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .awaitingReply("a turn"))
+        defaults.set(false, forKey: NoiseSuppression.key)
+        voice.press(as: .chat, mine: 1)
+        audio.wantAlive(false, for: .awaitingReply("a turn"))
+        seams.forget()
+        active = false
+        _ = await voice.end(as: .chat)
+        XCTAssertEqual(seams.records, [], "nothing is configured from the background")
+        active = true
+        voice.press(as: .chat, mine: voice.generation)
+        XCTAssertEqual(seams.modes, [false])
+        XCTAssertEqual(seams.processing.last?.on, false)
         voice.cancel()
     }
 

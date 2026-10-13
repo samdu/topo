@@ -56,7 +56,8 @@ final class AudioSession {
     private let isActive: @MainActor () -> Bool
     /// True once the session has been configured; a reset re-applies only a session that was.
     private var applied = false
-    /// A claim change that came in while a hold stood, waiting for the last hold to drop. The
+    /// A claim change that came in while a hold stood or the microphone was open, waiting for
+    /// the last hold to drop and the microphone to close. Of the hold: the
     /// session a reply is being waited for on is not reconfigured underneath it: activating or
     /// reconfiguring a non-mixable session from the background is refused
     /// (`cannotInterruptOthers`), which would leave the session invalid and every later
@@ -65,6 +66,14 @@ final class AudioSession {
     /// reply has been heard — the keeper is already rendering on it, and an already-active session
     /// goes on rendering in the background under the `audio` mode.
     private var deferredClaims = false
+    /// True while the chat's microphone is open: its engine is running on the session as it was
+    /// configured, with a tap installed on the format that configuration gave and a voice unit
+    /// made for its mode. A configuration applied underneath is a format changed under that tap
+    /// and a mode changed under that unit, so an open microphone keeps the session as a hold
+    /// does, and a claim change made over one waits for it to close.
+    private var microphoneOpen = false
+    /// Whether the session is to be left as it is: a hold stands, or the microphone is open.
+    private var kept: Bool { holding || microphoneOpen }
     /// True only between a configuration that activated the session and the next reset or failure.
     private var valid = false
     private var resetObserver: NSObjectProtocol?
@@ -117,9 +126,9 @@ final class AudioSession {
         let was = recordMode
         if on { recordClaims.insert(who) } else { recordClaims.remove(who) }
         guard recordMode != was else { return }
-        guard !holding else {
+        guard !kept else {
             deferredClaims = true
-            AudioLog.say("record \(recordMode ? "claimed" : "dropped") while a hold stands; the session is left as it is")
+            AudioLog.say("record \(recordMode ? "claimed" : "dropped") while \(keptBy); the session is left as it is")
             return
         }
         applyOrRemember()
@@ -128,18 +137,27 @@ final class AudioSession {
     /// Says whether the microphone is to be heard through voice processing, which is the record
     /// configuration's mode. Like a claim: the session is touched only when its configuration
     /// would change — never for the quiet one, which has no such mode — a failure is recorded
-    /// rather than thrown, and while a hold stands the change waits for the last hold to go, so
-    /// a press under a hold finds `voiceProcessed` as the session was left.
+    /// rather than thrown, and while a hold stands or the microphone is open the change waits
+    /// for both to go, so a press under a hold finds `voiceProcessed` as the session was left.
     func wantVoiceProcessing(_ on: Bool) {
         guard processed != on else { return }
         processed = on
         guard recordMode else { return }
-        guard !holding else {
+        guard !kept else {
             deferredClaims = true
-            AudioLog.say("voice processing \(on ? "wanted" : "dropped") while a hold stands; the session is left as it is")
+            AudioLog.say("voice processing \(on ? "wanted" : "dropped") while \(keptBy); the session is left as it is")
             return
         }
         applyOrRemember()
+    }
+
+    /// Says that the chat's microphone has opened, its engine started, or has closed, its engine
+    /// stopped. Between the two the session is not reconfigured; the close applies what waited,
+    /// as the last hold going does.
+    func microphone(open: Bool) {
+        guard microphoneOpen != open else { return }
+        microphoneOpen = open
+        if !open { applyDeferred(after: "the microphone has closed") }
     }
 
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
@@ -166,24 +184,29 @@ final class AudioSession {
         // taken while another already stands is the moment to retry a keeper an earlier refusal
         // left down, and a hold nothing renders for is a hold on paper.
         guard holding != wasHolding else { onHoldChanged?(holding); return }
-        // The claim changes the hold stood in the way of. The last hold going is as likely to be
-        // a reply ending behind the lock as the app coming back, and a configure from there is
-        // refused every time, so it is attempted only in the foreground; otherwise the session is
-        // marked as needing configuring and the claims are left for the next path that wants
-        // audio — the next `ensureActive`, or the foreground's own warm claim, which applies them
-        // as it changes.
-        if !holding, deferredClaims {
-            deferredClaims = false
-            if isActive() {
-                AudioLog.say("the last hold is gone; the claims are applied (record \(recordMode))")
-                applyOrRemember()
-            } else {
-                valid = false
-                AudioLog.say("the last hold is gone with the app away; the claims wait for the next audio path (record \(recordMode))")
-            }
-        }
+        if !holding { applyDeferred(after: "the last hold is gone") }
         onHoldChanged?(holding)
     }
+
+    /// The claim changes a hold or an open microphone stood in the way of, applied once neither
+    /// does. The last hold going is as likely to be a reply ending behind the lock as the app
+    /// coming back, and a configure from there is refused every time, so it is attempted only in
+    /// the foreground; otherwise the session is marked as needing configuring and the claims are
+    /// left for the next path that wants audio — the next `ensureActive`, or the foreground's own
+    /// warm claim, which applies them as it changes.
+    private func applyDeferred(after what: String) {
+        guard !kept, deferredClaims else { return }
+        deferredClaims = false
+        if isActive() {
+            AudioLog.say("\(what); the claims are applied (record \(recordMode))")
+            applyOrRemember()
+        } else {
+            valid = false
+            AudioLog.say("\(what) with the app away; the claims wait for the next audio path (record \(recordMode))")
+        }
+    }
+
+    private var keptBy: String { holding ? "a hold stands" : "the microphone is open" }
 
     /// Holds auto-lock off while someone is listening or speaking; process-wide, so counted.
     func wantScreenAwake(_ on: Bool, for who: ScreenClaim) {
