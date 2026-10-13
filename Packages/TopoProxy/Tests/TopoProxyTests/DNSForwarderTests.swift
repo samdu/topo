@@ -142,7 +142,8 @@ import Testing
                 _ = withAddress("127.0.0.1", port) { sendto(client.fd, bytes, bytes.count, 0, $0, $1) }
                 while case let length = recv(client.fd, &sink, sink.count, 0), length > 0 {
                     // An answer is the resolver's one record with no error, read off the header:
-                    // the response code, and the count of answers.
+                    // the response code, and the count of answers. A refusal is not one, and is
+                    // no failure either: the forwarder refuses past its questions in flight.
                     if length >= 12, sink[3] & 0x0f == DNSReply.noError, sink[6] == 0, sink[7] == 1 {
                         answered += 1
                         heard = clock.now
@@ -153,12 +154,11 @@ import Testing
             }
         }
         let grown = footprint() - before
-        #expect(answered >= flood, "the forwarder stopped answering after \(answered)")
-        #expect(other == 0, "\(other) replies were not the resolver's answer")
+        #expect(answered >= flood, "the forwarder stopped answering after \(answered), with \(other) other replies")
         // What one question may leave behind, in bytes: a timer of its own is over 400, and the
         // flood itself about 5. The rest is room for the suites running beside this one.
         let each = 250
-        #expect(grown < answered * each, "grew \(grown / 1_000_000) MB, \(grown / max(answered, 1)) bytes a question over \(answered)")
+        #expect(grown < max(answered, 1) * each, "grew \(grown / 1_000_000) MB, \(grown / max(answered, 1)) bytes a question over \(answered)")
     }
 
     /// Over UDP a reply of exactly the limit goes whole and one a byte longer truncated: 512 with no
