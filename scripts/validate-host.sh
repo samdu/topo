@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The switch that lends another Mac to validation, by hand: on for an afternoon, off after.
 #
-#   scripts/validate-host.sh on <host> [hours]
+#   scripts/validate-host.sh on <host> [hours] [slots]
 #   scripts/validate-host.sh off <host>
 #   scripts/validate-host.sh status
 #
@@ -12,7 +12,9 @@
 # twelve), so it neither sleeps nor locks for idleness between suites. The Mac is unlocked by
 # its person first: `on` refuses one where the session of the user it reaches is not the one
 # on the screen, or is locked, since nothing here unlocks it, and names nothing. A closed lid
-# still sleeps it, whatever holds it awake.
+# still sleeps it, whatever holds it awake. `slots` is how many validations' suites the Mac
+# runs at once, each in a checkout of its own and no two of one name: one unless two is
+# said, and written there (slots.count), where the script a validation sends reads it.
 #
 # `off` takes the name out and ends that `caffeinate`: the one whose pid, hours and end `on`
 # left on record there, and only while that pid is still that command and its hours are not
@@ -61,7 +63,7 @@ alone() {
 # while its time is not up and the pid is still that very command: a pid alone, or any
 # caffeinate, can be another's by then.
 there='
-what="$1" seconds="${2-}"
+what="$1" seconds="${2-}" slots="${3-1}"
 cache="$HOME/Library/Caches/topo-validate"
 held() {
   pid="$(sed -n 1p "$cache/awake" 2>/dev/null)"
@@ -88,12 +90,13 @@ case "$what" in
     release
     nohup /usr/bin/caffeinate -dimsu -t "$seconds" > /dev/null 2>&1 &
     printf "%s\n%s\n%s\n" "$!" "$seconds" "$(($(date +%s) + seconds))" > "$cache/awake"
+    echo "$slots" > "$cache/slots.count"
     ;;
   off) release ;;
   status)
     if held; then
       left=$((ends - $(date +%s)))
-      echo "held awake and unlocked for $((left / 3600)) h $((left % 3600 / 60)) min more"
+      echo "held awake and unlocked for $((left / 3600)) h $((left % 3600 / 60)) min more, $(cat "$cache/slots.count" 2>/dev/null || echo 1) at once"
     else
       echo "not held awake"
     fi
@@ -103,13 +106,14 @@ esac
 
 case "${1-}" in
   on)
-    host="${2-}"; hours="${3:-$DEFAULT_HOURS}"
+    host="${2-}"; hours="${3:-$DEFAULT_HOURS}"; slots="${4:-1}"
     check_name "$host"
     case "$hours" in [1-9] | [1-9][0-9]) ;; *) die "'$hours' is not a number of hours: 1 to $MAX_HOURS." ;; esac
     [ "$hours" -le "$MAX_HOURS" ] || die "$hours hours is more than $MAX_HOURS."
+    case "$slots" in 1 | 2) ;; *) die "'$slots' is not a number of validations at once: 1 or 2." ;; esac
     alone
     status=0
-    ssh_to "$host" bash -s -- on "$((hours * 3600))" <<<"$there" || status=$?
+    ssh_to "$host" bash -s -- on "$((hours * 3600))" "$slots" <<<"$there" || status=$?
     case "$status" in
       0) ;;
       76) exit 1 ;;
@@ -124,7 +128,7 @@ case "${1-}" in
       [ ! -s "$cache/hosts" ] || [ -z "$(tail -c 1 "$cache/hosts")" ] || echo >> "$cache/hosts"
       echo "$host" >> "$cache/hosts"
     fi
-    echo "$host is named in $cache/hosts and held awake and unlocked for $hours hours; a closed lid still sleeps it. \`$0 off $host\` ends both."
+    echo "$host is named in $cache/hosts and held awake and unlocked for $hours hours, $slots validation(s) at once; a closed lid still sleeps it. \`$0 off $host\` ends both."
     ;;
   off)
     host="${2-}"

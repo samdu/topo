@@ -6,7 +6,8 @@
 # starts the hours afresh with one name in the file; a Mac that is locked, on another user's
 # screen or not reached is not named, and none is asked anything for a name or hours that are
 # not; two at once leave one hold, which `off` ends; `off` takes the name out wherever on a
-# line it stands, leaves the rest, and ends no process but the hold on record.
+# line it stands, leaves the rest, and ends no process but the hold on record; and the number
+# of validations at once is one unless two is said, written on that Mac and said by `status`.
 #
 #   scripts/tests/validate-host-test.sh
 set -uo pipefail
@@ -81,7 +82,15 @@ is "on: named" "$(file)" "laptop|"
 is "on: held by the command it says, for the hour asked" "$(args "$first")" "/usr/bin/caffeinate -dimsu -t 3600"
 case "$out" in *"closed lid still sleeps it"*) ok "on: the lid is said" ;; *) fail "on: $out" ;; esac
 run status
-case "$out" in "laptop: held awake and unlocked for "[01]" h "*" min more") ok "status: held, and for how long" ;; *) fail "status: $out" ;; esac
+case "$out" in "laptop: held awake and unlocked for "[01]" h "*" min more, 1 at once") ok "status: held, for how long, and one validation at once unless said" ;; *) fail "status: $out" ;; esac
+count() { cat "$FAKE_HOSTS/$1/Library/Caches/topo-validate/slots.count" 2>/dev/null; }
+is "on: one validation at once, written there" "$(count laptop)" 1
+run on laptop 1 2
+is "on, two at once: exits 0" "$status" 0
+is "on, two at once: written there" "$(count laptop)" 2
+case "$out" in *"2 validation(s) at once"*) ok "on, two at once: it is said" ;; *) fail "on, two at once: $out" ;; esac
+run status
+case "$out" in "laptop: held awake and unlocked for "*" min more, 2 at once") ok "status: two at once" ;; *) fail "status: $out" ;; esac
 
 run on laptop 1
 second="$(awake laptop)"
@@ -107,7 +116,7 @@ is "a connection that went: exits 2" "$status" 2
 is "a connection that went: not named" "$(file)" "laptop|"
 is "a connection that went: what it started there is ended" "$(holds)" "$((before + 1))"
 : > "$SSH_CALLS"
-for bad in "on lap;top" "on -laptop" "on laptop 0" "on laptop 00" "on laptop 08" "on laptop 010" "on laptop 13" "on laptop soon" "on" "off" "off -laptop" "sideways laptop"; do
+for bad in "on laptop 1 0" "on laptop 1 3" "on laptop 1 two" "on lap;top" "on -laptop" "on laptop 0" "on laptop 00" "on laptop 08" "on laptop 010" "on laptop 13" "on laptop soon" "on" "off" "off -laptop" "sideways laptop"; do
   # shellcheck disable=SC2086
   run $bad
   is "'$bad': exits 2" "$status" 2
