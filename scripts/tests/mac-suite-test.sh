@@ -19,7 +19,8 @@
 # build's directory is built over for the pins it was built from and made afresh for any
 # other; and the display is held on under `topo_ui`, by a hold that waits on the script's own
 # pid and is running from before its lane starts to after it stops: one that did not start or
-# took no assertion starts no lane, and one that ended under the suite is red.
+# took no assertion starts no lane, one that ended before the tests runs none, and one that
+# ended under the tests is red.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -64,7 +65,8 @@ held() { kill -0 "$(cat "$CALLS.hold" 2>/dev/null)" 2>/dev/null && echo "display
 case "$1" in
   start) held start; [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
   stop) held stop; exit 0 ;;
-  check) [ "${FAKE_HOLD-}" != ends ] || [ "$2" != after ] || kill "$(cat "$CALLS.hold")"; exit 0 ;;
+  check) [ "${FAKE_HOLD-}" != ends ] || [ "$2" != after ] || kill "$(cat "$CALLS.hold")"
+    [ "${FAKE_HOLD-}" != ends-before ] || [ "$2" != before ] || kill "$(cat "$CALLS.hold")"; exit 0 ;;
   *) exit 0 ;;
 esac'
 fake "$tree/scripts/build-ish.sh" 'exit 0'
@@ -87,7 +89,7 @@ fake "$work/bin/sw_vers" 'exit 0'
 # that pid is the script this run started (the script's pid is this one's parent's: the hold is
 # started from the suite's own shell or a subshell of it). FAKE_HOLD=dies ends it at once, and
 # FAKE_HOLD=unheld leaves it running with no assertion for `pmset` to list; FAKE_HOLD=ends is
-# the lane's fake ending it once the tests have run.
+# the lane's fake ending it once the tests have run, and FAKE_HOLD=ends-before just before them.
 fake "$work/bin/caffeinate" '
 [ "${FAKE_HOLD-}" != dies ] || exit 1
 echo $$ > "$CALLS.hold"
@@ -184,12 +186,19 @@ for broken in dies unheld; do
   is "a hold that $broken: no lane is started" "$(calls 'ci-audio-lane.sh start')" 0
   grep -q 'the display could not be held on' "$work/hold-$broken.log" && ok "a hold that $broken: it is said" || fail "a hold that $broken: $(tail -3 "$work/hold-$broken.log")"
 done
-# One that ended under the suite: red, the lane stopped.
+# One that ended under the tests: red, the lane stopped.
 FAKE_HOLD=ends suite hold-ends topo_ui
-is "a hold that ended under the suite: exits 1" "$status" 1
-is "a hold that ended under the suite: topo_ui is a failure" "$(results)" "topo_ui=failure "
-is "a hold that ended under the suite: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
-grep -q "the display's hold .* ended under the suite" "$work/hold-ends.log" && ok "a hold that ended under the suite: it is said" || fail "a hold that ended under the suite: $(tail -3 "$work/hold-ends.log")"
+is "a hold that ended under the tests: exits 1" "$status" 1
+is "a hold that ended under the tests: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended under the tests: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended under the tests" "$work/hold-ends.log" && ok "a hold that ended under the tests: it is said" || fail "a hold that ended under the tests: $(tail -3 "$work/hold-ends.log")"
+# One that ended after the lane started and before the tests: no test is run.
+FAKE_HOLD=ends-before suite hold-ends-before topo_ui
+is "a hold that ended before the tests: exits 1" "$status" 1
+is "a hold that ended before the tests: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended before the tests: no test is run" "$(calls 'xcodebuild test-without-building')" 0
+is "a hold that ended before the tests: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended before the tests began" "$work/hold-ends-before.log" && ok "a hold that ended before the tests: it is said" || fail "a hold that ended before the tests: $(tail -3 "$work/hold-ends-before.log")"
 
 # A start that failed may have pinned the devices and left a feeder: it is stopped.
 LANE_START=1 suite lane-failed topo_ui

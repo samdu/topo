@@ -390,7 +390,8 @@ suite_topo_ui() {
     say "Audio loopback for the microphone test"
     # The display is kept on for as long as this script lives: when it sleeps the loopback's
     # input goes silent and stays so until the lane is started again, and the microphone test
-    # hears nothing. No lane is started without the hold, and a suite it ended under is red.
+    # hears nothing. No lane is started without the hold, no test is started once it has ended,
+    # and a suite whose tests it ended under is red.
     caffeinate -d -w $$ &
     display_hold=$!
     display_held || { err "the display could not be held on: \`caffeinate -d\` (pid $display_hold) is not running with its hold among \`pmset -g assertions\`. No audio lane was started."; return 1; }
@@ -440,6 +441,10 @@ suite_topo_ui() {
     # a silent tap inside the microphone test.
     say "Audio lane holds before the microphone test"
     scripts/ci-audio-lane.sh check before || return 1
+    # The hold is one process from before the lane to after the tests, so the same pid still
+    # holding after the tests held throughout; asked here too, so no test starts under one
+    # that ended while the simulator booted and the app built.
+    display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended before the tests began, so the display could sleep and silence the loopback. No test was run."; return 1; }
 
     say "xcodebuild test (Topo, UI)"
     local select=(-only-testing:TopoUITests) ui_status=0
@@ -460,7 +465,7 @@ suite_topo_ui() {
 
     say "Audio lane holds after the microphone test"
     scripts/ci-audio-lane.sh check after || ui_status=1
-    display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended under the suite, so the display could sleep and silence the loopback."; ui_status=1; }
+    display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended under the tests, so the display could sleep and silence the loopback."; ui_status=1; }
     return "$ui_status"
   }
   ui_steps || status=1
