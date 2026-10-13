@@ -93,6 +93,10 @@ run status
 case "$out" in "laptop: held awake and unlocked for "*" min more, 2 at once") ok "status: two at once" ;; *) fail "status: $out" ;; esac
 
 run on laptop 1
+is "on again with no number: one at once, written over the two" "$(count laptop)" 1
+run status
+case "$out" in "laptop: held awake and unlocked for "*" min more, 1 at once") ok "status: one at once again" ;; *) fail "status after on with no number: $out" ;; esac
+run on laptop 1
 second="$(awake laptop)"
 settled "$second"
 is "on again: exits 0" "$status" 0

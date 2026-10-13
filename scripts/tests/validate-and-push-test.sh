@@ -822,6 +822,21 @@ is "a second suite of one name: its run exits 0" "$status" 0
 is "a second suite of one name: it ran here, not beside the first" "$(ran_in "$work/host-two/same.record")" "$(here_slot)"
 case "$out" in *"others: laptop is busy with another validation."*) ok "a second suite of one name: the Mac is said busy" ;; *) fail "a second suite of one name: $out" ;; esac
 [ ! -e "$there/slots/2/checkout" ] && ok "a second suite of one name: the second checkout there was not made" || fail "a second suite of one name: it took the second checkout there"
+# The name's lock alone, held as a validation holds it that has chosen the suite and not yet
+# written its slot's record: one of that name is not started there, and no slot is touched.
+release "$work/host-two/first.hold"; wait "$first"; is "a second suite of one name: the first exits 0" "$?" 0
+rm -rf "$there"/logs/*-others
+git -C "$same" commit -q --allow-empty -m "the name alone"
+lockf -s -t 0 "$there/suite-others.lock" sh -c "while [ ! -e '$work/host-two/name.done' ]; do perl -e 'select(undef,undef,undef,0.1)'; done" & named=$!
+for _ in $(seq 100); do lockf -s -t 0 "$there/suite-others.lock" true 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+slots_before="$(cat "$there"/slots/*/run 2>/dev/null)"
+out="$(cd "$same" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/same.record" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "a suite's name held with no slot's record: one of that name runs here" "$status:$(ran_in "$work/host-two/same.record")" "0:$(here_slot)"
+case "$out" in *"others: laptop is busy with another validation."*) ok "a suite's name held with no slot's record: the Mac is said busy" ;; *) fail "a suite's name held with no slot's record: $out" ;; esac
+is "a suite's name held with no slot's record: no slot is touched" "$(cat "$there"/slots/*/run 2>/dev/null)" "$slots_before"
+touch "$work/host-two/name.done"; wait "$named" 2>/dev/null
+git -C "$repo" commit -q --allow-empty -m "the first again"
+begin "$repo" "$work/host-two/first" "$work/host-two/first.hold" TOPO_VALIDATE_HOSTS=laptop; first=$run
 # The first run's logs there made the oldest of seven: a run that prunes leaves them.
 first_logs="$(ls -d "$there"/logs/*-others)"
 for n in 1 2 3 4 5 6; do mkdir -p "$there/logs/old-$n"; done
@@ -847,16 +862,33 @@ touch "$work/host-two/whole.done"; wait "$whole" 2>/dev/null
 # run, and a process with that run's results in its arguments.
 printf 'ghost\nothers\n' > "$there/slots/1/run"
 perl -e 'sleep 120' "$there/logs/ghost" left & ghost=$!
+# Its results, the oldest there of more than are kept: the runs below prune, and leave them.
+mkdir -p "$there/logs/ghost"; for n in 1 2 3 4 5 6; do mkdir -p "$there/logs/newer-$n"; done
+touch -t 199901010000 "$there/logs/ghost"
 git -C "$same" commit -q --allow-empty -m again
 out="$(cd "$same" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/same.record" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "a suite left going on a host: one of its name runs here" "$status:$(ran_in "$work/host-two/same.record")" "0:$(here_slot)"
 git -C "$theirs" commit -q --allow-empty -m again
 out="$(cd "$theirs" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/second" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "a suite left going on a host: another suite is not put in its checkout" "$status:$(ran_in "$work/host-two/second")" "0:$(cd "$there/slots/2/checkout" && pwd -P)"
+[ -d "$there/logs/ghost" ] && ok "a suite left going on a host: its results are not pruned under it" || fail "a suite left going on a host: its results were pruned while it ran"
 kill "$ghost" 2>/dev/null; wait "$ghost" 2>/dev/null
 git -C "$same" commit -q --allow-empty -m "once more"
 out="$(cd "$same" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/same.record" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "the suite left going ended: its checkout and name are free there" "$status:$(ran_in "$work/host-two/same.record")" "0:$(cd "$there/checkout" && pwd -P)"
+[ ! -e "$there/logs/ghost" ] && ok "the suite left going ended: its results are pruned as any" || fail "the suite left going ended: its results are still kept"
+# A script killed as it starts its suite: the child it forked for that still has the script's
+# own arguments, the run's name last, and is the run still going.
+printf 'forked\nothers\n' > "$there/slots/1/run"
+bash -s -- "$sha" fast others forked <<<"perl -e 'sleep 120' & echo \$! > '$work/host-two/forked.child'; wait" & forked=$!
+for _ in $(seq 50); do ps -axww -o args= | grep -q -- "-s -- $sha fast others forked\$" && break; perl -e 'select(undef,undef,undef,0.1)'; done
+git -C "$same" commit -q --allow-empty -m "beside a fork"
+out="$(cd "$same" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/same.record" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "a script killed as its suite starts: one of its name runs here" "$status:$(ran_in "$work/host-two/same.record")" "0:$(here_slot)"
+git -C "$theirs" commit -q --allow-empty -m "beside a fork"
+out="$(cd "$theirs" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/second" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
+is "a script killed as its suite starts: another suite is not put in its checkout" "$status:$(ran_in "$work/host-two/second")" "0:$(cd "$there/slots/2/checkout" && pwd -P)"
+kill "$(cat "$work/host-two/forked.child")" "$forked" 2>/dev/null; wait "$forked" 2>/dev/null
 # Lent for one, which is what a Mac with no number is: a second run runs here.
 rm -f "$there/slots.count"
 git -C "$repo" commit -q --allow-empty -m again

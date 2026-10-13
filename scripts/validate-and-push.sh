@@ -287,8 +287,11 @@ results="$cache/logs/$run"
 refuse() { echo "error: $1 on $(hostname -s)." >&2; exit 76; }
 busy() { echo "error: $1 on $(hostname -s)." >&2; exit 75; }
 # Whether anything of a run is still going: every process of a suite here has the run'"'"'s
-# results directory in its arguments, from the way into the session down to mac-suite.sh.
-going() { ps -axww -o args= | grep -v grep | grep -qF -e "$cache/logs/$1\"" -e "$cache/logs/$1 "; }
+# results directory in its arguments, from the way into the session down to mac-suite.sh,
+# and this script has the run'"'"'s name as the last of its own, which a child it has forked
+# to start the suite still has until it is the suite. So a script killed as it starts its
+# suite leaves a run that is going from the fork on, with no moment between.
+going() { ps -axww -o args= | grep -v grep | grep -q -e "$cache/logs/$1[\" ]" -e " -s -- [0-9a-f]\{40\} [a-z]* [a-z_:]* $1\$"; }
 left_in() { [ -s "$1/run" ] && going "$(sed -n 1p "$1/run")"; }
 # The lock a run of the script as it was holds whole, held here shared: such a run and a
 # slot'"'"'s are never on this Mac at once.
