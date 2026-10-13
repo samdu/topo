@@ -6,8 +6,8 @@
 #   scripts/validate-host.sh status
 #
 # `on` names the Mac (an ssh alias) in ~/Library/Caches/topo-validate/hosts on this one, which
-# is where scripts/validate-and-push.sh reads the Macs it may send `topo_unit` and `others`
-# to, and holds that Mac awake and unlocked from then: a `caffeinate -dimsu` there that keeps
+# is where scripts/validate-and-push.sh reads the Macs it may send `topo_unit`, `others` and
+# `scripts` to, and holds that Mac awake and unlocked from then: a `caffeinate -dimsu` there that keeps
 # its display on and counts its person as present, for the hours given (six, and one to
 # twelve), so it neither sleeps nor locks for idleness between suites. The Mac is unlocked by
 # its person first: `on` refuses one where the session of the user it reaches is not the one
