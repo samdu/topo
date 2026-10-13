@@ -17,7 +17,7 @@ Automatic signing has already registered `zone.hexagon.topo` and made a team pro
 
 The entitlements name both. A container in the entitlements that does not exist for the team is a rejected upload rather than a warning.
 
-The same identifier needs **Push Notifications** ticked. The iOS target's entitlements (`Apps/TopoiOS.entitlements`) carry `aps-environment` for the silent CloudKit push that wakes the primary when a limb writes a turn, and a profile without the capability cannot sign it. The file says `development`, which is what a debug build is signed with; the App Store export signs with `production` from the distribution profile, so nothing is edited per build. CloudKit sends the push itself, so there is no APNs key or certificate to make. The watch and TV entitlements carry no push.
+The same identifier needs **Push Notifications** ticked. The iOS target's entitlements (`Apps/TopoiOS.entitlements`) carry `aps-environment` for the silent CloudKit push that wakes the primary when a limb writes a turn, and a profile without the capability cannot sign it. The file says `development`, which is what a debug build is signed with; the App Store export signs with `production` from the distribution profile, so nothing is edited per build. CloudKit sends the push itself, so there is no APNs key or certificate to make. The watch's entitlements (`Apps/TopoWatch.entitlements`) carry `aps-environment` too, for the silent `Surface` push that wakes it to fetch the slots sooner than its background refresh, so `zone.hexagon.topo.watch` needs **Push Notifications** ticked as well; the watch never answers a turn. The TV's entitlements carry no push.
 
 ## 2. The App Store Connect record
 

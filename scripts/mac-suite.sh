@@ -4,6 +4,7 @@
 # each suite's result to the PR as a commit status, which pr-validate.yaml's `test` job reads.
 #
 #   scripts/mac-suite.sh [--lane fast|full] [--results <dir>] [--cache <dir>] <suite>...
+#   scripts/mac-suite.sh --check [--cache <dir>] <suite>...
 #
 # The suites, by the names scripts/ci-select-suites.sh selects them under:
 #
@@ -34,7 +35,17 @@
 # the run, which stops that command, the audio lane it started and its simulators. A second
 # signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
-# validate-and-push.sh holds one lock for the whole run.
+# validate-and-push.sh runs one suite a call, each under that suite's lock.
+#
+# --check runs nothing: it says whether a Mac other than buddybox can run the suites named, and exits 1 with an
+# `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
+# pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
+# with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
+# counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
+# whose disk is encrypted, this user's session on the screen and unlocked. It makes, builds
+# and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
+# a suite there, and `topo_ui` is refused on any Mac it is asked of this way: the audio lane
+# installs a driver and takes the Mac's default input and output.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,13 +61,18 @@ XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
 SUITES=(topo_unit topo_ui others)
+# What --check asks of the disk: a runtime's simulators, a cold DerivedData and the pinned
+# downloads are most of it, and a Mac somebody else is using is not left full.
+MIN_FREE_GB=10
 
+check=no
 lane=fast
 RESULTS="$root/build/validate"
 cache="$HOME/Library/Caches/topo-validate"
 asked=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --check) check=yes; shift ;;
     --lane) lane="${2:-}"; shift 2 ;;
     --results) RESULTS="${2:-}"; shift 2 ;;
     --cache) cache="${2:-}"; shift 2 ;;
@@ -70,6 +86,82 @@ for suite in "${asked[@]}"; do
   case " ${SUITES[*]} " in *" $suite "*) ;; *) echo "no such suite '$suite': one of ${SUITES[*]}" >&2; exit 2 ;; esac
 done
 [ -n "$RESULTS" ] && [ -n "$cache" ] || { echo "--results and --cache each take a directory" >&2; exit 2; }
+
+err() { echo "error: $*" >&2; }
+
+# The pinned Xcode and XcodeGen, each an `error:` line when this Mac's is another.
+pinned_tools() {
+  local xcode status=0
+  xcode="$(xcodebuild -version 2>/dev/null | head -n 1)"
+  [ "$xcode" = "Xcode $XCODE_VERSION" ] || { err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION; pick the Xcode it has on purpose."; status=1; }
+  xcodegen --version 2>/dev/null | grep -qx "Version: $XCODEGEN_VERSION" \
+    || { err "xcodegen is '$(xcodegen --version 2>&1 | head -n 1)', not Version: $XCODEGEN_VERSION."; status=1; }
+  return "$status"
+}
+
+# has_simulator <runtime> <name prefix> — whether this Mac has a device new_simulator can copy.
+has_simulator() {
+  xcrun simctl list devices available --json 2>/dev/null | jq -e --arg rt "$1" --arg p "$2" \
+    '[.devices[$rt] // [] | .[] | select(.name | startswith($p))] | length > 0' >/dev/null 2>&1
+}
+
+if [ "$check" = yes ]; then
+  lacks=0
+  [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; lacks=1; }
+  pinned_tools || lacks=1
+  command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
+  has_simulator "$IOS_SIMULATOR_RUNTIME" iPhone || { err "no iPhone simulator of $IOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; }
+  for suite in "${asked[@]}"; do
+    case "$suite" in
+      others) has_simulator "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" || { err "no Apple Watch simulator of $WATCHOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; } ;;
+      topo_ui) err "topo_ui runs on buddybox alone: its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
+    esac
+  done
+  stamp="Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
+  if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$(scripts/build-ish.sh inputs 2>/dev/null)" ]; then
+    brew_prefix="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+    for tool in meson ninja; do
+      command -v "$tool" >/dev/null || { err "$tool is not installed, and the guest's framework here is not current (brew install meson ninja llvm lld)."; lacks=1; }
+    done
+    [ -x "$brew_prefix/opt/llvm/bin/clang" ] && [ -x "$brew_prefix/opt/lld/bin/ld.lld" ] \
+      || { err "Homebrew's llvm and lld are not installed, and the guest's framework here is not current (brew install llvm lld)."; lacks=1; }
+  fi
+  mkdir -p "$cache" || exit 2
+  # What the disk has for a write that matters, the figure Finder shows: `df` leaves out what
+  # macOS purges as the room is wanted, which on a laptop is most of it.
+  free="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); function run(argv) { var value = $(); $.NSURL.fileURLWithPath(argv[0]).getResourceValueForKeyError(value, "NSURLVolumeAvailableCapacityForImportantUsageKey", null); return Math.floor(ObjC.unwrap(value) / 1e9); }' "$cache" 2>/dev/null)"
+  case "$free" in
+    "" | *[!0-9]*) err "could not read the disk's available space under $cache."; lacks=1 ;;
+    *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache, purgeable space included (Finder's figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
+  esac
+  # A laptop with its lid shut sleeps whatever holds it awake; a Mac with no lid has no such key.
+  # Read whole and then looked at: a reader that stops at the first match ends ioreg on a
+  # closed pipe, which under pipefail is a failed pipeline, and that would read as open.
+  lid="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null || true)"
+  case "$lid" in *'"AppleClamshellState" = Yes'*) err "this Mac's lid is closed."; lacks=1 ;; esac
+  # A Mac whose disk is encrypted gives no file complete protection while its screen is
+  # locked, and TopoTests asks that of files in the simulator's home.
+  case " ${asked[*]} " in
+    *" topo_unit "*)
+      # The session of the user the suite runs as, by name: open when it is the one on the
+      # screen and not locked. Another user's, or the login window's, is not this one's.
+      sessions="$(ioreg -n Root -d1 2>/dev/null | tr '}' '\n' || true)"
+      mine="$(grep -F "\"kCGSSessionUserNameKey\"=\"$(id -un)\"" <<<"$sessions" || true)"
+      vault="$(fdesetup status 2>/dev/null || true)"
+      case "$mine" in
+        *'"CGSSessionScreenIsLocked"=Yes'*) open=no ;;
+        *'"kCGSSessionOnConsoleKey"=Yes'*) open=yes ;;
+        *) open=no ;;
+      esac
+      if [ "$open" = no ]; then
+        case "$vault" in *"FileVault is On"*) err "this Mac's disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen: no file can be given complete protection until it is unlocked, and topo_unit asks for that."; lacks=1 ;; esac
+      fi
+      ;;
+  esac
+  [ "$lacks" = 0 ] && echo "this Mac can run ${asked[*]}."
+  exit "$lacks"
+fi
+
 mkdir -p "$RESULTS" "$cache" || exit 2
 RESULTS="$(cd "$RESULTS" && pwd)"
 export RESULTS
@@ -105,7 +197,6 @@ ended() {
 trap ended TERM INT HUP
 
 say() { printf '\n==> %s\n' "$*"; }
-err() { echo "error: $*" >&2; }
 
 # run <log> <command>... — the command in the background under `wait`, so a signal reaches the
 # trap at once, with everything it prints in the log as well.
@@ -150,14 +241,10 @@ new_simulator() {
 prepare() {
   say "Toolchain"
   [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; return 1; }
-  local xcode
-  xcode="$(xcodebuild -version | head -n 1)"
-  [ "$xcode" = "Xcode $XCODE_VERSION" ] || { err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION; pick the Xcode it has on purpose."; return 1; }
+  pinned_tools || return 1
   sw_vers
   xcodebuild -version
   swift --version
-  xcodegen --version | grep -qx "Version: $XCODEGEN_VERSION" \
-    || { err "xcodegen is '$(xcodegen --version 2>&1)', not Version: $XCODEGEN_VERSION."; return 1; }
 
   say "Generate Xcode projects (XcodeGen)"
   xcodegen generate --spec project.yml || return 1
@@ -344,7 +431,7 @@ suite_others() {
   # Named, not globbed, so a test that disappears fails here.
   for test in simulator-run perf-run review-verdict ci-select-lane ci-audio-lane ci-select-suites asc-pem archive-upload \
               suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
-              model-manifest review-prompt review-cap janitor validate-and-push mac-suite agent-simulator; do
+              model-manifest review-prompt review-cap janitor validate-and-push validate-host mac-suite agent-simulator; do
     say "scripts/tests/$test-test.sh"
     if [ ! -x "scripts/tests/$test-test.sh" ]; then
       err "scripts/tests/$test-test.sh is missing."
