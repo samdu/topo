@@ -339,6 +339,10 @@ suite_topo_ui() {
     # one long-lived feeder. It starts before the simulator boots, because a simulator's audio
     # binds to the coreaudiod it booted against and the lane restarts coreaudiod.
     say "Audio loopback for the microphone test"
+    # The display is kept on for as long as this script lives: when it sleeps the loopback's
+    # input goes silent and stays so until the lane is started again, and the microphone test
+    # hears nothing.
+    caffeinate -d -w $$ &
     # Ours to stop from the moment `start` is called, not from its success: one that fails
     # after pinning the devices, or a signal while it is under way, leaves a feeder and the
     # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
