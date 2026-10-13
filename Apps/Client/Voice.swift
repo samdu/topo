@@ -244,10 +244,10 @@ actor PocketVoiceEngine: VoiceEngine {
 enum VoiceTemperature {
     static let key = "voiceTemperature"
 
-    /// What a phone never asked speaks at: the value Kyutai's own package speaks English at,
-    /// preferred to 0.7 in 53.5% of 400 judgements with the error rate 0.92% → 0.82% and UTMOS
-    /// 4.318 → 4.358 (kyutai-labs/pocket-tts#223); FluidAudio's default is 0.7.
-    static let standard = 0.3
+    /// What a phone never asked speaks at, chosen by Sam's ear between the two published
+    /// defaults: Kyutai's own package speaks English at 0.3 (kyutai-labs/pocket-tts#223) and
+    /// FluidAudio at 0.7.
+    static let standard = 0.5
 
     /// What the decoder is ever handed. Below 0 the square root is not a number; 1 is the
     /// noise unscaled, which is as far as the model was trained.
