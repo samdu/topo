@@ -334,6 +334,7 @@ final class VoiceInput {
         }
         engine.prepare()
         try engine.start()
+        audio.microphone(open: true)
         AudioLog.say("microphone open: noise suppression \(suppress ? "on" : "off")")
         listening = true
         sessions += 1
@@ -431,6 +432,9 @@ final class VoiceInput {
         pressedAt = nil
         audio.wantScreenAwake(false, for: .listening)
         if let gate { audio.wantRecord(false, for: gate == .chat ? .chat : .firstRun) }
+        // Last, so the claim just dropped and whatever waited on the open microphone are one
+        // configuration.
+        audio.microphone(open: false)
     }
 
     private struct InputUnavailable: Error {}
