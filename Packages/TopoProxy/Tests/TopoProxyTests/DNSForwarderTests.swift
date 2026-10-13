@@ -115,9 +115,17 @@ import Testing
     }
 
     /// A flood of questions answered at once holds nothing past its answers: no bound is left
-    /// waiting per question for its 4 s.
+    /// waiting per question. The bound is longer than any flood, so whatever a question left
+    /// waiting for it is still held when the footprint is read, however slowly the flood ran.
     @Test func aFloodHoldsNothingPerQuestion() async throws {
-        let forwarder = DNSForwarder(resolver: InstantResolver(), log: { _ in })
+        // The flood is a count of answers and not a length of time, so a loaded machine makes it
+        // slower and no smaller. It ends early only when the forwarder has stopped answering:
+        // the patience is for one answer, never for the flood, and is counted on a clock nobody
+        // sets. No flood that gets its answers is longer than the patience for every one of them.
+        let flood = 100_000
+        let patience = Duration.seconds(10)
+        let bound = patience * flood * 2
+        let forwarder = DNSForwarder(resolver: InstantResolver(), queryBound: bound, log: { _ in })
         let port = try await forwarder.start()
         defer { Task { await forwarder.stop() } }
         let clients = try (0..<8).map { _ in try UDPClient(port: port) }
@@ -125,18 +133,32 @@ import Testing
         for client in clients { _ = fcntl(client.fd, F_SETFL, fcntl(client.fd, F_GETFL) | O_NONBLOCK) }
         let bytes = query(1, "flood.example")
         var sink = [UInt8](repeating: 0, count: 2048)
-        var answered = 0
+        var answered = 0, other = 0
         let before = footprint()
-        let end = Date().addingTimeInterval(3)
-        while Date() < end {
+        let clock = ContinuousClock()
+        var heard = clock.now
+        while answered < flood, clock.now - heard < patience {
             for client in clients {
                 _ = withAddress("127.0.0.1", port) { sendto(client.fd, bytes, bytes.count, 0, $0, $1) }
-                while recv(client.fd, &sink, sink.count, 0) > 0 { answered += 1 }
+                while case let length = recv(client.fd, &sink, sink.count, 0), length > 0 {
+                    // An answer is the resolver's one record with no error, read off the header:
+                    // the response code, and the count of answers. A refusal is not one, and is
+                    // no failure either: the forwarder refuses past its questions in flight.
+                    if length >= 12, sink[3] & 0x0f == DNSReply.noError, sink[6] == 0, sink[7] == 1 {
+                        answered += 1
+                        heard = clock.now
+                    } else {
+                        other += 1
+                    }
+                }
             }
         }
-        let grown = (footprint() - before) / 1_000_000
-        #expect(answered > 10_000, "the flood was \(answered) answers")
-        #expect(grown < 30, "grew \(grown) MB over \(answered) answers")
+        let grown = footprint() - before
+        #expect(answered >= flood, "the forwarder stopped answering after \(answered), with \(other) other replies")
+        // What one question may leave behind, in bytes: a timer of its own is over 400, and the
+        // flood itself about 5. The rest is room for the suites running beside this one.
+        let each = 250
+        #expect(grown < max(answered, 1) * each, "grew \(grown / 1_000_000) MB, \(grown / max(answered, 1)) bytes a question over \(answered)")
     }
 
     /// Over UDP a reply of exactly the limit goes whole and one a byte longer truncated: 512 with no
