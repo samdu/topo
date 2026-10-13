@@ -56,7 +56,7 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.voiceTemperature)
                         .accessibilityLabel("Voice temperature")
                 } footer: {
-                    Text("How much chance Topo's voice is drawn with: lower is steadier, higher livelier. \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. Applies from the next sentence. Kept on this device.")
+                    Text("How much chance Topo's voice is drawn with: lower is steadier, higher livelier. \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. Applies from the next reply. Kept on this device.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }

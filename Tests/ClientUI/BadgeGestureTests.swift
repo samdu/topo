@@ -29,6 +29,14 @@ final class BadgeGestureTests: XCTestCase {
             if !found.exists { app.swipeUp() }
             XCTAssertTrue(found.exists, "the settings have no \(row)")
         }
+        // The slider is drawn from the value kept, so each end it is moved to is a value
+        // that was written and read back.
+        let temperature = app.sliders["settings-voice-temperature"]
+        for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
+        temperature.adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(temperature.value as? String, "100%", "the slider's top is not kept")
+        temperature.adjust(toNormalizedSliderPosition: 0)
+        XCTAssertEqual(temperature.value as? String, "0%", "the slider's foot is not kept")
     }
 
     /// A hold just past the gesture's own threshold.
