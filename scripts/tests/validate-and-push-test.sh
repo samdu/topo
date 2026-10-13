@@ -30,6 +30,15 @@
 # suite runs here; a busy one is left alone and the suite runs here; a suite red there is
 # red; and a signal ends the suite there, or comes before it and starts none.
 #
+# And of the line for a slot: runs that wait have it in the order they came, whichever asks
+# oftener; a run's ticket taken from under it is back under its own name; a ticket of a pid
+# that is gone or another's, or one not whole, is removed and holds nobody, and a file that is
+# no ticket is left; a run signalled in the line leaves no ticket; a run trying a busy Mac
+# keeps its place, and is out of the line while its suite runs there. And of --hold: the
+# command runs with the slot held and its own status, in any tree, a validation waiting
+# meanwhile; nothing is pushed or posted; what it leaves behind holds nothing; a signal ends
+# it; and one a SIGKILL left running is an orphan the next run starts nothing beside.
+#
 #   scripts/tests/validate-and-push-test.sh
 set -uo pipefail
 
@@ -112,10 +121,12 @@ mv -f "$FAKE_RECORD.new" "$FAKE_RECORD"
 [ "${FAKE_SUITES-}" != died ] || exit 1
 # Left running after the suite, with whatever descriptors the suite was given.
 [ -z "${FAKE_LEAVE-}" ] || { nohup perl -e "sleep 60" > /dev/null 2>&1 & echo $! > "$FAKE_LEAVE"; }
-# Held in every suite, or in the one FAKE_HOLD_SUITE names, for as long as the marker has its pid.
+# Held in every suite, or in the one FAKE_HOLD_SUITE names, for as long as the marker has its
+# pid, two minutes at most: a case that failed before its `release` does not hold the test.
 if [ "${FAKE_SUITES-}" = held ] && case "${FAKE_HOLD_SUITE-}" in "" | "${suites[0]}") true ;; *) false ;; esac; then
   echo $$ > "$FAKE_HOLD"
-  while [ -s "$FAKE_HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done
+  held=0
+  while [ -s "$FAKE_HOLD" ] && [ "$held" -lt 1200 ]; do perl -e "select(undef,undef,undef,0.1)"; held=$((held + 1)); done
 fi
 if [ "${FAKE_SUITES-}" = twice ]; then
   for suite in "${suites[@]}"; do echo "$suite=failure" >> "$results/suites.txt"; echo "$suite=success" >> "$results/suites.txt"; done
@@ -795,6 +806,171 @@ is "on main: exits 2" "$status" 2
 git -C "$repo" checkout -q --detach topic
 validate
 is "detached: exits 2" "$status" 2
+
+
+# The line for the one checkout. A run that waits is in it, and the checkout goes to whoever
+# has waited longest: the second run here looks five times as often as the first, and would
+# have the checkout nearly every time were it only a matter of who asks first.
+export TOPO_VALIDATE_SLOTS=1
+tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{10}-[0-9]{7}$' | LC_ALL=C sort | tr '\n' ' '; }
+ticket_of() { tickets | tr ' ' '\n' | grep -- "-0*$1\$" || true; }
+until_true() { local n; for n in $(seq 100); do "$@" && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
+has_ticket() { [ -n "$(ticket_of "$1")" ]; }
+no_ticket() { [ -z "$(ticket_of "$1")" ]; }
+reached() { [ -s "$1" ]; }
+# waiter <directory> <name> [VAR=value...] — a run there in the background that will be held
+# in its suite once it has one; its pid in $run, its marker $work/line/<name>.hold.
+waiter() {
+  local at="$1" name="$2"; shift 2
+  : > "$work/line/$name.hold"
+  (cd "$at" && exec env PATH="$work/bin:$PATH" FAKE_SUITES=held FAKE_RECORD="$work/line/$name" FAKE_HOLD="$work/line/$name.hold" "$@" scripts/validate-and-push.sh > "$work/line/$name.out" 2>&1) &
+  run=$!
+}
+scratch line Apps/Client/SettingsView.swift
+sibling line theirs Packages/TopoLink/Package.swift
+theirs="$other"
+sibling line later Packages/TopoLink/Package.swift
+later="$other"
+begin "$repo" "$work/line/first" "$work/line/first.hold" FAKE_HOLD_SUITE=topo_unit
+first=$run
+is "the first run, nobody waiting: it took no place in the line" "$(tickets)" ""
+waiter "$theirs" a LOCK_POLL=5; a=$run
+until_true has_ticket "$a" || fail "the line: a run that waits has no ticket: $(cat "$work/line/a.out")"
+a_ticket="$(ticket_of "$a")"
+waiter "$later" b LOCK_POLL=1; b=$run
+until_true has_ticket "$b" || fail "the line: a second run that waits has no ticket: $(cat "$work/line/b.out")"
+is "the line: in the order they came" "$(tickets)" "$a_ticket $(ticket_of "$b") "
+case "$(cat "$work/line/b.out")" in *"Waiting for a checkout (1 ahead in the line, the first theirs "*) ok "the line: the second says who is ahead" ;; *) fail "the line: $(cat "$work/line/b.out")" ;; esac
+# A run whose ticket was taken for dead puts it back, under its own name.
+rm -f "$TOPO_VALIDATE_CACHE/queue/$a_ticket"
+until_true has_ticket "$a" || fail "a ticket removed under a live run: not put back"
+is "a ticket removed under a live run: back under its own name" "$(ticket_of "$a")" "$a_ticket"
+release "$work/line/first.hold"; wait "$first" 2>/dev/null
+until_true reached "$work/line/a.hold" || fail "the line: the run that came first never had the checkout: $(cat "$work/line/a.out")"
+[ ! -s "$work/line/b.hold" ] && ok "the line: the run that came first has the checkout, the later one waits" || fail "the line: the later run took the checkout first"
+is "the line: the one with the checkout is out of it" "$(tickets)" "$(ticket_of "$b") "
+release "$work/line/a.hold"; wait "$a"; is "the line: the first to come exits 0" "$?" 0
+until_true reached "$work/line/b.hold" || fail "the line: the later run never had the checkout: $(cat "$work/line/b.out")"
+release "$work/line/b.hold"; wait "$b"; is "the line: the later run exits 0" "$?" 0
+is "the line: empty when all are done" "$(tickets)" ""
+
+# What is in the line and is not a run that waits holds nobody: a ticket of a pid that is
+# gone, one of a pid that began at another time, one of no length and one of one line are
+# each removed; a file of another name is left; and a ticket of a live process ahead is
+# waited behind, by name, until that process ends.
+q="$TOPO_VALIDATE_CACHE/queue"
+began() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1"; }
+sleep 30 & gone=$!; gone_began="$(began "$gone")"; kill "$gone"; wait "$gone" 2>/dev/null
+sleep 30 & alive=$!
+printf '%s\n%s\n%s\n' "$gone" "$gone_began" "ended 0000001" > "$q/0000000001-0000001"
+printf '%s\n%s\n%s\n' "$alive" "Thu Jan  1 00:00:00 1970" "another 0000002" > "$q/0000000002-0000002"
+: > "$q/0000000003-0000003"
+echo "$alive" > "$q/0000000004-0000004"
+echo keep > "$q/notes"; echo keep > "$q/.new.99999"; echo keep > "$q/0000000005-5"
+LOCK_WAIT=0 validate
+is "dead tickets ahead: the run waits for nothing" "$status" 0
+is "dead tickets ahead: each is removed" "$(tickets)" ""
+is "dead tickets ahead: what is not a ticket is left" "$(ls -A "$q" | LC_ALL=C sort | tr '\n' ' ')" ".new.99999 0000000005-5 notes "
+printf '%s\n%s\n%s\n' "$alive" "$(began "$alive")" "ahead 0000006" > "$q/0000000006-0000006"
+LOCK_WAIT=2 validate
+is "a live ticket ahead: exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout (1 ahead in the line, the first ahead 0000006, pid "*")"*) ok "a live ticket ahead: it is waited behind, by name" ;; *) fail "a live ticket ahead: $out" ;; esac
+is "a live ticket ahead: no suite ran" "$(recorded suites)" ""
+is "a wait that ran out: the run's own ticket is gone, the one ahead left" "$(tickets)" "0000000006-0000006 "
+# A signal while in the line.
+waiter "$theirs" term; term=$run
+until_true has_ticket "$term" || fail "a signal in the line: the run never took a place: $(cat "$work/line/term.out")"
+kill -TERM "$term"; wait "$term"; is "a signal in the line: exits 143" "$?" 143
+is "a signal in the line: its ticket is gone" "$(ticket_of "$term")" ""
+kill "$alive"; wait "$alive" 2>/dev/null
+LOCK_WAIT=0 validate
+is "the process ahead ended: the run waits for nothing" "$status" 0
+is "the process ahead ended: its ticket is removed" "$(tickets)" ""
+
+# With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
+# out of the line for each asking and back under its own name, so a run that came later does
+# not pass it. Once the Mac takes its suite it is out of the line for as long as that runs,
+# and the run behind has the checkout.
+scratch away Apps/Client/SettingsView.swift
+sibling away theirs Packages/TopoLink/Package.swift
+theirs="$other"
+sibling away later Packages/TopoLink/Package.swift
+later="$other"
+mkdir -p "$work/line" "$FAKE_HOSTS/laptop/Library/Caches/topo-validate"
+lockf -k "$FAKE_HOSTS/laptop/Library/Caches/topo-validate/lock" sh -c "echo \$\$ > '$work/away/held'; exec sleep 120" &
+holder=$!
+until_true reached "$work/away/held"
+begin "$repo" "$work/away/first" "$work/away/first.hold" FAKE_HOLD_SUITE=topo_unit TOPO_VALIDATE_HOSTS=
+first=$run
+waiter "$theirs" away-a TOPO_VALIDATE_HOSTS=laptop HOST_RETRY=1 LOCK_POLL=1; a=$run
+until_true has_ticket "$a" || fail "a busy Mac: the run took no place here: $(cat "$work/line/away-a.out")"
+a_ticket="$(ticket_of "$a")"
+waiter "$later" away-b TOPO_VALIDATE_HOSTS= LOCK_POLL=1; b=$run
+until_true has_ticket "$b" || fail "a busy Mac: the later run took no place: $(cat "$work/line/away-b.out")"
+asked="$(grep -c '^laptop bash -s' "$SSH_CALLS")"
+asked_again() { [ "$(grep -c '^laptop bash -s' "$SSH_CALLS")" -ge "$((asked + 3))" ]; }
+until_true asked_again || fail "a busy Mac: it was not asked again"
+until_true has_ticket "$a"
+is "a busy Mac asked again and again: the run keeps its place" "$(tickets)" "$a_ticket $(ticket_of "$b") "
+kill "$(cat "$work/away/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+until_true reached "$work/line/away-a.hold" || fail "the Mac free: the run's suite never started there: $(cat "$work/line/away-a.out")"
+until_true no_ticket "$a" && ok "a suite running on another Mac: its run is out of the line here" || fail "a suite running on another Mac: its run is still in the line here"
+release "$work/away/first.hold"; wait "$first" 2>/dev/null
+until_true reached "$work/line/away-b.hold" || fail "a suite running on another Mac: the run behind never had the checkout: $(cat "$work/line/away-b.out")"
+kill -0 "$(cat "$work/line/away-a.hold")" 2>/dev/null && ok "a suite running on another Mac: the run behind has the checkout meanwhile" || fail "a suite running on another Mac: it had ended"
+release "$work/line/away-a.hold"; release "$work/line/away-b.hold"
+wait "$a"; is "a suite on another Mac: its run exits 0" "$?" 0
+wait "$b"; is "a suite on another Mac: the run behind exits 0" "$?" 0
+is "the line: empty when all are done" "$(tickets)" ""
+
+# By hand: a command with the checkout held, in the line as a validation is. It asks nothing
+# of where it is run from, has the command's output and exit, starts no suite and posts and
+# pushes nothing; a validation meanwhile waits; what the command leaves running holds
+# nothing; a signal ends the command; and a command a SIGKILL of the script left running is
+# found by the next run, which starts nothing beside it.
+scratch hold Packages/TopoLink/Package.swift
+held_out="$(cd "$work" && PATH="$work/bin:$PATH" "$repo/scripts/validate-and-push.sh" --hold -- sh -c 'echo said; exit 7' 2>/dev/null)" && status=0 || status=$?
+is "a hold, from no worktree at all: the command's exit" "$status" 7
+is "a hold: the command's output" "$held_out" "said"
+is "a hold: nothing posted" "$(grep -c . "$GH_CALLS")" 0
+[ ! -e "$TOPO_VALIDATE_CACHE/slots/1/checkout" ] && ok "a hold: no checkout is made" || fail "a hold: a checkout was made"
+(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh --hold) > /dev/null 2>&1 && status=0 || status=$?
+is "a hold with no command: exits 2" "$status" 2
+: > "$work/hold/marker"
+(cd "$work" && PATH="$work/bin:$PATH" exec "$repo/scripts/validate-and-push.sh" --hold -- sh -c "echo \$\$ > '$work/hold/marker'; while [ -s '$work/hold/marker' ]; do sleep 0.1; done") > "$work/hold/out" 2>&1 &
+holding=$!
+until_true reached "$work/hold/marker" || fail "a hold: its command never started: $(cat "$work/hold/out")"
+LOCK_WAIT=2 validate
+is "a hold standing: a validation exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout (slot 1: by hand sh, pid $holding,"*) ok "a hold standing: the validation waits for it, by name" ;; *) fail "a hold standing: $out" ;; esac
+is "a hold standing: no suite ran" "$(recorded suites)" ""
+held_pid="$(cat "$work/hold/marker")"
+kill -TERM "$holding"; wait "$holding"; is "a signal to a hold: exits 143" "$?" 143
+until_true eval "! kill -0 $held_pid 2>/dev/null" && ok "a signal to a hold: its command is ended" || fail "a signal to a hold: its command is still running"
+LOCK_WAIT=0 validate
+is "a hold ended: the next validation waits for nothing" "$status" 0
+(cd "$work" && PATH="$work/bin:$PATH" "$repo/scripts/validate-and-push.sh" --hold -- sh -c "sleep 30 & echo \$! > '$work/hold/left'") > /dev/null 2>&1
+left="$(cat "$work/hold/left")"
+kill -0 "$left" 2>/dev/null && ok "a hold whose command left a process: it is still running" || fail "a hold: the process left behind is gone"
+LOCK_WAIT=0 validate
+is "a hold whose command left a process: the checkout is free" "$status" 0
+kill "$left" 2>/dev/null
+: > "$work/hold/marker"
+(cd "$work" && PATH="$work/bin:$PATH" exec "$repo/scripts/validate-and-push.sh" --hold -- sh -c "echo \$\$ > '$work/hold/marker'; exec sleep 60") > "$work/hold/out" 2>&1 &
+holding=$!
+until_true reached "$work/hold/marker" || fail "a hold: its command never started: $(cat "$work/hold/out")"
+held_pid="$(cat "$work/hold/marker")"
+until_true test -s "$TOPO_VALIDATE_CACHE/slots/1/suite"
+kill -KILL "$holding"; wait "$holding" 2>/dev/null
+LOCK_WAIT=2 validate
+is "a hold killed outright, its command still running: the next validation exits 2" "$status" 2
+case "$out" in *"hold of an earlier validation is still running without its script, pid $held_pid"*) ok "a hold killed outright: its command is named as what is left" ;; *) fail "a hold killed outright: $out" ;; esac
+is "a hold killed outright: no suite ran beside its command" "$(recorded suites)" ""
+is "a run that died for an orphan: no ticket of it is left" "$(tickets)" ""
+kill "$held_pid" 2>/dev/null
+until_true eval "! kill -0 $held_pid 2>/dev/null"
+LOCK_WAIT=5 validate
+is "the command left behind ended: the next validation runs" "$status" 0
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
