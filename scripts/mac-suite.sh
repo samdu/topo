@@ -17,7 +17,8 @@
 #              It has two parts, each a suite by its own name with its own line in suites.txt
 #              and its own result bundle: `topo_ui:quiet`, every UI test class but
 #              MicrophonePressTests, with no audio lane, no display hold, no models and nothing
-#              that opens a microphone or speaks; and `topo_ui:mic`, that class alone behind
+#              that opens a microphone or speaks (it runs no test unless every launch of the
+#              app in those classes' source leaves the ear and the voice loading); and `topo_ui:mic`, that class alone behind
 #              everything `topo_ui` has. One is all but the class and the other the class, so
 #              no test is in neither.
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
@@ -392,6 +393,37 @@ display_held() {
   done
   return 1
 }
+# Every launch of the app the quiet part makes, read from the tests' source: each
+# `XCUIApplication()` outside the microphone's class is launched with its ear and its voice
+# left loading (`TOPO_DEBUG_EAR`, `TOPO_DEBUG_VOICE`), so none makes the real ones, which
+# fetch and load models. Prints each launch that is not, and one made on anything but an
+# application the file made; false when there is one, or when no launch was found at all.
+QUIET_TESTS=Tests/ClientUI
+quiet_launches() {
+  local file found=0 bad=0 out
+  for file in "$QUIET_TESTS"/*.swift; do
+    [ -f "$file" ] || continue
+    case "$file" in */"${MIC_CLASS##*/}.swift") continue ;; esac
+    out="$(awk -v file="$file" '
+      match($0, /let [A-Za-z_][A-Za-z0-9_]* = XCUIApplication\(\)/) {
+        name = substr($0, RSTART + 4, RLENGTH - 4); sub(/ = .*/, "", name); made[name] = 1; ear[name] = 0; voice[name] = 0
+      }
+      match($0, /[A-Za-z_][A-Za-z0-9_]*\.launchEnvironment\["TOPO_DEBUG_(EAR|VOICE)"\] = "loading"/) {
+        name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name)
+        if ($0 ~ /TOPO_DEBUG_EAR/) ear[name] = 1; else voice[name] = 1
+      }
+      match($0, /[A-Za-z_][A-Za-z0-9_]*\.launch\(\)/) {
+        name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name); n++
+        if (!made[name] || !ear[name] || !voice[name]) print file ":" NR ": " name ".launch()"
+      }
+      END { print "launches " n + 0 }' "$file")"
+    found=$((found + $(sed -n 's/^launches //p' <<<"$out")))
+    out="$(grep -v '^launches ' <<<"$out")"
+    [ -z "$out" ] || { echo "$out"; bad=1; }
+  done
+  [ "$found" -gt 0 ] || { echo "no launch of the app was found under $QUIET_TESTS"; bad=1; }
+  return "$bad"
+}
 # suite_topo_ui <whole|quiet|mic>
 suite_topo_ui() {
   local part="$1" status=0 udid models="" lane_status name=Topo-ui
@@ -399,6 +431,10 @@ suite_topo_ui() {
   [ "$part" = whole ] || { name="Topo-ui-$part"; label=", $part"; }
   ui_steps() {
     echo "Lane: $lane"
+    if [ "$part" = quiet ]; then
+      local loud
+      loud="$(quiet_launches)" || { err "a UI test outside ${MIC_CLASS##*/} launches the app without TOPO_DEBUG_EAR and TOPO_DEBUG_VOICE set to loading, which is the real ear and voice on this Mac. No test was run."; echo "$loud" >&2; return 1; }
+    fi
     if [ "$part" != quiet ]; then
       # BlackHole as this Mac's default input and output, and the fixture looping into it from
       # one long-lived feeder. It starts before the simulator boots, because a simulator's audio

@@ -180,6 +180,17 @@ echo "pins: one" > "$pins"
 # models, no grants cleared and neither flag, in results of its own, which are held to have
 # the target and not that class.
 ui_tests() { grep '^xcodebuild test-without-building' "$CALLS"; }
+# The tests' source the quiet part reads: a class that launches as it must, and the
+# microphone's, which launches with the real ear and is not read.
+ui_source() {  # ui_source <lines of the quiet class's second launch>
+  rm -rf "$tree/Tests/ClientUI"; mkdir -p "$tree/Tests/ClientUI"
+  printf '%s\n' 'let app = XCUIApplication()' 'app.launch()' > "$tree/Tests/ClientUI/MicrophonePressTests.swift"
+  printf '%s\n' 'let app = XCUIApplication()' 'app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' \
+    'app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'addTeardownBlock {' "$@" '}' 'app.launch()' \
+    > "$tree/Tests/ClientUI/QuietTests.swift"
+}
+both=('let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' 'clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'clean.launch()')
+ui_source "${both[@]}"
 ear=TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 LANE=full suite quiet topo_ui:quiet
 is "the quiet part: exits 0" "$status" 0
@@ -199,6 +210,28 @@ REQUIRE_RED=absent suite quiet-has-mic topo_ui:quiet
 is "the quiet part with the microphone's class in its results: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
 UI_TEST=1 suite quiet-red topo_ui:quiet
 is "the quiet part red: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
+# A launch in a quiet class that makes the real ear or voice: no test is run, and it is named.
+loud() {  # loud <case> <named> <lines of the second launch…>
+  local case="$1" named="$2"; shift 2
+  ui_source "$@"
+  suite "quiet-$case" topo_ui:quiet
+  is "the quiet part, $case: a failure, and no test run" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "1:topo_ui:quiet=failure :0"
+  case "$(cat "$work/quiet-$case.log")" in *"$named"*) ok "the quiet part, $case: the launch is named" ;; *) fail "the quiet part, $case: not named: $(tail -3 "$work/quiet-$case.log")" ;; esac
+}
+loud no-ear "QuietTests.swift:7: clean.launch()" 'let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'clean.launch()'
+loud no-voice "QuietTests.swift:7: clean.launch()" 'let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' 'clean.launch()'
+loud anothers-ear "QuietTests.swift:6: clean.launch()" 'let clean = XCUIApplication()' 'clean.launch()'
+loud not-made-here "QuietTests.swift:5: other.launch()" 'other.launch()'
+ui_source "${both[@]}"; rm "$tree/Tests/ClientUI/QuietTests.swift"
+suite quiet-no-source topo_ui:quiet
+is "the quiet part with no launch to read: a failure, and no test run" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "1:topo_ui:quiet=failure :0"
+# The microphone's part and the whole suite are not held to it: the lane is theirs.
+ui_source 'let clean = XCUIApplication()' 'clean.launch()'
+suite mic-loud-source topo_ui:mic
+is "the microphone's part over a launch with the real ear: runs" "$status:$(results)" "0:topo_ui:mic=success "
+suite whole-loud-source topo_ui
+is "topo_ui whole over one: runs" "$status:$(results)" "0:topo_ui=success "
+ui_source "${both[@]}"
 
 # The microphone part: that class alone, behind everything topo_ui has.
 suite mic topo_ui:mic
