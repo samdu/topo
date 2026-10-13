@@ -10,7 +10,11 @@ import TopoTools
 /// the query, the body, the response — goes nowhere: not the taps' log, not a log line (Review
 /// Focus 13).
 extension ControlRequest {
-    /// From the start to the answer, whatever the server trickles.
+    /// From the start to the answer, whatever the server trickles. It is kept on two clocks, a
+    /// sleep beside the request and the session's own timeouts, since each is late where the
+    /// other is not: the session's timer by some tenths of a second on an idle device, the sleep
+    /// by however long a starved cooperative pool takes to resume it. Whichever sees the deadline
+    /// first, the answer is `timedOut`.
     static let deadline: Duration = .seconds(10)
 
     /// A request's status as A's taps record a run's: `0` for a 2xx, `1` for anything else or
@@ -45,7 +49,7 @@ extension ControlRequest {
                     let code = (response as? HTTPURLResponse)?.statusCode
                     return Answer(status: (200..<300).contains(code ?? 0) ? 0 : ToolReply.failed, code: code)
                 } catch {
-                    return Task.isCancelled ? nil : Answer(status: ToolReply.failed)
+                    return Task.isCancelled ? nil : Answer(failure: error)
                 }
             }
             group.addTask {
@@ -69,6 +73,12 @@ extension ControlRequest {
 
 extension ControlRequest.Answer {
     init(status: Int32) { self.init(status: status, code: nil) }
+
+    /// A request that threw: the session's own timeout is the deadline seen by its clock, and
+    /// anything else is a failure. Nothing of the error is kept.
+    init(failure: any Error) {
+        self.init(status: (failure as? URLError)?.code == .timedOut ? ToolReply.timedOut : ToolReply.failed)
+    }
 }
 
 extension ControlRequest.Form {

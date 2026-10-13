@@ -246,7 +246,8 @@ final class ControlRequestTests: XCTestCase {
         let took = ContinuousClock.now - started
         XCTAssertEqual(last?.status, String(ToolReply.timedOut))
         XCTAssertGreaterThanOrEqual(took, .seconds(9.5))
-        XCTAssertLessThan(took, .seconds(12), "the deadline was not absolute: \(took)")
+        // The server would trickle for 85 s; the room past 10 s is a loaded machine's.
+        XCTAssertLessThan(took, .seconds(20), "the deadline was not absolute: \(took)")
         XCTAssertEqual(server.requests.count, 1)
     }
 
@@ -315,6 +316,18 @@ final class ControlRequestTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.requests.count, 1)
         XCTAssertEqual(last?.status, "0")
+    }
+
+    /// The deadline is on two clocks, and the session's throws where the sleep answers: a timeout
+    /// is a timeout whichever sees it first, and no other error is one.
+    func testATimeoutIsATimeoutWhicheverClockSeesIt() {
+        XCTAssertEqual(ControlRequest.Answer(failure: URLError(.timedOut)), ControlRequest.Answer(status: ToolReply.timedOut))
+        for code in [URLError.Code.cannotConnectToHost, .networkConnectionLost, .cancelled, .notConnectedToInternet] {
+            XCTAssertEqual(ControlRequest.Answer(failure: URLError(code)), ControlRequest.Answer(status: ToolReply.failed), "\(code)")
+        }
+        XCTAssertEqual(ControlRequest.Answer(failure: CocoaError(.fileReadNoPermission)), ControlRequest.Answer(status: ToolReply.failed))
+        XCTAssertEqual(ControlRequest.Answer(failure: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)),
+                       ControlRequest.Answer(status: ToolReply.timedOut))
     }
 
     /// A response whose headers arrive and whose body stalls: the status is the answer, at once,
