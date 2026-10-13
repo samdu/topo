@@ -50,6 +50,11 @@ echo "$*" >> "$GH_CALLS"
 case "$*" in
   "api --silent -X POST repos/samdu/topo/statuses/"*)
     [ "${FAKE_POST:-ok}" = ok ] || exit 1
+    # Held at the post for as long as FAKE_POST_HOLD is there, and saying so once.
+    if [ -n "${FAKE_POST_HOLD-}" ]; then
+      : > "$FAKE_POST_HOLD.reached"
+      while [ -e "$FAKE_POST_HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done
+    fi
     # What origin's branch held as the status was posted: GitHub refuses one for a commit it lacks.
     git ls-remote "$FAKE_ORIGIN" refs/heads/topic | cut -f1 >> "$GH_CALLS.origin"
     ;;
@@ -434,6 +439,9 @@ kill -KILL "$run"; wait "$run" 2>/dev/null
 free() { lockf -s -t 0 "$TOPO_VALIDATE_CACHE/lock" true 2>/dev/null; }
 freed() { for _ in $(seq 50); do free && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
 free && fail "orphan suite: the lock of the script as it was is free beside it" || ok "orphan suite: a run of the script as it was is held off while it lives"
+# Held by what started the suite, so from before the suite began.
+keeper="$(ps -o ppid= -p "$orphan" | tr -d ' ')"
+[ "$keeper" != 1 ] && [ "$keeper" != "$run" ] && ok "orphan suite: what started it outlives the script" || fail "orphan suite: the suite's parent is $keeper"
 TOPO_VALIDATE_SLOTS=1 validate
 is "orphan suite, one checkout: exits 2" "$status" 2
 is "orphan suite, one checkout: no suite ran" "$(recorded head)" ""
@@ -470,6 +478,20 @@ free && fail "two orphan suites: the lock of the script as it was is free with o
 release "$work/orphans/second.hold"
 for _ in $(seq 100); do kill -0 "$two" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 freed && ok "two orphan suites: free once both have gone" || fail "two orphan suites: the lock is still held with both gone"
+# Whoever reads a killed script's output is not kept reading by the suite it left going.
+scratch reader Apps/Client/SettingsView.swift
+mkfifo "$work/reader/pipe"; : > "$work/reader/hold"
+cat "$work/reader/pipe" > "$work/reader/out" & reader=$!
+(cd "$repo" && exec env PATH="$work/bin:$PATH" FAKE_SUITES=held FAKE_RECORD="$work/reader/first" FAKE_HOLD="$work/reader/hold" scripts/validate-and-push.sh > "$work/reader/pipe" 2>&1) &
+run=$!
+for _ in $(seq 300); do [ -s "$work/reader/hold" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left="$(cat "$work/reader/hold")"
+kill -KILL "$run"; wait "$run" 2>/dev/null
+for _ in $(seq 30); do kill -0 "$reader" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+kill -0 "$left" 2>/dev/null && ok "a killed script's reader: its suite is still going" || fail "a killed script's reader: the suite is not going"
+kill -0 "$reader" 2>/dev/null && fail "a killed script's reader: still reading, three seconds on" || ok "a killed script's reader: done reading at once"
+kill "$reader" 2>/dev/null; release "$work/reader/hold"
+for _ in $(seq 100); do kill -0 "$left" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 # A run still going keeps its logs however many runs of its commit have begun since.
 scratch sameprune Apps/Client/SettingsView.swift
 begin "$repo" "$work/sameprune/first" "$work/sameprune/first.hold" FAKE_HOLD_SUITE=topo_unit
@@ -479,6 +501,23 @@ for n in 1 2 3 4 5; do mkdir -p "$TOPO_VALIDATE_LOGS/$sha/2999010${n}T000000Z-1"
 out="$(cd "$repo" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/sameprune/second" scripts/validate-and-push.sh --suites others 2>&1)" && status=0 || status=$?
 is "a sixth run of a commit beside a live one: exits 0" "$status" 0
 [ -d "$TOPO_VALIDATE_LOGS/$sha/$live" ] && ok "a sixth run of a commit beside a live one: the live run's logs are kept" || fail "a sixth run of a commit removed the logs of one still going"
+# And while it pushes and posts, its suites over: held at its first status.
+: > "$work/sameprune/post.hold"
+(cd "$repo" && exec env PATH="$work/bin:$PATH" FAKE_RECORD="$work/sameprune/third" FAKE_POST_HOLD="$work/sameprune/post.hold" scripts/validate-and-push.sh --suites others > "$work/sameprune/third.out" 2>&1) &
+third=$!
+for _ in $(seq 300); do [ -e "$work/sameprune/post.hold.reached" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+[ -e "$work/sameprune/post.hold.reached" ] || fail "a run held at its status never reached it: $(cat "$work/sameprune/third.out")"
+posting="$(ls -1 "$TOPO_VALIDATE_LOGS/$sha" | grep -- "-$third\$")"
+for n in 1 2 3 4 5; do mkdir -p "$TOPO_VALIDATE_LOGS/$sha/2999020${n}T000000Z-1"; done
+out="$(cd "$repo" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/sameprune/fourth" scripts/validate-and-push.sh --suites others 2>&1)" && status=0 || status=$?
+[ -n "$posting" ] && [ -d "$TOPO_VALIDATE_LOGS/$sha/$posting" ] && ok "a later run of a commit beside one still posting: its logs are kept" || fail "a later run of a commit removed the logs of one still posting ('$posting')"
+rm -f "$work/sameprune/post.hold"; wait "$third" 2>/dev/null
+[ ! -e "$TOPO_VALIDATE_LOGS/$sha/$posting/running" ] && ok "a run that is over leaves no mark on its logs" || fail "a finished run's mark is still on its logs"
+# A mark whose pid is by now another process's keeps nothing.
+mkdir -p "$TOPO_VALIDATE_LOGS/$sha/20000101T000000Z-1"
+printf '%s\n%s\n' "$$" "Sat Jan  1 00:00:00 2000" > "$TOPO_VALIDATE_LOGS/$sha/20000101T000000Z-1/running"
+out="$(cd "$repo" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/sameprune/fifth" scripts/validate-and-push.sh --suites others 2>&1)" && status=0 || status=$?
+[ ! -d "$TOPO_VALIDATE_LOGS/$sha/20000101T000000Z-1" ] && ok "a mark whose pid is another process's by now keeps no logs" || fail "a stale mark under a live pid kept its logs"
 release "$work/sameprune/first.hold"; wait "$first" 2>/dev/null
 # In its turn among runs of the script as it was: behind one that was waiting before it, and
 # ahead of one that came after.
@@ -526,7 +565,7 @@ for n in 1 2 3 4 5 6 7 8 9 a b c; do
   mkdir -p "$TOPO_VALIDATE_LOGS/${n}0000000/20200101T000000Z-1"
   touch -t 202001010000 "$TOPO_VALIDATE_LOGS/${n}0000000"
 done
-echo $$ > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
+printf '%s\n%s\n' "$$" "$(LC_ALL=C TZ=UTC ps -o lstart= -p $$)" > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
 touch -t 201901010000 "$TOPO_VALIDATE_LOGS/10000000"   # the oldest of them: the first the prune would take
 echo x > "$repo/x"; g -C "$repo" add -A; g -C "$repo" commit -qm x; sha="$(git -C "$repo" rev-parse HEAD)"
 validate
