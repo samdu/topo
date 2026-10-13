@@ -743,7 +743,9 @@ for suite in ${chosen[@]+"${chosen[@]}"}; do
   for part in $parts; do
     if grep -q "^$part=failure$" <<<"$results" || ! grep -q "^$part=success$" <<<"$results"; then state=failure said=failed; fi
     on="$(sed -n "s/^$part=//p" <<<"$ran_on")"
-    where_ran="$where_ran${where_ran:+ + }$(sed -n "s/^$part=//p" <<<"$took") min on ${on:-$host}"
+    # Short, the second part's the shorter: with the logs' path there are 140 characters for all of it.
+    unit=" min"; [ -z "$where_ran" ] || unit=""
+    where_ran="$where_ran${where_ran:+ + }$(sed -n "s/^$part=//p" <<<"$took")$unit on ${on:-$host}"
   done
   post "local/$suite" "$state" "$suite $said, $lane lane, $where_ran;"
   if [ "$suite" = topo_ui ] && [ "$lane" = full ] && [ "$state" = success ]; then

@@ -711,7 +711,7 @@ is "a host named: pushed" "$(origin_head)" "$sha"
 is "a host named: one success per suite" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
 is "a host named: topo_unit's status names it" "$(said_on topo_unit)" laptop
 is "a host named: others' status names it" "$(said_on others)" laptop
-is "a host named: topo_ui's one status names both Macs, the quiet part's first" "$(sed -n 's|.*context=local/topo_ui .*description=\(topo_ui [^;]*\);.*|\1|p' "$GH_CALLS")" "topo_ui passed, fast lane, 0 min on laptop + 0 min on $(hostname -s)"
+is "a host named: topo_ui's one status names both Macs, the quiet part's first" "$(sed -n 's|.*context=local/topo_ui .*description=\(topo_ui [^;]*\);.*|\1|p' "$GH_CALLS")" "topo_ui passed, fast lane, 0 min on laptop + 0 on $(hostname -s)"
 is "a host named: neither part is asked of the Mac as topo_ui, nor the microphone's at all" "$(grep -c '^laptop bash -s .* topo_ui\(:mic\)\{0,1\} ' "$SSH_CALLS")" 0
 [ -f "$TOPO_VALIDATE_LOGS/$sha"/*/laptop/suites.txt ] && ok "a host named: its results are in the run's logs" || fail "a host named: no results from it in the logs"
 # The full lane: the real ear rides on the two parts' one success.
