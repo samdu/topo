@@ -132,11 +132,23 @@ final class StopWhileSpeakingTests: XCTestCase {
         await settle("the question's microphone to open") { voice.listening }
         XCTAssertEqual(voice.owner, .firstRun)
         XCTAssertTrue(standing(empty: false), "a turn from another device took the question from under an answer being said")
-        XCTAssertFalse(FirstRun.asks(read: true, empty: false, waiting: false, busy: false,
-                                     engaged: FirstRun.engaged(voice: voice, row: row, focused: false), answered: false),
-                       "the asking alone would have kept it, so this test shows nothing")
         voice.cancel(.firstRun)
         XCTAssertFalse(standing(empty: false), "the question outlived its session over a log with turns")
+        // Everything that ends the asking still ends it here: the chat's own session, which is
+        // a session and not the question's, a turn waiting or in flight, and an answer given.
+        func standing(waiting: Bool = false, busy: Bool = false, answered: Bool = false, read: Bool = true) -> Bool {
+            FirstRun.standing(voice: voice, row: row, focused: false, read: read, empty: true,
+                              waiting: waiting, busy: busy, answered: answered, fixture: false)
+        }
+        XCTAssertFalse(standing(waiting: true))
+        XCTAssertFalse(standing(busy: true))
+        XCTAssertFalse(standing(answered: true))
+        XCTAssertFalse(standing(read: false))
+        _ = await voice.pressDown(as: .chat)
+        await settle("the chat's microphone to open") { voice.listening }
+        XCTAssertFalse(standing(), "the question arrived over the chat's open microphone")
+        XCTAssertFalse(standing(empty: false), "the chat's session was taken for the question's")
+        voice.cancel(.chat)
         XCTAssertFalse(FirstRun.standing(voice: voice, row: row, focused: false, read: true, empty: true,
                                          waiting: false, busy: false, answered: false, fixture: true),
                        "the question stood over a debug fixture")

@@ -172,12 +172,13 @@ final class ModelWaitersTests: XCTestCase {
 
     /// The bar and the words beside it are one count: a model on the phone counts whole, one
     /// downloading by what has arrived, one not begun adds only to the total, and one the
-    /// manifest does not name is not counted.
+    /// manifest does not name is not counted. The total is the manifest's sizes, whatever a
+    /// status says of its own.
     func testTheBarsShareIsTheBytesTheWordsSay() throws {
         typealias Status = ModelDownloads.Status
         let megabyte: Int64 = 1_000_000
         let sizes: [Int64?] = [100 * megabyte, 300 * megabyte, 100 * megabyte, nil]
-        let statuses: [Status] = [.present, .downloading(done: 30 * megabyte, total: 300 * megabyte), .absent, .absent]
+        let statuses: [Status] = [.present, .downloading(done: 30 * megabyte, total: 7), .absent, .absent]
         let bytes = ModelDownloads.bytes(sizes, statuses)
         XCTAssertEqual(bytes.done, 130 * megabyte)
         XCTAssertEqual(bytes.total, 500 * megabyte)

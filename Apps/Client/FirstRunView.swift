@@ -108,10 +108,7 @@ struct FirstRunView: View {
     /// Hold to talk, release to answer; on this screen a tap is a short hold, not a hands-free
     /// press, since one answer is all it takes.
     ///
-    /// What was heard is answered as it was returned, in the turn of the main actor that
-    /// returned it and not through the field: the session's end is what lets a turn from
-    /// another device take the question away (`FirstRun.standing`), and by then the answer is
-    /// on the line.
+    /// What was heard is answered as it was returned, not read back out of the field.
     private func pressed(_ down: Bool) async {
         #if os(iOS)
         let heard = down ? await voice.pressDown(as: .firstRun) : await voice.pressUp(as: .firstRun)

@@ -16,7 +16,7 @@ final class SetupTests: XCTestCase {
         var look = Look()
         look.setup.tint = Color(red: 0, green: 1, blue: 0)
         look.setup.track = Color(red: 0, green: 0, blue: 1)
-        look.setup.barWidth = 72
+        look.setup.barWidth = 60
         look.setup.barHeight = 6
         func bar(_ state: Setup.State) throws -> (filled: Int, empty: Int) {
             let renderer = ImageRenderer(content: SetupMeter(lines: [Setup.Line(title: Setup.hearing, state: state)])
@@ -52,7 +52,7 @@ final class SetupTests: XCTestCase {
             }
             return widest
         }
-        let whole = 72 * 3
+        let whole = 60 * 3
         let quarter = try bar(.progress(0.25, "downloading 57 MB of 228 MB"))
         XCTAssertEqual(quarter.filled + quarter.empty, whole, accuracy: 6, "the bar is not the look's width")
         XCTAssertEqual(Double(quarter.filled) / Double(whole), 0.25, accuracy: 0.04, "a quarter downloaded drew \(quarter)")

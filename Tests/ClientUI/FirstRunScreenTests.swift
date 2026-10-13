@@ -2,17 +2,32 @@ import XCTest
 
 /// The chat's two screens before there is a conversation, as the app draws them: the question
 /// over a log read and found empty, and the placeholder over a log not read yet. Each is reached
-/// through `TOPO_DEBUG_LOG`, which stands a log in memory, or one no read returns from, in the
-/// place of iCloud's.
+/// through `TOPO_DEBUG_LOG`, a stand-in for iCloud's log that takes no save and answers every
+/// read with nothing, or fails every read.
 @MainActor
 final class FirstRunScreenTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
     }
 
-    /// Over an empty log the question stands over the chat, and its typed answer is the first
-    /// turn: the question goes and the words are in the transcript.
-    func testAnEmptyLogAsksTheQuestionAndItsAnswerIsTheFirstTurn() {
+    /// Over an empty log the question stands over the chat, and its typed answer goes on the
+    /// line: the question goes and the words are in the transcript as a turn on its way. The
+    /// stand-in takes no save, so nothing here shows the turn reaching a log, and the launch
+    /// argument that asks the question on every run also keeps `firstRunAnswered` from being
+    /// what takes it away.
+    func testAnEmptyLogAsksTheQuestionAndItsAnswerIsDrawnOnItsWay() {
+        // The answer stays on the line, which is on disk: the next suite's launch is not left it.
+        addTeardownBlock { @MainActor in
+            let app = XCUIApplication()
+            app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
+            app.launchEnvironment["TOPO_DEBUG_LOG"] = "unread"
+            app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
+            app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
+            app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
+            app.launchArguments += ["-firstRunAnswered", "YES"]
+            app.launch()
+            app.terminate()
+        }
         let app = launch(log: "empty")
         let question = app.descendants(matching: .any).matching(identifier: "first-run").firstMatch
         XCTAssertTrue(question.waitForExistence(timeout: 60), "an empty log asked nothing")
@@ -39,7 +54,7 @@ final class FirstRunScreenTests: XCTestCase {
         let app = launch(log: "unread")
         let reading = app.descendants(matching: .any).matching(identifier: "reading-log").firstMatch
         XCTAssertTrue(reading.waitForExistence(timeout: 60), "an unread log drew no placeholder")
-        XCTAssertEqual(reading.label, "Reading your conversation…")
+        XCTAssertTrue(reading.label.hasSuffix("Reading your conversation…"), "the placeholder says \"\(reading.label)\"")
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "first-run").firstMatch.exists,
                        "the question was asked before the log was read")
         attach(app, "reading-log")

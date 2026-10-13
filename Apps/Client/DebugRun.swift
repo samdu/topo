@@ -3,7 +3,6 @@ import Foundation
 import TopoAuth
 import TopoCore
 #if os(iOS)
-import TopoCoreTesting
 import UIKit
 #endif
 
@@ -34,26 +33,33 @@ enum DebugRun {
     static let setupVariable = "TOPO_DEBUG_SETUP"
     static let logVariable = "TOPO_DEBUG_LOG"
     #if os(iOS)
-    /// `TOPO_DEBUG_LOG=<empty|unread>`: the log the chat's harness reads, in place of iCloud's.
-    /// `empty` is a database in memory holding nothing, which reads as a log with no turns and
-    /// takes a save, so a run reaches the first-run question and its answer becomes a turn;
-    /// `unread` is one no read of returns from in error, so the chat stays as it is before its
-    /// first read. Nil when the variable is absent or names neither.
+    /// `TOPO_DEBUG_LOG=<empty|unread>`: the log the chat's harness reads and writes, in place
+    /// of iCloud's, so a run reaches the chat's two screens before there is a conversation.
+    /// `empty` answers every read with nothing, which is a log with no turns, and `unread`
+    /// fails every read, so the chat stays as it is before its first one. Neither takes a
+    /// save: what is said stays on the line, drawn as a turn on its way. Nil when the variable
+    /// is absent or names neither.
     static func log(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> (any RecordDatabase)? {
         switch environment[logVariable] {
-        case "empty": InMemoryRecordDatabase()
-        case "unread": UnreadDatabase()
+        case "empty": StandInLog(reads: true)
+        case "unread": StandInLog(reads: false)
         default: nil
         }
     }
 
-    /// A database nothing is read from or saved to.
-    private struct UnreadDatabase: RecordDatabase {
-        struct Unread: Error {}
-        func save(_ records: [Record]) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Unread()) }
-        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { throw RecordDatabaseError.unavailable(underlying: Unread()) }
-        func query(_ query: RecordQuery) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Unread()) }
-        func records(ofType type: String) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Unread()) }
+    /// A database holding nothing, out of reach for every save, and for every read too unless
+    /// `reads`.
+    private struct StandInLog: RecordDatabase {
+        struct OutOfReach: Error {}
+        var reads: Bool
+        private func read<Found>(_ nothing: Found) throws -> Found {
+            guard reads else { throw RecordDatabaseError.unavailable(underlying: OutOfReach()) }
+            return nothing
+        }
+        func save(_ records: [Record]) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: OutOfReach()) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try read([:]) }
+        func query(_ query: RecordQuery) async throws -> [Record] { try read([]) }
+        func records(ofType type: String) async throws -> [Record] { try read([]) }
     }
 
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
