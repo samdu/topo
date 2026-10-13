@@ -42,8 +42,9 @@
 #      scripts/validate-host.sh writes; neither by default)
 #      `topo_unit`, `others` and `scripts` go there first, over ssh, and here only when it is busy or
 #      cannot be used: the commit is pushed to a repository of the Mac's own
-#      (~/Library/Caches/topo-validate/repo.git there), checked out in its one validation
-#      worktree under its own lock, the commit's `scripts/mac-suite.sh --check` asked whether
+#      (~/Library/Caches/topo-validate/repo.git there), checked out in a validation
+#      worktree there under its lock (one such worktree, or two where validate-host.sh lent
+#      the Mac for two validations at once, and never two suites of one name), the commit's `scripts/mac-suite.sh --check` asked whether
 #      the Mac can run the suite, and the suite run in its login session, held awake, its
 #      results copied into this run's logs. `topo_ui` goes as its two parts then: the
 #      quiet one (`topo_ui:quiet`, every UI class but the microphone's) there as any suite,
@@ -268,8 +269,10 @@ ran_on=""   # `<suite>=<host>` lines, for a suite that ran on another Mac
 # not.
 ssh_options="-o BatchMode=yes -o ControlPath=none -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 ssh_to() { ssh $ssh_options "$@"; }
-# What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under that
-# Mac's own lock, the commit checked out in its one validation worktree, mac-suite.sh asked
+# What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under the
+# lock of one of that Mac's slots (as many as its slots.count says, one or two, which
+# validate-host.sh writes; each a checkout of its own) and the lock of the suite's name,
+# the commit checked out in the slot's validation worktree, mac-suite.sh asked
 # whether the Mac can run the suite, and then the suite, in the login session where there is a
 # way into it and held awake, its display too, so that it does not lock for idleness under
 # the suite. It exits 75 when the Mac is busy, 76 when it cannot run the
@@ -286,8 +289,35 @@ sha="$1" lane="$2" suite="$3" run="$4"
 cache="$HOME/Library/Caches/topo-validate"
 results="$cache/logs/$run"
 refuse() { echo "error: $1 on $(hostname -s)." >&2; exit 76; }
-exec 9>> "$cache/lock"
-lockf -s -t 0 9 || { echo "error: another validation is running on $(hostname -s)." >&2; exit 75; }
+busy() { echo "error: $1 on $(hostname -s)." >&2; exit 75; }
+# Whether anything of a run is still going: every process of a suite here has the run'"'"'s
+# results directory in its arguments, from the way into the session down to mac-suite.sh,
+# and this script has the run'"'"'s name as the last of its own, which a child it has forked
+# to start the suite still has until it is the suite. So a script killed as it starts its
+# suite leaves a run that is going from the fork on, with no moment between.
+going() { ps -axww -o args= | grep -v grep | grep -q -e "$cache/logs/$1[\" ]" -e " -s -- [0-9a-f]\{40\} [a-z]* [a-z_:]* $1\$"; }
+left_in() { [ -s "$1/run" ] && going "$(sed -n 1p "$1/run")"; }
+# The lock a run of the script as it was holds whole, held here shared: such a run and a
+# slot'"'"'s are never on this Mac at once.
+exec 8>> "$cache/lock"
+perl -MFcntl=:flock -e '"'"'open(my $lock, ">&=", 8) or exit 2; exit(flock($lock, LOCK_SH | LOCK_NB) ? 0 : 1)'"'"'
+case $? in 0) ;; 1) busy "a validation of a branch that has not merged main is running" ;; *) refuse "the lock at $cache/lock could not be asked for" ;; esac
+# One suite of a name at a time: by its lock, and by the record of one a killed run left going.
+exec 6>> "$cache/suite-$suite.lock"
+lockf -s -t 0 6 || busy "another validation is running $suite"
+slots="$(cat "$cache/slots.count" 2>/dev/null)"
+case "$slots" in 1 | 2) ;; *) slots=1 ;; esac
+slot=""
+for n in $(seq "$slots"); do
+  mkdir -p "$cache/slots/$n"
+  ! { left_in "$cache/slots/$n" && [ "$(sed -n 2p "$cache/slots/$n/run")" = "$suite" ]; } || busy "$suite of an earlier validation is still running without its script"
+done
+for n in $(seq "$slots"); do
+  exec 9>> "$cache/slots/$n/lock"
+  if lockf -s -t 0 9 && ! left_in "$cache/slots/$n"; then slot="$n"; break; fi
+  exec 9>&-
+done
+[ -n "$slot" ] || busy "every checkout ($slots) is held by another validation"
 rm -rf "$results"
 mkdir -p "$results" || refuse "could not make $results"
 child=""
@@ -306,24 +336,27 @@ stop() {
 }
 trap stop TERM INT HUP
 echo $$ > "$results/host.pid"
-checkout="$cache/checkout"
+# The first slot'"'"'s checkout is the one a run of the script as it was uses, which is never here
+# at the same time, so what that one has built is not built again.
+if [ "$slot" = 1 ]; then checkout="$cache/checkout"; else checkout="$cache/slots/$slot/checkout"; fi
+printf "%s\n%s\n" "$run" "$suite" > "$cache/slots/$slot/run"
 if [ ! -e "$checkout/.git" ]; then
-  git --git-dir="$cache/repo.git" worktree prune 9>&-
-  git --git-dir="$cache/repo.git" worktree add --quiet --detach "$checkout" "$sha" 9>&- || refuse "could not make a worktree at $checkout"
+  git --git-dir="$cache/repo.git" worktree prune 6>&- 8>&- 9>&-
+  git --git-dir="$cache/repo.git" worktree add --quiet --detach "$checkout" "$sha" 6>&- 8>&- 9>&- || refuse "could not make a worktree at $checkout"
 fi
-git -C "$checkout" checkout --quiet --force --detach "$sha" 9>&- && git -C "$checkout" clean --quiet -fd 9>&- \
+git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 8>&- 9>&- && git -C "$checkout" clean --quiet -fd 6>&- 8>&- 9>&- \
   || refuse "could not check $sha out in $checkout"
 [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
-git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 9>&-
+git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 6>&- 8>&- 9>&-
 cd "$checkout" || refuse "could not enter $checkout"
-scripts/mac-suite.sh --check --cache "$cache" "$suite" 9>&- || exit 76
-ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do rm -rf "${cache:?}/logs/$old"; done
+scripts/mac-suite.sh --check --cache "$cache" "$suite" 6>&- 8>&- 9>&- || exit 76
+ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do going "$old" || rm -rf "${cache:?}/logs/$old"; done
 command="cd \"$checkout\" && exec env GIT_CONFIG_GLOBAL=/dev/null scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
 session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
-  sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 9>&- &
+  sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 6>&- 8>&- 9>&- &
 else
-  /usr/bin/caffeinate -di /bin/bash -lc "$command" 9>&- &
+  /usr/bin/caffeinate -di /bin/bash -lc "$command" 6>&- 8>&- 9>&- &
 fi
 child=$!
 status=0
