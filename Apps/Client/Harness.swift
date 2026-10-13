@@ -320,6 +320,10 @@ final class Harness {
     static func standard(tokens: StoredTokenProvider,
                          database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database()) -> Harness {
         let (bridge, relay) = guestBrain(ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile)
+        #if DEBUG
+        // A stand-in log has no zone to make, and a run over one makes none in iCloud.
+        if let debug = DebugRun.log() { return Harness(database: debug, tokens: tokens, ensureZone: {}, brain: bridge, relay: relay) }
+        #endif
         return Harness(database: database(), tokens: tokens, brain: bridge, relay: relay)
     }
 

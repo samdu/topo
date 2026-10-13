@@ -410,20 +410,32 @@ final class ModelDownloads {
         if statuses.contains(.verifying) { return "verifying the download" }
         if statuses.allSatisfy({ $0 == .present }) { return Self.downloaded }
         if statuses.allSatisfy({ $0 == .absent }) { return "not downloaded" }
-        let (done, total) = bytes(ids, statuses)
+        return Self.downloading(Self.bytes(sizes(ids), statuses))
+    }
+
+    /// What `describe` says of a set partway: the bytes on the phone of the bytes in all.
+    nonisolated static func downloading(_ bytes: (done: Int64, total: Int64)) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
-        return "downloading \(formatter.string(fromByteCount: done)) of \(formatter.string(fromByteCount: total))"
+        return "downloading \(formatter.string(fromByteCount: bytes.done)) of \(formatter.string(fromByteCount: bytes.total))"
     }
 
     /// The share of those models' bytes on the phone, while `describe` says they are downloading
     /// and from the same count, so a bar and the words beside it say one thing; nil in every
     /// other state, which has no measure.
     func fraction(_ ids: [String]) -> Double? {
-        let statuses = ids.map { status(for: $0) }
-        guard Self.measured(statuses) else { return nil }
-        let (done, total) = bytes(ids, statuses)
-        return Self.fraction(done: done, of: total)
+        Self.fraction(sizes(ids), ids.map { status(for: $0) })
+    }
+
+    /// The bytes each of those models comes to, nil for one the manifest does not name.
+    private func sizes(_ ids: [String]) -> [Int64?] { ids.map { manifest?.model($0)?.bytes } }
+
+    /// The share of a set's bytes on the phone, from each model's size and status: nil unless
+    /// the set has a measure.
+    nonisolated static func fraction(_ sizes: [Int64?], _ statuses: [Status]) -> Double? {
+        guard measured(statuses) else { return nil }
+        let (done, total) = bytes(sizes, statuses)
+        return fraction(done: done, of: total)
     }
 
     /// What `describe` says of models that are all on the phone.
@@ -443,14 +455,16 @@ final class ModelDownloads {
         total > 0 ? min(max(Double(done) / Double(total), 0), 1) : nil
     }
 
-    /// The bytes of those models on the phone and the bytes they come to.
-    private func bytes(_ ids: [String], _ statuses: [Status]) -> (done: Int64, total: Int64) {
+    /// The bytes of a set on the phone and the bytes it comes to, from each model's size and
+    /// status: a model on the phone counts whole, one downloading by what has arrived, and one
+    /// the manifest does not name not at all. The one count `describe` and `fraction` both read.
+    nonisolated static func bytes(_ sizes: [Int64?], _ statuses: [Status]) -> (done: Int64, total: Int64) {
         var done: Int64 = 0, total: Int64 = 0
-        for (id, status) in zip(ids, statuses) {
-            guard let model = manifest?.model(id) else { continue }
-            total += model.bytes
+        for (size, status) in zip(sizes, statuses) {
+            guard let size else { continue }
+            total += size
             switch status {
-            case .present: done += model.bytes
+            case .present: done += size
             case .downloading(let bytes, _): done += bytes
             default: break
             }

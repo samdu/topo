@@ -31,8 +31,37 @@ enum DebugRun {
     static let tuningVariable = "TOPO_DEBUG_TUNING"
     static let noticesVariable = "TOPO_DEBUG_NOTICES"
     static let setupVariable = "TOPO_DEBUG_SETUP"
-
+    static let logVariable = "TOPO_DEBUG_LOG"
     #if os(iOS)
+    /// `TOPO_DEBUG_LOG=<empty|unread>`: the log the chat's harness reads and writes, in place
+    /// of iCloud's, so a run reaches the chat's two screens before there is a conversation.
+    /// `empty` answers every read with nothing, which is a log with no turns, and `unread`
+    /// fails every read, so the chat stays as it is before its first one. Neither takes a
+    /// save: what is said stays on the line, drawn as a turn on its way. Nil when the variable
+    /// is absent or names neither.
+    static func log(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> (any RecordDatabase)? {
+        switch environment[logVariable] {
+        case "empty": StandInLog(reads: true)
+        case "unread": StandInLog(reads: false)
+        default: nil
+        }
+    }
+
+    /// A database holding nothing, out of reach for every save, and for every read too unless
+    /// `reads`.
+    private struct StandInLog: RecordDatabase {
+        struct OutOfReach: Error {}
+        var reads: Bool
+        private func read<Found>(_ nothing: Found) throws -> Found {
+            guard reads else { throw RecordDatabaseError.unavailable(underlying: OutOfReach()) }
+            return nothing
+        }
+        func save(_ records: [Record]) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: OutOfReach()) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try read([:]) }
+        func query(_ query: RecordQuery) async throws -> [Record] { try read([]) }
+        func records(ofType type: String) async throws -> [Record] { try read([]) }
+    }
+
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
     /// Mac's keyboard connected, which is how a simulator starts. With the Mac's keyboard nothing
     /// rises and the screen's safe area never changes, and the glass goes short on the keyboard's

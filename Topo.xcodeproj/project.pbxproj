@@ -461,6 +461,7 @@
 		D671E7599D8A068B094ADFD9 /* QRImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11800CD3827F773B71C8B1B7 /* QRImage.swift */; };
 		D6EF93EF3E2A2F6A9B7D96F6 /* VaultDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E270E681606D89AAEA041E6 /* VaultDownloads.swift */; };
 		D74E84DA8AC0C3C3D51D016B /* WatchRelevance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88A745D155637B885D24CB95 /* WatchRelevance.swift */; };
+		D79F9341A0CC792569CF5571 /* FirstRunScreenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F565D23B2B08962CD323D1E /* FirstRunScreenTests.swift */; };
 		D7D4A4D582A7379655220F68 /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		D925201A428816A89B31395C /* ControlDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2D998B2B0A1A14F93BC1BD /* ControlDocument.swift */; };
 		DAA85047031AD1661D0E8E48 /* ControlActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */; };
@@ -709,6 +710,7 @@
 		3C85E2F26724D2DFDA22E0E7 /* ClaudeCodeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeInstallerTests.swift; sourceTree = "<group>"; };
 		3EA598B0990C965B7E3F0F6A /* TopoMoment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoMoment.swift; sourceTree = "<group>"; };
 		3EC5770ED2DCA16F30AA7C93 /* crossing-up.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crossing-up.json"; sourceTree = "<group>"; };
+		3F565D23B2B08962CD323D1E /* FirstRunScreenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunScreenTests.swift; sourceTree = "<group>"; };
 		402DC40974C6C4DAF1B6B93F /* ChatBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBar.swift; sourceTree = "<group>"; };
 		402EB6E7D75092F33B78F15B /* GuestBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestBridge.swift; sourceTree = "<group>"; };
 		40819CF6083939579F503702 /* ShareIntake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareIntake.swift; sourceTree = "<group>"; };
@@ -1549,6 +1551,7 @@
 				AD09EC67E05EAE6A1F06E821 /* BarControlsTests.swift */,
 				D6A401F08D7A75D151418BFA /* ChatReading.swift */,
 				7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */,
+				3F565D23B2B08962CD323D1E /* FirstRunScreenTests.swift */,
 				91354032F5443E868316550B /* MicrophonePressTests.swift */,
 				55264DCB2FD2D8A991D906E6 /* ReplyBlocksTests.swift */,
 				117E875DA4060ECD83F0D66E /* ReplyLinkTests.swift */,
@@ -2201,6 +2204,7 @@
 				42BE4322536F82A8E48C386A /* BarControlsTests.swift in Sources */,
 				00BBDBC10968078A6D750507 /* ChatReading.swift in Sources */,
 				40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */,
+				D79F9341A0CC792569CF5571 /* FirstRunScreenTests.swift in Sources */,
 				A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */,
 				BAD07508B0297B2D8F63A5C2 /* ReplyBlocksTests.swift in Sources */,
 				B6628F0EE4CA108FE40D386A /* ReplyLinkTests.swift in Sources */,
