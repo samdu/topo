@@ -213,6 +213,9 @@ struct ScriptedVoice: VoiceEngine {
     var loads = true
     /// The frames of each sentence; one frame of quiet tone by default.
     var frames: @Sendable (String) -> [[Float]] = { _ in [toneFrame(0.5)] }
+    /// The sentences whose stream throws once their frames are yielded, as Pocket's does when a
+    /// sentence runs out of cache; none by default.
+    var cutShort: @Sendable (String) -> Bool = { _ in false }
 
     func load(base: URL) async throws {
         guard loads else { throw VoiceError.unavailable("no models here") }
@@ -224,7 +227,7 @@ struct ScriptedVoice: VoiceEngine {
             for samples in script {
                 continuation.yield(Voice.Frame(samples: samples, rate: Voice.rate))
             }
-            continuation.finish()
+            continuation.finish(throwing: cutShort(text) ? VoiceError.unavailable("out of cache") : nil)
         }
     }
 }
@@ -1087,6 +1090,30 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
+    /// A sentence whose stream throws after frames of it were yielded keeps those frames: they
+    /// are queued behind nothing heard yet when the error arrives, the speaker takes the error as
+    /// that sentence's end and goes on to the next, and all of it is heard in order.
+    func testASentenceThatThrowsAfterItsFramesKeepsThemAndTheReplyGoesOn() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let heard = Heard()
+        let voice = ScriptedVoice(frames: { sentence in
+            heard.append(sentence)
+            return [toneFrame(0.5)]
+        }, cutShort: { $0.hasPrefix("Cut") })
+        let speaker = await self.speaker(seams, audio, center, engine: voice, heard: .dataRendered)
+        speaker.speak("Cut one. Whole two.")
+        // Nothing is rendered yet, so the first sentence's frame is still waiting in the queue
+        // when its stream throws and the second sentence is asked for.
+        await settle("both sentences' frames to be queued") { CapturingPlayerNode.scheduled.count >= 2 }
+        await drain()
+        XCTAssertEqual(heard.sentences, ["Cut one.", "Whole two."], "the error ended the reply")
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 2, "the frame made before the error was dropped")
+        XCTAssertFalse(speaker.report.finished, "the reply finished with nothing heard")
+        try await render(seams, until: "the reply to be heard to its end") { speaker.report.finished }
+        speaker.stop()
+    }
 
     // MARK: The hold behind the lock
 
