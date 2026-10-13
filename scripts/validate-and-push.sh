@@ -106,6 +106,13 @@ die() { echo "error: $*" >&2; exit 2; }
 # When a pid began, as ps's lstart gives it in one zone and one locale whatever the caller's are,
 # so two runs from two sessions read the same words. Empty for a pid that is not running.
 began_of() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null || true; }
+# A run's mark on its logs, its pid and when that began: true while that run is going. A pid
+# alone can be another process's by then.
+live_run() {
+  local pid began
+  pid="$(sed -n 1p "$1" 2>/dev/null)" began="$(sed -n 2p "$1" 2>/dev/null)"
+  [ -n "$pid" ] && [ -n "$began" ] && [ "$(began_of "$pid")" = "$began" ]
+}
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git worktree."
 cd "$top"
@@ -142,7 +149,8 @@ voice="$(list lane VOICE_PATHS)" || die "could not read VOICE_PATHS from $short'
 # The selectors are the commit's own too, as `select` runs them: a copy edited and not committed
 # in this worktree would choose here what the workflow does not.
 selectors="$(mktemp -d -t topo-validate-select)" || die "could not make a directory for the commit's selectors."
-trap 'rm -rf "$selectors"' EXIT
+# A run's mark on its logs stands until the run is over, its push and its statuses included.
+trap 'rm -rf "$selectors"; [ -z "${logs-}" ] || rm -f "$logs/running"' EXIT
 for selector in ci-select-suites.sh ci-select-lane.sh; do
   git show "$sha:scripts/$selector" > "$selectors/$selector" || die "$short has no scripts/$selector."
 done
@@ -408,40 +416,45 @@ take_slot() {
 
 # run_here <suite> — the suite in this run's checkout, its lock already on descriptor 6.
 run_here() {
-  local suite="$1" suite_status=0 began said
+  local suite="$1" suite_status=0 said
   echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/suite-$suite.holder"
   echo "$suite: began $(date '+%H:%M')"
   suite_started=$SECONDS
-  # The descriptors closed: nothing the suite leaves running holds a lock. `exec`, so the pid
-  # is the suite's own and a signal to this script ends it by that pid.
-  # The trap before the suite it ends, so no signal finds a suite started and nothing to end
+  # The suite is started by a keeper, which is what this script waits for and signals. The
+  # keeper holds the old lock, shared, and no other descriptor, from before the suite begins
+  # until it has ended, and it outlives this script: the script as it was knows nothing of
+  # slots, and that lock is the one thing that keeps a run of it from starting beside a suite
+  # a killed run of this one left going. There is no moment at which the suite lives and its
+  # keeper has yet to start. The suite has no descriptor at all: nothing it leaves running
+  # holds a lock. The keeper writes the slot's record, whole or not at all and only for a
+  # suite that is running, and takes it away when the suite ends; a signal to it ends the
+  # suite first. It has none of this script's output either, so whoever reads that is not
+  # kept reading by a suite whose script is gone, and it starts no suite for a script that
+  # has gone already.
+  # The trap before the keeper it ends, so no signal finds one started and nothing to end
   # it. `|| true`: under `set -e` the wait's own status, the signal's, would end the trap there.
-  suite_pid="" keeper=""
-  trap '[ -z "$suite_pid" ] || kill "$suite_pid" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; [ -z "$keeper" ] || kill "$keeper" 2>/dev/null || true; rm -f "$slot_dir/suite"; exit 143' TERM INT HUP
-  (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "$suite") \
-    >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- 8>&- &
-  suite_pid=$!
-  # Written whole or not at all, and only for a suite that is running: one that could not
-  # start has no start to record, and its failure is reported below like any other.
-  began="$(began_of "$suite_pid")"
-  if [ -n "$began" ]; then
-    printf '%s\n%s\n%s\n' "$suite_pid" "$began" "$suite" > "$slot_dir/suite.$$" && mv -f "$slot_dir/suite.$$" "$slot_dir/suite"
-  else
+  suite_pid=""
+  trap '[ -z "$suite_pid" ] || kill "$suite_pid" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; rm -f "$slot_dir/suite"; exit 143' TERM INT HUP
+  (
+    child="" child_status=0
+    trap '[ -z "$child" ] || kill "$child" 2>/dev/null || true; [ -z "$child" ] || wait "$child" 2>/dev/null || true; rm -f "$slot_dir/suite"; exit 143' TERM INT HUP
+    kill -0 $$ 2>/dev/null || exit 143
+    (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "$suite") \
+      >> "$logs/mac-suite.log" 2>&1 8>&- &
+    child=$!
+    began="$(began_of "$child")"
+    if [ -n "$began" ]; then
+      printf '%s\n%s\n%s\n' "$child" "$began" "$suite" > "$slot_dir/suite.$$" && mv -f "$slot_dir/suite.$$" "$slot_dir/suite"
+    else
+      rm -f "$slot_dir/suite"
+    fi
+    wait "$child" || child_status=$?
     rm -f "$slot_dir/suite"
-  fi
-  # The old lock stays held, shared, for as long as the suite lives, by a keeper that
-  # outlives this script: the script as it was knows nothing of slots, and the lock is the
-  # one thing that keeps a run of it from starting beside a suite a killed run of this one
-  # left going. The keeper has that lock's descriptor and no other, looks each second, and
-  # goes when the suite has; it holds a pid to when it began, as the record does. A suite
-  # this script saw end has no need of it.
-  if [ -n "$began" ]; then
-    (while [ "$(began_of "$suite_pid")" = "$began" ]; do sleep 1 8>&-; done) > /dev/null 2>&1 6>&- 7>&- &
-    keeper=$!
-  fi
+    exit "$child_status"
+  ) > /dev/null 2>&1 6>&- 7>&- &
+  suite_pid=$!
   wait "$suite_pid" || suite_status=$?
   trap 'exit 143' TERM INT HUP
-  [ -z "$keeper" ] || kill "$keeper" 2>/dev/null || true
   rm -f "$slot_dir/suite"
   # mac-suite.sh starts its suites.txt afresh each call. The suite has a line, or it failed:
   # a call that died early wrote none.
@@ -462,12 +475,12 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   mkdir -p "$commit_logs"
   ls -1 "$commit_logs" | { grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' || true; } | sort -t- -k1,1r -k2,2nr | tail -n "+$KEEP_RUNS" | while IFS= read -r old; do
     # One a run is still writing, in another slot, is kept however many have begun since.
-    [ ! -s "$commit_logs/$old/running" ] || ! kill -0 "$(cat "$commit_logs/$old/running")" 2>/dev/null || continue
+    ! live_run "$commit_logs/$old/running" || continue
     rm -rf "${commit_logs:?}/$old"
   done
   logs="$commit_logs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir "$logs" || die "could not make $logs."
-  echo "$$" > "$logs/running"
+  printf '%s\n%s\n' "$$" "$(began_of $$)" > "$logs/running"
   echo "Running ${chosen[*]} (lane $lane) at $short${hosts:+, here or on $hosts}; logs in $logs"
   started=$SECONDS
 
@@ -533,13 +546,12 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   minutes=$(((SECONDS - started) / 60))
   # Every suite's result in the one file, as each call left its own.
   printf '%s' "$results" > "$logs/suites.txt"
-  rm -f "$logs/running"
   # The ten newest commits' logs are kept, and those of any commit a run is still writing: a
   # sibling's run, begun before ten other commits went through the other slot.
   ls -1t "$logs_root" | tail -n "+$((KEEP_LOGS + 1))" | while IFS= read -r old; do
     case "$old" in *[!0-9a-f]* | "") continue ;; esac
     for mark in "$logs_root/$old"/*/running; do
-      [ ! -s "$mark" ] || ! kill -0 "$(cat "$mark")" 2>/dev/null || continue 2
+      ! live_run "$mark" || continue 2
     done
     rm -rf "${logs_root:?}/$old"
   done
