@@ -73,7 +73,8 @@
 # A branch that has not merged main runs the script as it was, which holds one lock
 # ($cache/lock) for its whole run, in one checkout ($cache/checkout), and takes no suite's
 # lock. A run here holds that lock shared, so the two kinds never overlap and runs of this
-# script share it; a run of the script as it was waits for as long as any of these is going.
+# script share it; a run of the script as it was waits for as long as any of these is going,
+# a suite one of them left behind included.
 set -euo pipefail
 
 cache="${TOPO_VALIDATE_CACHE:-$HOME/Library/Caches/topo-validate}"
@@ -189,21 +190,6 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
   began="$(sed -n 2p "$1/suite")"
   [ -n "$pid" ] && [ -n "$began" ] && [ "$(began_of "$pid")" = "$began" ] || return 1
   echo "$pid $(sed -n 3p "$1/suite")"
-}
-# The script as it was looks for a suite left running in $cache/suite alone, once it has its
-# lock, so whatever suite a slot has on record is kept there too, marked as a slot's on a
-# fourth line it does not read: a run of it then refuses to start beside a suite a run of
-# this one left behind. Kept in step at every suite's start and end.
-mirror() {
-  local dir
-  [ ! -e "$cache/suite" ] || [ "$(sed -n 4p "$cache/suite")" = slot ] || return 0
-  for dir in "$cache"/slots/*/; do
-    if orphan_in "$dir" >/dev/null; then
-      { sed -n 1,3p "$dir/suite"; echo slot; } > "$cache/suite.$$" && mv -f "$cache/suite.$$" "$cache/suite"
-      return 0
-    fi
-  done
-  rm -f "$cache/suite"
 }
 # One look's wait at something held, against the LOCK_WAIT seconds the run has for all of them;
 # who holds it is said when the wait begins and every ten minutes after.
@@ -399,7 +385,7 @@ take_slot() {
     waited=$((waited + SECONDS - asked))
     [ "$got" = 0 ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $whose. Nothing is pushed or posted."
   fi
-  if [ "$(sed -n 4p "$cache/suite" 2>/dev/null)" != slot ] && orphan="$(orphan_in "$cache")"; then
+  if orphan="$(orphan_in "$cache")"; then
     die "the suite of an earlier validation is still running without its script (pid ${orphan%% *}; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill ${orphan%% *}\`, which stops its lane and deletes its simulators, and run again."
   fi
   echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/holder"
@@ -430,8 +416,8 @@ run_here() {
   # is the suite's own and a signal to this script ends it by that pid.
   # The trap before the suite it ends, so no signal finds a suite started and nothing to end
   # it. `|| true`: under `set -e` the wait's own status, the signal's, would end the trap there.
-  suite_pid=""
-  trap '[ -z "$suite_pid" ] || kill "$suite_pid" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; rm -f "$slot_dir/suite"; mirror; exit 143' TERM INT HUP
+  suite_pid="" keeper=""
+  trap '[ -z "$suite_pid" ] || kill "$suite_pid" 2>/dev/null || true; [ -z "$suite_pid" ] || wait "$suite_pid" 2>/dev/null || true; [ -z "$keeper" ] || kill "$keeper" 2>/dev/null || true; rm -f "$slot_dir/suite"; exit 143' TERM INT HUP
   (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "$suite") \
     >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- 8>&- &
   suite_pid=$!
@@ -443,11 +429,20 @@ run_here() {
   else
     rm -f "$slot_dir/suite"
   fi
-  mirror
+  # The old lock stays held, shared, for as long as the suite lives, by a keeper that
+  # outlives this script: the script as it was knows nothing of slots, and the lock is the
+  # one thing that keeps a run of it from starting beside a suite a killed run of this one
+  # left going. The keeper has that lock's descriptor and no other, looks each second, and
+  # goes when the suite has; it holds a pid to when it began, as the record does. A suite
+  # this script saw end has no need of it.
+  if [ -n "$began" ]; then
+    (while [ "$(began_of "$suite_pid")" = "$began" ]; do sleep 1 8>&-; done) > /dev/null 2>&1 6>&- 7>&- &
+    keeper=$!
+  fi
   wait "$suite_pid" || suite_status=$?
   trap 'exit 143' TERM INT HUP
+  [ -z "$keeper" ] || kill "$keeper" 2>/dev/null || true
   rm -f "$slot_dir/suite"
-  mirror
   # mac-suite.sh starts its suites.txt afresh each call. The suite has a line, or it failed:
   # a call that died early wrote none.
   said="$(grep "^$suite=" "$logs/suites.txt" 2>/dev/null || true)"
@@ -466,6 +461,8 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   # so a run a signal ends is counted by the next. Only what is named as a run is touched.
   mkdir -p "$commit_logs"
   ls -1 "$commit_logs" | { grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' || true; } | sort -t- -k1,1r -k2,2nr | tail -n "+$KEEP_RUNS" | while IFS= read -r old; do
+    # One a run is still writing, in another slot, is kept however many have begun since.
+    [ ! -s "$commit_logs/$old/running" ] || ! kill -0 "$(cat "$commit_logs/$old/running")" 2>/dev/null || continue
     rm -rf "${commit_logs:?}/$old"
   done
   logs="$commit_logs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
