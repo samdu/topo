@@ -95,8 +95,11 @@ at=$$
 while [ "$at" -gt 1 ] && [ "$at" != "$3" ]; do at="$(ps -o ppid= -p "$at" | tr -d " ")"; done
 case "$(ps -o args= -p "$3")" in *"scripts/mac-suite.sh "*) [ "$at" != "$3" ] || echo "hold waits on the script that started it" >> "$CALLS" ;; esac
 while kill -0 "$3" 2>/dev/null; do perl -e "select(undef,undef,undef,0.1)"; done'
+# As long as the real one's answer on a busy Mac: more after the hold's line than a pipe holds.
 fake "$work/bin/pmset" '
-[ "${FAKE_HOLD-}" = unheld ] || echo "   pid $(cat "$CALLS.hold" 2>/dev/null)(caffeinate): [0x0] 00:00:01 PreventUserIdleDisplaySleep named: \"caffeinate command-line tool\""'
+echo "Assertion status system-wide:"
+[ "${FAKE_HOLD-}" = unheld ] || echo "   pid $(cat "$CALLS.hold" 2>/dev/null)(caffeinate): [0x0] 00:00:01 PreventUserIdleDisplaySleep named: \"caffeinate command-line tool\""
+for n in $(seq 20000); do echo "   pid $n(powerd): [0x0] 00:00:01 InternalPreventDisplaySleep named: \"one of many\""; done'
 fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'

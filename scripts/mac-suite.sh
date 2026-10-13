@@ -369,10 +369,13 @@ suite_topo_unit() {
 # the ones the system counts. Asked for three seconds, since the assertion follows the start.
 display_hold=""
 display_held() {
-  local n
+  local n held
   for n in $(seq 30); do
     kill -0 "$display_hold" 2>/dev/null || return 1
-    ! pmset -g assertions 2>/dev/null | grep -q "pid $display_hold(caffeinate).*PreventUserIdleDisplaySleep" || return 0
+    # Read whole and then searched: a search that stops at its first match ends `pmset` with a
+    # signal while it still has lines to write, and under pipefail that reads as no match.
+    held="$(pmset -g assertions 2>/dev/null)"
+    ! grep -q "pid $display_hold(caffeinate).*PreventUserIdleDisplaySleep" <<<"$held" || return 0
     perl -e 'select(undef,undef,undef,0.1)'
   done
   return 1
