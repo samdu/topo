@@ -38,8 +38,8 @@ A PR opened from a host with no Mac passes `test` only when its paths need no su
 
 ## What the UI tests can and cannot see
 
-**`.accessibilityHidden(true)` does not take a view out of the XCUITest tree.** The element stays queryable, so a control that must be absent to a UI test has to leave the layout (an `if` around the view), not be hidden in place. Probed unconditionally; there is no modifier that does it.
+**`.accessibilityHidden(true)` does not take a view out of the XCUITest tree.** The element stays queryable, so a control that must be absent to a UI test has to leave the layout (an `if` around the view), not be hidden in place. Found when a hidden control kept matching an XCUITest query; no modifier was found that removes a view from the tree while it stays laid out.
 
-**A headless simulator has no hardware keyboard and no route to connect one.** CI refuses `XCTSkip`, so a path that only exists with a keyboard focused (the composer taking focus with no bar press) has no UI proof; its claim rests on unit tests and a device box.
+**A headless simulator has no hardware keyboard and no route to connect one.** CI refuses `XCTSkip`, so a path that only exists with a keyboard focused (the composer taking focus with no bar press) can have no UI-test proof. A PR that changes such a path proves it with unit tests over the form state and a device box on a phone with a hardware keyboard — this page states the rule; the proof belongs to that PR.
 
 **A plan that promises bar room measures it first.** On a 402 pt phone the bar holds 196 pt beside its model and mute controls, so a plan written as "notices fit whole at the largest font" could not hold. Measure on the smallest supported phone at the largest Dynamic Type before writing the plan line.
