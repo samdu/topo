@@ -9,8 +9,9 @@
 # on this workflow's latest pull_request run concluding green — so a suite
 # that did not pass on the Mac holds the merge by both routes, and spends no
 # reviewer round. Every job here runs on ubuntu-latest: a macOS runner bills
-# at ten times a Linux one, and the three suites are about 77 runner-minutes
-# a push against the account's 2,000 free minutes a month.
+# at ten times a Linux one, and the three suites that cover the product are
+# about 77 runner-minutes a push against the account's 2,000 free minutes a
+# month.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the current `auth.json` of that login, written
