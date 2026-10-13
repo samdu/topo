@@ -66,12 +66,13 @@ final class MarkdownRenderTests: XCTestCase {
                       until settled: (Pixels) -> Bool) throws -> Pixels {
         let live = try LiveStage(row(turn, look, images: images), look: look, size: stage)
         defer { live.close() }
-        var drawn = try Pixels(live.image())
+        var drawn: Pixels?
         try live.poll {
-            drawn = try Pixels(live.image())
-            return settled(drawn)
+            let pixels = try Pixels(live.image())
+            drawn = pixels
+            return settled(pixels)
         }
-        return drawn
+        return try XCTUnwrap(drawn, "the stage was never looked at")
     }
 
     private let long = "```\n" + String(repeating: "let aVeryLongName = anotherVeryLongName; ", count: 6) + "\n```"
