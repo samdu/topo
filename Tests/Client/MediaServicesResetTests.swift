@@ -15,6 +15,8 @@ final class Seams {
     private(set) var lines: [String] = []
     /// The record flag each configure was asked for, which is how a released claim is seen.
     private(set) var records: [Bool] = []
+    /// Whether each configure was asked for the voice processing mode, beside `records`.
+    private(set) var modes: [Bool] = []
     /// Set to make the configure step throw, as an activation refused behind Settings does.
     var activationError: Error?
     /// What the format reader reports in place of the engine's own formats; nil leaves it
@@ -24,6 +26,11 @@ final class Seams {
     private(set) var lastClient: AVAudioFormat?
     private(set) var engines: [AVAudioEngine] = []
     private(set) var formatReads = 0
+    /// Each voice processing a press asked its engine for, with the format reads, whether the
+    /// engine was running and how many configures the session had been asked for at that moment: the offline engine has no voice unit to turn on.
+    private(set) var processing: [(on: Bool, formatReads: Int, running: Bool, configures: Int)] = []
+    /// Set to make the voice processing step throw, as a node that will not take the unit does.
+    var processingError: Error?
 
     struct Refused: Error {}
 
@@ -32,10 +39,12 @@ final class Seams {
     func forget() {
         lines = []
         records = []
+        modes = []
     }
 
-    func configure(_ record: Bool) throws {
+    func configure(_ record: Bool, _ processed: Bool) throws {
         records.append(record)
+        modes.append(processed)
         if let activationError {
             lines.append("activate failed")
             throw activationError
@@ -53,6 +62,11 @@ final class Seams {
         try? engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
         engines.append(engine)
         return engine
+    }
+
+    func process(_ engine: AVAudioEngine, _ on: Bool) throws {
+        processing.append((on, formatReads, engine.isRunning, records.count))
+        if let processingError { throw processingError }
     }
 
     func readFormats(_ engine: AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat) {
@@ -360,7 +374,8 @@ final class MediaServicesResetTests: XCTestCase {
         await settle { ear.ready }
         return VoiceInput(audio: audio, ear: ear, center: center,
                           makeEngine: { seams.makeEngine() },
-                          formats: { seams.readFormats($0) })
+                          formats: { seams.readFormats($0) },
+                          voiceProcessing: { try seams.process($0, $1) })
     }
 
     // MARK: AudioSession

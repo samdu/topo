@@ -90,6 +90,7 @@ struct TopoApp: App {
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
             LogTool(reader: UnifiedLogReader()),
+            VoiceTool(),
             ContextTool(facts: { [weak harness] in
                 ContextTool.Facts(context: harness?.context, window: harness?.window, setting: harness?.compaction ?? .auto,
                                   compacting: harness?.compacting ?? false, last: harness?.lastCompaction)
