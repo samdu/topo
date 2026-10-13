@@ -246,7 +246,8 @@ final class ControlRequestTests: XCTestCase {
         let took = ContinuousClock.now - started
         XCTAssertEqual(last?.status, String(ToolReply.timedOut))
         XCTAssertGreaterThanOrEqual(took, .seconds(9.5))
-        // The server would trickle for 85 s; the room past 10 s is a loaded machine's.
+        // The server would trickle for 85 s. The room past 10 s is for the main actor, which this
+        // test's own continuation waits on and another test's work can hold for seconds.
         XCTAssertLessThan(took, .seconds(20), "the deadline was not absolute: \(took)")
         XCTAssertEqual(server.requests.count, 1)
     }
@@ -328,6 +329,30 @@ final class ControlRequestTests: XCTestCase {
         XCTAssertEqual(ControlRequest.Answer(failure: CocoaError(.fileReadNoPermission)), ControlRequest.Answer(status: ToolReply.failed))
         XCTAssertEqual(ControlRequest.Answer(failure: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)),
                        ControlRequest.Answer(status: ToolReply.timedOut))
+        // The code alone is not the session's timeout: another domain's -1001 is a failure.
+        XCTAssertEqual(ControlRequest.Answer(failure: NSError(domain: NSPOSIXErrorDomain, code: NSURLErrorTimedOut)),
+                       ControlRequest.Answer(status: ToolReply.failed))
+        for code in [URLError.Code.cannotFindHost, .dnsLookupFailed] {
+            XCTAssertEqual(ControlRequest.Answer(failure: URLError(code)), ControlRequest.Answer(status: ToolReply.failed), "\(code)")
+        }
+    }
+
+    /// The session's clock first, by seconds: a stalled response is answered as timed out by it,
+    /// well before the sleep's deadline, and its connection is closed.
+    func testTheSessionsClockAnswersTimedOut() async throws {
+        let server = try await server(.stallBody("SENTINEL-BODY", type: "text/plain"))
+        let form = ControlRequest.Form(method: "GET", url: server.url("/api"))
+        let secrets = secrets!, leftBehind = leftBehind
+        // Off the main actor, so what is timed is the request and not this test's wait for it.
+        let (answer, took) = await Task.detached {
+            let started = ContinuousClock.now
+            let answer = await ControlRequest.perform(form, secrets: secrets, leftBehind: leftBehind, deadline: .seconds(30),
+                                                      sessionTimeout: .seconds(1))
+            return (answer, ContinuousClock.now - started)
+        }.value
+        XCTAssertEqual(answer, ControlRequest.Answer(status: ToolReply.timedOut))
+        XCTAssertLessThan(took, .seconds(20), "the sleep answered, not the session: \(took)")
+        XCTAssertEqual(server.requests.count, 1)
     }
 
     /// A response whose headers arrive and whose body stalls: the status is the answer, at once,
