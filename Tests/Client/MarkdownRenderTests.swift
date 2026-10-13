@@ -41,9 +41,9 @@ final class MarkdownRenderTests: XCTestCase {
         return look
     }
 
-    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil,
-                      images: @escaping @Sendable (String) -> Data? = { _ in nil }) throws -> Pixels {
-        let row = VStack(spacing: 0) {
+    private func row(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil,
+                     images: @escaping @Sendable (String) -> Data?) -> some View {
+        VStack(spacing: 0) {
             TurnRow(turn: turn, cue: cue)
                 .padding(.horizontal, look.transcript.horizontalPadding)
             Spacer(minLength: 0)
@@ -51,7 +51,27 @@ final class MarkdownRenderTests: XCTestCase {
         .environment(\.replyImages, ReplyImages(kept: images, read: { images($0) }))
         .frame(width: stage.width, height: stage.height, alignment: .top)
         .background(Color.white)
-        return try Pixels(LookStage.image(row, look: look, size: stage))
+    }
+
+    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil,
+                      images: @escaping @Sendable (String) -> Data? = { _ in nil }) throws -> Pixels {
+        try Pixels(LookStage.image(row(turn, look, cue: cue, images: images), look: look, size: stage))
+    }
+
+    /// The row as it stands once `settled` says so of a picture of it, or after ten seconds as
+    /// it stands then. A file the reader does not already hold is drawn by a read that lands
+    /// after the row's first frame, whenever the main actor is next free, so its picture waits
+    /// on what is drawn and not on a count of refreshes.
+    private func draw(_ turn: Turn, _ look: Look, images: @escaping @Sendable (String) -> Data?,
+                      until settled: (Pixels) -> Bool) throws -> Pixels {
+        let live = try LiveStage(row(turn, look, images: images), look: look, size: stage)
+        defer { live.close() }
+        var drawn = try Pixels(live.image())
+        try live.poll {
+            drawn = try Pixels(live.image())
+            return settled(drawn)
+        }
+        return drawn
     }
 
     private let long = "```\n" + String(repeating: "let aVeryLongName = anotherVeryLongName; ", count: 6) + "\n```"
@@ -907,10 +927,10 @@ final class MarkdownRenderTests: XCTestCase {
             let picture = png(100, 100)
             for source in ["https://example.com/i.png", "file:///etc/hosts", "notes.txt"] {
                 let asked = Asked()
-                let drawn = try draw(turn(.assistant, "![A chart of sizes](\(source))"), look) { path in
+                let drawn = try draw(turn(.assistant, "![A chart of sizes](\(source))"), look, images: { path in
                     asked.add(path)
                     return path == "notes.txt" ? Data("words".utf8) : path.hasPrefix("file:") ? nil : picture
-                }
+                }, until: { [self] in $0.count(quoteInk) > 0 && $0.count(barInk) > 0 })
                 XCTAssertEqual(drawn.count(pictureInk), 0, "\(screen): \(source) drew a picture")
                 XCTAssertGreaterThan(drawn.count(quoteInk), 0, "\(screen): \(source) drew no alternative text")
                 XCTAssertGreaterThan(drawn.count(barInk), 0, "\(screen): \(source) drew no bar")
