@@ -65,6 +65,12 @@ final class Voice {
     /// second, where a slower stock voice (eponine, about 4.0 by the same measure) wants 1.20.
     nonisolated static let tempo: Float = 1.0
 
+    /// How much chance each frame is drawn with: the flow decoder starts every frame from noise
+    /// scaled by this value's square root. 0.3 is the value Kyutai's own package speaks English
+    /// at, preferred to 0.7 in 53.5% of 400 judgements with the error rate 0.92% → 0.82% and
+    /// UTMOS 4.318 → 4.358 (kyutai-labs/pocket-tts#223); FluidAudio's default is 0.7.
+    nonisolated static let temperature: Float = 0.3
+
     var ready: Bool { state == .ready }
 
     private let engine: any VoiceEngine
@@ -218,7 +224,8 @@ actor PocketVoiceEngine: VoiceEngine {
 
     func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         guard let manager else { throw VoiceError.notLoaded }
-        let frames = try await manager.synthesizeStreaming(text: text, voice: Voice.speaker)
+        let frames = try await manager.synthesizeStreaming(
+            text: text, voice: Voice.speaker, temperature: Voice.temperature)
         let rate = PocketTtsConstants.audioSampleRate
         return AsyncThrowingStream { continuation in
             let task = Task {
