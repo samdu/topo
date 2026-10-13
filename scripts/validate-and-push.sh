@@ -141,7 +141,8 @@ live_run() {
 }
 
 # A hold validates nothing, so it asks nothing of the tree: no commit, branch, fetch or suite.
-branch="by hand" sha="" short="${hold_command[0]##*/}" lane="" chosen=()
+branch="by hand" sha="" short="${hold_command[0]-}" lane="" chosen=()
+short="${short##*/}"
 if [ "$hold" = no ]; then
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git worktree."
   cd "$top"
