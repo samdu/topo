@@ -152,6 +152,10 @@ hold_pid="$(cat "$CALLS.hold")"
 for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+# Every test action, the four of them, runs without the simulator diagnostics xcodebuild
+# gathers after the last test, whose log archive is the 600 s stall a run cannot end.
+is "green: four test actions, each without xcodebuild's diagnostics" \
+  "$(grep -cE '^xcodebuild test(-without-building)? ' "$CALLS"):$(grep -cE '^xcodebuild test(-without-building)? .* -collect-test-diagnostics never ' "$CALLS")" "4:4"
 
 # The device build's directory is kept for the pins it was built from, and no others.
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
