@@ -41,10 +41,10 @@
 # Other sessions share this Mac (CLAUDE.md, *Working here*), so each suite runs on a simulator
 # this run created and deletes, this script kills nothing by name (the audio lane restarts
 # coreaudiod, by name, when it has just installed its driver), and `mac-suite.pids` in --results
-# lists this script's pid and then each command it is waiting on: `kill $(head -1 <file>)` ends
-# the run, which stops that command (the scripts' tests run at once, each in a process group
-# of its own, so every one still going and whatever it started), the audio lane it started
-# and its simulators. A second
+# lists this script's pid and then each command it is waiting on (the scripts' tests run at
+# once in a process group of their own, so the subshell that leads it and each test):
+# `kill $(head -1 <file>)` ends the run, which stops that command (every test still going and
+# whatever it started), the audio lane it started and its simulators. A second
 # signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
@@ -221,11 +221,6 @@ echo "$$" > "$pids"
 created=()
 lane_started=no
 current=""
-# The process groups of the scripts' tests still going, by leader: each test is started in a
-# group of its own and a signal ends the group, the test and whatever it started alike. A test
-# leaves the list as the suite waits for it. A group's id is not given out again while any
-# process of the group lives, so a signal to one that still has a member is never another's.
-running=()
 
 cleanup() {
   # A signal that landed while the lane's start was under way runs this before the start's
@@ -242,12 +237,21 @@ cleanup() {
   rm -f "$pids"
 }
 trap cleanup EXIT
-# Only the command this run is waiting on, by the pid recorded for it.
+# Only the command this run is waiting on, by the pid recorded for it, and the scripts' tests'
+# process group. That group is found on the job table bash keeps, which has a job from the
+# moment the command that started it completes and drops it once it has ended, never on a list
+# of pids: the one job that leads a process group of its own (the tests' subshell, started under
+# job control) is signalled as a group, so the tests and whatever they started end with it. A
+# pid or a group id a job that has ended held, which the Mac may have given to another process
+# since, is on no list this reads. The line says which groups were signalled.
 ended() {
-  local p
+  local p signalled=""
   [ -n "$current" ] && kill "$current" 2>/dev/null
-  for p in ${running[@]+"${running[@]}"}; do kill -- "-$p" 2>/dev/null; done
-  echo "error: mac-suite.sh was ended by a signal." >&2
+  for p in $(jobs -pr); do
+    [ "$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')" = "$p" ] || continue
+    kill -- "-$p" 2>/dev/null && signalled="$signalled $p"
+  done
+  echo "error: mac-suite.sh was ended by a signal${signalled:+; it signalled process group$signalled}." >&2
   exit 143
 }
 trap ended TERM INT HUP
@@ -594,36 +598,46 @@ suite_topo_ui() {
 # first. Each writes its own log, printed whole under its heading once it has ended, in the
 # order named, so the suite's log carries every test's output in a batch at the end rather
 # than live; a missing test's heading and error are printed as the start loop reaches it.
-# Each test is a process group of its own (job control is on while they are started, which is
-# what puts a background job in one), so that the signal that ends the suite ends a test's
-# children with it: a test killed alone leaves the command it was waiting on running.
+# The tests are started and waited for by a subshell that is a process group of its own (job
+# control is on while it is started, which is what puts a background job in one, and off in a
+# subshell, so what it starts stays in its group) and that the tests and whatever they start
+# belong to, so that the signal that ends the suite ends them all: a test killed alone leaves
+# the command it was waiting on running. The subshell lives until it has waited for every test,
+# so while any of them runs the group's leader is a running job of this script's, which is
+# what `ended` signals by: there is no list a test has to reach before a signal can end it.
 suite_scripts() {
-  local status=0 test i passed
-  local names=() started=()
+  local status=0 group
   set -m
-  for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
-              suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
-              model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
-    if [ ! -x "scripts/tests/$test-test.sh" ]; then
-      say "scripts/tests/$test-test.sh"
-      err "scripts/tests/$test-test.sh is missing."
-      status=1
-      continue
-    fi
-    "scripts/tests/$test-test.sh" > "$RESULTS/script-$test.log" 2>&1 &
-    echo "$!" >> "$pids"
-    names+=("$test")
-    started+=("$!")
-    running+=("$!")
-  done
+  (
+    status=0
+    names=()
+    started=()
+    for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
+                suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
+                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
+      if [ ! -x "scripts/tests/$test-test.sh" ]; then
+        say "scripts/tests/$test-test.sh"
+        err "scripts/tests/$test-test.sh is missing."
+        status=1
+        continue
+      fi
+      "scripts/tests/$test-test.sh" > "$RESULTS/script-$test.log" 2>&1 &
+      echo "$!" >> "$pids"
+      names+=("$test")
+      started+=("$!")
+    done
+    for i in ${names[@]+"${!names[@]}"}; do
+      say "scripts/tests/${names[$i]}-test.sh"
+      if wait "${started[$i]}"; then passed=yes; else passed=no; fi
+      cat "$RESULTS/script-${names[$i]}.log"
+      [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
+    done
+    exit "$status"
+  ) &
+  group=$!
   set +m
-  for i in ${names[@]+"${!names[@]}"}; do
-    say "scripts/tests/${names[$i]}-test.sh"
-    if wait "${started[$i]}"; then passed=yes; else passed=no; fi
-    running=("${running[@]:1}")
-    cat "$RESULTS/script-${names[$i]}.log"
-    [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
-  done
+  echo "$group" >> "$pids"
+  wait "$group" || status=1
   return "$status"
 }
 
