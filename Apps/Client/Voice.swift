@@ -68,9 +68,12 @@ final class Voice {
     var ready: Bool { state == .ready }
 
     private let engine: any VoiceEngine
+    /// Where `VoiceTemperature` is kept, read as each sentence is asked for.
+    private let defaults: UserDefaults
 
-    init(engine: any VoiceEngine = Voice.defaultEngine()) {
+    init(engine: any VoiceEngine = Voice.defaultEngine(), defaults: UserDefaults = .standard) {
         self.engine = engine
+        self.defaults = defaults
     }
 
     static func defaultEngine() -> any VoiceEngine {
@@ -146,7 +149,7 @@ final class Voice {
     /// One sentence, as the frames of it arrive. The caller queues each for playback the instant
     /// it exists, so what a listener waits for is a frame rather than the sentence.
     func synthesise(_ text: String) async throws -> AsyncThrowingStream<Frame, Error> {
-        try await engine.stream(text)
+        try await engine.stream(text, temperature: VoiceTemperature.value(defaults))
     }
 
     /// One decoded frame, 80 ms of audio.
@@ -163,7 +166,8 @@ protocol VoiceEngine: Sendable {
     func load(base: URL) async throws
     /// One sentence as a stream of frames. Breaking out of the stream cancels the synthesis
     /// behind it.
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error>
+    /// `temperature` is `VoiceTemperature`'s value as it stood when the sentence was asked for.
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error>
 }
 
 /// Stands in where FluidAudio is not linked: every call fails, so the voice never becomes ready
@@ -171,7 +175,7 @@ protocol VoiceEngine: Sendable {
 struct NoVoice: VoiceEngine {
     private static let why = "FluidAudio is not linked in this build"
     func load(base: URL) async throws { throw VoiceError.unavailable(Self.why) }
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         throw VoiceError.unavailable(Self.why)
     }
 }
@@ -216,9 +220,10 @@ actor PocketVoiceEngine: VoiceEngine {
         self.manager = manager
     }
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         guard let manager else { throw VoiceError.notLoaded }
-        let frames = try await manager.synthesizeStreaming(text: text, voice: Voice.speaker)
+        let frames = try await manager.synthesizeStreaming(
+            text: text, voice: Voice.speaker, temperature: temperature)
         let rate = PocketTtsConstants.audioSampleRate
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -236,4 +241,42 @@ actor PocketVoiceEngine: VoiceEngine {
     }
 }
 #endif
+/// How much chance each frame of the voice is drawn with: the flow decoder starts every frame
+/// from noise scaled by this value's square root. A setting, this device's alone: a slider in
+/// the settings sheet and the mind's `topo voice temperature`, kept as the `voiceTemperature`
+/// default and read as each sentence is asked for (`Voice.synthesise`). `Speaker` asks for a
+/// reply's sentences ahead of their playing, so a change is heard from the next reply, and in
+/// a reply being read only from the sentences not yet made.
+enum VoiceTemperature {
+    static let key = "voiceTemperature"
+
+    /// What a phone never asked speaks at, chosen by Sam's ear between the two published
+    /// defaults: Kyutai's own package speaks English at 0.3 (kyutai-labs/pocket-tts#223) and
+    /// FluidAudio at 0.7.
+    static let standard = 0.5
+
+    /// What the decoder is ever handed. Below 0 the square root is not a number; 1 is the
+    /// noise unscaled, which is as far as the model was trained.
+    static let range = 0.0...1.0
+
+    /// The slider's step, and what a value is said to: two places.
+    static let step = 0.05
+
+    /// The value as kept, or the standard one for a phone never asked and for anything kept
+    /// that is not a number in the range.
+    static func value(_ defaults: UserDefaults = .standard) -> Float {
+        // A Boolean kept there is an `NSNumber` too, and is no temperature.
+        guard let kept = defaults.object(forKey: key) as? NSNumber,
+              CFGetTypeID(kept) != CFBooleanGetTypeID() else { return Float(standard) }
+        return Float(judged(kept.doubleValue) ?? standard)
+    }
+
+    /// A value the decoder can take, or nil.
+    static func judged(_ raw: Double?) -> Double? {
+        guard let raw, raw.isFinite, range.contains(raw) else { return nil }
+        return raw
+    }
+
+    static func said(_ value: Double) -> String { String(format: "%.2f", value) }
+}
 #endif
