@@ -42,7 +42,8 @@
 # this run created and deletes, this script kills nothing by name (the audio lane restarts
 # coreaudiod, by name, when it has just installed its driver), and `mac-suite.pids` in --results
 # lists this script's pid and then each command it is waiting on: `kill $(head -1 <file>)` ends
-# the run, which stops that command, the audio lane it started and its simulators. A second
+# the run, which stops that command (the scripts' tests run at once, so every one of them still
+# going), the audio lane it started and its simulators. A second
 # signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
@@ -219,6 +220,8 @@ echo "$$" > "$pids"
 created=()
 lane_started=no
 current=""
+# The scripts' tests still going, which run at once; a signal ends every one of them.
+running=()
 
 cleanup() {
   # A signal that landed while the lane's start was under way runs this before the start's
@@ -237,7 +240,9 @@ cleanup() {
 trap cleanup EXIT
 # Only the command this run is waiting on, by the pid recorded for it.
 ended() {
+  local p
   [ -n "$current" ] && kill "$current" 2>/dev/null
+  for p in ${running[@]+"${running[@]}"}; do kill "$p" 2>/dev/null; done
   echo "error: mac-suite.sh was ended by a signal." >&2
   exit 143
 }
@@ -578,20 +583,37 @@ suite_topo_ui() {
 
 # Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
 # Named, not globbed, so a test that disappears fails here. Every one runs after an earlier
-# one failed.
+# one failed. They run at once and the suite waits for them all: each runs in a scratch
+# directory of its own, four of them take two to three minutes apiece (a bound exercised in
+# real time, a fake that sleeps to be killed) and the rest seconds, so the wall is the slowest
+# test rather than the sum, which was ten minutes. The slow four are named first and so start
+# first. Each writes its own log, printed whole under its heading once it has ended, in the
+# order named, so the suite's log reads as it did, in a batch at the end rather than live.
 suite_scripts() {
-  local status=0 test
-  for test in simulator-run perf-run review-verdict ci-select-lane ci-audio-lane ci-select-suites asc-pem archive-upload \
+  local status=0 test i passed
+  local names=() started=()
+  for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
               suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
-              model-manifest review-prompt review-cap janitor validate-and-push validate-host mac-suite agent-simulator; do
-    say "scripts/tests/$test-test.sh"
+              model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
     if [ ! -x "scripts/tests/$test-test.sh" ]; then
+      say "scripts/tests/$test-test.sh"
       err "scripts/tests/$test-test.sh is missing."
       status=1
-    else
-      run "$RESULTS/script-$test.log" "scripts/tests/$test-test.sh" || { err "scripts/tests/$test-test.sh failed."; status=1; }
+      continue
     fi
+    "scripts/tests/$test-test.sh" > "$RESULTS/script-$test.log" 2>&1 &
+    running+=("$!")
+    echo "$!" >> "$pids"
+    names+=("$test")
+    started+=("$!")
   done
+  for i in ${names[@]+"${!names[@]}"}; do
+    say "scripts/tests/${names[$i]}-test.sh"
+    if wait "${started[$i]}"; then passed=yes; else passed=no; fi
+    cat "$RESULTS/script-${names[$i]}.log"
+    [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
+  done
+  running=()
   return "$status"
 }
 

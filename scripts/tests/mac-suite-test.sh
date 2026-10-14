@@ -355,6 +355,41 @@ suite scripts-missing scripts
 is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure "
 fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
 
+# The tests run at once: two of them each wait, bounded, for the other to have started, which
+# one started after the other ended would never see.
+mkdir -p "$work/meet"
+fake "$tree/scripts/tests/review-cap-test.sh" "touch '$work/meet/review-cap'; for _ in \$(seq 50); do [ -e '$work/meet/review-prompt' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+fake "$tree/scripts/tests/review-prompt-test.sh" "touch '$work/meet/review-prompt'; for _ in \$(seq 50); do [ -e '$work/meet/review-cap' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+suite scripts-at-once scripts
+is "the tests run at once: two that wait for each other both pass" "$status:$(results)" "0:scripts=success "
+is "the tests run at once: a heading in the suite's log and a log of its own for each" \
+  "$(grep -c '^==> scripts/tests/.*-test.sh$' "$work/scripts-at-once.log"):$(ls "$RESULTS_DIR"/script-*.log | wc -l | tr -d ' ')" "$tests_named:$tests_named"
+fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
+fake "$tree/scripts/tests/review-prompt-test.sh" 'exit 0'
+
+# A signal while the tests run ends every one still going, not one of them.
+mkdir -p "$work/sleepers"
+fake "$tree/scripts/tests/janitor-test.sh" "echo \$\$ > '$work/sleepers/janitor'; exec sleep 60"
+fake "$tree/scripts/tests/validate-host-test.sh" "echo \$\$ > '$work/sleepers/validate-host'; exec sleep 60"
+export CALLS="$work/scripts-signal.calls" RESULTS_DIR="$work/scripts-signal.results"
+: > "$CALLS"
+(cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" scripts) \
+  > "$work/scripts-signal.log" 2>&1 &
+pid=$!
+for _ in $(seq 100); do [ -s "$work/sleepers/janitor" ] && [ -s "$work/sleepers/validate-host" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+sleepers="$(cat "$work/sleepers/janitor" "$work/sleepers/validate-host" 2>/dev/null | tr '\n' ' ')"
+is "signal during the tests: both sleepers are on the pids file" \
+  "$(for p in $sleepers; do grep -cx "$p" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null; done | tr '\n' ' ')" "1 1 "
+kill -TERM "$pid"
+for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+wait "$pid"; status=$?
+is "signal during the tests: exits 143" "$status" 143
+for _ in $(seq 30); do alive=0; for p in $sleepers; do kill -0 "$p" 2>/dev/null && alive=1; done; [ "$alive" = 0 ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left=""; for p in $sleepers; do kill -0 "$p" 2>/dev/null && { left="$left $p"; kill "$p" 2>/dev/null; }; done
+[ -z "$left" ] && ok "signal during the tests: every test still going ended with the run" || fail "signal during the tests: pids$left outlived the run"
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 0'
+fake "$tree/scripts/tests/validate-host-test.sh" 'exit 0'
+
 # A toolchain off its pin: no suite runs, and each one asked for is a failure.
 FAKE_XCODE=99.0 suite off-pin topo_unit others
 is "off the pin: exits 1" "$status" 1
