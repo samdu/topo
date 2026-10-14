@@ -220,8 +220,6 @@ echo "$$" > "$pids"
 created=()
 lane_started=no
 current=""
-# The scripts' tests still going, which run at once; a signal ends every one of them.
-running=()
 
 cleanup() {
   # A signal that landed while the lane's start was under way runs this before the start's
@@ -242,7 +240,9 @@ trap cleanup EXIT
 ended() {
   local p
   [ -n "$current" ] && kill "$current" 2>/dev/null
-  for p in ${running[@]+"${running[@]}"}; do kill "$p" 2>/dev/null; done
+  # The scripts' tests still going, which run at once: by the jobs bash still counts, never by
+  # a recorded pid, which once its test has ended may be another process's.
+  for p in $(jobs -pr); do kill "$p" 2>/dev/null; done
   echo "error: mac-suite.sh was ended by a signal." >&2
   exit 143
 }
@@ -584,11 +584,12 @@ suite_topo_ui() {
 # Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
 # Named, not globbed, so a test that disappears fails here. Every one runs after an earlier
 # one failed. They run at once and the suite waits for them all: each runs in a scratch
-# directory of its own, four of them take two to three minutes apiece (a bound exercised in
-# real time, a fake that sleeps to be killed) and the rest seconds, so the wall is the slowest
-# test rather than the sum, which was ten minutes. The slow four are named first and so start
+# directory of its own, four of them take between one and a half and three minutes apiece (a
+# bound exercised in real time, a fake that sleeps to be killed) and the rest seconds, so the
+# wall is the slowest test rather than the sum. The slow four are named first and so start
 # first. Each writes its own log, printed whole under its heading once it has ended, in the
-# order named, so the suite's log reads as it did, in a batch at the end rather than live.
+# order named, so the suite's log carries every test's output in a batch at the end rather
+# than live; a missing test's heading and error are printed as the start loop reaches it.
 suite_scripts() {
   local status=0 test i passed
   local names=() started=()
@@ -602,7 +603,6 @@ suite_scripts() {
       continue
     fi
     "scripts/tests/$test-test.sh" > "$RESULTS/script-$test.log" 2>&1 &
-    running+=("$!")
     echo "$!" >> "$pids"
     names+=("$test")
     started+=("$!")
@@ -613,7 +613,6 @@ suite_scripts() {
     cat "$RESULTS/script-${names[$i]}.log"
     [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
   done
-  running=()
   return "$status"
 }
 

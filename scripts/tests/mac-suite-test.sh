@@ -355,8 +355,8 @@ suite scripts-missing scripts
 is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure "
 fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
 
-# The tests run at once: two of them each wait, bounded, for the other to have started, which
-# one started after the other ended would never see.
+# The tests run at once: two of them each wait, bounded, for the other to have started; run
+# one after the other, the first would end before the second began and never see it.
 mkdir -p "$work/meet"
 fake "$tree/scripts/tests/review-cap-test.sh" "touch '$work/meet/review-cap'; for _ in \$(seq 50); do [ -e '$work/meet/review-prompt' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
 fake "$tree/scripts/tests/review-prompt-test.sh" "touch '$work/meet/review-prompt'; for _ in \$(seq 50); do [ -e '$work/meet/review-cap' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
@@ -376,6 +376,7 @@ export CALLS="$work/scripts-signal.calls" RESULTS_DIR="$work/scripts-signal.resu
 (cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" scripts) \
   > "$work/scripts-signal.log" 2>&1 &
 pid=$!
+running=$pid
 for _ in $(seq 100); do [ -s "$work/sleepers/janitor" ] && [ -s "$work/sleepers/validate-host" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
 sleepers="$(cat "$work/sleepers/janitor" "$work/sleepers/validate-host" 2>/dev/null | tr '\n' ' ')"
 is "signal during the tests: both sleepers are on the pids file" \
@@ -383,6 +384,7 @@ is "signal during the tests: both sleepers are on the pids file" \
 kill -TERM "$pid"
 for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 wait "$pid"; status=$?
+running=""
 is "signal during the tests: exits 143" "$status" 143
 for _ in $(seq 30); do alive=0; for p in $sleepers; do kill -0 "$p" 2>/dev/null && alive=1; done; [ "$alive" = 0 ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
 left=""; for p in $sleepers; do kill -0 "$p" 2>/dev/null && { left="$left $p"; kill "$p" 2>/dev/null; }; done
