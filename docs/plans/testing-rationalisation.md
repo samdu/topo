@@ -14,7 +14,7 @@ A validation runs its suites one after another in the one slot: `topo_unit`, the
 
 The UI tests themselves: a test is a launch of the app (8 to 10 s on the simulator) and then waits on elements with bounds of 10 to 60 s, none of which is a sleep. The slowest are the ones that launch more than once: `StatusNoticeTests` launches once per notice fixture inside two of its tests (71 s and 72 s), and `TopoPlacementTests`, `TopoOnTheGlassTests` and `DraftRowTests` launch per test at 20 to 60 s each. `CarryJudgeTests`, ten tests in 0.5 s, launches nothing and sits in the UI target.
 
-Flakes: the kept logs hold one red validation, and it is the iOS 27 runtime move's fifteen (keyboard focus, a table rule's width, the widgets' reference pictures), which `buddy/sim-runtime-27` is fixing. The 200 ms sleep in the mirror's test was #416. No other intermittent failure is on record; the UI tests' waits are all bounded `waitForExistence` calls.
+Flakes: the kept logs hold one red validation, and it is the iOS 27 runtime move's fifteen (keyboard focus, a table rule's width, the widgets' reference pictures), which `buddy/sim-runtime-27` is fixing. The 200 ms sleep in the mirror's test was #416. No other intermittent failure is in the ten runs kept; the UI tests' waits are all bounded `waitForExistence` calls.
 
 ## Ranked
 
