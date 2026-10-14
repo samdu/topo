@@ -31,4 +31,5 @@ After 1 and 2 a validation on buddybox alone is about 36 min at the median; afte
 ## Considered and not done
 
 - **Parallel UI testing on clones** (`-parallel-testing-enabled`, two workers): 48 quiet tests in about 9 min instead of 18. Not on buddybox, whose memory is shared with the voice assistant and holds one suite's simulators; worth one measured run of `topo_ui:quiet` on a lent Mac.
+- **buddybox's second slot.** Two slots are made under `~/Library/Caches/topo-validate/slots`, and the second is free (no process, no lock) and used by no run whose environment does not set `TOPO_VALIDATE_SLOTS=2`, which tonight's runs did not. Two validations at once on buddybox is a memory judgement against the voice assistant resident beside them (`docs/testing.md`, *One suite on buddybox at a time*), so it is Sam's call, not a change here.
 - **Shortening the scripts' tests' own waits** (fakes that sleep 600 s to be killed, bounds of 7 s exercised in real time): a test at a time and each a different wait; 2 returns most of the minutes without touching what each test holds.
