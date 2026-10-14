@@ -218,7 +218,7 @@ struct ScriptedVoice: VoiceEngine {
         guard loads else { throw VoiceError.unavailable("no models here") }
     }
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         let script = frames(text)
         return AsyncThrowingStream { continuation in
             for samples in script {
@@ -252,7 +252,7 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
 
     func load(base: URL) async throws {}
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
@@ -284,7 +284,7 @@ final class HeldSecondSentence: VoiceEngine, @unchecked Sendable {
 
     func load(base: URL) async throws {}
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         let mine = lock.withLock { asked += 1; return asked }
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -313,7 +313,7 @@ final class FramesAfterTheInterruption: VoiceEngine, @unchecked Sendable {
 
     func load(base: URL) async throws {}
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(seconds: Self.lengths[0]), rate: Voice.rate))
