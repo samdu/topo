@@ -46,8 +46,11 @@
 #      worktree there under its lock (one such worktree, or two where validate-host.sh lent
 #      the Mac for two validations at once, and never two suites of one name), the commit's `scripts/mac-suite.sh --check` asked whether
 #      the Mac can run the suite, and the suite run in its login session, held awake, its
-#      results copied into this run's logs. `topo_ui` runs here whatever is named: the audio
-#      lane is buddybox's. A Mac that is not reached, lacks something or loses the suite partway
+#      results copied into this run's logs. `topo_ui` goes as its two parts then: the
+#      quiet one (`topo_ui:quiet`, every UI class but the microphone's) there as any suite,
+#      and the microphone's (`topo_ui:mic`) here whatever is named, the audio lane being
+#      buddybox's, and last, so the slot here is not held under a suite there. With the Mac
+#      busy, unusable or losing the quiet part, `topo_ui` runs here whole in one call. A Mac that is not reached, lacks something or loses the suite partway
 #      is said, runs nothing more of this validation, and is never a red suite: the suite
 #      runs here. A pass counts only when the connection outlived it. A red result the Mac
 #      wrote is red, as this Mac's would be, whatever there made it so.
@@ -55,7 +58,8 @@
 #      A red suite pushes nothing. --no-push never pushes.
 #   5. Posts the statuses to the commit, once origin's branch is at it: `local/<suite>` as
 #      `success` or `failure` for each suite run, and `local/real_ear` beside a `topo_ui` that
-#      passed on the full lane. GitHub takes a status only for a commit it has, which is why the
+#      passed on the full lane. `topo_ui` run as its two parts is the one status, a success
+#      when both are. GitHub takes a status only for a commit it has, which is why the
 #      push comes first; a commit that was already origin's head when the run began (a draft
 #      pushed without this script) gets its statuses whatever the suites did. A suite the choice
 #      left out gets none, and `test` asks for none.
@@ -365,7 +369,7 @@ exit "$status"
 # lacking something, or lost partway. Only a suite that ran to a result there has one: a Mac
 # that fell asleep is not a red suite, and the suite is still to run.
 run_on() {
-  local at="$1" suite="$2" run="$short-$$-$2" status=0 began said
+  local at="$1" suite="$2" run="$short-$$-${2/:/-}" status=0 began said
   local there="Library/Caches/topo-validate"
   ssh_to "$at" "mkdir -p $there/logs && { [ -d $there/repo.git ] || git init --quiet --bare $there/repo.git; }" \
     || { echo "$at: not reached; it runs nothing of this validation."; return 2; }
@@ -578,10 +582,11 @@ keep() {
   rm -f "$slot_dir/suite"
 }
 
-# run_here <suite> — the suite in this run's checkout, its lock already on descriptor 6.
+# run_here <suite> <name> — the suite in this run's checkout, the lock of its name already on
+# descriptor 6: a part of topo_ui holds topo_ui's.
 run_here() {
   local suite="$1" suite_status=0 said
-  echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/suite-$suite.holder"
+  echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/suite-$2.holder"
   echo "$suite: began $(date '+%H:%M')"
   suite_started=$SECONDS
   keep start_suite "$suite"
@@ -632,6 +637,12 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   started=$SECONDS
 
   remaining=" ${chosen[*]} "
+  # With another Mac named, topo_ui is its two parts: the quiet one, which may leave this Mac
+  # as any suite may, and the microphone's, which never does and is the last thing the run
+  # does, so the slot here is not held under a suite on the other Mac.
+  if [ -n "$hosts" ]; then
+    case "$remaining" in *" topo_ui "*) remaining="${remaining/ topo_ui / topo_ui:quiet }topo_ui:mic " ;; esac
+  fi
   hosts_at=0   # when a host found busy is asked again
   while [ "$remaining" != " " ]; do
     suite=""
@@ -639,7 +650,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     # to run that may leave this one.
     if [ -n "$hosts" ] && [ "$SECONDS" -ge "$hosts_at" ]; then
       for candidate in $remaining; do
-        [ "$candidate" != topo_ui ] || continue
+        case "$candidate" in topo_ui | topo_ui:mic) continue ;; esac
         for at in $hosts; do
           # Out of the line for as long as this takes: the Mac says it is busy on the same
           # connection that would start the suite, and nobody waits here behind a run that
@@ -668,18 +679,22 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     fi
     if [ -z "$suite" ] && [ -n "$slot" ]; then
       for candidate in $remaining; do
-        exec 6>> "$cache/suite-$candidate.lock"
+        # A part of topo_ui holds topo_ui's name here, the lane being one a Mac; and with both
+        # parts still to run here they are the suite whole, in one call.
+        name="${candidate%%:*}" what="$candidate"
+        case "$name:$remaining" in topo_ui:*" topo_ui:quiet "*) case "$remaining" in *" topo_ui:mic "*) what=topo_ui ;; esac ;; esac
+        exec 6>> "$cache/suite-$name.lock"
         if ! lockf -s -t 0 6; then
-          held="$held; $candidate: $(cat "$cache/suite-$candidate.holder" 2>/dev/null || echo unknown)"
+          held="$held; $candidate: $(cat "$cache/suite-$name.holder" 2>/dev/null || echo unknown)"
         else
           # Free, and on record as running in some slot: its script is gone.
           orphan=""
           for dir in "$cache"/slots/*/; do
-            if found="$(orphan_in "$dir")" && [ "${found#* }" = "$candidate" ]; then orphan="${found%% *}"; fi
+            if found="$(orphan_in "$dir")" && found_suite="${found#* }" && [ "${found_suite%%:*}" = "$name" ]; then orphan="${found%% *}"; fi
           done
           if [ -z "$orphan" ]; then
-            suite="$candidate"
-            run_here "$suite"
+            suite="$what"
+            run_here "$suite" "$name"
             exec 6>&-
             break
           fi
@@ -693,6 +708,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
       continue
     fi
     say_at="$waited"
+    if [ "$suite" = topo_ui ]; then remaining="${remaining/ topo_ui:quiet / }"; remaining="${remaining/ topo_ui:mic / }"; fi
     remaining="${remaining/ $suite / }"
   done
   trap - TERM INT HUP
@@ -753,13 +769,18 @@ where="~${commit_logs#"$HOME"}"
 [ "$where" != "~$commit_logs" ] || where="$commit_logs"
 for suite in ${chosen[@]+"${chosen[@]}"}; do
   # Red by any line that says so, as `red` above is read: never the last word of several.
-  if grep -q "^$suite=failure$" <<<"$results" || ! grep -q "^$suite=success$" <<<"$results"; then
-    state=failure said=failed
-  else
-    state=success said=passed
-  fi
-  on="$(sed -n "s/^$suite=//p" <<<"$ran_on")"
-  post "local/$suite" "$state" "$suite $said, $lane lane, $(sed -n "s/^$suite=//p" <<<"$took") min on ${on:-$host};"
+  # topo_ui that ran as its two parts is one status: a success when each part is.
+  parts="$suite"
+  [ "$suite" != topo_ui ] || grep -q "^topo_ui=" <<<"$results" || parts="topo_ui:quiet topo_ui:mic"
+  state=success said=passed where_ran=""
+  for part in $parts; do
+    if grep -q "^$part=failure$" <<<"$results" || ! grep -q "^$part=success$" <<<"$results"; then state=failure said=failed; fi
+    on="$(sed -n "s/^$part=//p" <<<"$ran_on")"
+    # Short, the second part's the shorter: with the logs' path there are 140 characters for all of it.
+    unit=" min"; [ -z "$where_ran" ] || unit=""
+    where_ran="$where_ran${where_ran:+ + }$(sed -n "s/^$part=//p" <<<"$took")$unit on ${on:-$host}"
+  done
+  post "local/$suite" "$state" "$suite $said, $lane lane, $where_ran;"
   if [ "$suite" = topo_ui ] && [ "$lane" = full ] && [ "$state" = success ]; then
     post local/real_ear success "Parakeet heard the fixture on $host;"
   fi

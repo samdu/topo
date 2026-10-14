@@ -14,6 +14,13 @@
 #   topo_ui    TopoUITests behind the input-capable audio lane (scripts/ci-audio-lane.sh). The
 #              full lane adds Parakeet's models and the test in which the real ear hears the
 #              fixture; the fast lane deselects that test by name, so it neither runs nor skips.
+#              It has two parts, each a suite by its own name with its own line in suites.txt
+#              and its own result bundle: `topo_ui:quiet`, every UI test class but
+#              MicrophonePressTests, with no audio lane, no display hold, no models and nothing
+#              that opens a microphone or speaks (a tripwire reads the tests' source first, `quiet_launches`
+#              below, and no test runs when it names a launch); and `topo_ui:mic`, that class alone behind
+#              everything `topo_ui` has. One is all but the class and the other the class, so
+#              no test is in neither.
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
 #              watch's suite, and the builds no suite hosts: the watch and TV for their own
 #              simulators, a Release build for iOS devices, and the hub.
@@ -47,8 +54,9 @@
 # counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
 # whose disk is encrypted, this user's session on the screen and unlocked; of `scripts` alone
 # it asks jq, node, a python3 that runs and the lid. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
-# a suite there, and `topo_ui` is refused on any Mac it is asked of this way: the audio lane
-# installs a driver and takes the Mac's default input and output.
+# a suite there, and `topo_ui` and `topo_ui:mic` are refused on any Mac they are asked of this way: the
+# audio lane installs a driver and takes the Mac's default input and output. `topo_ui:quiet`
+# is asked what `topo_unit` is.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,6 +72,10 @@ XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
 SUITES=(topo_unit topo_ui others scripts)
+# The class the audio lane exists for, and the order everything asked for runs in: the parts of
+# `topo_ui` are suites by their own names.
+MIC_CLASS="TopoUITests/MicrophonePressTests"
+ORDER=(topo_unit topo_ui:quiet topo_ui topo_ui:mic others scripts)
 # What --check asks of the disk: a runtime's simulators, a cold DerivedData and the pinned
 # downloads are most of it, and a Mac somebody else is using is not left full.
 MIN_FREE_GB=10
@@ -87,7 +99,7 @@ done
 case "$lane" in full | fast) ;; *) echo "no such lane '$lane': full or fast" >&2; exit 2 ;; esac
 [ "${#asked[@]}" -gt 0 ] || { echo "no suite named: one or more of ${SUITES[*]}" >&2; exit 2; }
 for suite in "${asked[@]}"; do
-  case " ${SUITES[*]} " in *" $suite "*) ;; *) echo "no such suite '$suite': one of ${SUITES[*]}" >&2; exit 2 ;; esac
+  case " ${ORDER[*]} " in *" $suite "*) ;; *) echo "no such suite '$suite': one of ${SUITES[*]}, or topo_ui:quiet or topo_ui:mic" >&2; exit 2 ;; esac
 done
 [ -n "$RESULTS" ] && [ -n "$cache" ] || { echo "--results and --cache each take a directory" >&2; exit 2; }
 
@@ -146,7 +158,7 @@ if [ "$check" = yes ] && [ "$builds" = yes ]; then
   for suite in "${asked[@]}"; do
     case "$suite" in
       others) has_simulator "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" || { err "no Apple Watch simulator of $WATCHOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; } ;;
-      topo_ui) err "topo_ui runs on buddybox alone: its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
+      topo_ui | topo_ui:mic) err "$suite runs on buddybox alone: its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
     esac
   done
   stamp="Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
@@ -174,9 +186,10 @@ if [ "$check" = yes ]; then
   lid="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null || true)"
   case "$lid" in *'"AppleClamshellState" = Yes'*) err "this Mac's lid is closed."; lacks=1 ;; esac
   # A Mac whose disk is encrypted gives no file complete protection while its screen is
-  # locked, and TopoTests asks that of files in the simulator's home.
+  # locked, and the app asks that of files in the simulator's home, under TopoTests and under
+  # the UI tests alike.
   case " ${asked[*]} " in
-    *" topo_unit "*)
+    *" topo_unit "* | *" topo_ui:quiet "*)
       # The session of the user the suite runs as, by name: open when it is the one on the
       # screen and not locked. Another user's, or the login window's, is not this one's.
       sessions="$(ioreg -n Root -d1 2>/dev/null | tr '}' '\n' || true)"
@@ -188,7 +201,7 @@ if [ "$check" = yes ]; then
         *) open=no ;;
       esac
       if [ "$open" = no ]; then
-        case "$vault" in *"FileVault is On"*) err "this Mac's disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen: no file can be given complete protection until it is unlocked, and topo_unit asks for that."; lacks=1 ;; esac
+        case "$vault" in *"FileVault is On"*) err "this Mac's disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen: no file can be given complete protection until it is unlocked, and topo_unit and topo_ui:quiet ask for that."; lacks=1 ;; esac
       fi
       ;;
   esac
@@ -380,52 +393,116 @@ display_held() {
   done
   return 1
 }
+# A tripwire ahead of the quiet part's tests, which reads the UI tests' source and nothing
+# else. In each file but the microphone's it follows every `let <name> = XCUIApplication()`
+# line by line, the last write winning, and names a `<name>.launch()` reached when both
+# `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` are not, by that line, set to "loading" on that
+# name, in a statement that ends its line with that word: never set, set to something else since, removed (`removeValue`), or the dictionary
+# replaced or merged over since. It names a launch on a name the file did not make that way.
+# The quiet part leaves out the microphone's class and this leaves out its file, so it names
+# any other class declared in that file. It is false when it names anything, or finds no
+# launch at all. It does not see what the source does not say on those lines: an environment
+# changed through a helper the application is handed to, a loop, or a key that is not a
+# literal is not caught.
+QUIET_TESTS=Tests/ClientUI
+quiet_launches() {
+  local file found=0 bad=0 out mic="${MIC_CLASS##*/}"
+  for file in "$QUIET_TESTS"/*.swift; do
+    [ -f "$file" ] || continue
+    case "$file" in
+      */"$mic.swift")
+        out="$(awk -v file="$file" -v mic="$mic" '
+          match($0, /^[ \t]*((final|private|fileprivate|public|internal|open)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+            name = substr($0, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
+            if (name != mic && name != "func" && name != "var" && name != "let") print file ":" NR ": class " name ", which the quiet part runs and this does not read"
+          }' "$file")"
+        [ -z "$out" ] || { echo "$out"; bad=1; }
+        continue ;;
+    esac
+    out="$(awk -v file="$file" '
+      match($0, /let [A-Za-z_][A-Za-z0-9_]* = XCUIApplication\(\)/) {
+        name = substr($0, RSTART + 4, RLENGTH - 4); sub(/ = .*/, "", name); made[name] = 1; ear[name] = 0; voice[name] = 0
+      }
+      {
+        line = $0
+        while (match(line, /[A-Za-z_][A-Za-z0-9_]*\.launchEnvironment/)) {
+          name = substr(line, RSTART, RLENGTH); sub(/\..*/, "", name); rest = substr(line, RSTART + RLENGTH); line = rest
+          if (match(rest, /^\["TOPO_DEBUG_EAR"\] = /)) ear[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
+          else if (match(rest, /^\["TOPO_DEBUG_VOICE"\] = /)) voice[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
+          else if (rest ~ /^\["[A-Za-z0-9_]*"\] = /) continue
+          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_EAR"\)/) ear[name] = 0
+          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_VOICE"\)/) voice[name] = 0
+          else if (rest ~ /^\.removeValue\(forKey: "[A-Za-z0-9_]*"\)/) continue
+          else { ear[name] = 0; voice[name] = 0 }
+        }
+      }
+      match($0, /[A-Za-z_][A-Za-z0-9_]*\.launch\(\)/) {
+        name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name); n++
+        if (!made[name] || !ear[name] || !voice[name]) print file ":" NR ": " name ".launch()"
+      }
+      END { print "launches " n + 0 }' "$file")"
+    found=$((found + $(sed -n 's/^launches //p' <<<"$out")))
+    out="$(grep -v '^launches ' <<<"$out")"
+    [ -z "$out" ] || { echo "$out"; bad=1; }
+  done
+  [ "$found" -gt 0 ] || { echo "no launch of the app was found under $QUIET_TESTS"; bad=1; }
+  return "$bad"
+}
+# suite_topo_ui <whole|quiet|mic>
 suite_topo_ui() {
-  local status=0 udid models="" lane_status
+  local part="$1" status=0 udid models="" lane_status name=Topo-ui
+  local label=""
+  [ "$part" = whole ] || { name="Topo-ui-$part"; label=", $part"; }
   ui_steps() {
     echo "Lane: $lane"
-    # BlackHole as this Mac's default input and output, and the fixture looping into it from
-    # one long-lived feeder. It starts before the simulator boots, because a simulator's audio
-    # binds to the coreaudiod it booted against and the lane restarts coreaudiod.
-    say "Audio loopback for the microphone test"
-    # The display is kept on for as long as this script lives: when it sleeps the loopback's
-    # input goes silent and stays so until the lane is started again, and the microphone test
-    # hears nothing. No lane is started without the hold, no test is started once it has ended,
-    # and a suite whose tests it ended under is red.
-    caffeinate -d -w $$ &
-    display_hold=$!
-    display_held || { err "the display could not be held on: \`caffeinate -d\` (pid $display_hold) is not running with its hold among \`pmset -g assertions\`. No audio lane was started."; return 1; }
-    # Ours to stop from the moment `start` is called, not from its success: one that fails
-    # after pinning the devices, or a signal while it is under way, leaves a feeder and the
-    # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
-    # found another run's lane, which is not this run's to stop.
-    # The start and the note of how it ended are one command to this shell, so a signal's trap
-    # cannot run between them.
-    rm -f "$RESULTS/lane-start.status"
-    lane_started=starting
-    (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
-    lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
-    if [ "$lane_status" = 3 ]; then
-      lane_started=no
-      err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
-      return 1
+    if [ "$part" = quiet ]; then
+      local loud
+      loud="$(quiet_launches)" || { err "the UI tests' source does not show every launch outside ${MIC_CLASS##*/} leaving the ear and the voice loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE), and the quiet part has no lane for the real ones. No test was run."; echo "$loud" >&2; return 1; }
     fi
-    lane_started=yes
-    [ "$lane_status" = 0 ] || return 1
+    if [ "$part" != quiet ]; then
+      # BlackHole as this Mac's default input and output, and the fixture looping into it from
+      # one long-lived feeder. It starts before the simulator boots, because a simulator's audio
+      # binds to the coreaudiod it booted against and the lane restarts coreaudiod.
+      say "Audio loopback for the microphone test"
+      # The display is kept on for as long as this script lives: when it sleeps the loopback's
+      # input goes silent and stays so until the lane is started again, and the microphone test
+      # hears nothing. No lane is started without the hold, no test is started once it has ended,
+      # and a suite whose tests it ended under is red.
+      caffeinate -d -w $$ &
+      display_hold=$!
+      display_held || { err "the display could not be held on: \`caffeinate -d\` (pid $display_hold) is not running with its hold among \`pmset -g assertions\`. No audio lane was started."; return 1; }
+      # Ours to stop from the moment `start` is called, not from its success: one that fails
+      # after pinning the devices, or a signal while it is under way, leaves a feeder and the
+      # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
+      # found another run's lane, which is not this run's to stop.
+      # The start and the note of how it ended are one command to this shell, so a signal's trap
+      # cannot run between them.
+      rm -f "$RESULTS/lane-start.status"
+      lane_started=starting
+      (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
+      lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
+      if [ "$lane_status" = 3 ]; then
+        lane_started=no
+        err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
+        return 1
+      fi
+      lane_started=yes
+      [ "$lane_status" = 0 ] || return 1
+    fi
 
     new_simulator ui "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
     xcrun simctl boot "$udid" || return 1
 
     # Parakeet's models, fetched from the manifest's pinned revisions and verified file by
     # file. The full lane only.
-    if [ "$lane" = full ]; then
+    if [ "$lane" = full ] && [ "$part" != quiet ]; then
       say "The ear's models for the microphone test"
       scripts/fetch-ear-models.sh "$cache/ear-models" || return 1
       models="$cache/ear-models"
     fi
 
     say "xcodebuild build-for-testing (Topo)"
-    run "$RESULTS/Topo-ui-build.log" xcodebuild build-for-testing \
+    run "$RESULTS/$name-build.log" xcodebuild build-for-testing \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" || return 1
 
@@ -433,35 +510,44 @@ suite_topo_ui() {
     # is exactly one and that it is the microphone's. That count is only exact on a simulator
     # that has answered nothing, so the app's grants are cleared first and the flag tells the
     # test so.
-    say "Clear Topo's privacy grants on the simulator"
     xcrun simctl bootstatus "$udid" -b >/dev/null || return 1
-    xcrun simctl privacy "$udid" reset all zone.hexagon.topo || return 1
+    if [ "$part" != quiet ]; then
+      say "Clear Topo's privacy grants on the simulator"
+      xcrun simctl privacy "$udid" reset all zone.hexagon.topo || return 1
 
-    # A lane that has died fails here by name, before and after the suite, rather than only as
-    # a silent tap inside the microphone test.
-    say "Audio lane holds before the microphone test"
-    scripts/ci-audio-lane.sh check before || return 1
-    # The hold is one process from before the lane to after the tests, so the same pid still
-    # holding after the tests held throughout; asked here too, so no test starts under one
-    # that ended while the simulator booted and the app built.
-    display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended before the tests began, so the display could sleep and silence the loopback. No test was run."; return 1; }
+      # A lane that has died fails here by name, before and after the suite, rather than only as
+      # a silent tap inside the microphone test.
+      say "Audio lane holds before the microphone test"
+      scripts/ci-audio-lane.sh check before || return 1
+      # The hold is one process from before the lane to after the tests, so the same pid still
+      # holding after the tests held throughout; asked here too, so no test starts under one
+      # that ended while the simulator booted and the app built.
+      display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended before the tests began, so the display could sleep and silence the loopback. No test was run."; return 1; }
+    fi
 
-    say "xcodebuild test (Topo, UI)"
+    say "xcodebuild test (Topo, UI${label})"
     local select=(-only-testing:TopoUITests) ui_status=0
-    if [ "$lane" = fast ]; then
+    case "$part" in
+      quiet) select+=("-skip-testing:$MIC_CLASS") ;;
+      mic) select=("-only-testing:$MIC_CLASS") ;;
+    esac
+    if [ "$lane" = fast ] && [ "$part" != quiet ]; then
       select+=("-skip-testing:$REAL_EAR_TEST")
       echo "Fast lane: $REAL_EAR_TEST is deselected."
     fi
-    rm -rf "$RESULTS/Topo-ui.xcresult"
+    rm -rf "$RESULTS/$name.xcresult"
     # The lane and the reset are declared to the test runner, which then fails a hold refused
     # for want of an input and holds the prompt count exact.
-    local runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
+    # The quiet part declares neither: nothing in it holds the microphone or counts a prompt.
+    local runner=()
+    [ "$part" = quiet ] || runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
     [ -z "$models" ] || runner+=("TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$models")
-    run "$RESULTS/Topo-ui.log" bounded 3600 env "${runner[@]}" xcodebuild test-without-building \
+    run "$RESULTS/$name.log" bounded 3600 env ${runner[@]+"${runner[@]}"} xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
       "${select[@]}" \
-      -resultBundlePath "$RESULTS/Topo-ui.xcresult" || ui_status=1
+      -resultBundlePath "$RESULTS/$name.xcresult" || ui_status=1
+    [ "$part" != quiet ] || return "$ui_status"
 
     say "Audio lane holds after the microphone test"
     scripts/ci-audio-lane.sh check after || ui_status=1
@@ -477,9 +563,15 @@ suite_topo_ui() {
   # The target as a whole; and on the full lane the real-ear test by name: the target check
   # counts test cases, and a lane that meant to run Parakeet and did not would still pass it.
   say "Require every test target ran and passed"
-  scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-ui.xcresult" TopoUITests || status=1
-  if [ "$lane" = full ]; then
-    scripts/ci-require-tests.sh named "$RESULTS/Topo-ui.xcresult" "$REAL_EAR_TEST" || status=1
+  scripts/ci-require-tests.sh xcresult "$RESULTS/$name.xcresult" TopoUITests || status=1
+  # The parts are all but one class and that class: it is in the microphone part's results,
+  # passed, and not in the quiet part's.
+  case "$part" in
+    quiet) scripts/ci-require-tests.sh absent "$RESULTS/$name.xcresult" "$MIC_CLASS" || status=1 ;;
+    mic) scripts/ci-require-tests.sh named "$RESULTS/$name.xcresult" "$MIC_CLASS" || status=1 ;;
+  esac
+  if [ "$lane" = full ] && [ "$part" != quiet ]; then
+    scripts/ci-require-tests.sh named "$RESULTS/$name.xcresult" "$REAL_EAR_TEST" || status=1
   fi
   return "$status"
 }
@@ -619,11 +711,16 @@ else
   prepared=no
   err "the toolchain, the projects or the guest's framework could not be prepared; no suite ran."
 fi
-for suite in "${SUITES[@]}"; do
+for suite in "${ORDER[@]}"; do
   case " ${asked[*]} " in *" $suite "*) ;; *) continue ;; esac
   say "Suite: $suite"
   started=$SECONDS
-  if [ "$prepared" = yes ] && "suite_$suite"; then result=success; else result=failure; overall=1; fi
+  case "$suite" in
+    topo_ui) call=(suite_topo_ui whole) ;;
+    topo_ui:*) call=(suite_topo_ui "${suite#topo_ui:}") ;;
+    *) call=("suite_$suite") ;;
+  esac
+  if [ "$prepared" = yes ] && "${call[@]}"; then result=success; else result=failure; overall=1; fi
   echo "$suite=$result" >> "$RESULTS/suites.txt"
   say "Suite: $suite $result in $(((SECONDS - started) / 60)) min"
 done
