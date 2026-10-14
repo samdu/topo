@@ -10,7 +10,7 @@ import Testing
         let url = URL(string: "http://localhost:\(listener.port)/callback?code=abc&state=xyz")!
         let (body, response) = try await URLSession.shared.data(from: url)
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
-        #expect(String(decoding: body, as: UTF8.self).contains("Signed in"))
+        #expect(String(decoding: body, as: UTF8.self).contains("Approval received"))
         let caught = try await hit
         #expect(ClaudeOAuth.parseCallback(caught)?.code == "abc")
     }
@@ -24,21 +24,21 @@ import Testing
         listener.cancel()
     }
 
-    /// The login's callback sends the browser on to the guest's authorization.
-    @Test func aSuccessRedirectAnswersTheCallbackWithIt() async throws {
-        let listener = try LoopbackCallback()
-        let next = URL(string: "https://claude.com/cai/oauth/authorize?scope=user%3Ainference")!
-        listener.redirectOnSuccess(to: next)
-        final class NoFollow: NSObject, URLSessionTaskDelegate {
-            func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                            newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-        }
-        let session = URLSession(configuration: .ephemeral, delegate: NoFollow(), delegateQueue: nil)
-        let (_, response) = try await session.data(from: URL(string: "http://localhost:\(listener.port)/callback?code=abc&state=xyz")!)
+    /// The page says the approval arrived and how to get back, and nothing of what the browser
+    /// brought: it is written before the code is exchanged, in whichever browser carried it.
+    @Test func thePageOffersTheWayBackAndCarriesNothingOfTheRequest() async throws {
+        let listener = try LoopbackCallback(back: URL(string: "topo://open")!)
+        let (body, response) = try await URLSession.shared.data(from: URL(string: "http://localhost:\(listener.port)/callback?code=abc123secret&state=xyz789state")!)
         let http = try #require(response as? HTTPURLResponse)
-        #expect(http.statusCode == 302)
-        #expect(http.value(forHTTPHeaderField: "Location") == next.absoluteString)
-        #expect(ClaudeOAuth.parseCallback(try await listener.wait())?.code == "abc")
+        let page = String(decoding: body, as: UTF8.self)
+        #expect(http.statusCode == 200)
+        #expect(http.value(forHTTPHeaderField: "Location") == nil)
+        #expect(page.contains("<a href=\"topo://open\""))
+        #expect(page.contains("Approval received"))
+        #expect(!page.contains("Signed in"), "the page said the sign-in worked before the exchange")
+        #expect(!page.contains("abc123secret") && !page.contains("xyz789state"))
+        #expect(ClaudeOAuth.parseCallback(try await listener.wait())?.code == "abc123secret")
+        #expect(!LoopbackCallback.received(back: nil).contains("href"), "a device with no scheme offered a link")
     }
 
     /// A callback that lands before anyone waits is kept for the wait, not dropped as cancelled.

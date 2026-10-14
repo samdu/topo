@@ -57,16 +57,22 @@ extension Stubbed {
             for _ in 0..<200 where !done(signIn.phase) { try await Task.sleep(for: .milliseconds(10)) }
         }
 
-        /// Runs the ordinary authorization through the loopback listener and returns where its
-        /// callback sent the browser.
+        /// Runs the ordinary authorization through the loopback listener and returns the guest's
+        /// authorization, which the sign-in hands the view to open and the browser is not sent to:
+        /// the login's callback is answered with a page, whichever browser carried it.
         func approveTheLogin(_ signIn: SignIn, browser: Browser) async throws -> URL {
             let url = signIn.start()
             let response = try await browser.approve(url, code: "login-code")
-            #expect(response.statusCode == 302, "the login's callback did not send the browser on to the guest's authorization")
-            let next = try #require(response.value(forHTTPHeaderField: "Location").flatMap(URL.init(string:)))
+            #expect(response.statusCode == 200, "the login's callback sent the browser somewhere")
+            #expect(response.value(forHTTPHeaderField: "Location") == nil)
             try await settle(signIn) { if case .approvingGuest = $0 { true } else { false } }
+            guard case .approvingGuest(let next, pasteHint: false) = signIn.phase else {
+                throw Unopened(phase: signIn.phase)
+            }
             return next
         }
+
+        struct Unopened: Error { let phase: SignIn.Phase }
 
         @Test func theGuestsAuthorizationIsAskedForAsSetupTokenAsksForOne() async throws {
             StubURLProtocol.reset()
@@ -112,7 +118,6 @@ extension Stubbed {
             let browser = Browser()
 
             let next = try await approveTheLogin(signIn, browser: browser)
-            #expect(signIn.phase == .approvingGuest(opening: nil, pasteHint: false))
             #expect(Self.query(next, "scope") == "user:inference")
             let ordinaryBefore = try #require(try store.load())
             #expect(ordinaryBefore.refreshToken == "first")
@@ -166,6 +171,65 @@ extension Stubbed {
             #expect(handed.source == .accessToken)
         }
 
+        /// The sheet closed while a code is being exchanged declines nothing: what it shows then is
+        /// the page saying the approval arrived. Closed during the login's exchange, the guest's
+        /// authorization is still asked for; closed during the guest's, its token is still kept.
+        @Test func aSheetClosedDuringAnExchangeDeclinesNothing() async throws {
+            StubURLProtocol.reset()
+            defer { StubURLProtocol.reset() }
+            StubURLProtocol.responder = Self.tokenEndpoint()
+            let store = InMemoryTokenStore()
+            let guest = InMemoryTokenStore()
+            let signIn = SignIn(oauth: ClaudeOAuth(session: StubURLProtocol.session()), store: store, guestStore: guest)
+            let browser = Browser()
+            let closed = Closed()
+            // The request is in flight on the loader's thread, the sign-in suspended on it.
+            StubURLProtocol.beforeResponse = {
+                DispatchQueue.main.sync {
+                    MainActor.assumeIsolated {
+                        closed.phases.append(signIn.phase)
+                        signIn.cancel()
+                    }
+                }
+            }
+            let next = try await approveTheLogin(signIn, browser: browser)
+            #expect(closed.phases == [.exchanging])
+            _ = try await browser.approve(next, code: "guest-code")
+            try await settle(signIn) { $0 == .signedIn }
+            #expect(closed.phases == [.exchanging, .exchanging])
+            #expect(signIn.phase == .signedIn)
+            #expect(try guest.load()?.accessToken == "long-lived")
+            #expect(try store.load()?.refreshToken == "first")
+        }
+
+        @MainActor final class Closed { var phases: [SignIn.Phase] = [] }
+
+        /// A sheet's close answers only for what it was opened for. The login's, reported once the
+        /// guest's authorization is asked, declines nothing; neither does the close of a sheet for
+        /// another URL; the guest's own does.
+        @Test func aSheetsCloseAnswersOnlyForWhatItWasOpenedFor() async throws {
+            StubURLProtocol.reset()
+            defer { StubURLProtocol.reset() }
+            StubURLProtocol.responder = Self.tokenEndpoint()
+            let store = InMemoryTokenStore()
+            let guest = InMemoryTokenStore()
+            let signIn = SignIn(oauth: ClaudeOAuth(session: StubURLProtocol.session()), store: store, guestStore: guest)
+            let next = try await approveTheLogin(signIn, browser: Browser())
+            signIn.loginSheetClosed()
+            signIn.guestSheetClosed(URL(string: "https://example.com/another")!)
+            #expect(signIn.phase == .approvingGuest(opening: next, pasteHint: false), "a sheet that was not the guest's declined it")
+            signIn.guestSheetClosed(next)
+            #expect(signIn.phase == .signedIn)
+            #expect(try guest.load() == nil)
+
+            // Before its callback, the login's close ends the attempt.
+            _ = signIn.start()
+            signIn.guestSheetClosed(next)
+            #expect(signIn.phase == .waiting(pasteHint: false))
+            signIn.loginSheetClosed()
+            #expect(signIn.phase == .idle)
+        }
+
         /// A second exchange the endpoint refuses is the same fallback, and leaves the ordinary
         /// tokens as they were.
         @Test func aRefusedSecondExchangeStillSignsIn() async throws {
@@ -217,7 +281,7 @@ extension Stubbed {
             #expect(signIn.phase == .waiting(pasteHint: true))
             #expect(Self.query(login, "redirect_uri") == "https://platform.claude.com/oauth/code/callback")
             await signIn.finish(pasted: "login-code#\(try #require(Self.query(login, "state")))")
-            guard case .approvingGuest(let opening?, pasteHint: true) = signIn.phase else {
+            guard case .approvingGuest(let opening, pasteHint: true) = signIn.phase else {
                 Issue.record("the login's paste did not ask for the guest's authorization to be opened: \(signIn.phase)")
                 return
             }
@@ -240,7 +304,7 @@ extension Stubbed {
         }
 
         /// A device with no guest store (the hub) asks for no second authorization: one exchange,
-        /// and the callback is answered with the "Signed in" page rather than sent anywhere.
+        /// and it is signed in as that one lands.
         @Test func aDeviceWithNoGuestAsksForNoSecondAuthorization() async throws {
             StubURLProtocol.reset()
             defer { StubURLProtocol.reset() }
