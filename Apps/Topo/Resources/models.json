@@ -181,8 +181,8 @@
     },
     {
       "id": "pocket-tts-coreml",
-      "repo": "FluidInference/pocket-tts-coreml",
-      "revision": "91748676fe3c8b2eb3007b3125253bcd898202c3",
+      "repo": "samthehugenerd/Marius-Topo",
+      "revision": "0e896ab51092ac9ec3525688ee4918757e893983",
       "files": [
         {
           "path": "v2.1/english/cond_prefill_ane.mlmodelc/analytics/coremldata.bin",
@@ -227,22 +227,27 @@
         {
           "path": "v2.1/english/flow_decoder_fused.mlmodelc/analytics/coremldata.bin",
           "size": 243,
-          "sha256": "17cf344fd2be66e934982944a7a252da17087efbc9daac0d3dfb4e8e95797264"
+          "sha256": "9e45dc42347b497a8649b3681f3773dba063682af000e619fa5ecb567fdf5439"
         },
         {
           "path": "v2.1/english/flow_decoder_fused.mlmodelc/coremldata.bin",
-          "size": 413,
-          "sha256": "69ff9affa07e38b1a511ac8d71c594eeeb236389ddbe74f4fabdfa45db4edf7a"
+          "size": 412,
+          "sha256": "5695ecb3dd37b8b414a8f52ddfe8d2be67d3c3eed388c333aeed433190cb90f1"
+        },
+        {
+          "path": "v2.1/english/flow_decoder_fused.mlmodelc/metadata.json",
+          "size": 2175,
+          "sha256": "ed5883e791831d4f608b494537fa919d03e966687a2f36857b6a1620d2057878"
         },
         {
           "path": "v2.1/english/flow_decoder_fused.mlmodelc/model.mil",
-          "size": 333331,
-          "sha256": "0257898b9a6ce06c961959aae993bb27c558f509fbea7407d094b879f872ec3f"
+          "size": 58424,
+          "sha256": "36e60049529657f83327ba76c492a2cef43c09a62794296d67d5187fe7f5d2d0"
         },
         {
           "path": "v2.1/english/flow_decoder_fused.mlmodelc/weights/weight.bin",
-          "size": 19012608,
-          "sha256": "f28a1bd0af940a195802e9d702c9e050f3e69d265e582f3d0fdf4001709eb30c"
+          "size": 18997376,
+          "sha256": "85d30498346996233d415159852604a34380d2ea5cbdbd44bfc9bf0de6198fe2"
         },
         {
           "path": "v2.1/english/mimi_decoder.mlmodelc/analytics/coremldata.bin",

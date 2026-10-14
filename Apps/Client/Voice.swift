@@ -25,7 +25,7 @@ import FluidAudio
 /// too, only slower.
 ///
 /// The model is not in the bundle. `ModelDownloads` fetches it through the app's background
-/// session (about 351 MB of CoreML: the four bundles the `.ane` placement loads and the
+/// session (about 350 MB of CoreML: the four bundles the `.ane` placement loads and the
 /// constants beside them, listed file by file in the manifest) into the app's Application
 /// Support, and FluidAudio loads it from there, told to touch no network of its own. Until it is
 /// resident, or if it fails to load, a reply is not read aloud; the diagnostics `voice` row says
