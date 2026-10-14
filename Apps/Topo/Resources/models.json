@@ -182,27 +182,22 @@
     {
       "id": "pocket-tts-coreml",
       "repo": "samthehugenerd/Marius-Topo",
-      "revision": "31cc6848ec6b962f6297da910fe21b79cc9b7b01",
+      "revision": "0e896ab51092ac9ec3525688ee4918757e893983",
       "files": [
         {
           "path": "v2.1/english/cond_prefill_ane.mlmodelc/analytics/coremldata.bin",
           "size": 243,
-          "sha256": "1e43e4e1a4ab368d306f874dd3c26780da951d21fb0ab409df6ac83272faeed2"
+          "sha256": "1c9d0f384e454921a66cdd1a9fb8fa59fa0c5cd3703ca32a9792a97e67e8a1c2"
         },
         {
           "path": "v2.1/english/cond_prefill_ane.mlmodelc/coremldata.bin",
           "size": 1388,
-          "sha256": "c3c077205558f3841a17da03e832c8e25f647bcf82b16ff18f8d634221eab454"
-        },
-        {
-          "path": "v2.1/english/cond_prefill_ane.mlmodelc/metadata.json",
-          "size": 13190,
-          "sha256": "ed712cf8d3cf1af28674989c53b201c6ddc4f1a461870747b6d410dcdc231a83"
+          "sha256": "39d79bbbf366dca5fb7339c461952d79484e12da2b3642e45881afd4ddf82e7b"
         },
         {
           "path": "v2.1/english/cond_prefill_ane.mlmodelc/model.mil",
-          "size": 136095,
-          "sha256": "51e6c389501bddfdb15cc1a10d9fff5b072f07060962850b74fac3ee678b53a9"
+          "size": 136093,
+          "sha256": "6013f10e803c50b3819610edc218662b9ad768d3f1c86a20ec37230c3c49a553"
         },
         {
           "path": "v2.1/english/cond_prefill_ane.mlmodelc/weights/weight.bin",
@@ -212,22 +207,17 @@
         {
           "path": "v2.1/english/flowlm_step_ane.mlmodelc/analytics/coremldata.bin",
           "size": 243,
-          "sha256": "b1703595fbef1e390fe280dc5284831a7021cc5449b3cdbdbca6105b3253eceb"
+          "sha256": "5718b06291735fe6e648b6980fb07209b5bbda339ecc8fb2c8a0dfa87fbaf54f"
         },
         {
           "path": "v2.1/english/flowlm_step_ane.mlmodelc/coremldata.bin",
           "size": 1414,
-          "sha256": "18b225d70182b7f3864e3e5d4d75f70f08252e26adcf80e47b99f744fdaef7a1"
-        },
-        {
-          "path": "v2.1/english/flowlm_step_ane.mlmodelc/metadata.json",
-          "size": 13396,
-          "sha256": "1109c6bffc220cd47fa9eed39f532941125825743e6196a5766f5734e5a32a86"
+          "sha256": "18e49a8e73db70da25caddcaac36bc77245d6bea30754a23df3b10c27fa4de73"
         },
         {
           "path": "v2.1/english/flowlm_step_ane.mlmodelc/model.mil",
-          "size": 156947,
-          "sha256": "66de1b94ab0053c60388a220ab64752a9892159172484d0f4d1866e01c78581b"
+          "size": 156945,
+          "sha256": "6880224e71de99e394323ec706fbbe28af9fb2b5eb8d8698d43ecaec33a6ff38"
         },
         {
           "path": "v2.1/english/flowlm_step_ane.mlmodelc/weights/weight.bin",
@@ -262,22 +252,22 @@
         {
           "path": "v2.1/english/mimi_decoder.mlmodelc/analytics/coremldata.bin",
           "size": 243,
-          "sha256": "c7d62f308af615a46306cf5a24dd4a90926364d18cb14565b607eebdaa0babbd"
+          "sha256": "be4199b44838e2fb199bb44b7649531d28fe847a1a6633fd9f8ca89576c5a7f8"
         },
         {
           "path": "v2.1/english/mimi_decoder.mlmodelc/coremldata.bin",
-          "size": 1914,
-          "sha256": "a311ff696828076770fd78fdd8183677017fae5a700565a744455f8fdb161f72"
+          "size": 1777,
+          "sha256": "9d8644e2caad1513153ac28f1ba8090fcd2facdbd5d2621bf8016186fa932bf8"
         },
         {
           "path": "v2.1/english/mimi_decoder.mlmodelc/metadata.json",
-          "size": 16981,
-          "sha256": "604ce3086a933ae47e03412a59dbee1dbd18374cfea9b24e06c7cbf8db74638c"
+          "size": 16844,
+          "sha256": "aaca1b55b078095e72ee4826a94297fc070526d9f4cd3507464e7f2afaa73376"
         },
         {
           "path": "v2.1/english/mimi_decoder.mlmodelc/model.mil",
-          "size": 107986,
-          "sha256": "065ea09c0e974fb9ab9f35d63f05f000dbb997dc3cf609962640e7fdfccb4e15"
+          "size": 107403,
+          "sha256": "f7176b3b3d800de308ac01cb83d1f3e9b555e70b44d299efd4a21c9c27eecc16"
         },
         {
           "path": "v2.1/english/mimi_decoder.mlmodelc/weights/weight.bin",
