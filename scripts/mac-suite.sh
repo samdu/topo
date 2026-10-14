@@ -58,8 +58,8 @@ cd "$root" || exit 2
 # change what it is compiled and run with. XcodeGen's is the version the committed projects are
 # generated with.
 XCODE_VERSION="27.0"
-IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
