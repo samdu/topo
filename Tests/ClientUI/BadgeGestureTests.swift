@@ -29,14 +29,23 @@ final class BadgeGestureTests: XCTestCase {
             if !found.exists { app.swipeUp() }
             XCTAssertTrue(found.exists, "the settings have no \(row)")
         }
-        // The slider is drawn from the value kept, so each end it is moved to is a value
-        // that was written and read back.
+        // A sheet put up again is a new view, with nothing of the last one's own state: what its
+        // slider shows is the value kept, so a move that was only drawn is the standard value here.
         let temperature = app.sliders["settings-voice-temperature"]
-        for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
-        temperature.adjust(toNormalizedSliderPosition: 1)
-        XCTAssertEqual(temperature.value as? String, "100%", "the slider's top is not kept")
-        temperature.adjust(toNormalizedSliderPosition: 0)
-        XCTAssertEqual(temperature.value as? String, "0%", "the slider's foot is not kept")
+        for end in ["100%", "0%"] {
+            for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
+            temperature.adjust(toNormalizedSliderPosition: end == "100%" ? 1 : 0)
+            XCTAssertEqual(temperature.value as? String, end, "the slider did not move to \(end)")
+            app.navigationBars["Settings"].buttons["Done"].tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10),
+                          "Done did not close the settings")
+            badge(in: app).tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
+                          "the settings did not open again")
+            for _ in 0..<3 where !temperature.exists { app.swipeUp() }
+            XCTAssertEqual(temperature.value as? String, end,
+                           "the settings opened again do not have the \(end) the slider was moved to")
+        }
     }
 
     /// A hold just past the gesture's own threshold.
