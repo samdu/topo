@@ -28,14 +28,13 @@ A session opens its own worktree's project (`XcodeOpenWorkspace` with the absolu
 `RunProject`, `RunAllTests` and `RunSomeTests` boot, install and launch on the workspace's active run destination, and a `DeviceInteraction*` session on the device it is given. The validation suites and `scripts/simulator-run.sh` each count on a device nobody else is using (CLAUDE.md, *Working here*), so everything an agent runs through the bridge goes to one device kept for it, **`Topo Agent`**, an iPhone 17 on the iOS runtime `scripts/mac-suite.sh` pins:
 
 ```sh
-scripts/agent-simulator.sh holder    # "free", or it is a session's and is left alone
-for udid in $(xcrun simctl list devices -j | jq -r '.devices[][] | select(.name == "Topo Agent") | .udid'); do
-  xcrun simctl delete "$udid"
-done
-xcrun simctl create "Topo Agent" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-27-0
+old="$(scripts/agent-simulator.sh take)" &&    # exit 3: a session's, and nothing below runs
+  xcrun simctl delete "$old" &&
+  xcrun simctl create "Topo Agent" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-27-0 &&
+  scripts/agent-simulator.sh release
 ```
 
-`take` requires exactly one device of that name, so it is made only while `holder` says free, and any device already named so (one on an earlier runtime included) is deleted before the new one is created.
+The device is made again under its own reservation: `take` requires exactly one device of that name and records the session as holding it, and the reservation names the session, not the device, so it covers the one created in the old one's place until `release`. On a Mac with none, `take` refuses ("no simulator named") and the `create` line run by itself makes it.
 
 - **Take it first, release it last.** It is one device, so a session reserves it before anything runs on it: `scripts/agent-simulator.sh take` prints its udid and records the session as its holder, and `scripts/agent-simulator.sh release` shuts the device down and gives it up. The reservation names the session's own `claude` process and stands for as long as that process lives, so it outlasts the shells a session runs its commands in and falls to the next `take` when the session is gone. A session's subagents are that process too and the script cannot tell them from it, so the main session alone takes and releases, and a subagent does neither: it runs on the device only when the main session hands it the udid it took. A second `take` by the holder exits 4, so only a `take` that printed the udid says the device is the caller's. `take` exits 3 and names the holder when another session has it (1 is a fault it prints: no such device, or one that would not shut down); that session does without for now: it builds and reads through the bridge, runs nothing, and neither waits nor boots the device. `scripts/agent-simulator.sh holder` says who has it, from any shell.
 - **Switch first, and read the answer.** Straight after `XcodeOpenWorkspace`, before any tool that runs anything, `XcodeSwitchRunDestination` to the `displayTitle` `XcodeListRunDestinations` gives for `Topo Agent`, and check the `activeDestinationDisplayTitle` it returns: the tool refuses an ineligible destination and reports what Xcode resolved, which is not always what was asked for. A device session is given the udid as its `deviceIdentifier`, never the name, which is matched by best candidate on a Mac with other simulators named for Topo.
