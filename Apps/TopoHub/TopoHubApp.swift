@@ -276,7 +276,7 @@ struct SignInSection: View {
                 Label("Signed in with Claude", systemImage: "checkmark.circle.fill")
                 Button("Sign out") { signIn.signOut() }
             case .idle:
-                Button("Sign in with Claude") { webAuth.open(signIn.start()) { signIn.cancel() } }
+                Button("Sign in with Claude") { webAuth.open(signIn.start()) { signIn.loginSheetClosed() } }
             case .waiting(let pasteHint):
                 if pasteHint {
                     TextField("Paste the code", text: $pasted)
@@ -290,7 +290,7 @@ struct SignInSection: View {
                 ProgressView("Signing in…")
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary)
-                Button("Try again") { webAuth.open(signIn.start()) { signIn.cancel() } }
+                Button("Try again") { webAuth.open(signIn.start()) { signIn.loginSheetClosed() } }
             }
         }
         .onChange(of: signIn.phase) { _, phase in

@@ -8,9 +8,10 @@ import Observation
 /// On a device that runs a guest (`guestStore` set) the sign-in is two authorizations, as
 /// `claude login` and `claude setup-token` are two: the ordinary login, then the guest's
 /// long-lived token (`ClaudeOAuth.Grant.longLived`), each with its own code, verifier and exchange,
-/// so the second never touches the ordinary tokens. With a loopback listener the first callback
-/// is answered with a redirect to the second authorization, so the same browser sheet goes straight
-/// on to it; otherwise the second is opened (`Phase.approvingGuest(opening:)`) and its code pasted.
+/// so the second never touches the ordinary tokens. Each is opened by the view in a browser sheet
+/// of its own (`Phase.approvingGuest(opening:)` for the second): the login may have been carried
+/// off to another browser, by a link in an email, and a sheet opened here is the one place the
+/// second is sure to be seen. Its code comes back to a listener, or is pasted where none binds.
 /// A second authorization that fails or is declined still leaves the person signed in, with no
 /// guest token kept, and the guest runs on the ordinary access token (`GuestCredential`).
 @MainActor
@@ -21,9 +22,9 @@ public final class SignIn {
         /// The browser is open; `pasteHint` is true when the flow expects a pasted code.
         case waiting(pasteHint: Bool)
         case exchanging
-        /// Signed in; the guest's authorization is waiting for its Approve. `opening` is a URL the
-        /// view has to open, nil when the browser is already on its way there.
-        case approvingGuest(opening: URL?, pasteHint: Bool)
+        /// Signed in; the guest's authorization is waiting for its Approve. `opening` is the URL
+        /// the view opens for it, in a sheet of its own.
+        case approvingGuest(opening: URL, pasteHint: Bool)
         case signedIn
         case failed(String)
     }
@@ -39,18 +40,13 @@ public final class SignIn {
     private var loopback: LoopbackCallback?
     private var guestAttempt: ClaudeOAuth.Attempt?
     private var guestLoopback: LoopbackCallback?
-    /// The first callback redirects the browser to the guest's authorization.
-    private var chained = false
-    /// The guest's code, when its callback arrived before the ordinary exchange had finished.
-    private var guestCode: (code: String, state: String?)?
-    /// The guest's authorization was declined while the ordinary exchange was still running.
-    private var guestDeclined = false
-    private var exchangingGuest = false
     /// Makes a loopback listener, nil when none binds. A test makes it nil to take the paste path.
-    var makeListener: () -> LoopbackCallback? = { try? LoopbackCallback() }
+    var makeListener: () -> LoopbackCallback?
 
+    /// `back` is the link a callback's page offers for coming back to the app (`LoopbackCallback`).
     public init(oauth: ClaudeOAuth = ClaudeOAuth(), store: TokenStore = KeychainTokenStore(),
-                guestStore: TokenStore? = nil) {
+                guestStore: TokenStore? = nil, back: URL? = nil) {
+        makeListener = { try? LoopbackCallback(back: back) }
         self.oauth = oauth
         self.store = store
         self.guestStore = guestStore
@@ -71,13 +67,6 @@ public final class SignIn {
         let attempt = oauth.begin(redirect: redirect)
         self.attempt = attempt
         phase = .waiting(pasteHint: redirect == .manual)
-        if guestStore != nil, let listener = loopback {
-            prepareGuest()
-            if let guestAttempt, guestLoopback != nil {
-                listener.redirectOnSuccess(to: guestAttempt.authorizeURL)
-                chained = true
-            }
-        }
         if let listener = loopback {
             Task { [weak self] in
                 guard let url = try? await listener.wait() else { return }
@@ -104,18 +93,28 @@ public final class SignIn {
         await exchange(code: parsed.code, state: parsed.state)
     }
 
-    /// The browser was closed or Cancel pressed. Before the login lands that ends the attempt;
-    /// once it has, it declines the guest's authorization and the person is signed in without one.
+    /// The login's sheet was closed by the person. It ends the attempt only while the login is
+    /// still waited for: reported late, over an exchange or the guest's authorization, it is
+    /// nothing, since that sheet was never the guest's to decline.
+    public func loginSheetClosed() {
+        if case .waiting = phase { cancel() }
+    }
+
+    /// The sheet opened for the guest's authorization at `url` was closed by the person: that
+    /// declines it, while it is the one being asked.
+    public func guestSheetClosed(_ url: URL) {
+        if case .approvingGuest(url, _) = phase { cancel() }
+    }
+
+    /// Cancel or Skip pressed. Before the login's callback that ends the attempt; while the
+    /// guest's authorization is asked it declines it and the person is signed in without one.
+    /// During an exchange it is nothing: the approval is already given, and nothing is declined.
     public func cancel() {
         switch phase {
         case .approvingGuest:
             finishSignIn()
         case .exchanging:
-            // The exchange in flight finishes either way; only the guest's authorization is dropped.
-            if !exchangingGuest {
-                guestDeclined = true
-                tearDownGuest()
-            }
+            break
         case .waiting:
             reset()
             phase = .idle
@@ -152,20 +151,12 @@ public final class SignIn {
         } catch {
             fail("Sign-in failed: \(error)"); return
         }
-        if guestDeclined { finishSignIn(); return }
         if guestAttempt == nil { prepareGuest() }
         guard let guestAttempt else { finishSignIn(); return }
-        if let early = guestCode {
-            guestCode = nil
-            phase = .approvingGuest(opening: nil, pasteHint: false)
-            await exchangeGuest(code: early.code, state: early.state)
-            return
-        }
-        phase = .approvingGuest(opening: chained ? nil : guestAttempt.authorizeURL,
-                                pasteHint: guestAttempt.redirect == .manual)
+        phase = .approvingGuest(opening: guestAttempt.authorizeURL, pasteHint: guestAttempt.redirect == .manual)
     }
 
-    /// The guest's authorization, ready before the browser needs it: its own attempt, and a
+    /// The guest's authorization, made once the login has landed: its own attempt, and a
     /// listener of its own when one binds (the hosted paste page when not).
     private func prepareGuest() {
         let redirect: ClaudeOAuth.Redirect
@@ -183,13 +174,10 @@ public final class SignIn {
     }
 
     private func guestCalledBack(code: String, state: String?) async {
-        guard guestAttempt != nil else { return }
-        if case .approvingGuest = phase {
-            await exchangeGuest(code: code, state: state)
-        } else {
-            // The ordinary exchange has not landed yet; it takes this code up when it does.
-            guestCode = (code, state)
-        }
+        // A Skip, a sign-out or a new start has let the attempt go, and its callback with it; one
+        // that is already being exchanged is not exchanged again.
+        guard guestAttempt != nil, case .approvingGuest = phase else { return }
+        await exchangeGuest(code: code, state: state)
     }
 
     /// Exchanges the guest's code and keeps only its access token. Any failure is the fallback:
@@ -197,7 +185,6 @@ public final class SignIn {
     private func exchangeGuest(code: String, state: String?) async {
         guard let guestAttempt, let guestStore else { finishSignIn(); return }
         phase = .exchanging
-        exchangingGuest = true
         if var minted = try? await oauth.exchange(code: code, state: state, attempt: guestAttempt),
            self.guestAttempt == guestAttempt {
             minted.refreshToken = ""
@@ -210,8 +197,6 @@ public final class SignIn {
 
     private func finishSignIn() {
         tearDownGuest()
-        guestDeclined = false
-        exchangingGuest = false
         phase = .signedIn
     }
 
@@ -219,8 +204,6 @@ public final class SignIn {
         guestLoopback?.cancel()
         guestLoopback = nil
         guestAttempt = nil
-        guestCode = nil
-        chained = false
     }
 
     private func reset() {
@@ -228,8 +211,6 @@ public final class SignIn {
         loopback = nil
         attempt = nil
         tearDownGuest()
-        guestDeclined = false
-        exchangingGuest = false
     }
 
     private func fail(_ message: String) {
