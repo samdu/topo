@@ -79,6 +79,15 @@ ORDER=(topo_unit topo_ui:quiet topo_ui topo_ui:mic others scripts)
 # What --check asks of the disk: a runtime's simulators, a cold DerivedData and the pinned
 # downloads are most of it, and a Mac somebody else is using is not left full.
 MIN_FREE_GB=10
+# Every test action runs without the diagnostics xcodebuild otherwise gathers after the last
+# test: `simctl diagnose` of the simulator, which copies every crash report on the Mac and
+# collects a log archive into the result bundle. Nothing reads them, they are 320 MB a run, and
+# the archive's `log collect` stalls on this Mac often enough that three of seven UI runs
+# waited the full 600 s xcodebuild allows it before giving up (`Failure collecting diagnostics
+# from simulator: Timed out after 600.0 seconds`). What they held stays where it came from: a
+# crash report in ~/Library/Logs/DiagnosticReports, the simulator's log in its own store until
+# the run deletes the device. Each test's own log and attachments are still in the bundle.
+NO_DIAGNOSE=(-collect-test-diagnostics never)
 
 check=no
 lane=fast
@@ -364,6 +373,7 @@ suite_topo_unit() {
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -skip-testing:TopoUITests \
       -resultBundlePath "$RESULTS/Topo-unit.xcresult"
   }
@@ -545,6 +555,7 @@ suite_topo_ui() {
     run "$RESULTS/$name.log" bounded 3600 env ${runner[@]+"${runner[@]}"} xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       "${select[@]}" \
       -resultBundlePath "$RESULTS/$name.xcresult" || ui_status=1
     [ "$part" != quiet ] || return "$ui_status"
@@ -635,6 +646,7 @@ suite_others() {
     run "$RESULTS/Womble.log" bounded 1200 xcodebuild test \
       -project Womble/Womble.xcodeproj -scheme Womble \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -resultBundlePath "$RESULTS/Womble.xcresult" || status=1
   else
     status=1
@@ -663,6 +675,7 @@ suite_others() {
   if new_simulator watch "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" && xcrun simctl bootstatus "$udid" -b >/dev/null; then
     run "$RESULTS/TopoWatch-test.log" bounded 900 xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
       -destination "platform=watchOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -derivedDataPath build/watch \
       -resultBundlePath "$RESULTS/TopoWatch.xcresult" || status=1
   else
