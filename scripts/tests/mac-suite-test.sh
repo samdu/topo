@@ -184,7 +184,8 @@ ui_tests() { grep '^xcodebuild test-without-building' "$CALLS"; }
 # microphone's, which launches with the real ear and is not read.
 ui_source() {  # ui_source <lines of the quiet class's second launch>
   rm -rf "$tree/Tests/ClientUI"; mkdir -p "$tree/Tests/ClientUI"
-  printf '%s\n' 'let app = XCUIApplication()' 'app.launch()' > "$tree/Tests/ClientUI/MicrophonePressTests.swift"
+  printf '%s\n' 'final class MicrophonePressTests: XCTestCase {' '    class func setUpOnce() {}' 'let app = XCUIApplication()' 'app.launch()' '}' ${MIC_SOURCE+"$MIC_SOURCE"} \
+    > "$tree/Tests/ClientUI/MicrophonePressTests.swift"
   printf '%s\n' 'let app = XCUIApplication()' 'app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' \
     'app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'addTeardownBlock {' "$@" '}' 'app.launch()' \
     > "$tree/Tests/ClientUI/QuietTests.swift"
@@ -222,6 +223,22 @@ loud no-ear "QuietTests.swift:7: clean.launch()" 'let clean = XCUIApplication()'
 loud no-voice "QuietTests.swift:7: clean.launch()" 'let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' 'clean.launch()'
 loud anothers-ear "QuietTests.swift:6: clean.launch()" 'let clean = XCUIApplication()' 'clean.launch()'
 loud not-made-here "QuietTests.swift:5: other.launch()" 'other.launch()'
+# What the source says of the environment at the launch is its last word, not its first.
+loud ear-removed "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment.removeValue(forKey: "TOPO_DEBUG_EAR")' 'clean.launch()'
+loud voice-removed "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment.removeValue(forKey: "TOPO_DEBUG_VOICE")' 'clean.launch()'
+loud ear-set-again "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "stub"' 'clean.launch()'
+loud voice-set-again "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading" + suffix' 'clean.launch()'
+loud ear-set-in-a-branch "QuietTests.swift:8: clean.launch()" 'let clean = XCUIApplication()' 'if quiet { clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading" }' "${both[2]}" 'clean.launch()'
+loud replaced "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment = [:]' 'clean.launch()'
+loud merged-over "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment.merge(given) { _, new in new }' 'clean.launch()'
+loud key-not-literal "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment[key] = "stub"' 'clean.launch()'
+# A merge ahead of the two, another key removed or set after them: the two still stand.
+ui_source 'let clean = XCUIApplication()' 'clean.launchEnvironment.merge(given) { _, new in new }' "${both[@]:1:2}" \
+  'clean.launchEnvironment.removeValue(forKey: "TOPO_DEBUG_TUNING")' 'if soft { clean.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }' 'clean.launch()'
+suite quiet-last-word-stands topo_ui:quiet
+is "the quiet part, a merge ahead of the two and other keys after: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+# The quiet part leaves out the microphone's class and the reading its file: another class there is named.
+MIC_SOURCE='final class OtherTests: XCTestCase {}' loud class-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
 ui_source "${both[@]}"; rm "$tree/Tests/ClientUI/QuietTests.swift"
 suite quiet-no-source topo_ui:quiet
 is "the quiet part with no launch to read: a failure, and no test run" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "1:topo_ui:quiet=failure :0"

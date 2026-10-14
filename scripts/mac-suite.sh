@@ -17,8 +17,8 @@
 #              It has two parts, each a suite by its own name with its own line in suites.txt
 #              and its own result bundle: `topo_ui:quiet`, every UI test class but
 #              MicrophonePressTests, with no audio lane, no display hold, no models and nothing
-#              that opens a microphone or speaks (it runs no test unless every launch of the
-#              app in those classes' source leaves the ear and the voice loading); and `topo_ui:mic`, that class alone behind
+#              that opens a microphone or speaks (a tripwire reads the tests' source first, `quiet_launches`
+#              below, and no test runs when it names a launch); and `topo_ui:mic`, that class alone behind
 #              everything `topo_ui` has. One is all but the class and the other the class, so
 #              no test is in neither.
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
@@ -393,24 +393,48 @@ display_held() {
   done
   return 1
 }
-# Every launch of the app the quiet part makes, read from the tests' source: each
-# `XCUIApplication()` outside the microphone's class is launched with its ear and its voice
-# left loading (`TOPO_DEBUG_EAR`, `TOPO_DEBUG_VOICE`), so none makes the real ones, which
-# fetch and load models. Prints each launch that is not, and one made on anything but an
-# application the file made; false when there is one, or when no launch was found at all.
+# A tripwire ahead of the quiet part's tests, which reads the UI tests' source and nothing
+# else. In each file but the microphone's it follows every `let <name> = XCUIApplication()`
+# line by line, the last write winning, and names a `<name>.launch()` reached when both
+# `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` are not, by that line, set to "loading" on that
+# name, in a statement that ends its line with that word: never set, set to something else since, removed (`removeValue`), or the dictionary
+# replaced or merged over since. It names a launch on a name the file did not make that way.
+# The quiet part leaves out the microphone's class and this leaves out its file, so it names
+# any other class declared in that file. It is false when it names anything, or finds no
+# launch at all. It does not see what the source does not say on those lines: an environment
+# changed through a helper the application is handed to, a loop, or a key that is not a
+# literal is not caught.
 QUIET_TESTS=Tests/ClientUI
 quiet_launches() {
-  local file found=0 bad=0 out
+  local file found=0 bad=0 out mic="${MIC_CLASS##*/}"
   for file in "$QUIET_TESTS"/*.swift; do
     [ -f "$file" ] || continue
-    case "$file" in */"${MIC_CLASS##*/}.swift") continue ;; esac
+    case "$file" in
+      */"$mic.swift")
+        out="$(awk -v file="$file" -v mic="$mic" '
+          match($0, /^[ \t]*((final|private|fileprivate|public|internal|open)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+            name = substr($0, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
+            if (name != mic && name != "func" && name != "var" && name != "let") print file ":" NR ": class " name ", which the quiet part runs and this does not read"
+          }' "$file")"
+        [ -z "$out" ] || { echo "$out"; bad=1; }
+        continue ;;
+    esac
     out="$(awk -v file="$file" '
       match($0, /let [A-Za-z_][A-Za-z0-9_]* = XCUIApplication\(\)/) {
         name = substr($0, RSTART + 4, RLENGTH - 4); sub(/ = .*/, "", name); made[name] = 1; ear[name] = 0; voice[name] = 0
       }
-      match($0, /[A-Za-z_][A-Za-z0-9_]*\.launchEnvironment\["TOPO_DEBUG_(EAR|VOICE)"\] = "loading"/) {
-        name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name)
-        if ($0 ~ /TOPO_DEBUG_EAR/) ear[name] = 1; else voice[name] = 1
+      {
+        line = $0
+        while (match(line, /[A-Za-z_][A-Za-z0-9_]*\.launchEnvironment/)) {
+          name = substr(line, RSTART, RLENGTH); sub(/\..*/, "", name); rest = substr(line, RSTART + RLENGTH); line = rest
+          if (match(rest, /^\["TOPO_DEBUG_EAR"\] = /)) ear[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
+          else if (match(rest, /^\["TOPO_DEBUG_VOICE"\] = /)) voice[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
+          else if (rest ~ /^\["[A-Za-z0-9_]*"\] = /) continue
+          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_EAR"\)/) ear[name] = 0
+          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_VOICE"\)/) voice[name] = 0
+          else if (rest ~ /^\.removeValue\(forKey: "[A-Za-z0-9_]*"\)/) continue
+          else { ear[name] = 0; voice[name] = 0 }
+        }
       }
       match($0, /[A-Za-z_][A-Za-z0-9_]*\.launch\(\)/) {
         name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name); n++
@@ -433,7 +457,7 @@ suite_topo_ui() {
     echo "Lane: $lane"
     if [ "$part" = quiet ]; then
       local loud
-      loud="$(quiet_launches)" || { err "a UI test outside ${MIC_CLASS##*/} launches the app without TOPO_DEBUG_EAR and TOPO_DEBUG_VOICE set to loading, which is the real ear and voice on this Mac. No test was run."; echo "$loud" >&2; return 1; }
+      loud="$(quiet_launches)" || { err "the UI tests' source does not show every launch outside ${MIC_CLASS##*/} leaving the ear and the voice loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE), and the quiet part has no lane for the real ones. No test was run."; echo "$loud" >&2; return 1; }
     fi
     if [ "$part" != quiet ]; then
       # BlackHole as this Mac's default input and output, and the fixture looping into it from
