@@ -28,7 +28,7 @@ A session opens its own worktree's project (`XcodeOpenWorkspace` with the absolu
 `RunProject`, `RunAllTests` and `RunSomeTests` boot, install and launch on the workspace's active run destination, and a `DeviceInteraction*` session on the device it is given. The validation suites and `scripts/simulator-run.sh` each count on a device nobody else is using (CLAUDE.md, *Working here*), so everything an agent runs through the bridge goes to one device kept for it, **`Topo Agent`**, an iPhone 17 on the iOS runtime `scripts/mac-suite.sh` pins:
 
 ```sh
-xcrun simctl create "Topo Agent" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-26-5
+xcrun simctl create "Topo Agent" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-27-0
 xcrun simctl list devices | grep "Topo Agent"    # its udid
 ```
 
