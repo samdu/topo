@@ -27,4 +27,4 @@ The phone has to be unlocked: `devicectl` refuses to launch an app on a locked o
 
 ## Without the script
 
-The same marks are in the phone's unified log: `sudo log collect --device-udid <hardware udid> --last 15m --output run.logarchive`, then `log show run.logarchive --predicate 'subsystem == "zone.hexagon.topo" AND category == "perf"' --style compact`. The collect needs the phone awake and no `idevicesyslog` attached to it.
+The same marks are in the phone's unified log: `sudo log collect --device-udid <hardware udid> --last 15m --output run.logarchive`, then `log show run.logarchive --predicate 'subsystem == "zone.hexagon.topo" AND category == "perf"' --style compact`. The collect needs the phone awake, no `idevicesyslog` attached to it, and a cable: over Wi-Fi `sudo log collect --device-udid` fails with `Device not configured (6)`, so from buddybox, which has no cable to the phone, the only read is a file the app writes into its own container, copied out with `xcrun devicectl device copy from --domain-type appDataContainer` as `perf-run.sh` does with the marks file.
