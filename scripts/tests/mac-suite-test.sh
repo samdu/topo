@@ -356,20 +356,27 @@ is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure
 fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
 
 # The tests run at once: two of them each wait, bounded, for the other to have started; run
-# one after the other, the first would end before the second began and never see it.
+# one after the other, the first would end before the second began and never see it. Each
+# fake says a line of its own, and the suite's log has every one under its heading, in the
+# order named: a suite that dropped a test's output, or printed it under another heading,
+# would fail here.
 mkdir -p "$work/meet"
-fake "$tree/scripts/tests/review-cap-test.sh" "touch '$work/meet/review-cap'; for _ in \$(seq 50); do [ -e '$work/meet/review-prompt' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
-fake "$tree/scripts/tests/review-prompt-test.sh" "touch '$work/meet/review-prompt'; for _ in \$(seq 50); do [ -e '$work/meet/review-cap' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+named="$(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d')"
+for name in $named; do fake "$tree/scripts/tests/$name-test.sh" "echo 'out of $name'; exit 0"; done
+fake "$tree/scripts/tests/review-cap-test.sh" "echo 'out of review-cap'; touch '$work/meet/review-cap'; for _ in \$(seq 50); do [ -e '$work/meet/review-prompt' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+fake "$tree/scripts/tests/review-prompt-test.sh" "echo 'out of review-prompt'; touch '$work/meet/review-prompt'; for _ in \$(seq 50); do [ -e '$work/meet/review-cap' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
 suite scripts-at-once scripts
 is "the tests run at once: two that wait for each other both pass" "$status:$(results)" "0:scripts=success "
-is "the tests run at once: a heading in the suite's log and a log of its own for each" \
-  "$(grep -c '^==> scripts/tests/.*-test.sh$' "$work/scripts-at-once.log"):$(ls "$RESULTS_DIR"/script-*.log | wc -l | tr -d ' ')" "$tests_named:$tests_named"
-fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
-fake "$tree/scripts/tests/review-prompt-test.sh" 'exit 0'
+is "the tests run at once: a log of its own for each" "$(ls "$RESULTS_DIR"/script-*.log | wc -l | tr -d ' ')" "$tests_named"
+is "the tests run at once: every test's line is in the suite's log under its heading, in the order named" \
+  "$(grep -E '^==> scripts/tests/.*-test.sh$|^out of ' "$work/scripts-at-once.log" | tr '\n' '|')" \
+  "$(for name in $named; do printf '==> scripts/tests/%s-test.sh|out of %s|' "$name" "$name"; done)"
+for name in $named; do fake "$tree/scripts/tests/$name-test.sh" 'exit 0'; done
 
-# A signal while the tests run ends every one still going, not one of them.
+# A signal while the tests run ends every one still going and what it started: one fake is
+# waiting on a child of its own, which a signal to the fake alone would leave running.
 mkdir -p "$work/sleepers"
-fake "$tree/scripts/tests/janitor-test.sh" "echo \$\$ > '$work/sleepers/janitor'; exec sleep 60"
+fake "$tree/scripts/tests/janitor-test.sh" "sh -c \"echo \\\$\\\$ > '$work/sleepers/janitor.child'; exec sleep 60\" & echo \$\$ > '$work/sleepers/janitor'; wait"
 fake "$tree/scripts/tests/validate-host-test.sh" "echo \$\$ > '$work/sleepers/validate-host'; exec sleep 60"
 export CALLS="$work/scripts-signal.calls" RESULTS_DIR="$work/scripts-signal.results"
 : > "$CALLS"
@@ -377,18 +384,20 @@ export CALLS="$work/scripts-signal.calls" RESULTS_DIR="$work/scripts-signal.resu
   > "$work/scripts-signal.log" 2>&1 &
 pid=$!
 running=$pid
-for _ in $(seq 100); do [ -s "$work/sleepers/janitor" ] && [ -s "$work/sleepers/validate-host" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
-sleepers="$(cat "$work/sleepers/janitor" "$work/sleepers/validate-host" 2>/dev/null | tr '\n' ' ')"
-is "signal during the tests: both sleepers are on the pids file" \
-  "$(for p in $sleepers; do grep -cx "$p" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null; done | tr '\n' ' ')" "1 1 "
+for _ in $(seq 100); do [ -s "$work/sleepers/janitor" ] && [ -s "$work/sleepers/janitor.child" ] && [ -s "$work/sleepers/validate-host" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+leaders="$(cat "$work/sleepers/janitor" "$work/sleepers/validate-host" 2>/dev/null | tr '\n' ' ')"
+child="$(cat "$work/sleepers/janitor.child" 2>/dev/null)"
+is "signal during the tests: both tests are on the pids file" \
+  "$(for p in $leaders; do grep -cx "$p" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null; done | tr '\n' ' ')" "1 1 "
+is "signal during the tests: the child is in its test's process group" "$(ps -o pgid= -p "$child" 2>/dev/null | tr -d ' ')" "$(cut -d' ' -f1 <<<"$leaders")"
 kill -TERM "$pid"
 for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 wait "$pid"; status=$?
 running=""
 is "signal during the tests: exits 143" "$status" 143
-for _ in $(seq 30); do alive=0; for p in $sleepers; do kill -0 "$p" 2>/dev/null && alive=1; done; [ "$alive" = 0 ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
-left=""; for p in $sleepers; do kill -0 "$p" 2>/dev/null && { left="$left $p"; kill "$p" 2>/dev/null; }; done
-[ -z "$left" ] && ok "signal during the tests: every test still going ended with the run" || fail "signal during the tests: pids$left outlived the run"
+for _ in $(seq 30); do alive=0; for p in $leaders $child; do kill -0 "$p" 2>/dev/null && alive=1; done; [ "$alive" = 0 ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left=""; for p in $leaders $child; do kill -0 "$p" 2>/dev/null && { left="$left $p"; kill "$p" 2>/dev/null; }; done
+[ -z "$left" ] && ok "signal during the tests: every test still going, and the child one was waiting on, ended with the run" || fail "signal during the tests: pids$left outlived the run"
 fake "$tree/scripts/tests/janitor-test.sh" 'exit 0'
 fake "$tree/scripts/tests/validate-host-test.sh" 'exit 0'
 

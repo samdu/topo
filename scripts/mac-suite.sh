@@ -42,8 +42,9 @@
 # this run created and deletes, this script kills nothing by name (the audio lane restarts
 # coreaudiod, by name, when it has just installed its driver), and `mac-suite.pids` in --results
 # lists this script's pid and then each command it is waiting on: `kill $(head -1 <file>)` ends
-# the run, which stops that command (the scripts' tests run at once, so every one of them still
-# going), the audio lane it started and its simulators. A second
+# the run, which stops that command (the scripts' tests run at once, each in a process group
+# of its own, so every one still going and whatever it started), the audio lane it started
+# and its simulators. A second
 # signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
@@ -220,6 +221,11 @@ echo "$$" > "$pids"
 created=()
 lane_started=no
 current=""
+# The process groups of the scripts' tests still going, by leader: each test is started in a
+# group of its own and a signal ends the group, the test and whatever it started alike. A test
+# leaves the list as the suite waits for it. A group's id is not given out again while any
+# process of the group lives, so a signal to one that still has a member is never another's.
+running=()
 
 cleanup() {
   # A signal that landed while the lane's start was under way runs this before the start's
@@ -240,9 +246,7 @@ trap cleanup EXIT
 ended() {
   local p
   [ -n "$current" ] && kill "$current" 2>/dev/null
-  # The scripts' tests still going, which run at once: by the jobs bash still counts, never by
-  # a recorded pid, which once its test has ended may be another process's.
-  for p in $(jobs -pr); do kill "$p" 2>/dev/null; done
+  for p in ${running[@]+"${running[@]}"}; do kill -- "-$p" 2>/dev/null; done
   echo "error: mac-suite.sh was ended by a signal." >&2
   exit 143
 }
@@ -590,9 +594,13 @@ suite_topo_ui() {
 # first. Each writes its own log, printed whole under its heading once it has ended, in the
 # order named, so the suite's log carries every test's output in a batch at the end rather
 # than live; a missing test's heading and error are printed as the start loop reaches it.
+# Each test is a process group of its own (job control is on while they are started, which is
+# what puts a background job in one), so that the signal that ends the suite ends a test's
+# children with it: a test killed alone leaves the command it was waiting on running.
 suite_scripts() {
   local status=0 test i passed
   local names=() started=()
+  set -m
   for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
               suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
               model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
@@ -606,10 +614,13 @@ suite_scripts() {
     echo "$!" >> "$pids"
     names+=("$test")
     started+=("$!")
+    running+=("$!")
   done
+  set +m
   for i in ${names[@]+"${!names[@]}"}; do
     say "scripts/tests/${names[$i]}-test.sh"
     if wait "${started[$i]}"; then passed=yes; else passed=no; fi
+    running=("${running[@]:1}")
     cat "$RESULTS/script-${names[$i]}.log"
     [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
   done
