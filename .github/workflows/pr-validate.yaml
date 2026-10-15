@@ -18,12 +18,12 @@
 # file. The CLI rotates the refresh token on first use, which spends the
 # secret, so the codex job writes the rotated file back to `CODEX_AUTH_JSON`
 # before it deletes the login; `CODEX_SECRET_PAT`, a fine-grained PAT on this
-# repository with Secrets: write, is what lets it. The `codex_wait` job holds
-# each run's `codex` until no other run's is in progress, so two runs do not
-# start on the same login (after a 25-minute bound it fails, and `codex` does
-# not run). A new `codex login` is needed only when the chain breaks — two
-# runs on one login, a rotation the job could not write back — and shows as
-# `refresh token was already used`. Store it as ONE line (`jq -c . auth.json | gh secret set
+# repository with Secrets: write, is what lets it. The `codex` job's
+# concurrency group holds each run's `codex` until no other run's is in
+# progress, so two runs do not start on the same login. A new `codex login`
+# is needed only when the chain breaks — two runs on one login, a rotation
+# the job could not write back — and shows as `refresh token was already
+# used`. Store it as ONE line (`jq -c . auth.json | gh secret set
 # CODEX_AUTH_JSON`), as the write-back does: the runner registers every line
 # of a multi-line secret as a secret value of its own, so a pretty-printed
 # file's `{` and `}` lines become values the log mask and the verdict's
@@ -384,13 +384,13 @@ jobs:
   # The review cap (docs/process.md, *The fix loop*): four Codex verdicts on a
   # PR and the reviewer does not run again. scripts/review-cap.sh counts them
   # the way scripts/review-prompt.sh counts the round (both read
-  # scripts/review-verdicts.sh) and at four sets `capped`: codex_wait, and
-  # with it codex, does not run, and reviewer_ran and review_gate read the cap
+  # scripts/review-verdicts.sh) and at four sets `capped`: codex does not
+  # run, and reviewer_ran and review_gate read the cap
   # as neither a missing verdict nor a blocking one. review_gate stays red, so
   # automerge does not merge a capped PR: it merges on Sam's word, or goes
   # back to draft for a replan. The script posts one comment saying so, under
   # its own marker and never the codex one. A count it cannot read or a
-  # comment it cannot post fails this job, so codex_wait does not run and
+  # comment it cannot post fails this job, so codex does not run and
   # reviewer_ran reports it as re-runnable. post_feedback runs the same script
   # again immediately before it posts, which is the guard on the write side.
   #
@@ -401,7 +401,7 @@ jobs:
   #
   # It is also where the run learns whether the PR is a draft: read from the
   # API here, not from the event (see `concurrency` above), and handed on as
-  # `draft`. On a draft nothing is counted, `capped` is empty, and codex_wait,
+  # `draft`. On a draft nothing is counted, `capped` is empty, and codex,
   # which runs only on `draft == 'false'` and `capped == 'false'`, is skipped.
   # A read that fails, or answers neither `true` nor `false`, fails the job.
   review_cap:
@@ -461,19 +461,26 @@ jobs:
   # reviewer round.
   # One codex job at a time across the repository: each spends the login it
   # starts from and writes the rotated one back, so two on the same login
-  # break the chain. The wait is its own job because a job receives its
-  # secrets when it starts: `codex` must start after the previous write-back,
-  # not wait inside itself holding the login that write-back replaced.
-  #
-  # Queue order is this job's own start (then its id). It waits while another
-  # run of this workflow has a `codex` job not yet completed, a `codex_wait`
-  # that started earlier and is still in progress, or a `codex_wait` that
-  # succeeded whose `codex` has not appeared yet. It polls every 20 seconds,
-  # and after 25 minutes it fails, so `codex` does not run and `reviewer_ran`
-  # is red with no verdict, which is rerun like any other. An API error
-  # counts as busy and is retried within the same bound.
-  codex_wait:
+  # break the chain. The hold is the job's `concurrency` group rather than a
+  # wait inside a job, because a job receives its secrets when it starts:
+  # `codex` must start after the previous write-back, not wait holding the
+  # login that write-back replaced. A job pending in the group holds no
+  # runner, so a review waiting its turn takes no VM from the pool. `queue:
+  # max` keeps every pending one (up to GitHub's 100) rather than cancelling
+  # the older pending job when a third arrives; the order they start in is
+  # GitHub's, roughly first come.
+  codex:
     needs: [select, test, review_cap]
+    # Same-repo branches only: a fork PR carries untrusted content and must
+    # never meet the login. (A fork PR then has no verdict, reviewer_ran and
+    # review_gate go red, and it stays a human merge, made past the required
+    # check with `gh pr merge --admin`.)
+    #
+    # `!cancelled()` in place of the implicit `success()`, so every
+    # `needs.<job>.result` is spelled out — without them, a red `test` would
+    # still spend a reviewer round. A draft or a capped PR is held by
+    # review_cap's outputs, which are `false` only when it read the PR as
+    # ready and under the cap.
     if: >-
       !cancelled() &&
       needs.select.result == 'success' &&
@@ -482,77 +489,10 @@ jobs:
       needs.review_cap.outputs.capped == 'false' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: vm-linux
-    timeout-minutes: 30
-    permissions:
-      # Read-only, to list this workflow's runs and their jobs.
-      actions: read
-    steps:
-      - name: Wait for any other run's codex job to finish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          api="repos/$GITHUB_REPOSITORY/actions"
-          me=$(gh api "$api/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-            --jq '[.jobs[] | select(.name == "codex_wait")][0] | {id, started_at}' 2>/dev/null) || me=""
-          if [ -z "$me" ] || [ "$me" = "null" ]; then
-            echo "::warning::Could not find this codex_wait job in the API; the review goes ahead without waiting."
-            exit 0
-          fi
-          deadline=$((SECONDS + 25 * 60))
-          while :; do
-            busy=""
-            if runs=$(gh api "$api/workflows/pr-validate.yaml/runs?status=in_progress&per_page=100" \
-                --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | .id"); then
-              for r in $runs; do
-                if ! jobs=$(gh api "$api/runs/$r/jobs?filter=latest&per_page=100"); then
-                  busy="the jobs of run $r could not be read"
-                  break
-                fi
-                why=$(jq -r --argjson me "$me" --arg r "$r" '
-                  ([.jobs[] | select(.name == "codex")][0]) as $c
-                  | ([.jobs[] | select(.name == "codex_wait")][0]) as $w
-                  | if $c != null and $c.status != "completed" then "run \($r): codex is \($c.status)"
-                    elif $w != null and $w.status == "in_progress"
-                      and ([$w.started_at, $w.id] < [$me.started_at, $me.id]) then "run \($r): earlier in the queue"
-                    elif $w != null and $w.conclusion == "success" and $c == null then "run \($r): codex about to start"
-                    else empty end' <<<"$jobs")
-                if [ -n "$why" ]; then busy="$why"; break; fi
-              done
-            else
-              busy="this workflow's runs could not be listed"
-            fi
-            if [ -z "$busy" ]; then
-              echo "No other codex job is running or ahead in the queue."
-              exit 0
-            fi
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::Still waiting after 25 minutes ($busy); the review does not start on a login another job may be about to rotate. Re-run this job once that one is done."
-              exit 1
-            fi
-            echo "Waiting: $busy"
-            sleep 20
-          done
-
-  codex:
-    needs: [select, test, codex_wait]
-    # Same-repo branches only: a fork PR carries untrusted content and must
-    # never meet the login. (A fork PR then has no verdict, reviewer_ran and
-    # review_gate go red, and it stays a human merge, made past the required
-    # check with `gh pr merge --admin`.)
-    #
-    # `!cancelled()` in place of the implicit `success()`, so every
-    # `needs.<job>.result` is spelled out — without them, a red `test` would
-    # still spend a reviewer round. A draft is held by codex_wait, which ran
-    # only if review_cap read the PR as ready.
-    if: >-
-      !cancelled() &&
-      needs.select.result == 'success' &&
-      needs.test.result == 'success' &&
-      needs.codex_wait.result == 'success' &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    concurrency:
+      group: codex-login
+      cancel-in-progress: false
+      queue: max
     runs-on: vm-linux
     timeout-minutes: 30
     permissions:
