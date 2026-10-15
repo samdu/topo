@@ -14,8 +14,13 @@
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
 # the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
-# being buddybox; and `scripts` runs each script's test and prepares, builds and boots nothing,
-# and is asked by --check for jq, node, a python3 that runs and an open lid alone.
+# being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
+# and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
+# build's directory is built over for the pins it was built from and made afresh for any
+# other; and the display is held on under `topo_ui`, by a hold that waits on the script's own
+# pid and is running from before its lane starts to after it stops: one that did not start or
+# took no assertion starts no lane, one that ended before the tests runs none, and one that
+# ended under the tests is red.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -54,13 +59,18 @@ fake() {
 }
 # Waits, on a marker holding its own pid, for as long as the case wants a command to be running.
 hold='if [ -n "${HOLD-}" ]; then echo $$ > "$HOLD"; while [ -e "$HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done; fi'
+# The lane notes, at its start and its stop, whether the display's hold is running then.
 fake "$tree/scripts/ci-audio-lane.sh" '
+held() { kill -0 "$(cat "$CALLS.hold" 2>/dev/null)" 2>/dev/null && echo "display held at $1" >> "$CALLS"; }
 case "$1" in
-  start) [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  start) held start; [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  stop) held stop; exit 0 ;;
+  check) [ "${FAKE_HOLD-}" != ends ] || [ "$2" != after ] || kill "$(cat "$CALLS.hold")"
+    [ "${FAKE_HOLD-}" != ends-before ] || [ "$2" != before ] || kill "$(cat "$CALLS.hold")"; exit 0 ;;
   *) exit 0 ;;
 esac'
 fake "$tree/scripts/build-ish.sh" 'exit 0'
-fake "$tree/scripts/ci-require-tests.sh" 'exit 0'
+fake "$tree/scripts/ci-require-tests.sh" '[ "$1" != "${REQUIRE_RED-}" ]'
 fake "$tree/scripts/check-built-plist.sh" 'exit 0'
 fake "$tree/scripts/fetch-pinned.sh" 'echo "$2"'
 fake "$tree/scripts/fetch-ear-models.sh" 'exit 0'
@@ -68,12 +78,32 @@ fake "$tree/scripts/model-manifest.sh" 'exit 0'
 fake "$work/bin/xcodebuild" '
 case "$*" in
   -version) echo "Xcode ${FAKE_XCODE:-27.0}"; echo "Build version 1" ;;
-  *test-without-building*-only-testing:TopoUITests*) exit "${UI_TEST:-0}" ;;
+  *test-without-building*-only-testing:TopoUITests*)
+    echo "ui flags: input=${TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT-} reset=${TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET-} models=${TEST_RUNNER_TOPO_UITEST_EAR_MODELS-}" >> "$CALLS"
+    exit "${UI_TEST:-0}" ;;
+  *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
 esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
 fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
+# The display's hold: it lives while the pid `-w` names does, as the real one, and says whether
+# that pid is the script this run started (the script's pid is this one's parent's: the hold is
+# started from the suite's own shell or a subshell of it). FAKE_HOLD=dies ends it at once, and
+# FAKE_HOLD=unheld leaves it running with no assertion for `pmset` to list; FAKE_HOLD=ends is
+# the lane's fake ending it once the tests have run, and FAKE_HOLD=ends-before just before them.
+fake "$work/bin/caffeinate" '
+[ "${FAKE_HOLD-}" != dies ] || exit 1
+echo $$ > "$CALLS.hold"
+at=$$
+while [ "$at" -gt 1 ] && [ "$at" != "$3" ]; do at="$(ps -o ppid= -p "$at" | tr -d " ")"; done
+case "$(ps -o args= -p "$3")" in *"scripts/mac-suite.sh "*) [ "$at" != "$3" ] || echo "hold waits on the script that started it" >> "$CALLS" ;; esac
+while kill -0 "$3" 2>/dev/null; do perl -e "select(undef,undef,undef,0.1)"; done'
+# As long as the real one's answer on a busy Mac: more after the hold's line than a pipe holds.
+fake "$work/bin/pmset" '
+echo "Assertion status system-wide:"
+[ "${FAKE_HOLD-}" = unheld ] || echo "   pid $(cat "$CALLS.hold" 2>/dev/null)(caffeinate): [0x0] 00:00:01 PreventUserIdleDisplaySleep named: \"caffeinate command-line tool\""
+for n in $(seq 20000); do echo "   pid $n(powerd): [0x0] 00:00:01 InternalPreventDisplaySleep named: \"one of many\""; done'
 fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
@@ -85,12 +115,12 @@ fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleK
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
-  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-26-5\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-26-5\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
+  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-0\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-0\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
 esac'
 # The scripts' own tests are not this test's to run again: each is a fake that passes.
 mkdir -p "$tree/scripts/tests"
-for name in $(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//'); do
+for name in $(sed -n '/^ *for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//'); do
   fake "$tree/scripts/tests/$name-test.sh" 'exit 0'
 done
 for package in TopoAuth TopoCore TopoLink TopoMascot TopoProxy TopoTurn; do
@@ -102,7 +132,7 @@ suite() {
   local name="$1"; shift
   export CALLS="$work/$name.calls" RESULTS_DIR="$work/$name.results"
   : > "$CALLS"
-  (cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
+  (cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane "${LANE:-fast}" --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
     > "$work/$name.log" 2>&1 && status=0 || status=$?
 }
 calls() { grep -c "^$1" "$CALLS"; }
@@ -114,7 +144,170 @@ is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
 is "green: and stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+is "green: the display is held on for this script's life, from before the lane starts" \
+  "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
+is "green: the hold waits on the script's own pid" "$(calls 'hold waits on the script that started it')" 1
+is "green: the hold is running when the lane starts and when it stops" "$(grep '^display held' "$CALLS" | tr '\n' '|')" "display held at start|display held at stop|"
+hold_pid="$(cat "$CALLS.hold")"
+for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+# Every test action, the four of them, runs without the simulator diagnostics xcodebuild
+# gathers after the last test, whose log archive is the 600 s stall a run cannot end.
+is "green: four test actions, each without xcodebuild's diagnostics" \
+  "$(grep -cE '^xcodebuild test(-without-building)? ' "$CALLS"):$(grep -cE '^xcodebuild test(-without-building)? .* -collect-test-diagnostics never ' "$CALLS")" "4:4"
+
+# The device build's directory is kept for the pins it was built from, and no others.
+pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+mkdir -p "$(dirname "$pins")" && echo "pins: one" > "$pins"
+rm -rf "$tree/build/device"
+suite device-first others
+is "a first device build: exits 0" "$status" 0
+is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "pins: one"
+suite device-same others
+is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
+echo "pins: two" > "$pins"
+suite device-moved others
+is "pins that moved: exits 0" "$status" 0
+is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
+is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
+rm -f "$tree/build/device/Package.resolved"
+suite device-unknown others
+is "a directory that says no pins: made afresh" "$(calls 'device-build over what was there')" 0
+rm -f "$pins"
+suite device-no-pins others
+is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
+is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
+echo "pins: one" > "$pins"
+
+# The quiet part of topo_ui: every UI class but the microphone's, with no lane, no hold, no
+# models, no grants cleared and neither flag, in results of its own, which are held to have
+# the target and not that class.
+ui_tests() { grep '^xcodebuild test-without-building' "$CALLS"; }
+# The tests' source the quiet part reads: a class that launches as it must, and the
+# microphone's, which launches with the real ear and is not read.
+ui_source() {  # ui_source <lines of the quiet class's second launch>
+  rm -rf "$tree/Tests/ClientUI"; mkdir -p "$tree/Tests/ClientUI"
+  printf '%s\n' 'final class MicrophonePressTests: XCTestCase {' '    class func setUpOnce() {}' 'let app = XCUIApplication()' 'app.launch()' '}' ${MIC_SOURCE+"$MIC_SOURCE"} \
+    > "$tree/Tests/ClientUI/MicrophonePressTests.swift"
+  printf '%s\n' 'let app = XCUIApplication()' 'app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' \
+    'app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'addTeardownBlock {' "$@" '}' 'app.launch()' \
+    > "$tree/Tests/ClientUI/QuietTests.swift"
+}
+both=('let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' 'clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'clean.launch()')
+ui_source "${both[@]}"
+ear=TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
+LANE=full suite quiet topo_ui:quiet
+is "the quiet part: exits 0" "$status" 0
+is "the quiet part: a result of its own name" "$(results)" "topo_ui:quiet=success "
+is "the quiet part: no lane" "$(calls ci-audio-lane.sh)" 0
+is "the quiet part: no hold on the display" "$(calls caffeinate)" 0
+is "the quiet part: no models, on the full lane too" "$(calls fetch-ear-models.sh)" 0
+is "the quiet part: no grants cleared" "$(calls 'xcrun simctl privacy')" 0
+is "the quiet part: one run of the tests" "$(ui_tests | wc -l | tr -d ' ')" 1
+case "$(ui_tests)" in *" -only-testing:TopoUITests -skip-testing:TopoUITests/MicrophonePressTests -resultBundlePath $RESULTS_DIR/Topo-ui-quiet.xcresult") ok "the quiet part: the target less the microphone's class, and nothing else left out" ;; *) fail "the quiet part: $(ui_tests)" ;; esac
+is "the quiet part: neither flag, and no models" "$(grep '^ui flags' "$CALLS")" "ui flags: input= reset= models="
+is "the quiet part: the target is required of its results" "$(calls "ci-require-tests.sh xcresult $RESULTS_DIR/Topo-ui-quiet.xcresult TopoUITests\$")" 1
+is "the quiet part: the microphone's class is required out of them" "$(calls "ci-require-tests.sh absent $RESULTS_DIR/Topo-ui-quiet.xcresult TopoUITests/MicrophonePressTests\$")" 1
+is "the quiet part: nothing is required by name" "$(calls 'ci-require-tests.sh named')" 0
+is "the quiet part: its simulator is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+REQUIRE_RED=absent suite quiet-has-mic topo_ui:quiet
+is "the quiet part with the microphone's class in its results: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
+UI_TEST=1 suite quiet-red topo_ui:quiet
+is "the quiet part red: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
+# A launch in a quiet class that makes the real ear or voice: no test is run, and it is named.
+loud() {  # loud <case> <named> <lines of the second launch…>
+  local case="$1" named="$2"; shift 2
+  ui_source "$@"
+  suite "quiet-$case" topo_ui:quiet
+  is "the quiet part, $case: a failure, and no test run" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "1:topo_ui:quiet=failure :0"
+  case "$(cat "$work/quiet-$case.log")" in *"$named"*) ok "the quiet part, $case: the launch is named" ;; *) fail "the quiet part, $case: not named: $(tail -3 "$work/quiet-$case.log")" ;; esac
+}
+loud no-ear "QuietTests.swift:7: clean.launch()" 'let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"' 'clean.launch()'
+loud no-voice "QuietTests.swift:7: clean.launch()" 'let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' 'clean.launch()'
+loud anothers-ear "QuietTests.swift:6: clean.launch()" 'let clean = XCUIApplication()' 'clean.launch()'
+loud not-made-here "QuietTests.swift:5: other.launch()" 'other.launch()'
+# What the source says of the environment at the launch is its last word, not its first.
+loud ear-removed "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment.removeValue(forKey: "TOPO_DEBUG_EAR")' 'clean.launch()'
+loud voice-removed "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment.removeValue(forKey: "TOPO_DEBUG_VOICE")' 'clean.launch()'
+loud ear-set-again "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "stub"' 'clean.launch()'
+loud voice-set-again "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading" + suffix' 'clean.launch()'
+loud ear-set-in-a-branch "QuietTests.swift:8: clean.launch()" 'let clean = XCUIApplication()' 'if quiet { clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading" }' "${both[2]}" 'clean.launch()'
+loud replaced "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment = [:]' 'clean.launch()'
+loud merged-over "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment.merge(given) { _, new in new }' 'clean.launch()'
+loud key-not-literal "QuietTests.swift:9: clean.launch()" "${both[@]:0:3}" 'clean.launchEnvironment[key] = "stub"' 'clean.launch()'
+# A merge ahead of the two, another key removed or set after them: the two still stand.
+ui_source 'let clean = XCUIApplication()' 'clean.launchEnvironment.merge(given) { _, new in new }' "${both[@]:1:2}" \
+  'clean.launchEnvironment.removeValue(forKey: "TOPO_DEBUG_TUNING")' 'if soft { clean.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }' 'clean.launch()'
+suite quiet-last-word-stands topo_ui:quiet
+is "the quiet part, a merge ahead of the two and other keys after: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+# The quiet part leaves out the microphone's class and the reading its file: another class there is named.
+MIC_SOURCE='final class OtherTests: XCTestCase {}' loud class-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+ui_source "${both[@]}"; rm "$tree/Tests/ClientUI/QuietTests.swift"
+suite quiet-no-source topo_ui:quiet
+is "the quiet part with no launch to read: a failure, and no test run" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "1:topo_ui:quiet=failure :0"
+# The microphone's part and the whole suite are not held to it: the lane is theirs.
+ui_source 'let clean = XCUIApplication()' 'clean.launch()'
+suite mic-loud-source topo_ui:mic
+is "the microphone's part over a launch with the real ear: runs" "$status:$(results)" "0:topo_ui:mic=success "
+suite whole-loud-source topo_ui
+is "topo_ui whole over one: runs" "$status:$(results)" "0:topo_ui=success "
+ui_source "${both[@]}"
+
+# The microphone part: that class alone, behind everything topo_ui has.
+suite mic topo_ui:mic
+is "the microphone part: exits 0" "$status" 0
+is "the microphone part: a result of its own name" "$(results)" "topo_ui:mic=success "
+is "the microphone part: the hold, then the lane" "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
+is "the microphone part: the lane is checked before and after, and stopped" "$(grep -c '^ci-audio-lane.sh check' "$CALLS"):$(calls 'ci-audio-lane.sh stop')" "2:1"
+is "the microphone part: the grants are cleared" "$(calls 'xcrun simctl privacy')" 1
+case "$(ui_tests)" in *" -only-testing:TopoUITests/MicrophonePressTests -skip-testing:$ear -resultBundlePath $RESULTS_DIR/Topo-ui-mic.xcresult") ok "the microphone part: its class alone, the real ear left out on the fast lane" ;; *) fail "the microphone part: $(ui_tests)" ;; esac
+is "the microphone part: both flags" "$(grep '^ui flags' "$CALLS")" "ui flags: input=1 reset=1 models="
+is "the microphone part: the target and the class are required of its results" "$(calls "ci-require-tests.sh xcresult $RESULTS_DIR/Topo-ui-mic.xcresult TopoUITests\$"):$(calls "ci-require-tests.sh named $RESULTS_DIR/Topo-ui-mic.xcresult TopoUITests/MicrophonePressTests\$")" "1:1"
+is "the microphone part: nothing is required out" "$(calls 'ci-require-tests.sh absent')" 0
+REQUIRE_RED=named suite mic-absent topo_ui:mic
+is "the microphone part without its class in its results: a failure" "$status:$(results)" "1:topo_ui:mic=failure "
+LANE=full suite mic-full topo_ui:mic
+case "$(ui_tests)" in *" -only-testing:TopoUITests/MicrophonePressTests -resultBundlePath $RESULTS_DIR/Topo-ui-mic.xcresult") ok "the microphone part, full lane: its class whole" ;; *) fail "the microphone part, full lane: $(ui_tests)" ;; esac
+is "the microphone part, full lane: the models" "$(grep '^ui flags' "$CALLS")" "ui flags: input=1 reset=1 models=$work/cache/ear-models"
+is "the microphone part, full lane: the real ear is required by name" "$(calls "ci-require-tests.sh named $RESULTS_DIR/Topo-ui-mic.xcresult $ear\$")" 1
+
+# The two parts in one call: quiet first, each its own result; and the whole suite is as it was.
+suite parts topo_ui:mic topo_ui:quiet
+is "both parts: quiet, then the microphone's" "$status:$(results)" "0:topo_ui:quiet=success topo_ui:mic=success "
+is "both parts: one lane" "$(calls 'ci-audio-lane.sh start')" 1
+suite whole topo_ui
+case "$(ui_tests)" in *" -only-testing:TopoUITests -skip-testing:$ear -resultBundlePath $RESULTS_DIR/Topo-ui.xcresult") ok "topo_ui whole: the target in one run" ;; *) fail "topo_ui whole: $(ui_tests)" ;; esac
+is "topo_ui whole: one result, under its own name" "$(results)" "topo_ui=success "
+is "topo_ui whole: nothing is required out or by class" "$(calls 'ci-require-tests.sh absent'):$(calls 'ci-require-tests.sh named')" "0:0"
+suite no-part topo_ui:loud
+is "a part that is none: exits 2 and runs nothing" "$status:$(wc -l < "$CALLS" | tr -d ' ')" "2:0"
+
+# No lane, no hold: the display is this Mac's own business under the other suites.
+suite no-lane topo_unit others
+is "no UI suite: the display is not held" "$(calls caffeinate)" 0
+
+# A hold that did not start, or took no assertion: no lane, and red by name.
+for broken in dies unheld; do
+  FAKE_HOLD=$broken suite "hold-$broken" topo_ui
+  is "a hold that $broken: exits 1" "$status" 1
+  is "a hold that $broken: topo_ui is a failure" "$(results)" "topo_ui=failure "
+  is "a hold that $broken: no lane is started" "$(calls 'ci-audio-lane.sh start')" 0
+  grep -q 'the display could not be held on' "$work/hold-$broken.log" && ok "a hold that $broken: it is said" || fail "a hold that $broken: $(tail -3 "$work/hold-$broken.log")"
+done
+# One that ended under the tests: red, the lane stopped.
+FAKE_HOLD=ends suite hold-ends topo_ui
+is "a hold that ended under the tests: exits 1" "$status" 1
+is "a hold that ended under the tests: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended under the tests: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended under the tests" "$work/hold-ends.log" && ok "a hold that ended under the tests: it is said" || fail "a hold that ended under the tests: $(tail -3 "$work/hold-ends.log")"
+# One that ended after the lane started and before the tests: no test is run.
+FAKE_HOLD=ends-before suite hold-ends-before topo_ui
+is "a hold that ended before the tests: exits 1" "$status" 1
+is "a hold that ended before the tests: topo_ui is a failure" "$(results)" "topo_ui=failure "
+is "a hold that ended before the tests: no test is run" "$(calls 'xcodebuild test-without-building')" 0
+is "a hold that ended before the tests: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+grep -q "the display's hold .* ended before the tests began" "$work/hold-ends-before.log" && ok "a hold that ended before the tests: it is said" || fail "a hold that ended before the tests: $(tail -3 "$work/hold-ends-before.log")"
 
 # A start that failed may have pinned the devices and left a feeder: it is stopped.
 LANE_START=1 suite lane-failed topo_ui
@@ -149,7 +342,7 @@ is "scripts alone: a success" "$(results)" "scripts=success "
 # The list is the directory: a test added to scripts/tests and to no list is run by nothing.
 is "every test in scripts/tests is one the suite names" \
   "$(cd "$root/scripts/tests" && ls ./*-test.sh | sed 's|^\./||; s|-test\.sh$||' | sort | tr '\n' ' ')" \
-  "$(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')"
+  "$(sed -n '/^ *for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')"
 is "scripts alone: every script's test ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
 is "scripts alone: nothing generated, built, booted or prepared" "$(grep -cE '^(xcodegen|xcodebuild|xcrun|swift|build-ish\.sh|ci-audio-lane\.sh|model-manifest\.sh) ' "$CALLS")" 0
 is "others: every script's test runs there too" "$(grep -c -- '-test.sh' "$work/green.calls")" "$tests_named"
@@ -165,6 +358,89 @@ rm -f "$tree/scripts/tests/review-cap-test.sh"
 suite scripts-missing scripts
 is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure "
 fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
+
+# The tests run at once: two of them each wait, bounded, for the other to have started; run
+# one after the other, the first would end before the second began and never see it. Each
+# fake says a line of its own, and the suite's log has every one under its heading, in the
+# order named: a suite that dropped a test's output, or printed it under another heading,
+# would fail here.
+mkdir -p "$work/meet"
+named="$(sed -n '/^ *for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d')"
+for name in $named; do fake "$tree/scripts/tests/$name-test.sh" "echo 'out of $name'; exit 0"; done
+fake "$tree/scripts/tests/review-cap-test.sh" "echo 'out of review-cap'; touch '$work/meet/review-cap'; for _ in \$(seq 50); do [ -e '$work/meet/review-prompt' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+fake "$tree/scripts/tests/review-prompt-test.sh" "echo 'out of review-prompt'; touch '$work/meet/review-prompt'; for _ in \$(seq 50); do [ -e '$work/meet/review-cap' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+suite scripts-at-once scripts
+is "the tests run at once: two that wait for each other both pass" "$status:$(results)" "0:scripts=success "
+is "the tests run at once: a log of its own for each" "$(ls "$RESULTS_DIR"/script-*.log | wc -l | tr -d ' ')" "$tests_named"
+is "the tests run at once: every test's line is in the suite's log under its heading, in the order named" \
+  "$(grep -E '^==> scripts/tests/.*-test.sh$|^out of ' "$work/scripts-at-once.log" | tr '\n' '|')" \
+  "$(for name in $named; do printf '==> scripts/tests/%s-test.sh|out of %s|' "$name" "$name"; done)"
+for name in $named; do fake "$tree/scripts/tests/$name-test.sh" 'exit 0'; done
+
+# A signal while the tests run ends every one still going and what it started: one fake is
+# waiting on a child of its own, which a signal to the fake alone would leave running. The
+# tests are in one process group of their own, led by a subshell of the run, and what the run
+# signals it finds on bash's job table and says in the line it ends with: the one group, and
+# no test by its pid, so the pid of a test that has ended, which the Mac may have given to
+# another process since, is signalled by nothing.
+mkdir -p "$work/sleepers"
+fake "$tree/scripts/tests/janitor-test.sh" "sh -c \"echo \\\$\\\$ > '$work/sleepers/janitor.child'; exec sleep 60\" & echo \$\$ > '$work/sleepers/janitor'; wait"
+fake "$tree/scripts/tests/validate-host-test.sh" "echo \$\$ > '$work/sleepers/validate-host'; exec sleep 60"
+export CALLS="$work/scripts-signal.calls" RESULTS_DIR="$work/scripts-signal.results"
+: > "$CALLS"
+(cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" scripts) \
+  > "$work/scripts-signal.log" 2>&1 &
+pid=$!
+running=$pid
+for _ in $(seq 100); do [ -s "$work/sleepers/janitor" ] && [ -s "$work/sleepers/janitor.child" ] && [ -s "$work/sleepers/validate-host" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+leaders="$(cat "$work/sleepers/janitor" "$work/sleepers/validate-host" 2>/dev/null | tr '\n' ' ')"
+child="$(cat "$work/sleepers/janitor.child" 2>/dev/null)"
+is "signal during the tests: both tests are on the pids file" \
+  "$(for p in $leaders; do grep -cx "$p" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null; done | tr '\n' ' ')" "1 1 "
+group="$(ps -o pgid= -p "${leaders%% *}" 2>/dev/null | tr -d ' ')"
+is "signal during the tests: the tests are in a group of their own, led by a subshell of the run that is on the pids file" \
+  "$(ps -o ppid= -p "$group" 2>/dev/null | tr -d ' '):$(grep -cx "$group" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null)" "$pid:1"
+is "signal during the tests: both tests and the child are in that group" "$(for p in $leaders $child; do ps -o pgid= -p "$p" 2>/dev/null | tr -d ' '; done | sort -u | tr '\n' ' ')" "$group "
+kill -TERM "$pid"
+for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+wait "$pid"; status=$?
+running=""
+is "signal during the tests: exits 143" "$status" 143
+for _ in $(seq 30); do alive=0; for p in $leaders $child; do kill -0 "$p" 2>/dev/null && alive=1; done; [ "$alive" = 0 ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left=""; for p in $leaders $child; do kill -0 "$p" 2>/dev/null && { left="$left $p"; kill "$p" 2>/dev/null; }; done
+[ -z "$left" ] && ok "signal during the tests: every test still going, and the child one was waiting on, ended with the run" || fail "signal during the tests: pids$left outlived the run"
+is "signal during the tests: the run signalled the tests' group and nothing else" \
+  "$(sed -n 's/^error: mac-suite.sh was ended by a signal; it signalled process group \(.*\)\.$/\1/p' "$work/scripts-signal.log")" "$group"
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 0'
+fake "$tree/scripts/tests/validate-host-test.sh" 'exit 0'
+
+# A signal that lands as soon as the first test has started, while the subshell may still be
+# starting the rest and before the run has waited on anything, ends the run and everything of
+# the tests' group: the first test named sends the run its signal as its first act, then sleeps.
+# Where the signal lands between the subshell's start and the run's wait for it is not chosen
+# here; what holds is that there is no step after the start a signal can precede, so the group
+# is signalled wherever it lands.
+mkdir -p "$work/early"
+fake "$tree/scripts/tests/ci-audio-lane-test.sh" "echo \$\$ > '$work/early/first'; kill -TERM \"\$(sed -n 1p '$work/scripts-early.results/mac-suite.pids')\"; exec sleep 60"
+export CALLS="$work/scripts-early.calls" RESULTS_DIR="$work/scripts-early.results"
+: > "$CALLS"
+(cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" scripts) \
+  > "$work/scripts-early.log" 2>&1 &
+pid=$!
+running=$pid
+for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+wait "$pid"; status=$?
+running=""
+is "signal as the tests start: exits 143" "$status" 143
+first="$(cat "$work/early/first" 2>/dev/null)"
+group="$(sed -n 's/^error: mac-suite.sh was ended by a signal; it signalled process group \(.*\)\.$/\1/p' "$work/scripts-early.log")"
+is "signal as the tests start: the run signalled one process group" "$(echo "$group" | wc -w | tr -d ' ')" 1
+for _ in $(seq 30); do [ -z "$(pgrep -g "${group:-0}" 2>/dev/null)" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left="$(pgrep -g "${group:-0}" 2>/dev/null | tr '\n' ' ')"
+[ -n "$group" ] && [ -z "$left" ] && ! kill -0 "$first" 2>/dev/null \
+  && ok "signal as the tests start: nothing of the tests' group, the first test included, outlived the run" \
+  || { fail "signal as the tests start: pids $left$(kill -0 "$first" 2>/dev/null && echo " $first") outlived the run"; for p in $left; do kill "$p" 2>/dev/null; done; kill "$first" 2>/dev/null; }
+fake "$tree/scripts/tests/ci-audio-lane-test.sh" 'exit 0'
 
 # A toolchain off its pin: no suite runs, and each one asked for is a failure.
 FAKE_XCODE=99.0 suite off-pin topo_unit others
@@ -245,8 +521,8 @@ names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
 FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
 names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
 is "check, no pinned runtime: exits 1" "$status" 1
-names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
 case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
 FAKE_FREE=9 check disk topo_unit
@@ -316,6 +592,19 @@ is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
 check ui topo_ui
 is "check, topo_ui: exits 1" "$status" 1
 names "check, topo_ui: named" "topo_ui runs on buddybox alone"
+check ui-mic topo_ui:mic
+is "check, the microphone part: exits 1" "$status" 1
+names "check, the microphone part: named" "topo_ui:mic runs on buddybox alone"
+# The quiet part is asked what topo_unit is, the unlocked session too.
+check ui-quiet topo_ui:quiet
+is "check, the quiet part: exits 0" "$status:$said" "0:this Mac can run topo_ui:quiet."
+FAKE_LOCKED=1 FAKE_VAULT=On check ui-quiet-locked topo_ui:quiet
+is "check, the quiet part, encrypted and locked: exits 1" "$status" 1
+names "check, the quiet part, encrypted and locked: named" "is locked"
+FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 check ui-quiet-bare topo_ui:quiet
+names "check, the quiet part: the Xcode is asked" "selected Xcode"
+names "check, the quiet part: the simulator is asked" "no iPhone simulator"
+names "check, the quiet part: the room is asked" "GB available"
 # The framework there is of other inputs: the tools that build it are asked for.
 echo other > "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
 PATH="$work/bin:/usr/bin:/bin" check tools topo_unit

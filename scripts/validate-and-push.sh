@@ -4,6 +4,7 @@
 # status, which is what pr-validate.yaml's `test` job requires in place of a hosted macOS run.
 #
 #   scripts/validate-and-push.sh [--no-push] [--suites "<suite>..."|all|none] [--lane fast|full]
+#   scripts/validate-and-push.sh --hold -- <command…>
 #
 # Run from the worktree whose HEAD is the commit to push, on its branch. In order:
 #
@@ -26,21 +27,30 @@
 #   3. Runs each suite under that suite's own lock (suite-<name>.lock beside the slots), one
 #      call of scripts/mac-suite.sh a suite, the commit's own copy: the first of the suites
 #      still to run whose lock is free, in the order they were chosen or asked for, so a run
-#      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on
-#      this Mac at a time (the audio lane is one per Mac), and with more slots than one two
-#      runs overlap in two different suites. The waits for a slot, for a suite and for a run of the script as it
-#      was are LOCK_WAIT seconds between them (three hours); nothing makes them first come,
-#      first served.
+#      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on this
+#      Mac at a time (the audio lane is one per Mac), and with more slots than one two runs
+#      overlap in two different suites. The waits for a slot, for a suite and for a run of the
+#      script as it was are LOCK_WAIT seconds between them (three hours). The wait for a slot
+#      is in the order the runs began: a run that has to wait takes a ticket in
+#      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began (since
+#      this Mac started) and its pid, and only the run whose ticket is first asks for a slot. A
+#      ticket whose process is gone holds nobody. A run that reached the line within one look
+#      of another, and a run of a branch that has not merged main, which knows of no line, can
+#      still take a slot out of turn.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
 #      scripts/validate-host.sh writes; neither by default)
 #      `topo_unit`, `others` and `scripts` go there first, over ssh, and here only when it is busy or
 #      cannot be used: the commit is pushed to a repository of the Mac's own
-#      (~/Library/Caches/topo-validate/repo.git there), checked out in its one validation
-#      worktree under its own lock, the commit's `scripts/mac-suite.sh --check` asked whether
+#      (~/Library/Caches/topo-validate/repo.git there), checked out in a validation
+#      worktree there under its lock (one such worktree, or two where validate-host.sh lent
+#      the Mac for two validations at once, and never two suites of one name), the commit's `scripts/mac-suite.sh --check` asked whether
 #      the Mac can run the suite, and the suite run in its login session, held awake, its
-#      results copied into this run's logs. `topo_ui` runs here whatever is named: the audio
-#      lane is buddybox's. A Mac that is not reached, lacks something or loses the suite partway
+#      results copied into this run's logs. `topo_ui` goes as its two parts then: the
+#      quiet one (`topo_ui:quiet`, every UI class but the microphone's) there as any suite,
+#      and the microphone's (`topo_ui:mic`) here whatever is named, the audio lane being
+#      buddybox's, and last, so the slot here is not held under a suite there. With the Mac
+#      busy, unusable or losing the quiet part, `topo_ui` runs here whole in one call. A Mac that is not reached, lacks something or loses the suite partway
 #      is said, runs nothing more of this validation, and is never a red suite: the suite
 #      runs here. A pass counts only when the connection outlived it. A red result the Mac
 #      wrote is red, as this Mac's would be, whatever there made it so.
@@ -48,7 +58,8 @@
 #      A red suite pushes nothing. --no-push never pushes.
 #   5. Posts the statuses to the commit, once origin's branch is at it: `local/<suite>` as
 #      `success` or `failure` for each suite run, and `local/real_ear` beside a `topo_ui` that
-#      passed on the full lane. GitHub takes a status only for a commit it has, which is why the
+#      passed on the full lane. `topo_ui` run as its two parts is the one status, a success
+#      when both are. GitHub takes a status only for a commit it has, which is why the
 #      push comes first; a commit that was already origin's head when the run began (a draft
 #      pushed without this script) gets its statuses whatever the suites did. A suite the choice
 #      left out gets none, and `test` asks for none.
@@ -70,6 +81,12 @@
 # is still going no run takes the slot, whose checkout would be moved to another commit under
 # it, and none starts a suite of its name.
 #
+# --hold -- <command…> validates nothing: it waits in the same line, takes a slot and the lock
+# of the script as it was, and runs the command with both held, as a suite is run (its pid on
+# record in the slot, nothing it leaves behind holding the slot), then exits with the
+# command's status. It asks nothing of the tree, runs no suite, pushes and posts nothing. A
+# simulator run by hand goes through it, so it is never beside a validation's suite here.
+#
 # A branch that has not merged main runs the script as it was, which holds one lock
 # ($cache/lock) for its whole run, in one checkout ($cache/checkout), and takes no suite's
 # lock. A run here holds that lock shared, so the two kinds never overlap and runs of this
@@ -82,6 +99,12 @@ logs_root="${TOPO_VALIDATE_LOGS:-$HOME/Library/Logs/topo-validate}"
 repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 LOCK_POLL="${LOCK_POLL:-5}"   # seconds between looks at a lock that is held
+HOST_RETRY="${HOST_RETRY:-60}"   # seconds before a Mac found busy is asked again
+# When this run began, in microseconds: its place in the line for a slot, whenever it gets
+# there. By the clock that counts from this Mac's start and is never set, so no correction of
+# the time of day puts a later run first; a ticket from before a restart is of a pid long gone.
+arrived="$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.0f", clock_gettime(CLOCK_MONOTONIC) * 1e6')"
+[[ "$arrived" =~ ^[0-9]{1,16}$ ]] || { echo "error: could not read this Mac's clock for a place in the line." >&2; exit 2; }
 SLOTS="${TOPO_VALIDATE_SLOTS:-1}"
 KEEP_LOGS=10
 KEEP_RUNS=5
@@ -93,8 +116,14 @@ EVERY=(topo_unit topo_ui others)
 push=yes
 suites_arg=""
 lane_arg=""
+hold=no
+hold_command=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --hold)
+      [ "${2-}" = -- ] && [ $# -ge 3 ] || { echo "--hold takes a command after --: --hold -- <command>..." >&2; exit 2; }
+      hold=yes; shift 2; hold_command=("$@"); break
+      ;;
     --no-push) push=no; shift ;;
     --suites) suites_arg="${2:-}"; [ -n "$suites_arg" ] || { echo "--suites takes suite names, all or none" >&2; exit 2; }; shift 2 ;;
     --lane) lane_arg="${2:-}"; [ -n "$lane_arg" ] || { echo "--lane takes full or fast" >&2; exit 2; }; shift 2 ;;
@@ -116,72 +145,77 @@ live_run() {
   [ -n "$pid" ] && [ -n "$began" ] && [ "$(began_of "$pid")" = "$began" ]
 }
 
-top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git worktree."
-cd "$top"
-branch="$(git symbolic-ref --quiet --short HEAD)" || die "HEAD is detached; check out the branch the commit is pushed to."
-[ "$branch" != main ] || die "this is main; a change lands as a PR from its own branch."
-sha="$(git rev-parse HEAD)"
-short="${sha:0:7}"
-if [ -n "$(git status --porcelain)" ]; then
-  echo "warning: this worktree has uncommitted changes or untracked files; they are not in $short, which is what is validated and pushed." >&2
-fi
+# A hold validates nothing, so it asks nothing of the tree: no commit, branch, fetch or suite.
+branch="by hand" sha="" short="${hold_command[0]-}" lane="" chosen=()
+short="${short##*/}"
+if [ "$hold" = no ]; then
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git worktree."
+  cd "$top"
+  branch="$(git symbolic-ref --quiet --short HEAD)" || die "HEAD is detached; check out the branch the commit is pushed to."
+  [ "$branch" != main ] || die "this is main; a change lands as a PR from its own branch."
+  sha="$(git rev-parse HEAD)"
+  short="${sha:0:7}"
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "warning: this worktree has uncommitted changes or untracked files; they are not in $short, which is what is validated and pushed." >&2
+  fi
 
-git fetch --quiet origin main || die "could not fetch origin/main to choose the suites against."
-base="$(git merge-base origin/main "$sha")" || die "$short has no merge base with origin/main."
+  git fetch --quiet origin main || die "could not fetch origin/main to choose the suites against."
+  base="$(git merge-base origin/main "$sha")" || die "$short has no merge base with origin/main."
 
-# Whether origin's branch is at the commit, read from origin and never a local ref.
-remote_head() { git ls-remote origin "refs/heads/$branch" | cut -f1; }
-already_pushed=no
-[ "$(remote_head)" != "$sha" ] || already_pushed=yes
-if [ "$push" = no ] && [ "$already_pushed" = no ]; then
-  die "origin's $branch is not at $short, and --no-push posts only to a commit origin already has as the branch's head."
-fi
+  # Whether origin's branch is at the commit, read from origin and never a local ref.
+  remote_head() { git ls-remote origin "refs/heads/$branch" | cut -f1; }
+  already_pushed=no
+  [ "$(remote_head)" != "$sha" ] || already_pushed=yes
+  if [ "$push" = no ] && [ "$already_pushed" = no ]; then
+    die "origin's $branch is not at $short, and --no-push posts only to a commit origin already has as the branch's head."
+  fi
 
-# The lists `select` reads, out of the commit's own workflow.
-workflow="$(git show "$sha:.github/workflows/pr-validate.yaml")" || die "$short has no .github/workflows/pr-validate.yaml."
-list() {  # list <step id> <env name>
-  ruby -ryaml -e '
-    w = YAML.safe_load(STDIN.read, aliases: true)
-    print w.fetch("jobs").fetch("select").fetch("steps").find { |s| s["id"] == ARGV[0] }.fetch("env").fetch(ARGV[1])
-  ' "$1" "$2" <<<"$workflow"
-}
-rules="$(list suites SUITE_RULES)" || die "could not read SUITE_RULES from $short's workflow."
-voice="$(list lane VOICE_PATHS)" || die "could not read VOICE_PATHS from $short's workflow."
+  # The lists `select` reads, out of the commit's own workflow.
+  workflow="$(git show "$sha:.github/workflows/pr-validate.yaml")" || die "$short has no .github/workflows/pr-validate.yaml."
+  list() {  # list <step id> <env name>
+    ruby -ryaml -e '
+      w = YAML.safe_load(STDIN.read, aliases: true)
+      print w.fetch("jobs").fetch("select").fetch("steps").find { |s| s["id"] == ARGV[0] }.fetch("env").fetch(ARGV[1])
+    ' "$1" "$2" <<<"$workflow"
+  }
+  rules="$(list suites SUITE_RULES)" || die "could not read SUITE_RULES from $short's workflow."
+  voice="$(list lane VOICE_PATHS)" || die "could not read VOICE_PATHS from $short's workflow."
 
-# The selectors are the commit's own too, as `select` runs them: a copy edited and not committed
-# in this worktree would choose here what the workflow does not.
-selectors="$(mktemp -d -t topo-validate-select)" || die "could not make a directory for the commit's selectors."
-# A run's mark on its logs stands until the run is over, its push and its statuses included.
-trap 'rm -rf "$selectors"; [ -z "${logs-}" ] || rm -f "$logs/running"' EXIT
-for selector in ci-select-suites.sh ci-select-lane.sh; do
-  git show "$sha:scripts/$selector" > "$selectors/$selector" || die "$short has no scripts/$selector."
-done
-selection="$(SUITE_RULES="$rules" bash "$selectors/ci-select-suites.sh" --git "$base" "$sha" 2>/dev/null)" || die "scripts/ci-select-suites.sh failed."
-lane="$(VOICE_PATHS="$voice" bash "$selectors/ci-select-lane.sh" --git "$base" "$sha" 2>/dev/null | sed -n 's/^lane=//p')"
-case "$lane" in full | fast) ;; *) die "scripts/ci-select-lane.sh gave no lane." ;; esac
-chosen=()
-for suite in "${SUITES[@]}"; do
-  case "$(sed -n "s/^$suite=//p" <<<"$selection")" in
-    true) chosen+=("$suite") ;;
-    false) ;;
-    *) die "scripts/ci-select-suites.sh said neither true nor false for $suite." ;;
+  # The selectors are the commit's own too, as `select` runs them: a copy edited and not committed
+  # in this worktree would choose here what the workflow does not.
+  selectors="$(mktemp -d -t topo-validate-select)" || die "could not make a directory for the commit's selectors."
+  # A run's mark on its logs stands until the run is over, its push and its statuses included.
+  trap 'rm -rf "$selectors"; [ -z "${logs-}" ] || rm -f "$logs/running"; [ -z "${ticket-}" ] || rm -f "$ticket"' EXIT
+  for selector in ci-select-suites.sh ci-select-lane.sh; do
+    git show "$sha:scripts/$selector" > "$selectors/$selector" || die "$short has no scripts/$selector."
+  done
+  selection="$(SUITE_RULES="$rules" bash "$selectors/ci-select-suites.sh" --git "$base" "$sha" 2>/dev/null)" || die "scripts/ci-select-suites.sh failed."
+  lane="$(VOICE_PATHS="$voice" bash "$selectors/ci-select-lane.sh" --git "$base" "$sha" 2>/dev/null | sed -n 's/^lane=//p')"
+  case "$lane" in full | fast) ;; *) die "scripts/ci-select-lane.sh gave no lane." ;; esac
+  chosen=()
+  for suite in "${SUITES[@]}"; do
+    case "$(sed -n "s/^$suite=//p" <<<"$selection")" in
+      true) chosen+=("$suite") ;;
+      false) ;;
+      *) die "scripts/ci-select-suites.sh said neither true nor false for $suite." ;;
+    esac
+  done
+  echo "select: ${chosen[*]:-no suite} ($(sed -n 's/^reason=//p' <<<"$selection")); lane $lane"
+  case "$suites_arg" in
+    "") ;;
+    all) chosen=("${EVERY[@]}") ;;
+    none) chosen=() ;;
+    *)
+      chosen=()
+      for suite in $suites_arg; do
+        case " ${chosen[*]-} " in *" $suite "*) continue ;; esac
+        case " ${SUITES[*]} " in *" $suite "*) chosen+=("$suite") ;; *) die "no such suite '$suite': one of ${SUITES[*]}, all or none." ;; esac
+      done
+      ;;
   esac
-done
-echo "select: ${chosen[*]:-no suite} ($(sed -n 's/^reason=//p' <<<"$selection")); lane $lane"
-case "$suites_arg" in
-  "") ;;
-  all) chosen=("${EVERY[@]}") ;;
-  none) chosen=() ;;
-  *)
-    chosen=()
-    for suite in $suites_arg; do
-      case " ${chosen[*]-} " in *" $suite "*) continue ;; esac
-      case " ${SUITES[*]} " in *" $suite "*) chosen+=("$suite") ;; *) die "no such suite '$suite': one of ${SUITES[*]}, all or none." ;; esac
-    done
-    ;;
-esac
-[ -z "$lane_arg" ] || lane="$lane_arg"
-[ -z "$suites_arg$lane_arg" ] || echo "asked for: ${chosen[*]:-no suite}; lane $lane"
+  [ -z "$lane_arg" ] || lane="$lane_arg"
+  [ -z "$suites_arg$lane_arg" ] || echo "asked for: ${chosen[*]:-no suite}; lane $lane"
+fi
 
 commit_logs="$logs_root/$sha"
 logs=""   # this run's own directory under the commit's, made once the slot is held
@@ -235,8 +269,10 @@ ran_on=""   # `<suite>=<host>` lines, for a suite that ran on another Mac
 # not.
 ssh_options="-o BatchMode=yes -o ControlPath=none -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 ssh_to() { ssh $ssh_options "$@"; }
-# What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under that
-# Mac's own lock, the commit checked out in its one validation worktree, mac-suite.sh asked
+# What a host is asked to do, as `bash -s -- <sha> <lane> <suite> <run>` there: under the
+# lock of one of that Mac's slots (as many as its slots.count says, one or two, which
+# validate-host.sh writes; each a checkout of its own) and the lock of the suite's name,
+# the commit checked out in the slot's validation worktree, mac-suite.sh asked
 # whether the Mac can run the suite, and then the suite, in the login session where there is a
 # way into it and held awake, its display too, so that it does not lock for idleness under
 # the suite. It exits 75 when the Mac is busy, 76 when it cannot run the
@@ -253,8 +289,35 @@ sha="$1" lane="$2" suite="$3" run="$4"
 cache="$HOME/Library/Caches/topo-validate"
 results="$cache/logs/$run"
 refuse() { echo "error: $1 on $(hostname -s)." >&2; exit 76; }
-exec 9>> "$cache/lock"
-lockf -s -t 0 9 || { echo "error: another validation is running on $(hostname -s)." >&2; exit 75; }
+busy() { echo "error: $1 on $(hostname -s)." >&2; exit 75; }
+# Whether anything of a run is still going: every process of a suite here has the run'"'"'s
+# results directory in its arguments, from the way into the session down to mac-suite.sh,
+# and this script has the run'"'"'s name as the last of its own, which a child it has forked
+# to start the suite still has until it is the suite. So a script killed as it starts its
+# suite leaves a run that is going from the fork on, with no moment between.
+going() { ps -axww -o args= | grep -v grep | grep -q -e "$cache/logs/$1[\" ]" -e " -s -- [0-9a-f]\{40\} [a-z]* [a-z_:]* $1\$"; }
+left_in() { [ -s "$1/run" ] && going "$(sed -n 1p "$1/run")"; }
+# The lock a run of the script as it was holds whole, held here shared: such a run and a
+# slot'"'"'s are never on this Mac at once.
+exec 8>> "$cache/lock"
+perl -MFcntl=:flock -e '"'"'open(my $lock, ">&=", 8) or exit 2; exit(flock($lock, LOCK_SH | LOCK_NB) ? 0 : 1)'"'"'
+case $? in 0) ;; 1) busy "a validation of a branch that has not merged main is running" ;; *) refuse "the lock at $cache/lock could not be asked for" ;; esac
+# One suite of a name at a time: by its lock, and by the record of one a killed run left going.
+exec 6>> "$cache/suite-$suite.lock"
+lockf -s -t 0 6 || busy "another validation is running $suite"
+slots="$(cat "$cache/slots.count" 2>/dev/null)"
+case "$slots" in 1 | 2) ;; *) slots=1 ;; esac
+slot=""
+for n in $(seq "$slots"); do
+  mkdir -p "$cache/slots/$n"
+  ! { left_in "$cache/slots/$n" && [ "$(sed -n 2p "$cache/slots/$n/run")" = "$suite" ]; } || busy "$suite of an earlier validation is still running without its script"
+done
+for n in $(seq "$slots"); do
+  exec 9>> "$cache/slots/$n/lock"
+  if lockf -s -t 0 9 && ! left_in "$cache/slots/$n"; then slot="$n"; break; fi
+  exec 9>&-
+done
+[ -n "$slot" ] || busy "every checkout ($slots) is held by another validation"
 rm -rf "$results"
 mkdir -p "$results" || refuse "could not make $results"
 child=""
@@ -273,24 +336,27 @@ stop() {
 }
 trap stop TERM INT HUP
 echo $$ > "$results/host.pid"
-checkout="$cache/checkout"
+# The first slot'"'"'s checkout is the one a run of the script as it was uses, which is never here
+# at the same time, so what that one has built is not built again.
+if [ "$slot" = 1 ]; then checkout="$cache/checkout"; else checkout="$cache/slots/$slot/checkout"; fi
+printf "%s\n%s\n" "$run" "$suite" > "$cache/slots/$slot/run"
 if [ ! -e "$checkout/.git" ]; then
-  git --git-dir="$cache/repo.git" worktree prune 9>&-
-  git --git-dir="$cache/repo.git" worktree add --quiet --detach "$checkout" "$sha" 9>&- || refuse "could not make a worktree at $checkout"
+  git --git-dir="$cache/repo.git" worktree prune 6>&- 8>&- 9>&-
+  git --git-dir="$cache/repo.git" worktree add --quiet --detach "$checkout" "$sha" 6>&- 8>&- 9>&- || refuse "could not make a worktree at $checkout"
 fi
-git -C "$checkout" checkout --quiet --force --detach "$sha" 9>&- && git -C "$checkout" clean --quiet -fd 9>&- \
+git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 8>&- 9>&- && git -C "$checkout" clean --quiet -fd 6>&- 8>&- 9>&- \
   || refuse "could not check $sha out in $checkout"
 [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
-git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 9>&-
+git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 6>&- 8>&- 9>&-
 cd "$checkout" || refuse "could not enter $checkout"
-scripts/mac-suite.sh --check --cache "$cache" "$suite" 9>&- || exit 76
-ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do rm -rf "${cache:?}/logs/$old"; done
+scripts/mac-suite.sh --check --cache "$cache" "$suite" 6>&- 8>&- 9>&- || exit 76
+ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do going "$old" || rm -rf "${cache:?}/logs/$old"; done
 command="cd \"$checkout\" && exec env GIT_CONFIG_GLOBAL=/dev/null scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
 session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
-  sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 9>&- &
+  sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 6>&- 8>&- 9>&- &
 else
-  /usr/bin/caffeinate -di /bin/bash -lc "$command" 9>&- &
+  /usr/bin/caffeinate -di /bin/bash -lc "$command" 6>&- 8>&- 9>&- &
 fi
 child=$!
 status=0
@@ -303,7 +369,7 @@ exit "$status"
 # lacking something, or lost partway. Only a suite that ran to a result there has one: a Mac
 # that fell asleep is not a red suite, and the suite is still to run.
 run_on() {
-  local at="$1" suite="$2" run="$short-$$-$2" status=0 began said
+  local at="$1" suite="$2" run="$short-$$-${2/:/-}" status=0 began said
   local there="Library/Caches/topo-validate"
   ssh_to "$at" "mkdir -p $there/logs && { [ -d $there/repo.git ] || git init --quiet --bare $there/repo.git; }" \
     || { echo "$at: not reached; it runs nothing of this validation."; return 2; }
@@ -347,14 +413,61 @@ run_on() {
   echo "$suite: $(grep -q '=failure$' <<<"$said" && echo failure || echo success) in $(((SECONDS - suite_started) / 60)) min on $at"
 }
 
-# A slot, if one is free: its lock on descriptor 7 for the rest of the run, dropped by the
-# kernel when this script dies. One with an orphan in its checkout is not taken. Then the lock
+# The line for a slot: a ticket a run, in $cache/queue, named for the microsecond the run
+# began ($arrived) and its pid, of one width each, so the names' order under LC_ALL=C is the
+# order the runs began in for every reader. It holds the pid, when that began and who it is. A run's ticket
+# has one name for the run's life, and the file is there only while the run does nothing but
+# wait for a slot: it is out before a suite is tried on another Mac and back, under its own
+# name, when the run next waits here.
+queue="$cache/queue"
+ticket=""
+ticket_in() {
+  [ -n "$ticket" ] || ticket="$queue/$(printf '%016d-%07d' "$arrived" "$$")"
+  [ ! -s "$ticket" ] || return 0
+  # Whole or not at all: under a name no reader takes for a ticket, then its own.
+  mkdir -p "$queue" && printf '%s\n%s\n%s\n' "$$" "$(began_of $$)" "$branch $short" > "$queue/.new.$$" \
+    && mv -f "$queue/.new.$$" "$ticket" || die "could not take a place in $queue."
+}
+ticket_out() { [ -z "$ticket" ] || rm -f "$ticket"; }
+# Who is ahead of this run, one a line: every live ticket before its own, or every live one
+# when it has none in. A ticket is live while its pid is running and began when the ticket
+# says; one that is not, or that does not read as three lines, is dead and is removed here.
+# A live run whose ticket was taken for dead (a `ps` that failed) puts it back at its next look.
+ahead() {
+  local name pid began who
+  [ -d "$queue" ] || return 0
+  LC_ALL=C ls -1 "$queue" | LC_ALL=C sort | while IFS= read -r name; do
+    [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
+    [ "$queue/$name" != "$ticket" ] || break
+    pid="$(sed -n 1p "$queue/$name" 2>/dev/null)" began="$(sed -n 2p "$queue/$name" 2>/dev/null)" who="$(sed -n 3p "$queue/$name" 2>/dev/null)"
+    if [ -n "$pid" ] && [ -n "$began" ] && [ -n "$who" ] && [ "$(began_of "$pid")" = "$began" ]; then
+      echo "$who, pid $pid"
+    else
+      rm -f "$queue/$name"
+    fi
+  done
+}
+
+# A slot, if one is free and nobody is ahead in the line: the line is read first, always, and
+# only the run at its head, or one that finds it empty, asks for a slot's lock. Asked as it
+# always was, without waiting and again every LOCK_POLL: a run of the script as it was polls
+# too and knows of no line, and a head asleep on the lock would have it every time. So such
+# a run can still take a slot out of turn, as can a run that arrived within one look of
+# another; among the runs that know of the line, the order is arrival's. The slot's lock is
+# on descriptor 7 for the rest of the run, dropped by the kernel when this script dies. One with an orphan in its checkout is not taken. Then the lock
 # a run of the script as it was holds whole, held here shared, on descriptor 8: such a run and
 # a suite of this one here are never going at once, and neither is a suite one left behind it.
 slot=""
 slot_held=""
 take_slot() {
-  local n orphan held="" orphans=""
+  local n orphan held="" orphans="" before
+  [ -z "$ticket" ] || ticket_in
+  before="$(ahead)"
+  if [ -n "$before" ]; then
+    ticket_in
+    slot_held="$(grep -c . <<<"$before") ahead in the line, the first $(sed -n 1p <<<"$before")"
+    return 0
+  fi
   for n in $(seq "$SLOTS"); do
     mkdir -p "$cache/slots/$n"
     exec 7>> "$cache/slots/$n/lock"
@@ -372,8 +485,10 @@ take_slot() {
     [ -n "$held" ] || die "no checkout is free${orphans#;}. That stops its lane and deletes its simulators; then run again."
     slot_held="$held$orphans"
     slot_held="${slot_held#; }"
+    ticket_in
     return 0
   fi
+  ticket_out
   slot_dir="$cache/slots/$slot"
   echo "$branch $short, pid $$, since $(date '+%H:%M')" > "$slot_dir/holder"
 
@@ -399,7 +514,10 @@ take_slot() {
     die "the suite of an earlier validation is still running without its script (pid ${orphan%% *}; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill ${orphan%% *}\`, which stops its lane and deletes its simulators, and run again."
   fi
   echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/holder"
+}
 
+# The slot's checkout at the commit, once the slot is this run's.
+checkout_slot() {
   checkout="$slot_dir/checkout"
   if [ ! -e "$checkout/.git" ]; then
     git worktree prune
@@ -416,13 +534,18 @@ take_slot() {
   say_at="$waited"
 }
 
-# run_here <suite> — the suite in this run's checkout, its lock already on descriptor 6.
-run_here() {
-  local suite="$1" suite_status=0 said
-  echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/suite-$suite.holder"
-  echo "$suite: began $(date '+%H:%M')"
-  suite_started=$SECONDS
-  # The suite is started by a keeper, which is what this script waits for and signals. The
+# What a keeper starts, as the process it then waits for. A suite has none of this script's
+# output; a command held for by hand has all of it, on the descriptors the hold kept for it.
+start_suite() { cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "$1" >> "$logs/mac-suite.log" 2>&1; }
+start_held() { exec "${hold_command[@]}" >&3 2>&4 3>&- 4>&-; }
+
+# keep <starter> <name> — what the starter starts, in this run's slot under a keeper, its
+# exit status in $kept.
+kept=0
+keep() {
+  local starter="$1" name="$2"
+  kept=0
+  # It is started by a keeper, which is what this script waits for and signals. The
   # keeper holds the old lock, shared, and no other descriptor, from before the suite begins
   # until it has ended, and it outlives this script: the script as it was knows nothing of
   # slots, and that lock is the one thing that keeps a run of it from starting beside a suite
@@ -441,12 +564,11 @@ run_here() {
     child="" child_status=0
     trap '[ -z "$child" ] || kill "$child" 2>/dev/null || true; [ -z "$child" ] || wait "$child" 2>/dev/null || true; rm -f "$slot_dir/suite"; exit 143' TERM INT HUP
     kill -0 $$ 2>/dev/null || exit 143
-    (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "$suite") \
-      >> "$logs/mac-suite.log" 2>&1 8>&- &
+    ("$starter" "$name") 8>&- &
     child=$!
     began="$(began_of "$child")"
     if [ -n "$began" ]; then
-      printf '%s\n%s\n%s\n' "$child" "$began" "$suite" > "$slot_dir/suite.$$" && mv -f "$slot_dir/suite.$$" "$slot_dir/suite"
+      printf '%s\n%s\n%s\n' "$child" "$began" "$name" > "$slot_dir/suite.$$" && mv -f "$slot_dir/suite.$$" "$slot_dir/suite"
     else
       rm -f "$slot_dir/suite"
     fi
@@ -455,9 +577,20 @@ run_here() {
     exit "$child_status"
   ) > /dev/null 2>&1 6>&- 7>&- &
   suite_pid=$!
-  wait "$suite_pid" || suite_status=$?
+  wait "$suite_pid" || kept=$?
   trap 'exit 143' TERM INT HUP
   rm -f "$slot_dir/suite"
+}
+
+# run_here <suite> <name> — the suite in this run's checkout, the lock of its name already on
+# descriptor 6: a part of topo_ui holds topo_ui's.
+run_here() {
+  local suite="$1" suite_status=0 said
+  echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/suite-$2.holder"
+  echo "$suite: began $(date '+%H:%M')"
+  suite_started=$SECONDS
+  keep start_suite "$suite"
+  suite_status="$kept"
   # mac-suite.sh starts its suites.txt afresh each call. The suite has a line, or it failed:
   # a call that died early wrote none.
   said="$(grep "^$suite=" "$logs/suites.txt" 2>/dev/null || true)"
@@ -467,6 +600,23 @@ run_here() {
   took="$took$suite=$(((SECONDS - suite_started) / 60))"$'\n'
   echo "$suite: $(grep -q '=failure$' <<<"$said" && echo failure || echo success) in $(((SECONDS - suite_started) / 60)) min"
 }
+
+# By hand: the command with a slot held, taken in the line as a validation takes one, and
+# nothing else. It is kept as a suite is, so nothing it leaves running holds the slot, and
+# one a SIGKILL of this script left running is on the slot's record for the next run to find.
+if [ "$hold" = yes ]; then
+  mkdir -p "$cache/slots"
+  trap '[ -z "${ticket-}" ] || rm -f "$ticket"' EXIT
+  trap 'exit 143' TERM INT HUP
+  while [ -z "$slot" ]; do
+    take_slot
+    [ -n "$slot" ] || waiting "a checkout" "$slot_held"
+  done
+  echo "Slot $slot is held for: ${hold_command[*]}" >&2
+  exec 3>&1 4>&2
+  keep start_held hold
+  exit "$kept"
+fi
 
 if [ "${#chosen[@]}" -gt 0 ]; then
   mkdir -p "$cache/slots" "$logs_root"
@@ -487,6 +637,12 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   started=$SECONDS
 
   remaining=" ${chosen[*]} "
+  # With another Mac named, topo_ui is its two parts: the quiet one, which may leave this Mac
+  # as any suite may, and the microphone's, which never does and is the last thing the run
+  # does, so the slot here is not held under a suite on the other Mac.
+  if [ -n "$hosts" ]; then
+    case "$remaining" in *" topo_ui "*) remaining="${remaining/ topo_ui / topo_ui:quiet }topo_ui:mic " ;; esac
+  fi
   hosts_at=0   # when a host found busy is asked again
   while [ "$remaining" != " " ]; do
     suite=""
@@ -494,13 +650,17 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     # to run that may leave this one.
     if [ -n "$hosts" ] && [ "$SECONDS" -ge "$hosts_at" ]; then
       for candidate in $remaining; do
-        [ "$candidate" != topo_ui ] || continue
+        case "$candidate" in topo_ui | topo_ui:mic) continue ;; esac
         for at in $hosts; do
+          # Out of the line for as long as this takes: the Mac says it is busy on the same
+          # connection that would start the suite, and nobody waits here behind a run that
+          # is running there.
+          ticket_out
           outcome=0
           run_on "$at" "$candidate" || outcome=$?
           case "$outcome" in
             0) suite="$candidate"; break 2 ;;
-            1) hosts_at=$((SECONDS + 60)) ;;
+            1) hosts_at=$((SECONDS + HOST_RETRY)) ;;
             *) hosts=" $hosts "; hosts="${hosts/ $at / }"; hosts="$(echo $hosts)" ;;
           esac
         done
@@ -511,23 +671,30 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     # descriptor 6. A suite a killed script left going holds its name as a lock would.
     held=""
     if [ -z "$suite" ]; then
-      [ -n "$slot" ] || take_slot
+      if [ -z "$slot" ]; then
+        take_slot
+        [ -z "$slot" ] || checkout_slot
+      fi
       [ -n "$slot" ] || held="; $slot_held"
     fi
     if [ -z "$suite" ] && [ -n "$slot" ]; then
       for candidate in $remaining; do
-        exec 6>> "$cache/suite-$candidate.lock"
+        # A part of topo_ui holds topo_ui's name here, the lane being one a Mac; and with both
+        # parts still to run here they are the suite whole, in one call.
+        name="${candidate%%:*}" what="$candidate"
+        case "$name:$remaining" in topo_ui:*" topo_ui:quiet "*) case "$remaining" in *" topo_ui:mic "*) what=topo_ui ;; esac ;; esac
+        exec 6>> "$cache/suite-$name.lock"
         if ! lockf -s -t 0 6; then
-          held="$held; $candidate: $(cat "$cache/suite-$candidate.holder" 2>/dev/null || echo unknown)"
+          held="$held; $candidate: $(cat "$cache/suite-$name.holder" 2>/dev/null || echo unknown)"
         else
           # Free, and on record as running in some slot: its script is gone.
           orphan=""
           for dir in "$cache"/slots/*/; do
-            if found="$(orphan_in "$dir")" && [ "${found#* }" = "$candidate" ]; then orphan="${found%% *}"; fi
+            if found="$(orphan_in "$dir")" && found_suite="${found#* }" && [ "${found_suite%%:*}" = "$name" ]; then orphan="${found%% *}"; fi
           done
           if [ -z "$orphan" ]; then
-            suite="$candidate"
-            run_here "$suite"
+            suite="$what"
+            run_here "$suite" "$name"
             exec 6>&-
             break
           fi
@@ -541,6 +708,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
       continue
     fi
     say_at="$waited"
+    if [ "$suite" = topo_ui ]; then remaining="${remaining/ topo_ui:quiet / }"; remaining="${remaining/ topo_ui:mic / }"; fi
     remaining="${remaining/ $suite / }"
   done
   trap - TERM INT HUP
@@ -601,13 +769,18 @@ where="~${commit_logs#"$HOME"}"
 [ "$where" != "~$commit_logs" ] || where="$commit_logs"
 for suite in ${chosen[@]+"${chosen[@]}"}; do
   # Red by any line that says so, as `red` above is read: never the last word of several.
-  if grep -q "^$suite=failure$" <<<"$results" || ! grep -q "^$suite=success$" <<<"$results"; then
-    state=failure said=failed
-  else
-    state=success said=passed
-  fi
-  on="$(sed -n "s/^$suite=//p" <<<"$ran_on")"
-  post "local/$suite" "$state" "$suite $said, $lane lane, $(sed -n "s/^$suite=//p" <<<"$took") min on ${on:-$host};"
+  # topo_ui that ran as its two parts is one status: a success when each part is.
+  parts="$suite"
+  [ "$suite" != topo_ui ] || grep -q "^topo_ui=" <<<"$results" || parts="topo_ui:quiet topo_ui:mic"
+  state=success said=passed where_ran=""
+  for part in $parts; do
+    if grep -q "^$part=failure$" <<<"$results" || ! grep -q "^$part=success$" <<<"$results"; then state=failure said=failed; fi
+    on="$(sed -n "s/^$part=//p" <<<"$ran_on")"
+    # Short, the second part's the shorter: with the logs' path there are 140 characters for all of it.
+    unit=" min"; [ -z "$where_ran" ] || unit=""
+    where_ran="$where_ran${where_ran:+ + }$(sed -n "s/^$part=//p" <<<"$took")$unit on ${on:-$host}"
+  done
+  post "local/$suite" "$state" "$suite $said, $lane lane, $where_ran;"
   if [ "$suite" = topo_ui ] && [ "$lane" = full ] && [ "$state" = success ]; then
     post local/real_ear success "Parakeet heard the fixture on $host;"
   fi

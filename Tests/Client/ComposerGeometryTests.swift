@@ -1064,6 +1064,10 @@ final class ComposerPlanTests: XCTestCase {
         XCTAssertEqual(plan.more.x, inner - (inner - composer.horizontalInset) / 4, accuracy: 1e-9)
         XCTAssertLessThan(plan.more.x, plan.well.minX)
         XCTAssertGreaterThan(plan.more.x, (inner + composer.horizontalInset) / 2, "the control is not in the flank's inner half")
+        // The resting field covers none of the way to the keyboard: a touch on its frame is its
+        // own on iOS 27, so a field over the mark takes the press that raises the keyboard.
+        XCTAssertEqual(plan.field.width, 0, "the resting field has a width to take the mark's press with")
+        XCTAssertEqual(plan.field.minX, plan.keyboard.x, accuracy: 1e-9, "the resting field does not grow out of the mark")
     }
 
     /// The keyboard on screen is the row; so is the field holding focus once no keyboard has

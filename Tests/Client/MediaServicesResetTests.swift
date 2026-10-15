@@ -221,7 +221,7 @@ struct ScriptedVoice: VoiceEngine {
         guard loads else { throw VoiceError.unavailable("no models here") }
     }
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         let script = frames(text)
         return AsyncThrowingStream { continuation in
             for samples in script {
@@ -255,7 +255,7 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
 
     func load(base: URL) async throws {}
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
@@ -287,7 +287,7 @@ final class HeldSecondSentence: VoiceEngine, @unchecked Sendable {
 
     func load(base: URL) async throws {}
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         let mine = lock.withLock { asked += 1; return asked }
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -316,7 +316,7 @@ final class FramesAfterTheInterruption: VoiceEngine, @unchecked Sendable {
 
     func load(base: URL) async throws {}
 
-    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+    func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(seconds: Self.lengths[0]), rate: Voice.rate))
@@ -713,6 +713,22 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
                        "the session is active before the queue exists")
         XCTAssertEqual(speaker.report.engine, .pocket, "there is one voice")
+        speaker.stop()
+    }
+
+    /// The cost of each sentence is marked where a release build logs it, as numbers alone.
+    func testEachSentenceMadeIsMarkedWithWhatItCostAndNoneOfItsWords() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        let marks = SpokenMarks()
+        await Perf.$observer.withValue(marks.add) {
+            speaker.speak("Hello there. One more sentence follows.")
+            await settle("two sentences marked") { marks.sentences.count == 2 }
+        }
+        let shape = #/^speak\.sentence synth=\d+\.\d{2} first=\d+\.\d{2} audio=\d+\.\d{2} words=(\d+)$/#
+        XCTAssertEqual(marks.sentences.map { (try? shape.wholeMatch(in: $0))?.1 }, ["2", "4"], "\(marks.sentences)")
         speaker.stop()
     }
 
@@ -1748,5 +1764,16 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(built, 2)
         XCTAssertFalse(queue.node === node, "a new player")
         XCTAssertFalse(queue.timePitch === timePitch, "a new time-pitch unit")
+    }
+}
+
+
+/// The `speak.sentence` marks one task made, in order (`Perf.observer`).
+final class SpokenMarks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: [String] = []
+    var sentences: [String] { lock.withLock { kept } }
+    var add: @Sendable (String) -> Void {
+        { [self] name in if name.hasPrefix("speak.sentence") { lock.withLock { kept.append(name) } } }
     }
 }

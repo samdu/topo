@@ -474,6 +474,7 @@
 		E16BE15E28A212D1C84D18C7 /* ScreenShareSectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91557526B25922514E81F558 /* ScreenShareSectionTests.swift */; };
 		E24A9C95DA4BA49B0D069F99 /* ControlToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D431E5424FB548AF6DBE3713 /* ControlToolTests.swift */; };
 		E2952F8F672806D95C01C341 /* LookTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D237ABF387E8A76064A494FA /* LookTool.swift */; };
+		E2A21B4F2A1C56ACBE5F61EF /* WebAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFE19D8F26717B2747C2185 /* WebAuthTests.swift */; };
 		E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		E31E3699C246943267961135 /* DefaultSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7B76958213F991C66478F1 /* DefaultSurface.swift */; };
 		E42BB8C3B4B9D5F09895B354 /* accessoryRectangular.json in Resources */ = {isa = PBXBuildFile; fileRef = C3A55F344E7F7783741D58B4 /* accessoryRectangular.json */; };
@@ -927,6 +928,7 @@
 		EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPreviews.swift; sourceTree = "<group>"; };
 		EB40574A451BCD56247E1E50 /* HomeTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeTool.swift; sourceTree = "<group>"; };
 		EC5C273524C6EE9CB5783D8E /* GuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTests.swift; sourceTree = "<group>"; };
+		EEFE19D8F26717B2747C2185 /* WebAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthTests.swift; sourceTree = "<group>"; };
 		EFC4DEFA1DE3ED504C31746F /* LookStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookStage.swift; sourceTree = "<group>"; };
 		F0282172ECF3161683779EE2 /* GuestZoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestZoneTests.swift; sourceTree = "<group>"; };
 		F04D099F38FADE29E35DE3E1 /* OnePasswordInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePasswordInstallerTests.swift; sourceTree = "<group>"; };
@@ -1465,6 +1467,7 @@
 				0EF1677D8D77561257325F30 /* VaultMountTests.swift */,
 				BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */,
 				2BD6F008FEF0A72909C70901 /* VoiceToolTests.swift */,
+				EEFE19D8F26717B2747C2185 /* WebAuthTests.swift */,
 				4194F7FA1505EC3F8CCC30FE /* WidgetActionTests.swift */,
 				BD63F4FBE1962E523790F4A7 /* WidgetCueTests.swift */,
 				D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */,
@@ -2525,6 +2528,7 @@
 				E11803C2ACE44982CF4D443D /* VaultMountTests.swift in Sources */,
 				A399F66B2B5BFE21E44EE31E /* VocabularyTests.swift in Sources */,
 				B3943DDC6AC07591190127ED /* VoiceToolTests.swift in Sources */,
+				E2A21B4F2A1C56ACBE5F61EF /* WebAuthTests.swift in Sources */,
 				90412876E1F0D1581FFC9035 /* WidgetActionTests.swift in Sources */,
 				80A8388F259BD40B8ACEC511 /* WidgetCueTests.swift in Sources */,
 				F4010B6C30D29D40FE5B6DF3 /* WidgetDocumentTests.swift in Sources */,
