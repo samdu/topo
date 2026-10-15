@@ -42,8 +42,10 @@
 #      is back in the line at once, in its own place, for its next suite here. The waits for
 #      another Mac are in no order. A run that reached the line
 #      within one look of another, one that came back to it from asking another Mac in the
-#      look it was freed, and a run of a branch that has not merged main, which knows of no
-#      line and holds its slot for the whole run, can still take a slot out of turn.
+#      look it was freed, one that took its suite's name in the instant between a run ahead
+#      reading the line and taking that name, and a run of a branch that has not merged main,
+#      whose script holds its slot for the whole run and knows of no names in the line, or of
+#      no line, can still take a slot out of turn.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
 #      scripts/validate-host.sh writes; neither by default)
@@ -97,7 +99,8 @@
 # A branch that has not merged main runs the script as it was, which holds one lock
 # ($cache/lock) for its whole run, in one checkout ($cache/checkout), and takes no suite's
 # lock. A run here holds that lock shared, so the two kinds never overlap and runs of this
-# script share it; a run of the script as it was waits for as long as any of these is going,
+# script share it, each from its first suite here; a run of the script as it was waits for as
+# long as any of these that has run a suite here is going,
 # a suite one of them left behind included.
 set -euo pipefail
 
@@ -498,15 +501,21 @@ ahead() {
 slot=""
 slot_held=""
 old_held=""
-take_slot() {
-  local n orphan held="" orphans="" before
+# Whether this run is first in the line, which it reads holding no lock: a lock it held would
+# read as busy to a run behind it reading this run's ticket, which then passes it. Not first, it
+# is in the line and $slot_held says who is ahead.
+line_clear() {
+  local before
   [ -z "$ticket" ] || ticket_in
   before="$(ahead)"
-  if [ -n "$before" ]; then
-    ticket_in
-    slot_held="$(grep -c . <<<"$before") ahead in the line, the first $(sed -n 1p <<<"$before")"
-    return 0
-  fi
+  [ -n "$before" ] || return 0
+  ticket_in
+  slot_held="$(grep -c . <<<"$before") ahead in the line, the first $(sed -n 1p <<<"$before")"
+  return 1
+}
+take_slot() {  # take_slot [--line-read: line_clear has said this run is first]
+  local n orphan held="" orphans=""
+  [ "${1-}" = --line-read ] || line_clear || return 0
   for n in $(seq "$SLOTS"); do
     mkdir -p "$cache/slots/$n"
     exec 7>> "$cache/slots/$n/lock"
@@ -687,7 +696,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   remaining=" ${chosen[*]} "
   # With another Mac named, topo_ui is its two parts: the quiet one, which may leave this Mac
   # as any suite may, and the microphone's, which never does and is the last thing the run
-  # does, so the slot here is not held under a suite on the other Mac.
+  # does.
   if [ -n "$hosts" ]; then
     case "$remaining" in *" topo_ui "*) remaining="${remaining/ topo_ui / topo_ui:quiet }topo_ui:mic " ;; esac
   fi
@@ -728,33 +737,44 @@ if [ "${#chosen[@]}" -gt 0 ]; then
         # parts still to run here they are the suite whole, in one call.
         name="${candidate%%:*}" what="$candidate"
         case "$name:$remaining" in topo_ui:*" topo_ui:quiet "*) case "$remaining" in *" topo_ui:mic "*) what=topo_ui ;; esac ;; esac
+        # Free at a look that holds it for no longer than the look, and not on record as
+        # running in some slot (one whose script is gone); then the line, read holding
+        # nothing; and only then the name's lock, on descriptor 6, and a slot.
+        if ! name_free "$name" ""; then
+          held="$held; $candidate: $(cat "$cache/suite-$name.holder" 2>/dev/null || echo unknown)"
+          continue
+        fi
+        orphan=""
+        for dir in "$cache"/slots/*/; do
+          if found="$(orphan_in "$dir")" && found_suite="${found#* }" && [ "${found_suite%%:*}" = "$name" ]; then orphan="${found%% *}"; fi
+        done
+        if [ -n "$orphan" ]; then
+          held="$held; $candidate: still running without its script, pid $orphan, end it with \`kill $orphan\`"
+          continue
+        fi
+        mine="$name"
+        if ! line_clear; then
+          mine="" wanted="a checkout" held="; $slot_held"
+          break
+        fi
+        mine=""
         exec 6>> "$cache/suite-$name.lock"
         if ! lockf -s -t 0 6; then
+          exec 6>&-
           held="$held; $candidate: $(cat "$cache/suite-$name.holder" 2>/dev/null || echo unknown)"
+          continue
+        fi
+        take_slot --line-read
+        if [ -n "$slot" ]; then
+          checkout_slot
+          suite="$what"
+          run_here "$suite" "$name"
+          here=yes
         else
-          # Free, and on record as running in some slot: its script is gone.
-          orphan=""
-          for dir in "$cache"/slots/*/; do
-            if found="$(orphan_in "$dir")" && found_suite="${found#* }" && [ "${found_suite%%:*}" = "$name" ]; then orphan="${found%% *}"; fi
-          done
-          if [ -z "$orphan" ]; then
-            mine="$name"
-            take_slot
-            mine=""
-            if [ -n "$slot" ]; then
-              checkout_slot
-              suite="$what"
-              run_here "$suite" "$name"
-              here=yes
-            else
-              wanted="a checkout" held="; $slot_held"
-            fi
-            exec 6>&-
-            break
-          fi
-          held="$held; $candidate: still running without its script, pid $orphan, end it with \`kill $orphan\`"
+          wanted="a checkout" held="; $slot_held"
         fi
         exec 6>&-
+        break
       done
     fi
     if [ -z "$suite" ]; then

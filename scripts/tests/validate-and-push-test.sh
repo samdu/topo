@@ -460,7 +460,7 @@ kill -0 "$first" 2>/dev/null && ok "others held by a sibling: the first run wait
 out="$(cd "$other" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/third.record" LOCK_WAIT=2 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "a run waiting between its suites: a third run exits 2" "$status" 2
 case "$out" in *"Waiting for a suite (others: theirs "*) ok "a run waiting between its suites: the third waits for the suite, not a checkout" ;; *) fail "a run waiting between its suites: $out" ;; esac
-is "a run waiting between its suites: its checkout is free" "$(lockf -s -t 0 "$TOPO_VALIDATE_CACHE/slots/1/lock" echo free 2>/dev/null || echo held)" free
+is "a run waiting between its suites: its checkout is free" "$(lockf -k -s -t 0 "$TOPO_VALIDATE_CACHE/slots/1/lock" echo free 2>/dev/null || echo held)" free
 (cd "$other" && exec env PATH="$work/bin:$PATH" FAKE_RECORD="$work/overlap/third.record" TOPO_VALIDATE_SLOTS=3 scripts/validate-and-push.sh > "$work/overlap/third.out" 2>&1) &
 third=$!
 for _ in $(seq 100); do grep -q 'Waiting for a suite' "$work/overlap/third.out" && break; perl -e 'select(undef,undef,undef,0.1)'; done
@@ -492,7 +492,7 @@ kill "$left" 2>/dev/null
 scratch second-suite Apps/Client/SettingsView.swift
 begin "$repo" "$work/second-suite/record" "$work/second-suite/hold" FAKE_HOLD_SUITE=topo_ui
 held="$(cat "$work/second-suite/hold")"
-lockf -s -t 0 "$TOPO_VALIDATE_CACHE/lock" true && fail "a run's second suite here: the lock of the script as it was is free" || ok "a run's second suite here: a run of the script as it was is still held off"
+lockf -k -s -t 0 "$TOPO_VALIDATE_CACHE/lock" true && fail "a run's second suite here: the lock of the script as it was is free" || ok "a run's second suite here: a run of the script as it was is still held off"
 kill -TERM "$run"; wait "$run"
 is "a signal in the second suite: exits 143" "$?" 143
 kill -0 "$held" 2>/dev/null && fail "a signal in the second suite: the suite is still running" || ok "a signal in the second suite: the suite is ended"
@@ -1130,12 +1130,12 @@ kill "$(cat "$work/slot-suite/held")" "$holder" 2>/dev/null; wait "$holder" 2>/d
 release "$work/slot-suite/first.hold"
 until_true reached "$work/slot-suite/first.hold" || fail "the Mac free: the next suite never started there: $(cat "$work/slot-suite/first.out")"
 is "the next suite on the Mac: it runs there" "$(sed -n 's/^suites=//p' "$work/slot-suite/first"):$(ran_in "$work/slot-suite/first")" "topo_unit topo_ui:quiet:$(there laptop)"
-is "a suite on the Mac: no slot is held here" "$(lockf -s -t 0 "$TOPO_VALIDATE_CACHE/slots/1/lock" echo free 2>/dev/null || echo held)" free
+is "a suite on the Mac: no slot is held here" "$(lockf -k -s -t 0 "$TOPO_VALIDATE_CACHE/slots/1/lock" echo free 2>/dev/null || echo held)" free
 [ ! -e "$TOPO_VALIDATE_CACHE/slots/1/holder" ] && ok "a suite on the Mac: no holder on record here" || fail "a suite on the Mac: a holder on record: $(cat "$TOPO_VALIDATE_CACHE/slots/1/holder")"
 is "a suite on the Mac: its run is not in the line here" "$(ticket_of "$first")" ""
 begin "$theirs" "$work/slot-suite/second" "$work/slot-suite/second.hold" TOPO_VALIDATE_HOSTS=laptop; second=$run
 is "a second run's suite on the Mac lent for two: it runs there" "$(ran_in "$work/slot-suite/second")" "$(cd "$there_cache/slots/2/checkout" && pwd -P)"
-is "two runs' suites on the Mac: still no slot held here" "$(lockf -s -t 0 "$TOPO_VALIDATE_CACHE/slots/1/lock" echo free 2>/dev/null || echo held)" free
+is "two runs' suites on the Mac: still no slot held here" "$(lockf -k -s -t 0 "$TOPO_VALIDATE_CACHE/slots/1/lock" echo free 2>/dev/null || echo held)" free
 out="$(cd "$later" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/slot-suite/third" TOPO_VALIDATE_HOSTS= LOCK_WAIT=0 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "two runs' suites on the Mac: a third run here waits for nothing" "$status" 0
 is "two runs' suites on the Mac: the third ran here, in the one slot" "$(ran_in "$work/slot-suite/third")" "$(here_slot)"
@@ -1146,10 +1146,10 @@ is "the run that went between the Macs: one success per suite" "$(posted)" "loca
 is "the line: empty when all are done" "$(tickets)" ""
 rm -f "$there_cache/slots.count"
 
-# Waiting for a suite's name is in the line too. One checkout, a run in `others`: of two runs
+# Waiting for a suite's name is in the line too. Two checkouts, a run in `others`: of two runs
 # that need it, the one that began first has it when it is free, though the later one looks
-# five times as often. With two checkouts, a run waiting for a name that is not free holds
-# nobody up: a later run whose suite is free runs at once.
+# five times as often. And a run waiting for a name that is not free holds nobody up: a later
+# run whose suite is free runs at once.
 scratch name-line Packages/TopoLink/Package.swift
 sibling name-line theirs Packages/TopoLink/x; theirs="$other"
 sibling name-line later Packages/TopoLink/y; later="$other"
@@ -1170,6 +1170,41 @@ release "$work/line/name-a.hold"; wait "$a"; is "the name free: the first to com
 until_true reached "$work/line/name-b.hold" || fail "the name free again: the later run never had it: $(cat "$work/line/name-b.out")"
 release "$work/line/name-b.hold"; wait "$b"; is "the name free again: the later run exits 0" "$?" 0
 is "the line: empty when all are done" "$(tickets)" ""
+
+# A ticket that names suites counts while one of them is free, and not while each is held
+# by a run or on record as left going without its script, which no wait ends.
+scratch named Packages/TopoLink/Package.swift
+sibling named free scripts/janitor.py; free_run="$other"
+q="$TOPO_VALIDATE_CACHE/queue"; mkdir -p "$q" "$TOPO_VALIDATE_CACHE/slots/1"
+sleep 60 & waits=$!
+printf '%s\n%s\n%s\n%s\n' "$waits" "$(began "$waits")" "named 0000001" "topo_unit" > "$q/0000000000000001-0000001"
+named_run() { out="$(cd "$free_run" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/named/record" TOPO_VALIDATE_SLOTS=2 LOCK_WAIT="$1" scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?; }
+named_run 2
+is "a ticket whose name is free: a later run waits behind it" "$status" 2
+case "$out" in *"1 ahead in the line, the first named 0000001, pid $waits, for topo_unit"*) ok "a ticket whose name is free: it is named, with the suite" ;; *) fail "a ticket whose name is free: $out" ;; esac
+lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_unit.lock" sh -c "echo \$\$ > '$work/named/held'; exec sleep 60" & name_holder=$!
+until_true reached "$work/named/held"
+named_run 0
+is "a ticket whose name is held: a later run waits for nothing" "$status" 0
+kill "$(cat "$work/named/held")" "$name_holder" 2>/dev/null; wait "$name_holder" 2>/dev/null
+sleep 60 & left_going=$!
+printf '%s\n%s\n%s\n' "$left_going" "$(began "$left_going")" topo_unit > "$TOPO_VALIDATE_CACHE/slots/1/suite"
+named_run 0
+is "a ticket whose name is on record as left going: a later run waits for nothing" "$status" 0
+is "a ticket whose name is on record as left going: it runs in the other checkout" "$(sed -n 's/^checkout=//p' "$work/named/record")" "$(cd "$TOPO_VALIDATE_CACHE/slots/2/checkout" && pwd -P)"
+kill "$left_going" "$waits" 2>/dev/null; wait "$left_going" "$waits" 2>/dev/null
+rm -f "$TOPO_VALIDATE_CACHE/slots/1/suite"
+
+# The lock of the script as it was is taken at a run's first suite here and not let go until
+# the run is over: one waiting for it all the while finds every suite run.
+scratch old-lock Apps/Client/SettingsView.swift
+begin "$repo" "$work/old-lock/record" "$work/old-lock/hold" FAKE_HOLD_SUITE=topo_unit
+lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "sed -n 's/^suites=//p' '$work/old-lock/record' > '$work/old-lock/order'" & old_run=$!
+perl -e 'select(undef,undef,undef,0.5)'
+release "$work/old-lock/hold"; wait "$run"
+is "the lock of the script as it was, held across a run's suites: its run exits 0" "$?" 0
+wait "$old_run"
+is "the lock of the script as it was, held across a run's suites: had after the last" "$(cat "$work/old-lock/order" 2>/dev/null)" "topo_unit topo_ui others"
 
 # By hand: a command with the checkout held, in the line as a validation is. It asks nothing
 # of where it is run from, has the command's output and exit, starts no suite and posts and
