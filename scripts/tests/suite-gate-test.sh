@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Holds .github/workflows/pr-validate.yaml's gate against the job list this test pins by name
 # rather than one discovered from the file: the workflow has exactly `select`, `test` and the
-# review jobs, every one on ubuntu-latest, and is started by a pull_request alone. `test` needs
+# review jobs, every one on vm-linux, and is started by a pull_request alone. `test` needs
 # `select`, may read commit statuses and nothing else, and reads the PR's head commit, select's
 # result, its three suite outputs and its lane; `codex_wait` and `codex` need `select` and `test`
 # and spell out `needs.<job>.result == 'success'` for both, so a suite that did not pass on the
@@ -66,10 +66,10 @@ names_in = lambda do |results|
 end
 
 check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
-# A macOS runner bills at ten times a Linux one: no job here is on one, and nothing but a
-# pull_request starts a run.
-hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "ubuntu-latest" }
-check.(hosts.empty?, "every job runs on ubuntu-latest#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
+# Every job runs PR code, so every job is on vm-linux, the Mac VM pool whose guests reach
+# nothing in the house (dotfiles tools/vm-runner), and nothing but a pull_request starts a run.
+hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
+check.(hosts.empty?, "every job runs on vm-linux#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
 triggers = workflow.fetch(true) { workflow.fetch("on") }
 check.(triggers.keys == %w[pull_request], "only a pull_request starts a run (#{triggers.keys.join(', ')})")
 conc = workflow.fetch("concurrency")

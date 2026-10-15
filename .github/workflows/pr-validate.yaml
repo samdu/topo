@@ -162,7 +162,7 @@ jobs:
   # The PR's own changes are `HEAD^1..HEAD` of GitHub's test merge commit,
   # whose first parent is main: what merging the PR would change on main.
   select:
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     timeout-minutes: 5
     outputs:
       lane: ${{ steps.lane.outputs.lane }}
@@ -302,7 +302,7 @@ jobs:
   test:
     needs: select
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     timeout-minutes: 10
     permissions:
       # Read-only, for the suites' statuses on the PR head.
@@ -409,7 +409,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     timeout-minutes: 5
     permissions:
       contents: read
@@ -482,7 +482,7 @@ jobs:
       needs.review_cap.outputs.capped == 'false' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     timeout-minutes: 30
     permissions:
       # Read-only, to list this workflow's runs and their jobs.
@@ -553,7 +553,7 @@ jobs:
       needs.codex_wait.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     timeout-minutes: 30
     permissions:
       contents: read
@@ -965,7 +965,7 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/codex-home"
 
   post_feedback:
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     needs: codex
     # `!cancelled()` in place of the implicit `success()`, as on codex, so the
     # verdict Codex gave never stays in an artifact with nothing on the PR.
@@ -1068,7 +1068,7 @@ jobs:
   reviewer_ran:
     needs: [select, test, review_cap, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     steps:
       - name: Assert a verdict was produced and delivered
         env:
@@ -1156,7 +1156,7 @@ jobs:
   review_gate:
     needs: [reviewer_ran, select, test, review_cap, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: vm-linux
     permissions:
       contents: read
       # Read-only on Actions, for the verdict artifact from this same run.
