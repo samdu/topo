@@ -573,7 +573,10 @@ extension DebugRun {
             let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, provider: tokens)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
-            let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment)
+            // A debug command can be a whole `claude -p` turn under the emulator, and the script
+            // that launched it keeps its own timeout, so the guest's bound here is the far one.
+            let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment,
+                                                  within: .seconds(30 * 60))
             guestLines(output: exit.output, errors: exit.errors, status: exit.status).forEach(say)
         } catch {
             say("userland error: \(error)")
