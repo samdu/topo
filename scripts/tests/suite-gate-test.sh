@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Holds .github/workflows/pr-validate.yaml's gate against the job list this test pins by name
 # rather than one discovered from the file: the workflow has exactly `select`, `test` and the
-# review jobs, every one on vm-linux, and is started by a pull_request alone. `test` needs
+# review jobs, every one on vm-linux as is every job of automerge.yaml, and is started by a pull_request alone. `test` needs
 # `select`, may read commit statuses and nothing else, and reads the PR's head commit, select's
 # result, its three suite outputs and its lane; `codex` needs `select`, `test` and `review_cap`
 # and spells out `needs.<job>.result == 'success'` for the first two, so a suite that did not
@@ -27,11 +27,14 @@
 #
 #   scripts/tests/suite-gate-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/suite-gate-test.sh
+#   AUTOMERGE=/path/to/other/automerge.yaml scripts/tests/suite-gate-test.sh
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workflow="${WORKFLOW:-$here/../../.github/workflows/pr-validate.yaml}"
 [ -f "$workflow" ] || { echo "no workflow at $workflow" >&2; exit 2; }
+automerge="${AUTOMERGE:-$here/../../.github/workflows/automerge.yaml}"
+[ -f "$automerge" ] || { echo "no workflow at $automerge" >&2; exit 2; }
 
 work="$(mktemp -d -t suite-gate-test)"
 trap 'rm -rf "$work"' EXIT
@@ -40,8 +43,8 @@ failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
 
 # The structural checks, and the snippets written out for the runs below.
-ruby -ryaml - "$workflow" "$work" <<'RUBY' || failures=$((failures + 1))
-path, work = ARGV
+ruby -ryaml - "$workflow" "$work" "$automerge" <<'RUBY' || failures=$((failures + 1))
+path, work, automerge = ARGV
 workflow = YAML.load_file(path)
 jobs = workflow.fetch("jobs")
 # The jobs by name, written out here rather than discovered, so a job deleted from the workflow
@@ -72,6 +75,10 @@ check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly
 # that joins the tailnet as tag:ci reaches what that tag grants), and nothing but a pull_request starts a run.
 hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
 check.(hosts.empty?, "every job runs on vm-linux#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
+# automerge.yaml's jobs run on a pull_request too, so they are on the same pool.
+merge_jobs = YAML.load_file(automerge).fetch("jobs")
+merge_hosts = merge_jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
+check.(!merge_jobs.empty? && merge_hosts.empty?, "every job of automerge.yaml runs on vm-linux#{merge_hosts.empty? ? '' : " (not: #{merge_hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
 triggers = workflow.fetch(true) { workflow.fetch("on") }
 check.(triggers.keys == %w[pull_request], "only a pull_request starts a run (#{triggers.keys.join(', ')})")
 conc = workflow.fetch("concurrency")
