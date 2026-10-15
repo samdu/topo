@@ -8,10 +8,9 @@
 # and `test` are the required status checks on main, and automerge.yaml merges
 # on this workflow's latest pull_request run concluding green — so a suite
 # that did not pass on the Mac holds the merge by both routes, and spends no
-# reviewer round. Every job here runs on ubuntu-latest: a macOS runner bills
-# at ten times a Linux one, and the three suites that cover the product are
-# about 77 runner-minutes a push against the account's 2,000 free minutes a
-# month.
+# reviewer round. Every job here runs on `vm-linux`, the pool of ephemeral
+# arm64 Ubuntu VMs on the Macs (dotfiles tools/vm-runner): a fresh guest per
+# job, so nothing one job leaves is seen by the next.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the current `auth.json` of that login, written
@@ -101,8 +100,8 @@ on:
     # starts, and the reviewer jobs go by that.
     types: [opened, synchronize, reopened, ready_for_review]
 
-# One run per PR: a superseded push's run is cancelled, so it burns neither
-# minutes nor a reviewer.
+# One run per PR: a superseded push's run is cancelled, so it holds neither
+# a runner nor a reviewer.
 #
 # Which run survives is whichever GitHub created last, not whichever event
 # happened last: a push and a `gh pr ready` a second apart start two runs on
@@ -290,7 +289,7 @@ jobs:
   # The script posts straight after its push, so a status is normally there
   # before this job starts; it waits STATUS_WAIT seconds for one that is not,
   # and no longer, since a commit pushed without the script never gets one
-  # and every minute here is billed. A `failure` or `error` is red at once. A
+  # and every minute here holds a VM of the pool. A `failure` or `error` is red at once. A
   # head validated after its push (`scripts/validate-and-push.sh` on a commit
   # the branch already holds) has this job re-run by that script, when every
   # suite passed and this run had concluded.
@@ -738,10 +737,10 @@ jobs:
       - name: Install Codex CLI
         run: npm install -g @openai/codex && codex --version
 
-      # The CLI's read-only sandbox is bubblewrap, and Ubuntu 24.04 runners
-      # block unprivileged user namespaces via AppArmor (bwrap fails with
+      # The CLI's read-only sandbox is bubblewrap, and Ubuntu 24.04 blocks
+      # unprivileged user namespaces via AppArmor (bwrap fails with
       # `loopback: Failed RTM_NEWADDR: Operation not permitted`). Same fix
-      # openai/codex-action applies on hosted Linux runners.
+      # openai/codex-action applies on Linux runners.
       - name: Enable user namespaces for the Codex sandbox
         run: |
           set -euo pipefail

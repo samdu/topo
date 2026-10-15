@@ -66,8 +66,9 @@ names_in = lambda do |results|
 end
 
 check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
-# Every job runs PR code, so every job is on vm-linux, the Mac VM pool whose guests reach
-# nothing in the house (dotfiles tools/vm-runner), and nothing but a pull_request starts a run.
+# Every job runs PR code, so every job is on vm-linux, the Mac VM pool of ephemeral guests
+# whose own network reaches the internet and not the house (dotfiles tools/vm-runner; a job
+# that joins the tailnet as tag:ci reaches what that tag grants), and nothing but a pull_request starts a run.
 hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
 check.(hosts.empty?, "every job runs on vm-linux#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
 triggers = workflow.fetch(true) { workflow.fetch("on") }
