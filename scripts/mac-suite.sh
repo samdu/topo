@@ -41,8 +41,10 @@
 # Other sessions share this Mac (CLAUDE.md, *Working here*), so each suite runs on a simulator
 # this run created and deletes, this script kills nothing by name (the audio lane restarts
 # coreaudiod, by name, when it has just installed its driver), and `mac-suite.pids` in --results
-# lists this script's pid and then each command it is waiting on: `kill $(head -1 <file>)` ends
-# the run, which stops that command, the audio lane it started and its simulators. A second
+# lists this script's pid and then each command it is waiting on (the scripts' tests run at
+# once in a process group of their own, so the subshell that leads it and each test):
+# `kill $(head -1 <file>)` ends the run, which stops that command (every test still going and
+# whatever it started), the audio lane it started and its simulators. A second
 # signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
@@ -66,8 +68,8 @@ cd "$root" || exit 2
 # change what it is compiled and run with. XcodeGen's is the version the committed projects are
 # generated with.
 XCODE_VERSION="27.0"
-IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
@@ -79,6 +81,15 @@ ORDER=(topo_unit topo_ui:quiet topo_ui topo_ui:mic others scripts)
 # What --check asks of the disk: a runtime's simulators, a cold DerivedData and the pinned
 # downloads are most of it, and a Mac somebody else is using is not left full.
 MIN_FREE_GB=10
+# Every test action runs without the diagnostics xcodebuild otherwise gathers after the last
+# test: `simctl diagnose` of the simulator, which copies every crash report on the Mac and
+# collects a log archive into the result bundle. Nothing reads them, they are 320 MB a run, and
+# the archive's `log collect` stalls on this Mac often enough that three of seven UI runs
+# waited the full 600 s xcodebuild allows it before giving up (`Failure collecting diagnostics
+# from simulator: Timed out after 600.0 seconds`). What they held stays where it came from: a
+# crash report in ~/Library/Logs/DiagnosticReports, the simulator's log in its own store until
+# the run deletes the device. Each test's own log and attachments are still in the bundle.
+NO_DIAGNOSE=(-collect-test-diagnostics never)
 
 check=no
 lane=fast
@@ -235,10 +246,21 @@ cleanup() {
   rm -f "$pids"
 }
 trap cleanup EXIT
-# Only the command this run is waiting on, by the pid recorded for it.
+# Only the command this run is waiting on, by the pid recorded for it, and the scripts' tests'
+# process group. That group is found on the job table bash keeps, which has a job from the
+# moment the command that started it completes and drops it once it has ended, never on a list
+# of pids: the one job that leads a process group of its own (the tests' subshell, started under
+# job control) is signalled as a group, so the tests and whatever they started end with it. A
+# pid or a group id a job that has ended held, which the Mac may have given to another process
+# since, is on no list this reads. The line says which groups were signalled.
 ended() {
+  local p signalled=""
   [ -n "$current" ] && kill "$current" 2>/dev/null
-  echo "error: mac-suite.sh was ended by a signal." >&2
+  for p in $(jobs -pr); do
+    [ "$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')" = "$p" ] || continue
+    kill -- "-$p" 2>/dev/null && signalled="$signalled $p"
+  done
+  echo "error: mac-suite.sh was ended by a signal${signalled:+; it signalled process group$signalled}." >&2
   exit 143
 }
 trap ended TERM INT HUP
@@ -364,6 +386,7 @@ suite_topo_unit() {
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -skip-testing:TopoUITests \
       -resultBundlePath "$RESULTS/Topo-unit.xcresult"
   }
@@ -545,6 +568,7 @@ suite_topo_ui() {
     run "$RESULTS/$name.log" bounded 3600 env ${runner[@]+"${runner[@]}"} xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       "${select[@]}" \
       -resultBundlePath "$RESULTS/$name.xcresult" || ui_status=1
     [ "$part" != quiet ] || return "$ui_status"
@@ -578,20 +602,53 @@ suite_topo_ui() {
 
 # Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
 # Named, not globbed, so a test that disappears fails here. Every one runs after an earlier
-# one failed.
+# one failed. They run at once and the suite waits for them all: each runs in a scratch
+# directory of its own, four of them take between one and a half and three minutes apiece (a
+# bound exercised in real time, a fake that sleeps to be killed) and the rest seconds, so the
+# wall is the slowest test rather than the sum. The slow four are named first and so start
+# first. Each writes its own log, printed whole under its heading once it has ended, in the
+# order named, so the suite's log carries every test's output in a batch at the end rather
+# than live; a missing test's heading and error are printed as the start loop reaches it.
+# The tests are started and waited for by a subshell that is a process group of its own (job
+# control is on while it is started, which is what puts a background job in one, and off in a
+# subshell, so what it starts stays in its group) and that the tests and whatever they start
+# belong to, so that the signal that ends the suite ends them all: a test killed alone leaves
+# the command it was waiting on running. The subshell lives until it has waited for every test,
+# so while any of them runs the group's leader is a running job of this script's, which is
+# what `ended` signals by: there is no list a test has to reach before a signal can end it.
 suite_scripts() {
-  local status=0 test
-  for test in simulator-run perf-run review-verdict ci-select-lane ci-audio-lane ci-select-suites asc-pem archive-upload \
-              suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
-              model-manifest review-prompt review-cap janitor validate-and-push validate-host mac-suite agent-simulator; do
-    say "scripts/tests/$test-test.sh"
-    if [ ! -x "scripts/tests/$test-test.sh" ]; then
-      err "scripts/tests/$test-test.sh is missing."
-      status=1
-    else
-      run "$RESULTS/script-$test.log" "scripts/tests/$test-test.sh" || { err "scripts/tests/$test-test.sh failed."; status=1; }
-    fi
-  done
+  local status=0 group
+  set -m
+  (
+    status=0
+    names=()
+    started=()
+    for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
+                suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
+                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
+      if [ ! -x "scripts/tests/$test-test.sh" ]; then
+        say "scripts/tests/$test-test.sh"
+        err "scripts/tests/$test-test.sh is missing."
+        status=1
+        continue
+      fi
+      "scripts/tests/$test-test.sh" > "$RESULTS/script-$test.log" 2>&1 &
+      echo "$!" >> "$pids"
+      names+=("$test")
+      started+=("$!")
+    done
+    for i in ${names[@]+"${!names[@]}"}; do
+      say "scripts/tests/${names[$i]}-test.sh"
+      if wait "${started[$i]}"; then passed=yes; else passed=no; fi
+      cat "$RESULTS/script-${names[$i]}.log"
+      [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
+    done
+    exit "$status"
+  ) &
+  group=$!
+  set +m
+  echo "$group" >> "$pids"
+  wait "$group" || status=1
   return "$status"
 }
 
@@ -635,6 +692,7 @@ suite_others() {
     run "$RESULTS/Womble.log" bounded 1200 xcodebuild test \
       -project Womble/Womble.xcodeproj -scheme Womble \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -resultBundlePath "$RESULTS/Womble.xcresult" || status=1
   else
     status=1
@@ -663,6 +721,7 @@ suite_others() {
   if new_simulator watch "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" && xcrun simctl bootstatus "$udid" -b >/dev/null; then
     run "$RESULTS/TopoWatch-test.log" bounded 900 xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
       -destination "platform=watchOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -derivedDataPath build/watch \
       -resultBundlePath "$RESULTS/TopoWatch.xcresult" || status=1
   else

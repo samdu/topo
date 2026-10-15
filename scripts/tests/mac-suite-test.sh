@@ -115,12 +115,12 @@ fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleK
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
-  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-26-5\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-26-5\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
+  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-0\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-0\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
 esac'
 # The scripts' own tests are not this test's to run again: each is a fake that passes.
 mkdir -p "$tree/scripts/tests"
-for name in $(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//'); do
+for name in $(sed -n '/^ *for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//'); do
   fake "$tree/scripts/tests/$name-test.sh" 'exit 0'
 done
 for package in TopoAuth TopoCore TopoLink TopoMascot TopoProxy TopoTurn; do
@@ -152,6 +152,10 @@ hold_pid="$(cat "$CALLS.hold")"
 for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+# Every test action, the four of them, runs without the simulator diagnostics xcodebuild
+# gathers after the last test, whose log archive is the 600 s stall a run cannot end.
+is "green: four test actions, each without xcodebuild's diagnostics" \
+  "$(grep -cE '^xcodebuild test(-without-building)? ' "$CALLS"):$(grep -cE '^xcodebuild test(-without-building)? .* -collect-test-diagnostics never ' "$CALLS")" "4:4"
 
 # The device build's directory is kept for the pins it was built from, and no others.
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
@@ -338,7 +342,7 @@ is "scripts alone: a success" "$(results)" "scripts=success "
 # The list is the directory: a test added to scripts/tests and to no list is run by nothing.
 is "every test in scripts/tests is one the suite names" \
   "$(cd "$root/scripts/tests" && ls ./*-test.sh | sed 's|^\./||; s|-test\.sh$||' | sort | tr '\n' ' ')" \
-  "$(sed -n '/^  for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')"
+  "$(sed -n '/^ *for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')"
 is "scripts alone: every script's test ran" "$(grep -c -- '-test.sh' "$CALLS")" "$tests_named"
 is "scripts alone: nothing generated, built, booted or prepared" "$(grep -cE '^(xcodegen|xcodebuild|xcrun|swift|build-ish\.sh|ci-audio-lane\.sh|model-manifest\.sh) ' "$CALLS")" 0
 is "others: every script's test runs there too" "$(grep -c -- '-test.sh' "$work/green.calls")" "$tests_named"
@@ -354,6 +358,89 @@ rm -f "$tree/scripts/tests/review-cap-test.sh"
 suite scripts-missing scripts
 is "a script's test missing: scripts is a failure" "$(results)" "scripts=failure "
 fake "$tree/scripts/tests/review-cap-test.sh" 'exit 0'
+
+# The tests run at once: two of them each wait, bounded, for the other to have started; run
+# one after the other, the first would end before the second began and never see it. Each
+# fake says a line of its own, and the suite's log has every one under its heading, in the
+# order named: a suite that dropped a test's output, or printed it under another heading,
+# would fail here.
+mkdir -p "$work/meet"
+named="$(sed -n '/^ *for test in /,/; do$/p' "$root/scripts/mac-suite.sh" | tr -d '\\' | sed 's/^ *for test in//; s/; do$//' | tr -s ' ' '\n' | sed '/^$/d')"
+for name in $named; do fake "$tree/scripts/tests/$name-test.sh" "echo 'out of $name'; exit 0"; done
+fake "$tree/scripts/tests/review-cap-test.sh" "echo 'out of review-cap'; touch '$work/meet/review-cap'; for _ in \$(seq 50); do [ -e '$work/meet/review-prompt' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+fake "$tree/scripts/tests/review-prompt-test.sh" "echo 'out of review-prompt'; touch '$work/meet/review-prompt'; for _ in \$(seq 50); do [ -e '$work/meet/review-cap' ] && exit 0; perl -e 'select(undef,undef,undef,0.1)'; done; exit 1"
+suite scripts-at-once scripts
+is "the tests run at once: two that wait for each other both pass" "$status:$(results)" "0:scripts=success "
+is "the tests run at once: a log of its own for each" "$(ls "$RESULTS_DIR"/script-*.log | wc -l | tr -d ' ')" "$tests_named"
+is "the tests run at once: every test's line is in the suite's log under its heading, in the order named" \
+  "$(grep -E '^==> scripts/tests/.*-test.sh$|^out of ' "$work/scripts-at-once.log" | tr '\n' '|')" \
+  "$(for name in $named; do printf '==> scripts/tests/%s-test.sh|out of %s|' "$name" "$name"; done)"
+for name in $named; do fake "$tree/scripts/tests/$name-test.sh" 'exit 0'; done
+
+# A signal while the tests run ends every one still going and what it started: one fake is
+# waiting on a child of its own, which a signal to the fake alone would leave running. The
+# tests are in one process group of their own, led by a subshell of the run, and what the run
+# signals it finds on bash's job table and says in the line it ends with: the one group, and
+# no test by its pid, so the pid of a test that has ended, which the Mac may have given to
+# another process since, is signalled by nothing.
+mkdir -p "$work/sleepers"
+fake "$tree/scripts/tests/janitor-test.sh" "sh -c \"echo \\\$\\\$ > '$work/sleepers/janitor.child'; exec sleep 60\" & echo \$\$ > '$work/sleepers/janitor'; wait"
+fake "$tree/scripts/tests/validate-host-test.sh" "echo \$\$ > '$work/sleepers/validate-host'; exec sleep 60"
+export CALLS="$work/scripts-signal.calls" RESULTS_DIR="$work/scripts-signal.results"
+: > "$CALLS"
+(cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" scripts) \
+  > "$work/scripts-signal.log" 2>&1 &
+pid=$!
+running=$pid
+for _ in $(seq 100); do [ -s "$work/sleepers/janitor" ] && [ -s "$work/sleepers/janitor.child" ] && [ -s "$work/sleepers/validate-host" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+leaders="$(cat "$work/sleepers/janitor" "$work/sleepers/validate-host" 2>/dev/null | tr '\n' ' ')"
+child="$(cat "$work/sleepers/janitor.child" 2>/dev/null)"
+is "signal during the tests: both tests are on the pids file" \
+  "$(for p in $leaders; do grep -cx "$p" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null; done | tr '\n' ' ')" "1 1 "
+group="$(ps -o pgid= -p "${leaders%% *}" 2>/dev/null | tr -d ' ')"
+is "signal during the tests: the tests are in a group of their own, led by a subshell of the run that is on the pids file" \
+  "$(ps -o ppid= -p "$group" 2>/dev/null | tr -d ' '):$(grep -cx "$group" "$RESULTS_DIR/mac-suite.pids" 2>/dev/null)" "$pid:1"
+is "signal during the tests: both tests and the child are in that group" "$(for p in $leaders $child; do ps -o pgid= -p "$p" 2>/dev/null | tr -d ' '; done | sort -u | tr '\n' ' ')" "$group "
+kill -TERM "$pid"
+for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+wait "$pid"; status=$?
+running=""
+is "signal during the tests: exits 143" "$status" 143
+for _ in $(seq 30); do alive=0; for p in $leaders $child; do kill -0 "$p" 2>/dev/null && alive=1; done; [ "$alive" = 0 ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left=""; for p in $leaders $child; do kill -0 "$p" 2>/dev/null && { left="$left $p"; kill "$p" 2>/dev/null; }; done
+[ -z "$left" ] && ok "signal during the tests: every test still going, and the child one was waiting on, ended with the run" || fail "signal during the tests: pids$left outlived the run"
+is "signal during the tests: the run signalled the tests' group and nothing else" \
+  "$(sed -n 's/^error: mac-suite.sh was ended by a signal; it signalled process group \(.*\)\.$/\1/p' "$work/scripts-signal.log")" "$group"
+fake "$tree/scripts/tests/janitor-test.sh" 'exit 0'
+fake "$tree/scripts/tests/validate-host-test.sh" 'exit 0'
+
+# A signal that lands as soon as the first test has started, while the subshell may still be
+# starting the rest and before the run has waited on anything, ends the run and everything of
+# the tests' group: the first test named sends the run its signal as its first act, then sleeps.
+# Where the signal lands between the subshell's start and the run's wait for it is not chosen
+# here; what holds is that there is no step after the start a signal can precede, so the group
+# is signalled wherever it lands.
+mkdir -p "$work/early"
+fake "$tree/scripts/tests/ci-audio-lane-test.sh" "echo \$\$ > '$work/early/first'; kill -TERM \"\$(sed -n 1p '$work/scripts-early.results/mac-suite.pids')\"; exec sleep 60"
+export CALLS="$work/scripts-early.calls" RESULTS_DIR="$work/scripts-early.results"
+: > "$CALLS"
+(cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" scripts) \
+  > "$work/scripts-early.log" 2>&1 &
+pid=$!
+running=$pid
+for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
+wait "$pid"; status=$?
+running=""
+is "signal as the tests start: exits 143" "$status" 143
+first="$(cat "$work/early/first" 2>/dev/null)"
+group="$(sed -n 's/^error: mac-suite.sh was ended by a signal; it signalled process group \(.*\)\.$/\1/p' "$work/scripts-early.log")"
+is "signal as the tests start: the run signalled one process group" "$(echo "$group" | wc -w | tr -d ' ')" 1
+for _ in $(seq 30); do [ -z "$(pgrep -g "${group:-0}" 2>/dev/null)" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+left="$(pgrep -g "${group:-0}" 2>/dev/null | tr '\n' ' ')"
+[ -n "$group" ] && [ -z "$left" ] && ! kill -0 "$first" 2>/dev/null \
+  && ok "signal as the tests start: nothing of the tests' group, the first test included, outlived the run" \
+  || { fail "signal as the tests start: pids $left$(kill -0 "$first" 2>/dev/null && echo " $first") outlived the run"; for p in $left; do kill "$p" 2>/dev/null; done; kill "$first" 2>/dev/null; }
+fake "$tree/scripts/tests/ci-audio-lane-test.sh" 'exit 0'
 
 # A toolchain off its pin: no suite runs, and each one asked for is a failure.
 FAKE_XCODE=99.0 suite off-pin topo_unit others
@@ -434,8 +521,8 @@ names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
 FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
 names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
 is "check, no pinned runtime: exits 1" "$status" 1
-names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
 case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
 FAKE_FREE=9 check disk topo_unit
