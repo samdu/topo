@@ -53,7 +53,7 @@ packages:
   # speaks, and the models are the better part of a gigabyte.
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    exactVersion: "0.15.7"
+    exactVersion: "0.17.7"
 targets:
   Topo:
     type: application
@@ -142,7 +142,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
         TOPO_SOURCE_COMMIT: ""
-        # FluidAudio's prebuilt text-normalisation xcframework has an arm64 simulator slice and
+        # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false

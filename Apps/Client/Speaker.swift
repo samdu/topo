@@ -621,10 +621,13 @@ final class Speaker {
             // last frame was in flight leaves the measurements below belonging to a reply nobody
             // is hearing, and they would then time the next one.
             guard generation == mine else { return }
-            #if DEBUG
             let seconds = now() - started
             let audio = Double(samples) / Double(rate)
             let words = sentence.split(separator: " ").count
+            // What the sentence cost to make, in a release build's log too: numbers, never its words.
+            Perf.mark(String(format: "speak.sentence synth=%.2f first=%.2f audio=%.2f words=%d",
+                             seconds, first ?? -1, audio, words))
+            #if DEBUG
             guard let first else {
                 DebugRun.say(String(format: "voice: %@ synth=%.2fs made no audio words=%d",
                                     idle ? "ttfa" : "next", seconds, words))

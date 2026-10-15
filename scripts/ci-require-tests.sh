@@ -3,6 +3,7 @@
 #
 #   scripts/ci-require-tests.sh xcresult <bundle.xcresult> <TestTarget>...
 #   scripts/ci-require-tests.sh named <bundle.xcresult> <Target/Suite[/test]>...
+#   scripts/ci-require-tests.sh absent <bundle.xcresult> <Target/Suite>...
 #   scripts/ci-require-tests.sh xunit <package-swift-testing.xml>
 #
 # A green `xcodebuild test` or `swift test` does not say a test ran: a scheme
@@ -21,6 +22,10 @@
 # a lane that meant to run one particular test and did not would still pass it; this is the check
 # that says the test itself ran. `TopoUITests/MicrophonePressTests/testX` names one test,
 # `TopoTests/TurnRowRenderTests` a whole suite.
+#
+# absent: no test case of a named suite is in the result bundle, whatever its result: the
+# check for a run that was meant to leave the suite out. A bundle that is absent or cannot be
+# read fails, since it says nothing.
 #
 # xunit: the Swift Testing report that `swift test --xunit-output <f>.xml`
 # writes as `<f>-swift-testing.xml` must count at least one test and no
@@ -98,6 +103,35 @@ case "$mode" in
     done
     exit "$status"
     ;;
+  absent)
+    [ "$#" -ge 3 ] || fail "usage: $0 absent <bundle.xcresult> <Target/Suite>..."
+    bundle="$2"; shift 2
+    [ -d "$bundle" ] || fail "$bundle does not exist: the tests never produced a result bundle."
+
+    tests="$(xcrun xcresulttool get test-results tests --path "$bundle" --format json)" \
+      || fail "xcresulttool could not read $bundle."
+    status=0
+    for name in "$@"; do
+      IFS=/ read -r target suite rest <<<"$name"
+      if [ -z "$target" ] || [ -z "$suite" ] || [ -n "$rest" ]; then
+        echo "::error::$name is not Target/Suite."
+        status=1; continue
+      fi
+      total="$(jq --arg t "$target" --arg s "$suite" '
+        [.testNodes[] | .. | objects
+          | select((.nodeType // "") | endswith("test bundle")) | select(.name == $t)
+          | .. | objects | select(.nodeType == "Test Case")
+          | select(.nodeIdentifier // "" | startswith($s + "/"))] | length' <<<"$tests")" \
+        || fail "$bundle's tests could not be read."
+      if [ "$total" -ne 0 ]; then
+        echo "::error::$name is in $(basename "$bundle"), $total test cases: it was meant to be left out."
+        status=1
+      else
+        echo "$name: not in $(basename "$bundle")."
+      fi
+    done
+    exit "$status"
+    ;;
   xunit)
     [ "$#" -eq 2 ] || fail "usage: $0 xunit <package-swift-testing.xml>"
     report="$2"
@@ -110,6 +144,6 @@ case "$mode" in
     echo "$(basename "$report"): $total tests, all passed."
     ;;
   *)
-    fail "usage: $0 xcresult <bundle.xcresult> <TestTarget>... | named <bundle.xcresult> <Target/Suite[/test]>... | xunit <report.xml>"
+    fail "usage: $0 xcresult <bundle.xcresult> <TestTarget>... | named <bundle.xcresult> <Target/Suite[/test]>... | absent <bundle.xcresult> <Target/Suite>... | xunit <report.xml>"
     ;;
 esac

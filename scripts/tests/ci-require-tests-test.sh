@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Holds scripts/ci-require-tests.sh's xcresult and named modes against a fake `xcrun` that answers
+# Holds scripts/ci-require-tests.sh's xcresult, named and absent modes against a fake `xcrun` that answers
 # `xcresulttool get test-results tests` with a result tree written here: a skipped test fails
 # both, a test that is absent fails `named`, a target that is absent fails `xcresult`, and a
 # bundle whose every test passed passes both. So the fast lane, which deselects the real-ear
 # test rather than letting it skip, still fails on a skip anywhere, and the full lane's check by
-# name fails when the test did not run.
+# name fails when the test did not run. `absent` fails on any test case of the suite named, and
+# on a bundle that is not there or cannot be read.
 #
 #   scripts/tests/ci-require-tests-test.sh
 set -uo pipefail
@@ -74,6 +75,18 @@ expect fail "xcresult: a target that is absent" "did not run" xcresult "$green" 
 expect fail "named: a target that is absent" "did not run" named "$green" TopoTests/MicrophonePressTests
 expect fail "named: a bundle that is absent" "does not exist" named "$work/none.xcresult" "$ear"
 expect fail "named: a name with no suite" "is not Target/Suite" named "$green" TopoUITests
+
+# absent: the suite a run was meant to leave out has no test case in the bundle, passed or not.
+expect fail "absent: a suite that ran" "meant to be left out" absent "$green" TopoUITests/MicrophonePressTests
+expect fail "absent: a suite one of whose tests ran" "1 test cases" absent "$fast" TopoUITests/MicrophonePressTests
+expect fail "absent: a suite that ran and failed" "meant to be left out" absent "$failed" TopoUITests/MicrophonePressTests
+expect pass "absent: a suite that is not there" "not in green.xcresult" absent "$green" TopoUITests/DraftRowTests
+expect pass "absent: a suite of another target" "not in" absent "$green" TopoTests/MicrophonePressTests
+expect fail "absent: a bundle that is absent" "does not exist" absent "$work/none.xcresult" TopoUITests/MicrophonePressTests
+expect fail "absent: a name with no suite" "is not Target/Suite" absent "$green" TopoUITests
+expect fail "absent: a single test's name" "is not Target/Suite" absent "$green" "$ear"
+mkdir -p "$work/unread.xcresult"
+expect fail "absent: a bundle that cannot be read" "could not read" absent "$work/unread.xcresult" TopoUITests/MicrophonePressTests
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

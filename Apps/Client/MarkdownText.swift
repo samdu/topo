@@ -173,6 +173,7 @@ struct MarkdownText: View {
                         .padding(.vertical, enclosure.verticalPadding)
                 }
                 .scrollIndicators(.hidden)
+                .modifier(NoScrollEdgeEffect())
             case .wrap:
                 words
                     .fixedSize(horizontal: false, vertical: true)
@@ -218,6 +219,7 @@ struct MarkdownText: View {
             if scrolls {
                 ScrollView(.horizontal) { grid }
                     .scrollIndicators(.hidden)
+                    .modifier(NoScrollEdgeEffect())
             } else {
                 grid.frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -594,5 +596,18 @@ struct CodeBlockPulse: ViewModifier {
         RoundedRectangle(cornerRadius: enclosure.cornerRadius, style: .continuous)
             .strokeBorder(pulse.accent.opacity(pulse.opacity * level), lineWidth: pulse.width * level)
             .allowsHitTesting(false)
+    }
+}
+
+/// A reply's block that scrolls sideways is drawn as crisply as one that wraps. The system's
+/// scroll edge effect blurs what is under a scroll view's edges, and a block one row of a table
+/// tall is all edge: on iOS 27 a table's rule drew a point soft on each side.
+private struct NoScrollEdgeEffect: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, watchOS 26, tvOS 26, *) {
+            content.scrollEdgeEffectHidden()
+        } else {
+            content
+        }
     }
 }

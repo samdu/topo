@@ -89,6 +89,11 @@ final class TopoWidgetUITests: XCTestCase {
         let (text, tree) = try fixture(family)
         let app = XCUIApplication()
         app.launchEnvironment["TOPO_DEBUG_WIDGET"] = text
+        // An ear and a voice that never finish loading, as every class but the microphone's
+        // launches with: the host makes the app's own objects, and this class runs on a Mac
+        // whose microphone and speakers are somebody's.
+        app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
+        app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
         app.launch()
         let handed = app.staticTexts["widget-handed"]
         XCTAssertTrue(handed.waitForExistence(timeout: 30), "\(family): the host never came up")

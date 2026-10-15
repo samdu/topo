@@ -657,8 +657,10 @@ struct ComposerPlan: Equatable, Sendable {
     var well: CGRect
     /// The middle of the control for everything else.
     var more: CGPoint
-    /// The field. At rest, where it is not drawn, it keeps the trailing flank, so it grows out
-    /// of the way to the keyboard.
+    /// The field. At rest, where it is not drawn, it is a line of no width at the middle of the
+    /// way to the keyboard, so it grows out of it and covers none of it: on iOS 27 a touch on a
+    /// field's frame is the field's whatever its hit testing says, and one over the mark took the
+    /// press that raises the keyboard and opened nothing.
     var field: CGRect
     /// The middle of the send.
     var send: CGPoint
@@ -681,13 +683,14 @@ struct ComposerPlan: Equatable, Sendable {
         // A mark's middle is never nearer the pane's end than half the room it stands in, or
         // half the mark where that is wider, so a spacing wider than the pane puts neither off it.
         let half = min(max(composer.flank.slot, wide.isFinite ? wide : 0, 0), max(width, 0) / 2) / 2
+        let keyboard = CGPoint(x: min(width - inner + flank / 4, width - half), y: middle.y)
         return ComposerPlan(size: CGSize(width: width, height: height),
                             well: CGRect(x: middle.x - geometry.well / 2, y: middle.y - geometry.well / 2,
                                          width: geometry.well, height: geometry.well),
                             more: CGPoint(x: max(inner - flank / 4, half), y: middle.y),
-                            field: CGRect(x: width - inner, y: middle.y - line / 2, width: flank, height: line),
+                            field: CGRect(x: keyboard.x, y: middle.y - line / 2, width: 0, height: line),
                             send: CGPoint(x: width - outer - flank / 4, y: middle.y),
-                            keyboard: CGPoint(x: min(width - inner + flank / 4, width - half), y: middle.y),
+                            keyboard: keyboard,
                             moreSlot: composer.flank.slot, sendSlot: composer.flank.slot)
     }
 

@@ -961,8 +961,11 @@ import TopoCoreTesting
             let holder = CoordinatedHolder(url: directory.appendingPathComponent(".topo/mirror.json"))
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 3) }
-            try await Task.sleep(for: .milliseconds(200))
-            #expect(read("people/helen.md", in: directory) == "# Helen", "the file went down first")
+            // Waited for rather than slept on: the file lands whenever the pass gets there, and
+            // the save behind it waits for the holder however long that takes.
+            let helen = directory.appendingPathComponent("people/helen.md")
+            #expect(await eventually { (try? String(contentsOf: helen, encoding: .utf8)) == "# Helen" },
+                    "the file went down first")
             #expect(read(".topo/mirror.json", in: directory) == before, "and the save is waiting for them")
             holder.release()
 

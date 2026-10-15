@@ -56,6 +56,8 @@ final class TuningSliderTests: XCTestCase {
         addTeardownBlock {
             let clean = XCUIApplication()
             clean.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
+            clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
+            clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
             clean.launchEnvironment["TOPO_DEBUG_TUNING"] = ""
             clean.launch()
             clean.terminate()

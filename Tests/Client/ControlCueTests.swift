@@ -189,7 +189,7 @@ final class ControlCueTests: XCTestCase {
         defaults().follow(from: .idle, to: .signedIn)
         let written = try store.writeControl(ControlDocument.read(#"{"title": "Lamp", "action": {"kind": "run", "topo": ["notify", "Lamp"]}}"#, slot: "button-2").document,
                                              slot: "button-2")
-        defaults().follow(from: .approvingGuest(opening: nil, pasteHint: false), to: .signedIn)
+        defaults().follow(from: .approvingGuest(opening: URL(string: "https://claude.com/cai/oauth/authorize")!, pasteHint: false), to: .signedIn)
         let document = try XCTUnwrap(store.readControl(slot: "button-2")?.document)
         XCTAssertTrue(document.isDefault, "an earlier login's slot outlived a new login")
         XCTAssertGreaterThan(document.revision, written)
