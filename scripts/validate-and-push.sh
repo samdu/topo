@@ -14,12 +14,14 @@
 #      VOICE_PATHS lists read out of the commit's own .github/workflows/pr-validate.yaml.
 #      --suites and --lane override the choice, for a head whose `test` job names a status this
 #      choice left out (the two read different diffs once main has moved under the branch).
-#   2. Takes a slot, which is a checkout: one of TOPO_VALIDATE_SLOTS directories under
-#      ~/Library/Caches/topo-validate/slots, each with a lock held for the run and a validation
-#      worktree of this repository, detached at the commit. There is one unless more are
-#      asked for, so one run's suite is on this Mac at a time and a second run waits: buddybox
-#      shares its memory with the house's voice assistant, and one suite's simulators are
-#      what it has room for. So what runs is the commit and
+#   2. Takes a slot for each suite it runs here, which is a checkout: one of
+#      TOPO_VALIDATE_SLOTS directories under ~/Library/Caches/topo-validate/slots, each with a
+#      lock held for that suite alone and a validation worktree of this repository, detached
+#      at the commit. There is one unless more are asked for, so one suite is on this Mac at a
+#      time and another waits: buddybox shares its memory with the house's voice assistant,
+#      and one suite's simulators are what it has room for. A run holds no slot while a suite
+#      of its runs on another Mac, while it waits for one, or while it waits for a suite's
+#      name here. So what runs is the commit and
 #      nothing else: uncommitted changes and untracked files in the engineer's worktree are not
 #      in it, and the projects XcodeGen regenerates are not written over the engineer's. A
 #      slot's path never changes, so its DerivedData, the guest's framework and build/ stay
@@ -34,9 +36,14 @@
 #      is in the order the runs began: a run that has to wait takes a ticket in
 #      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began (since
 #      this Mac started) and its pid, and only the run whose ticket is first asks for a slot. A
-#      ticket whose process is gone holds nobody. A run that reached the line within one look
-#      of another, and a run of a branch that has not merged main, which knows of no line, can
-#      still take a slot out of turn.
+#      ticket whose process is gone holds nobody. The wait for a suite's name here is in the
+#      same line: a ticket names the suites its run still has to run here, and holds a run
+#      behind it up only while one of those names is free. A run that has just let a slot go
+#      is back in the line at once, in its own place, for its next suite here. The waits for
+#      another Mac are in no order. A run that reached the line
+#      within one look of another, one that came back to it from asking another Mac in the
+#      look it was freed, and a run of a branch that has not merged main, which knows of no
+#      line and holds its slot for the whole run, can still take a slot out of turn.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
 #      scripts/validate-host.sh writes; neither by default)
@@ -49,7 +56,7 @@
 #      results copied into this run's logs. `topo_ui` goes as its two parts then: the
 #      quiet one (`topo_ui:quiet`, every UI class but the microphone's) there as any suite,
 #      and the microphone's (`topo_ui:mic`) here whatever is named, the audio lane being
-#      buddybox's, and last, so the slot here is not held under a suite there. With the Mac
+#      buddybox's, and last. With the Mac
 #      busy, unusable or losing the quiet part, `topo_ui` runs here whole in one call. A Mac that is not reached, lacks something or loses the suite partway
 #      is said, runs nothing more of this validation, and is never a red suite: the suite
 #      runs here. A pass counts only when the connection outlived it. A red result the Mac
@@ -236,14 +243,16 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
   echo "$pid $(sed -n 3p "$1/suite")"
 }
 # One look's wait at something held, against the LOCK_WAIT seconds the run has for all of them;
-# who holds it is said when the wait begins and every ten minutes after.
+# who holds it is said when the wait begins, when what is waited for changes (a suite's name,
+# then a checkout), and every ten minutes after.
 waited=0
 say_at=0
+said_for=""
 waiting() {  # waiting <for what> <who holds it> [seconds already waited, in place of the wait]
   [ "$waited" -lt "$LOCK_WAIT" ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $1 ($2). Nothing is pushed or posted."
-  if [ "$waited" -ge "$say_at" ]; then
+  if [ "$waited" -ge "$say_at" ] || [ "$1" != "$said_for" ]; then
     echo "Waiting for $1 ($2); up to $(((LOCK_WAIT - waited) / 60)) min more."
-    say_at=$((waited + 600))
+    say_at=$((waited + 600)) said_for="$1"
   fi
   [ -n "${3-}" ] || sleep "$LOCK_POLL"
   waited=$((waited + ${3:-$LOCK_POLL}))
@@ -415,33 +424,60 @@ run_on() {
 
 # The line for a slot: a ticket a run, in $cache/queue, named for the microsecond the run
 # began ($arrived) and its pid, of one width each, so the names' order under LC_ALL=C is the
-# order the runs began in for every reader. It holds the pid, when that began and who it is. A run's ticket
-# has one name for the run's life, and the file is there only while the run does nothing but
-# wait for a slot: it is out before a suite is tried on another Mac and back, under its own
-# name, when the run next waits here.
+# order the runs began in for every reader. It holds the pid, when that began and who it is,
+# and a validation's has a fourth line: the names of the suites it still has to run here
+# ($wants). A run's ticket has one name for the run's life, and the file is there only while
+# the run is waiting to run a suite here, for a slot or for a suite's name: it is out while a
+# suite of the run is running, here or on another Mac, and while it asks another Mac, and back
+# under its own name when the run next waits here.
 queue="$cache/queue"
 ticket=""
+wants=""   # the suites' names this run waits to run here, its ticket's fourth line
+mine=""    # the name whose lock this run holds as it asks for a slot
 ticket_in() {
+  local body
   [ -n "$ticket" ] || ticket="$queue/$(printf '%016d-%07d' "$arrived" "$$")"
-  [ ! -s "$ticket" ] || return 0
+  body="$(printf '%s\n%s\n%s' "$$" "$(began_of $$)" "$branch $short")"
+  [ -z "$wants" ] || body="$(printf '%s\n%s' "$body" "$wants")"
+  [ "$(cat "$ticket" 2>/dev/null)" != "$body" ] || return 0
   # Whole or not at all: under a name no reader takes for a ticket, then its own.
-  mkdir -p "$queue" && printf '%s\n%s\n%s\n' "$$" "$(began_of $$)" "$branch $short" > "$queue/.new.$$" \
+  mkdir -p "$queue" && printf '%s\n' "$body" > "$queue/.new.$$" \
     && mv -f "$queue/.new.$$" "$ticket" || die "could not take a place in $queue."
 }
 ticket_out() { [ -z "$ticket" ] || rm -f "$ticket"; }
+# Whether a suite's name is free here for a run that waits for it: its lock not held, the one
+# this run holds itself counted free, and no suite of the name on record in a slot. The lock is
+# asked without waiting and let go at once, so its holder-to-be can find it held for that
+# instant and ask again at its next look.
+name_free() {  # name_free <name> <the names of the suites left going without their script>
+  [ "$1" != "$mine" ] || return 0
+  case " $2 " in *" $1 "*) return 1 ;; esac
+  perl -MFcntl=:flock -e 'open(my $lock, ">>", shift) or exit 1; exit(flock($lock, LOCK_EX | LOCK_NB) ? 0 : 1)' "$cache/suite-$1.lock" 6>&- 7>&- 8>&-
+}
 # Who is ahead of this run, one a line: every live ticket before its own, or every live one
-# when it has none in. A ticket is live while its pid is running and began when the ticket
-# says; one that is not, or that does not read as three lines, is dead and is removed here.
-# A live run whose ticket was taken for dead (a `ps` that failed) puts it back at its next look.
+# when it has none in, that waits for something this run could be given in its place. A
+# ticket with no fourth line (a hold, or a run of the script before names were in the line)
+# waits for a slot alone and always counts; one with names counts only while one of them is
+# free here, since a run that cannot have any of its suites' names takes no slot. A ticket is
+# live while its pid is running and began when the ticket says; one that is not, or that does
+# not read as three lines, is dead and is removed here. A live run whose ticket was taken for
+# dead (a `ps` that failed) puts it back at its next look.
 ahead() {
-  local name pid began who
+  local name pid began who names n dir found left=""
   [ -d "$queue" ] || return 0
+  for dir in "$cache"/slots/*/; do
+    if found="$(orphan_in "$dir")"; then found="${found#* }"; left="$left ${found%%:*}"; fi
+  done
   LC_ALL=C ls -1 "$queue" | LC_ALL=C sort | while IFS= read -r name; do
     [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
     [ "$queue/$name" != "$ticket" ] || break
     pid="$(sed -n 1p "$queue/$name" 2>/dev/null)" began="$(sed -n 2p "$queue/$name" 2>/dev/null)" who="$(sed -n 3p "$queue/$name" 2>/dev/null)"
+    names="$(sed -n 4p "$queue/$name" 2>/dev/null)"
     if [ -n "$pid" ] && [ -n "$began" ] && [ -n "$who" ] && [ "$(began_of "$pid")" = "$began" ]; then
-      echo "$who, pid $pid"
+      if [ -z "$names" ]; then echo "$who, pid $pid"; continue; fi
+      for n in $names; do
+        if name_free "$n" "$left"; then echo "$who, pid $pid, for $n"; break; fi
+      done
     else
       rm -f "$queue/$name"
     fi
@@ -454,11 +490,14 @@ ahead() {
 # too and knows of no line, and a head asleep on the lock would have it every time. So such
 # a run can still take a slot out of turn, as can a run that arrived within one look of
 # another; among the runs that know of the line, the order is arrival's. The slot's lock is
-# on descriptor 7 for the rest of the run, dropped by the kernel when this script dies. One with an orphan in its checkout is not taken. Then the lock
-# a run of the script as it was holds whole, held here shared, on descriptor 8: such a run and
-# a suite of this one here are never going at once, and neither is a suite one left behind it.
+# on descriptor 7 until the suite it is taken for has ended (release_slot), dropped by the
+# kernel when this script dies. One with an orphan in its checkout is not taken. Then, at the
+# run's first slot only, the lock a run of the script as it was holds whole, held here shared
+# on descriptor 8 for the rest of the run: such a run and a suite of this one here are never
+# going at once, and neither is a suite one left behind it.
 slot=""
 slot_held=""
+old_held=""
 take_slot() {
   local n orphan held="" orphans="" before
   [ -z "$ticket" ] || ticket_in
@@ -491,6 +530,7 @@ take_slot() {
   ticket_out
   slot_dir="$cache/slots/$slot"
   echo "$branch $short, pid $$, since $(date '+%H:%M')" > "$slot_dir/holder"
+  [ -z "$old_held" ] || return 0
 
   exec 8>> "$cache/lock"
   # Waited for as that run's siblings wait for it: asleep on the lock in one request for all
@@ -514,21 +554,29 @@ take_slot() {
     die "the suite of an earlier validation is still running without its script (pid ${orphan%% *}; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill ${orphan%% *}\`, which stops its lane and deletes its simulators, and run again."
   fi
   echo "$branch $short, pid $$, slot $slot, since $(date '+%H:%M')" > "$cache/holder"
+  old_held=yes
+}
+# A slot is let go as its suite ends: its holder first, while the lock is still this run's, so
+# another run's is never the one removed.
+release_slot() {
+  rm -f "$slot_dir/holder"
+  exec 7>&-
+  slot=""
 }
 
 # The slot's checkout at the commit, once the slot is this run's.
 checkout_slot() {
   checkout="$slot_dir/checkout"
   if [ ! -e "$checkout/.git" ]; then
-    git worktree prune
-    git worktree add --quiet --detach "$checkout" "$sha" || die "could not make the validation worktree at $checkout."
+    git worktree prune 6>&- 7>&- 8>&-
+    git worktree add --quiet --detach "$checkout" "$sha" 6>&- 7>&- 8>&- || die "could not make the validation worktree at $checkout."
   fi
   [ "$(git -C "$checkout" rev-parse --git-common-dir)" -ef "$(git rev-parse --git-common-dir)" ] \
     || die "$checkout is a worktree of another repository."
   # Tracked files as the commit has them, and nothing untracked but what .gitignore names:
   # build/, DerivedData and the guest's framework are the warm cache.
-  git -C "$checkout" checkout --quiet --force --detach "$sha" || die "could not check $short out in $checkout."
-  git -C "$checkout" clean --quiet -fd
+  git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 7>&- 8>&- || die "could not check $short out in $checkout."
+  git -C "$checkout" clean --quiet -fd 6>&- 7>&- 8>&-
   [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || die "$checkout is not at $short."
   echo "Slot $slot: $short in $checkout"
   say_at="$waited"
@@ -668,16 +716,13 @@ if [ "${#chosen[@]}" -gt 0 ]; then
       done
     fi
     # Then here: the first suite still to run that no sibling is running, its lock on
-    # descriptor 6. A suite a killed script left going holds its name as a lock would.
-    held=""
+    # descriptor 6. A suite a killed script left going holds its name as a lock would. Only
+    # with one found is a slot asked for, and it is this suite's alone: let go as it ends.
+    held="" wanted="a suite" here=no wants="" mine=""
+    for candidate in $remaining; do
+      case " $wants " in *" ${candidate%%:*} "*) ;; *) wants="$wants${wants:+ }${candidate%%:*}" ;; esac
+    done
     if [ -z "$suite" ]; then
-      if [ -z "$slot" ]; then
-        take_slot
-        [ -z "$slot" ] || checkout_slot
-      fi
-      [ -n "$slot" ] || held="; $slot_held"
-    fi
-    if [ -z "$suite" ] && [ -n "$slot" ]; then
       for candidate in $remaining; do
         # A part of topo_ui holds topo_ui's name here, the lane being one a Mac; and with both
         # parts still to run here they are the suite whole, in one call.
@@ -693,8 +738,17 @@ if [ "${#chosen[@]}" -gt 0 ]; then
             if found="$(orphan_in "$dir")" && found_suite="${found#* }" && [ "${found_suite%%:*}" = "$name" ]; then orphan="${found%% *}"; fi
           done
           if [ -z "$orphan" ]; then
-            suite="$what"
-            run_here "$suite" "$name"
+            mine="$name"
+            take_slot
+            mine=""
+            if [ -n "$slot" ]; then
+              checkout_slot
+              suite="$what"
+              run_here "$suite" "$name"
+              here=yes
+            else
+              wanted="a checkout" held="; $slot_held"
+            fi
             exec 6>&-
             break
           fi
@@ -704,12 +758,25 @@ if [ "${#chosen[@]}" -gt 0 ]; then
       done
     fi
     if [ -z "$suite" ]; then
-      if [ -n "$slot" ]; then waiting "a suite" "${held#; }"; else waiting "a checkout" "${held#; }"; fi
+      # Waiting for a suite's name is waiting in the line too, in this run's own place: its
+      # ticket names what it waits for, and holds nobody up while none of those is free.
+      ticket_in
+      waiting "$wanted" "${held#; }"
       continue
     fi
     say_at="$waited"
     if [ "$suite" = topo_ui ]; then remaining="${remaining/ topo_ui:quiet / }"; remaining="${remaining/ topo_ui:mic / }"; fi
     remaining="${remaining/ $suite / }"
+    # A suite here lets its slot go as it ends, back in the line first, in its own place, when
+    # another is still to run: nobody who began later is first in the moment between.
+    if [ "$here" = yes ]; then
+      wants=""
+      for candidate in $remaining; do
+        case " $wants " in *" ${candidate%%:*} "*) ;; *) wants="$wants${wants:+ }${candidate%%:*}" ;; esac
+      done
+      [ -z "$wants" ] || ticket_in
+      release_slot
+    fi
   done
   trap - TERM INT HUP
   exec 6>&- 7>&- 8>&-
