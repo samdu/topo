@@ -14,9 +14,19 @@
 #   topo_ui    TopoUITests behind the input-capable audio lane (scripts/ci-audio-lane.sh). The
 #              full lane adds Parakeet's models and the test in which the real ear hears the
 #              fixture; the fast lane deselects that test by name, so it neither runs nor skips.
+#              It has two parts, each a suite by its own name with its own line in suites.txt
+#              and its own result bundle: `topo_ui:quiet`, every UI test class but
+#              MicrophonePressTests, with no audio lane, no display hold, no models and nothing
+#              that opens a microphone or speaks (a tripwire reads the tests' source first, `quiet_launches`
+#              below, and no test runs when it names a launch); and `topo_ui:mic`, that class alone behind
+#              everything `topo_ui` has. One is all but the class and the other the class, so
+#              no test is in neither.
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
 #              watch's suite, and the builds no suite hosts: the watch and TV for their own
 #              simulators, a Release build for iOS devices, and the hub.
+#   scripts    the scripts' own tests and nothing else: each runs against fakes, so the suite
+#              boots no simulator, builds nothing and needs no toolchain prepared. It is what
+#              a change to the harness alone needs, and `others` runs the same tests.
 #
 # Green means the named suites ran, not that nothing complained: every package and project is
 # named and a missing one fails, and scripts/ci-require-tests.sh reads each result and fails on a
@@ -31,8 +41,10 @@
 # Other sessions share this Mac (CLAUDE.md, *Working here*), so each suite runs on a simulator
 # this run created and deletes, this script kills nothing by name (the audio lane restarts
 # coreaudiod, by name, when it has just installed its driver), and `mac-suite.pids` in --results
-# lists this script's pid and then each command it is waiting on: `kill $(head -1 <file>)` ends
-# the run, which stops that command, the audio lane it started and its simulators. A second
+# lists this script's pid and then each command it is waiting on (the scripts' tests run at
+# once in a process group of their own, so the subshell that leads it and each test):
+# `kill $(head -1 <file>)` ends the run, which stops that command (every test still going and
+# whatever it started), the audio lane it started and its simulators. A second
 # signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
 # one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
@@ -42,10 +54,11 @@
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
 # counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
-# whose disk is encrypted, this user's session on the screen and unlocked. It makes, builds
-# and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
-# a suite there, and `topo_ui` is refused on any Mac it is asked of this way: the audio lane
-# installs a driver and takes the Mac's default input and output.
+# whose disk is encrypted, this user's session on the screen and unlocked; of `scripts` alone
+# it asks jq, node, a python3 that runs and the lid. It makes, builds and boots nothing. validate-and-push.sh asks it of a Mac other than buddybox before it runs
+# a suite there, and `topo_ui` and `topo_ui:mic` are refused on any Mac they are asked of this way: the
+# audio lane installs a driver and takes the Mac's default input and output. `topo_ui:quiet`
+# is asked what `topo_unit` is.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,19 +68,33 @@ cd "$root" || exit 2
 # change what it is compiled and run with. XcodeGen's is the version the committed projects are
 # generated with.
 XCODE_VERSION="27.0"
-IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
-SUITES=(topo_unit topo_ui others)
+SUITES=(topo_unit topo_ui others scripts)
+# The class the audio lane exists for, and the order everything asked for runs in: the parts of
+# `topo_ui` are suites by their own names.
+MIC_CLASS="TopoUITests/MicrophonePressTests"
+ORDER=(topo_unit topo_ui:quiet topo_ui topo_ui:mic others scripts)
 # What --check asks of the disk: a runtime's simulators, a cold DerivedData and the pinned
 # downloads are most of it, and a Mac somebody else is using is not left full.
 MIN_FREE_GB=10
+# Every test action runs without the diagnostics xcodebuild otherwise gathers after the last
+# test: `simctl diagnose` of the simulator, which copies every crash report on the Mac and
+# collects a log archive into the result bundle. Nothing reads them, they are 320 MB a run, and
+# the archive's `log collect` stalls on this Mac often enough that three of seven UI runs
+# waited the full 600 s xcodebuild allows it before giving up (`Failure collecting diagnostics
+# from simulator: Timed out after 600.0 seconds`). What they held stays where it came from: a
+# crash report in ~/Library/Logs/DiagnosticReports, the simulator's log in its own store until
+# the run deletes the device. Each test's own log and attachments are still in the bundle.
+NO_DIAGNOSE=(-collect-test-diagnostics never)
 
 check=no
 lane=fast
 RESULTS="$root/build/validate"
+PACKAGE_PINS=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 cache="$HOME/Library/Caches/topo-validate"
 asked=()
 while [ $# -gt 0 ]; do
@@ -83,7 +110,7 @@ done
 case "$lane" in full | fast) ;; *) echo "no such lane '$lane': full or fast" >&2; exit 2 ;; esac
 [ "${#asked[@]}" -gt 0 ] || { echo "no suite named: one or more of ${SUITES[*]}" >&2; exit 2; }
 for suite in "${asked[@]}"; do
-  case " ${SUITES[*]} " in *" $suite "*) ;; *) echo "no such suite '$suite': one of ${SUITES[*]}" >&2; exit 2 ;; esac
+  case " ${ORDER[*]} " in *" $suite "*) ;; *) echo "no such suite '$suite': one of ${SUITES[*]}, or topo_ui:quiet or topo_ui:mic" >&2; exit 2 ;; esac
 done
 [ -n "$RESULTS" ] && [ -n "$cache" ] || { echo "--results and --cache each take a directory" >&2; exit 2; }
 
@@ -105,16 +132,44 @@ has_simulator() {
     '[.devices[$rt] // [] | .[] | select(.name | startswith($p))] | length > 0' >/dev/null 2>&1
 }
 
+# Whether anything asked for builds or boots: `scripts` alone does neither.
+builds=no
+for suite in "${asked[@]}"; do [ "$suite" = scripts ] || builds=yes; done
+
 if [ "$check" = yes ]; then
   lacks=0
+  command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
+  # What the scripts' tests run under beside bash: review-prompt's runs a workflow step's
+  # script under node, and the janitor's is python, which on a Mac with no developer tools is
+  # a stub at /usr/bin that asks to install them.
+  for suite in "${asked[@]}"; do
+    case "$suite" in
+      scripts | others)
+        command -v node >/dev/null || { err "node is not installed, and the scripts' tests run one under it (brew install node)."; lacks=1; }
+        # The stub is not run to find out: it answers with a dialog on the Mac's screen.
+        python="$(command -v python3 || true)"
+        if [ -z "$python" ]; then
+          err "python3 is not installed, and the scripts' tests run one under it."; lacks=1
+        elif [ "$python" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then
+          err "python3 is the stub of a Mac with no developer tools, and the scripts' tests run one under it (xcode-select --install)."; lacks=1
+        elif ! python3 -c 'import unittest' >/dev/null 2>&1; then
+          err "python3 ($python) does not run, and the scripts' tests run one under it."; lacks=1
+        fi
+        break
+        ;;
+    esac
+  done
+fi
+# The toolchain, the simulators, the guest's framework and the disk are what a suite that
+# builds wants; the scripts' tests want none of them.
+if [ "$check" = yes ] && [ "$builds" = yes ]; then
   [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; lacks=1; }
   pinned_tools || lacks=1
-  command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
   has_simulator "$IOS_SIMULATOR_RUNTIME" iPhone || { err "no iPhone simulator of $IOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; }
   for suite in "${asked[@]}"; do
     case "$suite" in
       others) has_simulator "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" || { err "no Apple Watch simulator of $WATCHOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; } ;;
-      topo_ui) err "topo_ui runs on buddybox alone: its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
+      topo_ui | topo_ui:mic) err "$suite runs on buddybox alone: its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
     esac
   done
   stamp="Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
@@ -134,15 +189,18 @@ if [ "$check" = yes ]; then
     "" | *[!0-9]*) err "could not read the disk's available space under $cache."; lacks=1 ;;
     *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache, purgeable space included (Finder's figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
   esac
+fi
+if [ "$check" = yes ]; then
   # A laptop with its lid shut sleeps whatever holds it awake; a Mac with no lid has no such key.
   # Read whole and then looked at: a reader that stops at the first match ends ioreg on a
   # closed pipe, which under pipefail is a failed pipeline, and that would read as open.
   lid="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null || true)"
   case "$lid" in *'"AppleClamshellState" = Yes'*) err "this Mac's lid is closed."; lacks=1 ;; esac
   # A Mac whose disk is encrypted gives no file complete protection while its screen is
-  # locked, and TopoTests asks that of files in the simulator's home.
+  # locked, and the app asks that of files in the simulator's home, under TopoTests and under
+  # the UI tests alike.
   case " ${asked[*]} " in
-    *" topo_unit "*)
+    *" topo_unit "* | *" topo_ui:quiet "*)
       # The session of the user the suite runs as, by name: open when it is the one on the
       # screen and not locked. Another user's, or the login window's, is not this one's.
       sessions="$(ioreg -n Root -d1 2>/dev/null | tr '}' '\n' || true)"
@@ -154,7 +212,7 @@ if [ "$check" = yes ]; then
         *) open=no ;;
       esac
       if [ "$open" = no ]; then
-        case "$vault" in *"FileVault is On"*) err "this Mac's disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen: no file can be given complete protection until it is unlocked, and topo_unit asks for that."; lacks=1 ;; esac
+        case "$vault" in *"FileVault is On"*) err "this Mac's disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen: no file can be given complete protection until it is unlocked, and topo_unit and topo_ui:quiet ask for that."; lacks=1 ;; esac
       fi
       ;;
   esac
@@ -188,10 +246,21 @@ cleanup() {
   rm -f "$pids"
 }
 trap cleanup EXIT
-# Only the command this run is waiting on, by the pid recorded for it.
+# Only the command this run is waiting on, by the pid recorded for it, and the scripts' tests'
+# process group. That group is found on the job table bash keeps, which has a job from the
+# moment the command that started it completes and drops it once it has ended, never on a list
+# of pids: the one job that leads a process group of its own (the tests' subshell, started under
+# job control) is signalled as a group, so the tests and whatever they started end with it. A
+# pid or a group id a job that has ended held, which the Mac may have given to another process
+# since, is on no list this reads. The line says which groups were signalled.
 ended() {
+  local p signalled=""
   [ -n "$current" ] && kill "$current" 2>/dev/null
-  echo "error: mac-suite.sh was ended by a signal." >&2
+  for p in $(jobs -pr); do
+    [ "$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')" = "$p" ] || continue
+    kill -- "-$p" 2>/dev/null && signalled="$signalled $p"
+  done
+  echo "error: mac-suite.sh was ended by a signal${signalled:+; it signalled process group$signalled}." >&2
   exit 143
 }
 trap ended TERM INT HUP
@@ -317,6 +386,7 @@ suite_topo_unit() {
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -skip-testing:TopoUITests \
       -resultBundlePath "$RESULTS/Topo-unit.xcresult"
   }
@@ -331,45 +401,131 @@ suite_topo_unit() {
 # The UI tests (TopoUITests), behind the input-capable audio lane on every lane: the press tests
 # over the stub and loading ears need no model, but `MicrophonePressTests` asserts buffers and
 # samples reached the tap, which only a host with an input delivers.
+# Whether the display's hold stands: its `caffeinate` running, and the assertion it takes among
+# the ones the system counts. Asked for three seconds, since the assertion follows the start.
+display_hold=""
+display_held() {
+  local n held
+  for n in $(seq 30); do
+    kill -0 "$display_hold" 2>/dev/null || return 1
+    # Read whole and then searched: a search that stops at its first match ends `pmset` with a
+    # signal while it still has lines to write, and under pipefail that reads as no match.
+    held="$(pmset -g assertions 2>/dev/null)"
+    ! grep -q "pid $display_hold(caffeinate).*PreventUserIdleDisplaySleep" <<<"$held" || return 0
+    perl -e 'select(undef,undef,undef,0.1)'
+  done
+  return 1
+}
+# A tripwire ahead of the quiet part's tests, which reads the UI tests' source and nothing
+# else. In each file but the microphone's it follows every `let <name> = XCUIApplication()`
+# line by line, the last write winning, and names a `<name>.launch()` reached when both
+# `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` are not, by that line, set to "loading" on that
+# name, in a statement that ends its line with that word: never set, set to something else since, removed (`removeValue`), or the dictionary
+# replaced or merged over since. It names a launch on a name the file did not make that way.
+# The quiet part leaves out the microphone's class and this leaves out its file, so it names
+# any other class declared in that file. It is false when it names anything, or finds no
+# launch at all. It does not see what the source does not say on those lines: an environment
+# changed through a helper the application is handed to, a loop, or a key that is not a
+# literal is not caught.
+QUIET_TESTS=Tests/ClientUI
+quiet_launches() {
+  local file found=0 bad=0 out mic="${MIC_CLASS##*/}"
+  for file in "$QUIET_TESTS"/*.swift; do
+    [ -f "$file" ] || continue
+    case "$file" in
+      */"$mic.swift")
+        out="$(awk -v file="$file" -v mic="$mic" '
+          match($0, /^[ \t]*((final|private|fileprivate|public|internal|open)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+            name = substr($0, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
+            if (name != mic && name != "func" && name != "var" && name != "let") print file ":" NR ": class " name ", which the quiet part runs and this does not read"
+          }' "$file")"
+        [ -z "$out" ] || { echo "$out"; bad=1; }
+        continue ;;
+    esac
+    out="$(awk -v file="$file" '
+      match($0, /let [A-Za-z_][A-Za-z0-9_]* = XCUIApplication\(\)/) {
+        name = substr($0, RSTART + 4, RLENGTH - 4); sub(/ = .*/, "", name); made[name] = 1; ear[name] = 0; voice[name] = 0
+      }
+      {
+        line = $0
+        while (match(line, /[A-Za-z_][A-Za-z0-9_]*\.launchEnvironment/)) {
+          name = substr(line, RSTART, RLENGTH); sub(/\..*/, "", name); rest = substr(line, RSTART + RLENGTH); line = rest
+          if (match(rest, /^\["TOPO_DEBUG_EAR"\] = /)) ear[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
+          else if (match(rest, /^\["TOPO_DEBUG_VOICE"\] = /)) voice[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
+          else if (rest ~ /^\["[A-Za-z0-9_]*"\] = /) continue
+          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_EAR"\)/) ear[name] = 0
+          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_VOICE"\)/) voice[name] = 0
+          else if (rest ~ /^\.removeValue\(forKey: "[A-Za-z0-9_]*"\)/) continue
+          else { ear[name] = 0; voice[name] = 0 }
+        }
+      }
+      match($0, /[A-Za-z_][A-Za-z0-9_]*\.launch\(\)/) {
+        name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name); n++
+        if (!made[name] || !ear[name] || !voice[name]) print file ":" NR ": " name ".launch()"
+      }
+      END { print "launches " n + 0 }' "$file")"
+    found=$((found + $(sed -n 's/^launches //p' <<<"$out")))
+    out="$(grep -v '^launches ' <<<"$out")"
+    [ -z "$out" ] || { echo "$out"; bad=1; }
+  done
+  [ "$found" -gt 0 ] || { echo "no launch of the app was found under $QUIET_TESTS"; bad=1; }
+  return "$bad"
+}
+# suite_topo_ui <whole|quiet|mic>
 suite_topo_ui() {
-  local status=0 udid models="" lane_status
+  local part="$1" status=0 udid models="" lane_status name=Topo-ui
+  local label=""
+  [ "$part" = whole ] || { name="Topo-ui-$part"; label=", $part"; }
   ui_steps() {
     echo "Lane: $lane"
-    # BlackHole as this Mac's default input and output, and the fixture looping into it from
-    # one long-lived feeder. It starts before the simulator boots, because a simulator's audio
-    # binds to the coreaudiod it booted against and the lane restarts coreaudiod.
-    say "Audio loopback for the microphone test"
-    # Ours to stop from the moment `start` is called, not from its success: one that fails
-    # after pinning the devices, or a signal while it is under way, leaves a feeder and the
-    # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
-    # found another run's lane, which is not this run's to stop.
-    # The start and the note of how it ended are one command to this shell, so a signal's trap
-    # cannot run between them.
-    rm -f "$RESULTS/lane-start.status"
-    lane_started=starting
-    (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
-    lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
-    if [ "$lane_status" = 3 ]; then
-      lane_started=no
-      err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
-      return 1
+    if [ "$part" = quiet ]; then
+      local loud
+      loud="$(quiet_launches)" || { err "the UI tests' source does not show every launch outside ${MIC_CLASS##*/} leaving the ear and the voice loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE), and the quiet part has no lane for the real ones. No test was run."; echo "$loud" >&2; return 1; }
     fi
-    lane_started=yes
-    [ "$lane_status" = 0 ] || return 1
+    if [ "$part" != quiet ]; then
+      # BlackHole as this Mac's default input and output, and the fixture looping into it from
+      # one long-lived feeder. It starts before the simulator boots, because a simulator's audio
+      # binds to the coreaudiod it booted against and the lane restarts coreaudiod.
+      say "Audio loopback for the microphone test"
+      # The display is kept on for as long as this script lives: when it sleeps the loopback's
+      # input goes silent and stays so until the lane is started again, and the microphone test
+      # hears nothing. No lane is started without the hold, no test is started once it has ended,
+      # and a suite whose tests it ended under is red.
+      caffeinate -d -w $$ &
+      display_hold=$!
+      display_held || { err "the display could not be held on: \`caffeinate -d\` (pid $display_hold) is not running with its hold among \`pmset -g assertions\`. No audio lane was started."; return 1; }
+      # Ours to stop from the moment `start` is called, not from its success: one that fails
+      # after pinning the devices, or a signal while it is under way, leaves a feeder and the
+      # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
+      # found another run's lane, which is not this run's to stop.
+      # The start and the note of how it ended are one command to this shell, so a signal's trap
+      # cannot run between them.
+      rm -f "$RESULTS/lane-start.status"
+      lane_started=starting
+      (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
+      lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
+      if [ "$lane_status" = 3 ]; then
+        lane_started=no
+        err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
+        return 1
+      fi
+      lane_started=yes
+      [ "$lane_status" = 0 ] || return 1
+    fi
 
     new_simulator ui "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
     xcrun simctl boot "$udid" || return 1
 
     # Parakeet's models, fetched from the manifest's pinned revisions and verified file by
     # file. The full lane only.
-    if [ "$lane" = full ]; then
+    if [ "$lane" = full ] && [ "$part" != quiet ]; then
       say "The ear's models for the microphone test"
       scripts/fetch-ear-models.sh "$cache/ear-models" || return 1
       models="$cache/ear-models"
     fi
 
     say "xcodebuild build-for-testing (Topo)"
-    run "$RESULTS/Topo-ui-build.log" xcodebuild build-for-testing \
+    run "$RESULTS/$name-build.log" xcodebuild build-for-testing \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" || return 1
 
@@ -377,34 +533,49 @@ suite_topo_ui() {
     # is exactly one and that it is the microphone's. That count is only exact on a simulator
     # that has answered nothing, so the app's grants are cleared first and the flag tells the
     # test so.
-    say "Clear Topo's privacy grants on the simulator"
     xcrun simctl bootstatus "$udid" -b >/dev/null || return 1
-    xcrun simctl privacy "$udid" reset all zone.hexagon.topo || return 1
+    if [ "$part" != quiet ]; then
+      say "Clear Topo's privacy grants on the simulator"
+      xcrun simctl privacy "$udid" reset all zone.hexagon.topo || return 1
 
-    # A lane that has died fails here by name, before and after the suite, rather than only as
-    # a silent tap inside the microphone test.
-    say "Audio lane holds before the microphone test"
-    scripts/ci-audio-lane.sh check before || return 1
+      # A lane that has died fails here by name, before and after the suite, rather than only as
+      # a silent tap inside the microphone test.
+      say "Audio lane holds before the microphone test"
+      scripts/ci-audio-lane.sh check before || return 1
+      # The hold is one process from before the lane to after the tests, so the same pid still
+      # holding after the tests held throughout; asked here too, so no test starts under one
+      # that ended while the simulator booted and the app built.
+      display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended before the tests began, so the display could sleep and silence the loopback. No test was run."; return 1; }
+    fi
 
-    say "xcodebuild test (Topo, UI)"
+    say "xcodebuild test (Topo, UI${label})"
     local select=(-only-testing:TopoUITests) ui_status=0
-    if [ "$lane" = fast ]; then
+    case "$part" in
+      quiet) select+=("-skip-testing:$MIC_CLASS") ;;
+      mic) select=("-only-testing:$MIC_CLASS") ;;
+    esac
+    if [ "$lane" = fast ] && [ "$part" != quiet ]; then
       select+=("-skip-testing:$REAL_EAR_TEST")
       echo "Fast lane: $REAL_EAR_TEST is deselected."
     fi
-    rm -rf "$RESULTS/Topo-ui.xcresult"
+    rm -rf "$RESULTS/$name.xcresult"
     # The lane and the reset are declared to the test runner, which then fails a hold refused
     # for want of an input and holds the prompt count exact.
-    local runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
+    # The quiet part declares neither: nothing in it holds the microphone or counts a prompt.
+    local runner=()
+    [ "$part" = quiet ] || runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
     [ -z "$models" ] || runner+=("TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$models")
-    run "$RESULTS/Topo-ui.log" bounded 3600 env "${runner[@]}" xcodebuild test-without-building \
+    run "$RESULTS/$name.log" bounded 3600 env ${runner[@]+"${runner[@]}"} xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       "${select[@]}" \
-      -resultBundlePath "$RESULTS/Topo-ui.xcresult" || ui_status=1
+      -resultBundlePath "$RESULTS/$name.xcresult" || ui_status=1
+    [ "$part" != quiet ] || return "$ui_status"
 
     say "Audio lane holds after the microphone test"
     scripts/ci-audio-lane.sh check after || ui_status=1
+    display_held || { err "the display's hold (\`caffeinate -d\`, pid $display_hold) ended under the tests, so the display could sleep and silence the loopback."; ui_status=1; }
     return "$ui_status"
   }
   ui_steps || status=1
@@ -416,30 +587,76 @@ suite_topo_ui() {
   # The target as a whole; and on the full lane the real-ear test by name: the target check
   # counts test cases, and a lane that meant to run Parakeet and did not would still pass it.
   say "Require every test target ran and passed"
-  scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-ui.xcresult" TopoUITests || status=1
-  if [ "$lane" = full ]; then
-    scripts/ci-require-tests.sh named "$RESULTS/Topo-ui.xcresult" "$REAL_EAR_TEST" || status=1
+  scripts/ci-require-tests.sh xcresult "$RESULTS/$name.xcresult" TopoUITests || status=1
+  # The parts are all but one class and that class: it is in the microphone part's results,
+  # passed, and not in the quiet part's.
+  case "$part" in
+    quiet) scripts/ci-require-tests.sh absent "$RESULTS/$name.xcresult" "$MIC_CLASS" || status=1 ;;
+    mic) scripts/ci-require-tests.sh named "$RESULTS/$name.xcresult" "$MIC_CLASS" || status=1 ;;
+  esac
+  if [ "$lane" = full ] && [ "$part" != quiet ]; then
+    scripts/ci-require-tests.sh named "$RESULTS/$name.xcresult" "$REAL_EAR_TEST" || status=1
   fi
+  return "$status"
+}
+
+# Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
+# Named, not globbed, so a test that disappears fails here. Every one runs after an earlier
+# one failed. They run at once and the suite waits for them all: each runs in a scratch
+# directory of its own, four of them take between one and a half and three minutes apiece (a
+# bound exercised in real time, a fake that sleeps to be killed) and the rest seconds, so the
+# wall is the slowest test rather than the sum. The slow four are named first and so start
+# first. Each writes its own log, printed whole under its heading once it has ended, in the
+# order named, so the suite's log carries every test's output in a batch at the end rather
+# than live; a missing test's heading and error are printed as the start loop reaches it.
+# The tests are started and waited for by a subshell that is a process group of its own (job
+# control is on while it is started, which is what puts a background job in one, and off in a
+# subshell, so what it starts stays in its group) and that the tests and whatever they start
+# belong to, so that the signal that ends the suite ends them all: a test killed alone leaves
+# the command it was waiting on running. The subshell lives until it has waited for every test,
+# so while any of them runs the group's leader is a running job of this script's, which is
+# what `ended` signals by: there is no list a test has to reach before a signal can end it.
+suite_scripts() {
+  local status=0 group
+  set -m
+  (
+    status=0
+    names=()
+    started=()
+    for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
+                suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
+                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
+      if [ ! -x "scripts/tests/$test-test.sh" ]; then
+        say "scripts/tests/$test-test.sh"
+        err "scripts/tests/$test-test.sh is missing."
+        status=1
+        continue
+      fi
+      "scripts/tests/$test-test.sh" > "$RESULTS/script-$test.log" 2>&1 &
+      echo "$!" >> "$pids"
+      names+=("$test")
+      started+=("$!")
+    done
+    for i in ${names[@]+"${!names[@]}"}; do
+      say "scripts/tests/${names[$i]}-test.sh"
+      if wait "${started[$i]}"; then passed=yes; else passed=no; fi
+      cat "$RESULTS/script-${names[$i]}.log"
+      [ "$passed" = yes ] || { err "scripts/tests/${names[$i]}-test.sh failed."; status=1; }
+    done
+    exit "$status"
+  ) &
+  group=$!
+  set +m
+  echo "$group" >> "$pids"
+  wait "$group" || status=1
   return "$status"
 }
 
 # Everything that is not the Topo scheme's suite. Every step runs after an earlier one failed.
 suite_others() {
-  local status=0 udid test package
+  local status=0 udid package
 
-  # Each script's own test, against fakes: scripts/tests/<name>-test.sh says what it holds.
-  # Named, not globbed, so a test that disappears fails here.
-  for test in simulator-run perf-run review-verdict ci-select-lane ci-audio-lane ci-select-suites asc-pem archive-upload \
-              suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
-              model-manifest review-prompt review-cap janitor validate-and-push validate-host mac-suite agent-simulator; do
-    say "scripts/tests/$test-test.sh"
-    if [ ! -x "scripts/tests/$test-test.sh" ]; then
-      err "scripts/tests/$test-test.sh is missing."
-      status=1
-    else
-      run "$RESULTS/script-$test.log" "scripts/tests/$test-test.sh" || { err "scripts/tests/$test-test.sh failed."; status=1; }
-    fi
-  done
+  suite_scripts || status=1
 
   # The committed manifest is what scripts/model-manifest.sh writes from its pins today: every
   # file fetched and hashed (kept in build/models), every package checked against Alpine's
@@ -475,6 +692,7 @@ suite_others() {
     run "$RESULTS/Womble.log" bounded 1200 xcodebuild test \
       -project Womble/Womble.xcodeproj -scheme Womble \
       -destination "platform=iOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -resultBundlePath "$RESULTS/Womble.xcresult" || status=1
   else
     status=1
@@ -503,6 +721,7 @@ suite_others() {
   if new_simulator watch "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" && xcrun simctl bootstatus "$udid" -b >/dev/null; then
     run "$RESULTS/TopoWatch-test.log" bounded 900 xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
       -destination "platform=watchOS Simulator,id=$udid" \
+      "${NO_DIAGNOSE[@]}" \
       -derivedDataPath build/watch \
       -resultBundlePath "$RESULTS/TopoWatch.xcresult" || status=1
   else
@@ -518,6 +737,13 @@ suite_others() {
   # distribution signing: no certificate, profile or entitlement is checked with
   # CODE_SIGNING_ALLOWED=NO.
   say "xcodebuild build (Topo Release for iOS devices, TopoHub), unsigned"
+  # The device build's derived data outlives the commit that made it, and what it keeps of a
+  # package is wrong once the pins move: a Swift module scan still names the headers of the
+  # version before, and a package whose headers moved fails the build. So it is kept only for
+  # the pins it was built from, a copy of which is in it, and is made afresh for any other.
+  cmp -s "$PACKAGE_PINS" build/device/Package.resolved || rm -rf build/device
+  mkdir -p build/device
+  cp "$PACKAGE_PINS" build/device/Package.resolved 2>/dev/null || true
   run "$RESULTS/Topo-iOS-Release-build.log" xcodebuild build -project Topo.xcodeproj -scheme Topo \
     -configuration Release -destination 'generic/platform=iOS' \
     -derivedDataPath build/device \
@@ -536,17 +762,24 @@ suite_others() {
 }
 
 overall=0
-if prepare; then
+if [ "$builds" = no ]; then
+  prepared=yes
+elif prepare; then
   prepared=yes
 else
   prepared=no
   err "the toolchain, the projects or the guest's framework could not be prepared; no suite ran."
 fi
-for suite in "${SUITES[@]}"; do
+for suite in "${ORDER[@]}"; do
   case " ${asked[*]} " in *" $suite "*) ;; *) continue ;; esac
   say "Suite: $suite"
   started=$SECONDS
-  if [ "$prepared" = yes ] && "suite_$suite"; then result=success; else result=failure; overall=1; fi
+  case "$suite" in
+    topo_ui) call=(suite_topo_ui whole) ;;
+    topo_ui:*) call=(suite_topo_ui "${suite#topo_ui:}") ;;
+    *) call=("suite_$suite") ;;
+  esac
+  if [ "$prepared" = yes ] && "${call[@]}"; then result=success; else result=failure; overall=1; fi
   echo "$suite=$result" >> "$RESULTS/suites.txt"
   say "Suite: $suite $result in $(((SECONDS - started) / 60)) min"
 done

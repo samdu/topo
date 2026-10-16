@@ -142,7 +142,7 @@ PENDING_MAX = 200                  # report lines kept for a later delivery
 
 UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)   # automerge.yaml's own test
 # The reviewer's jobs, in the order they run: each waits on the ones before it.
-REVIEW_CHAIN = ("review_cap", "codex_wait", "codex", "post_feedback", "reviewer_ran", "review_gate")
+REVIEW_CHAIN = ("review_cap", "codex", "post_feedback", "reviewer_ran", "review_gate")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
 ISSUES_PAGE = 100                  # issues read per GraphQL page
 ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole

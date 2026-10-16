@@ -24,10 +24,27 @@ final class BadgeGestureTests: XCTestCase {
         // at all is cheap enough to hold here. The form builds a row as it nears the screen, so
         // one below the sheet's foot is looked for again after a scroll.
         for row in ["Topo sits", "Vocabulary", "Memory", "Connections", "Context", "Noise suppression",
-                    "Diagnostics", "About Topo", "Sign out"] {
+                    "settings-voice-temperature", "Diagnostics", "About Topo", "Sign out"] {
             let found = app.descendants(matching: .any)[row]
             if !found.exists { app.swipeUp() }
             XCTAssertTrue(found.exists, "the settings have no \(row)")
+        }
+        // A sheet put up again is a new view, with nothing of the last one's own state: what its
+        // slider shows is the value kept, so a move that was only drawn is the standard value here.
+        let temperature = app.sliders["settings-voice-temperature"]
+        for end in ["100%", "0%"] {
+            for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
+            temperature.adjust(toNormalizedSliderPosition: end == "100%" ? 1 : 0)
+            XCTAssertEqual(temperature.value as? String, end, "the slider did not move to \(end)")
+            app.navigationBars["Settings"].buttons["Done"].tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10),
+                          "Done did not close the settings")
+            badge(in: app).tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
+                          "the settings did not open again")
+            for _ in 0..<3 where !temperature.exists { app.swipeUp() }
+            XCTAssertEqual(temperature.value as? String, end,
+                           "the settings opened again do not have the \(end) the slider was moved to")
         }
     }
 
