@@ -36,8 +36,9 @@ final class StatusNoticeTests: XCTestCase {
         XCTAssertTrue(found, "a turn went and no notice said so")
         let words = notices.staticTexts.firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the notices hold no words")
-        XCTAssertTrue(Self.heldTurn.contains(words.label),
-                      "the notice says \"\(words.label)\", none of what a held turn says: \(Self.heldTurn)")
+        let held = expectation(for: NSPredicate(format: "label == %@", Self.heldTurn), evaluatedWith: words)
+        XCTAssertEqual(XCTWaiter.wait(for: [held], timeout: 10), .completed,
+                       "the notice says \"\(words.label)\", not what a held turn says: \(Self.heldTurn)")
 
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "no badge in the navigation bar")
@@ -146,11 +147,9 @@ final class StatusNoticeTests: XCTestCase {
 
     /// What a turn held before the model call can say: where it is, or iCloud's refusal on a
     /// simulator whose iCloud read is refused.
-    private static let heldTurn: Set<String> = [
-        "Reaching iCloud…",
-        "iCloud refused the read. Check you're signed in on this device.",
-        "iCloud is out of reach. Topo will try again.",
-    ]
+    /// What the turn says while the reply delay holds it: the store has answered (passing
+    /// "Reaching iCloud…" on the way), and no step of the model call has begun.
+    private static let heldTurn = "Working…"
 
     /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
     private static let fixtures: [(String, [String])] = [
