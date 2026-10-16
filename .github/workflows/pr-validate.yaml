@@ -954,7 +954,7 @@ jobs:
             const v = JSON.parse(require('fs').readFileSync(process.env.CODEX_VERDICT_PATH, 'utf8'))
             const lines = [v.summary, ...(v.findings ?? []).map(f => `- ${f}`)]
             if (v.blocking) {
-              lines.unshift('**Blocking — this merge is held until these are addressed or overridden.**', '')
+              lines.unshift('**Blocking — this merge is held until these are addressed or overridden.** The PR goes back to draft: fix every finding there, push, and mark it ready (`gh pr ready`) for the next review.', '')
             } else if (v.codex_blocking) {
               lines.unshift('Codex marked this blocking, but every finding cites only files this PR does not change, so the gate treats it as non-blocking.', '')
             }
@@ -1098,7 +1098,12 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: vm-linux
     permissions:
-      contents: read
+      # Write, with pull-requests, only so a blocking verdict can turn the PR
+      # back into a draft: the conversion is GraphQL-only and the workflow
+      # token is refused it without both. This job checks nothing out, so
+      # the write reaches no PR code.
+      contents: write
+      pull-requests: write
       # Read-only on Actions, for the verdict artifact from this same run.
       actions: read
     steps:
@@ -1217,6 +1222,35 @@ jobs:
               finish block "reviewer returned no usable verdict" 1
               ;;
           esac
+
+      # A blocking verdict turns the PR back into a draft, which is what makes
+      # the next round a deliberate one: the session fixes every finding in
+      # draft, where `review_cap` holds the reviewer, and marking it ready is
+      # the next review. Only a verdict that blocks: a cap or a missing
+      # verdict is not a finding to fix in draft.
+      - name: Back to draft on a blocking verdict
+        if: >-
+          ${{ always() && steps.verdict.outputs.state == 'block' &&
+          needs.codex.outputs.has_verdict == 'true' &&
+          needs.review_cap.outputs.capped != 'true' && needs.post_feedback.outputs.capped != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NODE_ID: ${{ github.event.pull_request.node_id }}
+          VERDICT_FILE: ${{ runner.temp }}/codex-verdict/verdict.json
+        run: |
+          set -euo pipefail
+          if ! jq -e '.blocking == true' "$VERDICT_FILE" >/dev/null 2>&1; then
+            echo "Not a blocking verdict; the PR stays as it is."
+            exit 0
+          fi
+          out="$(curl -sS -X POST -H "Authorization: bearer $GH_TOKEN" "$GITHUB_GRAPHQL_URL" \
+            -d "$(jq -nc --arg id "$PR_NODE_ID" '{query: "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }", variables: {id: $id}}')" || true)"
+          if jq -e '.data.convertPullRequestToDraft.pullRequest.isDraft == true' <<<"$out" >/dev/null 2>&1; then
+            echo "The PR is back in draft: fix every finding there, push, and mark it ready (gh pr ready) for the next review."
+          else
+            echo "::error::Could not convert the PR to draft: ${out:-no response}. Convert it by hand (\`gh pr ready --undo\`)."
+            exit 1
+          fi
 
       - name: Join the tailnet, to reach the status pane
         if: ${{ env.TS_OAUTH_CLIENT_ID != '' }}
