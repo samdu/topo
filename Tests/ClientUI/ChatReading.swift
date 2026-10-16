@@ -127,7 +127,7 @@ enum ChatReading {
     /// launch kept — the look `look` in place of the vault's, and anything in `environment` besides.
     static func launch(transcript: String, tuning: String?, look: String = "{}",
                        softwareKeyboard: Bool = false, environment: [String: String] = [:]) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment.merge(environment) { _, given in given }
         if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"

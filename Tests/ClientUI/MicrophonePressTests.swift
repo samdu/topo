@@ -250,7 +250,7 @@ final class MicrophonePressTests: XCTestCase {
     }
 
     private func launch(environment: [String: String]) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         // This lane presses the microphone and speaks nothing, so the voice is held at loading

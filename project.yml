@@ -82,6 +82,10 @@ targets:
         buildPhase: resources
     dependencies:
       - package: TopoCore
+      # The in-memory store a debug launch with TOPO_DEBUG_STORE=memory runs on (AppRecords),
+      # imported only behind DEBUG.
+      - package: TopoCore
+        product: TopoCoreTesting
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio

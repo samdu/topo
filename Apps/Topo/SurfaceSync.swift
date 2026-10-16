@@ -82,9 +82,9 @@ final class SurfaceSync {
         try await DeviceRole.read(device, from: database)?.role != .viewer
     }
 
-    init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: TopoCloudKit.database()) },
-         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
-         roles: @escaping @Sendable () -> any RecordDatabase = { TopoCloudKit.database() },
+    init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: AppRecords.database()) },
+         ensureZone: @escaping @Sendable () async throws -> Void = AppRecords.ensureZone,
+         roles: @escaping @Sendable () -> any RecordDatabase = { AppRecords.database() },
          mayOwn: (@Sendable () async throws -> Bool)? = nil,
          demoted: (@Sendable (String) async throws -> Bool)? = nil,
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
