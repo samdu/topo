@@ -242,7 +242,6 @@
 		788F2C849A097A30DF3EE412 /* SurfaceReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		78BC1C3075EF38B6E9CC6AD9 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
-		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
 		7A8B1ADFEA35183A04493998 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		7B6542E14EB920F1A6FABB7D /* TopoPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */; };
 		7C378AC1792F1B90CA47F507 /* WatchRelevance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88A745D155637B885D24CB95 /* WatchRelevance.swift */; };
@@ -960,14 +959,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				91F97D9F0C5CE7E3FDC78845 /* TopoMascot in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		4E4E879F4A5AC63969DE56B2 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1908,7 +1899,6 @@
 			buildPhases = (
 				CC8D7954E78D3F001113BB83 /* Sources */,
 				76D44C8834577A74EF878097 /* Resources */,
-				4E4E879F4A5AC63969DE56B2 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -1917,7 +1907,6 @@
 			);
 			name = TopoTests;
 			packageProductDependencies = (
-				F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */,
 			);
 			productName = TopoTests;
 			productReference = 8D1F9ED3E5644D6B2C499B31 /* TopoTests.xctest */;
@@ -3664,10 +3653,6 @@
 		F62F043A4758AE7705F44F5A /* TopoProxy */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoProxy;
-		};
-		F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = TopoCoreTesting;
 		};
 		FE39E35328B7F68962D1C4D7 /* TopoTurn */ = {
 			isa = XCSwiftPackageProductDependency;
