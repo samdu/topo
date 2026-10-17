@@ -4,7 +4,8 @@ import Foundation
 /// the suite.
 @MainActor
 public protocol BackgroundTime: AnyObject {
-    /// Asks for background time; `expiration` is iOS's handler for its running out.
+    /// Asks for background time; `expiration` is iOS's handler for its running out. Answers
+    /// `GraceBudget.refused` when iOS will not give any.
     func begin(expiration: @escaping @MainActor () -> Void) -> Int
     func end(_ task: Int)
     /// `backgroundTimeRemaining`: infinite in the foreground, and inside `DidEnterBackground`
@@ -43,6 +44,8 @@ public enum TurnProgress {
 /// is usable, and ending Claude Code takes 3–4 s. The process is ended with 8 s of the usable time
 /// left, so the teardown lands well inside it.
 public enum GraceBudget {
+    /// What `BackgroundTime.begin` answers when iOS refuses (`UIBackgroundTaskIdentifier.invalid`).
+    public static let refused = 0
     /// When the remaining time is first read: `backgroundTimeRemaining` is infinite inside the
     /// notification and finite a tick later.
     public static let firstTick: Duration = .seconds(1)
@@ -173,7 +176,13 @@ public final class GuestLifecycle {
                 guard self.carrying == mine else { return }
                 self.carrying = nil
                 // Back in front with the turn still running: the task stays, for the next way out.
-                if outcome != .kept || self.openTurn == nil { self.completeContinued(success: true) }
+                guard outcome != .kept || self.openTurn == nil else { return }
+                // A turn abandoned at the teardown point is a task that did not do what it was for.
+                if case .ended(.abandoned, _) = outcome {
+                    self.completeContinued(success: false)
+                } else {
+                    self.completeContinued(success: true)
+                }
             }
             return
         }
@@ -193,10 +202,11 @@ public final class GuestLifecycle {
         }
     }
 
-    /// Asks iOS for the grace for background `mine`.
-    private func beginGrace(_ mine: Int) {
+    /// Asks iOS for the grace for background `mine`; answers whether it was given.
+    @discardableResult
+    private func beginGrace(_ mine: Int) -> Bool {
         let session = session
-        tasks[mine] = time.begin { [weak self] in
+        let task = time.begin { [weak self] in
             // The backstop: the teardown is budgeted to land before this. The process is told to
             // end now, and the task stays open until the teardown answers below, so iOS does not
             // suspend the app with the process alive — or, if the teardown has not answered just
@@ -204,26 +214,45 @@ public final class GuestLifecycle {
             Task { await session.expire(generation: mine) }
             self?.holdAfterExpiry(mine)
         }
+        guard task != GraceBudget.refused else { return false }
+        tasks[mine] = task
+        return true
     }
 
-    /// iOS expired the continued task, or the person cancelled it. Carrying a way out, the grace is
-    /// begun first — so the app is never without a hold — then the task is completed, and the
-    /// waiting turn is given what the grace allows, read a tick later (two when the first reading
-    /// is not yet a grant). In the foreground the task is let go and the turn runs on.
+    /// iOS expired the continued task, or the person cancelled it. In the foreground the task is
+    /// let go and the turn runs on. Carrying a way out, the grace is begun first, and the task is
+    /// completed a tick later rather than at once, since iOS grants the grace's assertion
+    /// asynchronously; the waiting turn is then given what the grace allows, read at that tick (or
+    /// a tick later when the first reading is not yet a grant). A grace iOS refuses leaves nothing
+    /// to hand to: the process is ended now, and the expired task is held until the teardown
+    /// answers, or let go just short of what an expiry leaves.
     private func continuedExpired(_ task: ContinuedTask) {
         guard task === continued else { return }
         guard let mine = carrying else {
             completeContinued(success: false)
             return
         }
-        carrying = nil
-        beginGrace(mine)
-        completeContinued(success: false)
-        report(.handedToGrace)
         let session = session
-        Task { [weak self, sleep] in
+        guard beginGrace(mine) else {
+            // `carrying` stays: the way out's answer completes the task.
+            report(.graceRefused)
+            Task { await session.expire(generation: mine) }
+            Task { [weak self, weak task, sleep] in
+                try? await sleep(GraceBudget.expiryHold)
+                guard let self, let task, task === self.continued, self.carrying == mine else { return }
+                self.carrying = nil
+                self.report(.outOfTime)
+                self.completeContinued(success: false)
+            }
+            return
+        }
+        carrying = nil
+        report(.handedToGrace)
+        Task { [weak self, weak task, sleep] in
             try? await sleep(GraceBudget.firstTick)
-            guard let self, self.generation == mine else { return }
+            guard let self else { return }
+            if let task, task === self.continued { self.completeContinued(success: false) }
+            guard self.generation == mine else { return }
             if !GraceBudget.isGrant(self.time.remaining) {
                 try? await sleep(GraceBudget.firstTick)
                 guard self.generation == mine else { return }

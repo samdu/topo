@@ -12,9 +12,10 @@ import UIKit
 @MainActor
 final class ApplicationBackgroundTime: BackgroundTime {
     func begin(expiration: @escaping @MainActor () -> Void) -> Int {
-        UIApplication.shared.beginBackgroundTask(withName: "zone.hexagon.topo.guest") {
+        let task = UIApplication.shared.beginBackgroundTask(withName: "zone.hexagon.topo.guest") {
             MainActor.assumeIsolated { expiration() }
-        }.rawValue
+        }
+        return task == .invalid ? GraceBudget.refused : task.rawValue
     }
 
     func end(_ task: Int) {
@@ -205,8 +206,10 @@ final class GuestResident {
     /// the task is asked for now, while the app is in front, and the lifecycle hears the turn end
     /// from the updates, which are passed on as they come. Read to the end whoever listens, since
     /// the end is what lets the task go.
-    func carried(_ updates: AsyncStream<GuestSession.TurnUpdate>) -> AsyncStream<GuestSession.TurnUpdate> {
+    func carried(_ updates: AsyncStream<GuestSession.TurnUpdate>, compaction: Bool) -> AsyncStream<GuestSession.TurnUpdate> {
         guard #available(iOS 26, *), let lifecycle else { return updates }
+        // A compaction is the mind's housekeeping, not a reply the person is waiting on.
+        guard !compaction else { return updates }
         let turn = lifecycle.turnBegan()
         ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.log)
         let (stream, continuation) = AsyncStream<GuestSession.TurnUpdate>.makeStream()
@@ -343,7 +346,7 @@ struct ResidentConversation: GuestConversation {
                 throw GuestBridgeError.notReady("\(error)")
             }
         }
-        return await GuestResident.shared.carried(updates)
+        return await GuestResident.shared.carried(updates, compaction: text == GuestBridge.compactCommand)
     }
 
     func settle() async -> Bool {

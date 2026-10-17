@@ -7,12 +7,18 @@ import XCTest
 final class GuestLifecycleTests: XCTestCase {
     private final class FakeTime: BackgroundTime {
         var remaining: TimeInterval = .greatestFiniteMagnitude
+        /// iOS refuses the next grace asked for.
+        var refuseNext = false
         private(set) var begun: [Int] = []
         private(set) var ended: [Int] = []
         private var next = 100
         var expirations: [Int: @MainActor () -> Void] = [:]
 
         func begin(expiration: @escaping @MainActor () -> Void) -> Int {
+            if refuseNext {
+                refuseNext = false
+                return GraceBudget.refused
+            }
             next += 1
             begun.append(next)
             expirations[next] = expiration
@@ -314,16 +320,21 @@ final class GuestLifecycleTests: XCTestCase {
 
         task.expire()
         XCTAssertEqual(time.open.count, 1, "the grace was not begun at the expiry")
-        XCTAssertEqual(task.completions, [false], "the expired task was not completed at once")
+        XCTAssertTrue(task.open, "the expired task was completed before the grace's assertion could land")
         XCTAssertEqual(outcomes.all, [.handedToGrace])
-        // The first reading is still not a grant, so a second tick is taken before the budget.
+        // The task is completed at the first tick; the reading there is still not a grant, so a
+        // second tick is taken before the budget.
         await eventually("the first tick asleep") { await clock.pending == 2 }
         await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the task completed at the tick") { task.completions == [false] }
         await eventually("the second tick asleep") { await clock.pending == 2 }
         time.remaining = 25
         await clock.advance(by: GraceBudget.firstTick)
         await eventually("the deadline set") { await clock.pending == 2 }
         await clock.advance(by: .milliseconds(12_000 - 1))
+        // The watchdog and the deadline both still asleep: the turn was not cut early.
+        let standing = await clock.pending
+        XCTAssertEqual(standing, 2, "the turn was cut before the grace's budget")
         XCTAssertFalse(process.terminated, "the turn was cut before the grace's budget")
         await clock.advance(by: .milliseconds(1))
         await eventually("the grace ended") { time.open.isEmpty }
@@ -352,8 +363,10 @@ final class GuestLifecycleTests: XCTestCase {
         task.expire()
         let grace = try XCTUnwrap(time.open.first)
         time.expirations[grace]?()
+        await clock.advance(by: GraceBudget.firstTick)
         await eventually("the grace ended") { time.open.isEmpty }
         XCTAssertTrue(process.terminated)
+        XCTAssertEqual(task.completions, [false])
         XCTAssertEqual(process.bounds, [GraceBudget.expiredTeardownBound])
         guard case .ended(.abandoned, _)? = outcomes.all.last else { return XCTFail("\(outcomes.all)") }
     }
@@ -414,6 +427,63 @@ final class GuestLifecycleTests: XCTestCase {
         await eventually("the way out waiting on the turn") { await clock.pending == 1 }
         await session.limit(budget: .zero, generation: 1)
         await clock.advance(by: .seconds(60))
-        XCTAssertFalse(process.terminated, "a stale limit cut the turn")
+        answer(process, "done")
+        await eventually("the way out answered") { !outcomes.all.isEmpty }
+        guard case .ended(.finished, _)? = outcomes.all.first else {
+            return XCTFail("a stale limit cut the turn: \(outcomes.all)")
+        }
+    }
+
+    func testARefusedGraceAtTheExpiryEndsTheProcessAndHoldsTheTaskUntilItIsGone() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        process.holdNextTermination()
+        time.refuseNext = true
+        task.expire()
+        XCTAssertEqual(outcomes.all, [.graceRefused])
+        await eventually("the teardown running") { process.terminationHeld }
+        XCTAssertTrue(task.open, "the task was let go with the process alive and no grace")
+        process.release()
+        await eventually("the task completed") { !task.open }
+        XCTAssertEqual(task.completions, [false])
+        XCTAssertEqual(process.bounds, [GraceBudget.expiredTeardownBound])
+        guard case .ended(.abandoned, _)? = outcomes.all.last else { return XCTFail("\(outcomes.all)") }
+        XCTAssertTrue(time.open.isEmpty)
+    }
+
+    func testAStaleWayOutsAnswerLeavesTheTaskANewerOneIsCarrying() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        lifecycle.willEnterForeground()
+        lifecycle.didEnterBackground()
+        await eventually("the first way out answered") { outcomes.all.contains(.kept) }
+        XCTAssertTrue(task.open, "a stale answer completed the task the newer way out carries")
+        process.holdNextTermination()
+        answer(process, "done")
+        lifecycle.turnEnded(number)
+        await eventually("the teardown running") { process.terminationHeld }
+        XCTAssertTrue(task.open, "the task was completed with the process alive")
+        process.release()
+        await eventually("the task completed") { !task.open }
+        XCTAssertEqual(task.completions, [true])
+        XCTAssertTrue(time.begun.isEmpty)
+        _ = clock
     }
 }

@@ -141,6 +141,9 @@ public actor GuestSession {
         case outOfTime
         /// The continued-processing task carrying the way out expired, and the grace took it over.
         case handedToGrace
+        /// The continued-processing task carrying the way out expired and iOS refused the grace:
+        /// the process is ended at once.
+        case graceRefused
     }
 
     public enum TurnFate: Sendable, Equatable {
@@ -799,6 +802,8 @@ extension GuestSession.BackgroundOutcome: CustomStringConvertible {
             return "ended, \(fate); termination \(confirmed): \(termination)"
         case .handedToGrace:
             return "the continued-processing task expired; the grace has the turn"
+        case .graceRefused:
+            return "the continued-processing task expired and iOS refused the grace; the process is ended now"
         case .outOfTime:
             return "background time ran out before the termination answered; the background task was ended with the teardown still running"
         }

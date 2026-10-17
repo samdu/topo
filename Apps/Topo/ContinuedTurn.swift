@@ -26,7 +26,7 @@ final class ContinuedTurnTask: ContinuedTask {
     func onExpiry(_ handler: @escaping @MainActor () -> Void) {
         // The queue the handler is called on is not documented: the grace is begun from the main
         // actor either way, at once when it is already there.
-        task.expirationHandler = {
+        task.expirationHandler = { @Sendable in
             if Thread.isMainThread {
                 MainActor.assumeIsolated { handler() }
             } else {
