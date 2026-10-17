@@ -76,6 +76,34 @@ final class LookDocumentTests: XCTestCase {
     /// The point of reading field by field rather than through `Codable`: one value the document
     /// gets wrong costs that value and nothing else. Everything the full fixture set still stands,
     /// the one bad field is the compiled default, and the row says which field and why.
+    /// The first run's sizes are bounded, so no document pushes the question's field out of
+    /// reach or the setup's bars out of the chat's bar, and a surface made clear is still read:
+    /// the question draws it over an opaque base.
+    func testTheFirstRunsSizesAreBounded() {
+        typealias Setup = Look.Setup
+        // The ranges the reader reads in, at their largest, leave three rows inside the bar's
+        // height and a row inside the room between the model's control and the badge.
+        XCTAssertLessThanOrEqual(3 * Setup.symbolSizeRange.upperBound + 2 * Setup.spacingRange.upperBound, Setup.tallest)
+        XCTAssertLessThanOrEqual(Setup.symbolSizeRange.upperBound + Setup.symbolSpacingRange.upperBound + Setup.barWidthRange.upperBound, Setup.widest)
+        XCTAssertLessThanOrEqual(Setup.barHeightRange.upperBound, Setup.symbolSizeRange.lowerBound, "a bar taller than its row")
+        XCTAssertLessThanOrEqual(Setup.tallest, 44)
+        XCTAssertLessThanOrEqual(Setup.widest, 100)
+        let most = LookDocument.read(#"{"setup": {"symbolSize": 12, "spacing": 4, "symbolSpacing": 8, "barWidth": 80, "barHeight": 6}}"#).look.setup
+        XCTAssertEqual([most.symbolSize, most.spacing, most.symbolSpacing, most.barWidth, most.barHeight], [12, 4, 8, 80, 6])
+        // One past each is refused, and costs no other field.
+        let big = LookDocument.read(#"{"setup": {"symbolSize": 13, "barWidth": 81, "barHeight": 7, "symbolSpacing": 9, "spacing": 2, "troubleFont": {"size": 400}}, "reading": {"font": {"size": 400}, "spacing": 20}}"#)
+        XCTAssertEqual(big.look.setup.symbolSize, Look().setup.symbolSize)
+        XCTAssertEqual(big.look.setup.barWidth, Look().setup.barWidth)
+        XCTAssertEqual(big.look.setup.barHeight, Look().setup.barHeight)
+        XCTAssertEqual(big.look.setup.symbolSpacing, Look().setup.symbolSpacing)
+        XCTAssertEqual(big.look.setup.spacing, 2, "the good field was taken down with the others")
+        // A font's size is drawn at the most its place holds.
+        XCTAssertEqual(big.look.setup.troubleFont, .system(size: Setup.largestFont))
+        XCTAssertEqual(big.look.reading.font, .system(size: Look.Reading.largestFont))
+        XCTAssertEqual(big.look.reading.spacing, 20)
+        XCTAssertEqual(LookDocument.read(#"{"reading": {"font": {"size": 34}}}"#).look.reading.font, .system(size: 34))
+    }
+
     func testOneBadFieldKeepsEveryOtherOverrideAndReportsTheOne() throws {
         let broken = LookFixture.full.replacingOccurrences(of: "\"cornerRadius\": 3",
                                                            with: "\"cornerRadius\": \"wide\"")

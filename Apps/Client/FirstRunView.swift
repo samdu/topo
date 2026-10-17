@@ -1,11 +1,14 @@
-#if os(iOS) || os(macOS)
+#if os(iOS)
 import SwiftUI
 
 /// The first ten minutes: one question, with the microphone asked for at the first press and
-/// nothing before it. The answer is kept in `firstRunAnswer` until the turn log takes it as the
-/// first turn; nothing said here is dropped.
+/// nothing before it. The answer is handed to `onDone`, which puts it on the harness's line as
+/// the first turn. It stands over the chat, opaque, while `FirstRun.asks` and until an answer
+/// said into its microphone has been heard.
 struct FirstRunView: View {
-    @AppStorage("firstRunAnswer") private var storedAnswer = ""
+    /// What a new install is still fetching and preparing, drawn under the question.
+    var setup: [Setup.Line] = []
+    @Environment(\.look) private var look
     @State private var answer = ""
     #if os(iOS)
     @Environment(VoiceInput.self) private var voice
@@ -77,32 +80,45 @@ struct FirstRunView: View {
                     .disabled(answer.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .frame(maxWidth: 360)
+            if Setup.shows(setup) { SetupMeter(lines: setup) }
+            if let trouble = Setup.trouble(setup) {
+                Text(trouble).font(look.setup.troubleFont).foregroundStyle(look.setup.troubleInk).multilineTextAlignment(.center)
+            }
             Spacer().frame(height: 24)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The page's own colour under the look's, so the question is opaque whatever the look says.
+        .background(look.reading.surface)
+        .background(Theme.background)
+        .accessibilityIdentifier("first-run")
         #if os(iOS)
         .onDisappear { voice.cancel(.firstRun) }
         #endif
     }
 
-    private func submit() {
-        let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func submit() { submit(answer) }
+
+    private func submit(_ words: String) {
+        let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        storedAnswer = text
         onDone(text)
     }
 
     /// Hold to talk, release to answer; on this screen a tap is a short hold, not a hands-free
     /// press, since one answer is all it takes.
+    ///
+    /// What was heard is answered as it was returned, not read back out of the field.
     private func pressed(_ down: Bool) async {
         #if os(iOS)
         let heard = down ? await voice.pressDown(as: .firstRun) : await voice.pressUp(as: .firstRun)
         if let heard {
             answer = heard
-            submit()
+            submit(heard)
         } else if !down, voice.handsFree {
-            answer = await voice.pressDown(as: .firstRun) ?? ""
-            submit()
+            let heard = await voice.pressDown(as: .firstRun) ?? ""
+            answer = heard
+            submit(heard)
         }
         #endif
     }

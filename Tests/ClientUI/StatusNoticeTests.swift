@@ -110,6 +110,35 @@ final class StatusNoticeTests: XCTestCase {
         attach(app, "slider-under-notice")
     }
 
+    /// The setup's bars stand in the bar's middle when the chat has nothing to say: one for each
+    /// part still to come and none for a part that is done, level with the badge and between
+    /// it and the model, and each says where its part has got to. What the chat has to say takes
+    /// the middle from them, and a part that failed is said there in words.
+    func testTheSetupsBarsAreInTheNavigationBar() throws {
+        let app = launch("none", setup: "fetching")
+        let workspace = app.descendants(matching: .any).matching(identifier: "setup-Topo's workspace").firstMatch
+        let hearing = app.descendants(matching: .any).matching(identifier: "setup-Hearing you").firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 60), "no bar for the workspace in the bar")
+        XCTAssertTrue(hearing.exists, "no bar for the ear in the bar")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "setup-Speaking").firstMatch.exists,
+                       "a part that is ready has a bar")
+        XCTAssertEqual(workspace.value as? String, "downloading 57 MB of 228 MB")
+        XCTAssertEqual(hearing.label, "Hearing you")
+        XCTAssertLessThanOrEqual(workspace.frame.maxY, hearing.frame.minY + 0.5, "the bars are not one over the other")
+        try holdInTheBar(app, [workspace, hearing], "the setup's bars")
+        attach(app, "setup-bars")
+
+        let busy = launch("busy", setup: "fetching")
+        _ = try words(busy, "busy over the setup")
+        XCTAssertFalse(busy.descendants(matching: .any).matching(identifier: "setup-meter").firstMatch.exists,
+                       "the bars are drawn beside a turn in flight")
+
+        let failed = launch("none", setup: "failed")
+        let said = try words(failed, "a part that failed")
+        XCTAssertEqual(said.map(\.label), ["Topo's workspace failed: the download was refused"])
+        try holdInTheBar(failed, said, "a part that failed")
+    }
+
     /// The least a notice is drawn at, as a share of its font (`look.transcript.noticeLeastScale`):
     /// between the bar's controls and the badge a notice that does not fit its two lines is
     /// drawn smaller before any of it is cut.
@@ -165,9 +194,10 @@ final class StatusNoticeTests: XCTestCase {
         ("error-busy", ["iCloud refused the read. Check you're signed in on this device."]),
     ]
 
-    private func launch(_ fixture: String, look: String = "{}") -> XCUIApplication {
-        ChatReading.launch(transcript: "full", tuning: "", look: look,
-                           environment: ["TOPO_DEBUG_NOTICES": fixture])
+    private func launch(_ fixture: String, look: String = "{}", setup: String? = nil) -> XCUIApplication {
+        var environment = ["TOPO_DEBUG_NOTICES": fixture]
+        if let setup { environment["TOPO_DEBUG_SETUP"] = setup }
+        return ChatReading.launch(transcript: "full", tuning: "", look: look, environment: environment)
     }
 
     private func words(_ app: XCUIApplication, _ fixture: String) throws -> [XCUIElement] {
