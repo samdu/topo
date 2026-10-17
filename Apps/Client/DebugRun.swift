@@ -30,8 +30,38 @@ enum DebugRun {
     static let transcriptVariable = "TOPO_DEBUG_TRANSCRIPT"
     static let tuningVariable = "TOPO_DEBUG_TUNING"
     static let noticesVariable = "TOPO_DEBUG_NOTICES"
-
+    static let setupVariable = "TOPO_DEBUG_SETUP"
+    static let logVariable = "TOPO_DEBUG_LOG"
     #if os(iOS)
+    /// `TOPO_DEBUG_LOG=<empty|unread>`: the log the chat's harness reads and writes, in place
+    /// of iCloud's, so a run reaches the chat's two screens before there is a conversation.
+    /// `empty` answers every read with nothing, which is a log with no turns, and `unread`
+    /// fails every read, so the chat stays as it is before its first one. Neither takes a
+    /// save: what is said stays on the line, drawn as a turn on its way. Nil when the variable
+    /// is absent or names neither.
+    static func log(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> (any RecordDatabase)? {
+        switch environment[logVariable] {
+        case "empty": StandInLog(reads: true)
+        case "unread": StandInLog(reads: false)
+        default: nil
+        }
+    }
+
+    /// A database holding nothing, out of reach for every save, and for every read too unless
+    /// `reads`.
+    private struct StandInLog: RecordDatabase {
+        struct OutOfReach: Error {}
+        var reads: Bool
+        private func read<Found>(_ nothing: Found) throws -> Found {
+            guard reads else { throw RecordDatabaseError.unavailable(underlying: OutOfReach()) }
+            return nothing
+        }
+        func save(_ records: [Record]) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: OutOfReach()) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try read([:]) }
+        func query(_ query: RecordQuery) async throws -> [Record] { try read([]) }
+        func records(ofType type: String) async throws -> [Record] { try read([]) }
+    }
+
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
     /// Mac's keyboard connected, which is how a simulator starts. With the Mac's keyboard nothing
     /// rises and the screen's safe area never changes, and the glass goes short on the keyboard's
@@ -55,17 +85,19 @@ enum DebugRun {
     static let look: Look? = lookReading?.look
 
     #if os(iOS)
-    /// `TOPO_DEBUG_NOTICES=<busy|busy-long|error|info|busy-info|error-busy>`: the chat's notices
+    /// `TOPO_DEBUG_NOTICES=<none|busy|busy-long|error|info|busy-info|error-busy>`: the chat's notices
     /// (`ChatNotices`) say one of their three things whatever the harness is doing, so a UI suite
     /// can hold each in the bar on any host: a turn in flight with two behind it, the longest
     /// status the harness sets with eleven behind it, iCloud refusing the read, a turn left in the
-    /// log for another device's primary, and two of them at once, which the bar says one of. The
+    /// log for another device's primary, and two of them at once, which the bar says one of;
+    /// `none` is nothing to say, which leaves the bar's middle to the setup's bars. The
     /// words are the harness's own. Nil when the variable is absent or names none of them.
     @MainActor static var notices: ChatNotices.Said? { notices(ProcessInfo.processInfo.environment) }
 
     @MainActor static func notices(_ environment: [String: String]) -> ChatNotices.Said? {
         let refused = Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission)))
         return switch environment[noticesVariable] {
+        case "none": ChatNotices.Said()
         case "busy": ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 3)
         case "busy-long": ChatNotices.Said(busy: true, status: "Checking this device is primary…", waiting: 12)
         case "error": ChatNotices.Said(error: refused)
@@ -143,6 +175,34 @@ enum DebugRun {
         let folder = home.appendingPathComponent("charts", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? picture.pngData()?.write(to: folder.appendingPathComponent("sizes.png"))
+    }
+    #endif
+
+    #if os(iOS)
+    /// `TOPO_DEBUG_SETUP=<fetching|failed>`: the setup's meter draws these lines in place of the
+    /// app's own parts, so a run draws the meter without a download: one part downloading at a
+    /// known share, one being prepared and one ready, or one of them failed.
+    @MainActor
+    static func setup(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Setup.Line]? {
+        let fetch = Setup.Fetch(fraction: 0.25, words: "downloading 57 MB of 228 MB")
+        switch environment[setupVariable] {
+        case "fetching":
+            return Setup.lines(phase: .fetching, claude: .fetching, workspace: fetch,
+                               ear: .loading, earFetch: fetch, earLoading: Ear.preparing,
+                               voice: .ready, voiceFetch: fetch, voiceLoading: Voice.preparing)
+        case "failed":
+            return Setup.lines(phase: .failed("the download was refused"), claude: .fetching, workspace: fetch,
+                               ear: .ready, earFetch: fetch, earLoading: Ear.preparing,
+                               voice: .ready, voiceFetch: fetch, voiceLoading: Voice.preparing)
+        default:
+            return nil
+        }
+    }
+
+    /// The launch gave the ear or the voice a stand-in (`TOPO_DEBUG_EAR`, `TOPO_DEBUG_VOICE`), so
+    /// there is no setup of the app's own to show.
+    static func standsIn(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        [earVariable, voiceVariable].contains { !(environment[$0] ?? "").isEmpty }
     }
     #endif
 

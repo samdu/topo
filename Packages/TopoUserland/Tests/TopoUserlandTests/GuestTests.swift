@@ -133,4 +133,49 @@ final class GuestTests: XCTestCase {
         let exit = try await Guest.shared.run("/bin/echo", ["still here"])
         XCTAssertEqual(exit.output, "still here\n")
     }
+    /// A program that never ends is a hang, not an ending: the call throws at its bound, and the
+    /// program is gone by the time it does.
+    func testAProgramThatNeverEndsThrowsAtTheBoundAndIsKilled() async throws {
+        _ = try SharedGuest.booted()
+        let file = "/tmp/hung-root-\(UUID().uuidString)"
+        try await assertHangs(#"echo $$ > "$1"; exec sleep 3600"#, file)
+    }
+
+    /// A program that exits 0 but leaves a child holding its output is a hang too, and the child
+    /// — orphaned to init, out of any parent walk — is ended with it.
+    func testAChildLeftHoldingThePipesThrowsAtTheBoundAndIsKilled() async throws {
+        _ = try SharedGuest.booted()
+        let file = "/tmp/hung-child-\(UUID().uuidString)"
+        try await assertHangs(#"sleep 3600 & echo $! > "$1"; exit 0"#, file)
+    }
+
+    /// A program that ends inside its bound answers as before.
+    func testAProgramInsideItsBoundAnswers() async throws {
+        _ = try SharedGuest.booted()
+        let exit = try await Guest.shared.run("/bin/sh", ["-c", "sleep 1; echo done"], within: .seconds(10))
+        XCTAssertEqual(exit.status, 0)
+        XCTAssertEqual(exit.output, "done\n")
+    }
+
+    private func assertHangs(_ script: String, _ file: String, file path: StaticString = #filePath,
+                             line: UInt = #line) async throws {
+        let bound: Duration = .seconds(2)
+        let start = ContinuousClock.now
+        do {
+            let exit = try await Guest.shared.run("/bin/sh", ["-c", script, "sh", file], within: bound)
+            XCTFail("a hang answered \(exit)", file: path, line: line)
+        } catch Guest.Failure.hung(let after, let running) {
+            XCTAssertEqual(after, bound, file: path, line: line)
+            XCTAssertEqual(running, 0, file: path, line: line)
+        }
+        let elapsed = ContinuousClock.now - start
+        XCTAssertGreaterThanOrEqual(elapsed, bound, file: path, line: line)
+        XCTAssertLessThan(elapsed, bound + .seconds(6), file: path, line: line)
+        let written = try await Guest.shared.run("/bin/cat", [file])
+        let pid = try XCTUnwrap(Int32(written.output.trimmingCharacters(in: .whitespacesAndNewlines)),
+                                "no pid in \(file)", file: path, line: line)
+        let running = await GuestProcess.running([pid])
+        XCTAssertEqual(running, 0, "the hung program \(pid) is still running", file: path, line: line)
+        _ = try await Guest.shared.run("/bin/rm", ["-f", file])
+    }
 }

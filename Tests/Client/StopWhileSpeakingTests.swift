@@ -89,6 +89,71 @@ final class StopWhileSpeakingTests: XCTestCase {
         sink.append(buffer)
     }
 
+    /// The composer works while the log is unread, so the first read of an empty log can return
+    /// under an open microphone. The first-run question is not asked over it: the chat's session
+    /// is the person's hand on the chat from the press until it ends, and so are words in the row.
+    func testTheFirstRunQuestionWaitsForTheChatsOpenMicrophone() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let row = NextTurn()
+        func asks() -> Bool {
+            FirstRun.asks(read: true, empty: true, waiting: false, busy: false,
+                          engaged: FirstRun.engaged(voice: voice, row: row, focused: false), answered: false)
+        }
+        XCTAssertTrue(asks())
+        _ = await voice.pressDown(as: .chat)
+        await settle("the microphone to open") { voice.listening }
+        XCTAssertFalse(asks(), "the question arrived over the chat's open microphone")
+        voice.cancel(.chat)
+        XCTAssertFalse(voice.listening)
+        XCTAssertTrue(asks(), "a session that ended in nothing left the question unasked")
+        row.text = "The bins"
+        XCTAssertFalse(asks(), "the question arrived over words in the row")
+        row.text = ""
+        XCTAssertFalse(FirstRun.engaged(voice: voice, row: row, focused: false))
+        XCTAssertTrue(FirstRun.engaged(voice: voice, row: row, focused: true))
+    }
+
+    /// What the chat draws the question by (`FirstRun.standing`), over a real `VoiceInput`: an
+    /// answer being said into the question's own microphone keeps it standing when a turn from
+    /// another device has made the log no longer empty, which the asking alone would not, and
+    /// it goes once that session has ended.
+    func testTheQuestionStandsOverATurnThatArrivesWhileItsAnswerIsSaid() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let row = NextTurn()
+        func standing(empty: Bool) -> Bool {
+            FirstRun.standing(voice: voice, row: row, focused: false, read: true, empty: empty,
+                              waiting: false, busy: false, answered: false, fixture: false)
+        }
+        XCTAssertTrue(standing(empty: true))
+        XCTAssertFalse(standing(empty: false), "the question stood over a log with turns and nobody answering")
+        _ = await voice.pressDown(as: .firstRun)
+        await settle("the question's microphone to open") { voice.listening }
+        XCTAssertEqual(voice.owner, .firstRun)
+        XCTAssertTrue(standing(empty: false), "a turn from another device took the question from under an answer being said")
+        voice.cancel(.firstRun)
+        XCTAssertFalse(standing(empty: false), "the question outlived its session over a log with turns")
+        // Everything that ends the asking still ends it here: the chat's own session, which is
+        // a session and not the question's, a turn waiting or in flight, and an answer given.
+        func standing(waiting: Bool = false, busy: Bool = false, answered: Bool = false, read: Bool = true) -> Bool {
+            FirstRun.standing(voice: voice, row: row, focused: false, read: read, empty: true,
+                              waiting: waiting, busy: busy, answered: answered, fixture: false)
+        }
+        XCTAssertFalse(standing(waiting: true))
+        XCTAssertFalse(standing(busy: true))
+        XCTAssertFalse(standing(answered: true))
+        XCTAssertFalse(standing(read: false))
+        _ = await voice.pressDown(as: .chat)
+        await settle("the chat's microphone to open") { voice.listening }
+        XCTAssertFalse(standing(), "the question arrived over the chat's open microphone")
+        XCTAssertFalse(standing(empty: false), "the chat's session was taken for the question's")
+        voice.cancel(.chat)
+        XCTAssertFalse(FirstRun.standing(voice: voice, row: row, focused: false, read: true, empty: true,
+                                         waiting: false, busy: false, answered: false, fixture: true),
+                       "the question stood over a debug fixture")
+    }
+
     func testTheMicrophoneIsAStopButtonWhileTopoSpeaks() async {
         let (speaker, voice, held) = await speakingChat()
         defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }

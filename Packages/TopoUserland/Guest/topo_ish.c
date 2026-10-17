@@ -476,6 +476,29 @@ int topo_ish_signal_all(int sig, int *pids, int capacity) {
     return live;
 }
 
+int topo_ish_signal_session(int sid, int sig) {
+    if (!booted)
+        return _ENODEV;
+    if (sid <= 1 || sig < 0 || sig >= NUM_SIGS)
+        return _EINVAL;
+    // Every task whose group is in the session, found by its group's sid rather than by parent
+    // links: a descendant whose parent died was reparented to init and is still in the session.
+    // A sid is not reused while anything is in its session (`pid_empty`), so this reaches no
+    // stranger's program.
+    lock(&pids_lock);
+    int live = 0;
+    for (int id = 2; id <= MAX_PID; id++) {
+        struct task *task = pid_get_task_zombie(id);
+        if (task == NULL || task->zombie || task->group == NULL || task->group->sid != (pid_t_) sid)
+            continue;
+        live++;
+        if (sig != 0 && !task->exiting)
+            signal_task(task, sig);
+    }
+    unlock(&pids_lock);
+    return live;
+}
+
 int topo_ish_running(const int *pids, int count) {
     if (!booted)
         return _ENODEV;

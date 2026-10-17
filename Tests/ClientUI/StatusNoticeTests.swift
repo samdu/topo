@@ -5,11 +5,9 @@ import XCTest
 /// composer. Only a running app lays out a toolbar, so this is a UI test.
 ///
 /// The turn never settles: the app is launched with `TOPO_DEBUG_REPLY_DELAY`, which holds the
-/// harness before the model call, so a notice stands for the length of the test on any host —
-/// the status of the turn in flight on one with an iCloud account behind the simulator, the
-/// failure on one without. Either is a notice, and both are held to the same place. The three
-/// things a notice says are each held on their own off `TOPO_DEBUG_NOTICES`, which puts them in
-/// the bar whatever the host's iCloud does.
+/// harness before the model call, so the status of the turn in flight stands for the length of
+/// the test. The three things a notice says are each held on their own off `TOPO_DEBUG_NOTICES`,
+/// which puts them in the bar whatever the harness is doing.
 @MainActor
 final class StatusNoticeTests: XCTestCase {
     override func setUp() {
@@ -38,8 +36,9 @@ final class StatusNoticeTests: XCTestCase {
         XCTAssertTrue(found, "a turn went and no notice said so")
         let words = notices.staticTexts.firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the notices hold no words")
-        XCTAssertTrue(Self.heldTurn.contains(words.label),
-                      "the notice says \"\(words.label)\", none of what a held turn says: \(Self.heldTurn)")
+        let held = expectation(for: NSPredicate(format: "label == %@", Self.heldTurn), evaluatedWith: words)
+        XCTAssertEqual(XCTWaiter.wait(for: [held], timeout: 10), .completed,
+                       "the notice says \"\(words.label)\", not what a held turn says: \(Self.heldTurn)")
 
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "no badge in the navigation bar")
@@ -111,6 +110,35 @@ final class StatusNoticeTests: XCTestCase {
         attach(app, "slider-under-notice")
     }
 
+    /// The setup's bars stand in the bar's middle when the chat has nothing to say: one for each
+    /// part still to come and none for a part that is done, level with the badge and between
+    /// it and the model, and each says where its part has got to. What the chat has to say takes
+    /// the middle from them, and a part that failed is said there in words.
+    func testTheSetupsBarsAreInTheNavigationBar() throws {
+        let app = launch("none", setup: "fetching")
+        let workspace = app.descendants(matching: .any).matching(identifier: "setup-Topo's workspace").firstMatch
+        let hearing = app.descendants(matching: .any).matching(identifier: "setup-Hearing you").firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 60), "no bar for the workspace in the bar")
+        XCTAssertTrue(hearing.exists, "no bar for the ear in the bar")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "setup-Speaking").firstMatch.exists,
+                       "a part that is ready has a bar")
+        XCTAssertEqual(workspace.value as? String, "downloading 57 MB of 228 MB")
+        XCTAssertEqual(hearing.label, "Hearing you")
+        XCTAssertLessThanOrEqual(workspace.frame.maxY, hearing.frame.minY + 0.5, "the bars are not one over the other")
+        try holdInTheBar(app, [workspace, hearing], "the setup's bars")
+        attach(app, "setup-bars")
+
+        let busy = launch("busy", setup: "fetching")
+        _ = try words(busy, "busy over the setup")
+        XCTAssertFalse(busy.descendants(matching: .any).matching(identifier: "setup-meter").firstMatch.exists,
+                       "the bars are drawn beside a turn in flight")
+
+        let failed = launch("none", setup: "failed")
+        let said = try words(failed, "a part that failed")
+        XCTAssertEqual(said.map(\.label), ["Topo's workspace failed: the download was refused"])
+        try holdInTheBar(failed, said, "a part that failed")
+    }
+
     /// The least a notice is drawn at, as a share of its font (`look.transcript.noticeLeastScale`):
     /// between the bar's controls and the badge a notice that does not fit its two lines is
     /// drawn smaller before any of it is cut.
@@ -148,11 +176,9 @@ final class StatusNoticeTests: XCTestCase {
 
     /// What a turn held before the model call can say: where it is, or iCloud's refusal on a
     /// simulator whose iCloud read is refused.
-    private static let heldTurn: Set<String> = [
-        "Reaching iCloud…",
-        "iCloud refused the read. Check you're signed in on this device.",
-        "iCloud is out of reach. Topo will try again.",
-    ]
+    /// What the turn says while the reply delay holds it: the store has answered (passing
+    /// "Reaching iCloud…" on the way), and no step of the model call has begun.
+    private static let heldTurn = "Working…"
 
     /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
     private static let fixtures: [(String, [String])] = [
@@ -168,9 +194,10 @@ final class StatusNoticeTests: XCTestCase {
         ("error-busy", ["iCloud refused the read. Check you're signed in on this device."]),
     ]
 
-    private func launch(_ fixture: String, look: String = "{}") -> XCUIApplication {
-        ChatReading.launch(transcript: "full", tuning: "", look: look,
-                           environment: ["TOPO_DEBUG_NOTICES": fixture])
+    private func launch(_ fixture: String, look: String = "{}", setup: String? = nil) -> XCUIApplication {
+        var environment = ["TOPO_DEBUG_NOTICES": fixture]
+        if let setup { environment["TOPO_DEBUG_SETUP"] = setup }
+        return ChatReading.launch(transcript: "full", tuning: "", look: look, environment: environment)
     }
 
     private func words(_ app: XCUIApplication, _ fixture: String) throws -> [XCUIElement] {
@@ -220,7 +247,7 @@ final class StatusNoticeTests: XCTestCase {
     /// Signed in with a placeholder token, past the first-run question, with nothing on the line
     /// and neither model resident, and the turn held before the model call.
     private func launch() -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"

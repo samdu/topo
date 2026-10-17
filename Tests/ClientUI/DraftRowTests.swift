@@ -10,9 +10,8 @@ import XCTest
 /// it and by neither on a turn's words.
 ///
 /// A sent turn never settles: the app is launched with `TOPO_DEBUG_REPLY_DELAY`, which holds the
-/// harness before the model call and so before the person's turn is written, on any host — one
-/// with an iCloud account behind the simulator and one without. So the row stays in flight for
-/// the length of the test wherever it runs, and no turn reaches the API.
+/// harness before the model call and so before the person's turn is written. So the row stays in
+/// flight for the length of the test, and no turn reaches the API.
 ///
 /// Every state it puts the pane in is photographed into the result bundle, which is where the
 /// screenshots on the PR come from: `xcrun xcresulttool export attachments`.
@@ -173,9 +172,9 @@ final class DraftRowTests: XCTestCase {
         shot(app, "in-flight")
 
         // What the chat says under the row when the write stopped rather than merely taking its
-        // time: the error line, and the line's own way forward. A simulator with an iCloud
-        // account behind it reaches neither — its turn is genuinely on its way — so this waits
-        // and photographs what it finds rather than asserting either way.
+        // time: the error line, and the line's own way forward. On the in-memory store
+        // (`TopoLaunch`) the write does not stop, and the turn is genuinely on its way, so this
+        // waits and photographs what it finds rather than asserting either way.
         _ = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Send \\\"'")).firstMatch
             .waitForExistence(timeout: 15)
         shot(app, "failed")
@@ -292,7 +291,7 @@ final class DraftRowTests: XCTestCase {
     /// left: a turn said and not settled stays on disk, so every test here says what it wants
     /// rather than inheriting the turn the test before it sent and never landed.
     private func launch(owed: String) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = owed
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"

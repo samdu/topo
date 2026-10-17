@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Holds .github/workflows/pr-validate.yaml's gate against the job list this test pins by name
 # rather than one discovered from the file: the workflow has exactly `select`, `test` and the
-# review jobs, every one on ubuntu-latest, and is started by a pull_request alone. `test` needs
+# review jobs, every one on vm-linux as is every job of automerge.yaml, and is started by a pull_request alone. `test` needs
 # `select`, may read commit statuses and nothing else, and reads the PR's head commit, select's
-# result, its three suite outputs and its lane; `codex_wait` and `codex` need `select` and `test`
-# and spell out `needs.<job>.result == 'success'` for both, so a suite that did not pass on the
-# Mac spends no reviewer round; `codex_wait` runs only on review_cap's `false`, for the cap and
-# for `draft`, which `review_cap` reads from the API and no job takes from the event; and
+# result, its three suite outputs and its lane; `codex` needs `select`, `test` and `review_cap`
+# and spells out `needs.<job>.result == 'success'` for the first two, so a suite that did not
+# pass on the Mac spends no reviewer round; `codex` runs only on review_cap's `false`, for the
+# cap and for `draft`, which `review_cap` reads from the API and no job takes from the event,
+# one at a time across the repository in a concurrency group that queues rather than cancels; and
 # `reviewer_ran` and `review_gate` need `select`, `test` and the review jobs before them.
 #
 # Then it runs `test`'s step against a fake `gh` that answers the head's combined status: green
@@ -26,11 +27,14 @@
 #
 #   scripts/tests/suite-gate-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/suite-gate-test.sh
+#   AUTOMERGE=/path/to/other/automerge.yaml scripts/tests/suite-gate-test.sh
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workflow="${WORKFLOW:-$here/../../.github/workflows/pr-validate.yaml}"
 [ -f "$workflow" ] || { echo "no workflow at $workflow" >&2; exit 2; }
+automerge="${AUTOMERGE:-$here/../../.github/workflows/automerge.yaml}"
+[ -f "$automerge" ] || { echo "no workflow at $automerge" >&2; exit 2; }
 
 work="$(mktemp -d -t suite-gate-test)"
 trap 'rm -rf "$work"' EXIT
@@ -39,14 +43,14 @@ failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
 
 # The structural checks, and the snippets written out for the runs below.
-ruby -ryaml - "$workflow" "$work" <<'RUBY' || failures=$((failures + 1))
-path, work = ARGV
+ruby -ryaml - "$workflow" "$work" "$automerge" <<'RUBY' || failures=$((failures + 1))
+path, work, automerge = ARGV
 workflow = YAML.load_file(path)
 jobs = workflow.fetch("jobs")
 # The jobs by name, written out here rather than discovered, so a job deleted from the workflow
 # is a difference and not a job that silently stops being checked.
 suite = %w[select test]
-review = %w[review_cap codex_wait codex post_feedback reviewer_ran review_gate]
+review = %w[review_cap codex post_feedback reviewer_ran review_gate]
 # The suites select chooses among, which run on the Mac and reach `test` as statuses.
 selectable = %w[topo_unit topo_ui others scripts]
 bad = 0
@@ -66,10 +70,15 @@ names_in = lambda do |results|
 end
 
 check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
-# A macOS runner bills at ten times a Linux one: no job here is on one, and nothing but a
-# pull_request starts a run.
-hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "ubuntu-latest" }
-check.(hosts.empty?, "every job runs on ubuntu-latest#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
+# Every job runs PR code, so every job is on vm-linux, the Mac VM pool of ephemeral guests
+# whose own network reaches the internet and not the house (dotfiles tools/vm-runner; a job
+# that joins the tailnet as tag:ci reaches what that tag grants), and nothing but a pull_request starts a run.
+hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
+check.(hosts.empty?, "every job runs on vm-linux#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
+# automerge.yaml's jobs run on a pull_request too, so they are on the same pool.
+merge_jobs = YAML.load_file(automerge).fetch("jobs")
+merge_hosts = merge_jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
+check.(!merge_jobs.empty? && merge_hosts.empty?, "every job of automerge.yaml runs on vm-linux#{merge_hosts.empty? ? '' : " (not: #{merge_hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
 triggers = workflow.fetch(true) { workflow.fetch("on") }
 check.(triggers.keys == %w[pull_request], "only a pull_request starts a run (#{triggers.keys.join(', ')})")
 conc = workflow.fetch("concurrency")
@@ -87,13 +96,15 @@ check.(genv.fetch("SELECTED", "").split.join(" ") == selectable.map { |j| "#{j}=
 check.(jobs.fetch("select").fetch("outputs").values_at(*selectable) == selectable.map { |j| "${{ steps.suites.outputs.#{j} }}" }, "select outputs each suite from its suites step")
 check.(jobs.fetch("select").fetch("outputs")["lane"] == "${{ steps.lane.outputs.lane }}", "select outputs the lane from its lane step")
 
-check.(needs.("codex").sort == (suite + %w[codex_wait]).sort, "codex needs exactly #{suite.join(', ')} and codex_wait (#{needs.('codex').join(', ')})")
-check.(needs.("codex_wait").sort == (suite + %w[review_cap]).sort, "codex_wait needs exactly #{suite.join(', ')} and review_cap (#{needs.('codex_wait').join(', ')})")
+check.(needs.("codex").sort == (suite + %w[review_cap]).sort, "codex needs exactly #{suite.join(', ')} and review_cap (#{needs.('codex').join(', ')})")
+# One codex at a time across the repository, and the ones waiting kept, not cancelled: each
+# spends the login it starts from.
+check.(jobs.fetch("codex")["concurrency"] == { "group" => "codex-login", "cancel-in-progress" => false, "queue" => "max" }, "codex is alone in the codex-login group, queued and never cancelled (#{jobs.fetch('codex')['concurrency'].inspect})")
 %w[reviewer_ran review_gate].each do |job|
   capped = jobs.fetch(job).fetch("steps").map { |s| s.dig("env", "CAPPED") }.compact
   check.(capped == ["${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}"], "#{job} reads the cap from review_cap and from post_feedback's recount (#{capped.inspect})")
 end
-check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.capped == 'false' &&"), "codex_wait runs only on review_cap's false")
+check.(jobs.fetch("codex").fetch("if").include?("needs.review_cap.outputs.capped == 'false' &&"), "codex runs only on review_cap's false")
 # Draft is review_cap's reading of the API as the run starts, never the event's: the run that
 # survives a push and a ready a second apart can be the one whose payload still says draft.
 cap = jobs.fetch("review_cap")
@@ -101,8 +112,7 @@ check.(cap.fetch("outputs")["draft"] == "${{ steps.draft.outputs.draft }}", "rev
 check.(!cap.fetch("if").include?("draft"), "review_cap runs on a draft too, to read that it is one")
 check.(cap.fetch("steps").first["id"] == "draft" && cap.fetch("steps").first.fetch("run").include?('gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .draft'), "review_cap's first step reads draft from the API")
 check.(cap.fetch("steps").drop(1).all? { |s| s["if"] == "steps.draft.outputs.draft == 'false'" }, "review_cap counts nothing on a draft")
-check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.draft == 'false' &&"), "codex_wait runs only on review_cap's draft false")
-check.(jobs.fetch("codex").fetch("if").include?("needs.codex_wait.result == 'success' &&"), "codex runs only behind codex_wait, which holds a draft")
+check.(jobs.fetch("codex").fetch("if").include?("needs.review_cap.outputs.draft == 'false' &&"), "codex runs only on review_cap's draft false")
 check.(jobs.fetch("post_feedback").fetch("if").start_with?("${{ !cancelled() && ") && jobs.fetch("post_feedback").fetch("if").include?("needs.codex.outputs.has_verdict == 'true'"), "post_feedback posts whenever codex gave a verdict")
 payload = jobs.select { |_, j| [j["if"], *Array(j["steps"]).flat_map { |s| [s["if"], *(s["env"] || {}).values] }].compact.any? { |v| v.to_s.include?("pull_request.draft") } }.keys
 check.(payload == %w[reviewer_ran], "only reviewer_ran reads the event's draft, as the fallback for a fork (#{payload.join(', ')})")
@@ -112,7 +122,7 @@ check.(needs.("review_gate").sort == (suite + %w[reviewer_ran review_cap codex p
 
 # The reviewer waits on a green `test`, spelled out: `!cancelled()` stands in for the implicit
 # success(), so a result left unread would let a red suite spend a round.
-{ "codex" => suite + %w[codex_wait], "codex_wait" => suite }.each do |job, waits|
+{ "codex" => suite }.each do |job, waits|
   cif = jobs.fetch(job).fetch("if")
   read = cif.scan(/needs\.(\w+)\.result == 'success'/).flatten
   check.(read.sort == waits.sort, "#{job}'s if reads exactly #{waits.join(', ')} as success (#{read.join(', ')})")

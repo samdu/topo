@@ -1,0 +1,69 @@
+# Sends a ready PR back to draft when its PR validate run posts a blocking
+# Codex verdict (a P0 or P1). The session then fixes everything in draft,
+# where pushes run nothing, resolves the review threads it fixed, and marks
+# the PR ready for the next round. The session converts the PR itself before
+# pushing its fix, since this lands minutes after the verdict; this is the
+# backstop for when it has not.
+#
+# A workflow of its own, on `workflow_run` alone, because the conversion
+# needs a write token: `convertPullRequestToDraft` refuses the workflow token
+# without `contents: write` beside `pull-requests: write`. A `pull_request`
+# run executes the PR's own copy of its workflow, so a write token there is
+# one unreviewed code can use; a `workflow_run` run executes this file as it
+# is on the default branch. Nothing here checks out or runs PR code.
+name: Redraft
+
+on:
+  workflow_run:
+    workflows: ["PR validate"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  redraft:
+    # A draft's own runs conclude red too (reviewer_ran), and the payload
+    # carries no draft flag, so the PR's state is read below.
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: vm-linux
+    steps:
+      - name: Back to draft when the round is over
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run
+            const { owner, repo } = context.repo
+            const sha = run.head_sha
+            let prs = (run.pull_requests ?? []).map(p => p.number)
+            if (prs.length === 0) {
+              const open = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 })
+              prs = open.filter(p => p.head.sha === sha).map(p => p.number)
+            }
+            if (prs.length === 0) return core.info(`No open PR has head ${sha}; nothing to do.`)
+
+            for (const number of prs) {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number })
+              // A superseded run must not redraft a newer head, and a draft or
+              // closed PR has nothing to send back.
+              if (pr.state !== 'open' || pr.draft || pr.head.sha !== sha) {
+                core.info(`#${number}: skip (state ${pr.state}, draft ${pr.draft}, head ${pr.head.sha.slice(0, 7)} vs run ${sha.slice(0, 7)})`)
+                continue
+              }
+              // The Codex verdict comment on this PR that names this head,
+              // blocks, and was posted during this run. It is also the
+              // notice: the githubpr channel reads a draft's CI as pending, so
+              // a redraft must follow a comment the session receives. An older
+              // blocking comment on the same head was delivered already and
+              // does not count, so a run red for another reason leaves the PR
+              // ready and red.
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 })
+              const mine = comments.filter(c => c.user?.login === 'github-actions[bot]' && c.body?.includes('<!-- agent-review: codex -->') && c.body.includes(`<!-- agent-review-sha: ${sha} -->`) && c.created_at >= run.run_started_at)
+              if (!/\*\*Blocking —/.test(mine.at(-1)?.body ?? '')) {
+                core.info(`#${number}: run ${run.id} is red without a blocking verdict posted to this PR during it; nothing to do.`)
+                continue
+              }
+              await github.graphql('mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }', { id: pr.node_id })
+              core.info(`#${number}: back to draft (blocking review).`)
+            }
