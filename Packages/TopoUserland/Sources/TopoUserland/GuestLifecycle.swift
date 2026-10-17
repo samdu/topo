@@ -239,9 +239,13 @@ public final class GuestLifecycle {
             Task { await session.expire(generation: mine) }
             Task { [weak self, weak task, sleep] in
                 try? await sleep(GraceBudget.expiryHold)
-                guard let self, let task, task === self.continued, self.carrying == mine else { return }
-                self.carrying = nil
-                self.report(.outOfTime)
+                // The task is let go whatever came of the way out since: one that answered `kept`,
+                // the turn still running, leaves it held, and an expired task is never kept.
+                guard let self, let task, task === self.continued else { return }
+                if self.carrying == mine {
+                    self.carrying = nil
+                    self.report(.outOfTime)
+                }
                 self.completeContinued(success: false)
             }
             return

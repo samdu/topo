@@ -366,7 +366,7 @@ final class GuestLifecycleTests: XCTestCase {
         await clock.advance(by: GraceBudget.firstTick)
         await eventually("the grace ended") { time.open.isEmpty }
         XCTAssertTrue(process.terminated)
-        XCTAssertEqual(task.completions, [false])
+        await eventually("the task completed") { task.completions == [false] }
         XCTAssertEqual(process.bounds, [GraceBudget.expiredTeardownBound])
         guard case .ended(.abandoned, _)? = outcomes.all.last else { return XCTFail("\(outcomes.all)") }
     }
@@ -458,6 +458,33 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertEqual(process.bounds, [GraceBudget.expiredTeardownBound])
         guard case .ended(.abandoned, _)? = outcomes.all.last else { return XCTFail("\(outcomes.all)") }
         XCTAssertTrue(time.open.isEmpty)
+    }
+
+    func testARefusedGraceThenComingBackStillLetsTheExpiredTaskGo() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        time.refuseNext = true
+        task.expire()
+        lifecycle.willEnterForeground()
+        await eventually("the way out answered") { outcomes.all.count == 2 }
+        // The hold's sleep, beside the watchdog's while the turn is still open (`kept`).
+        let sleepers = outcomes.all.last == .kept ? 2 : 1
+        await eventually("the hold asleep") { await clock.pending == sleepers }
+        await clock.advance(by: GraceBudget.expiryHold)
+        // Whether the teardown or the foreground came first, the expired task is let go at the latest
+        // when the hold runs out, with the turn still open.
+        await eventually("the task completed") { task.completions == [false] }
+        lifecycle.turnEnded(number)
+        XCTAssertEqual(task.completions, [false], "the task was completed twice")
     }
 
     func testAStaleWayOutsAnswerLeavesTheTaskANewerOneIsCarrying() async throws {
