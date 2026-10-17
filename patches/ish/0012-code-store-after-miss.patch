@@ -1,0 +1,198 @@
+diff --git a/asbestos/guest-arm64/gadgets-aarch64/entry.S b/asbestos/guest-arm64/gadgets-aarch64/entry.S
+index acdbbfb..47f95c1 100644
+--- a/asbestos/guest-arm64/gadgets-aarch64/entry.S
++++ b/asbestos/guest-arm64/gadgets-aarch64/entry.S
+@@ -215,10 +215,15 @@ NAME(handle_write_miss):
+     // Store current JIT code stream pointer for watchpoint debugging
+     str _pc, [_cpu, #LOCAL_value]
+     save_c
++    // The store buffer and its address slot, for a miss that took a page's
++    // W^X mark off (tlb_handle_write_miss); taken from _cpu (x1) and _tlb (x2)
++    // before either is overwritten.
++    add x3, _cpu, #LOCAL_value_addr
++    add x4, _cpu, #LOCAL_value
+     sub x0, _tlb, #TLB_entries   // pass tlb base, not tlb+entries
+     mov x1, x7                    // guest address (64-bit) from _addr (x7)
+-    mov x2, #1                    // MEM_WRITE
+-    bl NAME(tlb_handle_miss)
++    mov x2, x4
++    bl NAME(tlb_handle_write_miss)
+     mov x20, x0                   // save result in a callee-saved register
+     restore_c
+     mov x0, x20                   // return result
+@@ -292,7 +297,9 @@ segfault_read_cp:
+     b fiber_exit
+ 
+ /*
+- * crosspage_store - Handle a store that crosses a page boundary
++ * crosspage_store - Handle a store made into the LOCAL_value buffer: one that
++ * crosses a page boundary, or one whose write miss took a page's W^X mark off
++ * (handle_write_miss), which tlb_store_buffered makes and then clears again
+  *
+  * Entry: x19 = size in bytes, _addr (x7) = LOCAL_value buffer
+  * Exit: data from LOCAL_value written to guest memory
+@@ -317,7 +324,7 @@ NAME(crosspage_store):
+     add x2, _cpu, #LOCAL_value       // x2 = buffer with data
+     ldr x1, [_cpu, #LOCAL_value_addr] // x1 = guest address (64-bit, saved earlier)
+     mov x3, x8                        // x3 = size (from temp)
+-    bl NAME(__tlb_write_cross_page)
++    bl NAME(tlb_store_buffered)
+     mov x20, x0
+     restore_c
+ 
+diff --git a/emu/tlb.c b/emu/tlb.c
+index f7c2c18..821ac23 100644
+--- a/emu/tlb.c
++++ b/emu/tlb.c
+@@ -49,6 +49,53 @@ bool __tlb_read_cross_page(struct tlb *tlb, addr_t addr, char *value, unsigned s
+     return true;
+ }
+ 
++#ifdef GUEST_ARM64
++// The page whose W^X mark this thread's last gadget write miss took off, its
++// store handed to tlb_store_buffered rather than made through the pointer.
++static __thread page_t code_store_page = TLB_PAGE_EMPTY;
++
++// A gadget's write miss (handle_write_miss). When the miss took the W^X mark
++// off a page of translated code, the store is not let through the pointer the
++// miss found: a compile between the clearing and the store would read the old
++// bytes and keep a block of them. The gadget is handed the cpu's store buffer
++// instead, as for a store across pages, so write_done hands it to
++// tlb_store_buffered, which makes the store in C and then clears again.
++__no_instrument void *tlb_handle_write_miss(struct tlb *tlb, addr_t addr, char *buffer, addr_t *buffer_addr) {
++    mmu_code_cleared_reset();
++    void *ptr = tlb_handle_miss(tlb, addr, MEM_WRITE);
++    if (ptr != NULL && mmu_code_cleared_take()) {
++        code_store_page = PAGE(addr);
++        *buffer_addr = addr;
++        return buffer;
++    }
++    return ptr;
++}
++
++// One page's part of a buffered store, and the W^X tail after it when this
++// store's miss, or the gadget's miss that redirected it, cleared the mark.
++static bool store_part(struct tlb *tlb, addr_t addr, const char *value, unsigned size) {
++    mmu_code_cleared_reset();
++    char *ptr = __tlb_write_ptr(tlb, addr);
++    bool cleared = mmu_code_cleared_take() || PAGE(addr) == code_store_page;
++    if (ptr == NULL)
++        return false;
++    memcpy(ptr, value, size);
++    if (cleared)
++        mmu_code_store_landed(tlb->mmu, PAGE(addr));
++    return true;
++}
++
++// The store write_done hands over from the cpu's store buffer: one across
++// pages, or one whose write miss took a page's W^X mark off.
++__no_instrument bool tlb_store_buffered(struct tlb *tlb, addr_t addr, const char *value, unsigned size) {
++    unsigned part1 = PGOFFSET(addr) > PAGE_SIZE - size ? PAGE_SIZE - PGOFFSET(addr) : size;
++    bool stored = store_part(tlb, addr, value, part1) &&
++        (part1 == size || store_part(tlb, (PAGE(addr) + 1) << PAGE_BITS, value + part1, size - part1));
++    code_store_page = TLB_PAGE_EMPTY;
++    return stored;
++}
++#endif
++
+ bool __tlb_write_cross_page(struct tlb *tlb, addr_t addr, const char *value, unsigned size) {
+     char *ptr1 = __tlb_write_ptr(tlb, addr);
+     if (ptr1 == NULL)
+diff --git a/emu/tlb.h b/emu/tlb.h
+index 635c2c9..68d70ae 100644
+--- a/emu/tlb.h
++++ b/emu/tlb.h
+@@ -52,6 +52,11 @@ void tlb_refresh(struct tlb *tlb, struct mmu *mmu);
+ void tlb_free(struct tlb *tlb);
+ void tlb_flush(struct tlb *tlb);
+ void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type);
++#ifdef GUEST_ARM64
++// The gadgets' write miss and the store their write_done hands over (emu/tlb.c).
++void *tlb_handle_write_miss(struct tlb *tlb, addr_t addr, char *buffer, addr_t *buffer_addr);
++bool tlb_store_buffered(struct tlb *tlb, addr_t addr, const char *value, unsigned size);
++#endif
+ 
+ forceinline __no_instrument void *__tlb_read_ptr(struct tlb *tlb, addr_t addr) {
+     struct tlb_entry entry = tlb->entries[TLB_INDEX(addr)];
+diff --git a/kernel/memory.c b/kernel/memory.c
+index e21bdbc..9f6e3ca 100644
+--- a/kernel/memory.c
++++ b/kernel/memory.c
+@@ -1023,6 +1023,9 @@ void mem_changed_pub(struct mem *mem) {
+ 
+ // This version will return NULL instead of making necessary pagetable changes.
+ // Used by the emulator to avoid deadlocks.
++// Whether mem_ptr took P_CODE off a page on this thread since the last reset.
++static __thread bool code_cleared;
++
+ static void *mem_ptr_nofault(struct mem *mem, addr_t addr, int type) {
+     struct pt_entry *entry = mem_pt(mem, PAGE(addr));
+     if (entry == NULL)
+@@ -1313,6 +1316,10 @@ have_entry:
+             __atomic_fetch_and(&entry->flags, ~P_CODE, __ATOMIC_ACQ_REL);
+             atomic_fetch_add_explicit(&st_wx_clears, 1, memory_order_relaxed);
+             mem_changed(mem);
++            // A compile can mark the page again before the caller's store
++            // lands; a caller that makes the store itself reads this and
++            // clears again after it (mmu_code_store_landed).
++            code_cleared = true;
+             // Order the bump before the caller's store: a compiling thread
+             // that observes the (torn) store bytes must also observe the
+             // bump when it verifies.
+@@ -1387,6 +1394,31 @@ uint32_t mem_watch_peek32(uint64_t addr) {
+     return mem_watch_peek32_mem(current->mem, addr);
+ }
+ 
++void mmu_code_cleared_reset(void) {
++    code_cleared = false;
++}
++
++bool mmu_code_cleared_take(void) {
++    bool cleared = code_cleared;
++    code_cleared = false;
++    return cleared;
++}
++
++void mmu_code_store_landed(struct mmu *mmu, page_t page) {
++    struct mem *mem = container_of(mmu, struct mem, mmu);
++    // The store first, then the clear and the bump: a compile that read its
++    // generation before this sees it move and compiles again, from the new bytes.
++    __atomic_thread_fence(__ATOMIC_SEQ_CST);
++    struct pt_entry *entry = mem_pt(mem, page);
++    if (entry != NULL)
++        __atomic_fetch_and(&entry->flags, ~P_CODE, __ATOMIC_ACQ_REL);
++    mem_changed(mem);
++    // Not asbestos_invalidate_page: its unlocked look at the page's list can
++    // miss a block a compile holding the lock is about to insert.
++    extern void asbestos_invalidate_range(struct asbestos *asbestos, page_t start, page_t end);
++    asbestos_invalidate_range(mmu->asbestos, page, page + 1);
++}
++
+ // W^X code-page protection: mark `page` as containing compiled guest code.
+ // Caller must hold the mem read lock (JIT context). Returns 1 if the page
+ // transitioned to code — mmu->changes is bumped so every thread's cached
+diff --git a/kernel/memory.h b/kernel/memory.h
+index 342560b..c86ce4b 100644
+--- a/kernel/memory.h
++++ b/kernel/memory.h
+@@ -214,6 +214,20 @@ int mem_segv_reason(struct mem *mem, addr_t addr);
+ int mmu_mark_code_page(struct mmu *mmu, page_t page);
+ bool mmu_code_page_intact(struct mmu *mmu, page_t page);
+ 
++// The W^X protocol wants a page's mark cleared and mmu->changes bumped *after*
++// the store that cleared it has landed: cleared before it, a compile between
++// the two marks the page again, reads the old bytes, sees nothing move, and
++// keeps a block of them that the store then lands under. mem_ptr still clears
++// before (so no writable TLB entry is ever stamped over a marked page), and
++// says so on this thread through mmu_code_cleared_take; the caller makes the
++// store itself and then calls mmu_code_store_landed, which clears and bumps
++// again and drops the page's blocks under asbestos->lock. The lock is what
++// catches a compile already past its check: compiling and inserting happen
++// under it, so its block is in the page's list by the time the drop runs.
++void mmu_code_cleared_reset(void);
++bool mmu_code_cleared_take(void);
++void mmu_code_store_landed(struct mmu *mmu, page_t page);
++
+ extern size_t real_page_size;
+ 
+ #endif
