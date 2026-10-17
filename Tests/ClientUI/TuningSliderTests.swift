@@ -10,7 +10,7 @@ final class TuningSliderTests: XCTestCase {
     }
 
     func testTheClearanceSliderIsWornByTheChatAndResetUndoesIt() throws {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
@@ -45,7 +45,7 @@ final class TuningSliderTests: XCTestCase {
     /// pin kept, the section says so, Reset gives the chat its roaming back; the placement chosen
     /// there, `glass`, is what the chat wears.
     func testTheSectionShowsThePlacementAndThePinAndResetRemovesThem() throws {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
@@ -54,7 +54,7 @@ final class TuningSliderTests: XCTestCase {
         app.launchEnvironment["TOPO_DEBUG_TUNING"] = #"{"mascot": {"placement": "pinned", "pin": {"x": 0.25, "y": 0.5}}}"#
         app.launchArguments += ["-firstRunAnswered", "YES"]
         addTeardownBlock {
-            let clean = XCUIApplication()
+            let clean = TopoLaunch.app()
             clean.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
             clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
             clean.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"

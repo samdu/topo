@@ -5,11 +5,9 @@ import XCTest
 /// composer. Only a running app lays out a toolbar, so this is a UI test.
 ///
 /// The turn never settles: the app is launched with `TOPO_DEBUG_REPLY_DELAY`, which holds the
-/// harness before the model call, so a notice stands for the length of the test on any host —
-/// the status of the turn in flight on one with an iCloud account behind the simulator, the
-/// failure on one without. Either is a notice, and both are held to the same place. The three
-/// things a notice says are each held on their own off `TOPO_DEBUG_NOTICES`, which puts them in
-/// the bar whatever the host's iCloud does.
+/// harness before the model call, so the status of the turn in flight stands for the length of
+/// the test. The three things a notice says are each held on their own off `TOPO_DEBUG_NOTICES`,
+/// which puts them in the bar whatever the harness is doing.
 @MainActor
 final class StatusNoticeTests: XCTestCase {
     override func setUp() {
@@ -38,8 +36,9 @@ final class StatusNoticeTests: XCTestCase {
         XCTAssertTrue(found, "a turn went and no notice said so")
         let words = notices.staticTexts.firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the notices hold no words")
-        XCTAssertTrue(Self.heldTurn.contains(words.label),
-                      "the notice says \"\(words.label)\", none of what a held turn says: \(Self.heldTurn)")
+        let held = expectation(for: NSPredicate(format: "label == %@", Self.heldTurn), evaluatedWith: words)
+        XCTAssertEqual(XCTWaiter.wait(for: [held], timeout: 10), .completed,
+                       "the notice says \"\(words.label)\", not what a held turn says: \(Self.heldTurn)")
 
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "no badge in the navigation bar")
@@ -177,11 +176,9 @@ final class StatusNoticeTests: XCTestCase {
 
     /// What a turn held before the model call can say: where it is, or iCloud's refusal on a
     /// simulator whose iCloud read is refused.
-    private static let heldTurn: Set<String> = [
-        "Reaching iCloud…",
-        "iCloud refused the read. Check you're signed in on this device.",
-        "iCloud is out of reach. Topo will try again.",
-    ]
+    /// What the turn says while the reply delay holds it: the store has answered (passing
+    /// "Reaching iCloud…" on the way), and no step of the model call has begun.
+    private static let heldTurn = "Working…"
 
     /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
     private static let fixtures: [(String, [String])] = [
@@ -250,7 +247,7 @@ final class StatusNoticeTests: XCTestCase {
     /// Signed in with a placeholder token, past the first-run question, with nothing on the line
     /// and neither model resident, and the turn held before the model call.
     private func launch() -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"

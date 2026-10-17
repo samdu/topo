@@ -82,6 +82,10 @@ targets:
         buildPhase: resources
     dependencies:
       - package: TopoCore
+      # The in-memory store a debug launch with TOPO_DEBUG_STORE=memory runs on (AppRecords),
+      # imported only behind DEBUG.
+      - package: TopoCore
+        product: TopoCoreTesting
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
@@ -391,10 +395,10 @@ targets:
       - Tests/Client
       - path: THIRD-PARTY
         buildPhase: resources
+    # TopoCoreTesting comes from the host: the app links it, and a second link here makes it a
+    # framework of its own carrying a second TopoCore, whose types the app's do not match.
     dependencies:
       - target: Topo
-      - package: TopoCore
-        product: TopoCoreTesting
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tests
