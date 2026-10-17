@@ -37,6 +37,10 @@
 # The share extension likewise: `PlugIns/TopoShare.appex`, a share-services extension whose
 # activation rule is the dictionary of the four things Topo takes, one of each.
 #
+# `BGTaskSchedulerPermittedIdentifiers` is read the same way and for the same reason: no setting
+# generates it, and without `zone.hexagon.topo.turn.*` in it the continued-processing task a turn
+# asks for is refused at registration, so every turn behind another app has the grace alone.
+#
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
 #
@@ -151,6 +155,15 @@ if [ "$loads" != "true" ] && [ "$loads" != "1" ]; then
     echo "$app/Info.plist does not set NSAppTransportSecurity's NSAllowsArbitraryLoads ( ${loads:-absent} ); a control's request to an http URL would fail" >&2
     status=1
 fi
+
+permitted="$(plutil -extract BGTaskSchedulerPermittedIdentifiers json -o - -- "$plist" 2>/dev/null || true)"
+case "$permitted" in
+    *'"zone.hexagon.topo.turn.*"'*) ;;
+    *)
+        echo "$app/Info.plist does not permit zone.hexagon.topo.turn.* (BGTaskSchedulerPermittedIdentifiers: ${permitted:-absent}); a turn behind another app would have the grace alone" >&2
+        status=1
+        ;;
+esac
 
 if [ ! -f "$app/PlugIns/TopoWidgets.appex/Info.plist" ]; then
     echo "$app does not embed PlugIns/TopoWidgets.appex; there would be no widgets" >&2
@@ -287,5 +300,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex and TopoShare.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, the turn's continued-processing task, $entitlements, embeds TopoWidgets.appex and TopoShare.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"
