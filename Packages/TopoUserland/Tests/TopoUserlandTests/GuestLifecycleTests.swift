@@ -414,7 +414,7 @@ final class GuestLifecycleTests: XCTestCase {
     }
 
     func testALimitForABackgroundThatIsOverChangesNothing() async throws {
-        let (lifecycle, session, launcher, clock, _, _) = make()
+        let (lifecycle, session, launcher, clock, _, outcomes) = make()
         lifecycle.willEnterForeground()
         await eventually("resident") { await session.currentPhase == .resident }
         let process = try XCTUnwrap(launcher.last)
