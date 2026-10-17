@@ -954,7 +954,7 @@ jobs:
             const v = JSON.parse(require('fs').readFileSync(process.env.CODEX_VERDICT_PATH, 'utf8'))
             const lines = [v.summary, ...(v.findings ?? []).map(f => `- ${f}`)]
             if (v.blocking) {
-              lines.unshift('**Blocking — this merge is held until these are addressed or overridden.** The PR goes back to draft: fix every finding there, push, and mark it ready (`gh pr ready`) for the next review.', '')
+              lines.unshift('**Blocking — this merge is held until these are addressed or overridden.** The PR goes back to draft: if it is not a draft yet, convert it before pushing (`gh pr ready ' + context.payload.pull_request.number + ' --undo`), then fix every finding there, push, resolve the threads you fixed, and mark it ready (`gh pr ready ' + context.payload.pull_request.number + '`) for the next review.', '')
             } else if (v.codex_blocking) {
               lines.unshift('Codex marked this blocking, but every finding cites only files this PR does not change, so the gate treats it as non-blocking.', '')
             }
