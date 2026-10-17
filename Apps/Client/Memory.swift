@@ -186,10 +186,12 @@ final class Memory {
     }
 
     /// The app's memory: the folder Files shows or the one the person picked, over the same
-    /// CloudKit database the harness uses and under the same device identity.
-    static func standard(tokens: TokenStore = KeychainTokenStore()) -> Memory {
-        Memory(directory: Memory.standardDirectory, store: MemoryStore(database: TopoCloudKit.database()),
-               isSignedIn: { (try? tokens.load()) != nil })
+    /// record database the harness uses (`AppRecords` in the app) and under the same device identity.
+    static func standard(tokens: TokenStore = KeychainTokenStore(),
+                         database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database(),
+                         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) -> Memory {
+        Memory(directory: Memory.standardDirectory, store: MemoryStore(database: database()),
+               isSignedIn: { (try? tokens.load()) != nil }, ensureZone: ensureZone)
     }
 
     static var standardDirectory: URL {

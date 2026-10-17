@@ -10,8 +10,8 @@ struct ViewerRootView: View {
     @Environment(RoleSelector.self) private var roleSelector
     @Environment(Harness.self) private var harness
     @Environment(Connections.self) private var connections
-    @State private var store = TranscriptStore(database: TopoCloudKit.database())
-    @State private var primary = PrimaryReader(database: TopoCloudKit.database())
+    @State private var store = TranscriptStore(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
+    @State private var primary = PrimaryReader(database: AppRecords.database())
     @State private var showAbout = false
     @State private var confirmingTakeover = false
 

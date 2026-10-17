@@ -35,6 +35,7 @@ enum NotePush {
     /// Registers the subscription unless this Apple ID already has it. A failure is the caller's
     /// to swallow: a device that cannot subscribe still syncs on the loop.
     static func ensureSubscription() async throws {
+        guard AppRecords.isCloudKit else { return }
         let database = CKContainer(identifier: TopoCloudKit.containerIdentifier).privateCloudDatabase
         do {
             _ = try await database.subscription(for: subscriptionID)
