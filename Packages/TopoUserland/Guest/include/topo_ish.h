@@ -62,6 +62,12 @@ int topo_ish_wait(int pid, int *status);
 /// became of the links between them. Requires a booted kernel.
 int topo_ish_signal_all(int sig, int *pids, int capacity);
 
+/// Sends `sig` to every task in session `sid` (each program `topo_ish_spawn` starts leads a
+/// session of its own, its pid the sid, and what it starts stays in it unless it calls setsid),
+/// and answers how many there were that are not zombies, or a negative guest errno. Signal 0
+/// only counts. Init's session (1) is refused. Requires a booted kernel.
+int topo_ish_signal_session(int sid, int sig);
+
 /// How many of `pids` are still running: a task that exists and is not a zombie. A zombie whose
 /// parent is init — a descendant orphaned when the process above it died — is reaped here, since
 /// init never runs a program and so never reaps one itself. Never pass a pid a `topo_ish_wait`
