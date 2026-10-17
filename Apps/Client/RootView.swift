@@ -11,9 +11,6 @@ struct RootView: View {
     @Environment(Memory.self) private var memory
     @Environment(Connections.self) private var connections
     #endif
-    @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
-    /// Set once the first answer is in the log, so the question is not asked twice.
-    @AppStorage("firstRunAnswered") private var answered = false
     #if os(iOS)
     @Environment(RoleSelector.self) private var roleSelector
     #endif
@@ -38,10 +35,11 @@ struct RootView: View {
                                     forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) }).act()
             }
         case .primary:
+            // Signed in, it is the chat, which asks the first-run question itself once the log
+            // has been read and holds nothing (`FirstRun.asks`): a returning person's log has
+            // turns, and nothing here knows that before the read.
             if signIn.phase != .signedIn {
                 SignInView()
-            } else if firstRunAnswer.isEmpty, !answered {
-                FirstRunView { _ in }
             } else {
                 ChatView()
             }

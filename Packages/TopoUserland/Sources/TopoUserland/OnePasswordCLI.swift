@@ -248,8 +248,11 @@ public enum OnePasswordRun {
                 Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment) }
             }
         } catch {
-            // `Guest` throws only when the spawn failed or after the shell has exited, so there the
-            // cancel finds nothing to stop and leaves its empty mark for the launch's /tmp clean.
+            // `Guest` throws only when the spawn failed, after the shell has exited, or once a
+            // shell that hung past `Guest.runBound` has had its session killed. So there the
+            // cancel finds no shell running: it ends what a killed shell left outside its session
+            // (`op`'s daemon) through the group file, or leaves its empty mark for the launch's
+            // /tmp clean.
             // Another `GuestRunning` may throw with the shell still starting, perhaps not yet at its
             // group file: the mark stops it there, and a group already written is ended.
             _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment)

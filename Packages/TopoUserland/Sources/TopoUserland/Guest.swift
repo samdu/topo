@@ -33,6 +33,10 @@ public final class Guest: Sendable {
         /// `/etc/localtime` could not be pointed at the zone: not a zone name, no zoneinfo for it in
         /// the guest, or the write failed, with why.
         case timeZone(String)
+        /// The program had not ended, or had not let go of its output, within `bound`: everything
+        /// in its session was killed, and `running` of those tasks were still not gone when the
+        /// call gave up waiting for them.
+        case hung(after: Duration, running: Int)
 
         public var description: String {
             switch self {
@@ -46,6 +50,9 @@ public final class Guest: Sendable {
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
             case .temporary(let said): "/tmp could not be emptied: \(said)"
             case .timeZone(let why): "/etc/localtime could not be written: \(why)"
+            case .hung(let bound, let running):
+                "the program had not finished after \(bound), and was killed"
+                    + (running > 0 ? " (\(running) of its tasks still there)" : "")
             }
         }
     }
@@ -255,16 +262,33 @@ public final class Guest: Sendable {
         }
     }
 
+    /// How long `run` gives a program when it is given no bound of its own.
+    public static let runBound: Duration = .seconds(120)
+
+    /// `run(_:_:environment:within:)` within `runBound`.
+    public func run(_ path: String, _ arguments: [String] = [],
+                    environment: [String: String] = Guest.environment) async throws -> Exit {
+        try await run(path, arguments, environment: environment, within: Self.runBound)
+    }
+
     /// Runs `path` with `arguments` to its end and returns what it left. The work is blocking —
     /// two pipe reads and a wait on the kernel — so it runs on a queue of its own, never on the
     /// cooperative pool. The reads end when every guest descriptor on the pipes closes, so a
-    /// program that leaves a child holding them keeps this waiting for that child too.
+    /// program that leaves a child holding them is waited for until that child lets go too.
+    ///
+    /// All of it is bounded: a program that has not ended and let go of its pipes `bound` after
+    /// it started has its session killed — the program and everything it started that has not
+    /// left the session, however its parents died — and the call throws `Failure.hung` rather
+    /// than answer with what it got so far, so a hang never reads as an ending. The kill is
+    /// SIGKILL, sent again until the session is empty or `hangGrace` past the bound, and the throw
+    /// waits for the pipes until that same moment, so a hung call throws within `bound` +
+    /// `hangGrace` of its start — as long as the kill ends the program, whose reaping it waits for.
     public func run(_ path: String, _ arguments: [String] = [],
-                    environment: [String: String] = Guest.environment) async throws -> Exit {
+                    environment: [String: String] = Guest.environment, within bound: Duration) async throws -> Exit {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(with: Result {
-                    let ran = try Self.runToEnd(path, arguments, environment)
+                    let ran = try Self.runToEnd(path, arguments, environment, within: bound)
                     return Exit(status: ran.status, output: String(decoding: ran.output, as: UTF8.self),
                                 errors: String(decoding: ran.errors, as: UTF8.self))
                 })
@@ -287,7 +311,8 @@ public final class Guest: Sendable {
     ///
     /// It is one short-lived program beside whatever else the guest runs, bounded in bytes
     /// (`head`) and in time (`timeout`, `readSeconds`, with the signal nothing parked in a read
-    /// outlasts); nothing here can end it sooner, and a teardown that ends every guest process
+    /// outlasts, and `run`'s own bound a few seconds past it, a hang there being a nil too);
+    /// nothing here can end it sooner, and a teardown that ends every guest process
     /// ends it too, which is a nil. Each call holds a thread of the shared queue until its
     /// program ends, so a caller with many to make makes them one at a time (`GuestImages`).
     public func contents(ofFile path: String, from directory: String, limit: Int) async throws -> Data? {
@@ -296,10 +321,16 @@ public final class Guest: Sendable {
         let named = path.hasPrefix("/") ? path : "./" + path
         let script = #"cd "$1" && [ -f "$2" ] && exec timeout -s KILL "$3" head -c "$4" -- "$2""#
         let arguments = ["-c", script, "sh", directory, named, String(Self.readSeconds), String(limit + 1)]
-        let ran: Ran = try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(with: Result { try Self.runToEnd("/bin/sh", arguments, Guest.environment) })
+        let bound: Duration = .seconds(Self.readSeconds + 5)
+        let ran: Ran
+        do {
+            ran = try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result { try Self.runToEnd("/bin/sh", arguments, Guest.environment, within: bound) })
+                }
             }
+        } catch Failure.hung {
+            return nil
         }
         guard ran.status == 0, ran.output.count <= limit else { return nil }
         return ran.output
@@ -312,7 +343,12 @@ public final class Guest: Sendable {
         var errors: Data
     }
 
-    private static func runToEnd(_ path: String, _ arguments: [String], _ environment: [String: String]) throws -> Ran {
+    /// How long past the bound a hung program's kill is sent again for and the call waits for its
+    /// pipes, before it throws all the same: one deadline, `bound` + this, for both.
+    static let hangGrace: Duration = .seconds(5)
+
+    private static func runToEnd(_ path: String, _ arguments: [String], _ environment: [String: String],
+                                 within bound: Duration) throws -> Ran {
         let argv = [path] + arguments
         let envp = environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         var out: Int32 = -1, err: Int32 = -1
@@ -331,11 +367,60 @@ public final class Guest: Sendable {
         DispatchQueue.global(qos: .userInitiated).async(group: reads) {
             collected.set(errors: errors.readDataToEndOfFile())
         }
+        // The bound, kept by a timer that kills only while the wait has not returned — after it
+        // the pid is reaped, and its session is ended from this thread instead, if the pipes are
+        // still held.
+        let start = ContinuousClock.now
+        let deadline = DispatchTime.now() + .nanoseconds(Int(bound / .nanoseconds(1)))
+        let graceEnd = start + bound + hangGrace
+        let watch = Watch()
+        let timer = DispatchWorkItem {
+            if watch.expire() { endSession(pid, until: graceEnd) }
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: deadline, execute: timer)
         var status: Int32 = 0
         let waited = topo_ish_wait(pid, &status)
-        reads.wait()
+        var hung = watch.settle()
+        timer.cancel()
+        if reads.wait(timeout: deadline) == .timedOut {
+            hung = true
+            endSession(pid, until: graceEnd)
+        }
+        if hung {
+            let left = max(Duration.zero, graceEnd - ContinuousClock.now)
+            _ = reads.wait(timeout: .now() + .nanoseconds(Int(left / .nanoseconds(1))))
+            throw Failure.hung(after: bound, running: max(0, Int(topo_ish_signal_session(pid, 0))))
+        }
         guard waited == 0 else { throw Failure.wait(waited) }
         return Ran(status: status, output: collected.output, errors: collected.errors)
+    }
+
+    /// SIGKILL to every task in session `sid`, again every 50 ms while any is left, until `end`:
+    /// a second SIGKILL is what wakes a task parked in a host call that missed the first one's
+    /// wake (`topo_ish.c`, `signal_task`).
+    private static func endSession(_ sid: Int32, until end: ContinuousClock.Instant) {
+        while topo_ish_signal_session(sid, TOPO_ISH_SIGKILL) > 0, ContinuousClock.now < end {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    /// Whether the bound ran out before the wait returned, decided once: the timer expires it
+    /// only while the waiter has not settled it, and the waiter reads which came first.
+    private final class Watch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var settled = false, expired = false
+        func expire() -> Bool {
+            lock.withLock {
+                if !settled { expired = true }
+                return expired
+            }
+        }
+        func settle() -> Bool {
+            lock.withLock {
+                settled = true
+                return expired
+            }
+        }
     }
 
     private final class Collected: @unchecked Sendable {
