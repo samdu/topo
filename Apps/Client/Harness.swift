@@ -316,11 +316,12 @@ final class Harness {
     /// composes. Until the userland is on the phone and the resident process is up, a turn is not
     /// answered: the person's words stand in the log, the chat says why, and the answering loop
     /// answers them once the guest is ready.
-    /// `database` is the suites' seam; the app passes nothing.
+    /// `database` and `ensureZone` are the app's store (`AppRecords`) and the suites' seam.
     static func standard(tokens: StoredTokenProvider,
-                         database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database()) -> Harness {
+                         database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database(),
+                         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) -> Harness {
         let (bridge, relay) = guestBrain(ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile)
-        return Harness(database: database(), tokens: tokens, brain: bridge, relay: relay)
+        return Harness(database: database(), tokens: tokens, ensureZone: ensureZone, brain: bridge, relay: relay)
     }
 
     /// The guest as the brain, and the relay its activity reaches `onGuest` through.

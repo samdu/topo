@@ -198,7 +198,7 @@ class Decisions(unittest.TestCase):
         self.assertNotIn("rerun", kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), "nor with the reviewer never reached")
 
     def test_the_rerun_is_one_job_the_first_of_the_chain_that_did_not_pass(self):
-        j = jobs(select="success", test="success", review_cap="success", codex_wait="success", codex="failure",
+        j = jobs(select="success", test="success", review_cap="success", codex="failure",
                  post_feedback="skipped", reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), ["rerun"], "the reviewer chain red on its own is no verdict")
@@ -209,12 +209,13 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(), run("failure"), j[::-1], {}, NOW)
         self.assertEqual((w[0]["job"], w[0]["job_id"]), ("codex", job_id(j, "codex")))
 
-    def test_a_failed_wait_with_codex_skipped_is_rerun_at_the_wait(self):
-        j = jobs(test="success", review_cap="success", codex_wait="failure", codex="skipped", post_feedback="skipped",
+    def test_a_cancelled_codex_is_rerun_at_codex(self):
+        # Cancelled out of its concurrency group's queue: no verdict, and codex is the job rerun.
+        j = jobs(test="success", review_cap="success", codex="cancelled", post_feedback="skipped",
                  reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
-        self.assertEqual(kinds(w), ["rerun"], "a skipped codex under a reviewer that never ran is not the cap")
-        self.assertEqual((w[0]["job"], w[0]["job_id"]), ("codex_wait", job_id(j, "codex_wait")))
+        self.assertEqual(kinds(w), ["rerun"], "a cancelled codex under a reviewer that never ran is no verdict")
+        self.assertEqual((w[0]["job"], w[0]["job_id"]), ("codex", job_id(j, "codex")))
 
     def test_a_red_test_is_never_rerun_and_is_reported_idle_in_time(self):
         # A suite status missing or failed on the head: the reviewer chain is red behind it.
@@ -264,7 +265,7 @@ class Decisions(unittest.TestCase):
         self.assertEqual(kinds(w), ["report:verdict"], "a posted verdict that blocks is a verdict")
 
     def test_a_failed_review_count_is_no_verdict_and_rerun(self):
-        j = jobs(test="success", review_cap="failure", codex_wait="skipped", codex="skipped", post_feedback="skipped",
+        j = jobs(test="success", review_cap="failure", codex="skipped", post_feedback="skipped",
                  reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), ["rerun"])
@@ -1993,7 +1994,7 @@ class WholePass(unittest.TestCase):
         self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
 
     def test_no_verdict_reruns_one_job_by_its_id_once_and_the_second_red_is_reported(self):
-        j = jobs(select="success", test="success", review_cap="success", codex_wait="success", codex=("failure", "Run Codex"),
+        j = jobs(select="success", test="success", review_cap="success", codex=("failure", "Run Codex"),
                  post_feedback="skipped", reviewer_ran="failure", review_gate="failure")
         s = self.scripted(runs={HEAD: [run("failure")]}, jobs=j)
         p, calls = self.run_pass(s)

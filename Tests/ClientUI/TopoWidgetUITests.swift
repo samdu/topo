@@ -87,7 +87,7 @@ final class TopoWidgetUITests: XCTestCase {
 
     private func check(_ family: String) throws {
         let (text, tree) = try fixture(family)
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_WIDGET"] = text
         // An ear and a voice that never finish loading, as every class but the microphone's
         // launches with: the host makes the app's own objects, and this class runs on a Mac
