@@ -1,0 +1,39 @@
+diff --git a/fs/mount.c b/fs/mount.c
+index 68435ed..dcf2db2 100644
+--- a/fs/mount.c
++++ b/fs/mount.c
+@@ -30,7 +30,8 @@ static __thread struct mount *last_mount_cache = NULL;
+ static __thread uint64_t mount_cache_version = 0;
+ static uint64_t global_mount_version = 0;  // Incremented on mount/umount
+ 
+-// Check if cached mount is valid for given path
++// Check if cached mount is valid for given path. Called with mounts_lock held: the version is
++// written under it, and `cached` may be freed the moment it is not held.
+ static inline bool mount_cache_check(struct mount *cached, const char *path) {
+     if (cached == NULL)
+         return false;
+@@ -53,18 +54,22 @@ static inline bool mount_cache_check(struct mount *cached, const char *path) {
+ struct mount *mount_find(char *path) {
+     assert(path_is_normalized(path));
+ 
++    // Both paths run under mounts_lock. The cache's check reads the cached mount's point, and
++    // mount_remove frees that mount and bumps the version under this lock, so only a version read
++    // under it says the cached mount is still allocated: read outside it, a umount landing
++    // between the check and the reference hands back a freed mount.
++    lock(&mounts_lock);
++
+     // === FAST PATH: Check thread-local cache ===
+     struct mount *cached = last_mount_cache;
+     if (mount_cache_check(cached, path)) {
+         // Cache hit - just increment refcount
+-        lock(&mounts_lock);
+         cached->refcount++;
+         unlock(&mounts_lock);
+         return cached;
+     }
+ 
+     // === SLOW PATH: Full mount table search ===
+-    lock(&mounts_lock);
+     struct mount *mount = NULL;
+     assert(!list_empty(&mounts)); // this would mean there's no root FS mounted
+     list_for_each_entry(&mounts, mount, mounts) {

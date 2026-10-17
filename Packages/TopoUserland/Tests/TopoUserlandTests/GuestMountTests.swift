@@ -139,4 +139,60 @@ final class GuestMountTests: XCTestCase {
             + "cat \(point)/f; exec 3<&-; umount \(point) && echo unmounted; grep -c ' \(point) ' /proc/mounts")
         XCTAssertEqual(busy.output, "fresh\nrefused\nagain\nunmounted\n0\n", busy.errors)
     }
+    /// Lookups under a tmpfs's point beside a loop that mounts and unmounts it
+    /// (`patches/ish/0011-mount-find-cache-under-lock.patch`): each reader is one shell testing
+    /// for the directory's own `under` and the tmpfs's `over` with a builtin, so every lookup is
+    /// on one guest thread, whose cached mount is the tmpfs another process is unmounting. A
+    /// stat holds the mount only for its lookup, so the loop's unmounts land between them. Both
+    /// files are seen, and the loop ends with nothing mounted. A use of a freed mount is a window
+    /// of a few instructions that this does not reproduce on demand; what it proves is that the
+    /// lookups still take the lock without deadlocking and still find the mount the point has.
+    func testLookupsBesideAMountAndUnmountLoopFindTheMountThePointHas() async throws {
+        let id = UUID().uuidString.prefix(8)
+        let point = "/mnt/race-\(id)", out = "/tmp/race-\(id)"
+        let script = #"""
+        p="$1"; o="$2"
+        mkdir -p "$p" "$o" && touch "$p/under" || exit 70
+        for r in 1 2 3 4; do
+            (
+                under=0; over=0
+                while [ ! -e "$o/stop" ]; do
+                    [ -e "$p/under" ] && under=$((under + 1))
+                    [ -e "$p/over" ] && over=$((over + 1))
+                done
+                echo "$under $over" > "$o/$r"
+            ) &
+        done
+        trap 'touch "$o/stop"' EXIT
+        i=0
+        while [ $i -lt 300 ]; do
+            mount -t tmpfs tmpfs "$p" || exit 71
+            : > "$p/over" && [ -e "$p/over" ] && [ ! -e "$p/under" ] || exit 73
+            j=0
+            while [ $j -lt 20 ]; do [ -e "$p/over" ]; j=$((j + 1)); done
+            tries=0
+            until umount "$p" 2> /dev/null; do
+                tries=$((tries + 1))
+                [ $tries -lt 5000 ] || exit 72
+            done
+            i=$((i + 1))
+        done
+        touch "$o/stop"
+        wait
+        cat "$o"/1 "$o"/2 "$o"/3 "$o"/4
+        grep -c " $p " /proc/mounts
+        ls "$p"
+        rm -rf "$o"
+        """#
+        let exit = try await Guest.shared.run("/bin/sh", ["-c", script, "sh", point, out])
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        var lines = exit.output.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.popLast(), "under", exit.output)
+        XCTAssertEqual(lines.popLast(), "0", exit.output)
+        XCTAssertEqual(lines.count, 4, exit.output)
+        let counts = lines.map { $0.split(separator: " ").compactMap { Int($0) } }
+        XCTAssertTrue(counts.allSatisfy { $0.count == 2 }, exit.output)
+        XCTAssertGreaterThan(counts.map { $0.first ?? 0 }.reduce(0, +), 0, exit.output)
+        XCTAssertGreaterThan(counts.map { $0.last ?? 0 }.reduce(0, +), 0, exit.output)
+    }
 }
