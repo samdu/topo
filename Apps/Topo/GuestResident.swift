@@ -12,9 +12,10 @@ import UIKit
 @MainActor
 final class ApplicationBackgroundTime: BackgroundTime {
     func begin(expiration: @escaping @MainActor () -> Void) -> Int {
-        UIApplication.shared.beginBackgroundTask(withName: "zone.hexagon.topo.guest") {
+        let task = UIApplication.shared.beginBackgroundTask(withName: "zone.hexagon.topo.guest") {
             MainActor.assumeIsolated { expiration() }
-        }.rawValue
+        }
+        return task == .invalid ? GraceBudget.refused : task.rawValue
     }
 
     func end(_ task: Int) {
@@ -201,6 +202,25 @@ final class GuestResident {
         return environment
     }
 
+    /// A turn just sent, carried behind another app by a continued-processing task (iOS 26 on):
+    /// the task is asked for now, while the app is in front, and the lifecycle hears the turn end
+    /// from the updates, which are passed on as they come. Read to the end whoever listens, since
+    /// the end is what lets the task go.
+    func carried(_ updates: AsyncStream<GuestSession.TurnUpdate>, compaction: Bool) -> AsyncStream<GuestSession.TurnUpdate> {
+        guard #available(iOS 26, *), let lifecycle else { return updates }
+        // A compaction is the mind's housekeeping, not a reply the person is waiting on.
+        guard !compaction else { return updates }
+        let turn = lifecycle.turnBegan()
+        ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.log)
+        let (stream, continuation) = AsyncStream<GuestSession.TurnUpdate>.makeStream()
+        Task { @MainActor in
+            for await update in updates { continuation.yield(update) }
+            continuation.finish()
+            lifecycle.turnEnded(turn)
+        }
+        return stream
+    }
+
     private func follow(_ lifecycle: GuestLifecycle) {
         let center = NotificationCenter.default
         observers = [
@@ -319,13 +339,14 @@ struct ResidentConversation: GuestConversation {
         let session = try await session()
         // A move of the memory may have come since `ready()`: the turn waits for one running, and
         // goes into a mount of the home as it is once none is (`MemoryTurns`).
-        return try await GuestResident.shared.turns.send(text, id: id, to: session) {
+        let updates = try await GuestResident.shared.turns.send(text, id: id, to: session) {
             do {
                 return try GuestResident.shared.reconcileMemory()
             } catch {
                 throw GuestBridgeError.notReady("\(error)")
             }
         }
+        return await GuestResident.shared.carried(updates, compaction: text == GuestBridge.compactCommand)
     }
 
     func settle() async -> Bool {

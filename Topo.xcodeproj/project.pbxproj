@@ -289,6 +289,7 @@
 		8BFACA8AF2DA41DC0EAB795B /* GuestZoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0282172ECF3161683779EE2 /* GuestZoneTests.swift */; };
 		8BFB64AEF27B709A911F2A4A /* WidgetNodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9F578527FAA2BB3C84ACEA5 /* WidgetNodeView.swift */; };
 		8C031FE613E8A808216E049D /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC10F86563FE12BC674EFBB /* AboutView.swift */; };
+		8C1CA0E5BF103D95F1741946 /* ContinuedTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6435AE12860665B0ACB8AC /* ContinuedTurn.swift */; };
 		8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */; };
 		8D68671CC764D16A596405E9 /* SurfaceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297C1A9489C88545BA87293C /* SurfaceProvider.swift */; };
 		8DC7F6A8F29EFF59088C1EA9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
@@ -753,6 +754,7 @@
 		5DA33EA8462B1B0879858056 /* PhotosToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotosToolTests.swift; sourceTree = "<group>"; };
 		5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestConcurrencyTests.swift; sourceTree = "<group>"; };
 		5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeGuestTests.swift; sourceTree = "<group>"; };
+		5E6435AE12860665B0ACB8AC /* ContinuedTurn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedTurn.swift; sourceTree = "<group>"; };
 		5FA3798B7F6069020E5A4DA0 /* womble.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = womble.js; sourceTree = "<group>"; };
 		6095AF743ED350A7E5D6403E /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressRefusalTests.swift; sourceTree = "<group>"; };
@@ -1091,6 +1093,7 @@
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				B8C76AE9F6DF2889FA1D7CD5 /* Connections.swift */,
 				FDE1B5AC935DE7F86F1C6126 /* ConnectionsView.swift */,
+				5E6435AE12860665B0ACB8AC /* ContinuedTurn.swift */,
 				C7BD599AC4315251579CE778 /* ControlDefaults.swift */,
 				B099B495226BFD2823184CC1 /* ControlRequest.swift */,
 				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
@@ -2611,6 +2614,7 @@
 				D0076A594104D14F2C6E6E7E /* ConnectionsView.swift in Sources */,
 				EA62ABE92498980EC79A486C /* ContactsTool.swift in Sources */,
 				32A8232D7FDF934BB5928D81 /* ContextTool.swift in Sources */,
+				8C1CA0E5BF103D95F1741946 /* ContinuedTurn.swift in Sources */,
 				46900B879C0B64EE7C9F2995 /* ControlDefaults.swift in Sources */,
 				D925201A428816A89B31395C /* ControlDocument.swift in Sources */,
 				C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */,

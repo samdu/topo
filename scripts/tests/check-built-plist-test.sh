@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key; so does one without the topo URL scheme, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, the broadcast extension as one that takes sample buffers and has a program and a principal class, or the share extension with its program, its principal class and its rule of four things, one of each; nor one whose share extension is signed without the app group. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme, the turn's continued-processing identifier, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, the broadcast extension as one that takes sample buffers and has a program and a principal class, or the share extension with its program, its principal class and its rule of four things, one of each; nor one whose share extension is signed without the app group. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -32,6 +32,7 @@ make_app() {
     done
     plutil -insert NSAppTransportSecurity -json '{"NSAllowsArbitraryLoads":true}' "$app/Info.plist"
     plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo","CFBundleURLSchemes":["topo"]}]' "$app/Info.plist"
+    plutil -insert BGTaskSchedulerPermittedIdentifiers -json '["zone.hexagon.topo.turn.*"]' "$app/Info.plist"
     mkdir -p "$app/PlugIns/TopoWidgets.appex"
     plutil -create xml1 "$app/PlugIns/TopoWidgets.appex/Info.plist"
     mkdir -p "$app/PlugIns/TopoBroadcast.appex"
@@ -88,6 +89,21 @@ if errors="$("$check" "$work/no-alert/Topo.app" 2>&1 >/dev/null)"; then
 elif [[ "$errors" != *"PHPhotoLibraryPreventAutomaticLimitedAccessAlert"* ]]; then
     fail "the refusal of a product that lets the limited library's sheet come up does not name the key: $errors"
 fi
+
+for permitted in absent '["zone.hexagon.topo.other.*"]'; do
+    make_app "$work/no-turn/Topo.app"
+    if [ "$permitted" = absent ]; then
+        plutil -remove BGTaskSchedulerPermittedIdentifiers "$work/no-turn/Topo.app/Info.plist"
+    else
+        plutil -replace BGTaskSchedulerPermittedIdentifiers -json "$permitted" "$work/no-turn/Topo.app/Info.plist"
+    fi
+    if errors="$("$check" "$work/no-turn/Topo.app" 2>&1 >/dev/null)"; then
+        fail "a product whose permitted identifiers are $permitted passed"
+    elif [[ "$errors" != *"zone.hexagon.topo.turn.*"* ]]; then
+        fail "the refusal of a product without the turn's identifier does not name it: $errors"
+    fi
+    rm -rf "$work/no-turn"
+done
 
 make_app "$work/no-scheme/Topo.app"
 plutil -remove CFBundleURLTypes "$work/no-scheme/Topo.app/Info.plist"
