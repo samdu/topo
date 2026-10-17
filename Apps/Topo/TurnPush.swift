@@ -60,6 +60,7 @@ enum TurnPush {
     /// subscribe still answers on the loop, so this must never be a reason
     /// the screen shows an error.
     static func ensureSubscription() async throws {
+        guard AppRecords.isCloudKit else { return }
         let database = CKContainer(identifier: TopoCloudKit.containerIdentifier).privateCloudDatabase
         do {
             _ = try await database.subscription(for: subscriptionID)

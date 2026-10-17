@@ -327,7 +327,7 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// glass, which goes short on the keyboard's own safe area, stays as it is. `transcript` is the
     /// fixture the chat draws (`TOPO_DEBUG_TRANSCRIPT`).
     private func launch(look: String, transcript: String, softwareKeyboard: Bool = false) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"

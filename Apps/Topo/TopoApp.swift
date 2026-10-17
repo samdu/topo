@@ -42,13 +42,13 @@ struct TopoApp: App {
         // so a refresh is in flight once for the process: a refresh token is single-use.
         let tokens = StoredTokenProvider(store: KeychainTokenStore())
         self.tokens = tokens
-        let harness = Harness.standard(tokens: tokens)
+        let harness = Harness.standard(tokens: tokens, database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
         let mascot = Mascot()
         // The guest answering the chat moves Topo as it works: each turn's events set his pose.
         mascot.follow(harness)
         _harness = State(initialValue: harness)
         _mascot = State(initialValue: mascot)
-        let memory = Memory.standard()
+        let memory = Memory.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
         _memory = State(initialValue: memory)
         // The guest's mount of the memory follows the same home the mirror runs against.
         GuestResident.shared.memory = memory
@@ -115,8 +115,9 @@ struct TopoApp: App {
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
-        _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
-                                                         isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
+        _roleSelector = State(initialValue: RoleSelector(database: AppRecords.database(),
+                                                         isSignedIn: { (try? KeychainTokenStore().load()) != nil },
+                                                         ensureZone: AppRecords.ensureZone))
         let audio = AudioSession()
         Perf.mark("app.housekeeping.begin")
         _audio = State(initialValue: audio)

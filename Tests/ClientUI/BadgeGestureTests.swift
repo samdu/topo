@@ -121,7 +121,7 @@ final class BadgeGestureTests: XCTestCase {
     }
 
     private func launch() -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         // Neither model is wanted here, and an ear that never loads is one nothing asks the
