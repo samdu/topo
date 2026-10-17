@@ -361,10 +361,11 @@ final class GuestLifecycleTests: XCTestCase {
         lifecycle.didEnterBackground()
         await eventually("the way out waiting on the turn") { await clock.pending == 1 }
         task.expire()
+        await eventually("the first tick asleep") { await clock.pending == 2 }
         let grace = try XCTUnwrap(time.open.first)
         time.expirations[grace]?()
-        await clock.advance(by: GraceBudget.firstTick)
         await eventually("the grace ended") { time.open.isEmpty }
+        await clock.advance(by: GraceBudget.firstTick)
         XCTAssertTrue(process.terminated)
         await eventually("the task completed") { task.completions == [false] }
         XCTAssertEqual(process.bounds, [GraceBudget.expiredTeardownBound])
