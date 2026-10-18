@@ -58,7 +58,7 @@ enum ContinuedTurns {
     /// Whether the wildcard is registered, once asked: registering it twice kills the app.
     private static var registered: Bool?
     /// The turns asked for and not yet started, by the identifier their request carries.
-    private static var waiting: [String: (lifecycle: GuestLifecycle, turn: Int)] = [:]
+    private static var waiting: [String: (lifecycle: GuestLifecycle, turn: Int, log: @Sendable (String) -> Void)] = [:]
 
     static func submit(turn: Int, to lifecycle: GuestLifecycle, log: @escaping @Sendable (String) -> Void) {
         guard register() else {
@@ -66,7 +66,7 @@ enum ContinuedTurns {
             return
         }
         let identifier = "\(prefix).\(UUID().uuidString)"
-        waiting[identifier] = (lifecycle, turn)
+        waiting[identifier] = (lifecycle, turn, log)
         // Made and submitted here, at the send and on the main actor, so the app is in front for
         // both: the request "creates an instance on behalf of the currently foregrounded app"
         // (`BGTaskRequest.h`), and the system takes it from an app in front. The synchronous submit
@@ -74,6 +74,7 @@ enum ContinuedTurns {
         // completion-handler form alone, whose submission lands after the call returns.
         do {
             try BGTaskScheduler.shared.submit(ContinuedTurns.request(identifier: identifier))
+            log("continued: asked for turn \(turn)")
         } catch {
             waiting.removeValue(forKey: identifier)
             log("continued: refused (\(error)); the turn has the grace alone")
@@ -102,9 +103,11 @@ enum ContinuedTurns {
     private static func launched(_ task: BGTask) {
         guard let task = task as? BGContinuedProcessingTask,
               let asked = waiting.removeValue(forKey: task.identifier) else {
+            GuestResident.log("continued: started for no turn asked; completed at once")
             task.setTaskCompleted(success: false)
             return
         }
+        asked.log("continued: started for turn \(asked.turn)")
         asked.lifecycle.held(ContinuedTurnTask(task), turn: asked.turn)
     }
 }
