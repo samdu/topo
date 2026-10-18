@@ -157,7 +157,6 @@ enum LookDocument {
         r.bounded("spacing", &value.spacing, in: 0...64)
         r.font("font", &value.font, largest: Look.Reading.largestFont)
         r.colour("ink", &value.ink)
-        r.colour("surface", &value.surface)
     }
 
     private static func setup(_ value: inout Look.Setup, _ r: Reader) {

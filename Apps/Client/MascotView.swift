@@ -934,7 +934,8 @@ struct MascotLayer: View {
             let field = scene.field(in: proxy, keyboardTop: keyboardTop, stop: stop)
             // Under the model slider while it is open, whatever the look's placement.
             let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, perch: look.composer.perchInset,
-                                                                   reduceMotion: reduceMotion),
+                                                                   reduceMotion: reduceMotion,
+                                                                   within: MascotSprite.reach(sign: state.sign)),
                                                under: field, swim: look.mascot.swimSpeed)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,

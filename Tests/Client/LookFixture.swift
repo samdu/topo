@@ -209,7 +209,7 @@ enum LookFixture {
       },
       "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" },
       "reading": { "markSize": 80, "spacing": 20, "font": { "style": "title3", "weight": "medium" },
-                   "ink": ["#203040", "#C0D0E0"], "surface": ["#F4F0E8", "#181410"] },
+                   "ink": ["#203040", "#C0D0E0"] },
       "setup": { "spacing": 2, "symbolSpacing": 8, "symbolSize": 10, "barWidth": 60, "barHeight": 4,
                  "troubleFont": { "style": "caption", "weight": "medium" },
                  "tint": ["#207080", "#70D0E0"], "track": ["#C0D8DC", "#203438"],

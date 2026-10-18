@@ -1,55 +1,63 @@
 #if os(iOS)
 import SwiftUI
 
-/// When the first-run question is asked. Nothing is decided before the log has been read: a
-/// returning person's log has turns, and a read that failed says nothing of what it holds.
+/// When the first-run question is asked, and what asks it. The chat itself is the first-run
+/// surface: Topo holds the question up on a sign over the empty transcript, the line under it
+/// says the rest, and the answer is whatever the person first says or writes through the
+/// composer, which goes on the harness's line as any turn does. Nothing is decided before the
+/// log has been read: a returning person's log has turns, and a read that failed says nothing of
+/// what it holds.
 enum FirstRun {
+    /// The question, on Topo's sign and in the line's accessibility label.
+    static let question = "What did you forget this week?"
+    /// What the line under the transcript says while the question stands.
+    static let invitation = "or just start talking"
+    /// What the line says as well while the microphone is denied: an ear still downloading its
+    /// models is a wait, not something to go and allow.
+    static let denied = "Topo can't hear you without the microphone. You can type instead, or allow it in Settings."
+
     /// True only over a log that has been read and holds no turns, with nothing on the line or
-    /// in flight, the person not at the chat's own microphone or field, and the question not
-    /// answered on this device. `engaged` is why the question never arrives over a session the
-    /// chat already holds: the composer is usable while the log is unread, and a press begun
-    /// there ends there. A debug build's fixture transcript is never asked over.
-    static func asks(read: Bool, empty: Bool, waiting: Bool, busy: Bool, engaged: Bool, answered: Bool,
+    /// in flight, and the question not answered on this device. A debug build's fixture
+    /// transcript is never asked over.
+    static func asks(read: Bool, empty: Bool, waiting: Bool, busy: Bool, answered: Bool,
                      fixture: Bool = false) -> Bool {
-        read && empty && !waiting && !busy && !engaged && !answered && !fixture
+        read && empty && !waiting && !busy && !answered && !fixture
     }
 
-    /// The person's hand is on the chat: its own microphone is open or opening (the session is
-    /// the chat's from the press until it is torn down), its field has the focus, or there are
-    /// words in its row.
-    @MainActor
-    static func engaged(voice: VoiceInput, row: NextTurn, focused: Bool) -> Bool {
-        voice.owner == .chat || focused || row.typing || !row.text.isEmpty
+    /// Whether the question was answered when it stopped being asked: it was asked over a read
+    /// log, and is not asked now over a log still read, so something reached the line or the
+    /// log. A log not read now (a device taking primary back reads again) answers nothing.
+    static func answered(asked: Bool, asks: Bool, read: Bool) -> Bool { asked && !asks && read }
+
+    /// Topo as the chat draws him: holding the question up while it is asked.
+    static func drawn(_ state: MascotState, asks: Bool) -> MascotState {
+        guard asks else { return state }
+        var drawn = state
+        drawn.sign = question
+        return drawn
     }
+}
 
-    /// The answer becomes the first turn: on the line under one nonce before the question goes,
-    /// so the outbox is the one place it is kept. `mark` is what records the question as
-    /// answered, called once the words are on the line. Answers false, and does nothing, for a
-    /// second answer or one with no words in it.
-    @MainActor
-    static func answer(_ text: String, answered: Bool, via harness: Harness, mark: () -> Void) -> Bool {
-        guard !answered, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        harness.willSend(text)
-        mark()
-        return true
-    }
+/// The line under the transcript while the first-run question stands: the invitation, and the
+/// way to the microphone while it is denied. The question itself is on Topo's sign, which is
+/// pixels, so the line carries it to accessibility.
+struct FirstRunLine: View {
+    var denied: Bool
+    @Environment(\.look) private var look
 
-    /// Whether the question stands: while it is asked, and until an answer said into its own
-    /// microphone has been heard, so a turn the log brings while the ear decodes does not take
-    /// the screen, and the answer with it, from under the person.
-    static func stands(hearing: Bool, asks: Bool) -> Bool { asks || hearing }
-
-    /// Whether the question stands over the chat, from what the chat holds: the voice, whose
-    /// session is the question's own while an answer said into it is open or being heard, the
-    /// row and the field, and what the harness says of the log and the line. The chat draws the
-    /// question while this is true and asks nothing else.
-    @MainActor
-    static func standing(voice: VoiceInput, row: NextTurn, focused: Bool, read: Bool, empty: Bool,
-                         waiting: Bool, busy: Bool, answered: Bool, fixture: Bool) -> Bool {
-        stands(hearing: voice.owner == .firstRun,
-               asks: asks(read: read, empty: empty, waiting: waiting, busy: busy,
-                          engaged: engaged(voice: voice, row: row, focused: focused),
-                          answered: answered, fixture: fixture))
+    var body: some View {
+        VStack(spacing: look.reading.spacing) {
+            Text(FirstRun.invitation)
+            if denied { Text(FirstRun.denied) }
+        }
+        .font(look.reading.font)
+        .foregroundStyle(look.reading.ink)
+        .multilineTextAlignment(.center)
+        .padding(.bottom, look.reading.spacing)
+        .mascotObstacle()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(([FirstRun.question, FirstRun.invitation] + (denied ? [FirstRun.denied] : [])).joined(separator: " "))
+        .accessibilityIdentifier("first-run")
     }
 }
 

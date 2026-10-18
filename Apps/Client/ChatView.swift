@@ -125,34 +125,25 @@ struct ChatView: View {
             }
             .ignoresSafeArea(.keyboard)
         }
-        // Under the question the chat is not there to be read or pressed: one microphone, one
-        // field. The question never arrives over a press or a word of the chat's own
-        // (`FirstRun.asks`), so nothing is taken from a hand that is on it.
-        .accessibilityHidden(asking)
         .onChange(of: !standingSetup.isEmpty, initial: true) { _, stands in setupStood = stands }
-        .allowsHitTesting(!asking)
-        .overlay {
-            if asking {
-                FirstRunView(setup: standingSetup) { text in
-                    if FirstRun.answer(text, answered: answered, via: harness, mark: { answered = true }) { Task { await harness.retry() } }
-                }
-            }
+        // The question goes once something of the person's is on the line or in the log, and is
+        // not asked on this device again.
+        .onChange(of: asking) { asked, asks in
+            if FirstRun.answered(asked: asked, asks: asks, read: harness.hasRead) { answered = true }
         }
     }
 
-    /// Whether the first-run question stands over the chat: over a log that has been read and
-    /// holds nothing, with nothing of the person's on its way and their hand not on the chat.
+    /// Whether the first-run question stands: over a log that has been read and holds nothing,
+    /// with nothing of the person's on its way. Topo holds it up on a sign and the line under the
+    /// transcript says the rest; the chat is the chat throughout, so the answer is the person's
+    /// first turn through the composer.
     private var asking: Bool {
         var fixture = false
         #if DEBUG
         fixture = DebugRun.transcript() != nil
         #endif
-        // An answer said into the question's microphone is still being heard when its press
-        // ends: the question stands until it has been, so a turn the log brings meanwhile does
-        // not take the screen, and the answer with it, from under the person.
-        return FirstRun.standing(voice: voice, row: row, focused: focused, read: harness.hasRead,
-                                 empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
-                                 busy: harness.busy, answered: answered, fixture: fixture)
+        return FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+                             busy: harness.busy, answered: answered, fixture: fixture)
     }
 
     /// The setup's lines while its meter stands, and none while it does not.
@@ -189,6 +180,8 @@ struct ChatView: View {
                     lineButton("Unfinished: ask \"\(unfinished.text)\" again") {
                         await harness.askAgain()
                     }
+                } else if asking {
+                    FirstRunLine(denied: voice.denied)
                 }
             } card: {
                 // Once, and only while the memory is still in this app's own folder and has
@@ -211,9 +204,10 @@ struct ChatView: View {
             .overlay(alignment: .topLeading) { modelSlider }
             .animation(.easeInOut(duration: look.composer.duration), value: modelsOpen)
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
-            // under them and the glass leave him room, on the glass, or at a pin.
-            .mascotRoams(mascot.drawn, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
-                         covered: showSettings || showDiagnostics || showMemory || asking, keyboardTop: keyboardTop,
+            // under them and the glass leave him room, on the glass, or at a pin; holding the
+            // first-run question up while it stands.
+            .mascotRoams(FirstRun.drawn(mascot.drawn, asks: asking), opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+                         covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          stop: modelsOpen ? modelStop : nil, ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
                          face: { facing in Task { @MainActor in mascot.facing = facing } },

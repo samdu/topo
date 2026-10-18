@@ -139,9 +139,44 @@ enum MascotSprite {
     /// ways between them — in both facings, with two pixels round it
     /// (`MascotGeometryTests.testEveryPoseTheAppAsksForIsDrawnInsideTheReach`). Facing right what a
     /// pose reaches on his right is reached on his left, so each side is the longer of the two.
-    /// The sign is not in it, because nothing in the app sets one (`MascotState.sign`); a sign
-    /// reaches about 40 pixels further out on the side he faces.
+    /// A sign is not in it: what a sign reaches depends on its words, so `reach(sign:)` measures it.
     static let reach = CGRect(x: 15, y: 47, width: 130, height: 113)
+
+    #if os(iOS)
+    /// The part of the picture he can be drawn in while he holds up `sign`: `reach`, and every
+    /// pixel the engine draws taking up the sign from the shelf and holding it, in both facings,
+    /// with two pixels round it, made symmetric about his body's axis as `reach` is. Measured by
+    /// running the engine, once per sign's words.
+    @MainActor static func reach(sign: String?) -> CGRect {
+        guard let sign else { return reach }
+        if let known = signReaches[sign] { return known }
+        var x0 = Int(reach.minX), y0 = Int(reach.minY), x1 = Int(reach.maxX) - 1, y1 = Int(reach.maxY) - 1
+        var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+        for facing in MascotFacing.allCases {
+            let engine = Topo(random: { 0.5 })
+            let input = TopoInput(activity: "sign", sign: sign, facing: facing.rawValue)
+            for frame in 0..<(signSettle * 30) {
+                engine.update(1.0 / 30, input)
+                guard frame % 3 == 0 || frame == signSettle * 30 - 1 else { continue }
+                engine.draw(&rgba)
+                for y in 0..<Topo.height {
+                    for x in 0..<Topo.width where rgba[(y * Topo.width + x) * 4 + 3] != 0 {
+                        x0 = min(x0, x - 2); x1 = max(x1, x + 2); y0 = min(y0, y - 2); y1 = max(y1, y + 2)
+                    }
+                }
+            }
+        }
+        // Each side the longer of the two, about the body's axis, as `reach` is.
+        let axis = box.midX, half = max(axis - CGFloat(x0), CGFloat(x1 + 1) - axis)
+        let measured = CGRect(x: axis - half, y: CGFloat(y0), width: half * 2, height: CGFloat(y1 + 1 - y0))
+        signReaches[sign] = measured
+        return measured
+    }
+
+    /// How long, in seconds, the engine is run for a sign: the arm taking it up and settling.
+    static let signSettle = 3
+    @MainActor private static var signReaches: [String: CGRect] = [:]
+    #endif
 
     /// How far `reach` goes past the box on each side, in points at `scale`.
     struct Reach: Equatable, Sendable, Codable {
@@ -165,7 +200,7 @@ enum MascotSprite {
         }
     }
 
-    static func reach(scale: CGFloat) -> Reach {
+    static func reach(scale: CGFloat, within reach: CGRect = reach) -> Reach {
         Reach(left: (box.minX - reach.minX) * scale, top: (box.minY - reach.minY) * scale,
               right: (reach.maxX - box.maxX) * scale, bottom: (reach.maxY - box.maxY) * scale)
     }
@@ -846,9 +881,11 @@ struct MascotRoam: Equatable, Sendable {
             self.pin = pin
         }
 
-        init(_ mascot: Look.Mascot, perch: CGFloat = Look.Composer().perchInset, reduceMotion: Bool) {
+        /// `within` is the part of the picture he can be drawn in: `MascotSprite.reach`, or a sign's.
+        init(_ mascot: Look.Mascot, perch: CGFloat = Look.Composer().perchInset, reduceMotion: Bool,
+             within: CGRect = MascotSprite.reach) {
             self.init(size: MascotSprite.size(scale: mascot.scale), clearance: mascot.clearance,
-                      reach: MascotSprite.reach(scale: mascot.scale), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
+                      reach: MascotSprite.reach(scale: mascot.scale, within: within), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
                       reduceMotion: reduceMotion, placement: mascot.placement, pin: mascot.pin)
             self.perch = perch
         }
