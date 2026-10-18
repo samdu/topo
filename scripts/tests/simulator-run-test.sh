@@ -95,6 +95,10 @@ case "$2" in
                       say "guest turn 1 answered in 9.10 s: ok"; say "guest turn 2 sent: b"
                       say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
                       say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-glued-stderr) say "guest turn 1 sent: a"; printf 'E5RT encountered an STL exception. msg = MILCompilerForANE error.'
+                          say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                          printf 'E5RT: Failed to load program.'; say "guest turn 1 answered in 9.10 s: ok"; say "guest turn done"
+                          exec sleep 600 ;;
       guest-one-failed) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
                         say "guest turn 1 failed in 12.00 s: the process ended mid-turn"
                         say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
@@ -267,6 +271,7 @@ case_ userland-claude-fetched-not-reused   fail userland-fetched     "$quick"  -
 case_ userland-claude-reused-not-fetched   fail userland-reused      "$quick"  --userland "claude --version" --expect-claude fetched
 case_ userland-claude-not-mounted          fail userland-unmounted   "$quick"  --userland "echo hi"
 case_ guest-turns-answered                 pass guest-answered       "$quick"  --guest-turn "a || b"
+case_ guest-turn-stderr-glued-on           pass guest-glued-stderr   "$quick"  --guest-turn "a"
 case_ guest-turn-failed                    fail guest-one-failed     "$quick"  --guest-turn "a || b"
 case_ guest-turn-abandoned                 fail guest-abandoned      "$quick"  --guest-turn "a || b"
 case_ guest-turns-two-processes           fail guest-two-processes  "$quick"  --guest-turn "a || b"

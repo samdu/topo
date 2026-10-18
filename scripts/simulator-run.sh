@@ -373,7 +373,10 @@ if [ -n "$send" ]; then
 fi
 
 if [ -n "$userland" ]; then
-  lines="$(grep '\[topo-debug\]' "$log" | tr -d '\r')"
+  # Each line from its first marker on: another process's stderr written without a trailing
+  # newline (CoreML's E5RT does this) lands in front of the next marker, and the checks below
+  # match from the start of a line.
+  lines="$(grep -o '\[topo-debug\].*' "$log" | tr -d '\r')"
   grep -q '\[topo-debug\] userland error:' <<< "$lines" && fail "the guest reported an error"
   grep -Eq '^\[topo-debug\] userland: claude code [^ ]+ verified in [0-9]+ ms, mounted at /usr/local/bin/claude$' <<< "$lines" \
     || fail "Claude Code was not verified and mounted"
@@ -397,7 +400,7 @@ if [ -n "$userland" ]; then
 fi
 
 if [ -n "$guestturn" ]; then
-  lines="$(grep '\[topo-debug\]' "$log" | tr -d '\r')"
+  lines="$(grep -o '\[topo-debug\].*' "$log" | tr -d '\r')"  # from the first marker, as for --userland
   grep -q '\[topo-debug\] guest turn error:' <<< "$lines" && fail "the guest's turns reported an error"
   grep -Eq '^\[topo-debug\] guest turn [0-9]+ (failed|abandoned)' <<< "$lines" && fail "a guest turn failed or was abandoned"
   count="$(awk -F ' \\|\\| ' '{ n = 0; for (i = 1; i <= NF; i++) if ($i ~ /[^ ]/) n++; print n }' <<< "$guestturn")"
