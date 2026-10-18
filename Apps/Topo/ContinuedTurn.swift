@@ -67,22 +67,16 @@ enum ContinuedTurns {
         }
         let identifier = "\(prefix).\(UUID().uuidString)"
         waiting[identifier] = (lifecycle, turn)
-        // The request is made here, at the send and on the main actor: `BGTaskRequest.h` says its
-        // initialiser "creates an instance on behalf of the currently foregrounded app". Only the
-        // submission, which the scheduler asks not to be called on the main thread, waits for a
-        // thread of its own, and one that lands after the app has left is refused and logged.
-        nonisolated(unsafe) let request = ContinuedTurns.request(identifier: identifier)
-        Task.detached {
-            do {
-                if #available(iOS 27, *) {
-                    try await BGTaskScheduler.shared.submitTaskRequest(request)
-                } else {
-                    try BGTaskScheduler.shared.submit(request)
-                }
-            } catch {
-                await MainActor.run { _ = waiting.removeValue(forKey: identifier) }
-                log("continued: refused (\(error)); the turn has the grace alone")
-            }
+        // Made and submitted here, at the send and on the main actor, so the app is in front for
+        // both: the request "creates an instance on behalf of the currently foregrounded app"
+        // (`BGTaskRequest.h`), and the system takes it from an app in front. The synchronous submit
+        // is used on every iOS: the main-thread caution in `BGTaskScheduler.h` is on iOS 27's
+        // completion-handler form alone, whose submission lands after the call returns.
+        do {
+            try BGTaskScheduler.shared.submit(ContinuedTurns.request(identifier: identifier))
+        } catch {
+            waiting.removeValue(forKey: identifier)
+            log("continued: refused (\(error)); the turn has the grace alone")
         }
     }
 

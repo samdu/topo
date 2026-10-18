@@ -212,19 +212,7 @@ final class GuestResident {
         guard !compaction else { return updates }
         let turn = lifecycle.turnBegan()
         ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.log)
-        let (stream, continuation) = AsyncStream<GuestSession.TurnUpdate>.makeStream()
-        Task { @MainActor in
-            // Only an answer is a success: a failure, an abandonment, or a stream that ends with no
-            // end at all (a sign-out mid-turn) is not.
-            var answered = false
-            for await update in updates {
-                if case .ended(.answered) = update { answered = true }
-                continuation.yield(update)
-            }
-            continuation.finish()
-            lifecycle.turnEnded(turn, succeeded: answered)
-        }
-        return stream
+        return lifecycle.carry(updates, turn: turn)
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {
