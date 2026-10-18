@@ -507,6 +507,8 @@ struct Look: Equatable, Sendable {
         /// The line under him: what a tap on the sign does, then that the code is copied, which
         /// is a confirmation and wears `highlight`.
         var signFont = Font.footnote
+        /// The largest a look document sets the line in, in points.
+        static let signFontLargest = 34.0
         var signInk = Theme.textMuted
         var copiedInk = Theme.highlight
         /// How far the sign jumps at the tap, and how long the confirmation stands before

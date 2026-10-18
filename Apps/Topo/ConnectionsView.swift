@@ -187,15 +187,17 @@ struct GitHubCodeSign: View {
     var body: some View {
         VStack(spacing: look.settings.signSpacing) {
             Button {
-                tapped(.milliseconds(Int(look.settings.copiedPause * 1000)))
+                tapped(Self.pause(look.settings))
                 guard !reduceMotion else { return }
                 withAnimation(.spring(duration: 0.2)) { bumped = true } completion: {
                     withAnimation(.spring(duration: 0.3)) { bumped = false }
                 }
             } label: {
+                // At most `signScale` times the engine's picture, and never wider than the page:
+                // the code on the sign is what the person reads, so none of it is cut off.
                 picture
-                    .frame(width: CGFloat(Topo.width) * look.settings.signScale,
-                           height: CGFloat(Topo.height) * look.settings.signScale)
+                    .frame(maxWidth: CGFloat(Topo.width) * look.settings.signScale,
+                           maxHeight: CGFloat(Topo.height) * look.settings.signScale)
                     .scaleEffect(bumped ? look.settings.copiedBump : 1)
             }
             .buttonStyle(.plain)
@@ -211,10 +213,17 @@ struct GitHubCodeSign: View {
                 }
             }
             .font(look.settings.signFont)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
             .accessibilityIdentifier("github-code-line")
         }
         .frame(maxWidth: .infinity)
         .padding(.bottom, look.settings.signSpacing)
+    }
+
+    /// How long the confirmation stands before GitHub's page opens.
+    static func pause(_ settings: Look.Settings) -> Duration {
+        .milliseconds(Int((settings.copiedPause * 1000).rounded()))
     }
 
     @ViewBuilder private var picture: some View {

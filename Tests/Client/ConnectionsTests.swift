@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import TopoAuth
 import TopoTools
 import UIKit
@@ -150,6 +151,41 @@ final class ConnectionsTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(browser.opened.count, 1, "a superseded connect opened GitHub's page")
         github.release(.token)
+    }
+
+    /// A sign-out (`forget()`) or GitHub's approval during the confirmation opens nothing: the
+    /// page waits only for the connect still waiting on the code that was copied.
+    func testThePageOpensNotAfterASignOutOrAnApprovalDuringTheConfirmation() async throws {
+        let connections = connections()
+        connections.connectGitHub()
+        await github.reach(.token)
+        await settle()
+        connections.copyCodeAndOpenGitHub(after: .milliseconds(200))
+        connections.forget()
+        XCTAssertFalse(connections.codeCopied, "a sign-out left the code said to be copied")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(browser.opened, [], "GitHub's page opened after a sign-out")
+
+        connections.connectGitHub()
+        await github.reach(.token)
+        await settle()
+        connections.copyCodeAndOpenGitHub(after: .milliseconds(300))
+        github.release(.token)
+        await github.reach(.login)
+        XCTAssertEqual(connections.github, .finishing)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(browser.opened, [], "GitHub's page opened after GitHub had approved")
+        github.release(.login)
+        await settle()
+        XCTAssertEqual(connections.github, .connected(login: "samdu"))
+        XCTAssertFalse(connections.codeCopied)
+    }
+
+    /// The sign hands its tap the look's pause: the compiled 0.9 seconds, or a document's.
+    func testTheSignsTapWaitsTheLooksPause() {
+        XCTAssertEqual(GitHubCodeSign.pause(Look().settings), .milliseconds(900))
+        let slow = LookDocument.read(#"{"settings": {"copiedPause": 1.5}}"#).look
+        XCTAssertEqual(GitHubCodeSign.pause(slow.settings), .milliseconds(1500))
     }
 
     /// With no code shown, the tap does nothing; and after the person closed the sheet, the tap
@@ -574,6 +610,39 @@ final class ConnectionsScreenshots: XCTestCase {
         }
         let pictures = try [disconnected, waiting, copied, connected].map { try XCTUnwrap($0.pngData()) }
         XCTAssertEqual(Set(pictures).count, 4, "two states are drawn the same")
+    }
+
+    /// The sign carries the code from the first frame drawn: two codes draw two different
+    /// pictures, which they would not if the sign were missing, or if the first frame were him
+    /// still taking it up.
+    func testTheSignHoldsTheCodeFromTheFirstFrame() throws {
+        let size = CGSize(width: 390, height: 360)
+        func sign(_ code: String) throws -> Data {
+            let image = try LookStage.image(GitHubCodeSign(code: code, copied: false, tapped: { _ in })
+                .environment(Mascot()), look: Look(), size: size)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "sign-\(code)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            return try XCTUnwrap(image.pngData())
+        }
+        XCTAssertNotEqual(try sign("ABCD-1234"), try sign("WXYZ-9876"), "the sign does not carry the code")
+    }
+
+    /// The largest sign and line a look document can set fit a 320-point-wide page and leave the
+    /// list above them room on a 667-point one; a scale past the largest is not taken.
+    func testTheLargestSignFitsTheNarrowestPage() {
+        let rejected = LookDocument.read(#"{"settings": {"signScale": 3, "signFont": {"size": 400}}}"#).look
+        XCTAssertEqual(rejected.settings.signScale, Look().settings.signScale)
+        let largest = LookDocument.read(#"{"settings": {"signScale": 2, "signSpacing": 32, "signFont": {"size": 400}}}"#).look
+        XCTAssertEqual(largest.settings.signScale, 2)
+        for copied in [false, true] {
+            let host = UIHostingController(rootView: GitHubCodeSign(code: "ABCD-1234", copied: copied, tapped: { _ in })
+                .environment(Mascot()).environment(\.look, largest))
+            let fitted = host.sizeThatFits(in: CGSize(width: 320, height: CGFloat.infinity))
+            XCTAssertLessThanOrEqual(fitted.width, 320, "copied \(copied): the sign is wider than the page")
+            XCTAssertLessThanOrEqual(fitted.height, 667 * 0.7, "copied \(copied): the sign leaves the list no room")
+        }
     }
 
     private func attach(_ connections: Connections, _ name: String) throws -> UIImage {
