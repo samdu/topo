@@ -222,6 +222,7 @@ final class Connections {
                 let token = try await flow.token(for: code)
                 guard generation == self.generation else { return }
                 github = .finishing
+                codeCopied = false
                 let login = try await flow.login(token: token)
                 guard generation == self.generation else { return }
                 try store.save(Connection(token: token, account: login), for: .github)

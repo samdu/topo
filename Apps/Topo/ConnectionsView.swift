@@ -162,8 +162,8 @@ struct ConnectionsView: View {
 /// Topo holding GitHub's one-time code up on a sign, drawn by the engine the chat draws him with,
 /// and the line under him. The sign is the button: a tap copies the code and jumps the sign, the
 /// line turns to the confirmation, and `tapped` is handed how long the confirmation stands before
-/// GitHub's page opens. Under Reduce Motion he is one still frame holding the sign, and nothing
-/// jumps.
+/// GitHub's page opens. He is drawn holding the sign from the first frame, never taking it up, so
+/// the code is readable at once. Under Reduce Motion he is one still frame, and nothing jumps.
 struct GitHubCodeSign: View {
     let code: String
     let copied: Bool
@@ -229,6 +229,7 @@ struct GitHubCodeSign: View {
                 }
                 .onChange(of: context.date) { last, now in
                     driver.input = input
+                    if driver.frames == 0 { driver.settle(Self.settleSteps) }
                     driver.tick(min(now.timeIntervalSince(last), MascotCanvas.stepCap(interval: look.mascot.frameInterval)))
                 }
             }
