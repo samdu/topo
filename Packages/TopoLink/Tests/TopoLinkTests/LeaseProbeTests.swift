@@ -94,7 +94,11 @@ import TopoCore
         defer { connection.cancel() }
         try await connection.waitUntilReady()
         try await connection.send(Data(repeating: UInt8(ascii: "x"), count: 300))
-        #expect(try await connection.readLine(maximum: 16) == "no")
+        // The server answers no and closes with the rest of the line unread, which resets the
+        // connection; the reset can reach the client before the no does. Either is a refusal,
+        // as SocketLeaseProbe reads it. An empty clean close is not.
+        let answer = try? await connection.readLine(maximum: 16)
+        #expect(answer == "no" || answer == nil)
     }
 
     @Test func aLeaseWithoutAnEndpointIsNo() async {
