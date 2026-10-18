@@ -104,8 +104,8 @@ public final class GuestLifecycle {
     private var parked: [Int: ContinuedTask] = [:]
     /// The background generation the continued task is carrying, in place of the grace.
     private var carrying: Int?
-    /// Whether the held task has expired: it is kept only until the grace's assertion lands or the
-    /// teardown answers, and holds the app for no way out after.
+    /// Whether the held task has expired: it is kept only until the grace is read at the tick or
+    /// the teardown answers, and holds the app for no way out after.
     private var spent = false
     /// Turns begun whose end has not been heard.
     private var unended: Set<Int> = []
@@ -162,8 +162,12 @@ public final class GuestLifecycle {
             }
             return
         }
-        // An expired task kept for the grace's assertion is not needed in front.
-        if continued != nil, spent, !inBackground { completeContinued(success: false) }
+        // An expired task kept for the tick or the teardown is not needed in front, and neither is
+        // the way out it was carrying.
+        if continued != nil, spent, !inBackground {
+            carrying = nil
+            completeContinued(success: false)
+        }
         guard continued == nil, !inBackground else {
             task.complete(success: false)
             return
@@ -225,7 +229,7 @@ public final class GuestLifecycle {
         if continued != nil, !spent {
             // The continued task holds the app up, so no grace is begun: the turn is waited for
             // with no deadline, and the task is completed once the process is ended. Its expiry
-            // hands what is left to the grace (`continuedExpired`).
+            // begins the grace, which has the turn only once it is read (`continuedExpired`).
             carrying = mine
             Task { [weak self] in
                 let outcome = await session.background(budget: nil, generation: mine)
@@ -289,7 +293,8 @@ public final class GuestLifecycle {
     /// (`GuestSession.limit`); any other reading is a grace nothing has shown, and is treated as a
     /// refused one. A grace iOS refuses, or one not read, leaves nothing to hand to: the process is
     /// ended now, and the expired task is held until the way out answers — a turn that ends first
-    /// included — or let go just short of what an expiry leaves. An expired task is never completed
+    /// included — or `expiryHold` from the moment the process is told to end runs out, which is
+    /// past the expired teardown's bound. An expired task is never completed
     /// as a success. Whether `backgroundTimeRemaining` shows the grace while a continued task is
     /// held is not measured; if it never does, every expiry in the background ends the process.
     private func continuedExpired(_ task: ContinuedTask) {
@@ -318,7 +323,9 @@ public final class GuestLifecycle {
             let remaining = self.time.remaining
             guard GraceBudget.isGrant(remaining) else {
                 self.report(.graceUnread)
-                self.endNow(mine, holding: task, for: GraceBudget.expiryHold - GraceBudget.firstTick)
+                // The process is told to end only now, so the hold runs from here: the expired
+                // teardown's bound and the second after it.
+                self.endNow(mine, holding: task, for: GraceBudget.expiryHold)
                 return
             }
             self.carrying = nil

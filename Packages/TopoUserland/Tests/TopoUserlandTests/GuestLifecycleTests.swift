@@ -371,6 +371,57 @@ final class GuestLifecycleTests: XCTestCase {
         for await _ in turn {}
     }
 
+    func testAnUnreadGraceHoldsTheTaskThroughTheWholeExpiredTeardown() async throws {
+        let (lifecycle, session, launcher, clock, _, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        task.expire()
+        await eventually("the tick asleep") { await clock.pending == 2 }
+        process.holdNextTermination()
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the teardown running") { process.terminationHeld }
+        await eventually("the hold asleep") { await clock.pending == 1 }
+        // The teardown is told to end only at the tick, and may take its whole expired bound.
+        await clock.advance(by: GraceBudget.expiredTeardownBound - .milliseconds(100))
+        XCTAssertTrue(task.open, "the task was let go inside the expired teardown's bound, the process alive")
+        process.release()
+        await eventually("the task completed") { !task.open }
+        XCTAssertEqual(task.completions, [false])
+        XCTAssertFalse(outcomes.all.contains(.outOfTime), "\(outcomes.all)")
+    }
+
+    func testAnExpiredTaskGivingWayInFrontLeavesNoWayOutCarried() async throws {
+        let (lifecycle, _, _, _, time, _) = make()
+        lifecycle.willEnterForeground()
+        let first = lifecycle.turnBegan()
+        let one = FakeContinued()
+        lifecycle.held(one, turn: first)
+        lifecycle.didEnterBackground()
+        one.expire()
+        XCTAssertEqual(time.begun.count, 1)
+        // Back in front, the turn over and the next one's task held, before the way out answers.
+        lifecycle.willEnterForeground()
+        lifecycle.turnEnded(first, succeeded: true)
+        let second = lifecycle.turnBegan()
+        let two = FakeContinued()
+        lifecycle.held(two, turn: second)
+        XCTAssertEqual(one.completions, [false])
+        XCTAssertTrue(two.open)
+        // An expiry in front: let go, with no grace begun for a way out nobody is carrying.
+        two.expire()
+        XCTAssertEqual(two.completions, [false])
+        XCTAssertEqual(time.begun.count, 1, "a second grace was begun over the first")
+        await eventually("every grace ended") { time.open.isEmpty }
+    }
+
     func testATurnEndingBeforeTheTickCompletesTheExpiredTaskUnsuccessfullyOnceTheProcessIsGone() async throws {
         let (lifecycle, session, launcher, clock, time, outcomes) = make()
         lifecycle.willEnterForeground()
@@ -479,7 +530,7 @@ final class GuestLifecycleTests: XCTestCase {
         await eventually("the way out waiting on the turn") { await clock.pending == 1 }
         task.expire()
         XCTAssertEqual(time.open.count, 1)
-        // Back and away again inside the handoff's tick, the turn still running.
+        // Back and away again before the tick, the turn still running.
         lifecycle.willEnterForeground()
         await eventually("kept") { outcomes.all.contains(.kept) }
         XCTAssertTrue(time.open.isEmpty)
@@ -570,7 +621,7 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertEqual(task.completions, [true])
     }
 
-    func testAGraceExpiryAfterTheHandOffEndsTheTurnAtOnce() async throws {
+    func testAGraceExpiryBeforeTheTickEndsTheTurnAtOnce() async throws {
         let (lifecycle, session, launcher, clock, time, outcomes) = make()
         lifecycle.willEnterForeground()
         await eventually("resident") { await session.currentPhase == .resident }
