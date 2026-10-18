@@ -445,6 +445,40 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// A sign reaches past every pose, so the roam is given `MascotSprite.signReach` while he holds
+    /// one: every frame of taking up and holding the largest board the engine makes (three lines
+    /// of eleven), the first-run question and a short one, on every head and load band and in both
+    /// facings, is inside it, and the largest board reaches past `reach`.
+    func testEverySignIsDrawnInsideTheSignReach() {
+        let signReach = MascotSprite.signReach
+        XCTAssertTrue(signReach.contains(MascotSprite.reach), "the sign's reach is smaller than a pose's")
+        XCTAssertEqual(signReach.midX, MascotSprite.box.midX, accuracy: 0.5, "the sign's reach is not symmetric about his axis")
+        XCTAssertEqual(MascotSprite.reach(sign: nil), MascotSprite.reach)
+        XCTAssertEqual(MascotSprite.reach(sign: "hello"), signReach)
+        let signs = ["MMMMMMMMMMM MMMMMMMMMMM MMMMMMMMMMM", FirstRun.question, "ABCD-1234"]
+        let reached = Self.each(Run.all) { run -> [Reach] in
+            signs.enumerated().map { i, sign in
+                var random = Mulberry32(seed: UInt32(run.m * 4 + run.b + 1 + 16 * i))
+                let engine = Topo(random: { random.next() })
+                var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+                var reach = Reach()
+                for _ in 0..<(6 * 30) {
+                    engine.update(1.0 / 30, TopoInput(tokens: run.tokens, level: run.level, activity: "sign", sign: sign,
+                                                      corner: 0, facing: run.facing.rawValue))
+                    engine.draw(&rgba)
+                    reach.add(rgba)
+                }
+                return reach
+            }
+        }
+        for (run, result) in zip(Run.all, reached) {
+            for (sign, reach) in zip(signs, result) {
+                XCTAssertTrue(signReach.contains(reach.rect), "\(run.label) \"\(sign)\": drawn in \(reach.rect), outside \(signReach)")
+            }
+            XCTAssertFalse(MascotSprite.reach.contains(result[0].rect), "\(run.label): the largest board reaches no further than a pose")
+        }
+    }
+
     /// `work` for each run, on as many cores as there are: every run owns its engine and its
     /// seeds, and the engine's globals are all constants, so the runs share nothing. The results
     /// come back in the runs' order, for the assertions to be made on the main actor.

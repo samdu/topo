@@ -26,7 +26,8 @@ struct MascotState: Equatable, Sendable {
     /// device. It is the turn's own life rather than anything the guest wrote, so the wait before
     /// the guest has the words and the save after its last one are part of the turn he shows.
     var turnOpen = false
-    /// Words on a sign he holds up. Nothing sets it yet; while it is nil he holds none.
+    /// Words on a sign he holds up: the first-run question while it stands (`FirstRun.drawn`).
+    /// While it is nil he holds none.
     var sign: String?
     /// The side of the screen he stands on, which is the way the whole picture faces: on the right
     /// the engine mirrors him, so the sign comes out to the left, into the room. The engine takes a

@@ -399,8 +399,8 @@ final class LookDocumentTests: XCTestCase {
         }
     }
 
-    /// A document written for the slider on the glass, the keyboard's second mark and the room
-    /// between the bar's controls still reads: the keys the look no longer has are passed over,
+    /// A document written for the slider on the glass, the keyboard's second mark, the room
+    /// between the bar's controls and the first run's page colour still reads: the keys the look no longer has are passed over,
     /// whatever they hold, with no note, and every field beside them is taken.
     func testTheKeysThatWentRefuseNothing() {
         let reading = LookDocument.read("""
@@ -408,6 +408,7 @@ final class LookDocumentTests: XCTestCase {
                         "models": { "inset": 52, "height": 61, "stop": "not a number", "labelFont": 7 },
                         "flank": { "keyboardDown": "pencil.slash", "muted": "bell.slash" } },
           "bar": { "spacing": "wide" },
+          "reading": { "surface": "#000000" },
           "mascot": { "roamSpeed": 60 } }
         """)
         XCTAssertEqual(reading.notes, [])

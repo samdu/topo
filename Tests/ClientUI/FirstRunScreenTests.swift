@@ -10,7 +10,8 @@ final class FirstRunScreenTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// Over an empty log the question stands over the chat, and its typed answer goes on the
+    /// Over an empty log the chat asks the question, Topo holding it on a sign with the line
+    /// under the transcript saying the rest, and the answer typed into the composer goes on the
     /// line: the question goes and the words are in the transcript as a turn on its way. The
     /// stand-in takes no save, so nothing here shows the turn reaching a log, and the launch
     /// argument that asks the question on every run also keeps `firstRunAnswered` from being
@@ -31,16 +32,15 @@ final class FirstRunScreenTests: XCTestCase {
         let app = launch(log: "empty")
         let question = app.descendants(matching: .any).matching(identifier: "first-run").firstMatch
         XCTAssertTrue(question.waitForExistence(timeout: 60), "an empty log asked nothing")
-        XCTAssertTrue(app.staticTexts["What did you forget this week?"].exists)
+        XCTAssertTrue(question.label.hasPrefix("What did you forget this week?"), "the question says \"\(question.label)\"")
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "reading-log").firstMatch.exists,
                        "the placeholder stands over a log that has been read")
         attach(app, "first-run-question")
 
-        let field = app.textFields["Type it instead"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "the question has no field")
-        field.tap()
+        ChatReading.raiseKeyboard(app)
+        let field = ChatReading.field(app)
         field.typeText("The bins on Thursday")
-        app.buttons["Go"].tap()
+        app.buttons["Send"].tap()
 
         let gone = NSPredicate(format: "exists == false")
         wait(for: [expectation(for: gone, evaluatedWith: question)], timeout: 20)

@@ -6,10 +6,7 @@ import Observation
 /// where it can be. Hold to talk and release to send; a tap (a press shorter than `tapLimit`)
 /// opens the microphone until the next press. One object for the whole app, and one gate on its
 /// microphone, enforced: a surface that presses while another holds it is refused, because two
-/// gates on one input answer the same utterance twice; the first-run question stands over the
-/// chat only while the chat holds no session (`FirstRun.engaged`), and cancels its own on
-/// disappearing. The microphone is
-/// asked for at the first press and nowhere earlier, and it is the only permission a press asks
+/// gates on one input answer the same utterance twice. The microphone is asked for at the first press and nowhere earlier, and it is the only permission a press asks
 /// for: recognition is the phone's own.
 ///
 /// One ear, the `Ear` (Parakeet, on the device). A press while it is not resident is refused

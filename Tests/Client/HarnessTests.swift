@@ -160,7 +160,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(flaky, defaults: makeDefaults(), transport: ScriptedTransport())
         func asks() -> Bool {
             FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
-                          busy: harness.busy, engaged: false, answered: false)
+                          busy: harness.busy, answered: false)
         }
         XCTAssertFalse(asks(), "asked before any read")
         XCTAssertTrue(ReadingLog.stands(read: harness.hasRead, drawn: false))
@@ -201,7 +201,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(), transport: ScriptedTransport())
         await harness.refresh()
         XCTAssertTrue(FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
-                                    busy: harness.busy, engaged: false, answered: false))
+                                    busy: harness.busy, answered: false))
     }
 
     /// A device that read an empty log, was demoted while another answered the question, and takes
@@ -217,44 +217,34 @@ final class HarnessIntegrationTests: XCTestCase {
         try await log.writer(for: DeviceID("other")).append(.person, "the bins", continuing: try await log.read())
         harness.adopt(PrimaryLease(database: db, device: DeviceID("phone"), endpoint: nil, probe: NoSocketProbe()))
         XCTAssertFalse(FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
-                                     busy: harness.busy, engaged: false, answered: false),
+                                     busy: harness.busy, answered: false),
                        "asked over a read made before the takeover")
         await harness.refresh()
         XCTAssertEqual(harness.turns.map(\.text), ["the bins"])
         XCTAssertFalse(FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
-                                     busy: harness.busy, engaged: false, answered: false))
+                                     busy: harness.busy, answered: false))
     }
 
-    /// The answer is one turn: on the line under one nonce before the question goes, a second
-    /// answer adding nothing, and a relaunch that finds it still waiting not asking again even
-    /// with the device's own mark of having answered lost.
-    func testTheFirstRunAnswerIsOneTurnOnTheLine() async throws {
+    /// The answer is the person's first turn, sent as any turn is: on the line under one nonce,
+    /// which ends the asking and marks the question answered, and a relaunch that finds it still
+    /// waiting does not ask again even with the device's own mark of having answered lost.
+    func testTheFirstRunAnswerIsATurnOnTheLine() async throws {
         let db = InMemoryRecordDatabase(), defaults = makeDefaults()
         let harness = harness(db, defaults: defaults, transport: ScriptedTransport())
         await harness.refresh()
-        var answered = false
-        // What was on the line at the moment the question was marked answered.
-        var onTheLineAtTheMark: [String]?
-        func answer(_ text: String) -> Bool {
-            FirstRun.answer(text, answered: answered, via: harness) {
-                onTheLineAtTheMark = harness.waiting
-                answered = true
-            }
+        func asks(_ harness: Harness) -> Bool {
+            FirstRun.asks(read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting,
+                          busy: harness.busy, answered: false)
         }
-        XCTAssertFalse(answer("  \n"), "no words is no answer")
-        XCTAssertFalse(answered)
-        XCTAssertTrue(answer("The bins"))
-        XCTAssertTrue(answered)
-        XCTAssertEqual(onTheLineAtTheMark, ["The bins"], "the question was marked answered before the words were on the line")
-        XCTAssertFalse(answer("The bins"))
-        XCTAssertFalse(answer("And the post"))
-        XCTAssertEqual(harness.waiting, ["The bins"], "a second answer became a second turn")
+        XCTAssertTrue(asks(harness))
+        harness.willSend("The bins")
+        XCTAssertEqual(harness.waiting, ["The bins"])
+        XCTAssertFalse(asks(harness), "asked over the answer on the line")
+        XCTAssertTrue(FirstRun.answered(asked: true, read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting))
         let relaunched = self.harness(db, defaults: defaults, transport: ScriptedTransport())
         await relaunched.refresh()
         XCTAssertEqual(relaunched.waiting, ["The bins"])
-        XCTAssertFalse(FirstRun.asks(read: relaunched.hasRead, empty: relaunched.turns.isEmpty,
-                                     waiting: relaunched.hasWaiting, busy: relaunched.busy, engaged: false, answered: false),
-                       "asked again over an answer still on the line")
+        XCTAssertFalse(asks(relaunched), "asked again over an answer still on the line")
     }
 
     // MARK: A turn as primary

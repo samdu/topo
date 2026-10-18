@@ -12,7 +12,6 @@
 		00BBDBC10968078A6D750507 /* ChatReading.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A401F08D7A75D151418BFA /* ChatReading.swift */; };
 		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
 		019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */; };
-		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		02DA0AFA59BA220F3523C0D7 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
 		036B6CB589587A4D2BC8FF69 /* WidgetToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37FFE301CDB57C54D6E76A8E /* WidgetToolTests.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
@@ -160,7 +159,6 @@
 		473D96F72E5B9C40C4975D6A /* Mascot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F572EF397E4BF9E7FF6685 /* Mascot.swift */; };
 		47A5DAA62699857838E4805C /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
-		497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		4D8CA320675F3FC531E9132D /* Speakable.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF519B4570159A5CED371583 /* Speakable.swift */; };
 		4DCA8DB14D90096B931F7E08 /* SurfacePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631F54F3CC1F646736B81799 /* SurfacePages.swift */; };
 		4E76B88032F4551CC1EEB54B /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C23E92759DB8DA59246B5F /* SampleHandler.swift */; };
@@ -406,7 +404,6 @@
 		BBDC20A7E5D4EED441DE67A5 /* systemSmall.json in Resources */ = {isa = PBXBuildFile; fileRef = C404AE7F18179442D89B4B50 /* systemSmall.json */; };
 		BC7C3989619DEA2E3C3D185B /* WatchSurfaceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 208E2EE99A7F55009F492ACE /* WatchSurfaceCacheTests.swift */; };
 		BCF92A147BD39566DBC81227 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
-		BD0BB7A7D364CC4E7926AE75 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		BDAC31A885ADB3E134011054 /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
 		BE2E77872613825E0A6215B5 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
 		BE5D03B4667AA4BD89FBD2AB /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
@@ -630,7 +627,6 @@
 
 /* Begin PBXFileReference section */
 		00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptStore.swift; sourceTree = "<group>"; };
-		004642A0824EA785157BF757 /* FirstRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunView.swift; sourceTree = "<group>"; };
 		011C3E458182B06895F173DA /* TopoMomentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoMomentTests.swift; sourceTree = "<group>"; };
 		017C0E3316F8178AF19904AE /* TopoTalkTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoTalkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		01E2AA2FBC22C4A180D4E383 /* LogToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogToolTests.swift; sourceTree = "<group>"; };
@@ -1273,7 +1269,6 @@
 				18DEE83593874ABE4660BB2D /* Dictation.swift */,
 				ADE17E3120F6835D9626B032 /* Ear.swift */,
 				DAA62817ACBB2D81A716AAF2 /* FirstRun.swift */,
-				004642A0824EA785157BF757 /* FirstRunView.swift */,
 				402EB6E7D75092F33B78F15B /* GuestBridge.swift */,
 				9A03F8DA19F37B857BA8F079 /* Harness.swift */,
 				4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */,
@@ -2235,7 +2230,6 @@
 				F009A2290679ADEB835A97AE /* Dictation.swift in Sources */,
 				2AF169CA7DA76C7448A360A2 /* Ear.swift in Sources */,
 				20491C4B301D9C09A869B0F1 /* FirstRun.swift in Sources */,
-				BD0BB7A7D364CC4E7926AE75 /* FirstRunView.swift in Sources */,
 				D04AF66C6C9CC515FD607A73 /* GuestBridge.swift in Sources */,
 				043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */,
 				2A8B0CBB3C5F5C7737F9B998 /* Look.swift in Sources */,
@@ -2407,7 +2401,6 @@
 				73BD2BFD4C40E7CBC67D0EE3 /* Dictation.swift in Sources */,
 				443639D8481C026336CB1598 /* Ear.swift in Sources */,
 				1B8DBB5A70457082D6843E1F /* FirstRun.swift in Sources */,
-				497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */,
 				E855FBF41819F3010E5322B5 /* GuestBridge.swift in Sources */,
 				5ADB9E3D8ACFC40D15A2B63E /* Harness.swift in Sources */,
 				A8807AF0D00F928C12D256FA /* Look.swift in Sources */,
@@ -2624,7 +2617,6 @@
 				39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */,
 				3E623C9ECC3D2014C7EAB9A9 /* FilesTool.swift in Sources */,
 				F1658B67DBE624653FE6611D /* FirstRun.swift in Sources */,
-				01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */,
 				D4813369C6BE1682D0651573 /* GitHubTool.swift in Sources */,
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
 				B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */,

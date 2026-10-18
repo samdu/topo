@@ -788,7 +788,8 @@ struct Look: Equatable, Sendable {
 
 extension Look {
     /// The mark, the spinner and the line under them that stand where the transcript will, until
-    /// the first read of the log returns.
+    /// the first read of the log returns; and the first run's line under the transcript, which is
+    /// set in the same font and ink.
     struct Reading: Equatable, Sendable {
         var markSize: CGFloat = 64
         var spacing: CGFloat = 12
@@ -796,10 +797,6 @@ extension Look {
         var font: Font = .body
         static let largestFont: Double = 34
         var ink = Theme.textMuted
-        /// What the first-run question stands on, over the chat: the page's own colour. Drawn
-        /// over an opaque base, so a surface a document makes clear shows the base and not the
-        /// chat.
-        var surface = Theme.background
     }
 
     /// The setup's meter: a thin bar for each part of an install still to come, one over the
