@@ -660,18 +660,31 @@ final class ConnectionsScreenshots: XCTestCase {
     }
 
     /// The largest sign and line a look document can set fit a 320-point-wide page and leave the
-    /// list above them room on a 667-point one; a scale past the largest is not taken.
+    /// list above them room on a 667-point one, at the default and the largest text size, and
+    /// the jump at the tap stays inside the sign's frame; a scale past the largest is not taken.
     func testTheLargestSignFitsTheNarrowestPage() {
         let rejected = LookDocument.read(#"{"settings": {"signScale": 3, "signFont": {"size": 400}}}"#).look
         XCTAssertEqual(rejected.settings.signScale, Look().settings.signScale)
-        let largest = LookDocument.read(#"{"settings": {"signScale": 2, "signSpacing": 32, "signFont": {"size": 400}}}"#).look
+        let largest = LookDocument.read(#"{"settings": {"signScale": 2, "signSpacing": 32, "copiedBump": 1.3, "signFont": {"size": 400}}}"#).look
+        let style = LookDocument.read(#"{"settings": {"signScale": 2, "signSpacing": 32, "signFont": "largeTitle"}}"#).look
         XCTAssertEqual(largest.settings.signScale, 2)
-        for copied in [false, true] {
-            let host = UIHostingController(rootView: GitHubCodeSign(code: "ABCD-1234", copied: copied, tapped: { _ in })
-                .environment(Mascot()).environment(\.look, largest))
-            let fitted = host.sizeThatFits(in: CGSize(width: 320, height: CGFloat.infinity))
-            XCTAssertLessThanOrEqual(fitted.width, 320, "copied \(copied): the sign is wider than the page")
-            XCTAssertLessThanOrEqual(fitted.height, 667 * 0.7, "copied \(copied): the sign leaves the list no room")
+        XCTAssertEqual(largest.settings.copiedBump, 1.3)
+        XCTAssertEqual(style.settings.signFont, .system(.largeTitle))
+        for (name, look) in [("400 points", largest), ("largeTitle", style)] {
+            for size in [DynamicTypeSize.large, .accessibility5] {
+                for copied in [false, true] {
+                    let label = "\(name), \(size), copied \(copied)"
+                    let host = UIHostingController(rootView: GitHubCodeSign(code: "ABCD-1234", copied: copied, tapped: { _ in })
+                        .environment(Mascot()).environment(\.look, look).dynamicTypeSize(size))
+                    let fitted = host.sizeThatFits(in: CGSize(width: 320, height: CGFloat.infinity))
+                    XCTAssertLessThanOrEqual(fitted.width, 320, "\(label): the sign is wider than the page")
+                    XCTAssertLessThanOrEqual(fitted.height, 667 * 0.7, "\(label): the sign leaves the list no room")
+                }
+            }
+        }
+        for bump in [1, Look().settings.copiedBump, 1.3] {
+            XCTAssertEqual(GitHubCodeSign.drawnScale(bumped: true, bump: bump), 1, "the jump goes past the frame")
+            XCTAssertEqual(GitHubCodeSign.drawnScale(bumped: false, bump: bump) * bump, 1, accuracy: 0.0001)
         }
     }
 

@@ -197,11 +197,12 @@ struct GitHubCodeSign: View {
                 }
             } label: {
                 // At most `signScale` times the engine's picture, and never wider than the page:
-                // the code on the sign is what the person reads, so none of it is cut off.
+                // the code on the sign is what the person reads, so none of it is cut off. The
+                // jump is inside that frame too (`drawnScale`).
                 picture
+                    .scaleEffect(Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
                     .frame(maxWidth: CGFloat(Topo.width) * look.settings.signScale,
                            maxHeight: CGFloat(Topo.height) * look.settings.signScale)
-                    .scaleEffect(bumped ? look.settings.copiedBump : 1)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("GitHub code \(code)")
@@ -218,10 +219,20 @@ struct GitHubCodeSign: View {
             .font(look.settings.signFont)
             .lineLimit(2)
             .multilineTextAlignment(.center)
+            // A style grows with the text size; past two lines of the largest font it shrinks
+            // to fit rather than pushing the sign up the page.
+            .minimumScaleFactor(Look.Settings.signLineShrink)
+            .frame(maxHeight: Look.Settings.signLineMost)
             .accessibilityIdentifier("github-code-line")
         }
         .frame(maxWidth: .infinity)
         .padding(.bottom, look.settings.signSpacing)
+    }
+
+    /// How large the picture is drawn in its frame: at rest one `bump`th of it, so the jump at
+    /// the tap fills the frame and goes past it nowhere, since a scale effect is not laid out.
+    static func drawnScale(bumped: Bool, bump: CGFloat) -> CGFloat {
+        bumped ? 1 : 1 / bump
     }
 
     /// How long the confirmation stands before GitHub's page opens.

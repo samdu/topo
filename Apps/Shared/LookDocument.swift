@@ -300,7 +300,8 @@ enum LookDocument {
         // points tall at most, which with its line leaves the list room on a 667-point phone.
         r.bounded("signScale", &value.signScale, in: 0.5...2)
         r.bounded("signSpacing", &value.signSpacing, in: 0...32)
-        // The line under the sign shares the page's foot with it: two lines of it at most.
+        // The line under the sign shares the page's foot with it: at most two lines of 34
+        // points tall, a style shrunk to that at a larger text size.
         r.font("signFont", &value.signFont, largest: Look.Settings.signFontLargest)
         r.colour("signInk", &value.signInk)
         r.colour("copiedInk", &value.copiedInk)
