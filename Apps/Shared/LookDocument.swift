@@ -296,6 +296,13 @@ enum LookDocument {
         r.font("codeFont", &value.codeFont)
         // No smaller than a finger takes: the button is the only way a share is started here.
         r.bounded("broadcastButton", &value.broadcastButton, in: 44...88)
+        r.bounded("signScale", &value.signScale, in: 0.5...3)
+        r.bounded("signSpacing", &value.signSpacing, in: 0...32)
+        r.font("signFont", &value.signFont)
+        r.colour("signInk", &value.signInk)
+        r.colour("copiedInk", &value.copiedInk)
+        r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
+        r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {

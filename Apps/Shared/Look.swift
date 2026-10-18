@@ -500,6 +500,20 @@ struct Look: Equatable, Sendable {
         var codeFont = Font.system(.title2, design: .monospaced)
         /// The side of the button a screen share is started from, the system's own.
         var broadcastButton: CGFloat = 44
+        /// Topo holding GitHub's code up on a sign over the Connections page: points an art
+        /// pixel, and the space between him and the line under him.
+        var signScale: CGFloat = 1.5
+        var signSpacing: CGFloat = 4
+        /// The line under him: what a tap on the sign does, then that the code is copied, which
+        /// is a confirmation and wears `highlight`.
+        var signFont = Font.footnote
+        var signInk = Theme.textMuted
+        var copiedInk = Theme.highlight
+        /// How far the sign jumps at the tap, and how long the confirmation stands before
+        /// GitHub's page opens over it.
+        var copiedBump: CGFloat = 1.08
+        var copiedPause: CGFloat = 0.9
+        static let copiedPauseRange: ClosedRange<Double> = 0...3
     }
     /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
     /// carries two flanks and, set into the middle of it, the microphone in its well. With the

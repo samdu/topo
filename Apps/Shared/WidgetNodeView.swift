@@ -281,8 +281,17 @@ struct WidgetMascotView: View {
     /// the same picture every time it is drawn.
     static func still(_ pose: WidgetNode.Pose) -> CGImage? {
         #if canImport(TopoMascot)
+        still(TopoInput(activity: pose.rawValue))
+        #else
+        return nil
+        #endif
+    }
+
+    #if canImport(TopoMascot)
+    /// The engine handed `input` for `steps` thirtieths of a second, drawn once.
+    static func still(_ input: TopoInput, steps: Int = 60) -> CGImage? {
         let engine = Topo(random: { 0.5 })
-        for _ in 0..<60 { engine.update(1.0 / 30, TopoInput(activity: pose.rawValue)) }
+        for _ in 0..<steps { engine.update(1.0 / 30, input) }
         var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
         engine.draw(&rgba)
         let data = Data(rgba) as CFData
@@ -291,9 +300,7 @@ struct WidgetMascotView: View {
                        bytesPerRow: Topo.width * 4, space: CGColorSpaceCreateDeviceRGB(),
                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-        #else
-        return nil
-        #endif
     }
+    #endif
 }
 #endif

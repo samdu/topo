@@ -94,14 +94,25 @@ final class ConnectionsTests: XCTestCase {
         for _ in 0..<20 { await Task.yield() }
     }
 
-    func testAConnectShowsAndCopiesTheCodeOpensGitHubAndSavesTheLogin() async throws {
+    /// A connect shows the code and polls, and copies nothing and opens nothing: the sheet would
+    /// come up over a code the person has not seen. The sign's tap copies it and opens GitHub's
+    /// page, and the flow saves the login once GitHub answers.
+    func testAConnectShowsTheCodeAndOnlyTheTapCopiesItAndOpensGitHub() async throws {
         let connections = connections()
         connections.connectGitHub()
         await github.reach(.token)
         await settle()
         XCTAssertEqual(connections.github, .waiting(github.code))
-        XCTAssertEqual(copied, ["ABCD-1234"])
+        XCTAssertEqual(copied, [], "the code was copied before the tap")
+        XCTAssertEqual(browser.opened, [], "GitHub's page opened before the code was copied")
+        XCTAssertFalse(connections.codeCopied)
+
+        connections.copyCodeAndOpenGitHub()
+        XCTAssertEqual(copied, ["ABCD-1234"], "the tap copies at once, ahead of the page")
+        XCTAssertTrue(connections.codeCopied)
+        await settle()
         XCTAssertEqual(browser.opened, [github.code.verificationURL])
+
         github.release(.token)
         await github.reach(.login)
         github.release(.login)
@@ -109,6 +120,57 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertEqual(connections.github, .connected(login: "samdu"))
         XCTAssertEqual(try store.load(.github), Connection(token: "gho_token", account: "samdu"))
         XCTAssertEqual(browser.closes, 1, "the sheet closes once GitHub has answered")
+        XCTAssertFalse(connections.codeCopied)
+    }
+
+    /// The page waits for the confirmation, and opens then only for the connect that is still
+    /// waiting on that code: a Cancel or a second Connect during it opens nothing.
+    func testThePageOpensAfterTheConfirmationAndNotAfterCancelOrASecondConnect() async throws {
+        let connections = connections()
+        connections.connectGitHub()
+        await github.reach(.token)
+        await settle()
+        connections.copyCodeAndOpenGitHub(after: .milliseconds(200))
+        await settle()
+        XCTAssertEqual(browser.opened, [], "the page opened over the confirmation")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(browser.opened, [github.code.verificationURL])
+
+        connections.copyCodeAndOpenGitHub(after: .milliseconds(200))
+        connections.cancelGitHub()
+        XCTAssertFalse(connections.codeCopied, "a Cancel left the code said to be copied")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(browser.opened.count, 1, "a cancelled connect opened GitHub's page")
+
+        connections.connectGitHub()
+        await settle()
+        connections.copyCodeAndOpenGitHub(after: .milliseconds(200))
+        connections.connectGitHub()
+        XCTAssertFalse(connections.codeCopied, "a second Connect inherited the first one's copy")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(browser.opened.count, 1, "a superseded connect opened GitHub's page")
+        github.release(.token)
+    }
+
+    /// With no code shown, the tap does nothing; and after the person closed the sheet, the tap
+    /// copies again and opens again.
+    func testTheTapNeedsACodeAndCanBeTakenAgain() async throws {
+        let connections = connections()
+        connections.copyCodeAndOpenGitHub()
+        await settle()
+        XCTAssertEqual(copied, [])
+        XCTAssertEqual(browser.opened, [])
+
+        connections.connectGitHub()
+        await github.reach(.token)
+        await settle()
+        connections.copyCodeAndOpenGitHub()
+        await settle()
+        connections.copyCodeAndOpenGitHub()
+        await settle()
+        XCTAssertEqual(copied, ["ABCD-1234", "ABCD-1234"])
+        XCTAssertEqual(browser.opened, [github.code.verificationURL, github.code.verificationURL])
+        github.release(.token)
     }
 
     func testAConnectionInTheStoreIsShownAtLaunch() throws {
@@ -380,6 +442,7 @@ final class ConnectionsLeftBehindTests: XCTestCase {
     /// offered, and Disconnect tries the clear again: once the keychain lets it, the token is gone.
     func testAFailedClearKeepsDisconnectWhichTriesItAgain() throws {
         XCTAssertEqual(ConnectionsView.githubActions(.failed("x")), [.tryAgain, .disconnect])
+        XCTAssertEqual(ConnectionsView.githubActions(.waiting(HeldGitHub().code)), [.openGitHub, .cancel])
         XCTAssertEqual(ConnectionsView.githubActions(.connected(login: "samdu")), [.revoke, .disconnect])
         XCTAssertFalse(ConnectionsView.githubActions(.disconnected).contains(.disconnect))
 
@@ -478,7 +541,7 @@ final class GitHubToolTests: XCTestCase {
     }
 }
 
-/// The Connections screen in its three standing states, drawn under the compiled look and kept as
+/// The Connections screen in its four standing states, drawn under the compiled look and kept as
 /// attachments: what the screen says is read off the pictures, since `simctl` cannot tap through
 /// Settings to it. Each state is checked to be the one drawn, and the three pictures to be drawn
 /// (more than a background's worth of colours) and to differ from one another.
@@ -496,6 +559,8 @@ final class ConnectionsScreenshots: XCTestCase {
         for _ in 0..<20 { await Task.yield() }
         guard case .waiting = connections.github else { return XCTFail("not waiting: \(connections.github)") }
         let waiting = try attach(connections, "connections-waiting")
+        connections.copyCodeAndOpenGitHub()
+        let copied = try attach(connections, "connections-copied")
 
         connections.cancelGitHub()
         try store.save(Connection(token: "gho_x", account: "samdu"), for: .github)
@@ -504,15 +569,15 @@ final class ConnectionsScreenshots: XCTestCase {
         let connected = try attach(reopened, "connections-connected")
         github.release(.token)
 
-        for (name, image) in [("disconnected", disconnected), ("waiting", waiting), ("connected", connected)] {
+        for (name, image) in [("disconnected", disconnected), ("waiting", waiting), ("copied", copied), ("connected", connected)] {
             XCTAssertGreaterThan(try colours(image), 8, "\(name) is drawn as a blank screen")
         }
-        let pictures = try [disconnected, waiting, connected].map { try XCTUnwrap($0.pngData()) }
-        XCTAssertEqual(Set(pictures).count, 3, "two states are drawn the same")
+        let pictures = try [disconnected, waiting, copied, connected].map { try XCTUnwrap($0.pngData()) }
+        XCTAssertEqual(Set(pictures).count, 4, "two states are drawn the same")
     }
 
     private func attach(_ connections: Connections, _ name: String) throws -> UIImage {
-        let image = try LookStage.image(ConnectionsView().environment(connections), look: Look())
+        let image = try LookStage.image(ConnectionsView().environment(connections).environment(Mascot()), look: Look())
         let attachment = XCTAttachment(image: image)
         attachment.name = name
         attachment.lifetime = .keepAlways
