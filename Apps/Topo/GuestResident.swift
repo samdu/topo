@@ -155,7 +155,7 @@ final class GuestResident {
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
-                                           report: { outcome in log("background: \(outcome)") })
+                                           report: { outcome in Self.note("background: \(outcome)") })
             self.lifecycle = lifecycle
             self.follow(lifecycle)
             Perf.mark("guest.proxy.up")
@@ -211,7 +211,7 @@ final class GuestResident {
         // A compaction is the mind's housekeeping, not a reply the person is waiting on.
         guard !compaction else { return updates }
         let turn = lifecycle.turnBegan()
-        ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.log)
+        ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.note)
         return lifecycle.carry(updates, turn: turn)
     }
 
@@ -383,6 +383,17 @@ extension GuestResident {
     nonisolated static let log: @Sendable (String) -> Void = { line in
         let line = redacted(line)
         Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
+        #if DEBUG
+        DebugRun.say("guest: \(line)")
+        #endif
+    }
+
+    /// The lines a device check reads after the fact — each way out of the background and each
+    /// continued-processing task asked for and started — at `notice`, which the phone keeps on
+    /// disk: an `info` line is kept in memory alone, and is gone within minutes.
+    nonisolated static let note: @Sendable (String) -> Void = { line in
+        let line = redacted(line)
+        Logger(subsystem: "zone.hexagon.topo", category: "resident").notice("\(line, privacy: .public)")
         #if DEBUG
         DebugRun.say("guest: \(line)")
         #endif

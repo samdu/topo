@@ -103,7 +103,7 @@ enum ContinuedTurns {
     private static func launched(_ task: BGTask) {
         guard let task = task as? BGContinuedProcessingTask,
               let asked = waiting.removeValue(forKey: task.identifier) else {
-            GuestResident.log("continued: started for no turn asked; completed at once")
+            GuestResident.note("continued: started for no turn asked; completed at once")
             task.setTaskCompleted(success: false)
             return
         }
