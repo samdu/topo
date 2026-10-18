@@ -1,5 +1,6 @@
 import SwiftUI
 import TopoAuth
+import TopoMascot
 
 /// Settings › Connections: one section a service Topo can act on for the person — connect, who
 /// it is connected as, disconnect. The tokens are held by the app; the guest asks for one each
@@ -17,6 +18,16 @@ struct ConnectionsView: View {
                 github
                 onePassword
             }
+            // While GitHub waits on its code, Topo holds it up on a sign at the foot of the page:
+            // a tap copies it, says so, and only then opens GitHub's page over it.
+            .safeAreaInset(edge: .bottom) {
+                if case let .waiting(code) = connections.github {
+                    GitHubCodeSign(code: code.userCode, copied: connections.codeCopied,
+                                   covered: connections.browserShowing) { pause in
+                        connections.copyCodeAndOpenGitHub(after: pause)
+                    }
+                }
+            }
             .navigationTitle("Connections")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -28,14 +39,14 @@ struct ConnectionsView: View {
     /// the failure may be a clear the keychain refused, with the token still on the phone:
     /// Disconnect tries the clear again (every connection's, while a refused sign-out clear stands).
     enum GitHubAction: Equatable {
-        case connect, tryAgain, copyCode, openGitHub, cancel, revoke, disconnect
+        case connect, tryAgain, openGitHub, cancel, revoke, disconnect
     }
 
     static func githubActions(_ state: Connections.GitHub) -> [GitHubAction] {
         switch state {
         case .disconnected: [.connect]
         case .starting, .finishing: []
-        case .waiting: [.copyCode, .openGitHub, .cancel]
+        case .waiting: [.openGitHub, .cancel]
         case .connected: [.revoke, .disconnect]
         case .failed: [.tryAgain, .disconnect]
         }
@@ -59,11 +70,8 @@ struct ConnectionsView: View {
                 switch action {
                 case .connect: Button("Connect GitHub") { connections.connectGitHub() }
                 case .tryAgain: Button("Try again") { connections.connectGitHub() }
-                case .copyCode:
-                    if case let .waiting(code) = connections.github {
-                        Button("Copy code") { UIPasteboard.general.string = code.userCode }
-                    }
-                case .openGitHub: Button("Open GitHub") { connections.reopenGitHub() }
+                // The sign's tap without the pause: the code copied, and the page opened at once.
+                case .openGitHub: Button("Copy code and open GitHub") { connections.copyCodeAndOpenGitHub() }
                 case .cancel: Button("Cancel", role: .cancel) { connections.cancelGitHub() }
                 case .revoke: Button("Revoke on GitHub") { connections.open(Connections.githubAuthorizations) }
                 case .disconnect:
@@ -140,12 +148,119 @@ struct ConnectionsView: View {
 
     @ViewBuilder private var githubFooter: some View {
         switch connections.github {
-        case .waiting:
+        case .waiting where connections.codeCopied:
             Text("The code is copied. Paste it on GitHub's page and approve Topo; this screen finishes by itself.")
+        case .waiting:
+            Text("Tap Topo's sign to copy the code, then paste it on GitHub's page and approve Topo; this screen finishes by itself.")
         case .connected:
             Text("git and gh in Topo's Linux use this connection, with your access to every repository, your organizations' membership and workflow files. Disconnecting forgets the token here; revoke it at github.com/settings/applications.")
         default:
             Text("Lets Topo clone, push and open pull requests as you, on any repository you can reach.")
         }
+    }
+}
+
+/// Topo holding GitHub's one-time code up on a sign, drawn by the engine the chat draws him with,
+/// and the line under him. The sign is the button: a tap copies the code and jumps the sign, the
+/// line turns to the confirmation, and `tapped` is handed how long the confirmation stands before
+/// GitHub's page opens. He is drawn holding the sign from the first frame, never taking it up, so
+/// the code is readable at once. Under Reduce Motion he is one still frame, and nothing jumps.
+struct GitHubCodeSign: View {
+    let code: String
+    let copied: Bool
+    /// GitHub's page is over him: no frame is drawn until it goes.
+    var covered = false
+    let tapped: (Duration) -> Void
+    @Environment(\.look) private var look
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(Mascot.self) private var mascot
+    @State private var driver = MascotDriver()
+    @State private var bumped = false
+    /// Thirtieths of a second for his arm to take the sign up and settle, for the still.
+    static let settleSteps = 90
+
+    private var input: TopoInput {
+        var state = mascot.drawn
+        state.sign = code
+        state.turnOpen = false
+        state.activity = .idle
+        return state.input
+    }
+
+    var body: some View {
+        VStack(spacing: look.settings.signSpacing) {
+            Button {
+                tapped(Self.pause(look.settings))
+                guard !reduceMotion else { return }
+                withAnimation(.spring(duration: 0.2)) { bumped = true } completion: {
+                    withAnimation(.spring(duration: 0.3)) { bumped = false }
+                }
+            } label: {
+                // At most `signScale` times the engine's picture, and never wider than the page:
+                // the code on the sign is what the person reads, so none of it is cut off. The
+                // jump is inside that frame too (`drawnScale`).
+                picture
+                    .scaleEffect(Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
+                    .frame(maxWidth: CGFloat(Topo.width) * look.settings.signScale,
+                           maxHeight: CGFloat(Topo.height) * look.settings.signScale)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("GitHub code \(code)")
+            .accessibilityHint("Copies the code and opens GitHub")
+            .accessibilityIdentifier("github-code-sign")
+            .sensoryFeedback(.success, trigger: copied) { _, now in now }
+            Group {
+                if copied {
+                    Label("Copied", systemImage: "checkmark").foregroundStyle(look.settings.copiedInk)
+                } else {
+                    Text("Tap the sign to copy the code").foregroundStyle(look.settings.signInk)
+                }
+            }
+            .font(look.settings.signFont)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            // A style grows with the text size; past two lines of the largest font it shrinks
+            // to fit rather than pushing the sign up the page.
+            .minimumScaleFactor(Look.Settings.signLineShrink)
+            .frame(maxHeight: Look.Settings.signLineMost)
+            .accessibilityIdentifier("github-code-line")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, look.settings.signSpacing)
+    }
+
+    /// How large the picture is drawn in its frame: at rest one `bump`th of it, so the jump at
+    /// the tap fills the frame and goes past it nowhere, since a scale effect is not laid out.
+    static func drawnScale(bumped: Bool, bump: CGFloat) -> CGFloat {
+        bumped ? 1 : 1 / bump
+    }
+
+    /// How long the confirmation stands before GitHub's page opens.
+    static func pause(_ settings: Look.Settings) -> Duration {
+        .milliseconds(Int((settings.copiedPause * 1000).rounded()))
+    }
+
+    @ViewBuilder private var picture: some View {
+        if reduceMotion {
+            if let still = WidgetMascotView.still(input, steps: Self.settleSteps) { image(still) }
+        } else {
+            TimelineView(.animation(minimumInterval: look.mascot.frameInterval, paused: covered)) { context in
+                Group {
+                    // Until the first frame, the still: a picture drawn once, as a snapshot is, has him too.
+                    if let frame = driver.image { image(frame) }
+                    else if let still = WidgetMascotView.still(input, steps: Self.settleSteps) { image(still) }
+                }
+                .onChange(of: context.date) { last, now in
+                    driver.input = input
+                    if driver.frames == 0 { driver.settle(Self.settleSteps) }
+                    driver.tick(min(now.timeIntervalSince(last), MascotCanvas.stepCap(interval: look.mascot.frameInterval)))
+                }
+            }
+            .onAppear { driver.conditions = .init(active: true, onScreen: true) }
+        }
+    }
+
+    private func image(_ frame: CGImage) -> some View {
+        Image(decorative: frame, scale: 1).interpolation(.none).resizable().scaledToFit()
     }
 }

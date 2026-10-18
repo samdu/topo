@@ -83,6 +83,12 @@ final class MascotDriver {
         private static let rest = Topo().state
     }
 
+    /// The engine moved on `steps` thirtieths of a second and nothing drawn: a picture whose first
+    /// frame is already the pose settled, as a sign wants to be readable from the start.
+    func settle(_ steps: Int) {
+        for _ in 0..<steps { engine.update(1.0 / 30, input) }
+    }
+
     /// One frame, `dt` seconds after the last: the engine moved on and drawn, if he animates.
     func tick(_ dt: Double) {
         guard conditions.animates else { return }

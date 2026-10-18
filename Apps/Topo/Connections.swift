@@ -71,6 +71,8 @@ final class Connections {
     private let clearControlSecrets: @Sendable () throws -> Void
     private var generation = 0
     private var task: Task<Void, Never>?
+    /// GitHub's page waiting on the copy's confirmation (`copyCodeAndOpenGitHub`).
+    private var opening: Task<Void, Never>?
     private var onePasswordGeneration = 0
     private var onePasswordTask: Task<Void, Never>?
 
@@ -201,8 +203,9 @@ final class Connections {
         return onePasswordGeneration
     }
 
-    /// Starts connecting GitHub: a code from GitHub, copied and shown, and GitHub's page for it
-    /// opened in the in-app browser; then the poll, the login and the save.
+    /// Starts connecting GitHub: a code from GitHub, shown and polled for, then the login and the
+    /// save. Nothing is copied and no page opened here: the person copies the code first
+    /// (`copyCodeAndOpenGitHub`), so the sheet never comes up over a code they have not seen.
     func connectGitHub() {
         if leftBehind.words != nil { forgetConnections() }
         if let words = leftBehind.words {
@@ -216,16 +219,15 @@ final class Connections {
                 let code = try await flow.start()
                 guard generation == self.generation else { return }
                 github = .waiting(code)
-                copy(code.userCode)
-                browser.open(code.verificationURL)
                 let token = try await flow.token(for: code)
                 guard generation == self.generation else { return }
                 github = .finishing
+                codeCopied = false
                 let login = try await flow.login(token: token)
                 guard generation == self.generation else { return }
                 try store.save(Connection(token: token, account: login), for: .github)
                 github = .connected(login: login)
-                browser.close()
+                closeBrowser()
             } catch {
                 guard generation == self.generation else { return }
                 github = .failed(Self.describe(error))
@@ -233,20 +235,61 @@ final class Connections {
         }
     }
 
-    /// GitHub's page for the code shown, again: the person closed the sheet before approving.
-    func reopenGitHub() {
-        if case let .waiting(code) = github { browser.open(code.verificationURL) }
+    /// The code shown has been put on the pasteboard by this connect, which is what the screen
+    /// says before it says the code is copied.
+    private(set) var codeCopied = false
+
+    /// The code shown, copied to the pasteboard at once, then GitHub's page for it opened in the
+    /// in-app browser `after` the confirmation the screen draws. The page opens only if this
+    /// connect is still waiting on that same code when the confirmation ends: a Cancel, a second
+    /// Connect, a sign-out or the flow ending meanwhile opens nothing. A second call, the person
+    /// having closed the sheet, copies and opens again.
+    func copyCodeAndOpenGitHub(after confirmation: Duration = .zero) {
+        guard case let .waiting(code) = github else { return }
+        copy(code.userCode)
+        codeCopied = true
+        opening?.cancel()
+        let generation = generation
+        opening = Task { [weak self] in
+            if confirmation > .zero {
+                do { try await Task.sleep(for: confirmation) } catch { return }
+            }
+            guard let self, generation == self.generation, case let .waiting(now) = self.github, now == code else { return }
+            self.openBrowser(code.verificationURL)
+        }
+    }
+
+    /// The in-app browser's sheet is up over the screen, which then draws nothing moving.
+    private(set) var browserShowing = false
+    /// Which opening `browserShowing` is about, so a sheet's dismissal after another opened
+    /// over it says nothing.
+    private var browserOpening = 0
+
+    private func openBrowser(_ url: URL) {
+        browserOpening += 1
+        let opening = browserOpening
+        browserShowing = true
+        browser.open(url) { [weak self] in
+            guard let self, self.browserOpening == opening else { return }
+            self.browserShowing = false
+        }
+    }
+
+    private func closeBrowser() {
+        browserOpening += 1
+        browserShowing = false
+        browser.close()
     }
 
     /// Opens a page in the in-app browser: where the authorization is revoked.
     func open(_ url: URL) {
-        browser.open(url)
+        openBrowser(url)
     }
 
     /// Stops a connect in flight; what was connected before stays.
     func cancelGitHub() {
         supersede()
-        browser.close()
+        closeBrowser()
         github = Self.standing(store)
     }
 
@@ -276,7 +319,7 @@ final class Connections {
     private func forgetConnections() {
         supersede()
         supersedeOnePassword()
-        browser.close()
+        closeBrowser()
         secrets.clearing {
             do {
                 try store.clearAll()
@@ -322,6 +365,9 @@ final class Connections {
         generation += 1
         task?.cancel()
         task = nil
+        opening?.cancel()
+        opening = nil
+        codeCopied = false
         return generation
     }
 
@@ -433,7 +479,8 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
 /// The in-app browser, as `Connections` uses it.
 @MainActor
 protocol Browser {
-    func open(_ url: URL)
+    /// Shows `url` in a sheet; `dismissed` is called once it has gone, closed or put away.
+    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void)
     func close()
 }
 
@@ -445,8 +492,8 @@ final class WebAuthBrowser: Browser {
 
     init() {}
 
-    func open(_ url: URL) {
-        web.open(url) {}
+    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void) {
+        web.open(url, onDismiss: dismissed)
     }
 
     func close() {
@@ -478,7 +525,8 @@ extension DebugRun {
     }
 
     /// `TOPO_DEBUG_CONNECT_GITHUB=1`: connects GitHub at launch as the screen's Connect does — a
-    /// real code from github.com, copied, and GitHub's page for it in the sheet — printing each
+    /// real code from github.com, shown on Topo's sign for the tap that copies it and opens GitHub's
+    /// page in the sheet — printing each
     /// state the connection takes (never a token or the device code), so a simulator shows the
     /// flow against GitHub itself. Approving it is a person's; with nobody there the code expires.
     @MainActor static func connectGitHub(_ connections: Connections,

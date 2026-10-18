@@ -76,7 +76,7 @@ private final class FakePasteboard: Pasteboard {
 }
 
 private final class NoBrowser: Browser {
-    func open(_ url: URL) {}
+    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void) {}
     func close() {}
 }
 

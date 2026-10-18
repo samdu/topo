@@ -296,6 +296,17 @@ enum LookDocument {
         r.font("codeFont", &value.codeFont)
         // No smaller than a finger takes: the button is the only way a share is started here.
         r.bounded("broadcastButton", &value.broadcastButton, in: 44...88)
+        // The sign is drawn no wider than the page; at twice the engine's picture it is 320
+        // points tall at most, which with its line leaves the list room on a 667-point phone.
+        r.bounded("signScale", &value.signScale, in: 0.5...2)
+        r.bounded("signSpacing", &value.signSpacing, in: 0...32)
+        // The line under the sign shares the page's foot with it: at most two lines of 34
+        // points tall, a style shrunk to that at a larger text size.
+        r.font("signFont", &value.signFont, largest: Look.Settings.signFontLargest)
+        r.colour("signInk", &value.signInk)
+        r.colour("copiedInk", &value.copiedInk)
+        r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
+        r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {
