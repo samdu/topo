@@ -68,7 +68,11 @@ private final class HeldGitHub: GitHubConnecting, @unchecked Sendable {
 private final class RecordingBrowser: Browser {
     var opened: [URL] = []
     var closes = 0
-    func open(_ url: URL) { opened.append(url) }
+    var dismissals: [@MainActor () -> Void] = []
+    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void) {
+        opened.append(url)
+        dismissals.append(dismissed)
+    }
     func close() { closes += 1 }
 }
 
@@ -179,6 +183,32 @@ final class ConnectionsTests: XCTestCase {
         await settle()
         XCTAssertEqual(connections.github, .connected(login: "samdu"))
         XCTAssertFalse(connections.codeCopied)
+    }
+
+    /// The screen knows while GitHub's sheet is over it, so the sign draws nothing under it: up
+    /// from the open to the sheet's going, and a sheet put away after another opened says
+    /// nothing of the one now up.
+    func testTheScreenKnowsWhileGitHubsSheetIsUp() async throws {
+        let connections = connections()
+        connections.connectGitHub()
+        await github.reach(.token)
+        await settle()
+        XCTAssertFalse(connections.browserShowing)
+        connections.copyCodeAndOpenGitHub()
+        await settle()
+        XCTAssertTrue(connections.browserShowing)
+        browser.dismissals[0]()
+        XCTAssertFalse(connections.browserShowing, "the sheet went and the sign stayed paused")
+
+        connections.copyCodeAndOpenGitHub()
+        await settle()
+        connections.copyCodeAndOpenGitHub()
+        await settle()
+        browser.dismissals[1]()
+        XCTAssertTrue(connections.browserShowing, "an earlier sheet's going unpaused the sign under the one up")
+        connections.cancelGitHub()
+        XCTAssertFalse(connections.browserShowing)
+        github.release(.token)
     }
 
     /// The sign hands its tap the look's pause: the compiled 0.9 seconds, or a document's.

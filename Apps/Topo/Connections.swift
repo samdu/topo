@@ -227,7 +227,7 @@ final class Connections {
                 guard generation == self.generation else { return }
                 try store.save(Connection(token: token, account: login), for: .github)
                 github = .connected(login: login)
-                browser.close()
+                closeBrowser()
             } catch {
                 guard generation == self.generation else { return }
                 github = .failed(Self.describe(error))
@@ -255,19 +255,41 @@ final class Connections {
                 do { try await Task.sleep(for: confirmation) } catch { return }
             }
             guard let self, generation == self.generation, case let .waiting(now) = self.github, now == code else { return }
-            self.browser.open(code.verificationURL)
+            self.openBrowser(code.verificationURL)
         }
+    }
+
+    /// The in-app browser's sheet is up over the screen, which then draws nothing moving.
+    private(set) var browserShowing = false
+    /// Which opening `browserShowing` is about, so a sheet's dismissal after another opened
+    /// over it says nothing.
+    private var browserOpening = 0
+
+    private func openBrowser(_ url: URL) {
+        browserOpening += 1
+        let opening = browserOpening
+        browserShowing = true
+        browser.open(url) { [weak self] in
+            guard let self, self.browserOpening == opening else { return }
+            self.browserShowing = false
+        }
+    }
+
+    private func closeBrowser() {
+        browserOpening += 1
+        browserShowing = false
+        browser.close()
     }
 
     /// Opens a page in the in-app browser: where the authorization is revoked.
     func open(_ url: URL) {
-        browser.open(url)
+        openBrowser(url)
     }
 
     /// Stops a connect in flight; what was connected before stays.
     func cancelGitHub() {
         supersede()
-        browser.close()
+        closeBrowser()
         github = Self.standing(store)
     }
 
@@ -297,7 +319,7 @@ final class Connections {
     private func forgetConnections() {
         supersede()
         supersedeOnePassword()
-        browser.close()
+        closeBrowser()
         secrets.clearing {
             do {
                 try store.clearAll()
@@ -457,7 +479,8 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
 /// The in-app browser, as `Connections` uses it.
 @MainActor
 protocol Browser {
-    func open(_ url: URL)
+    /// Shows `url` in a sheet; `dismissed` is called once it has gone, closed or put away.
+    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void)
     func close()
 }
 
@@ -469,8 +492,8 @@ final class WebAuthBrowser: Browser {
 
     init() {}
 
-    func open(_ url: URL) {
-        web.open(url) {}
+    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void) {
+        web.open(url, onDismiss: dismissed)
     }
 
     func close() {

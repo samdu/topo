@@ -22,7 +22,8 @@ struct ConnectionsView: View {
             // a tap copies it, says so, and only then opens GitHub's page over it.
             .safeAreaInset(edge: .bottom) {
                 if case let .waiting(code) = connections.github {
-                    GitHubCodeSign(code: code.userCode, copied: connections.codeCopied) { pause in
+                    GitHubCodeSign(code: code.userCode, copied: connections.codeCopied,
+                                   covered: connections.browserShowing) { pause in
                         connections.copyCodeAndOpenGitHub(after: pause)
                     }
                 }
@@ -167,6 +168,8 @@ struct ConnectionsView: View {
 struct GitHubCodeSign: View {
     let code: String
     let copied: Bool
+    /// GitHub's page is over him: no frame is drawn until it goes.
+    var covered = false
     let tapped: (Duration) -> Void
     @Environment(\.look) private var look
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -230,7 +233,7 @@ struct GitHubCodeSign: View {
         if reduceMotion {
             if let still = WidgetMascotView.still(input, steps: Self.settleSteps) { image(still) }
         } else {
-            TimelineView(.animation(minimumInterval: look.mascot.frameInterval)) { context in
+            TimelineView(.animation(minimumInterval: look.mascot.frameInterval, paused: covered)) { context in
                 Group {
                     // Until the first frame, the still: a picture drawn once, as a snapshot is, has him too.
                     if let frame = driver.image { image(frame) }
