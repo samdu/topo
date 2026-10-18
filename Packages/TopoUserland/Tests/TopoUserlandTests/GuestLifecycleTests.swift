@@ -240,7 +240,7 @@ final class GuestLifecycleTests: XCTestCase {
         let task = FakeContinued()
         lifecycle.held(task, turn: turn)
         XCTAssertTrue(lifecycle.holdsContinuedTask)
-        lifecycle.turnEnded(turn)
+        lifecycle.turnEnded(turn, succeeded: true)
         XCTAssertEqual(task.completions, [true])
         XCTAssertFalse(lifecycle.holdsContinuedTask)
     }
@@ -250,7 +250,7 @@ final class GuestLifecycleTests: XCTestCase {
         lifecycle.willEnterForeground()
         await eventually("resident") { await session.currentPhase == .resident }
         let fast = lifecycle.turnBegan()
-        lifecycle.turnEnded(fast)
+        lifecycle.turnEnded(fast, succeeded: true)
         let late = FakeContinued()
         lifecycle.held(late, turn: fast)
         XCTAssertEqual(late.completions, [true], "a task for a turn already over was held")
@@ -292,7 +292,7 @@ final class GuestLifecycleTests: XCTestCase {
         var ends: [GuestSession.TurnEnd] = []
         for await update in turn { if case .ended(let end) = update { ends.append(end) } }
         guard case .answered? = ends.first else { return XCTFail("\(ends)") }
-        lifecycle.turnEnded(number)
+        lifecycle.turnEnded(number, succeeded: true)
         await eventually("the teardown running") { process.terminationHeld }
         XCTAssertTrue(task.open, "the task was completed with the process still alive")
         process.release()
@@ -344,8 +344,117 @@ final class GuestLifecycleTests: XCTestCase {
         var ends: [GuestSession.TurnEnd] = []
         for await update in turn { if case .ended(let end) = update { ends.append(end) } }
         XCTAssertEqual(ends, [.abandoned])
-        lifecycle.turnEnded(number)
+        lifecycle.turnEnded(number, succeeded: false)
         XCTAssertEqual(task.completions, [false], "the task was completed twice")
+    }
+
+    func testAnExpiryWithNoGrantReadAtEitherTickAssumesTheGraceLessTheExtraTick() async throws {
+        let (lifecycle, session, launcher, clock, time, _) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        task.expire()
+        await eventually("the first tick asleep") { await clock.pending == 2 }
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the second tick asleep") { await clock.pending == 2 }
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the deadline set") { await clock.pending == 2 }
+        // `time.remaining` is infinite at both ticks: 28 s assumed less the second tick, less the
+        // margin and the reserve, is 14 s.
+        await clock.advance(by: .milliseconds(14_000 - 1))
+        XCTAssertFalse(process.terminated, "the turn was cut before the assumed budget")
+        await clock.advance(by: .milliseconds(1))
+        await eventually("the turn cut at the assumed budget") { process.terminated }
+    }
+
+    func testATurnEndingInsideTheHandOffTickLeavesTheTaskToTheTick() async throws {
+        let (lifecycle, session, launcher, clock, _, _) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        let turn = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        task.expire()
+        await eventually("the first tick asleep") { await clock.pending == 2 }
+        answer(process, "done")
+        for await _ in turn {}
+        lifecycle.turnEnded(number, succeeded: true)
+        XCTAssertTrue(task.open, "the expired task was let go before the grace's assertion could land")
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the task completed at the tick") { !task.open }
+        XCTAssertEqual(task.completions, [false])
+    }
+
+    func testASecondSendBeforeTheFirstsEndIsHeardHoldsItsOwnTask() {
+        let (lifecycle, _, _, _, _, _) = make()
+        lifecycle.willEnterForeground()
+        let first = lifecycle.turnBegan()
+        let one = FakeContinued()
+        lifecycle.held(one, turn: first)
+        let second = lifecycle.turnBegan()
+        let two = FakeContinued()
+        lifecycle.held(two, turn: second)
+        XCTAssertTrue(two.open, "the second turn's task was refused for the first's")
+        XCTAssertTrue(one.open, "the first turn's task was let go before its end was heard")
+        lifecycle.turnEnded(first, succeeded: false)
+        XCTAssertEqual(one.completions, [false], "the first task was not completed with its own turn's result")
+        XCTAssertTrue(two.open, "the first turn's end let the second's task go")
+        XCTAssertTrue(lifecycle.holdsContinuedTask)
+        lifecycle.turnEnded(second, succeeded: true)
+        XCTAssertEqual(two.completions, [true])
+
+        // A parked task that iOS expires before its turn's end is heard is completed then.
+        let third = lifecycle.turnBegan()
+        let three = FakeContinued()
+        lifecycle.held(three, turn: third)
+        _ = lifecycle.turnBegan()
+        three.expire()
+        XCTAssertEqual(three.completions, [false])
+        lifecycle.turnEnded(third, succeeded: true)
+        XCTAssertEqual(three.completions, [false], "the parked task was completed twice")
+    }
+
+    func testATurnThatFailsCompletesItsTaskUnsuccessfully() {
+        let (lifecycle, _, _, _, _, _) = make()
+        lifecycle.willEnterForeground()
+        let turn = lifecycle.turnBegan()
+        let task = FakeContinued()
+        lifecycle.held(task, turn: turn)
+        lifecycle.turnEnded(turn, succeeded: false)
+        XCTAssertEqual(task.completions, [false])
+    }
+
+    func testATurnThatFailsBehindAnotherAppCompletesTheCarryingTaskUnsuccessfully() async throws {
+        let (lifecycle, session, launcher, clock, _, _) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        let turn = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        answer(process, "done")
+        for await _ in turn {}
+        // The way out may answer before the turn's end is heard: the task waits for that end.
+        await eventually("the process ended") { process.terminated }
+        lifecycle.turnEnded(number, succeeded: false)
+        await eventually("the task completed") { !task.open }
+        XCTAssertEqual(task.completions, [false])
     }
 
     func testAGraceExpiryAfterTheHandOffEndsTheTurnAtOnce() async throws {
@@ -393,7 +502,7 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertTrue(time.begun.isEmpty, "the second way out began the grace with the task held")
         answer(process, "done")
         for await _ in turn {}
-        lifecycle.turnEnded(number)
+        lifecycle.turnEnded(number, succeeded: true)
         await eventually("the task completed") { !task.open }
         XCTAssertEqual(task.completions, [true])
         XCTAssertTrue(process.terminated)
@@ -484,7 +593,7 @@ final class GuestLifecycleTests: XCTestCase {
         // Whether the teardown or the foreground came first, the expired task is let go at the latest
         // when the hold runs out, with the turn still open.
         await eventually("the task completed") { task.completions == [false] }
-        lifecycle.turnEnded(number)
+        lifecycle.turnEnded(number, succeeded: true)
         XCTAssertEqual(task.completions, [false], "the task was completed twice")
     }
 
@@ -505,7 +614,7 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertTrue(task.open, "a stale answer completed the task the newer way out carries")
         process.holdNextTermination()
         answer(process, "done")
-        lifecycle.turnEnded(number)
+        lifecycle.turnEnded(number, succeeded: true)
         await eventually("the teardown running") { process.terminationHeld }
         XCTAssertTrue(task.open, "the task was completed with the process alive")
         process.release()

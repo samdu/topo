@@ -214,9 +214,15 @@ final class GuestResident {
         ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.log)
         let (stream, continuation) = AsyncStream<GuestSession.TurnUpdate>.makeStream()
         Task { @MainActor in
-            for await update in updates { continuation.yield(update) }
+            // Only an answer is a success: a failure, an abandonment, or a stream that ends with no
+            // end at all (a sign-out mid-turn) is not.
+            var answered = false
+            for await update in updates {
+                if case .ended(.answered) = update { answered = true }
+                continuation.yield(update)
+            }
             continuation.finish()
-            lifecycle.turnEnded(turn)
+            lifecycle.turnEnded(turn, succeeded: answered)
         }
         return stream
     }

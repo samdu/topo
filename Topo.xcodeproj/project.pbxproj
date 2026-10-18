@@ -242,6 +242,7 @@
 		75313F01C0848E3EED4BFA56 /* TopoLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F367954EC9F9ACB3431014 /* TopoLaunch.swift */; };
 		7590F007267E6B8508C3369A /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
+		76617C5CB68EFA3B14BBFE2E /* ContinuedTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75BC358249A62CCF446E0F8 /* ContinuedTurnTests.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */; };
@@ -845,6 +846,7 @@
 		A64DF85F65D65AA39B2128BD /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		A69B83668827B1468B16F8E0 /* ScreenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenStore.swift; sourceTree = "<group>"; };
 		A69D3F0D29AF2F1F3DF4686E /* ScreenTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTool.swift; sourceTree = "<group>"; };
+		A75BC358249A62CCF446E0F8 /* ContinuedTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedTurnTests.swift; sourceTree = "<group>"; };
 		A92EDFAF7BC94A3837BE8C2F /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		A937031358337FDFD5743C85 /* WatchSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSurfaces.swift; sourceTree = "<group>"; };
 		AA05A8C67947D4E32E7EF7D8 /* crossing-down.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crossing-down.json"; sourceTree = "<group>"; };
@@ -1409,6 +1411,7 @@
 				2E3F7EEC977B79E8BB72BBDC /* ComposerStateTests.swift */,
 				53EE28CCE270949153C3E0BE /* ConnectionsTests.swift */,
 				6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */,
+				A75BC358249A62CCF446E0F8 /* ContinuedTurnTests.swift */,
 				9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */,
 				621361E24A923844780887AC /* ControlCueTests.swift */,
 				0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */,
@@ -2479,6 +2482,7 @@
 				A0CB70E9F5876CDC83B84D04 /* ComposerStateTests.swift in Sources */,
 				C1901D08A64A897C972B76E2 /* ConnectionsTests.swift in Sources */,
 				9DA33BA8920514669E568B0A /* ContextToolTests.swift in Sources */,
+				76617C5CB68EFA3B14BBFE2E /* ContinuedTurnTests.swift in Sources */,
 				DAA85047031AD1661D0E8E48 /* ControlActionTests.swift in Sources */,
 				884C2A44B2BE25779EA4F3F7 /* ControlCueTests.swift in Sources */,
 				8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */,
