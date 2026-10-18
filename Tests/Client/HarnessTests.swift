@@ -240,7 +240,7 @@ final class HarnessIntegrationTests: XCTestCase {
         harness.willSend("The bins")
         XCTAssertEqual(harness.waiting, ["The bins"])
         XCTAssertFalse(asks(harness), "asked over the answer on the line")
-        XCTAssertTrue(FirstRun.answered(asked: true, asks: asks(harness), read: harness.hasRead))
+        XCTAssertTrue(FirstRun.answered(asked: true, read: harness.hasRead, empty: harness.turns.isEmpty, waiting: harness.hasWaiting))
         let relaunched = self.harness(db, defaults: defaults, transport: ScriptedTransport())
         await relaunched.refresh()
         XCTAssertEqual(relaunched.waiting, ["The bins"])

@@ -144,7 +144,8 @@ enum MascotSprite {
 
     #if os(iOS)
     /// The part of the picture he can be drawn in while he holds up `sign`: `reach`, and every
-    /// pixel the engine draws taking up the sign from the shelf and holding it, in both facings,
+    /// pixel the engine draws on every frame of taking up the sign from the shelf and holding it,
+    /// in both facings,
     /// with two pixels round it, made symmetric about his body's axis as `reach` is. Measured by
     /// running the engine, once per sign's words.
     @MainActor static func reach(sign: String?) -> CGRect {
@@ -157,7 +158,6 @@ enum MascotSprite {
             let input = TopoInput(activity: "sign", sign: sign, facing: facing.rawValue)
             for frame in 0..<(signSettle * 30) {
                 engine.update(1.0 / 30, input)
-                guard frame % 3 == 0 || frame == signSettle * 30 - 1 else { continue }
                 engine.draw(&rgba)
                 for y in 0..<Topo.height {
                     for x in 0..<Topo.width where rgba[(y * Topo.width + x) * 4 + 3] != 0 {

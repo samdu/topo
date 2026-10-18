@@ -62,6 +62,8 @@ struct ChatView: View {
     @State private var debugOpened: [URL] = []
     #endif
     @State private var transcriptTop: CGFloat?
+    /// Topo stands nowhere, as his roam last reported.
+    @State private var topoNowhere = false
     @State private var paneTop: CGFloat?
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
@@ -128,8 +130,9 @@ struct ChatView: View {
         .onChange(of: !standingSetup.isEmpty, initial: true) { _, stands in setupStood = stands }
         // The question goes once something of the person's is on the line or in the log, and is
         // not asked on this device again.
-        .onChange(of: asking) { asked, asks in
-            if FirstRun.answered(asked: asked, asks: asks, read: harness.hasRead) { answered = true }
+        .onChange(of: asking) { asked, _ in
+            if FirstRun.answered(asked: asked, read: harness.hasRead, empty: harness.turns.isEmpty,
+                                 waiting: harness.hasWaiting) { answered = true }
         }
     }
 
@@ -181,7 +184,7 @@ struct ChatView: View {
                         await harness.askAgain()
                     }
                 } else if asking {
-                    FirstRunLine(denied: voice.denied)
+                    FirstRunLine(denied: voice.denied, unheld: topoNowhere)
                 }
             } card: {
                 // Once, and only while the memory is still in this app's own folder and has
@@ -673,12 +676,17 @@ struct ChatView: View {
 
     /// Where Topo stands, into the badge's debug report, off the view update it arrives in. Nil in
     /// a release build, which reports nothing.
+    /// What the roam reports, in every build: whether he stands anywhere, which the first-run
+    /// line reads; and in a debug build the whole report, for the badge.
     private var mascotReported: ((MascotRoam.Report) -> Void)? {
-        #if DEBUG
-        return { report in Task { @MainActor in mascotReport = report } }
-        #else
-        return nil
-        #endif
+        { report in
+            Task { @MainActor in
+                if topoNowhere != report.hidden { topoNowhere = report.hidden }
+                #if DEBUG
+                mascotReport = report
+                #endif
+            }
+        }
     }
 
     /// What the UI suites decode off the microphone after a press. A debug build only, so

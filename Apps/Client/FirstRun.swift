@@ -24,10 +24,13 @@ enum FirstRun {
         read && empty && !waiting && !busy && !answered && !fixture
     }
 
-    /// Whether the question was answered when it stopped being asked: it was asked over a read
-    /// log, and is not asked now over a log still read, so something reached the line or the
-    /// log. A log not read now (a device taking primary back reads again) answers nothing.
-    static func answered(asked: Bool, asks: Bool, read: Bool) -> Bool { asked && !asks && read }
+    /// Whether the question was answered when it stopped being asked: it was asked, and the log,
+    /// still read, has a turn or words on the line. Nothing else that ends the asking is an
+    /// answer: a turn in flight with nothing on the line (a demotion holds the harness busy while
+    /// it saves), or a read taken away (a device taking primary back reads again).
+    static func answered(asked: Bool, read: Bool, empty: Bool, waiting: Bool) -> Bool {
+        asked && read && (waiting || !empty)
+    }
 
     /// Topo as the chat draws him: holding the question up while it is asked.
     static func drawn(_ state: MascotState, asks: Bool) -> MascotState {
@@ -39,14 +42,18 @@ enum FirstRun {
 }
 
 /// The line under the transcript while the first-run question stands: the invitation, and the
-/// way to the microphone while it is denied. The question itself is on Topo's sign, which is
-/// pixels, so the line carries it to accessibility.
+/// way to the microphone while it is denied. The question is on Topo's sign, which is pixels, so
+/// the line carries it to accessibility; and while he stands nowhere (no room for his reach at
+/// the look's scale, a keyboard leaving none) the line says it in words, so it is never unseen.
 struct FirstRunLine: View {
     var denied: Bool
+    /// Topo stands nowhere, so nothing holds the question up.
+    var unheld = false
     @Environment(\.look) private var look
 
     var body: some View {
         VStack(spacing: look.reading.spacing) {
+            if unheld { Text(FirstRun.question) }
             Text(FirstRun.invitation)
             if denied { Text(FirstRun.denied) }
         }

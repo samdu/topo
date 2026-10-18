@@ -23,14 +23,17 @@ final class FirstRunTests: XCTestCase {
         XCTAssertEqual(asked, [[true, true, false, false, false, false]])
     }
 
-    /// The question is answered when it stops being asked over a log still read: the person's
-    /// turn reached the line or the log. A read taken away (a device taking primary back) is not
-    /// an answer, and neither is a question that was never asked.
-    func testTheQuestionIsAnsweredOnlyWhenItGoesOverARead() {
-        XCTAssertTrue(FirstRun.answered(asked: true, asks: false, read: true))
-        XCTAssertFalse(FirstRun.answered(asked: true, asks: false, read: false), "a read taken away answered the question")
-        XCTAssertFalse(FirstRun.answered(asked: false, asks: false, read: true), "a question never asked was answered")
-        XCTAssertFalse(FirstRun.answered(asked: true, asks: true, read: true))
+    /// The question is answered when it stops being asked over a log still read that has a turn
+    /// or words on the line. A read taken away (a device taking primary back), a turn in flight
+    /// with nothing on the line (a demotion's save holds the harness busy), and a question never
+    /// asked are not answers.
+    func testTheQuestionIsAnsweredOnlyByATurn() {
+        XCTAssertTrue(FirstRun.answered(asked: true, read: true, empty: true, waiting: true))
+        XCTAssertTrue(FirstRun.answered(asked: true, read: true, empty: false, waiting: false))
+        XCTAssertFalse(FirstRun.answered(asked: true, read: true, empty: true, waiting: false),
+                       "the harness going busy with nothing on the line answered the question")
+        XCTAssertFalse(FirstRun.answered(asked: true, read: false, empty: true, waiting: true), "a read taken away answered the question")
+        XCTAssertFalse(FirstRun.answered(asked: false, read: true, empty: false, waiting: true), "a question never asked was answered")
     }
 
     /// Topo holds the question up while it is asked, and nothing otherwise: whatever he was
@@ -42,11 +45,11 @@ final class FirstRunTests: XCTestCase {
         XCTAssertEqual(FirstRun.drawn(state, asks: false), state)
     }
 
-    /// The question's sign reaches past every other pose, and what the engine draws taking it up
-    /// and holding it is inside that reach in both facings, so the roam keeps the whole board on
-    /// the screen and off the glass.
+    /// The question's sign reaches past every other pose, and every frame the engine draws taking
+    /// it up from the shelf and holding it is inside that reach in both facings, so the roam keeps
+    /// the whole board on the screen and off the glass from the first frame.
     @MainActor
-    func testTheQuestionsSignIsDrawnInsideItsReach() {
+    func testTheQuestionsSignIsDrawnInsideItsReachOnEveryFrame() {
         let reach = MascotSprite.reach(sign: FirstRun.question)
         XCTAssertTrue(reach.contains(MascotSprite.reach), "the sign's reach \(reach) is smaller than a pose's")
         XCTAssertGreaterThan(reach.width, MascotSprite.reach.width, "the sign reaches no further than a pose")
@@ -55,18 +58,37 @@ final class FirstRunTests: XCTestCase {
         var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
         for facing in MascotFacing.allCases {
             let engine = Topo(random: { 0.5 })
-            for _ in 0..<(MascotSprite.signSettle * 30) {
+            var outside = 0, board = false
+            for _ in 0..<(MascotSprite.signSettle * 30 * 2) {
                 engine.update(1.0 / 30, TopoInput(activity: "sign", sign: FirstRun.question, facing: facing.rawValue))
+                engine.draw(&rgba)
+                for y in 0..<Topo.height { for x in 0..<Topo.width where rgba[(y * Topo.width + x) * 4 + 3] != 0 {
+                    if !reach.contains(CGPoint(x: x, y: y)) { outside += 1 }
+                    if !MascotSprite.reach.contains(CGPoint(x: x, y: y)) { board = true }
+                } }
             }
-            engine.draw(&rgba)
-            var outside = 0, drawn = 0
-            for y in 0..<Topo.height { for x in 0..<Topo.width where rgba[(y * Topo.width + x) * 4 + 3] != 0 {
-                drawn += 1
-                if !reach.contains(CGPoint(x: x, y: y)) { outside += 1 }
-            } }
-            XCTAssertGreaterThan(drawn, 0, "\(facing) drew nothing")
-            XCTAssertEqual(outside, 0, "\(facing) drew \(outside) pixels outside \(reach)")
+            XCTAssertTrue(board, "\(facing) never drew the board past a pose's reach")
+            XCTAssertEqual(outside, 0, "\(facing) drew \(outside) pixels outside \(reach) over six seconds")
         }
+    }
+
+    /// Under Reduce Motion he is one still, and a still handed a sign holds it up: the question
+    /// is on the screen whether or not he moves.
+    @MainActor
+    func testTheReduceMotionStillHoldsTheSign() throws {
+        func drawn(sign: String?) throws -> CGRect {
+            let driver = MascotDriver()
+            driver.input = FirstRun.drawn(MascotState(model: "sonnet"), asks: sign != nil).input
+            driver.conditions = .init(active: true, onScreen: true, reduceMotion: true)
+            let image = try XCTUnwrap(driver.image, "no still was drawn")
+            let data = try XCTUnwrap(image.dataProvider?.data) as Data
+            var x1 = -1
+            for y in 0..<image.height { for x in 0..<image.width where data[(y * image.width + x) * 4 + 3] != 0 { x1 = max(x1, x) } }
+            return CGRect(x: 0, y: 0, width: x1 + 1, height: 1)
+        }
+        XCTAssertGreaterThan(try drawn(sign: FirstRun.question).maxX, MascotSprite.reach.maxX,
+                             "the still dropped the sign")
+        XCTAssertLessThanOrEqual(try drawn(sign: nil).maxX, MascotSprite.reach.maxX)
     }
 
     func testThePlaceholderStandsOnlyOverAnUnreadEmptyPage() {
