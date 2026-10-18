@@ -33,6 +33,12 @@ enum FirstRun {
     }
 
     /// Topo as the chat draws him: holding the question up while it is asked.
+    /// How opaque Topo is drawn: he goes with the flanks while the thumb is on the microphone,
+    /// unless he is holding the question up, which stands until the answer is a turn.
+    static func opacity(holding: Bool, asks: Bool, held: Double) -> Double {
+        holding && !asks ? held : 1
+    }
+
     static func drawn(_ state: MascotState, asks: Bool) -> MascotState {
         guard asks else { return state }
         var drawn = state

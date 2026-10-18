@@ -45,6 +45,16 @@ final class FirstRunTests: XCTestCase {
         XCTAssertEqual(FirstRun.drawn(state, asks: false), state)
     }
 
+    /// A thumb on the microphone takes Topo away with the flanks, but not while he holds the
+    /// question: holding the microphone is how it is answered, and it stands until it is.
+    func testTheQuestionStaysUpWhileTheMicrophoneIsHeld() {
+        let held = Look().composer.flank.heldOpacity
+        XCTAssertEqual(FirstRun.opacity(holding: true, asks: true, held: held), 1)
+        XCTAssertEqual(FirstRun.opacity(holding: true, asks: false, held: held), held)
+        XCTAssertEqual(FirstRun.opacity(holding: false, asks: true, held: held), 1)
+        XCTAssertEqual(FirstRun.opacity(holding: false, asks: false, held: held), 1)
+    }
+
     /// Under Reduce Motion he is one still, and a still handed a sign holds it up: the question
     /// is on the screen whether or not he moves.
     @MainActor

@@ -208,8 +208,9 @@ struct ChatView: View {
             .animation(.easeInOut(duration: look.composer.duration), value: modelsOpen)
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
             // under them and the glass leave him room, on the glass, or at a pin; holding the
-            // first-run question up while it stands.
-            .mascotRoams(FirstRun.drawn(mascot.drawn, asks: asking), opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+            // first-run question up while it stands, which a thumb on the microphone does not
+            // take away, since that is how it is answered.
+            .mascotRoams(FirstRun.drawn(mascot.drawn, asks: asking), opacity: FirstRun.opacity(holding: micState.holding, asks: asking, held: look.composer.flank.heldOpacity),
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          stop: modelsOpen ? modelStop : nil, ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
