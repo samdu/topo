@@ -106,6 +106,13 @@ public final class GuestLifecycle {
     private var carrying: Int?
     /// Between an expiry handed to the grace and the tick that completes the expired task.
     private var handingOff = false
+    /// Whether the held task has expired: it is kept only until the grace's assertion lands or the
+    /// teardown answers, and holds the app for no way out after.
+    private var spent = false
+    /// Turns begun whose end has not been heard.
+    private var unended: Set<Int> = []
+    /// Whether each recently ended turn was answered, for a task that starts after its end.
+    private var results: [Int: Bool] = [:]
     private var inBackground = false
 
     public init(session: GuestSession, time: BackgroundTime,
@@ -131,21 +138,35 @@ public final class GuestLifecycle {
     public func turnBegan() -> Int {
         turnCount += 1
         openTurn = turnCount
+        unended.insert(turnCount)
+        results = results.filter { $0.key > turnCount - 8 }
         if let task = continued, let turn = heldTurn, heldResult == nil, carrying == nil, !handingOff {
-            parked[turn] = task
             continued = nil
             heldTurn = nil
+            park(task, turn: turn)
         }
         return turnCount
     }
 
     /// iOS started the continued-processing task asked for `turn`. Held while the turn is open
-    /// and the app has not gone to the background without it; otherwise completed at once — a
-    /// task arriving after its turn ended, or after the way out began on the grace, is not
-    /// needed and holding it would keep the app awake for nothing.
+    /// and the app has not gone to the background without it. A task for a turn already over is
+    /// completed with that turn's result: now when its end has been heard, at that end when not.
+    /// One arriving after the way out began on the grace is completed at once, unsuccessfully: it
+    /// is not needed, and holding it would keep the app awake for nothing.
     public func held(_ task: ContinuedTask, turn: Int) {
-        guard turn == openTurn, continued == nil, !inBackground else {
-            task.complete(success: turn != openTurn)
+        if turn != openTurn {
+            if unended.contains(turn) {
+                // Its turn is over but its end not yet heard: completed at that end, with its result.
+                park(task, turn: turn)
+            } else {
+                task.complete(success: results[turn] ?? false)
+            }
+            return
+        }
+        // An expired task kept for the grace's assertion is not needed in front.
+        if continued != nil, spent, !inBackground { completeContinued(success: false) }
+        guard continued == nil, !inBackground else {
+            task.complete(success: false)
             return
         }
         continued = task
@@ -158,9 +179,11 @@ public final class GuestLifecycle {
     }
 
     /// `turn` ended: `succeeded` when its answer arrived. Its task is completed with that, now in
-    /// the foreground; in the background, once the way out it carries has ended the process, and
-    /// across an expiry handed to the grace, at the tick that hands it over.
+    /// the foreground, and in the background once the way out it carries has ended the process. An
+    /// expired task is not: the expiry's own path completes it, unsuccessfully.
     public func turnEnded(_ turn: Int, succeeded: Bool) {
+        unended.remove(turn)
+        results[turn] = succeeded
         parked.removeValue(forKey: turn)?.complete(success: succeeded)
         if turn == openTurn { openTurn = nil }
         guard turn == heldTurn else { return }
@@ -183,7 +206,7 @@ public final class GuestLifecycle {
         generation += 1
         let mine = generation
         let session = session
-        if continued != nil {
+        if continued != nil, !spent {
             // The continued task holds the app up, so no grace is begun: the turn is waited for
             // with no deadline, and the task is completed once the process is ended. Its expiry
             // hands what is left to the grace (`continuedExpired`).
@@ -201,8 +224,9 @@ public final class GuestLifecycle {
                 } else if let result = self.heldResult {
                     self.completeContinued(success: result)
                 }
-                // Otherwise the turn's end has not been heard: back in front with it still running,
-                // the task stays for the next way out, and `turnEnded` completes it with its result.
+                // Otherwise the turn's end has not been heard — back in front with it still running,
+                // or the process ended before the turn's stream was read to its end — and
+                // `turnEnded` completes the task with its result; kept, it stays for the next way out.
             }
             return
         }
@@ -246,9 +270,9 @@ public final class GuestLifecycle {
     /// one iOS answered an identifier for: nothing confirms the assertion further. The waiting turn
     /// is then given what the grace allows, read at that tick, or a tick later when the first
     /// reading is not a grant, and assumed (`assumedRemaining` less that tick) when neither is. How
-    /// much grace iOS gives after a continued task expires is not measured. A grace iOS refuses leaves nothing
-    /// to hand to: the process is ended now, and the expired task is held until the teardown
-    /// answers, or let go just short of what an expiry leaves.
+    /// much grace iOS gives after a continued task expires is not measured. A grace iOS refuses
+    /// leaves nothing to hand to: the process is ended now, and the expired task is held until the
+    /// teardown answers, or let go just short of what an expiry leaves.
     private func continuedExpired(_ task: ContinuedTask) {
         if let turn = parked.first(where: { $0.value === task })?.key {
             parked.removeValue(forKey: turn)?.complete(success: false)
@@ -259,6 +283,7 @@ public final class GuestLifecycle {
             completeContinued(success: false)
             return
         }
+        spent = true
         let session = session
         guard beginGrace(mine) else {
             // `carrying` stays: the way out's answer completes the task.
@@ -306,7 +331,17 @@ public final class GuestLifecycle {
         continued = nil
         heldTurn = nil
         heldResult = nil
+        spent = false
+        handingOff = false
         task.complete(success: success)
+    }
+
+    private func park(_ task: ContinuedTask, turn: Int) {
+        parked[turn] = task
+        task.onExpiry { [weak self, weak task] in
+            guard let self, let task else { return }
+            self.continuedExpired(task)
+        }
     }
 
     private func holdAfterExpiry(_ generation: Int) {

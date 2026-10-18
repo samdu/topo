@@ -426,6 +426,83 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertEqual(three.completions, [false], "the parked task was completed twice")
     }
 
+    func testATaskStartingAfterItsTurnIsCompletedWithThatTurnsResult() {
+        let (lifecycle, _, _, _, _, _) = make()
+        lifecycle.willEnterForeground()
+        let failed = lifecycle.turnBegan()
+        lifecycle.turnEnded(failed, succeeded: false)
+        let late = FakeContinued()
+        lifecycle.held(late, turn: failed)
+        XCTAssertEqual(late.completions, [false], "a task for a turn that was not answered was completed as a success")
+
+        // Its turn over but its end not heard yet when the task starts: completed at that end.
+        let first = lifecycle.turnBegan()
+        _ = lifecycle.turnBegan()
+        let behind = FakeContinued()
+        lifecycle.held(behind, turn: first)
+        XCTAssertTrue(behind.open, "completed before its turn's result was known")
+        lifecycle.turnEnded(first, succeeded: false)
+        XCTAssertEqual(behind.completions, [false])
+    }
+
+    func testAnExpiredTaskHoldsTheAppForNoLaterWayOut() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        let turn = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let task = FakeContinued()
+        lifecycle.held(task, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        task.expire()
+        XCTAssertEqual(time.open.count, 1)
+        // Back and away again inside the handoff's tick, the turn still running.
+        lifecycle.willEnterForeground()
+        await eventually("kept") { outcomes.all.contains(.kept) }
+        XCTAssertTrue(time.open.isEmpty)
+        lifecycle.didEnterBackground()
+        XCTAssertEqual(time.open.count, 1, "the expired task was taken as holding the app, and nothing does")
+        await eventually("both ticks asleep") { await clock.pending == 3 }
+        time.remaining = 25
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the expired task completed") { task.completions == [false] }
+        await eventually("the deadline set") { await clock.pending == 2 }
+        await clock.advance(by: .seconds(12))
+        await eventually("the turn cut at the grace's budget") { process.terminated }
+        for await _ in turn {}
+    }
+
+    func testANewTurnsTaskIsHeldOverAnExpiredOneInFront() async throws {
+        let (lifecycle, session, launcher, clock, _, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let number = lifecycle.turnBegan()
+        let turn = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        let expired = FakeContinued()
+        lifecycle.held(expired, turn: number)
+        lifecycle.didEnterBackground()
+        await eventually("the way out waiting on the turn") { await clock.pending == 1 }
+        expired.expire()
+        lifecycle.willEnterForeground()
+        await eventually("kept") { outcomes.all.contains(.kept) }
+        answer(process, "done")
+        for await _ in turn {}
+        lifecycle.turnEnded(number, succeeded: true)
+        let next = lifecycle.turnBegan()
+        let fresh = FakeContinued()
+        lifecycle.held(fresh, turn: next)
+        XCTAssertTrue(fresh.open, "a new turn's task was refused for an expired one")
+        XCTAssertEqual(expired.completions, [false])
+        await clock.advance(by: GraceBudget.firstTick)
+        XCTAssertTrue(fresh.open, "the expired task's tick let the new task go")
+        XCTAssertEqual(expired.completions, [false], "the expired task was completed twice")
+    }
+
     func testATurnThatFailsCompletesItsTaskUnsuccessfully() {
         let (lifecycle, _, _, _, _, _) = make()
         lifecycle.willEnterForeground()

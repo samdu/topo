@@ -67,9 +67,10 @@ enum ContinuedTurns {
         }
         let identifier = "\(prefix).\(UUID().uuidString)"
         waiting[identifier] = (lifecycle, turn)
-        // The request is made here, at the send and on the main actor, since it is made on behalf
-        // of the app in front; only the submission, which the scheduler asks not to be called on
-        // the main thread, waits for a thread of its own.
+        // The request is made here, at the send and on the main actor: `BGTaskRequest.h` says its
+        // initialiser "creates an instance on behalf of the currently foregrounded app". Only the
+        // submission, which the scheduler asks not to be called on the main thread, waits for a
+        // thread of its own, and one that lands after the app has left is refused and logged.
         nonisolated(unsafe) let request = ContinuedTurns.request(identifier: identifier)
         Task.detached {
             do {
@@ -92,8 +93,9 @@ enum ContinuedTurns {
         return request
     }
 
-    /// Registered at the first turn rather than at launch: `BGTaskScheduler.h` exempts
-    /// `BGContinuedProcessingTask` registrations from the before-launch rule.
+    /// Registered at the first turn rather than at launch. `BGTaskScheduler.h`: "You must register
+    /// launch handlers before your application finishes launching (``BGContinuedProcessingTask``
+    /// registrations are exempt from this requirement)."
     private static func register() -> Bool {
         if let registered { return registered }
         let done = BGTaskScheduler.shared.register(forTaskWithIdentifier: "\(prefix).*", using: .main) { task in
