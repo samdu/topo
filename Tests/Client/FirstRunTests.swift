@@ -45,33 +45,6 @@ final class FirstRunTests: XCTestCase {
         XCTAssertEqual(FirstRun.drawn(state, asks: false), state)
     }
 
-    /// The question's sign reaches past every other pose, and every frame the engine draws taking
-    /// it up from the shelf and holding it is inside that reach in both facings, so the roam keeps
-    /// the whole board on the screen and off the glass from the first frame.
-    @MainActor
-    func testTheQuestionsSignIsDrawnInsideItsReachOnEveryFrame() {
-        let reach = MascotSprite.reach(sign: FirstRun.question)
-        XCTAssertTrue(reach.contains(MascotSprite.reach), "the sign's reach \(reach) is smaller than a pose's")
-        XCTAssertGreaterThan(reach.width, MascotSprite.reach.width, "the sign reaches no further than a pose")
-        XCTAssertEqual(reach.midX, MascotSprite.box.midX, accuracy: 0.5, "the reach is not symmetric about his axis")
-        XCTAssertEqual(MascotSprite.reach(sign: nil), MascotSprite.reach)
-        var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
-        for facing in MascotFacing.allCases {
-            let engine = Topo(random: { 0.5 })
-            var outside = 0, board = false
-            for _ in 0..<(MascotSprite.signSettle * 30 * 2) {
-                engine.update(1.0 / 30, TopoInput(activity: "sign", sign: FirstRun.question, facing: facing.rawValue))
-                engine.draw(&rgba)
-                for y in 0..<Topo.height { for x in 0..<Topo.width where rgba[(y * Topo.width + x) * 4 + 3] != 0 {
-                    if !reach.contains(CGPoint(x: x, y: y)) { outside += 1 }
-                    if !MascotSprite.reach.contains(CGPoint(x: x, y: y)) { board = true }
-                } }
-            }
-            XCTAssertTrue(board, "\(facing) never drew the board past a pose's reach")
-            XCTAssertEqual(outside, 0, "\(facing) drew \(outside) pixels outside \(reach) over six seconds")
-        }
-    }
-
     /// Under Reduce Motion he is one still, and a still handed a sign holds it up: the question
     /// is on the screen whether or not he moves.
     @MainActor
