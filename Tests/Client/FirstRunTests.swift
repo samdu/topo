@@ -1,3 +1,4 @@
+import TopoMascot
 import XCTest
 
 @testable import Topo
@@ -7,42 +8,70 @@ import XCTest
 /// answer on the line — is `HarnessIntegrationTests`'.
 final class FirstRunTests: XCTestCase {
     /// Of every combination, the question is asked in one: the log read, empty, nothing on the
-    /// line or in flight, the person's hand not on the chat, not answered, no fixture drawn.
+    /// line or in flight, not answered, no fixture drawn.
     func testTheQuestionIsAskedOnlyOverAReadEmptyLogWithNothingGoing() {
         var asked: [[Bool]] = []
         let both = [false, true]
         for read in both { for empty in both { for waiting in both { for busy in both {
-            for engaged in both { for answered in both { for fixture in both {
-                if FirstRun.asks(read: read, empty: empty, waiting: waiting, busy: busy, engaged: engaged,
+            for answered in both { for fixture in both {
+                if FirstRun.asks(read: read, empty: empty, waiting: waiting, busy: busy,
                                  answered: answered, fixture: fixture) {
-                    asked.append([read, empty, waiting, busy, engaged, answered, fixture])
+                    asked.append([read, empty, waiting, busy, answered, fixture])
                 }
-            } } }
+            } }
         } } } }
-        XCTAssertEqual(asked, [[true, true, false, false, false, false, false]])
+        XCTAssertEqual(asked, [[true, true, false, false, false, false]])
     }
 
-    /// The composer works while the log is unread, so the first read of an empty log can return
-    /// with the chat's microphone open, its field focused or words in its row. The question
-    /// waits for each to end; one that ended in a turn left words on the line, and it is not asked.
-    func testTheQuestionWaitsForTheChatsMicrophoneAndField() {
-        func asks(engaged: Bool, waiting: Bool = false) -> Bool {
-            FirstRun.asks(read: true, empty: true, waiting: waiting, busy: false, engaged: engaged, answered: false)
+    /// The question is answered when it stops being asked over a log still read that has a turn
+    /// or words on the line. A read taken away (a device taking primary back), a turn in flight
+    /// with nothing on the line (a demotion's save holds the harness busy), and a question never
+    /// asked are not answers.
+    func testTheQuestionIsAnsweredOnlyByATurn() {
+        XCTAssertTrue(FirstRun.answered(asked: true, read: true, empty: true, waiting: true))
+        XCTAssertTrue(FirstRun.answered(asked: true, read: true, empty: false, waiting: false))
+        XCTAssertFalse(FirstRun.answered(asked: true, read: true, empty: true, waiting: false),
+                       "the harness going busy with nothing on the line answered the question")
+        XCTAssertFalse(FirstRun.answered(asked: true, read: false, empty: true, waiting: true), "a read taken away answered the question")
+        XCTAssertFalse(FirstRun.answered(asked: false, read: true, empty: false, waiting: true), "a question never asked was answered")
+    }
+
+    /// Topo holds the question up while it is asked, and nothing otherwise: whatever he was
+    /// drawn as stays, sign and all.
+    func testTopoHoldsTheQuestionWhileItIsAsked() {
+        let state = MascotState(model: "sonnet")
+        XCTAssertEqual(FirstRun.drawn(state, asks: true).sign, FirstRun.question)
+        XCTAssertEqual(FirstRun.drawn(state, asks: true).input.activity, "sign")
+        XCTAssertEqual(FirstRun.drawn(state, asks: false), state)
+    }
+
+    /// A thumb on the microphone takes Topo away with the flanks, but not while he holds the
+    /// question: holding the microphone is how it is answered, and it stands until it is.
+    func testTheQuestionStaysUpWhileTheMicrophoneIsHeld() {
+        let held = Look().composer.flank.heldOpacity
+        XCTAssertEqual(FirstRun.opacity(holding: true, asks: true, held: held), 1)
+        XCTAssertEqual(FirstRun.opacity(holding: true, asks: false, held: held), held)
+        XCTAssertEqual(FirstRun.opacity(holding: false, asks: true, held: held), 1)
+        XCTAssertEqual(FirstRun.opacity(holding: false, asks: false, held: held), 1)
+    }
+
+    /// Under Reduce Motion he is one still, and a still handed a sign holds it up: the question
+    /// is on the screen whether or not he moves.
+    @MainActor
+    func testTheReduceMotionStillHoldsTheSign() throws {
+        func drawn(sign: String?) throws -> CGRect {
+            let driver = MascotDriver()
+            driver.input = FirstRun.drawn(MascotState(model: "sonnet"), asks: sign != nil).input
+            driver.conditions = .init(active: true, onScreen: true, reduceMotion: true)
+            let image = try XCTUnwrap(driver.image, "no still was drawn")
+            let data = try XCTUnwrap(image.dataProvider?.data) as Data
+            var x1 = -1
+            for y in 0..<image.height { for x in 0..<image.width where data[(y * image.width + x) * 4 + 3] != 0 { x1 = max(x1, x) } }
+            return CGRect(x: 0, y: 0, width: x1 + 1, height: 1)
         }
-        XCTAssertFalse(asks(engaged: true), "the question arrived over the chat's own session")
-        XCTAssertTrue(asks(engaged: false), "a session that ended in nothing left the question unasked")
-        XCTAssertFalse(asks(engaged: false, waiting: true), "asked over the turn the session ended in")
-    }
-
-    /// Words said before the read are drawn as any turn on its way is, and the placeholder never
-    /// stands over them; once the log is read it does not stand at all.
-    /// The question stands while it is asked, and while its own microphone's answer is still
-    /// being heard though a turn the log brought has ended the asking.
-    func testTheQuestionStandsUntilItsOwnAnswerIsHeard() {
-        XCTAssertTrue(FirstRun.stands(hearing: false, asks: true))
-        XCTAssertTrue(FirstRun.stands(hearing: true, asks: false), "a turn from another device took the question from under an answer being heard")
-        XCTAssertTrue(FirstRun.stands(hearing: true, asks: true))
-        XCTAssertFalse(FirstRun.stands(hearing: false, asks: false))
+        XCTAssertGreaterThan(try drawn(sign: FirstRun.question).maxX, MascotSprite.reach.maxX,
+                             "the still dropped the sign")
+        XCTAssertLessThanOrEqual(try drawn(sign: nil).maxX, MascotSprite.reach.maxX)
     }
 
     func testThePlaceholderStandsOnlyOverAnUnreadEmptyPage() {

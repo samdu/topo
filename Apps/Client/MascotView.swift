@@ -59,20 +59,24 @@ final class MascotDriver {
 
     /// What of the input the still is drawn differently for, as the engine reads it: the head the
     /// model picks (`levelForModel`, by family, so two ids of one model are one head), the band
-    /// the tokens fall in (`loadForTokens`) and the facing, which mirrors the whole picture (any
-    /// word but `right` is `left`, as the engine reads it). Tokens moving within a band, a pose, a
-    /// sign or the stroll's corner change nothing of the idle still, and `MascotState` sets
+    /// the tokens fall in (`loadForTokens`), the facing, which mirrors the whole picture (any
+    /// word but `right` is `left`, as the engine reads it), and the sign's words, which he holds
+    /// up in the still. Tokens moving within a band, a pose or the stroll's corner change nothing
+    /// of the still, and `MascotState` sets
     /// nothing else it is drawn with: style, shading and relief are left at the engine's own.
     struct Still: Equatable {
         var level: Double
         var load: Load
         var facing: String
+        /// The words on the sign he holds up in the still, if any.
+        var sign: String?
 
         init(_ input: TopoInput) {
             let rest = Self.rest
             level = input.model.flatMap { $0.isEmpty ? nil : levelForModel($0) } ?? input.level ?? rest.level
             load = input.tokens.map(loadForTokens) ?? input.load.flatMap(Load.init(rawValue:)) ?? rest.load
             facing = input.facing.map { $0 == "right" ? "right" : "left" } ?? rest.facing
+            sign = input.sign
         }
 
         /// A fresh engine's, which is what the still starts from and keeps where the input is silent.
@@ -100,7 +104,8 @@ final class MascotDriver {
         #endif
     }
 
-    /// Under Reduce Motion he is the idle pose, settled, at home: a fresh engine walked to where
+    /// Under Reduce Motion he is the idle pose, settled, at home, or holding up the sign he is
+    /// handed: a fresh engine walked to where
     /// the pose has landed and drawn once, with the model, the load and the facing of the state.
     ///
     /// 2.9 s at a thirtieth is past the pose's settle (the sheet settles in 2.2) and before the
@@ -111,9 +116,9 @@ final class MascotDriver {
         guard conditions.still, stillFor != key else { return }
         stillFor = key
         let still = Topo(random: { 0.5 })
+        // A sign is words for the person to read, so the still holds it up; otherwise he is idle.
         var idle = input
-        idle.activity = "idle"
-        idle.sign = nil
+        if idle.sign == nil { idle.activity = "idle" } else { idle.activity = "sign" }
         for _ in 0..<Self.stillSteps { still.update(1.0 / 30, idle) }
         still.draw(&rgba)
         publish(x: 0)
@@ -413,11 +418,11 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         conditions.hidden = roam.hidden
         var worn = input
         // The engine walks along its own shelf; where he is on the screen is the roam's, so the
-        // stroll goes nowhere and a glide is the walk worn in place.
+        // stroll goes nowhere and a glide is the walk worn in place. Holding a sign, he glides
+        // holding it: the words stay up for as long as he is handed them.
         worn.corner = 0
-        if roam.walking {
+        if roam.walking, worn.sign == nil {
             worn.activity = "walk"
-            worn.sign = nil
         }
         if driver.input.activity != worn.activity || driver.input.model != worn.model
             || driver.input.tokens != worn.tokens || driver.input.sign != worn.sign || driver.input.corner != 0
@@ -940,7 +945,8 @@ struct MascotLayer: View {
             let field = scene.field(in: proxy, keyboardTop: keyboardTop, stop: stop)
             // Under the model slider while it is open, whatever the look's placement.
             let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, perch: look.composer.perchInset,
-                                                                   reduceMotion: reduceMotion),
+                                                                   reduceMotion: reduceMotion,
+                                                                   within: MascotSprite.reach(sign: state.sign)),
                                                under: field, swim: look.mascot.swimSpeed)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,

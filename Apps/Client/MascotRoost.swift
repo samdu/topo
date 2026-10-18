@@ -139,9 +139,19 @@ enum MascotSprite {
     /// ways between them — in both facings, with two pixels round it
     /// (`MascotGeometryTests.testEveryPoseTheAppAsksForIsDrawnInsideTheReach`). Facing right what a
     /// pose reaches on his right is reached on his left, so each side is the longer of the two.
-    /// The sign is not in it, because nothing in the app sets one (`MascotState.sign`); a sign
-    /// reaches about 40 pixels further out on the side he faces.
+    /// A sign is not in it: `signReach` is.
     static let reach = CGRect(x: 15, y: 47, width: 130, height: 113)
+
+    /// The part of the picture he can be drawn in while he holds up a sign: `reach`, and every
+    /// pixel the engine draws taking the largest board it makes (three lines of eleven) up from
+    /// the shelf and holding it, on every head and load band, in both facings, with two pixels
+    /// round it, each side the longer of the two facings as `reach` is
+    /// (`MascotGeometryTests.testEverySignIsDrawnInsideTheSignReach`). A board of fewer words is
+    /// smaller, so it is inside too.
+    static let signReach = CGRect(x: -21, y: 45, width: 202, height: 115)
+
+    /// The reach for a picture holding up `sign`, or none.
+    static func reach(sign: String?) -> CGRect { sign == nil ? reach : signReach }
 
     /// How far `reach` goes past the box on each side, in points at `scale`.
     struct Reach: Equatable, Sendable, Codable {
@@ -165,7 +175,7 @@ enum MascotSprite {
         }
     }
 
-    static func reach(scale: CGFloat) -> Reach {
+    static func reach(scale: CGFloat, within reach: CGRect = reach) -> Reach {
         Reach(left: (box.minX - reach.minX) * scale, top: (box.minY - reach.minY) * scale,
               right: (reach.maxX - box.maxX) * scale, bottom: (reach.maxY - box.maxY) * scale)
     }
@@ -846,9 +856,11 @@ struct MascotRoam: Equatable, Sendable {
             self.pin = pin
         }
 
-        init(_ mascot: Look.Mascot, perch: CGFloat = Look.Composer().perchInset, reduceMotion: Bool) {
+        /// `within` is the part of the picture he can be drawn in: `MascotSprite.reach`, or a sign's.
+        init(_ mascot: Look.Mascot, perch: CGFloat = Look.Composer().perchInset, reduceMotion: Bool,
+             within: CGRect = MascotSprite.reach) {
             self.init(size: MascotSprite.size(scale: mascot.scale), clearance: mascot.clearance,
-                      reach: MascotSprite.reach(scale: mascot.scale), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
+                      reach: MascotSprite.reach(scale: mascot.scale, within: within), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
                       reduceMotion: reduceMotion, placement: mascot.placement, pin: mascot.pin)
             self.perch = perch
         }
