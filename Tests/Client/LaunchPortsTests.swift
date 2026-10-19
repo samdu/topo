@@ -22,8 +22,15 @@ final class LaunchPortsTests: XCTestCase {
         // Both listeners gone, as iOS takes them from a suspended app.
         await proxy.stop()
         await tools.stop()
-        let probes = await (LoopbackProbe.answers(port: first.proxy), LoopbackProbe.answers(port: first.tools))
-        XCTAssertFalse(probes.0 || probes.1, "control: the first ports still answer")
+        // A listener closes on its own queue: the old ports refuse a moment after the stop.
+        var answering = true
+        for _ in 0..<500 where answering {
+            let probes = await (LoopbackProbe.answers(port: first.proxy, within: .milliseconds(200)),
+                                LoopbackProbe.answers(port: first.tools, within: .milliseconds(200)))
+            answering = probes.0 || probes.1
+            if answering { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        XCTAssertFalse(answering, "control: the first ports still answer")
         let next = try await ports.ports()
         let answers = await (LoopbackProbe.answers(port: next.proxy), LoopbackProbe.answers(port: next.tools))
         XCTAssertTrue(answers.0 && answers.1, "the next launch was told a port nothing listens on")
