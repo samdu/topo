@@ -4453,8 +4453,29 @@ extension GuestBridgeTests {
         let log = TurnLog(database: db)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: steadyLease(db, phone), brain: bridge)
         _ = try? await runner.run("hello", model: .sonnet)
-        XCTAssertFalse(lines.all.isEmpty, "a refused request was told nowhere")
-        XCTAssertTrue(lines.all.allSatisfy { $0 == "bridge: not ready at the request" }, "\(lines.all)")
+        XCTAssertEqual(lines.all, ["bridge: not ready at the request"], "a refused request is told once")
+    }
+
+    /// A process that exits before reading the input is told by kind; its last words, which can
+    /// hold the person's, are not in the line.
+    func testAProcessThatExitedIsToldWithoutItsLastWords() async throws {
+        let secret = "the person's words \(UUID().uuidString)"
+        let lines = Lines()
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.notReceived(secret)])
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile, note: { lines.add($0) })
+        let log = TurnLog(database: db)
+        let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: steadyLease(db, phone), brain: bridge)
+        _ = try? await runner.run("hello", model: .sonnet)
+        XCTAssertTrue(lines.all.contains { $0.hasSuffix("; the turn lost its process mid-turn") }, "\(lines.all)")
+        for line in lines.all { XCTAssertFalse(line.contains(secret), line) }
+    }
+
+    /// A subtype that is not a plain identifier is said as `other`: the field is the process's.
+    func testASubtypeThatIsNotAnIdentifierIsNotSaid() {
+        let secret = "the person's words"
+        let odd = StreamEvent.TurnResult(isError: true, subtype: secret, text: nil, session: nil, duration: nil)
+        XCTAssertEqual(GuestBridge.kind(of: .failed(.result(odd))), "ended with an error result (other)")
     }
 
     /// The line a failure is logged with names the kind of end and never what the turn carried:

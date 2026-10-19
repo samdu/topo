@@ -1241,12 +1241,21 @@ actor GuestBridge: Brain {
         return error
     }
 
+    /// An error result's subtype as a line may carry it: Claude Code's own are lowercase words
+    /// joined by underscores, and anything else is said as `other`, since the field is whatever the
+    /// process wrote.
+    static func subtype(_ subtype: String) -> String {
+        let plain = !subtype.isEmpty && subtype.count <= 48
+            && subtype.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || $0 == "_" }
+        return plain ? subtype : "other"
+    }
+
     /// The kind of end a turn came to, with nothing it carried but an error result's subtype.
     static func kind(of end: GuestSession.TurnEnd) -> String {
         switch end {
         case .answered: "answered"
         case .abandoned: "was abandoned"
-        case .failed(.result(let result)): "ended with an error result (\(result.subtype))"
+        case .failed(.result(let result)): "ended with an error result (\(Self.subtype(result.subtype)))"
         case .failed(.exited): "lost its process mid-turn"
         case .failed(.silent(let bound)): "heard nothing for \(bound)"
         case .failed(.input): "could not be written"
