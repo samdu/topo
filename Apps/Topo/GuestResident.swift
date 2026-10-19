@@ -129,8 +129,13 @@ final class GuestResident {
             _ = try await userland.bootGuest()
             _ = try await self.prepareTools(log: log)
             Perf.mark("guest.tools.ready")
-            let proxy = self.proxy ?? (try APIProxy(log: Self.listening("proxy", log: log)))
-            self.proxy = proxy
+            let proxy: APIProxy
+            if let made = self.proxy {
+                proxy = made
+            } else {
+                proxy = try APIProxy(log: Self.listening("proxy", log: log))
+                self.proxy = proxy
+            }
             _ = try await proxy.start()
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
             let launcher = ClaudeLauncher {
