@@ -382,7 +382,7 @@ actor GuestBridge: Brain {
 
         // A ledger that cannot be read may hold an input the guest received: nothing is sent
         // until it can be read and that input reconciled.
-        guard readLedger() else { throw told(.failed(Self.ledgerUnreadable), at: "ledger unreadable") }
+        guard readLedger() else { throw failing(.failed(Self.ledgerUnreadable), at: "ledger unreadable") }
         // What an input the log moved past carried: the guest received it, so it is not told
         // again, but it is counted seen only when this request's reply lands, which covers it.
         var received = Coverage()
@@ -399,7 +399,7 @@ actor GuestBridge: Brain {
             // killed: read off the guest's transcript before anything else is sent.
             guard await settleEarly() else {
                 try stillCurrent(login)
-                throw told(.failed(Self.unknown), at: "an early input's end not known")
+                throw failing(.failed(Self.unknown), at: "an early input's end not known")
             }
             try stillCurrent(login)
             repeat { reconciling: while let pending = ledger.pending {
@@ -428,11 +428,11 @@ actor GuestBridge: Brain {
                         ledger.pending?.covers.formUnion(received)
                         try? save()
                     }
-                    throw told(.failed("a reply the guest finished is still to be written"), at: "reconciling: a reply owed")
+                    throw failing(.failed("a reply the guest finished is still to be written"), at: "reconciling: a reply owed")
                 case .unresolved:
                     ledger.pending?.state = .unresolved
                     try save()
-                    throw told(.unresolved, at: "reconciling: the pending input unresolved")
+                    throw failing(.unresolved, at: "reconciling: the pending input unresolved")
                 case .askAgain:
                     break
                 case .superseded:
@@ -440,14 +440,14 @@ actor GuestBridge: Brain {
                     // since the log was read is read with the next request.
                     let read = Set((request.context + request.answering).map(\.ref))
                     guard pending.answering.allSatisfy({ read.contains($0) }) else {
-                        throw told(.failed("a turn the guest was cut off on was saved since the log was read"), at: "reconciling: superseded since the read")
+                        throw failing(.failed("a turn the guest was cut off on was saved since the log was read"), at: "reconciling: superseded since the read")
                     }
                     received.formUnion(pending.covers)
                     try record(nil)
                 case .hold:
                     break
                 case .unknown:
-                    throw told(.failed(Self.unknown), at: "reconciling: the pending input's end not known")
+                    throw failing(.failed(Self.unknown), at: "reconciling: the pending input's end not known")
                 }
                 break reconciling
             } } while promote()
@@ -507,7 +507,7 @@ actor GuestBridge: Brain {
             // Refused before anything was written: not received. The record may have landed
             // and another taken its place while the guest was asked for its process.
             if self.login == login, ledger.pending?.input == id { try? record(nil) }
-            throw told(.failed(String(describing: error)), at: "send refused (\(type(of: error)))")
+            throw failing(.failed(String(describing: error)), at: "send refused (\(type(of: error)))")
         }
 
         let answering = request.answering.map(\.ref)
@@ -568,21 +568,21 @@ actor GuestBridge: Brain {
                 ledger.pending?.state = .unresolved
                 try? save()
             }
-            throw told(.unresolved, at: "the turn ended", end: end)
+            throw failing(.unresolved, at: "the turn ended", end: end)
         }
         // Anything else is read off the transcript once nothing can still be writing it.
         let final = await conversation.settle()
         guard self.login == login else { throw CancellationError() }
         guard let pending = ledger.pending, pending.input == id else {
-            throw told(.failed(Self.describe(end)), at: "the record moved while the turn ran", end: end)
+            throw failing(.failed(Self.describe(end)), at: "the record moved while the turn ran", end: end)
         }
         // A process not confirmed gone may still be writing: the record stays, and the next
         // request reads again.
-        guard final else { throw told(.failed(Self.unknown), at: "the process not confirmed gone", end: end) }
+        guard final else { throw failing(.failed(Self.unknown), at: "the process not confirmed gone", end: end) }
         switch GuestTranscript.verdict(for: id, home: conversation.home, session: pending.session, since: pending.sentAt) {
         case .notReceived:
             try? record(nil)
-            throw told(.failed(Self.describe(end)), at: "the transcript: not received", end: end)
+            throw failing(.failed(Self.describe(end)), at: "the transcript: not received", end: end)
         case .answered(let text):
             ledger.pending?.state = .answered
             ledger.pending?.text = text
@@ -591,10 +591,10 @@ actor GuestBridge: Brain {
         case .unresolved:
             ledger.pending?.state = .unresolved
             try? save()
-            throw told(.unresolved, at: "the transcript: unresolved", end: end)
+            throw failing(.unresolved, at: "the transcript: unresolved", end: end)
         case .unreadable:
             // The record stays: the next request reads again before it sends anything.
-            throw told(.failed(Self.unknown), at: "the transcript: unreadable", end: end)
+            throw failing(.failed(Self.unknown), at: "the transcript: unreadable", end: end)
         }
     }
 
@@ -1199,7 +1199,7 @@ actor GuestBridge: Brain {
     /// last words can hold the person's words or the reply's.
     private static let trail = Logger(subsystem: "zone.hexagon.topo", category: "bridge")
 
-    private func told(_ error: GuestBridgeError, at place: String, end: GuestSession.TurnEnd? = nil) -> GuestBridgeError {
+    private func failing(_ error: GuestBridgeError, at place: String, end: GuestSession.TurnEnd? = nil) -> GuestBridgeError {
         let kind = switch error {
         case .notReady: "not ready"
         case .unresolved: "unresolved"
