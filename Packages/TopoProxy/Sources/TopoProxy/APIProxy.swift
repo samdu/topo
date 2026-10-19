@@ -62,31 +62,44 @@ public actor APIProxy {
         self.log = log
     }
 
-    /// Starts listening and returns the port, once bound; the port it has when already up. A
-    /// start while another is waiting for its listener waits for the same one.
+    /// Starts listening and returns the port, once bound. A port already held is vouched for
+    /// first (`LoopbackProbe`): one that does not answer is a listener lost whether or not it has
+    /// said so yet — iOS takes a suspended app's away, and its word can come after the next launch
+    /// asks — and is started again. A start while another is waiting for its listener waits for
+    /// the same one.
     public func start() async throws -> UInt16 {
-        if let port { return port }
-        if listener == nil {
-            let parameters = NWParameters.tcp
+        while true {
+            if let held = port {
+                let current = generation
+                let answers = await LoopbackProbe.answers(port: held)
+                // Anything may have happened across the probe: only the listener it judged is judged.
+                guard current == generation, port == held else { continue }
+                if answers { return held }
+                lost("its port no longer answers", POSIXError(.ECONNREFUSED))
+                continue
+            }
+            if listener == nil {
+                let parameters = NWParameters.tcp
             // Loopback only: the listener is bound to 127.0.0.1, so no other interface — and no
             // LAN peer — reaches it.
-            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
-            let listener = try NWListener(using: parameters)
-            generation += 1
-            let current = generation
-            listener.newConnectionHandler = { [weak self] connection in
-                guard let self else { connection.cancel(); return }
-                Task { await self.accept(connection, generation: current) }
+                parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: requestedPort)
+                let listener = try NWListener(using: parameters)
+                generation += 1
+                let current = generation
+                listener.newConnectionHandler = { [weak self] connection in
+                    guard let self else { connection.cancel(); return }
+                    Task { await self.accept(connection, generation: current) }
+                }
+                listener.stateUpdateHandler = { [weak self] state in
+                    guard let self else { return }
+                    Task { await self.stateChanged(state, generation: current) }
+                }
+                self.listener = listener
+                listener.start(queue: queue)
             }
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
-                Task { await self.stateChanged(state, generation: current) }
+            return try await withCheckedThrowingContinuation { continuation in
+                waiting.append(continuation)
             }
-            self.listener = listener
-            listener.start(queue: queue)
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            waiting.append(continuation)
         }
     }
 
@@ -110,10 +123,14 @@ public actor APIProxy {
         return (["ANTHROPIC_BASE_URL": baseURL(port: port), "CLAUDE_CODE_OAUTH_TOKEN": token], source)
     }
 
-    private func stateChanged(_ state: NWListener.State, generation current: Int) {
+    private func stateChanged(_ state: NWListener.State, generation current: Int) async {
         guard current == generation, let listener else { return }
         switch state {
         case .ready:
+            if let holdReady {
+                await holdReady()
+                guard current == generation else { return }
+            }
             // A listener that cannot name its port is a failed start.
             guard let bound = listener.port?.rawValue, bound != 0 else {
                 down()
@@ -122,10 +139,10 @@ public actor APIProxy {
             }
             port = bound
             settle(.success(bound))
-        case .failed(let error):
-            lost(error)
-        case .cancelled:
-            lost(CancellationError())
+        case .failed(let error) where hearsLoss:
+            lost("it failed", error)
+        case .cancelled where hearsLoss:
+            lost("it was cancelled", CancellationError())
         case .waiting(let error) where port == nil:
             // A port that cannot be bound waits for one that can; a start takes it as failed.
             down()
@@ -136,11 +153,25 @@ public actor APIProxy {
     }
 
     /// The running listener went away without being stopped: down until the next start.
-    private func lost(_ error: any Error) {
-        if port != nil { log("listener lost (\(type(of: error))); the next start listens again") }
+    private func lost(_ how: String, _ error: any Error) {
+        if port != nil { log("listener lost (\(how)); the next start listens again") }
         down()
         settle(.failure(error))
     }
+
+    // MARK: Seams for the tests
+
+    /// The port the next listener asks for; any, outside a test that needs one taken.
+    var requestedPort: NWEndpoint.Port = .any
+    /// Whether a listener's own word that it failed or was cancelled is heard; a test turns it off
+    /// to stand for the word not having come yet.
+    var hearsLoss = true
+    /// Awaited before a listener's readiness is settled, so a test can hold a start pending.
+    var holdReady: (@Sendable () async -> Void)?
+    var waitingStarts: Int { waiting.count }
+    func set(requestedPort: NWEndpoint.Port) { self.requestedPort = requestedPort }
+    func set(hearsLoss: Bool) { self.hearsLoss = hearsLoss }
+    func set(holdReady: (@Sendable () async -> Void)?) { self.holdReady = holdReady }
 
     private func down() {
         generation += 1

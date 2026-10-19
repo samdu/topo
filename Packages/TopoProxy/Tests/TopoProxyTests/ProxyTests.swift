@@ -407,18 +407,48 @@ import TopoAuth
 }
 
 @Suite struct ListenerLossTests {
-    /// Issue 369: a listener taken away once it is up (iOS takes a suspended app's) is the proxy
-    /// down and logged, and the next start listens again on a port that answers.
-    @Test func aListenerLostIsTheProxyDownUntilTheNextStart() async throws {
+    /// Waits until nothing answers on `port`, as a listener iOS took away does not.
+    static func refused(_ port: UInt16) async throws {
+        for _ in 0..<500 where await LoopbackProbe.answers(port: port, within: .milliseconds(200)) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await !LoopbackProbe.answers(port: port, within: .milliseconds(200)))
+    }
+
+    /// Issue 369: a listener that says it was cancelled once it is up is the proxy down and
+    /// logged, its connections closed — a streaming response in flight included, its upstream
+    /// cancelled — and the next start listens again on a port that forwards.
+    @Test func aListenerLostIsTheProxyDownWithItsConnectionsClosed() async throws {
+        let cancelled = Signal()
+        let (proxy, first, logs) = try await startedProxy(StreamingTests.endlessStream(pinging: false, cancelled: cancelled))
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: first)
+        try await client.send(post("/v1/messages", body: #"{"model":"x","stream":true}"#))
+        _ = try await client.readHead()
+        _ = try await client.readChunk()
+        await proxy.listener?.cancel()
+        #expect(await cancelled.wait(3), "the upstream stream outlived the listener: \(logs.lines)")
+        for _ in 0..<500 where await proxy.port != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await proxy.port == nil)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost (it was cancelled)") })
+        let second = try await proxy.start()
+        #expect(await LoopbackProbe.answers(port: second))
+    }
+
+    /// Codex on #448: a launch can ask for the port before the listener's own word that it was
+    /// taken away has arrived, or with none ever arriving. The held port is vouched for, and one
+    /// that does not answer is started again rather than handed out.
+    @Test func aHeldPortThatNoLongerAnswersIsStartedAgainWithNoWordFromItsListener() async throws {
         let upstream = StubUpstream()
         let (proxy, first, logs) = try await startedProxy(upstream)
         defer { Task { await proxy.stop() } }
+        await proxy.set(hearsLoss: false)
         await proxy.listener?.cancel()
-        for _ in 0..<500 where await proxy.port != nil { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(await proxy.port == nil)
-        #expect(logs.lines.contains { $0.hasPrefix("listener lost") })
+        try await Self.refused(first)
+        #expect(await proxy.port == first, "control: the proxy has not heard of the loss")
         let second = try await proxy.start()
-        #expect(second != 0)
+        #expect(second != first)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost (its port no longer answers)") })
         let client = try await WireClient(port: second)
         try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
         let (head, _) = try await client.readResponse()
@@ -426,17 +456,54 @@ import TopoAuth
         #expect(upstream.requests.count == 1)
     }
 
-    /// A stop is not a loss, and a start after it listens again; a start waiting while another
-    /// waits for the same listener gets the same port.
-    @Test func aStopThenAStartListensAgainAndConcurrentStartsShareOne() async throws {
+    /// A held port that answers is handed out as it is, and nothing is logged.
+    @Test func aHeldPortThatAnswersIsKept() async throws {
+        let (proxy, first, logs) = try await startedProxy(StubUpstream())
+        defer { Task { await proxy.stop() } }
+        let generation = await proxy.generation
+        #expect(try await proxy.start() == first)
+        #expect(await proxy.generation == generation)
+        #expect(logs.lines.isEmpty)
+    }
+
+    /// Two starts while one listener is still coming up wait for that one listener.
+    @Test func startsWhileAListenerComesUpShareIt() async throws {
+        let proxy = try APIProxy(upstream: StubUpstream(), log: { _ in })
+        defer { Task { await proxy.stop() } }
+        let gate = Signal()
+        await proxy.set(holdReady: { _ = await gate.wait(10) })
+        async let one = proxy.start()
+        async let two = proxy.start()
+        for _ in 0..<500 where await proxy.waitingStarts < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await proxy.waitingStarts == 2)
+        #expect(await proxy.generation == 1)
+        gate.fire()
+        let (a, b) = try await (one, two)
+        #expect(a == b)
+        #expect(await proxy.generation == 1)
+    }
+
+    /// A port that cannot be bound fails the start rather than leaving it waiting.
+    @Test func aPortThatCannotBeBoundFailsTheStart() async throws {
+        let (holder, taken, _) = try await startedProxy(StubUpstream())
+        defer { Task { await holder.stop() } }
+        let proxy = try APIProxy(upstream: StubUpstream(), log: { _ in })
+        defer { Task { await proxy.stop() } }
+        await proxy.set(requestedPort: NWEndpoint.Port(rawValue: taken)!)
+        let started = ContinuousClock.now
+        await #expect(throws: (any Error).self) { _ = try await proxy.start() }
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(await proxy.port == nil)
+        #expect(await proxy.waitingStarts == 0)
+    }
+
+    /// A stop is not a loss, and a start after it listens again.
+    @Test func aStopThenAStartListensAgain() async throws {
         let (proxy, _, logs) = try await startedProxy(StubUpstream())
         await proxy.stop()
         #expect(await proxy.port == nil)
-        async let one = proxy.start()
-        async let two = proxy.start()
-        let (a, b) = try await (one, two)
-        #expect(a == b)
-        #expect(a != 0)
+        let port = try await proxy.start()
+        #expect(await LoopbackProbe.answers(port: port))
         await proxy.stop()
         #expect(!logs.lines.contains { $0.hasPrefix("listener lost") })
     }

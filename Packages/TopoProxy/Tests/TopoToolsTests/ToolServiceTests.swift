@@ -217,17 +217,32 @@ import TopoProxy
 }
 
 @Suite struct ToolListenerLossTests {
-    /// A listener taken away once it is up (iOS takes a suspended app's) is the service down and
-    /// logged; the next start listens again with the same token, and a call through it runs.
-    @Test func aListenerLostIsTheServiceDownUntilTheNextStart() async throws {
+    /// A listener that says it was cancelled once it is up is the service down and logged, a call
+    /// in flight closed rather than answered at its bound; the next start listens again with the
+    /// same token, and a call through it runs.
+    @Test func aListenerLostIsTheServiceDownWithItsConnectionsClosed() async throws {
+        let stuck = ScriptedTool(name: "stuck") { _ in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 20) { continuation.resume() }
+            }
+            return .ok("never")
+        }
         let tool = ScriptedTool()
-        let (service, _, logs) = try await startedService([tool])
+        let (service, first, logs) = try await startedService([stuck, tool], bound: .seconds(30))
         defer { Task { await service.stop() } }
         let token = await service.token
+        let started = ContinuousClock.now
+        async let inFlight = { () async throws -> Int? in
+            let (head, body) = call(port: first, token: token, ["stuck"])
+            return try await exchange(port: first, head, body: body).status
+        }()
+        for _ in 0..<500 where stuck.calls.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
         await service.listener?.cancel()
+        #expect(try await inFlight == nil, "a call in flight was answered after the listener was lost")
+        #expect(ContinuousClock.now - started < .seconds(10))
         for _ in 0..<500 where await service.port != nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await service.port == nil)
-        #expect(logs.lines.contains { $0.hasPrefix("listener lost") })
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost (it was cancelled)") })
         let second = try await service.start()
         #expect(await service.token == token)
         let (head, body) = call(port: second, token: token, ["echo", "back"])
@@ -236,13 +251,44 @@ import TopoProxy
         #expect(tool.calls == [["back"]])
     }
 
-    /// A stop is not a loss: nothing is logged as lost, and a start after it listens again.
+    /// Codex on #448: a held port that no longer answers, with no word from its listener, is
+    /// started again rather than handed out.
+    @Test func aHeldPortThatNoLongerAnswersIsStartedAgainWithNoWordFromItsListener() async throws {
+        let (service, first, logs) = try await startedService([ScriptedTool()])
+        defer { Task { await service.stop() } }
+        await service.set(hearsLoss: false)
+        await service.listener?.cancel()
+        for _ in 0..<500 where await LoopbackProbe.answers(port: first, within: .milliseconds(200)) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await service.port == first, "control: the service has not heard of the loss")
+        let second = try await service.start()
+        #expect(second != first)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost (its port no longer answers)") })
+        let (head, body) = call(port: second, token: await service.token, ["echo", "x"])
+        #expect(try await exchange(port: second, head, body: body).status == 200)
+    }
+
+    /// A port that cannot be bound fails the start rather than leaving it waiting.
+    @Test func aPortThatCannotBeBoundFailsTheStart() async throws {
+        let (holder, taken, _) = try await startedService([])
+        defer { Task { await holder.stop() } }
+        let service = try ToolService(tools: [])
+        defer { Task { await service.stop() } }
+        await service.set(requestedPort: NWEndpoint.Port(rawValue: taken)!)
+        let started = ContinuousClock.now
+        await #expect(throws: (any Error).self) { _ = try await service.start() }
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(await service.port == nil)
+    }
+
+    /// A stop is not a loss, and a start after it listens again.
     @Test func aStopThenAStartListensAgain() async throws {
         let (service, _, logs) = try await startedService([])
         await service.stop()
         #expect(await service.port == nil)
         let port = try await service.start()
-        #expect(port != 0)
+        #expect(await LoopbackProbe.answers(port: port))
         await service.stop()
         #expect(!logs.lines.contains { $0.hasPrefix("listener lost") })
     }
