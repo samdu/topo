@@ -348,7 +348,7 @@ actor GuestBridge: Brain {
     func answer(_ request: BrainRequest) async throws -> Reply {
         let told = Told()
         do {
-            return try await Told.current.withValue(told) { try await answering(request) }
+            return try await Told.$current.withValue(told) { try await answering(request) }
         } catch {
             if !told.said {
                 let kind = (error as? GuestBridgeError).map(Self.kind(of:)) ?? "failed (\(type(of: error)))"
