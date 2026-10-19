@@ -137,15 +137,23 @@ public enum GuestTranscript {
 
     /// A `user` entry that is a prompt rather than tool results coming back, a note Claude Code
     /// adds for itself (`isMeta`), or the summary it writes in the conversation's place when it
-    /// compacts (`isCompactSummary`): what starts the next turn. A compaction at the threshold
-    /// comes between an input and its reply, so its summary ends nothing.
+    /// compacts (`isCompactSummary`), or a background task's notice kept for the transcript alone
+    /// (`origin.kind` `task-notification` with `queueTranscriptOnly`): what starts the next turn.
+    /// A compaction at the threshold, and a background task ending while a turn runs, come
+    /// between an input and its reply, so neither ends anything. A notice Claude Code answers
+    /// (no `queueTranscriptOnly`) is followed by a reply of its own, and is a prompt.
     private static func isPrompt(_ entry: [String: Any]) -> Bool {
         guard entry["isMeta"] as? Bool != true, entry["isSidechain"] as? Bool != true,
-              entry["isCompactSummary"] as? Bool != true,
+              entry["isCompactSummary"] as? Bool != true, !isTranscriptOnlyNotice(entry),
               let message = entry["message"] as? [String: Any] else { return false }
         if message["content"] is String { return true }
         let blocks = (message["content"] as? [Any])?.compactMap { ($0 as? [String: Any])?["type"] as? String } ?? []
         return !blocks.isEmpty && !blocks.allSatisfy { $0 == "tool_result" }
+    }
+
+    private static func isTranscriptOnlyNotice(_ entry: [String: Any]) -> Bool {
+        (entry["origin"] as? [String: Any])?["kind"] as? String == "task-notification"
+            && entry["queueTranscriptOnly"] as? Bool == true
     }
 
     private static func object(_ line: String) -> [String: Any]? {

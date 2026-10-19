@@ -34,6 +34,23 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: input(6), in: Array(lines[...summary])), .unresolved)
     }
 
+    /// A background task that ends while a turn runs writes its notice into the transcript
+    /// between the input and the reply, as 2.1.285 did on the phone (`queueTranscriptOnly`): the
+    /// reply is still the input's. A notice Claude Code answers itself is a prompt, and its reply
+    /// is not the input's.
+    func testABackgroundTasksNoticeBetweenAnInputAndItsReplyEndsNothing() {
+        let input = "aaaaaaaa-0000-4000-8000-000000000003"
+        func notice(queued: Bool) -> String {
+            #"{"type":"user","uuid":"n","isSidechain":false,"origin":{"kind":"task-notification"},"promptSource":"system","queueSkipAttachments":true,"# +
+                (queued ? #""queueTranscriptOnly":true,"# : "") +
+                #""message":{"role":"user","content":"<task-notification> <task-id>b</task-id> </task-notification>"}}"#
+        }
+        let prompt = #"{"type":"user","uuid":"\#(input)","isSidechain":false,"message":{"role":"user","content":"hello"}}"#
+        let reply = #"{"type":"assistant","isSidechain":false,"message":{"id":"m","model":"claude-haiku-4-5","stop_reason":"end_turn","content":[{"type":"text","text":"hi"}]}}"#
+        XCTAssertEqual(GuestTranscript.verdict(for: input, in: [prompt, notice(queued: true), reply]), .answered("hi"))
+        XCTAssertEqual(GuestTranscript.verdict(for: input, in: [prompt, notice(queued: false), reply]), .unresolved)
+    }
+
     func testAnInputNoEntryCarriesWasNotReceived() throws {
         let lines = try Transcripts.lines("answered-with-tool")
         XCTAssertEqual(GuestTranscript.verdict(for: "never-sent", in: lines), .notReceived)
