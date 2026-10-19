@@ -24,7 +24,7 @@ import TopoCore
 ///
 /// A listener that fails or is cancelled once it is up — iOS takes a suspended app's away — is the
 /// proxy down: its port is forgotten, its connections closed and the loss logged, and the next
-/// `start` listens again, on a port of its own, with a new listener.
+/// `start` listens again, on a port of its own, with a new listener. `relisten` starts a new listener whatever the old one's state, which is what each launch of the resident asks for: iOS's word of a loss can come late, and a port it freed can be bound again by another process.
 public actor APIProxy {
     public typealias Log = @Sendable (String) -> Void
 
@@ -62,45 +62,43 @@ public actor APIProxy {
         self.log = log
     }
 
-    /// Starts listening and returns the port, once bound. A port already held is vouched for
-    /// first (`LoopbackProbe`): one that does not answer is a listener lost whether or not it has
-    /// said so yet — iOS takes a suspended app's away, and its word can come after the next launch
-    /// asks — and is started again. A start while another is waiting for its listener waits for
-    /// the same one.
+    /// Starts listening and returns the port, once bound; the port it has when already up. A
+    /// start while another is waiting for its listener waits for the same one.
     public func start() async throws -> UInt16 {
-        while true {
-            if let held = port {
-                let current = generation
-                let answers = await LoopbackProbe.answers(port: held)
-                // Anything may have happened across the probe: only the listener it judged is judged.
-                guard current == generation, port == held else { continue }
-                if answers { return held }
-                lost("its port no longer answers", POSIXError(.ECONNREFUSED))
-                continue
-            }
-            if listener == nil {
-                let parameters = NWParameters.tcp
+        if let port { return port }
+        if listener == nil {
+            let parameters = NWParameters.tcp
             // Loopback only: the listener is bound to 127.0.0.1, so no other interface — and no
             // LAN peer — reaches it.
-                parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: requestedPort)
-                let listener = try NWListener(using: parameters)
-                generation += 1
-                let current = generation
-                listener.newConnectionHandler = { [weak self] connection in
-                    guard let self else { connection.cancel(); return }
-                    Task { await self.accept(connection, generation: current) }
-                }
-                listener.stateUpdateHandler = { [weak self] state in
-                    guard let self else { return }
-                    Task { await self.stateChanged(state, generation: current) }
-                }
-                self.listener = listener
-                listener.start(queue: queue)
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: requestedPort)
+            let listener = try NWListener(using: parameters)
+            generation += 1
+            let current = generation
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self else { connection.cancel(); return }
+                Task { await self.accept(connection, generation: current) }
             }
-            return try await withCheckedThrowingContinuation { continuation in
-                waiting.append(continuation)
+            listener.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                Task { await self.stateChanged(state, generation: current) }
             }
+            self.listener = listener
+            listener.start(queue: queue)
         }
+        return try await withCheckedThrowingContinuation { continuation in
+            waiting.append(continuation)
+        }
+    }
+
+    /// Lets the listener go and starts a new one, on a port of its own, whatever the old one's
+    /// state: a listener bound a moment ago is this one's by construction, where a held port may
+    /// have been taken away while the app was suspended, its word of that not yet come, and even
+    /// bound again by another process. Closes every connection, so it is for a moment nothing is
+    /// using them: the resident's launch.
+    public func relisten() async throws -> UInt16 {
+        down()
+        settle(.failure(CancellationError()))
+        return try await start()
     }
 
     /// Stops listening and closes every connection, which cancels every request in flight.

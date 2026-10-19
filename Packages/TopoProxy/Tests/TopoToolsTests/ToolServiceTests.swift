@@ -251,22 +251,28 @@ import TopoProxy
         #expect(tool.calls == [["back"]])
     }
 
-    /// Codex on #448: a held port that no longer answers, with no word from its listener, is
-    /// started again rather than handed out.
-    @Test func aHeldPortThatNoLongerAnswersIsStartedAgainWithNoWordFromItsListener() async throws {
-        let (service, first, logs) = try await startedService([ScriptedTool()])
+    /// Codex on #448: with no word from the old listener, and its port bound again by another
+    /// process, `relisten` starts a listener of the service's own, with the same token, on a
+    /// port other than the old one.
+    @Test func relistenStartsANewListenerWhateverBecameOfTheOldPort() async throws {
+        let tool = ScriptedTool()
+        let (service, first, _) = try await startedService([tool])
         defer { Task { await service.stop() } }
+        let token = await service.token
         await service.set(hearsLoss: false)
         await service.listener?.cancel()
         for _ in 0..<500 where await LoopbackProbe.answers(port: first, within: .milliseconds(200)) {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(await service.port == first, "control: the service has not heard of the loss")
-        let second = try await service.start()
+        let squatter = try await squat(first)
+        defer { squatter.cancel() }
+        let second = try await service.relisten()
         #expect(second != first)
-        #expect(logs.lines.contains { $0.hasPrefix("listener lost (its port no longer answers)") })
-        let (head, body) = call(port: second, token: await service.token, ["echo", "x"])
+        #expect(await service.token == token)
+        let (head, body) = call(port: second, token: token, ["echo", "x"])
         #expect(try await exchange(port: second, head, body: body).status == 200)
+        #expect(tool.calls == [["x"]], "the call reached a listener other than the service's")
     }
 
     /// A port that cannot be bound fails the start rather than leaving it waiting.

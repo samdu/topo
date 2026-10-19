@@ -1,42 +1,76 @@
+import Darwin
 import TopoProxy
 import TopoTools
 import XCTest
 
 @testable import Topo
 
-/// What each launch of the resident is told of the proxy and the tool service (#369): asked for
-/// at every launch, so a launch after a listener went away is told the port listening now.
+/// What each launch of the resident is told of the proxy and the tool service (#369), through
+/// `ClaudeLauncher` as the session launches it: every launch starts both listeners anew and is
+/// told the ports they have now.
 @MainActor
 final class LaunchPortsTests: XCTestCase {
-    func testEachLaunchIsToldThePortsListeningNowAndAChangeIsSaid() async throws {
+    func testEachLaunchIsToldListenersStartedForItAndSaysWhich() async throws {
         let proxy = try APIProxy(log: { _ in })
         let tools = try ToolService(tools: [])
         let ports = LaunchPorts(proxy: proxy, tools: tools)
-        let first = try await ports.ports()
-        XCTAssertFalse(ports.made(first), "the first launch changed nothing")
-        let again = try await ports.ports()
-        XCTAssertEqual(again.proxy, first.proxy)
-        XCTAssertEqual(again.tools, first.tools)
-        XCTAssertFalse(ports.made(again), "a launch told the same ports said they changed")
-
-        // Both listeners gone, as iOS takes them from a suspended app.
-        await proxy.stop()
-        await tools.stop()
-        // A listener closes on its own queue: the old ports refuse a moment after the stop.
-        var answering = true
-        for _ in 0..<500 where answering {
-            let probes = await (LoopbackProbe.answers(port: first.proxy, within: .milliseconds(200)),
-                                LoopbackProbe.answers(port: first.tools, within: .milliseconds(200)))
-            answering = probes.0 || probes.1
-            if answering { try await Task.sleep(for: .milliseconds(10)) }
+        let said = Said()
+        let made = GuestResident.launchEnvironment(ports: ports, note: { said.add($0) }) { port in
+            ["ANTHROPIC_BASE_URL": APIProxy.baseURL(port: port)]
         }
-        XCTAssertFalse(answering, "control: the first ports still answer")
-        let next = try await ports.ports()
-        let answers = await (LoopbackProbe.answers(port: next.proxy), LoopbackProbe.answers(port: next.tools))
-        XCTAssertTrue(answers.0 && answers.1, "the next launch was told a port nothing listens on")
-        XCTAssertTrue(ports.made(next) || (next.proxy == first.proxy && next.tools == first.tools),
-                      "a launch told new ports did not say so")
+        let launcher = ClaudeLauncher(environment: made)
+
+        let first = try await launcher.launchEnvironment()
+        let firstProxy = try XCTUnwrap(await proxy.port)
+        let firstTools = try XCTUnwrap(await tools.port)
+        XCTAssertEqual(first["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: firstProxy))
+        XCTAssertEqual(first[ToolService.urlVariable], "http://127.0.0.1:\(firstTools)")
+        XCTAssertEqual(first[ToolService.tokenVariable], tools.token)
+        XCTAssertEqual(said.all, ["guest: the launch is told the proxy at \(firstProxy) and the tools at \(firstTools)"])
+
+        // The old ports held by others, as a process that took what iOS freed would hold them:
+        // the next launch is told neither.
+        let squatters = [try Self.squat(firstProxy), try Self.squat(firstTools)].compactMap { $0 }
+        defer { squatters.forEach { close($0) } }
+        let next = try await launcher.launchEnvironment()
+        let nextProxy = try XCTUnwrap(await proxy.port)
+        let nextTools = try XCTUnwrap(await tools.port)
+        XCTAssertNotEqual(nextProxy, firstProxy)
+        XCTAssertNotEqual(nextTools, firstTools)
+        XCTAssertEqual(next["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: nextProxy))
+        XCTAssertEqual(next[ToolService.urlVariable], "http://127.0.0.1:\(nextTools)")
+        XCTAssertEqual(said.all.last, "guest: the launch is told the proxy at \(nextProxy) and the tools at \(nextTools)")
         await proxy.stop()
         await tools.stop()
     }
+
+    /// A socket listening on `127.0.0.1` at `port` once the listener there has let it go; nil when
+    /// it could not be bound in five seconds.
+    private static func squat(_ port: UInt16) throws -> Int32? {
+        for _ in 0..<500 {
+            let fd = socket(AF_INET, SOCK_STREAM, 0)
+            var on: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            address.sin_addr.s_addr = in_addr_t(INADDR_LOOPBACK).bigEndian
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            if bound == 0, listen(fd, 1) == 0 { return fd }
+            close(fd)
+            usleep(10_000)
+        }
+        XCTFail("port \(port) was never let go")
+        return nil
+    }
+}
+
+private final class Said: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
+    var all: [String] { lock.withLock { lines } }
 }

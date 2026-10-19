@@ -435,20 +435,20 @@ import TopoAuth
         #expect(await LoopbackProbe.answers(port: second))
     }
 
-    /// Codex on #448: a launch can ask for the port before the listener's own word that it was
-    /// taken away has arrived, or with none ever arriving. The held port is vouched for, and one
-    /// that does not answer is started again rather than handed out.
-    @Test func aHeldPortThatNoLongerAnswersIsStartedAgainWithNoWordFromItsListener() async throws {
+    /// Codex on #448: a launch can ask before the listener's own word that it was taken away has
+    /// come, or with none ever coming. `relisten` starts a new listener whatever the old one's
+    /// state, and the new port forwards.
+    @Test func relistenStartsANewListenerWithNoWordFromTheOldOne() async throws {
         let upstream = StubUpstream()
-        let (proxy, first, logs) = try await startedProxy(upstream)
+        let (proxy, first, _) = try await startedProxy(upstream)
         defer { Task { await proxy.stop() } }
         await proxy.set(hearsLoss: false)
         await proxy.listener?.cancel()
         try await Self.refused(first)
         #expect(await proxy.port == first, "control: the proxy has not heard of the loss")
-        let second = try await proxy.start()
+        let second = try await proxy.relisten()
         #expect(second != first)
-        #expect(logs.lines.contains { $0.hasPrefix("listener lost (its port no longer answers)") })
+        #expect(await proxy.port == second)
         let client = try await WireClient(port: second)
         try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
         let (head, _) = try await client.readResponse()
@@ -456,8 +456,30 @@ import TopoAuth
         #expect(upstream.requests.count == 1)
     }
 
-    /// A held port that answers is handed out as it is, and nothing is logged.
-    @Test func aHeldPortThatAnswersIsKept() async throws {
+    /// Codex on #448: a port iOS freed can be bound again by another process before the proxy
+    /// hears of the loss. The next launch is never told it: `relisten` binds a port of its own,
+    /// and what reaches that port reaches this proxy.
+    @Test func aPortBoundAgainByAnotherListenerIsNeverHandedOut() async throws {
+        let upstream = StubUpstream()
+        let (proxy, first, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        await proxy.set(hearsLoss: false)
+        await proxy.listener?.cancel()
+        try await Self.refused(first)
+        let squatter = try await squat(first)
+        defer { squatter.cancel() }
+        #expect(await LoopbackProbe.answers(port: first), "control: another listener holds the old port")
+        let second = try await proxy.relisten()
+        #expect(second != first)
+        let client = try await WireClient(port: second)
+        try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
+        let (head, _) = try await client.readResponse()
+        #expect(head.status == 200)
+        #expect(upstream.requests.count == 1, "the request reached a listener other than the proxy's")
+    }
+
+    /// A start with a port up is that port, with no new listener and nothing logged.
+    @Test func aStartWithAPortUpIsThatPort() async throws {
         let (proxy, first, logs) = try await startedProxy(StubUpstream())
         defer { Task { await proxy.stop() } }
         let generation = await proxy.generation

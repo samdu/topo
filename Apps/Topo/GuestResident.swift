@@ -139,22 +139,15 @@ final class GuestResident {
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(proxy: proxy, tools: tools)
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
+            let made = Self.launchEnvironment(ports: ports) { port in
+                try await APIProxy.guestEnvironment(port: port, credential: credential).environment
+            }
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
                 // first reads for its life.
                 await userland.bringZoneUpToDate()
-                // The proxy's and the tool service's ports asked for at every launch: iOS takes a
-                // suspended app's listeners away, and a start after that listens again on a port
-                // of its own, which only a process launched after it can be told.
-                let now = try await ports.ports()
-                let environment = try await APIProxy.guestEnvironment(port: now.proxy, credential: credential).environment
-                    .merging(ToolService.environment(port: now.tools, token: tools.token)) { own, _ in own }
-                    .merging(GuestTools.environment) { own, _ in own }
-                if await ports.made(now) {
-                    Self.listenerLog.notice("guest: a listener was started again; the launch is told the proxy at \(now.proxy, privacy: .public) and the tools at \(now.tools, privacy: .public)")
-                }
-                return environment
+                return try await made()
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
@@ -212,7 +205,7 @@ final class GuestResident {
     }
 
     /// Where a listener started again is told: at `notice`, which the phone keeps.
-    private nonisolated static let listenerLog = Logger(subsystem: "zone.hexagon.topo", category: "resident")
+    nonisolated static let listenerLog = Logger(subsystem: "zone.hexagon.topo", category: "resident")
 
     /// A turn just sent, carried behind another app by a continued-processing task (iOS 26 on):
     /// the task is asked for now, while the app is in front, and the lifecycle hears the turn end
@@ -241,31 +234,44 @@ final class GuestResident {
 }
 
 /// What each launch of the resident is told of the proxy and the tool service. Claude Code reads
-/// their ports once, from its environment at launch, so they are asked for at every launch, which
-/// vouches for a held port and starts a lost listener again (`APIProxy.start`, `ToolService.start`).
+/// their ports once, from its environment at launch, so every launch starts both listeners anew
+/// (`relisten`) and is told the ports they have now: a listener bound a moment ago is the app's
+/// own, where one held across a suspension may have been taken away, its word of that not come
+/// yet, and its port bound again by another process. A launch has no resident beside it, so no
+/// connection is lost by it.
 @MainActor
 final class LaunchPorts {
     let proxy: APIProxy
     let tools: ToolService
-    /// The ports the last environment made was told.
-    private var told: (proxy: UInt16, tools: UInt16)?
 
     init(proxy: APIProxy, tools: ToolService) {
         self.proxy = proxy
         self.tools = tools
     }
 
-    /// The ports to tell the next launch: each listener's own, started again if it was lost.
+    /// The ports to tell the next launch: each service's, on a listener started for it.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
-        (try await proxy.start(), try await tools.start())
+        (try await proxy.relisten(), try await tools.relisten())
     }
+}
 
-    /// Notes that an environment was made with `ports`, once it was; true when they are not the
-    /// ones the last environment made was told, which is a listener started again.
-    func made(_ ports: (proxy: UInt16, tools: UInt16)) -> Bool {
-        defer { told = ports }
-        guard let told else { return false }
-        return told != ports
+extension GuestResident {
+    /// What the resident's launcher answers at each launch: the proxy's and the tool service's
+    /// ports from `ports`, the credential `credential` makes for the proxy's, and `topo`'s own
+    /// variables. Says at notice what the launch is told, once the environment is made; a launch
+    /// that then fails to start says so in the session's own line.
+    nonisolated static func launchEnvironment(
+        ports: LaunchPorts, note: @escaping @Sendable (String) -> Void = { GuestResident.listenerLog.notice("\($0, privacy: .public)") },
+        credential: @escaping @Sendable (UInt16) async throws -> [String: String]
+    ) -> @Sendable () async throws -> [String: String] {
+        { @Sendable in
+            let now = try await ports.ports()
+            let environment = try await credential(now.proxy)
+                .merging(ToolService.environment(port: now.tools, token: ports.tools.token)) { own, _ in own }
+                .merging(GuestTools.environment) { own, _ in own }
+            note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")
+            return environment
+        }
     }
 }
 
