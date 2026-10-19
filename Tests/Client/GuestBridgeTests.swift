@@ -4427,4 +4427,25 @@ extension GuestBridgeTests {
         XCTAssertEqual(speaker.report.speaks, 1, "the reply was not read as it was written")
         XCTAssertTrue(harness.turns.isEmpty, "control: nothing landed")
     }
+
+    /// The line a failure is logged with names the kind of end and never what the turn carried:
+    /// an error result's text, its errors and a process's last words can hold the person's words.
+    func testAFailedTurnsEndIsToldByKindAlone() {
+        let secret = "the person's words"
+        let result = StreamEvent.TurnResult(isError: true, subtype: "error_during_execution", text: secret,
+                                            session: nil, duration: nil, errors: [secret])
+        let ends: [(GuestSession.TurnEnd, String)] = [
+            (.answered(StreamEvent.TurnResult(isError: false, subtype: "success", text: secret, session: nil, duration: nil)), "answered"),
+            (.abandoned, "was abandoned"),
+            (.failed(.result(result)), "ended with an error result (error_during_execution)"),
+            (.failed(.exited(secret)), "lost its process mid-turn"),
+            (.failed(.silent(.seconds(90))), "heard nothing for 90.0 seconds"),
+            (.failed(.input(secret)), "could not be written"),
+        ]
+        for (end, said) in ends {
+            let told = GuestBridge.kind(of: end)
+            XCTAssertEqual(told, said)
+            XCTAssertFalse(told.contains(secret), "\(end) told what it carried")
+        }
+    }
 }
