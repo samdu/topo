@@ -7,7 +7,8 @@
 # arrives while another is held inside start refuses; a pid file naming a live process that is
 # not the recorded supervisor refuses nothing; stop leaves nothing of its lane behind and puts
 # the defaults back; and after the pid file of a running lane is lost and a second lane started,
-# stop names the first lane's feeder and supervisor by pid and leaves them running. macOS only:
+# stop names the first lane's feeder and supervisor by pid and leaves them running; a silent input
+# names the missing microphone grant when the meter reports auth=0, and only then. macOS only:
 # the script locks with lockf(1).
 #
 #   scripts/tests/ci-audio-lane-test.sh
@@ -172,6 +173,22 @@ hold "stop with an orphan: its own supervisor and feeder are gone" eval '! alive
 hold "stop with an orphan: warns of the orphaned feeder and its supervisor by pid" grep -q "::warning::audio lane: feeder $lost_feeder (supervisor $lost_supervisor) is still running" "$work/orphan.out"
 hold "stop with an orphan: warns of nothing it stopped" eval '! grep -q "feeder $second_feeder " "$work/orphan.out"'
 hold "stop with an orphan: leaves both running" eval 'alive "$lost_supervisor" && alive "$lost_feeder"'
+
+# A silent input says why when the meter's process holds no microphone grant (auth=0, a shell
+# started over ssh), and only then.
+run start "$work/fixture.wav" > /dev/null 2>&1
+record
+cp "$state/ci-audio-meter" "$work/meter.hears"
+printf '#!/bin/sh\necho "auth=0 rate=48000 buffers=30 frames=144000 rms=0.0000 peak=0.0000"\n' > "$state/ci-audio-meter"
+run check "before" > "$work/ungranted.out" 2>&1; status=$?
+hold "ungranted meter: check exits 1 (got $status)" [ "$status" = 1 ]
+hold "ungranted meter: names the missing grant and tmux" grep -q "auth=0 is a process that holds no microphone grant.*tmux server" "$work/ungranted.out"
+printf '#!/bin/sh\necho "auth=3 rate=48000 buffers=30 frames=144000 rms=0.0000 peak=0.0000"\n' > "$state/ci-audio-meter"
+run check "before" > "$work/granted-silent.out" 2>&1; status=$?
+hold "granted, silent meter: check exits 1 (got $status)" [ "$status" = 1 ]
+hold "granted, silent meter: says nothing of a grant" eval '! grep -q "microphone grant" "$work/granted-silent.out"'
+cp "$work/meter.hears" "$state/ci-audio-meter"
+run stop > /dev/null 2>&1
 
 if [ "$failures" -gt 0 ]; then
   for out in "$work"/*.out; do echo "--- $out"; cat "$out"; done
