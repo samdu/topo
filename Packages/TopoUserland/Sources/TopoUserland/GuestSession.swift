@@ -134,11 +134,19 @@ public actor GuestSession {
         /// The app came back before the teardown began, so the process stayed.
         case kept
         /// The process was ended. `turn` is what became of a turn in flight when the app left:
-        /// finished inside the grace, or abandoned at the teardown point; nil when none was.
+        /// finished in the background, or abandoned at the teardown point; nil when none was.
         case ended(turn: TurnFate?, termination: GuestProcess.Termination)
         /// iOS's background time ran out before the teardown answered; the background task was
         /// ended with it still running (`GuestLifecycle`, never the session).
         case outOfTime
+        /// The continued-processing task carrying the way out expired, and the grace took it over.
+        case handedToGrace
+        /// The continued-processing task carrying the way out expired and iOS refused the grace:
+        /// the process is ended at once.
+        case graceRefused
+        /// The continued-processing task carrying the way out expired, and a tick later the grace
+        /// iOS answered an identifier for was still not to be read: the process is ended at once.
+        case graceUnread
     }
 
     public enum TurnFate: Sendable, Equatable {
@@ -192,6 +200,10 @@ public actor GuestSession {
     /// iOS's expiration handler has fired for this background: whatever waits stops waiting, and
     /// a teardown begun from here on is bounded by what the handler leaves.
     private var expired = false
+    /// The deadline a background with no budget of its own was given since (`limit`), for the
+    /// background of `limitGeneration`.
+    private var limited: Duration?
+    private var limitGeneration: Int?
 
     private enum State {
         case idle
@@ -389,10 +401,12 @@ public actor GuestSession {
 
     /// The app went to the background with `budget` of grace to spend: a turn in flight is given
     /// until then to finish, and the process is ended when it does, at the budget, or at once
-    /// when no turn is in flight; a startup still pending is ended as it lands. Returns once
+    /// when no turn is in flight; a startup still pending is ended as it lands. A nil budget is a
+    /// turn held up by something other than the grace (a continued-processing task): it is waited
+    /// for with no deadline until `limit` gives one or `expire` ends the wait. Returns once
     /// nothing is resident, with what that came to — or at once with `kept` when the app came back
     /// before the teardown began, or when this call is older than one already seen.
-    public func background(budget: Duration, generation given: Int? = nil) async -> BackgroundOutcome {
+    public func background(budget: Duration?, generation given: Int? = nil) async -> BackgroundOutcome {
         guard admit(given) else { return .kept }
         let mine = generation
         inForeground = false
@@ -405,7 +419,7 @@ public actor GuestSession {
         var fate: TurnFate?
         if resident.turn != nil {
             fate = .finished
-            let wake = await waitForTurn(budget: budget)
+            let wake = await waitForTurn(budget: budget ?? limitFor(mine))
             if wake == .foreground || generation != mine || inForeground { return .kept }
         }
         if case .stopping = phase, let teardown {
@@ -421,6 +435,21 @@ public actor GuestSession {
         let termination = await end(still, reason: fate == .abandoned ? "the teardown point, turn abandoned" : "the background",
                                     restart: true).value
         return .ended(turn: fate, termination: termination)
+    }
+
+    /// A background begun with no budget is given `budget` from now: what holds the turn up has
+    /// gone, and the grace is what is left. A wait already standing starts its deadline now; one
+    /// not yet begun starts it when it begins. Nothing for a background that is over, or one that
+    /// had a budget of its own.
+    public func limit(budget: Duration, generation given: Int) {
+        guard given == generation, !inForeground else { return }
+        limited = budget
+        limitGeneration = given
+        if backgroundWait != nil, backgroundTimer == nil { startDeadline(budget) }
+    }
+
+    private func limitFor(_ generation: Int) -> Duration? {
+        limitGeneration == generation ? limited : nil
     }
 
     /// The grace is ending now (iOS's expiration handler): a teardown waiting on a turn stops
@@ -733,17 +762,23 @@ public actor GuestSession {
         return true
     }
 
-    private func waitForTurn(budget: Duration) async -> Wake {
+    /// Waits for the turn to end, the app to come back, or the deadline: `budget` from now, or
+    /// none until `limit` gives one.
+    private func waitForTurn(budget: Duration?) async -> Wake {
         if expired { return .deadline }
+        if let budget { startDeadline(budget) }
+        let wake = await withCheckedContinuation { backgroundWait = $0 }
+        backgroundTimer?.cancel()
+        backgroundTimer = nil
+        return wake
+    }
+
+    private func startDeadline(_ budget: Duration) {
         let sleep = sleep
         backgroundTimer = Task { [weak self] in
             do { try await sleep(budget) } catch { return }
             await self?.wakeBackground(.deadline)
         }
-        let wake = await withCheckedContinuation { backgroundWait = $0 }
-        backgroundTimer?.cancel()
-        backgroundTimer = nil
-        return wake
     }
 
     private func wakeBackground(_ wake: Wake) {
@@ -762,12 +797,18 @@ extension GuestSession.BackgroundOutcome: CustomStringConvertible {
         case .kept: return "kept: the app came back before the teardown"
         case .ended(let turn, let termination):
             let fate = switch turn {
-            case .finished: "the turn in flight finished inside the grace"
+            case .finished: "the turn in flight finished in the background"
             case .abandoned: "the turn in flight was abandoned at the teardown point"
             case nil: "no turn in flight"
             }
             let confirmed = termination.confirmed ? "confirmed" : "NOT confirmed"
             return "ended, \(fate); termination \(confirmed): \(termination)"
+        case .handedToGrace:
+            return "the continued-processing task expired; the grace has the turn"
+        case .graceRefused:
+            return "the continued-processing task expired and iOS refused the grace; the process is ended now"
+        case .graceUnread:
+            return "the continued-processing task expired and no grace could be read a tick later; the process is ended now"
         case .outOfTime:
             return "background time ran out before the termination answered; the background task was ended with the teardown still running"
         }

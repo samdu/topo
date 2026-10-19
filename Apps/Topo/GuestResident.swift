@@ -12,9 +12,10 @@ import UIKit
 @MainActor
 final class ApplicationBackgroundTime: BackgroundTime {
     func begin(expiration: @escaping @MainActor () -> Void) -> Int {
-        UIApplication.shared.beginBackgroundTask(withName: "zone.hexagon.topo.guest") {
+        let task = UIApplication.shared.beginBackgroundTask(withName: "zone.hexagon.topo.guest") {
             MainActor.assumeIsolated { expiration() }
-        }.rawValue
+        }
+        return task == .invalid ? GraceBudget.refused : task.rawValue
     }
 
     func end(_ task: Int) {
@@ -154,7 +155,7 @@ final class GuestResident {
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
-                                           report: { outcome in log("background: \(outcome)") })
+                                           report: { outcome in Self.note("background: \(outcome)") })
             self.lifecycle = lifecycle
             self.follow(lifecycle)
             Perf.mark("guest.proxy.up")
@@ -199,6 +200,19 @@ final class GuestResident {
             .merging(GuestTools.environment) { own, _ in own }
         toolsEnvironment = environment
         return environment
+    }
+
+    /// A turn just sent, carried behind another app by a continued-processing task (iOS 26 on):
+    /// the task is asked for now, while the app is in front, and the lifecycle hears the turn end
+    /// from the updates, which are passed on as they come. Read to the end whoever listens, since
+    /// the end is what lets the task go.
+    func carried(_ updates: AsyncStream<GuestSession.TurnUpdate>, compaction: Bool) -> AsyncStream<GuestSession.TurnUpdate> {
+        guard #available(iOS 26, *), let lifecycle else { return updates }
+        // A compaction is the mind's housekeeping, not a reply the person is waiting on.
+        guard !compaction else { return updates }
+        let turn = lifecycle.turnBegan()
+        ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.note)
+        return lifecycle.carry(updates, turn: turn)
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {
@@ -319,13 +333,14 @@ struct ResidentConversation: GuestConversation {
         let session = try await session()
         // A move of the memory may have come since `ready()`: the turn waits for one running, and
         // goes into a mount of the home as it is once none is (`MemoryTurns`).
-        return try await GuestResident.shared.turns.send(text, id: id, to: session) {
+        let updates = try await GuestResident.shared.turns.send(text, id: id, to: session) {
             do {
                 return try GuestResident.shared.reconcileMemory()
             } catch {
                 throw GuestBridgeError.notReady("\(error)")
             }
         }
+        return await GuestResident.shared.carried(updates, compaction: text == GuestBridge.compactCommand)
     }
 
     func settle() async -> Bool {
@@ -368,6 +383,17 @@ extension GuestResident {
     nonisolated static let log: @Sendable (String) -> Void = { line in
         let line = redacted(line)
         Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
+        #if DEBUG
+        DebugRun.say("guest: \(line)")
+        #endif
+    }
+
+    /// The lines a device check reads after the fact — each way out of the background and each
+    /// continued-processing task asked for and started — at `notice`, which the phone keeps on
+    /// disk: an `info` line is kept in memory alone, and is gone within minutes.
+    nonisolated static let note: @Sendable (String) -> Void = { line in
+        let line = redacted(line)
+        Logger(subsystem: "zone.hexagon.topo", category: "resident").notice("\(line, privacy: .public)")
         #if DEBUG
         DebugRun.say("guest: \(line)")
         #endif
