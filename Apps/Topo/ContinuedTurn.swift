@@ -45,9 +45,11 @@ final class ContinuedTurnTask: ContinuedTask {
 
 /// Asks iOS to keep the app running behind another app while a turn sent in front is in flight:
 /// one `BGContinuedProcessingTaskRequest` a turn, `zone.hexagon.topo.turn.<uuid>`, under the
-/// wildcard the Info.plist permits and registered once a process. The request fails rather than
-/// queues, since a turn's task is only worth having now; a refusal leaves the turn to the grace.
-/// The pill's words are fixed, never the turn's: it is drawn on the lock screen.
+/// wildcard the Info.plist permits. The launch handler is registered for that one identifier just
+/// before its request is submitted, as Apple's "Performing long-running tasks on iOS and iPadOS"
+/// does: a handler registered for the wildcard pattern itself is refused. The request fails rather
+/// than queues, since a turn's task is only worth having now; a refusal leaves the turn to the
+/// grace. The pill's words are fixed, never the turn's: it is drawn on the lock screen.
 @available(iOS 26, *)
 @MainActor
 enum ContinuedTurns {
@@ -55,49 +57,76 @@ enum ContinuedTurns {
     nonisolated static let title = "Topo"
     nonisolated static let subtitle = "Working on a reply"
 
-    /// Whether the wildcard is registered, once asked: registering it twice kills the app.
-    private static var registered: Bool?
+    /// The scheduler's two calls, apart so a suite can see what each is given.
+    struct Scheduler {
+        /// Registers a launch handler for one identifier, called on the main queue; false when
+        /// iOS refuses it.
+        var register: @MainActor (_ identifier: String, _ launched: @escaping @MainActor (BGTask) -> Void) -> Bool
+        /// Submits the request for one identifier, answering with the error that refused it, or
+        /// nil, on the main actor.
+        var submit: @MainActor (_ identifier: String, _ answer: @escaping @MainActor (Error?) -> Void) -> Void
+
+        static let system = Scheduler(
+            register: { identifier, launched in
+                BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
+                    MainActor.assumeIsolated { launched(task) }
+                }
+            },
+            submit: { identifier, answer in
+                // The request is made at the send, with the app in front: it "creates an instance
+                // on behalf of the currently foregrounded app" (`BGTaskRequest.h`). On iOS 27 the
+                // throwing submit is deprecated, since it cannot report every failure, and the
+                // completion-handler form is not called from the main thread (`BGTaskScheduler.h`).
+                if #available(iOS 27, *) {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        BGTaskScheduler.shared.submitTaskRequest(ContinuedTurns.request(identifier: identifier)) { error in
+                            let refusal = error.map { "\($0)" }
+                            Task { @MainActor in answer(refusal.map(Refusal.init)) }
+                        }
+                    }
+                } else {
+                    do {
+                        try BGTaskScheduler.shared.submit(ContinuedTurns.request(identifier: identifier))
+                        answer(nil)
+                    } catch {
+                        answer(error)
+                    }
+                }
+            })
+    }
+
+    /// A refusal carried across to the main actor as its description.
+    struct Refusal: Error, CustomStringConvertible {
+        let description: String
+    }
+
     /// The turns asked for and not yet started, by the identifier their request carries.
     private static var waiting: [String: (lifecycle: GuestLifecycle, turn: Int, log: @Sendable (String) -> Void)] = [:]
 
-    static func submit(turn: Int, to lifecycle: GuestLifecycle, log: @escaping @Sendable (String) -> Void) {
-        guard register() else {
-            log("continued: \(prefix).* is not permitted; the turn has the grace alone")
+    static func submit(turn: Int, to lifecycle: GuestLifecycle, log: @escaping @Sendable (String) -> Void,
+                       scheduler: Scheduler = .system) {
+        // A new identifier every turn, so none is registered twice, which ends the app.
+        let identifier = "\(prefix).\(UUID().uuidString)"
+        guard scheduler.register(identifier, { launched($0) }) else {
+            log("continued: \(identifier) is not permitted; the turn has the grace alone")
             return
         }
-        let identifier = "\(prefix).\(UUID().uuidString)"
         waiting[identifier] = (lifecycle, turn, log)
-        // Made and submitted here, at the send and on the main actor, so the app is in front for
-        // both: the request "creates an instance on behalf of the currently foregrounded app"
-        // (`BGTaskRequest.h`), and the system takes it from an app in front. The synchronous submit
-        // is used on every iOS: the main-thread caution in `BGTaskScheduler.h` is on iOS 27's
-        // completion-handler form alone, whose submission lands after the call returns.
-        do {
-            try BGTaskScheduler.shared.submit(ContinuedTurns.request(identifier: identifier))
-            log("continued: asked for turn \(turn)")
-        } catch {
-            waiting.removeValue(forKey: identifier)
-            log("continued: refused (\(error)); the turn has the grace alone")
+        scheduler.submit(identifier) { error in
+            if let error {
+                waiting.removeValue(forKey: identifier)
+                log("continued: refused (\(error)); the turn has the grace alone")
+            } else {
+                log("continued: asked for turn \(turn)")
+            }
         }
     }
 
     /// A turn's request: the fixed words, and the `fail` strategy.
-    static func request(identifier: String) -> BGContinuedProcessingTaskRequest {
+    nonisolated static func request(identifier: String) -> BGContinuedProcessingTaskRequest {
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
         request.strategy = .fail
         return request
-    }
-
-    /// Registered at the first turn rather than at launch. `BGTaskScheduler.h`: "You must register
-    /// launch handlers before your application finishes launching (``BGContinuedProcessingTask``
-    /// registrations are exempt from this requirement)."
-    private static func register() -> Bool {
-        if let registered { return registered }
-        let done = BGTaskScheduler.shared.register(forTaskWithIdentifier: "\(prefix).*", using: .main) { task in
-            MainActor.assumeIsolated { launched(task) }
-        }
-        registered = done
-        return done
     }
 
     private static func launched(_ task: BGTask) {
