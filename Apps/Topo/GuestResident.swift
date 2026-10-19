@@ -40,12 +40,14 @@ final class GuestResident {
     private let starting = StartOnce<GuestSession>()
     /// What of the start is done, so a start tried again after a failure does not do it twice.
     private var homeMounted = false
-    private var proxyPort: UInt16?
     private var lifecycle: GuestLifecycle?
     private var proxy: APIProxy?
-    /// The tool service and what the guest is handed to reach it, once started.
+    /// The tool service, made once; its listener is started again wherever it was lost.
     private var tools: ToolService?
-    private var toolsEnvironment: [String: String]?
+    /// `topo`, its skill and the GitHub shims written into the home and linked onto the path.
+    private var toolsInstalled = false
+    /// The ports the last launch was handed, so one handed a port that changed says so.
+    private var handed: (proxy: UInt16, tools: String?)?
     /// The tools the service answers with: the app's own, set before the first start
     /// (`TopoApp`). A start before they are set answers `topo help` with none.
     var toolTable: [any Tool] = []
@@ -125,28 +127,23 @@ final class GuestResident {
                log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
         try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
-            let toolsEnvironment = try await self.prepareTools(log: log)
+            _ = try await self.prepareTools(log: log)
             Perf.mark("guest.tools.ready")
-            let port: UInt16
-            if let running = self.proxyPort {
-                port = running
-            } else {
-                let proxy = try APIProxy(log: { log("proxy: \($0)") })
-                do {
-                    port = try await proxy.start()
-                } catch {
-                    await proxy.stop()
-                    throw error
-                }
-                self.proxy = proxy
-                self.proxyPort = port
-            }
+            let proxy = self.proxy ?? (try APIProxy(log: Self.listening("proxy", log: log)))
+            self.proxy = proxy
+            _ = try await proxy.start()
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
                 // first reads for its life.
                 await userland.bringZoneUpToDate()
+                // The proxy's and the tool service's ports asked for at every launch: iOS takes a
+                // suspended app's listeners away, and a start after that listens again on a port
+                // of its own, which only a process launched after it can be told.
+                let port = try await proxy.start()
+                let toolsEnvironment = try await self.prepareTools(log: log)
+                await self.handing(proxy: port, tools: toolsEnvironment)
                 return try await APIProxy.guestEnvironment(port: port, credential: credential).environment
                     .merging(toolsEnvironment) { own, _ in own }
             }
@@ -163,10 +160,12 @@ final class GuestResident {
         }
     }
 
-    /// The home mounted, the tool service started, `topo`, its skill and the GitHub shims written
+    /// The home mounted, the tool service listening, `topo`, its skill and the GitHub shims written
     /// into the home and the commands linked onto the guest's path; the answer is what the guest's environment gains to
-    /// reach the service. Each step is done once per process and kept, so a start tried again after
-    /// a failure picks up from the step that failed. Needs a booted guest.
+    /// reach the service. The mount, the service and the install are each done once per process and
+    /// kept, so a start tried again after a failure picks up from the step that failed; the
+    /// listener is asked for at every call, so one iOS took away is started again and the answer
+    /// names the port it listens on now. Needs a booted guest.
     func prepareTools(log: @escaping @Sendable (String) -> Void) async throws -> [String: String] {
         let home = Self.homeDirectory
         if !homeMounted {
@@ -175,31 +174,46 @@ final class GuestResident {
             homeMounted = true
             GuestImages.changed(home: true)
         }
-        if let toolsEnvironment { return toolsEnvironment }
         let service: ToolService
         if let tools {
             service = tools
         } else {
-            service = try ToolService(tools: toolTable, log: { log("tools: \($0)") })
+            service = try ToolService(tools: toolTable, log: Self.listening("tools", log: log))
             tools = service
         }
-        let port: UInt16
-        do {
-            port = try await service.start()
-        } catch {
-            await service.stop()
-            tools = nil
-            throw error
+        let port = try await service.start()
+        if !toolsInstalled {
+            try GuestTools.install(home: home)
+            for (script, command) in GuestTools.links {
+                try await Guest.shared.linkCommand(ClaudeLauncher.home + "/" + script, at: command)
+            }
+            toolsInstalled = true
         }
-        try GuestTools.install(home: home)
-        for (script, command) in GuestTools.links {
-            try await Guest.shared.linkCommand(ClaudeLauncher.home + "/" + script, at: command)
-        }
-        let environment = ToolService.environment(port: port, token: await service.token)
+        return ToolService.environment(port: port, token: await service.token)
             .merging(GuestTools.environment) { own, _ in own }
-        toolsEnvironment = environment
-        return environment
     }
+
+    /// Notes the ports a launch is handed, and says so when they are not the last launch's: a
+    /// listener was lost while the app was suspended and has been started again.
+    private func handing(proxy: UInt16, tools: [String: String]) {
+        let now = (proxy: proxy, tools: tools[ToolService.urlVariable])
+        if let handed, handed.proxy != now.proxy || handed.tools != now.tools {
+            Self.listenerLog.notice("guest: a listener was started again; the launch is handed the proxy at \(now.proxy, privacy: .public) and the tools at \(now.tools ?? "none", privacy: .public)")
+        }
+        handed = now
+    }
+
+    /// A listener's lines under `name`, to `log`; a loss is told at `notice` as well, since the
+    /// one after a suspension is what the phone has to keep for a run read afterwards.
+    private nonisolated static func listening(_ name: String, log: @escaping @Sendable (String) -> Void) -> @Sendable (String) -> Void {
+        { line in
+            log("\(name): \(line)")
+            if line.hasPrefix("listener lost") { listenerLog.notice("\(name, privacy: .public): \(line, privacy: .public)") }
+        }
+    }
+
+    /// Where a listener started again is told: at `notice`, which the phone keeps.
+    private nonisolated static let listenerLog = Logger(subsystem: "zone.hexagon.topo", category: "resident")
 
     private func follow(_ lifecycle: GuestLifecycle) {
         let center = NotificationCenter.default

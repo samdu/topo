@@ -216,6 +216,38 @@ import TopoProxy
     }
 }
 
+@Suite struct ToolListenerLossTests {
+    /// A listener taken away once it is up (iOS takes a suspended app's) is the service down and
+    /// logged; the next start listens again with the same token, and a call through it runs.
+    @Test func aListenerLostIsTheServiceDownUntilTheNextStart() async throws {
+        let tool = ScriptedTool()
+        let (service, _, logs) = try await startedService([tool])
+        defer { Task { await service.stop() } }
+        let token = await service.token
+        await service.listener?.cancel()
+        for _ in 0..<500 where await service.port != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await service.port == nil)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost") })
+        let second = try await service.start()
+        #expect(await service.token == token)
+        let (head, body) = call(port: second, token: token, ["echo", "back"])
+        let answer = try await exchange(port: second, head, body: body)
+        #expect(answer.status == 200)
+        #expect(tool.calls == [["back"]])
+    }
+
+    /// A stop is not a loss: nothing is logged as lost, and a start after it listens again.
+    @Test func aStopThenAStartListensAgain() async throws {
+        let (service, _, logs) = try await startedService([])
+        await service.stop()
+        #expect(await service.port == nil)
+        let port = try await service.start()
+        #expect(port != 0)
+        await service.stop()
+        #expect(!logs.lines.contains { $0.hasPrefix("listener lost") })
+    }
+}
+
 @Suite struct ToolLoopbackTests {
     /// Review focus 2: the listener is bound to 127.0.0.1 and nothing else.
     @Test func theListenerIsBoundToLoopbackAlone() async throws {

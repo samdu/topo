@@ -406,6 +406,42 @@ import TopoAuth
     }
 }
 
+@Suite struct ListenerLossTests {
+    /// Issue 369: a listener taken away once it is up (iOS takes a suspended app's) is the proxy
+    /// down and logged, and the next start listens again on a port that answers.
+    @Test func aListenerLostIsTheProxyDownUntilTheNextStart() async throws {
+        let upstream = StubUpstream()
+        let (proxy, first, logs) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        await proxy.listener?.cancel()
+        for _ in 0..<500 where await proxy.port != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await proxy.port == nil)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost") })
+        let second = try await proxy.start()
+        #expect(second != 0)
+        let client = try await WireClient(port: second)
+        try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
+        let (head, _) = try await client.readResponse()
+        #expect(head.status == 200)
+        #expect(upstream.requests.count == 1)
+    }
+
+    /// A stop is not a loss, and a start after it listens again; a start waiting while another
+    /// waits for the same listener gets the same port.
+    @Test func aStopThenAStartListensAgainAndConcurrentStartsShareOne() async throws {
+        let (proxy, _, logs) = try await startedProxy(StubUpstream())
+        await proxy.stop()
+        #expect(await proxy.port == nil)
+        async let one = proxy.start()
+        async let two = proxy.start()
+        let (a, b) = try await (one, two)
+        #expect(a == b)
+        #expect(a != 0)
+        await proxy.stop()
+        #expect(!logs.lines.contains { $0.hasPrefix("listener lost") })
+    }
+}
+
 @Suite struct LoopbackTests {
     /// Review focus 3: the listener is bound to 127.0.0.1 and nothing else, so a connection to this
     /// machine's own non-loopback address is refused.
