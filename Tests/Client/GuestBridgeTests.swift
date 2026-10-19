@@ -4428,6 +4428,35 @@ extension GuestBridgeTests {
         XCTAssertTrue(harness.turns.isEmpty, "control: nothing landed")
     }
 
+    /// A turn that ends in an error result is told at notice by where it stopped and its kind of
+    /// end, and the line carries nothing of the result's words or errors.
+    func testAnErrorResultIsToldWithoutItsWords() async throws {
+        let secret = "the person's words \(UUID().uuidString)"
+        let lines = Lines()
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.errorResult(secret)])
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile, note: { lines.add($0) })
+        let log = TurnLog(database: db)
+        let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: steadyLease(db, phone), brain: bridge)
+        _ = try? await runner.run("hello", model: .sonnet)
+        XCTAssertEqual(lines.all, ["bridge: unresolved at the turn ended; the turn ended with an error result (error_during_execution)"])
+        for line in lines.all { XCTAssertFalse(line.contains(secret), line) }
+    }
+
+    /// A failure no place told — the guest not ready — is told at the request, by kind alone.
+    func testAFailureNoPlaceToldIsToldAtTheRequest() async throws {
+        let lines = Lines()
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi.")])
+        guest.refuse("the userland is still downloading")
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile, note: { lines.add($0) })
+        let log = TurnLog(database: db)
+        let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: steadyLease(db, phone), brain: bridge)
+        _ = try? await runner.run("hello", model: .sonnet)
+        XCTAssertFalse(lines.all.isEmpty, "a refused request was told nowhere")
+        XCTAssertTrue(lines.all.allSatisfy { $0 == "bridge: not ready at the request" }, "\(lines.all)")
+    }
+
     /// The line a failure is logged with names the kind of end and never what the turn carried:
     /// an error result's text, its errors and a process's last words can hold the person's words.
     func testAFailedTurnsEndIsToldByKindAlone() {
@@ -4448,4 +4477,12 @@ extension GuestBridgeTests {
             XCTAssertFalse(told.contains(secret), "\(end) told what it carried")
         }
     }
+}
+
+/// Lines a bridge told, in order.
+private final class Lines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
+    var all: [String] { lock.withLock { lines } }
 }

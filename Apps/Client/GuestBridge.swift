@@ -318,16 +318,20 @@ actor GuestBridge: Brain {
     /// The nonces `hear` is at work on, each with the calls for the same nonce waiting on it.
     private var hearing: [String: [CheckedContinuation<Bool, Never>]] = [:]
     private let heardObserver: @Sendable (GuestHeard) async -> Void
+    /// Where a request's failure is told (`failing`): the unified log at `notice` outside a test.
+    private let note: @Sendable (String) -> Void
 
     /// `file` is the ledger; everything the bridge knows across launches is read from it here, or,
     /// when it cannot be read, at each request until it can.
     init(conversation: any GuestConversation, ledger file: URL,
          observe: @escaping @Sendable (GuestActivity) async -> Void = { _ in },
-         heard: @escaping @Sendable (GuestHeard) async -> Void = { _ in }) {
+         heard: @escaping @Sendable (GuestHeard) async -> Void = { _ in },
+         note: @escaping @Sendable (String) -> Void = GuestBridge.notice) {
         self.conversation = conversation
         self.file = file
         self.observe = observe
         heardObserver = heard
+        self.note = note
         do {
             ledger = try GuestLedger.load(file)
             loaded = true
@@ -338,7 +342,29 @@ actor GuestBridge: Brain {
 
     // MARK: - Brain
 
+    /// Answers `request` through the guest. Whatever it fails with is told at notice: by
+    /// `failing` where the place is known, and here for anything that reached the caller untold
+    /// (the guest not ready, a ledger that could not be written), by its kind alone.
     func answer(_ request: BrainRequest) async throws -> Reply {
+        let told = Told()
+        do {
+            return try await Told.current.withValue(told) { try await answering(request) }
+        } catch {
+            if !told.said {
+                let kind = (error as? GuestBridgeError).map(Self.kind(of:)) ?? "failed (\(type(of: error)))"
+                note("bridge: \(kind) at the request")
+            }
+            throw error
+        }
+    }
+
+    /// Whether this request's failure has been told yet, carried down the request's own task.
+    final class Told: @unchecked Sendable {
+        @TaskLocal static var current: Told?
+        var said = false
+    }
+
+    private func answering(_ request: BrainRequest) async throws -> Reply {
         let login = self.login
         // A request bound to words the guest was given ahead of their turn is answered by that
         // input: waited for while the guest is still on it, and handed over without the slot,
@@ -1197,16 +1223,21 @@ actor GuestBridge: Brain {
     /// afterwards says why a reply failed. A line names the place the request stopped and the
     /// kind of end the turn came to, never what was said: an error result's text and a process's
     /// last words can hold the person's words or the reply's.
-    private static let trail = Logger(subsystem: "zone.hexagon.topo", category: "bridge")
+    static let notice: @Sendable (String) -> Void = { line in
+        Logger(subsystem: "zone.hexagon.topo", category: "bridge").notice("\(line, privacy: .public)")
+    }
 
-    private func failing(_ error: GuestBridgeError, at place: String, end: GuestSession.TurnEnd? = nil) -> GuestBridgeError {
-        let kind = switch error {
+    static func kind(of error: GuestBridgeError) -> String {
+        switch error {
         case .notReady: "not ready"
         case .unresolved: "unresolved"
         case .failed: "failed"
         }
-        let line = "bridge: \(kind) at \(place)" + (end.map { "; the turn \(Self.kind(of: $0))" } ?? "")
-        Self.trail.notice("\(line, privacy: .public)")
+    }
+
+    private func failing(_ error: GuestBridgeError, at place: String, end: GuestSession.TurnEnd? = nil) -> GuestBridgeError {
+        note("bridge: \(Self.kind(of: error)) at \(place)" + (end.map { "; the turn \(Self.kind(of: $0))" } ?? ""))
+        Told.current?.said = true
         return error
     }
 
