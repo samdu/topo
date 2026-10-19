@@ -62,9 +62,9 @@ enum ContinuedTurns {
         /// Registers a launch handler for one identifier, called on the main queue; false when
         /// iOS refuses it.
         var register: @MainActor (_ identifier: String, _ launched: @escaping @MainActor (BGTask) -> Void) -> Bool
-        /// Submits the request for one identifier, answering with the error that refused it, or
-        /// nil, on the main actor.
-        var submit: @MainActor (_ identifier: String, _ answer: @escaping @MainActor (Error?) -> Void) -> Void
+        /// Submits a request already made on the main actor, answering with the error that refused
+        /// it, or nil, on the main actor.
+        var submit: @MainActor (_ request: BGContinuedProcessingTaskRequest, _ answer: @escaping @MainActor (Error?) -> Void) -> Void
 
         static let system = Scheduler(
             register: { identifier, launched in
@@ -72,27 +72,35 @@ enum ContinuedTurns {
                     MainActor.assumeIsolated { launched(task) }
                 }
             },
-            submit: { identifier, answer in
-                // The request is made at the send, with the app in front: it "creates an instance
-                // on behalf of the currently foregrounded app" (`BGTaskRequest.h`). On iOS 27 the
-                // throwing submit is deprecated, since it cannot report every failure, and the
-                // completion-handler form is not called from the main thread (`BGTaskScheduler.h`).
+            submit: { request, answer in
+                // On iOS 27 the throwing submit is deprecated, since it cannot report every failure,
+                // and the completion-handler form is not called from the main thread
+                // (`BGTaskScheduler.h`), so the submission lands a moment after the send: a Home
+                // press inside that moment can find the app no longer in front and leave the turn
+                // to the grace, which is the floor.
                 if #available(iOS 27, *) {
+                    let made = Made(request: request)
                     DispatchQueue.global(qos: .userInitiated).async {
-                        BGTaskScheduler.shared.submitTaskRequest(ContinuedTurns.request(identifier: identifier)) { error in
+                        BGTaskScheduler.shared.submitTaskRequest(made.request) { error in
                             let refusal = error.map { "\($0)" }
                             Task { @MainActor in answer(refusal.map(Refusal.init)) }
                         }
                     }
                 } else {
                     do {
-                        try BGTaskScheduler.shared.submit(ContinuedTurns.request(identifier: identifier))
+                        try BGTaskScheduler.shared.submit(request)
                         answer(nil)
                     } catch {
                         answer(error)
                     }
                 }
             })
+    }
+
+    /// A request made on the main actor, carried to the queue that submits it and touched by
+    /// nothing else after.
+    private struct Made: @unchecked Sendable {
+        let request: BGContinuedProcessingTaskRequest
     }
 
     /// A refusal carried across to the main actor as its description.
@@ -112,7 +120,9 @@ enum ContinuedTurns {
             return
         }
         waiting[identifier] = (lifecycle, turn, log)
-        scheduler.submit(identifier) { error in
+        // Made here, at the send and on the main actor, while the app is in front: the request
+        // "creates an instance on behalf of the currently foregrounded app" (`BGTaskRequest.h`).
+        scheduler.submit(request(identifier: identifier)) { error in
             if let error {
                 waiting.removeValue(forKey: identifier)
                 log("continued: refused (\(error)); the turn has the grace alone")

@@ -28,7 +28,14 @@ final class ContinuedTurnTests: XCTestCase {
         let seen = Seen()
         let scheduler = ContinuedTurns.Scheduler(
             register: { identifier, _ in seen.registered.append(identifier); return true },
-            submit: { identifier, answer in seen.submitted.append(identifier); answer(nil) })
+            submit: { request, answer in
+                // The request reaches the submit already made, at the send on the main actor, so a
+                // queue that runs late submits the request of an app that was in front.
+                XCTAssertEqual(request.strategy, .fail)
+                XCTAssertEqual(request.title, ContinuedTurns.title)
+                seen.submitted.append(request.identifier)
+                answer(nil)
+            })
         let lifecycle = Self.lifecycle()
         for turn in 1...2 {
             ContinuedTurns.submit(turn: turn, to: lifecycle, log: { line in MainActor.assumeIsolated { seen.lines.append(line) } },
@@ -51,7 +58,7 @@ final class ContinuedTurnTests: XCTestCase {
         let seen = Seen()
         let scheduler = ContinuedTurns.Scheduler(
             register: { _, _ in false },
-            submit: { identifier, answer in seen.submitted.append(identifier); answer(nil) })
+            submit: { request, answer in seen.submitted.append(request.identifier); answer(nil) })
         ContinuedTurns.submit(turn: 1, to: Self.lifecycle(), log: { line in MainActor.assumeIsolated { seen.lines.append(line) } },
                               scheduler: scheduler)
         XCTAssertEqual(seen.submitted, [])

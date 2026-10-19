@@ -561,6 +561,10 @@ final class GuestLifecycleTests: XCTestCase {
         expired.expire()
         lifecycle.willEnterForeground()
         await eventually("kept") { outcomes.all.contains(.kept) }
+        // Back before the tick: the way out's answer lets the expired task go, unsuccessfully,
+        // so a turn that then ends in front has nothing left holding the pill.
+        XCTAssertEqual(expired.completions, [false], "an expired task stayed held after the way out was kept")
+        XCTAssertFalse(lifecycle.holdsContinuedTask)
         answer(process, "done")
         for await _ in turn {}
         lifecycle.turnEnded(number, succeeded: true)
