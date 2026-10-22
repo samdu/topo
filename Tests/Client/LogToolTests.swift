@@ -167,8 +167,9 @@ final class LogToolTests: XCTestCase {
         XCTAssertTrue(lines.allSatisfy { $0.at >= since })
     }
 
-    /// The first line read at `since` that `matches`, read again until it is there or 5 s have
-    /// gone by on a clock no correction of the host's moves.
+    /// The first line read at `since` that `matches`, read again until it is there, with no read
+    /// begun more than 5 s after the first on a clock no correction of the host's moves. A read
+    /// itself is not cut short, so one slow read can end the wait later than that.
     private func read(since: Date, _ matches: (LogLine) -> Bool) throws -> LogLine? {
         let deadline = ContinuousClock.now + .seconds(5)
         repeat {
