@@ -273,9 +273,12 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(words, ["PONG"], "the notice's words reached the person's turn")
         // Exactly the lines from the turn's own init on, its echo aside: none of the notice's.
         let own = try XCTUnwrap(recorded.lastIndex { $0.contains(#""subtype":"init""#) })
-        let expected = recorded[own...].flatMap(StreamJSON.events(in:)).filter {
+        var expected = recorded[own...].flatMap(StreamJSON.events(in:)).filter {
             if case .received = $0 { false } else { true }
         }
+        // What comes after the turn's result is no turn's.
+        let end = try XCTUnwrap(expected.firstIndex { if case .result = $0 { true } else { false } })
+        expected = Array(expected[...end])
         XCTAssertEqual(turn.events, expected, "the turn's events are not its own lines alone")
         XCTAssertEqual(turn.events.filter { if case .started = $0 { true } else { false } }.count, 1)
         XCTAssertTrue(lines.all.contains { $0.hasPrefix("a turn of Claude Code's own ended before") })
