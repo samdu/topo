@@ -1,6 +1,7 @@
 import Darwin
 import TopoProxy
 import TopoTools
+import TopoUserland
 import XCTest
 
 @testable import Topo
@@ -21,8 +22,10 @@ final class LaunchPortsTests: XCTestCase {
         let launcher = ClaudeLauncher(environment: made)
 
         let first = try await launcher.launchEnvironment()
-        let firstProxy = try XCTUnwrap(await proxy.port)
-        let firstTools = try XCTUnwrap(await tools.port)
+        let firstProxyPort = await proxy.port
+        let firstProxy = try XCTUnwrap(firstProxyPort)
+        let firstToolsPort = await tools.port
+        let firstTools = try XCTUnwrap(firstToolsPort)
         XCTAssertEqual(first["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: firstProxy))
         XCTAssertEqual(first[ToolService.urlVariable], "http://127.0.0.1:\(firstTools)")
         XCTAssertEqual(first[ToolService.tokenVariable], tools.token)
@@ -33,8 +36,10 @@ final class LaunchPortsTests: XCTestCase {
         let squatters = [try Self.squat(firstProxy), try Self.squat(firstTools)].compactMap { $0 }
         defer { squatters.forEach { close($0) } }
         let next = try await launcher.launchEnvironment()
-        let nextProxy = try XCTUnwrap(await proxy.port)
-        let nextTools = try XCTUnwrap(await tools.port)
+        let nextProxyPort = await proxy.port
+        let nextProxy = try XCTUnwrap(nextProxyPort)
+        let nextToolsPort = await tools.port
+        let nextTools = try XCTUnwrap(nextToolsPort)
         XCTAssertNotEqual(nextProxy, firstProxy)
         XCTAssertNotEqual(nextTools, firstTools)
         XCTAssertEqual(next["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: nextProxy))
