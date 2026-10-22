@@ -180,7 +180,7 @@ public actor GuestSession {
     /// A process the way out ended with something of its own still running: a turn it had not
     /// answered, or tasks it had started in the background, which went with it.
     public struct Cut: Codable, Sendable, Equatable {
-        /// When the app went behind another app, and when the process was ended.
+        /// When the app went behind another app, and when the way out decided to end the process.
         public let left: Date
         public let ended: Date
         /// Whether a turn was in flight, abandoned at the teardown point.
@@ -506,15 +506,16 @@ public actor GuestSession {
             fate = .abandoned
             finish(turn, of: still, with: .abandoned)
         }
+        // The note is kept before the teardown, which is where iOS is likeliest to suspend the app.
         let running = still.backgroundTasks
-        let termination = await end(still, reason: fate == .abandoned ? "the teardown point, turn abandoned" : "the background",
-                                    restart: true).value
         if fate == .abandoned || running > 0 {
             let cut = Cut(left: left, ended: now(), turn: fate == .abandoned, backgroundTasks: running)
             // A process of a forgotten conversation leaves nothing for the next login's.
             if still.conversation == conversation { cuts.save(cut) }
             log("the way out cut short \(fate == .abandoned ? "a turn" : "no turn") and \(running) background task\(running == 1 ? "" : "s"); the next process is told")
         }
+        let termination = await end(still, reason: fate == .abandoned ? "the teardown point, turn abandoned" : "the background",
+                                    restart: true).value
         return .ended(turn: fate, termination: termination)
     }
 
