@@ -280,15 +280,22 @@ final class GuestSessionTests: XCTestCase {
     /// The same order in miniature, and a result before any echo: the turn is not ended by it, and
     /// one whose echo never comes is ended at the bound, as any turn that hears nothing is.
     func testAResultBeforeTheTurnsEchoDoesNotEndIt() async throws {
-        let (session, process) = try await resident()
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
         process.echoes = false
+        let stray = "a turn of Claude Code's own ended before"
         let (turn, done) = collect(try await session.send("hi", id: "input-1"))
         await eventually("written") { process.turns.count == 1 }
         process.emit(Lines.`init`("S1"))
         process.emit(Lines.text("the job is done"))
         process.emit(Lines.result("the job is done", session: "S1"))
         process.emit(Lines.echo("another-input"))
-        await eventually("the watchdog asleep") { await clock.pending == 1 }
+        // The log line says the other turn's result has been read, and ended nothing.
+        await eventually("the other turn's result read") { lines.all.filter { $0.hasPrefix(stray) }.count == 1 }
         XCTAssertTrue(turn.ends.isEmpty, "another turn's result ended this one")
         process.emit(Lines.`init`("S1"))
         process.emit(Lines.echo("input-1"))
@@ -303,9 +310,15 @@ final class GuestSessionTests: XCTestCase {
         // An input never echoed: the other turn's result ends nothing, and the bound ends the turn.
         let (silent, silentDone) = collect(try await session.send("again", id: "input-2"))
         await eventually("written") { process.turns.count == 2 }
+        await eventually("the watchdog asleep") { await clock.pending == 1 }
         process.emit(Lines.`init`("S1"))
         process.emit(Lines.result("not yours", session: "S1"))
-        await eventually("the watchdog asleep") { await clock.pending == 1 }
+        await eventually("the other turn's result read") { lines.all.filter { $0.hasPrefix(stray) }.count == 2 }
+        XCTAssertTrue(silent.ends.isEmpty, "another turn's result ended this one")
+        // The lines it heard reset the watchdog once; a whole bound of nothing after that ends it.
+        await clock.advance(by: bound)
+        await eventually("the watchdog asleep again") { await clock.pending == 1 }
+        XCTAssertTrue(silent.ends.isEmpty)
         await clock.advance(by: bound)
         await silentDone.value
         XCTAssertEqual(silent.ends, [.failed(.silent(bound))])

@@ -646,10 +646,14 @@ public actor GuestSession {
         resident.turn?.ticks += 1
         if resident.turn?.ticks == 1 { Perf.mark("turn.guest.firstLine") }
         for event in StreamJSON.events(in: line) {
+            // A turn's marks are its own: lines of a turn Claude Code runs of its own, before the
+            // input's echo or with no turn in flight, are marked apart.
+            let own = resident.turn?.begun == true
             switch event {
-            case .text: Perf.mark("turn.guest.text")
-            case .toolUse: Perf.mark("turn.guest.toolUse")
-            case .result: Perf.mark("turn.guest.result")
+            case .text where own: Perf.mark("turn.guest.text")
+            case .toolUse where own: Perf.mark("turn.guest.toolUse")
+            case .result where own: Perf.mark("turn.guest.result")
+            case .result: Perf.mark("turn.guest.result.other")
             default: break
             }
             switch event {
