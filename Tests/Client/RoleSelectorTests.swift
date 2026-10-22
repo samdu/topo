@@ -153,6 +153,50 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertNil(s.trouble)
     }
 
+    /// #436: iCloud that does not answer leaves the role open, with a login in the keychain or
+    /// without, and writes nothing; the next attempt is given longer, and once the store answers
+    /// another device's lease the role is viewer — which a login taken as the evidence would have
+    /// made a second primary.
+    func testFirstReadsThatRunOutDecideNothingAndWriteNothing() async throws {
+        for signedIn in [true, false] {
+            let db = InMemoryRecordDatabase()
+            try await lease(db, holder: DeviceID("ios-phone"))
+            let slow = Stalling(db)
+            let bounds = Slept()
+            let zones = Slept()
+            let s = RoleSelector(database: slow, device: me, defaults: defaults(), isSignedIn: { signedIn },
+                                 ensureZone: { await zones.add(0) },
+                                 deadline: { bound in
+                                     await bounds.add(bound)
+                                     // Run out at once while the store stalls; once it answers, never.
+                                     if await slow.answers { try await Task.sleep(for: .seconds(3600)) }
+                                 })
+            await s.decide()
+            XCTAssertNil(s.role, "signed in: \(signedIn)")
+            XCTAssertEqual(s.trouble, "iCloud hasn't answered in 5 seconds. Topo will keep asking.")
+            await s.decide()
+            XCTAssertNil(s.role)
+            XCTAssertEqual(s.trouble, "iCloud hasn't answered in 10 seconds. Topo will keep asking.")
+            let saves = await slow.saves
+            XCTAssertEqual(saves, 0, "a read that ran out wrote something")
+            let made = await zones.all
+            XCTAssertTrue(made.isEmpty, "a zone was made on a read that ran out")
+            let record = await db.current(Lease.recordID)
+            XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, DeviceID("ios-phone"))
+
+            await slow.answer()
+            await s.decide()
+            XCTAssertEqual(s.role, .viewer, "signed in: \(signedIn)")
+            XCTAssertNil(s.trouble)
+            let asked = await bounds.all
+            XCTAssertEqual(asked, [5, 10, 20])
+        }
+    }
+
+    func testTheFirstReadsBoundDoublesFromFiveSecondsToAMinute() {
+        XCTAssertEqual((0...6).map(RoleSelector.firstReadBound(after:)), [5, 10, 20, 40, 60, 60, 60])
+    }
+
     func testADecisionIsKeptAcrossLaunches() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = defaults()
@@ -376,6 +420,23 @@ private actor ZoneGate: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try check(); return try await wrapped.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try check(); return try await wrapped.query(query) }
     func records(ofType type: String) async throws -> [Record] { try check(); return try await wrapped.records(ofType: type) }
+}
+
+/// A database that never answers until `answer()`: every call before that waits until it is
+/// cancelled, as a CloudKit that keeps a first launch waiting does.
+private actor Stalling: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    private(set) var answers = false
+    private(set) var saves = 0
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+    func answer() { answers = true }
+    private func stall() async throws {
+        while !answers { try await Task.sleep(for: .milliseconds(10)) }
+    }
+    func save(_ records: [Record]) async throws -> [Record] { saves += 1; try await stall(); return try await wrapped.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await stall(); return try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await stall(); return try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await stall(); return try await wrapped.records(ofType: type) }
 }
 
 /// A wait as real time would leave the record: the sleep is instant, so the lease that the wait

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import TopoCore
 
 /// What this device is to the mind: decided once, at first launch, from the private CloudKit
@@ -41,15 +42,22 @@ final class RoleSelector {
     private let ensureZone: @Sendable () async throws -> Void
     private let timing: LeaseTiming
     private let sleep: @Sendable (TimeInterval) async throws -> Void
+    private let deadline: @Sendable (TimeInterval) async throws -> Void
+    /// Attempts to decide that ran out of time, which lengthen the next one's bound.
+    private var ranOut = 0
     private static let key = "topo.role"
 
     /// - Parameter ensureZone: run before the first claim, because the lease record goes in the
     ///   zone the writers create. Injected so a test can hold a database and no iCloud.
+    /// - Parameter deadline: how the first reads' bound is waited out (`firstReadBound`), apart
+    ///   from `sleep`, which is the takeover's wait.
     init(database: any RecordDatabase, device: DeviceID = DeviceIdentity.current,
          defaults: UserDefaults = .standard, isSignedIn: @escaping @Sendable () -> Bool,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          timing: LeaseTiming = .standard,
-         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
+         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+         deadline: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
+        self.deadline = deadline
         self.database = database
         self.device = device
         self.defaults = defaults
@@ -64,34 +72,29 @@ final class RoleSelector {
 
     /// Decides the role if it is not decided yet. A decision is kept; a failure to read leaves it
     /// open for the next call, with `trouble` saying why.
+    ///
+    /// The reads it is decided from — this device's role record, the lease record and, before a
+    /// first claim, the zone — are given `firstReadBound(after:)` together, and one that runs out
+    /// is never taken for an answer: the role stays open and `trouble` says iCloud has not answered,
+    /// whether or not the keychain holds a login. A read that fails is a different thing, and with
+    /// a login the login is the evidence there is. A read that ran out may be one whose record
+    /// names another device, and a phone and a pad answer no probe, so taking it as that evidence
+    /// would make two primaries. The claim itself is the lease's (`PrimaryLease`), which bounds its
+    /// own requests.
     func decide() async {
         if role == .primary { await checkDemotion() }
         guard role == nil else { return }
-        if let recorded = try? await DeviceRole.read(device, from: database), recorded.role == .viewer {
-            keep(.viewer)
-            return
-        }
         let signedIn = isSignedIn()
+        let bound = Self.firstReadBound(after: ranOut)
+        let read: FirstRead
         do {
-            let record: Record?
-            do {
-                record = try await database.fetch(Lease.recordID)
-            } catch where TopoCloudKit.meansNoLogYet(error) {
-                // Nothing has been written on this Apple ID yet: no zone, so no record.
-                record = nil
+            read = try await Self.within(bound, deadline: deadline) { [database, device, ensureZone] in
+                try await Self.firstRead(database: database, device: device, signedIn: signedIn, ensureZone: ensureZone)
             }
-            guard let record else {
-                if signedIn {
-                    keep(.primary)
-                    return
-                }
-                try await ensureZone()
-                keep(try await stake() ? .primary : .viewer)
-                return
-            }
-            let holder = Lease(record: record)?.holder
-            // A login decides only where the record names nobody.
-            keep(holder == device || (signedIn && holder == nil) ? .primary : .viewer)
+        } catch is RanOut {
+            ranOut += 1
+            trouble = "iCloud hasn't answered in \(Int(bound)) seconds. Topo will keep asking."
+            return
         } catch {
             // With a login and no record to read, the login is the evidence there is.
             if signedIn {
@@ -99,6 +102,82 @@ final class RoleSelector {
             } else {
                 trouble = TranscriptStore.message(for: error)
             }
+            return
+        }
+        switch read {
+        case .recordedViewer:
+            keep(.viewer)
+        case .lease(let record?):
+            let holder = Lease(record: record)?.holder
+            // A login decides only where the record names nobody.
+            keep(holder == device || (signedIn && holder == nil) ? .primary : .viewer)
+        case .lease(nil) where signedIn:
+            keep(.primary)
+        case .lease(nil):
+            do {
+                keep(try await stake() ? .primary : .viewer)
+            } catch {
+                trouble = TranscriptStore.message(for: error)
+            }
+        }
+    }
+
+    /// What the first reads found: this device's role recorded as viewer, or else the lease record,
+    /// nil when there is none. With no record and no login, the zone has been made for the claim.
+    private enum FirstRead: Sendable {
+        case recordedViewer
+        case lease(Record?)
+    }
+
+    private static func firstRead(database: any RecordDatabase, device: DeviceID, signedIn: Bool,
+                                  ensureZone: @Sendable () async throws -> Void) async throws -> FirstRead {
+        if let recorded = try? await DeviceRole.read(device, from: database), recorded.role == .viewer {
+            return .recordedViewer
+        }
+        let record: Record?
+        do {
+            record = try await database.fetch(Lease.recordID)
+        } catch where TopoCloudKit.meansNoLogYet(error) {
+            // Nothing has been written on this Apple ID yet: no zone, so no record.
+            record = nil
+        }
+        if record == nil, !signedIn { try await ensureZone() }
+        return .lease(record)
+    }
+
+    /// How long the first reads are given, after `ranOut` attempts that ran out: 5 s, doubling to
+    /// 60 s. The first screen says why it is waiting within seconds, and a store that answers
+    /// slowly but surely is still read, by an attempt given longer than it takes.
+    static func firstReadBound(after ranOut: Int) -> TimeInterval {
+        min(5 * pow(2, Double(min(ranOut, 4))), 60)
+    }
+
+    /// The first reads did not answer within their bound.
+    struct RanOut: Error {}
+
+    /// What `work` answers if it answers before `deadline(bound)` returns, and `RanOut` otherwise.
+    /// A `work` that does not stop when it is cancelled is not waited for: its answer, when it
+    /// comes, goes nowhere.
+    private static func within<T: Sendable>(_ bound: TimeInterval, deadline: @escaping @Sendable (TimeInterval) async throws -> Void,
+                                            _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        let answered = OSAllocatedUnfairLock(initialState: false)
+        var tasks: [Task<Void, Never>] = []
+        defer { tasks.forEach { $0.cancel() } }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            let answer: @Sendable (Result<T, Error>) -> Void = { result in
+                let first = answered.withLock { done in
+                    defer { done = true }
+                    return !done
+                }
+                if first { continuation.resume(with: result) }
+            }
+            tasks.append(Task {
+                do { answer(.success(try await work())) } catch { answer(.failure(error)) }
+            })
+            tasks.append(Task {
+                guard (try? await deadline(bound)) != nil else { return }
+                answer(.failure(RanOut()))
+            })
         }
     }
 
