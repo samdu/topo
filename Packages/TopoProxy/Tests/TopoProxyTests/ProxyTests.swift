@@ -406,6 +406,131 @@ import TopoAuth
     }
 }
 
+@Suite struct ListenerLossTests {
+    /// Waits until nothing answers on `port`, as a listener iOS took away does not.
+    static func refused(_ port: UInt16) async throws {
+        for _ in 0..<500 where await LoopbackProbe.answers(port: port, within: .milliseconds(200)) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await !LoopbackProbe.answers(port: port, within: .milliseconds(200)))
+    }
+
+    /// Issue 369: a listener that says it was cancelled once it is up is the proxy down and
+    /// logged, its connections closed — a streaming response in flight included, its upstream
+    /// cancelled — and the next start listens again on a port that forwards.
+    @Test func aListenerLostIsTheProxyDownWithItsConnectionsClosed() async throws {
+        let cancelled = Signal()
+        let (proxy, first, logs) = try await startedProxy(StreamingTests.endlessStream(pinging: false, cancelled: cancelled))
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: first)
+        try await client.send(post("/v1/messages", body: #"{"model":"x","stream":true}"#))
+        _ = try await client.readHead()
+        _ = try await client.readChunk()
+        await proxy.listener?.cancel()
+        #expect(await cancelled.wait(3), "the upstream stream outlived the listener: \(logs.lines)")
+        for _ in 0..<500 where await proxy.port != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await proxy.port == nil)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost (it was cancelled)") })
+        let second = try await proxy.start()
+        #expect(await LoopbackProbe.answers(port: second))
+    }
+
+    /// Codex on #448: a launch can ask before the listener's own word that it was taken away has
+    /// come, or with none ever coming. `relisten` starts a new listener whatever the old one's
+    /// state, and the new port forwards.
+    @Test func relistenStartsANewListenerWithNoWordFromTheOldOne() async throws {
+        let upstream = StubUpstream()
+        let (proxy, first, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        await proxy.set(hearsLoss: false)
+        await proxy.listener?.cancel()
+        try await Self.refused(first)
+        #expect(await proxy.port == first, "control: the proxy has not heard of the loss")
+        let second = try await proxy.relisten()
+        #expect(second != first)
+        #expect(await proxy.port == second)
+        let client = try await WireClient(port: second)
+        try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
+        let (head, _) = try await client.readResponse()
+        #expect(head.status == 200)
+        #expect(upstream.requests.count == 1)
+    }
+
+    /// Codex on #448: a port iOS freed can be bound again by another process before the proxy
+    /// hears of the loss. The next launch is never told it: `relisten` binds a port of its own,
+    /// and what reaches that port reaches this proxy.
+    @Test func aPortBoundAgainByAnotherListenerIsNeverHandedOut() async throws {
+        let upstream = StubUpstream()
+        let (proxy, first, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        await proxy.set(hearsLoss: false)
+        await proxy.listener?.cancel()
+        try await Self.refused(first)
+        let squatter = try await squat(first)
+        defer { squatter.cancel() }
+        #expect(await LoopbackProbe.answers(port: first), "control: another listener holds the old port")
+        let second = try await proxy.relisten()
+        #expect(second != first)
+        let client = try await WireClient(port: second)
+        try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
+        let (head, _) = try await client.readResponse()
+        #expect(head.status == 200)
+        #expect(upstream.requests.count == 1, "the request reached a listener other than the proxy's")
+    }
+
+    /// A start with a port up is that port, with no new listener and nothing logged.
+    @Test func aStartWithAPortUpIsThatPort() async throws {
+        let (proxy, first, logs) = try await startedProxy(StubUpstream())
+        defer { Task { await proxy.stop() } }
+        let generation = await proxy.generation
+        #expect(try await proxy.start() == first)
+        #expect(await proxy.generation == generation)
+        #expect(logs.lines.isEmpty)
+    }
+
+    /// Two starts while one listener is still coming up wait for that one listener.
+    @Test func startsWhileAListenerComesUpShareIt() async throws {
+        let proxy = try APIProxy(upstream: StubUpstream(), log: { _ in })
+        defer { Task { await proxy.stop() } }
+        let gate = Signal()
+        await proxy.set(holdReady: { _ = await gate.wait(10) })
+        async let one = proxy.start()
+        async let two = proxy.start()
+        for _ in 0..<500 where await proxy.waitingStarts < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await proxy.waitingStarts == 2)
+        #expect(await proxy.generation == 1)
+        gate.fire()
+        let (a, b) = try await (one, two)
+        #expect(a == b)
+        #expect(await proxy.generation == 1)
+    }
+
+    /// A port that cannot be bound fails the start rather than leaving it waiting.
+    @Test func aPortThatCannotBeBoundFailsTheStart() async throws {
+        let (holder, taken, _) = try await startedProxy(StubUpstream())
+        defer { Task { await holder.stop() } }
+        let proxy = try APIProxy(upstream: StubUpstream(), log: { _ in })
+        defer { Task { await proxy.stop() } }
+        await proxy.set(requestedPort: NWEndpoint.Port(rawValue: taken)!)
+        let started = ContinuousClock.now
+        await #expect(throws: (any Error).self) { _ = try await proxy.start() }
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(await proxy.port == nil)
+        #expect(await proxy.waitingStarts == 0)
+    }
+
+    /// A stop is not a loss, and a start after it listens again.
+    @Test func aStopThenAStartListensAgain() async throws {
+        let (proxy, _, logs) = try await startedProxy(StubUpstream())
+        await proxy.stop()
+        #expect(await proxy.port == nil)
+        let port = try await proxy.start()
+        #expect(await LoopbackProbe.answers(port: port))
+        await proxy.stop()
+        #expect(!logs.lines.contains { $0.hasPrefix("listener lost") })
+    }
+}
+
 @Suite struct LoopbackTests {
     /// Review focus 3: the listener is bound to 127.0.0.1 and nothing else, so a connection to this
     /// machine's own non-loopback address is refused.
