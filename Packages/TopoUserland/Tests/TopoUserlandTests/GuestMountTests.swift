@@ -6,7 +6,8 @@ import TopoUserland
 /// alone, replaced when it points elsewhere, and never put over something that is not a link. And
 /// the guest's own `mount(2)`, which never reaches the host
 /// (`patches/ish/0004-guest-mount-real-refused.patch`), and its own `umount(2)` of a tmpfs, which
-/// the app survives (`patches/ish/0008-tmpfs-umount.patch`).
+/// the app survives (`patches/ish/0008-tmpfs-umount.patch`), and `touch` on such a tmpfs
+/// (`patches/ish/0014-tmpfs-utime.patch`).
 final class GuestMountTests: XCTestCase {
     private let fm = FileManager.default
     private var hosts: [URL] = []
@@ -139,6 +140,20 @@ final class GuestMountTests: XCTestCase {
             + "cat \(point)/f; exec 3<&-; umount \(point) && echo unmounted; grep -c ' \(point) ' /proc/mounts")
         XCTAssertEqual(busy.output, "fresh\nrefused\nagain\nunmounted\n0\n", busy.errors)
     }
+    /// `touch` on a tmpfs the guest made (`patches/ish/0014-tmpfs-utime.patch`): a name that is not
+    /// there is created, since the filesystem's utime answers ENOENT for it and busybox's touch
+    /// creates on that alone; a file that is there takes the time it is given; and `touch -c` of a
+    /// name that is not there leaves it not there.
+    func testTouchOnTheGuestsOwnTmpfsCreatesAndSetsTimes() async throws {
+        let point = "/mnt/touch-\(UUID().uuidString.prefix(8))"
+        let touched = try await sh("mkdir -p \(point) && mount -t tmpfs tmpfs \(point) "
+            + "&& touch \(point)/f && [ -f \(point)/f ] && echo made "
+            + "&& touch -d @981173106 \(point)/f && stat -c %Y \(point)/f "
+            + "&& touch -c \(point)/absent && { [ -e \(point)/absent ] || echo absent; }; umount \(point)")
+        XCTAssertEqual(touched.output, "made\n981173106\nabsent\n", touched.errors)
+        XCTAssertEqual(touched.status, 0, touched.errors)
+    }
+
     /// Lookups under a tmpfs's point beside a loop that mounts and unmounts it
     /// (`patches/ish/0011-mount-find-cache-under-lock.patch`): each reader is one shell testing
     /// for the directory's own `under` and the tmpfs's `over` with a builtin, so every lookup is
