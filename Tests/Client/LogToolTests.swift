@@ -149,16 +149,33 @@ final class LogToolTests: XCTestCase {
         let logger = Logger(subsystem: "zone.hexagon.topo", category: "logtest")
         for index in 0..<300 { logger.error("\(mark, privacy: .public) before \(index, privacy: .public)") }
         Thread.sleep(forTimeInterval: 1.5)
-        // The store stamps a line from its own time base, which the host's clock leaves by
-        // milliseconds as it is slewed, so a line written just after `Date()` can be dated just
-        // before it. The window opens inside the gap, a second after the lines before it and
-        // half a second before the one after.
-        let since = Date().addingTimeInterval(-0.5)
+        // The store stamps a line from its own time base, which `Date()` leaves as the host's
+        // clock is slewed, by an amount that grows over the process's life. So the window opens
+        // at a fence line's own stamp, read back from the store, never at a `Date()`: the lines
+        // before are a second and a half before it on the store's clock whatever the host's says.
+        logger.error("\(mark, privacy: .public) fence")
+        let fence = try XCTUnwrap(try read(since: Date().addingTimeInterval(-60)) { $0.message == "\(mark) fence" }, "the fence never reached the store")
+        let since = fence.at
         logger.error("\(mark, privacy: .public) after")
+        // A line is in the store a moment after it is written, and later on a busy Mac.
+        _ = try read(since: since) { $0.message == "\(mark) after" }
         let lines = try UnifiedLogReader().lines(since: since)
-        XCTAssertEqual(lines.filter { $0.message.contains(mark) }.map(\.message), ["\(mark) after"])
+        // The fence is at the window's very start, which the store's comparison may or may not
+        // count as inside it; what matters is that no line before it is.
+        XCTAssertEqual(lines.filter { $0.message.contains(mark) && $0.message != "\(mark) fence" }.map(\.message), ["\(mark) after"])
         XCTAssertLessThan(lines.count, 100, "the read went back past its window")
         XCTAssertTrue(lines.allSatisfy { $0.at >= since })
+    }
+
+    /// The first line read at `since` that `matches`, read again until it is there or 5 s have
+    /// gone by.
+    private func read(since: Date, _ matches: (LogLine) -> Bool) throws -> LogLine? {
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            if let line = try UnifiedLogReader().lines(since: since).first(where: matches) { return line }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        return nil
     }
 
     /// The resident's own lines, the proxy's and the tool service's among them, are in the unified
