@@ -250,6 +250,78 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertFalse(second.events.contains(.text("late answer")))
     }
 
+    /// #447, as Claude Code 2.1.285 wrote it: a background task finished, Claude Code began a turn
+    /// of its own to answer the notice, and the person's turn was written while that ran. The
+    /// notice's result came first. It is not the person's reply, and their reply is not lost.
+    func testATurnClaudeCodeRunsOfItsOwnIsNotTheTurnSentWhileItRan() async throws {
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        process.echoes = false
+        let (turn, done) = collect(try await session.send("Reply only with the word PONG.",
+                                                          id: "22222222-2222-4222-8222-222222222222"))
+        await eventually("written") { process.turns.count == 1 }
+        let recorded = try Recording.lines("notice-before-turn")
+        recorded.forEach(process.emit)
+        await done.value
+        guard case .answered(let result) = turn.ends.first, turn.ends.count == 1 else { return XCTFail("\(turn.ends)") }
+        XCTAssertEqual(result.text, "PONG")
+        let words = turn.events.compactMap { if case .text(let text, _) = $0 { return text } else { return nil } }
+        XCTAssertEqual(words, ["PONG"], "the notice's words reached the person's turn")
+        XCTAssertFalse(turn.events.contains { if case .writing(let text) = $0 { text.contains("Background") } else { false } })
+        XCTAssertEqual(turn.events.first.map { if case .started = $0 { true } else { false } }, true,
+                       "the turn's own init, which comes before its echo, is the turn's")
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix("a turn of Claude Code's own ended before") })
+    }
+
+    /// The same order in miniature, and a result before any echo: the turn is not ended by it, and
+    /// one whose echo never comes is ended at the bound, as any turn that hears nothing is.
+    func testAResultBeforeTheTurnsEchoDoesNotEndIt() async throws {
+        let (session, process) = try await resident()
+        process.echoes = false
+        let (turn, done) = collect(try await session.send("hi", id: "input-1"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(Lines.text("the job is done"))
+        process.emit(Lines.result("the job is done", session: "S1"))
+        process.emit(Lines.echo("another-input"))
+        await eventually("the watchdog asleep") { await clock.pending == 1 }
+        XCTAssertTrue(turn.ends.isEmpty, "another turn's result ended this one")
+        process.emit(Lines.`init`("S1"))
+        process.emit(Lines.echo("input-1"))
+        process.emit(Lines.text("hello"))
+        process.emit(Lines.result("hello", session: "S1"))
+        await done.value
+        guard case .answered(let result) = turn.ends.first else { return XCTFail("\(turn.ends)") }
+        XCTAssertEqual(result.text, "hello")
+        XCTAssertFalse(turn.events.contains(.text("the job is done")))
+        XCTAssertEqual(turn.events.first, .started(session: "S1", model: "claude-haiku-4-5-20251001"))
+
+        // An input never echoed: the other turn's result ends nothing, and the bound ends the turn.
+        let (silent, silentDone) = collect(try await session.send("again", id: "input-2"))
+        await eventually("written") { process.turns.count == 2 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(Lines.result("not yours", session: "S1"))
+        await eventually("the watchdog asleep") { await clock.pending == 1 }
+        await clock.advance(by: bound)
+        await silentDone.value
+        XCTAssertEqual(silent.ends, [.failed(.silent(bound))])
+    }
+
+    /// A turn sent with no id is given one, and its echo is what begins it.
+    func testATurnSentWithNoIdIsGivenOne() async throws {
+        let (session, process) = try await resident()
+        let (turn, done) = collect(try await session.send("hi"))
+        await eventually("written") { process.turns.count == 1 }
+        XCTAssertNotNil(process.ids.first ?? nil)
+        answer(process, "ok")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+    }
+
     // MARK: - The way out and back
 
     func testATurnFinishingInsideTheGraceIsDeliveredOnceAndTheNextForegroundResumes() async throws {
@@ -706,4 +778,12 @@ final class GuestSessionTests: XCTestCase {
         await freshDone.value
         XCTAssertEqual(store.load(), "NEW", "the replacement's own session was not kept")
     }
+}
+
+/// What a session logged, in order.
+private final class Logged: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    var all: [String] { lock.withLock { lines } }
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
 }

@@ -42,7 +42,11 @@ final class MemoryMoveDuringTurnTests: XCTestCase {
 
         init() { (lines, continuation) = AsyncStream<String>.makeStream() }
 
-        func write(_ line: String) async throws {}
+        /// Echoes the input as `--replay-user-messages` does when its turn begins.
+        func write(_ line: String) async throws {
+            guard let id = ((try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any])?["uuid"] as? String else { return }
+            continuation.yield(#"{"type":"user","message":{"role":"user","content":"x"},"uuid":"\#(id)","isReplay":true}"#)
+        }
         func emit(_ line: String) { continuation.yield(line) }
         func end(within bound: Duration) async -> GuestProcess.Termination {
             continuation.finish()
