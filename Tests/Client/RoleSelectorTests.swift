@@ -205,7 +205,7 @@ final class RoleSelectorTests: XCTestCase {
         let s = RoleSelector(database: slow, device: me, defaults: defaults(), isSignedIn: { true }, ensureZone: {},
                              deadline: { _ in
                                  // Run out only once the lease read is the one waiting.
-                                 for _ in 0..<1000 where await slow.stalled == 0 { try await Task.sleep(for: .milliseconds(5)) }
+                                 for _ in 0..<1000 { if await slow.stalled > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
                              })
         await s.decide()
         XCTAssertNil(s.role, "a login was taken as the evidence over a lease read that ran out")
@@ -222,7 +222,7 @@ final class RoleSelectorTests: XCTestCase {
         let fresh = RoleSelector(database: empty, device: me, defaults: defaults(), isSignedIn: { false },
                                  ensureZone: { await zone.wait() },
                                  deadline: { _ in
-                                     for _ in 0..<1000 where await zone.waiting == 0 { try await Task.sleep(for: .milliseconds(5)) }
+                                     for _ in 0..<1000 { if await zone.waiting > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
                                  })
         await fresh.decide()
         XCTAssertNil(fresh.role)
