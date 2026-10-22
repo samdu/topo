@@ -271,9 +271,13 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(result.text, "PONG")
         let words = turn.events.compactMap { if case .text(let text, _) = $0 { return text } else { return nil } }
         XCTAssertEqual(words, ["PONG"], "the notice's words reached the person's turn")
-        XCTAssertFalse(turn.events.contains { if case .writing(let text) = $0 { text.contains("Background") } else { false } })
-        XCTAssertEqual(turn.events.first.map { if case .started = $0 { true } else { false } }, true,
-                       "the turn's own init, which comes before its echo, is the turn's")
+        // Exactly the lines from the turn's own init on, its echo aside: none of the notice's.
+        let own = try XCTUnwrap(recorded.lastIndex { $0.contains(#""subtype":"init""#) })
+        let expected = recorded[own...].flatMap(StreamJSON.events(in:)).filter {
+            if case .received = $0 { false } else { true }
+        }
+        XCTAssertEqual(turn.events, expected, "the turn's events are not its own lines alone")
+        XCTAssertEqual(turn.events.filter { if case .started = $0 { true } else { false } }.count, 1)
         XCTAssertTrue(lines.all.contains { $0.hasPrefix("a turn of Claude Code's own ended before") })
     }
 
@@ -322,6 +326,27 @@ final class GuestSessionTests: XCTestCase {
         await clock.advance(by: bound)
         await silentDone.value
         XCTAssertEqual(silent.ends, [.failed(.silent(bound))])
+    }
+
+    /// `/compact` as Claude Code 2.1.285 writes it: its init, the boundary, the summary and the
+    /// command's own output come before the input's echo, and the boundary is the turn's.
+    func testACompactionsBoundaryBeforeItsEchoIsTheTurns() async throws {
+        let (session, process) = try await resident()
+        process.echoes = false
+        let (turn, done) = collect(try await session.send("/compact", id: "compact-1"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(#"{"type":"system","subtype":"status","session_id":"S1"}"#)
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"system","subtype":"compact_boundary","session_id":"S1","compact_metadata":{"trigger":"manual","pre_tokens":31502,"post_tokens":1471}}"#)
+        process.emit(#"{"type":"user","message":{"role":"user","content":"This session is being continued"},"uuid":"summary","session_id":"S1"}"#)
+        process.emit(Lines.echo("local-output"))
+        process.emit(Lines.echo("compact-1"))
+        process.emit(Lines.result("", session: "S1"))
+        await done.value
+        guard case .answered = turn.ends.first else { return XCTFail("\(turn.ends)") }
+        XCTAssertEqual(turn.events.first, .started(session: "S1", model: "claude-haiku-4-5-20251001"))
+        XCTAssertTrue(turn.events.contains(.compacted(.init(trigger: "manual", pre: 31502, post: 1471))),
+                      "the boundary before the echo was dropped")
     }
 
     /// A turn sent with no id is given one, and its echo is what begins it.
