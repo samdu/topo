@@ -41,7 +41,7 @@ index acdbbfb..47f95c1 100644
      restore_c
  
 diff --git a/emu/tlb.c b/emu/tlb.c
-index f7c2c18..04d019e 100644
+index f7c2c18..8bbf2bf 100644
 --- a/emu/tlb.c
 +++ b/emu/tlb.c
 @@ -49,6 +49,53 @@ bool __tlb_read_cross_page(struct tlb *tlb, addr_t addr, char *value, unsigned s
@@ -98,7 +98,7 @@ index f7c2c18..04d019e 100644
  bool __tlb_write_cross_page(struct tlb *tlb, addr_t addr, const char *value, unsigned size) {
      char *ptr1 = __tlb_write_ptr(tlb, addr);
      if (ptr1 == NULL)
-@@ -143,6 +190,36 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type) {
+@@ -143,6 +190,38 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type) {
   * - Returns 0 on success, -1 on segfault (tlb->segfault_addr is set)
   */
  
@@ -108,7 +108,9 @@ index f7c2c18..04d019e 100644
 +// its pointers through code_write_ptr, which notes the pages a miss cleared,
 +// and calls code_stores_landed once its store has landed, which clears and
 +// drops those pages' blocks again. A hit leaves mmu->changes where it was, so
-+// only a call whose lookup moved it reads the thread's mark.
++// only a call whose lookup moved it reads the thread's mark. That mark is not
++// reset first: one a kernel path's mem_ptr left standing, read by a call whose
++// changes another thread moved, costs one needless clear and drop, no more.
 +#define CODE_STORE_NONE ((page_t) -1)
 +struct code_stores { page_t page[2]; };
 +#define CODE_STORES_NONE {{CODE_STORE_NONE, CODE_STORE_NONE}}
@@ -135,7 +137,7 @@ index f7c2c18..04d019e 100644
  
  
  // Load functions - return 0 on success, -1 on segfault
-@@ -245,51 +322,61 @@ __no_instrument int c_load8_sx32(struct tlb *tlb, addr_t addr, int32_t *out) {
+@@ -245,51 +324,61 @@ __no_instrument int c_load8_sx32(struct tlb *tlb, addr_t addr, int32_t *out) {
  
  // Store functions - return 0 on success, -1 on segfault
  __no_instrument int c_store64(struct tlb *tlb, addr_t addr, uint64_t value) {
@@ -202,7 +204,7 @@ index f7c2c18..04d019e 100644
      return 0;
  }
  
-@@ -316,15 +403,8 @@ __no_instrument void c_ic_ivau(struct tlb *tlb, addr_t addr) {
+@@ -316,15 +405,8 @@ __no_instrument void c_ic_ivau(struct tlb *tlb, addr_t addr) {
      *old_out = old; \
  } while(0)
  
@@ -220,7 +222,7 @@ index f7c2c18..04d019e 100644
      switch (size) {
          case 0: { // 8-bit
              uint8_t val = (uint8_t)value;
-@@ -391,21 +471,27 @@ __no_instrument int c_atomic_rmw(struct tlb *tlb, addr_t addr, uint64_t value,
+@@ -391,21 +473,27 @@ __no_instrument int c_atomic_rmw(struct tlb *tlb, addr_t addr, uint64_t value,
      }
  }
  
@@ -257,7 +259,7 @@ index f7c2c18..04d019e 100644
      switch (size) {
          case 0: { // 8-bit
              uint8_t exp = (uint8_t)expected;
-@@ -440,6 +526,21 @@ __no_instrument int c_atomic_cas(struct tlb *tlb, addr_t addr, uint64_t expected
+@@ -440,6 +528,21 @@ __no_instrument int c_atomic_cas(struct tlb *tlb, addr_t addr, uint64_t expected
      }
  }
  
@@ -279,7 +281,7 @@ index f7c2c18..04d019e 100644
  // 128-bit atomic compare-and-swap for the CASP (Compare-And-Swap Pair)
  // instruction. CASP atomically compares/swaps a 16-byte pair — this MUST be
  // a single atomic 128-bit operation, not two 64-bit CAS, otherwise a torn
-@@ -466,13 +567,15 @@ __no_instrument int c_atomic_cas128(struct tlb *tlb, addr_t addr,
+@@ -466,13 +569,15 @@ __no_instrument int c_atomic_cas128(struct tlb *tlb, addr_t addr,
      // 16-byte access must not straddle a page boundary for a single ptr.
      if (PGOFFSET(addr) > PAGE_SIZE - 16)
          return -1;
@@ -296,7 +298,7 @@ index f7c2c18..04d019e 100644
      // exp is updated to the actual old value on failure (and unchanged =
      // old value on success).
      *old_lo = (uint64_t)exp;
-@@ -488,13 +591,8 @@ __no_instrument int c_atomic_cas128(struct tlb *tlb, addr_t addr,
+@@ -488,13 +593,8 @@ __no_instrument int c_atomic_cas128(struct tlb *tlb, addr_t addr,
  // To prevent CoW from invalidating the host pointer between getting it
  // and the CAS, we snapshot mmu->changes before and after. If it changed,
  // another thread did CoW/mmap, so we retry with a fresh TLB lookup.
@@ -312,7 +314,7 @@ index f7c2c18..04d019e 100644
      switch (size) {
          case 0: { // 8-bit
              uint8_t exp = (uint8_t)expected_val;
-@@ -525,6 +623,18 @@ __no_instrument int c_stxr_cas(struct tlb *tlb, addr_t addr,
+@@ -525,6 +625,18 @@ __no_instrument int c_stxr_cas(struct tlb *tlb, addr_t addr,
      }
  }
  
@@ -331,7 +333,7 @@ index f7c2c18..04d019e 100644
  // STXP atomic compare-and-swap helper for LDXP/STXP pair-exclusive emulation.
  // A pair-exclusive store must atomically write BOTH registers only if memory
  // still holds the pair loaded by LDXP — emulating it as a plain store pair
-@@ -538,11 +648,14 @@ __no_instrument int c_stxp_cas(struct tlb *tlb, addr_t addr,
+@@ -538,11 +650,14 @@ __no_instrument int c_stxp_cas(struct tlb *tlb, addr_t addr,
      if (size == 2) {
          uint64_t exp = (uint32_t)exp1 | ((uint64_t)(uint32_t)exp2 << 32);
          uint64_t des = (uint32_t)new1 | ((uint64_t)(uint32_t)new2 << 32);
@@ -349,7 +351,7 @@ index f7c2c18..04d019e 100644
      }
      if (size != 3)
          return -1;
-@@ -555,13 +668,16 @@ __no_instrument int c_stxp_cas(struct tlb *tlb, addr_t addr,
+@@ -555,13 +670,16 @@ __no_instrument int c_stxp_cas(struct tlb *tlb, addr_t addr,
      // 16-byte access must not straddle a page.
      if (PGOFFSET(addr) > PAGE_SIZE - 16)
          return -1;
@@ -369,7 +371,7 @@ index f7c2c18..04d019e 100644
  }
  
  // LDP/STP helper functions for pair loads/stores
-@@ -596,30 +712,36 @@ __no_instrument int c_ldp32(struct tlb *tlb, addr_t addr, uint32_t *val1, uint32
+@@ -596,30 +714,36 @@ __no_instrument int c_ldp32(struct tlb *tlb, addr_t addr, uint32_t *val1, uint32
  }
  
  __no_instrument int c_stp64(struct tlb *tlb, addr_t addr, uint64_t val1, uint64_t val2) {
@@ -410,7 +412,7 @@ index f7c2c18..04d019e 100644
      return 0;
  }
  
-@@ -686,11 +808,14 @@ __no_instrument int c_simd_store_interleaved(struct cpu_state *cpu, struct tlb *
+@@ -686,11 +810,14 @@ __no_instrument int c_simd_store_interleaved(struct cpu_state *cpu, struct tlb *
  
      // Write all bytes to guest memory (bulk write via host pointer)
      if (PGOFFSET(addr) + total_bytes <= PAGE_SIZE) {
