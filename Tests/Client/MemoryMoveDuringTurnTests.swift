@@ -55,7 +55,7 @@ final class MemoryMoveDuringTurnTests: XCTestCase {
         private var made: [Process] = []
         var last: Process? { lock.withLock { made.last } }
 
-        func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess {
+        func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
             let process = Process()
             lock.withLock { made.append(process) }
             return process

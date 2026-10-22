@@ -24,9 +24,10 @@ extension GuestProcess: ResidentProcess {
 
 /// What starts the resident process: resuming a session by its id, or starting a fresh one, asking
 /// every turn of `model` (nil leaves the model to Claude Code), and telling it whether its memory
-/// is mounted (`memory`; nil tells it nothing).
+/// is mounted (`memory`; nil tells it nothing), and with `note`, what became of the process before
+/// it when the way out cut that one short (`GuestSession.Cut`).
 public protocol ResidentLauncher: Sendable {
-    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess
+    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess
 }
 
 /// The one session id kept on disk: the id of the conversation the next process resumes. A file of
@@ -45,6 +46,28 @@ public struct SessionFile: Sendable {
     public func save(_ id: String) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? Data(id.utf8).write(to: url, options: .atomic)
+    }
+
+    public func clear() { try? FileManager.default.removeItem(at: url) }
+}
+
+/// What the way out cut short, kept on disk beside the session id until a process told of it has
+/// begun: the next one is told, in its system prompt, since nothing of a process ended outside a
+/// turn reaches the conversation any other way.
+public struct CutFile: Sendable {
+    public let url: URL
+
+    public init(url: URL) { self.url = url }
+
+    public func load() -> GuestSession.Cut? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(GuestSession.Cut.self, from: data)
+    }
+
+    public func save(_ cut: GuestSession.Cut) {
+        guard let data = try? JSONEncoder().encode(cut) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 
     public func clear() { try? FileManager.default.removeItem(at: url) }
@@ -154,6 +177,46 @@ public actor GuestSession {
         case abandoned
     }
 
+    /// A process the way out ended with something of its own still running: a turn it had not
+    /// answered, or tasks it had started in the background, which went with it.
+    public struct Cut: Codable, Sendable, Equatable {
+        /// When the app went behind another app, and when the process was ended.
+        public let left: Date
+        public let ended: Date
+        /// Whether a turn was in flight, abandoned at the teardown point.
+        public let turn: Bool
+        /// How many background tasks Claude Code said it had running.
+        public let backgroundTasks: Int
+
+        public init(left: Date, ended: Date, turn: Bool, backgroundTasks: Int) {
+            self.left = left
+            self.ended = ended
+            self.turn = turn
+            self.backgroundTasks = backgroundTasks
+        }
+
+        /// What the next process is told: when, how long after the app left, and what went.
+        public var words: String {
+            let at = left.formatted(Date.ISO8601FormatStyle().year().month().day().dateSeparator(.dash)
+                .time(includingFractionalSeconds: false).timeSeparator(.colon))
+            let after = max(Int(ended.timeIntervalSince(left).rounded()), 0)
+            var went: [String] = []
+            if turn { went.append("the turn you were answering, which the person will be asked about again") }
+            if backgroundTasks > 0 {
+                went.append(backgroundTasks == 1 ? "a background task you had started"
+                                                 : "\(backgroundTasks) background tasks you had started")
+            }
+            // A turn cut is the time iOS allowed running out; with none in flight the process was
+            // ended as every one is once its reply is done and Topo is off the screen.
+            let why = turn ? "the time iOS allowed ran out and the process was ended"
+                           : "the process was ended, as every one is once its reply is done and Topo is not on the screen"
+            return "Your last process was cut short. Topo went behind another app at \(at) UTC, and \(after) seconds "
+                + "later \(why). Ended with it: \(went.joined(separator: "; ")). "
+                + "Whatever those were doing did not finish; check before relying on anything they were to write, "
+                + "and tell the person what did not get done."
+        }
+    }
+
     /// Where the session stands, for a test or a log line.
     public enum Phase: Sendable, Equatable {
         case idle
@@ -168,6 +231,8 @@ public actor GuestSession {
 
     private let launcher: any ResidentLauncher
     private let store: SessionFile
+    private let cuts: CutFile
+    private let now: @Sendable () -> Date
     /// The model every process is started with.
     private var model: String?
     /// What every process is told of its memory: mounted, not, or nothing.
@@ -236,6 +301,10 @@ public actor GuestSession {
         var began = false
         /// A result that arrived with no turn in flight — what a failed resume writes before it exits.
         var strayResult: StreamEvent.TurnResult?
+        /// How many background tasks it last said it had running.
+        var backgroundTasks = 0
+        /// The cut it was told of at its launch, cleared from disk once it has begun.
+        var told: Cut?
 
         init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, conversation: Int) {
             self.compactAt = compactAt
@@ -259,13 +328,16 @@ public actor GuestSession {
         init(continuation: AsyncStream<TurnUpdate>.Continuation) { self.continuation = continuation }
     }
 
-    public init(launcher: any ResidentLauncher, store: SessionFile, model: String? = nil, memory: Bool? = nil,
-                compactAt: Int? = nil,
+    /// `cuts` is where a cut is kept for the next process, beside `store` unless given.
+    public init(launcher: any ResidentLauncher, store: SessionFile, cuts: CutFile? = nil, model: String? = nil, memory: Bool? = nil,
+                compactAt: Int? = nil, now: @escaping @Sendable () -> Date = Date.init,
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.launcher = launcher
         self.store = store
+        self.cuts = cuts ?? CutFile(url: store.url.deletingLastPathComponent().appendingPathComponent(".guest-cut.json"))
+        self.now = now
         self.model = model
         self.memory = memory
         self.compactAt = compactAt
@@ -358,6 +430,7 @@ public actor GuestSession {
     @discardableResult
     public func forgetSession(then takeAway: @Sendable () async -> Void = {}) async -> GuestProcess.Termination? {
         store.clear()
+        cuts.clear()
         freshNext = true
         conversation += 1
         signingOut += 1
@@ -409,6 +482,7 @@ public actor GuestSession {
     public func background(budget: Duration?, generation given: Int? = nil) async -> BackgroundOutcome {
         guard admit(given) else { return .kept }
         let mine = generation
+        let left = now()
         inForeground = false
         // A start still pending ends what it made as it lands; a teardown already under way (a
         // restart, a process that died) is waited out, so nothing is resident when this answers.
@@ -432,8 +506,15 @@ public actor GuestSession {
             fate = .abandoned
             finish(turn, of: still, with: .abandoned)
         }
+        let running = still.backgroundTasks
         let termination = await end(still, reason: fate == .abandoned ? "the teardown point, turn abandoned" : "the background",
                                     restart: true).value
+        if fate == .abandoned || running > 0 {
+            let cut = Cut(left: left, ended: now(), turn: fate == .abandoned, backgroundTasks: running)
+            // A process of a forgotten conversation leaves nothing for the next login's.
+            if still.conversation == conversation { cuts.save(cut) }
+            log("the way out cut short \(fate == .abandoned ? "a turn" : "no turn") and \(running) background task\(running == 1 ? "" : "s"); the next process is told")
+        }
         return .ended(turn: fate, termination: termination)
     }
 
@@ -553,6 +634,7 @@ public actor GuestSession {
             freshNext = false
         }
         let resume = store.load()
+        let cut = cuts.load()
         phase = .starting
         Perf.mark(resume == nil ? "resident.launch.begin fresh" : "resident.launch.begin resume")
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
@@ -560,12 +642,14 @@ public actor GuestSession {
         startTask = Task {
             let result: Result<any ResidentProcess, Error>
             do {
-                result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt))
+                result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt,
+                                                            note: cut?.words))
             } catch {
                 result = .failure(error)
             }
             if case .success = result { Perf.mark("resident.spawned") } else { Perf.mark("resident.launch.failed") }
-            await self.launched(result, resume: resume, model: model, memory: memory, compactAt: compactAt, conversation: conversation)
+            await self.launched(result, resume: resume, model: model, memory: memory, compactAt: compactAt, conversation: conversation,
+                                told: cut)
         }
     }
 
@@ -585,7 +669,7 @@ public actor GuestSession {
     }
 
     private func launched(_ result: Result<any ResidentProcess, Error>, resume: String?, model: String?,
-                          memory: Bool?, compactAt: Int?, conversation: Int) async {
+                          memory: Bool?, compactAt: Int?, conversation: Int, told: Cut?) async {
         startTask = nil
         switch result {
         case .failure(let error):
@@ -595,6 +679,7 @@ public actor GuestSession {
         case .success(let process):
             let resident = Resident(process: process, resumed: resume, model: model, memory: memory,
                                     compactAt: compactAt, conversation: conversation)
+            resident.told = told
             guard inForeground else {
                 // The app left while the start was pending: nothing may stay resident.
                 settleReadiness(.failure(Refusal.notResident))
@@ -641,6 +726,11 @@ public actor GuestSession {
                 Perf.mark("turn.guest.init")
                 resident.began = true
                 keep(session, of: resident)
+                // Told, so the next process is not: unless a newer cut has been kept since.
+                if let told = resident.told, cuts.load() == told { cuts.clear() }
+                resident.told = nil
+            case .backgroundTasks(let count):
+                resident.backgroundTasks = count
             case .result(let result):
                 if let session = result.session, resident.began { keep(session, of: resident) }
             default:

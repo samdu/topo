@@ -23,6 +23,16 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// What the resident is told of its memory, appended to Claude Code's own system prompt:
     /// where the vault is and how to write in it when it is mounted, and that nothing written
     /// there is kept when it is not.
+    /// What every process is told of the time it has, since nothing in Claude Code knows it runs
+    /// in an app iOS suspends: behind another app the process has only the time iOS allows, and it
+    /// is ended, with everything it started, when that runs out or when its reply is done.
+    public static let timePrompt = "You run inside Topo, an app on the person's iPhone. While Topo is on the screen "
+        + "you run freely. Once it goes behind another app, iOS gives you only the time it allows: often a minute "
+        + "or two, sometimes none, and it can take it back at any moment. When that runs out, or when your reply "
+        + "is done and Topo is not on the screen, you are ended, and every process you started, background "
+        + "commands included, is ended with you. Don't start work that has to outlive your reply or run for "
+        + "minutes behind another app; when a job needs longer, tell the person to keep Topo open while it runs."
+
     public static func memoryPrompt(mounted: Bool) -> String {
         if mounted {
             return "Your memory is an Obsidian vault at \(memory) (memory/ from your working directory). "
@@ -54,12 +64,17 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// requires), a message's text as it is written (`--include-partial-messages`), permissions bypassed, the model when one is given, and the session to resume
     /// when there is one. Bypassed because the guest is the sandbox: what the mind can reach is
     /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
-    public static func arguments(model: String?, resume: String?, memory: Bool? = nil) -> [String] {
+    ///
+    /// The system prompt is appended to with what the process is told of its time (`timePrompt`),
+    /// of its memory when `memory` is said, and `note`, what became of the process before it when
+    /// that was cut short (`GuestSession.Cut`).
+    public static func arguments(model: String?, resume: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--include-partial-messages",
                          "--dangerously-skip-permissions"]
         if let model { arguments += ["--model", model] }
-        if let memory { arguments += ["--append-system-prompt", memoryPrompt(mounted: memory)] }
+        let prompt = [timePrompt, memory.map { memoryPrompt(mounted: $0) }, note].compactMap { $0 }
+        arguments += ["--append-system-prompt", prompt.joined(separator: "\n\n")]
         if let resume { arguments += ["--resume", resume] }
         return arguments
     }
@@ -67,9 +82,9 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// The whole command line: the shell moves into the home and `exec`s Claude Code, so the pid
     /// the app holds is Claude Code's own. `model` is the model every turn is asked of (the
     /// session's, which a debug build pins to Haiku); nil leaves it to Claude Code.
-    public func commandLine(resume: String?, model: String?, memory: Bool? = nil) -> [String] {
+    public func commandLine(resume: String?, model: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
         ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", command]
-            + Self.arguments(model: model, resume: resume, memory: memory)
+            + Self.arguments(model: model, resume: resume, memory: memory, note: note)
     }
 
     /// The resident's environment: the guest's, what `environment` answers now, and last the
@@ -105,8 +120,8 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// `memory` is the session's (`GuestSession.use(memory:)`): true or false says so to the
     /// resident (`memoryPrompt`), nil says nothing. A launch mounts nothing: what it says is what
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
-    public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess {
-        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
+    public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
+        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory, note: note),
                               environment: try await launchEnvironment(compactAt: compactAt))
     }
 }

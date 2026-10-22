@@ -13,7 +13,7 @@ final class ContinuedTurnTests: XCTestCase {
         XCTAssertEqual(request.identifier, identifier)
         XCTAssertEqual(request.strategy, .fail, "a turn's task is worth having now or not at all")
         XCTAssertEqual(request.title, "Topo")
-        XCTAssertEqual(request.subtitle, "Working on a reply", "the pill is drawn on the lock screen: fixed words, never the turn's")
+        XCTAssertEqual(request.subtitle, "Still working. Tap to keep it going", "the pill is drawn on the lock screen: fixed words, never the turn's")
     }
 
     func testTheIdentifierIsUnderTheWildcardThePlistPermits() throws {

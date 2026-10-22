@@ -141,6 +141,7 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     private var asked: [String?] = []
     private var told: [Bool?] = []
     private var thresholds: [Int?] = []
+    private var notes: [String?] = []
     private var holdNext = false
     private var gate: CheckedContinuation<Void, Never>?
 
@@ -152,6 +153,8 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     var memories: [Bool?] { lock.withLock { told } }
     /// What each launch was told to compact at, in order.
     var compactions: [Int?] { lock.withLock { thresholds } }
+    /// What each launch was told of the process before it, in order.
+    var notesTold: [String?] { lock.withLock { notes } }
     var last: ScriptedProcess? { processes.last }
 
     func holdNextLaunch() { lock.withLock { holdNext = true } }
@@ -167,12 +170,13 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
         waiting?.resume()
     }
 
-    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess {
+    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
         let hold = lock.withLock { () -> Bool in
             resumes.append(session)
             asked.append(model)
             told.append(memory)
             thresholds.append(compactAt)
+            notes.append(note)
             return holdNext
         }
         if hold {
