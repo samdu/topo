@@ -32,8 +32,11 @@ final class LaunchPortsTests: XCTestCase {
         XCTAssertEqual(first[ToolService.tokenVariable], token)
         XCTAssertEqual(said.all, ["guest: the launch is told the proxy at \(firstProxy) and the tools at \(firstTools)"])
 
-        // The old ports held by others, as a process that took what iOS freed would hold them:
-        // the next launch is told neither.
+        // Both listeners gone, as iOS takes them from a suspended app, and the old ports held by
+        // others, as a process that took what iOS freed would hold them: the next launch is told
+        // neither.
+        await proxy.stop()
+        await tools.stop()
         let squatters = [try Self.squat(firstProxy), try Self.squat(firstTools)].compactMap { $0 }
         defer { squatters.forEach { close($0) } }
         let next = try await launcher.launchEnvironment()
