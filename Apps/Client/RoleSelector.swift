@@ -75,8 +75,10 @@ final class RoleSelector {
     ///
     /// The reads it is decided from — this device's role record, the lease record and, before a
     /// first claim, the zone — are given `firstReadBound(after:)` together, and one that runs out
-    /// is never taken for an answer: the role stays open and `trouble` says iCloud has not answered,
-    /// whether or not the keychain holds a login. A read that fails is a different thing, and with
+    /// is never taken for an answer: the role stays open, nothing is claimed, and `trouble` says
+    /// iCloud has not answered, whether or not the keychain holds a login. The zone is the one
+    /// write under the bound, and a request that ran out may still land; it is the empty zone a
+    /// claim needs, made again harmlessly at every claim, and decides nobody's role. A read that fails is a different thing, and with
     /// a login the login is the evidence there is. A read that ran out may be one whose record
     /// names another device, and a phone and a pad answer no probe, so taking it as that evidence
     /// would make two primaries. The claim itself is the lease's (`PrimaryLease`), which bounds its

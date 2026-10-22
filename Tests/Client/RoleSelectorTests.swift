@@ -193,6 +193,47 @@ final class RoleSelectorTests: XCTestCase {
         }
     }
 
+    /// The bound covers each of the first reads, not only the first: the lease read stalling after
+    /// the role record answered, and the zone stalling after no lease record was found, each by a
+    /// request that does not stop when cancelled. Either runs out with the role open and nothing
+    /// claimed; the zone the claim needs may have been made, which decides nothing.
+    func testTheBoundCoversTheLeaseReadAndTheZone() async throws {
+        // The lease read stalls, with a login in the keychain and another phone's lease standing.
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("ios-phone"))
+        let slow = Stalling(db, only: [Lease.recordID], ignoresCancellation: true)
+        let s = RoleSelector(database: slow, device: me, defaults: defaults(), isSignedIn: { true }, ensureZone: {},
+                             deadline: { _ in
+                                 // Run out only once the lease read is the one waiting.
+                                 for _ in 0..<1000 where await slow.stalled == 0 { try await Task.sleep(for: .milliseconds(5)) }
+                             })
+        await s.decide()
+        XCTAssertNil(s.role, "a login was taken as the evidence over a lease read that ran out")
+        XCTAssertEqual(s.trouble, "iCloud hasn't answered in 5 seconds. Topo will keep asking.")
+        let saves = await slow.saves
+        XCTAssertEqual(saves, 0)
+        let reached = await slow.stalled
+        XCTAssertEqual(reached, 1, "the lease read was never the one waiting")
+        await slow.answer()
+
+        // The zone stalls, with no login and no lease record: nothing is staked.
+        let empty = InMemoryRecordDatabase()
+        let zone = Gate()
+        let fresh = RoleSelector(database: empty, device: me, defaults: defaults(), isSignedIn: { false },
+                                 ensureZone: { await zone.wait() },
+                                 deadline: { _ in
+                                     for _ in 0..<1000 where await zone.waiting == 0 { try await Task.sleep(for: .milliseconds(5)) }
+                                 })
+        await fresh.decide()
+        XCTAssertNil(fresh.role)
+        XCTAssertNotNil(fresh.trouble)
+        let staked = await empty.current(Lease.recordID)
+        XCTAssertNil(staked, "a claim was staked after the zone ran out")
+        let asked = await zone.waiting
+        XCTAssertEqual(asked, 1, "the zone was never the one waiting")
+        await zone.open()
+    }
+
     func testTheFirstReadsBoundDoublesFromFiveSecondsToAMinute() {
         XCTAssertEqual((0...6).map(RoleSelector.firstReadBound(after:)), [5, 10, 20, 40, 60, 60, 60])
     }
@@ -426,17 +467,44 @@ private actor ZoneGate: RecordDatabase {
 /// cancelled, as a CloudKit that keeps a first launch waiting does.
 private actor Stalling: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
+    /// The records whose fetch stalls; nil stalls every call.
+    let only: Set<RecordID>?
+    /// Whether a stalled call goes on waiting when it is cancelled, as a request that does not
+    /// stop when it is no longer wanted does.
+    let ignoresCancellation: Bool
     private(set) var answers = false
     private(set) var saves = 0
-    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+    /// Calls that reached a stall.
+    private(set) var stalled = 0
+    init(_ wrapped: InMemoryRecordDatabase, only: Set<RecordID>? = nil, ignoresCancellation: Bool = false) {
+        self.wrapped = wrapped
+        self.only = only
+        self.ignoresCancellation = ignoresCancellation
+    }
     func answer() { answers = true }
-    private func stall() async throws {
-        while !answers { try await Task.sleep(for: .milliseconds(10)) }
+    private func stall(_ ids: [RecordID]? = nil) async throws {
+        if let only, let ids, only.isDisjoint(with: ids) { return }
+        guard !answers else { return }
+        stalled += 1
+        while !answers {
+            if ignoresCancellation { try? await Task.sleep(for: .milliseconds(10)) } else { try await Task.sleep(for: .milliseconds(10)) }
+        }
     }
     func save(_ records: [Record]) async throws -> [Record] { saves += 1; try await stall(); return try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await stall(); return try await wrapped.fetch(ids) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await stall(ids); return try await wrapped.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await stall(); return try await wrapped.query(query) }
     func records(ofType type: String) async throws -> [Record] { try await stall(); return try await wrapped.records(ofType: type) }
+}
+
+/// A zone made only once `open()` is called: until then `wait()` does not return, cancelled or not.
+private actor Gate {
+    private(set) var waiting = 0
+    private var isOpen = false
+    func wait() async {
+        waiting += 1
+        while !isOpen { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+    func open() { isOpen = true }
 }
 
 /// A wait as real time would leave the record: the sleep is instant, so the lease that the wait
