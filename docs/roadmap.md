@@ -36,8 +36,10 @@ Struck through: shipped, then removed, with the reason.
 
 - Push to talk with Parakeet on the device and the person's own vocabulary (#48, #51, #57, #85); replies in Pocket TTS behind the lock (#55, #86, #89); recovery from a media services reset (#78)
 - Speakable text and code blocks cued by number (#207, #212); the voice from a reply's first sentence as it streams (#297)
-- FluidAudio pinned at 0.17.7, which keeps a sentence whole up to Pocket's 512-position cache (#397); `marius` at his own pace (#400); the voice's temperature as a setting, 0.5 unless changed (#411); Topo's own voice pack (#415); noise suppression through Apple's voice processing (#385)
-- ~~Apple speech as the ear's and the voice's fallback, and Kokoro as the voice~~ (#48, #49; removed in #85, #86: one ear and one voice, both FluidAudio on the device)
+- FluidAudio pinned at 0.17.7, which keeps a sentence whole up to Pocket's 512-position cache (#397); `marius` as the voice, at his own pace (#400); the voice's temperature as a setting, 0.5 unless changed (#411); Topo's own voice pack (#415); noise suppression through Apple's voice processing (#385)
+- ~~Kokoro's `bm_buddy` blend as the voice~~ (#49; replaced in #55 by Pocket TTS on the device)
+- ~~Apple speech as the ear's and the voice's fallback~~ (#48, #49; removed in #85, #86: one ear and one voice, both FluidAudio on the device, no fallback)
+- ~~Pocket's `eponine` as the voice~~ (#55; `marius` in #400)
 
 **The chat and Topo**
 
@@ -108,8 +110,8 @@ Struck through: shipped, then removed, with the reason.
 - **Topo as a mesh peer (#277).** The topo-link issue mailbox carries device checks today; an addressable peer with an allowlist of what it runs unasked is not built.
 - **On-device storage (#309, #117, #87).** The ANE compile cache, tmp at launch, the model housekeeping residue and the voice pack's ten-minute download start from a fresh measurement on the phone.
 - **Ideas with no code yet:** a Topo menu the agent populates, on a long-press of the octopus (which conflicts with dragging him); what the composer's `+` opens, attachments first; Maps results as a card (#358); a contact sheet of the screen share's stills (#378); Topo walking the person through the first run himself in place of the iCloud Drive offer card (#395).
-- **Small ones**, hardening with nothing failing today: a claim change attempted from the background (#90); an empty parents list left off the wire (#96); the same-folder guard compares URLs (#103); a query of mostly digits read as a number (#240); a package added to the manifest never reaches an existing fakefs (#254); the resident keeps its clock across a zone change until its next launch (#256); guest transcripts under the guest's home outlive sign-out (no issue).
-- **Proof gaps** a review left non-blocking, each against the PR it came from: #132, #147, #149, #153, #160, #211, #213, #221, #286, #292, #337, #338.
+- **Small ones**, hardening with nothing failing today: a claim change attempted from the background (#90); an empty parents list left off the wire (#96); the same-folder guard compares URLs (#103); a query of mostly digits read as a number (#240); a package added to the manifest never reaches an existing fakefs (#254); the resident keeps its clock across a zone change until its next launch (#256); a look with `composer.flank.font` at 400 draws the resting keyboard mark past the pane (#337); guest transcripts under the guest's home outlive sign-out (no issue).
+- **Proof gaps** a review left non-blocking, each against the PR it came from: #132, #147, #149, #153, #160, #211, #213, #221, #286, #292, #338.
 
 ## Explored, not done
 
