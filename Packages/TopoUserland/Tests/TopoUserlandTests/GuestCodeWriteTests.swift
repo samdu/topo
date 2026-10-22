@@ -60,23 +60,36 @@ final class GuestCodeWriteTests: XCTestCase {
     /// store's landing invalidates the page again before the writer runs it
     /// (`patches/ish/0012-code-store-after-miss.patch`), and every writer reads back its own write.
     func testAStoreToCodeAnotherThreadIsRunningIsWhatTheWriterRunsNext() async throws {
+        try await runCodeshare("codeshare")
+    }
+
+    /// The same with the writers' stores made by `swp`, which the emulator makes in a C helper
+    /// (`c_atomic_rmw`) rather than a gadget: the helper's store lands before the page is
+    /// invalidated again too.
+    func testAStoreAHelperMakesToCodeAnotherThreadIsRunningIsWhatTheWriterRunsNext() async throws {
+        try await runCodeshare("codeshare-swp")
+    }
+
+    private func runCodeshare(_ name: String, file: StaticString = #filePath, line: UInt = #line) async throws {
         let program = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Programs/codeshare")
-        let dir = fm.temporaryDirectory.appendingPathComponent("codeshare-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Programs/\(name)")
+        let dir = fm.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         host = dir
-        let copy = dir.appendingPathComponent("codeshare")
+        let copy = dir.appendingPathComponent(name)
         try fm.copyItem(at: program, to: copy)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: copy.path)
-        let point = "/opt/codeshare-\(UUID().uuidString.prefix(8))"
+        let point = "/opt/\(name)-\(UUID().uuidString.prefix(8))"
         try Guest.shared.mount(dir, at: point)
 
-        let exit = try await Guest.shared.run("\(point)/codeshare")
-        XCTAssertEqual(exit.output, "rounds=20000 writers=4 runners=4 lanes=0,0,0,0 mismatches=0\n", exit.errors)
-        XCTAssertEqual(exit.status, 0)
+        let exit = try await Guest.shared.run("\(point)/\(name)")
+        XCTAssertEqual(exit.output, "rounds=20000 writers=4 runners=4 lanes=0,0,0,0 mismatches=0\n", exit.errors,
+                       file: file, line: line)
+        XCTAssertEqual(exit.status, 0, file: file, line: line)
         let end = exit.errors.split(separator: "\n").first { $0.hasPrefix("end=0x") }
             .flatMap { UInt64($0.dropFirst("end=0x".count), radix: 16) }
-        XCTAssertLessThanOrEqual(end ?? .max, 1 << 32, "the chain is above 4 GB, where nothing chains")
+        XCTAssertLessThanOrEqual(end ?? .max, 1 << 32, "the chain is above 4 GB, where nothing chains",
+                                 file: file, line: line)
     }
 }
