@@ -154,7 +154,7 @@ final class LogToolTests: XCTestCase {
         // at a fence line's own stamp, read back from the store, never at a `Date()`: the lines
         // before are a second and a half before it on the store's clock whatever the host's says.
         logger.error("\(mark, privacy: .public) fence")
-        let fence = try XCTUnwrap(try read(since: Date().addingTimeInterval(-60)) { $0.message == "\(mark) fence" }, "the fence never reached the store")
+        let fence = try XCTUnwrap(try read(since: .distantPast) { $0.message == "\(mark) fence" }, "the fence never reached the store")
         let since = fence.at
         logger.error("\(mark, privacy: .public) after")
         // A line is in the store a moment after it is written, and later on a busy Mac.
@@ -168,13 +168,13 @@ final class LogToolTests: XCTestCase {
     }
 
     /// The first line read at `since` that `matches`, read again until it is there or 5 s have
-    /// gone by.
+    /// gone by on a clock no correction of the host's moves.
     private func read(since: Date, _ matches: (LogLine) -> Bool) throws -> LogLine? {
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = ContinuousClock.now + .seconds(5)
         repeat {
             if let line = try UnifiedLogReader().lines(since: since).first(where: matches) { return line }
             Thread.sleep(forTimeInterval: 0.1)
-        } while Date() < deadline
+        } while ContinuousClock.now < deadline
         return nil
     }
 
