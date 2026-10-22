@@ -28,7 +28,8 @@ final class LaunchPortsTests: XCTestCase {
         let firstTools = try XCTUnwrap(firstToolsPort)
         XCTAssertEqual(first["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: firstProxy))
         XCTAssertEqual(first[ToolService.urlVariable], "http://127.0.0.1:\(firstTools)")
-        XCTAssertEqual(first[ToolService.tokenVariable], tools.token)
+        let token = await tools.token
+        XCTAssertEqual(first[ToolService.tokenVariable], token)
         XCTAssertEqual(said.all, ["guest: the launch is told the proxy at \(firstProxy) and the tools at \(firstTools)"])
 
         // The old ports held by others, as a process that took what iOS freed would hold them:
