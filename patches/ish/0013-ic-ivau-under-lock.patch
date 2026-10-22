@@ -1,0 +1,21 @@
+diff --git a/emu/tlb.c b/emu/tlb.c
+index f7c2c18..ca3b3d4 100644
+--- a/emu/tlb.c
++++ b/emu/tlb.c
+@@ -298,9 +298,14 @@ __no_instrument int c_store8(struct tlb *tlb, addr_t addr, uint8_t value) {
+ // Without this, a store through an already-writable TLB entry (which never
+ // takes the mem_ptr write-miss path that calls asbestos_invalidate_page)
+ // leaves stale translations running — JSC's in-place JIT repatching breaks.
++// Under asbestos->lock, not through asbestos_invalidate_page's unlocked look
++// at the page's list: a compile holding the lock may have read the bytes
++// before the guest's store and be about to insert its block, which the look
++// would miss. Compiling and inserting happen under the lock, so taking it
++// here waits for that block and drops it.
+ __no_instrument void c_ic_ivau(struct tlb *tlb, addr_t addr) {
+-    extern void asbestos_invalidate_page(struct asbestos *asbestos, page_t page);
+-    asbestos_invalidate_page(tlb->mmu->asbestos, PAGE(addr));
++    extern void asbestos_invalidate_range(struct asbestos *asbestos, page_t start, page_t end);
++    asbestos_invalidate_range(tlb->mmu->asbestos, PAGE(addr), PAGE(addr) + 1);
+ }
+ 
+ // Atomic memory operations (LSE): LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/LDUMAX/LDUMIN/SWP

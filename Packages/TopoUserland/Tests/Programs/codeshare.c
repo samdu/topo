@@ -10,24 +10,26 @@
 // counted per writer; the line is the counts and the mismatches, and the
 // status is 1 if there were any.
 //
-// Built two ways, by how a writer stores its instruction:
+// Built three ways, by how a writer stores its instruction:
 //
 //   codeshare       a plain `str`, which the emulator makes in a gadget;
-//   codeshare-swp   a `swp` (LSE), which it makes in a C helper (c_atomic_rmw).
+//   codeshare-swp   a `swp` (LSE), which it makes in a C helper (c_atomic_rmw);
+//   codeshare-ivau  a plain `str` followed by DC CVAU, DSB, IC IVAU, DSB, ISB.
 //
-// Both hold the emulator to its own promise: a store that reaches a page of
-// translated code is in what the next run of that page executes. ARM itself
-// promises that only after the writer's IC IVAU and ISB, which neither
-// issues, so on hardware the result would be undefined.
+// The first two hold the emulator to its own promise: a store that reaches a
+// page of translated code is in what the next run of that page executes. ARM
+// itself promises that only after the writer's IC IVAU and ISB, which those
+// two do not issue, so on hardware their result would be undefined. The third
+// issues them, so a mismatch there breaks ARM's own rule.
 //
-// Freestanding and static, so it runs on the bare minirootfs. The two
+// Freestanding and static, so it runs on the bare minirootfs. The three
 // binaries beside this file are its builds, made with Homebrew's llvm and lld:
 //
 //   llvm=$(brew --prefix llvm)/bin
 //   build() { $llvm/clang --target=aarch64-linux-gnu -march=armv8.1-a -O1 -ffreestanding \
 //     -nostdlib -static -fno-stack-protector -fuse-ld=lld \
 //     --ld-path=$(brew --prefix lld)/bin/ld.lld "$@" codeshare.c && $llvm/llvm-strip "$2"; }
-//   build -o codeshare; build -o codeshare-swp -DCODESHARE_SWP
+//   build -o codeshare; build -o codeshare-swp -DCODESHARE_SWP; build -o codeshare-ivau -DCODESHARE_IVAU
 
 typedef long L;
 typedef unsigned int U32;
@@ -85,6 +87,9 @@ static void store(U32 *at, U32 insn) {
     __asm__ volatile("swp %w1, %w0, [%2]" : "=&r"(old) : "r"(insn), "r"(at) : "memory");
 #else
     *(volatile U32 *)at = insn;
+#endif
+#if defined(CODESHARE_IVAU)
+    __asm__ volatile("dc cvau, %0\n dsb ish\n ic ivau, %0\n dsb ish\n isb" :: "r"(at) : "memory");
 #endif
 }
 

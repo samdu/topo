@@ -70,6 +70,15 @@ final class GuestCodeWriteTests: XCTestCase {
         try await runCodeshare("codeshare-swp")
     }
 
+    /// The same with each writer following its store with DC CVAU, DSB, IC IVAU, DSB and ISB, as
+    /// ARM asks of code that writes code: its IC IVAU drops the page's blocks under the JIT's lock,
+    /// so a block a runner was compiling from the old bytes as the store landed is dropped too
+    /// (`patches/ish/0013-ic-ivau-under-lock.patch`). Of the three, the only one whose mismatch
+    /// breaks hardware's own rule.
+    func testAStoreFollowedByICIVAUIsWhatTheWriterRunsNext() async throws {
+        try await runCodeshare("codeshare-ivau")
+    }
+
     private func runCodeshare(_ name: String, file: StaticString = #filePath, line: UInt = #line) async throws {
         let program = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
