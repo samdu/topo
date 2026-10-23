@@ -1,0 +1,63 @@
+diff --git a/fs/tmp.c b/fs/tmp.c
+index 462ace4..48d80cd 100644
+--- a/fs/tmp.c
++++ b/fs/tmp.c
+@@ -5,6 +5,7 @@
+ #include "kernel/fs.h"
+ #include "fs/path.h"
+ #include "util/refcount.h"
++#include "util/timer.h"
+ #include "debug.h"
+ 
+ // ========================
+@@ -319,6 +320,42 @@ static int tmpfs_stat(struct mount *mount, const char *path, struct statbuf *sta
+     return 0;
+ }
+ 
++// The guest's UTIME_NOW and UTIME_OMIT, which sys_utimensat passes through in a time's nsec.
++#define TMPFS_UTIME_NOW ((1l << 30) - 1l)
++#define TMPFS_UTIME_OMIT ((1l << 30) - 2l)
++
++static void tmpfs_set_time(dword_t *sec, dword_t *nsec, struct timespec time, struct timespec now) {
++    if (time.tv_nsec == TMPFS_UTIME_OMIT)
++        return;
++    if (time.tv_nsec == TMPFS_UTIME_NOW)
++        time = now;
++    *sec = (dword_t) time.tv_sec;
++    *nsec = (dword_t) time.tv_nsec;
++}
++
++// utimensat on a path in this filesystem: ENOENT for a name that is not there, which is what
++// tells busybox's touch to create the file.
++static int tmpfs_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
++    struct tmp_dirent *dirent = tmpfs_lookup(mount, path);
++    if (IS_ERR(dirent))
++        return PTR_ERR(dirent);
++    // Both omitted changes nothing, ctime included, as on Linux.
++    if (atime.tv_nsec == TMPFS_UTIME_OMIT && mtime.tv_nsec == TMPFS_UTIME_OMIT) {
++        tmp_dirent_release(dirent);
++        return 0;
++    }
++    struct tmp_inode *inode = dirent->inode;
++    struct timespec now = timespec_now(CLOCK_REALTIME);
++    lock(&inode->lock);
++    tmpfs_set_time(&inode->stat.atime, &inode->stat.atime_nsec, atime, now);
++    tmpfs_set_time(&inode->stat.mtime, &inode->stat.mtime_nsec, mtime, now);
++    inode->stat.ctime = (dword_t) now.tv_sec;
++    inode->stat.ctime_nsec = (dword_t) now.tv_nsec;
++    unlock(&inode->lock);
++    tmp_dirent_release(dirent);
++    return 0;
++}
++
+ static int tmpfs_close(struct fd *fd) {
+     // shouldn't need locking as this is the last reference to the fd
+     tmp_dirent_release(fd->tmpfs.dirent);
+@@ -501,6 +538,7 @@ const struct fs_ops tmpfs = {
+     .close = tmpfs_close,
+     .stat = tmpfs_stat,
+     .fstat = tmpfs_fstat,
++    .utime = tmpfs_utime,
+     .getpath = tmpfs_getpath,
+     .mkdir = tmpfs_mkdir,
+ };

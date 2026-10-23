@@ -153,6 +153,91 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertNil(s.trouble)
     }
 
+    /// #436: iCloud that does not answer leaves the role open, with a login in the keychain or
+    /// without, and writes nothing; the next attempt is given longer, and once the store answers
+    /// another device's lease the role is viewer — which a login taken as the evidence would have
+    /// made a second primary.
+    func testFirstReadsThatRunOutDecideNothingAndWriteNothing() async throws {
+        for signedIn in [true, false] {
+            let db = InMemoryRecordDatabase()
+            try await lease(db, holder: DeviceID("ios-phone"))
+            let slow = Stalling(db)
+            let bounds = Slept()
+            let zones = Slept()
+            let s = RoleSelector(database: slow, device: me, defaults: defaults(), isSignedIn: { signedIn },
+                                 ensureZone: { await zones.add(0) },
+                                 deadline: { bound in
+                                     await bounds.add(bound)
+                                     // Run out at once while the store stalls; once it answers, never.
+                                     if await slow.answers { try await Task.sleep(for: .seconds(3600)) }
+                                 })
+            await s.decide()
+            XCTAssertNil(s.role, "signed in: \(signedIn)")
+            XCTAssertEqual(s.trouble, "iCloud hasn't answered in 5 seconds. Topo will keep asking.")
+            await s.decide()
+            XCTAssertNil(s.role)
+            XCTAssertEqual(s.trouble, "iCloud hasn't answered in 10 seconds. Topo will keep asking.")
+            let saves = await slow.saves
+            XCTAssertEqual(saves, 0, "a read that ran out wrote something")
+            let made = await zones.all
+            XCTAssertTrue(made.isEmpty, "a zone was made on a read that ran out")
+            let record = await db.current(Lease.recordID)
+            XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, DeviceID("ios-phone"))
+
+            await slow.answer()
+            await s.decide()
+            XCTAssertEqual(s.role, .viewer, "signed in: \(signedIn)")
+            XCTAssertNil(s.trouble)
+            let asked = await bounds.all
+            XCTAssertEqual(asked, [5, 10, 20])
+        }
+    }
+
+    /// The bound covers each of the first reads, not only the first: the lease read stalling after
+    /// the role record answered, and the zone stalling after no lease record was found, each by a
+    /// request that does not stop when cancelled. Either runs out with the role open and nothing
+    /// claimed; the zone the claim needs may have been made, which decides nothing.
+    func testTheBoundCoversTheLeaseReadAndTheZone() async throws {
+        // The lease read stalls, with a login in the keychain and another phone's lease standing.
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("ios-phone"))
+        let slow = Stalling(db, only: [Lease.recordID], ignoresCancellation: true)
+        let s = RoleSelector(database: slow, device: me, defaults: defaults(), isSignedIn: { true }, ensureZone: {},
+                             deadline: { _ in
+                                 // Run out only once the lease read is the one waiting.
+                                 for _ in 0..<6000 { if await slow.stalled > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
+                             })
+        await s.decide()
+        XCTAssertNil(s.role, "a login was taken as the evidence over a lease read that ran out")
+        XCTAssertEqual(s.trouble, "iCloud hasn't answered in 5 seconds. Topo will keep asking.")
+        let saves = await slow.saves
+        XCTAssertEqual(saves, 0)
+        let reached = await slow.stalled
+        XCTAssertEqual(reached, 1, "the lease read was never the one waiting")
+        await slow.answer()
+
+        // The zone stalls, with no login and no lease record: nothing is staked.
+        let empty = InMemoryRecordDatabase()
+        let zone = Gate()
+        let fresh = RoleSelector(database: empty, device: me, defaults: defaults(), isSignedIn: { false },
+                                 ensureZone: { await zone.wait() },
+                                 deadline: { _ in
+                                     for _ in 0..<6000 { if await zone.waiting > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
+                                 })
+        await fresh.decide()
+        XCTAssertNil(fresh.role)
+        XCTAssertNotNil(fresh.trouble)
+        let staked = await empty.current(Lease.recordID)
+        XCTAssertNil(staked, "a claim was staked after the zone ran out")
+        let asked = await zone.waiting
+        XCTAssertEqual(asked, 1, "the zone was never the one waiting")
+        await zone.open()
+    }
+
+    func testTheFirstReadsBoundDoublesFromFiveSecondsToAMinute() {
+        XCTAssertEqual((0...6).map(RoleSelector.firstReadBound(after:)), [5, 10, 20, 40, 60, 60, 60])
+    }
+
     func testADecisionIsKeptAcrossLaunches() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = defaults()
@@ -376,6 +461,65 @@ private actor ZoneGate: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try check(); return try await wrapped.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try check(); return try await wrapped.query(query) }
     func records(ofType type: String) async throws -> [Record] { try check(); return try await wrapped.records(ofType: type) }
+}
+
+/// A database that never answers until `answer()`: every call before that waits until it is
+/// cancelled, as a CloudKit that keeps a first launch waiting does.
+private actor Stalling: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    /// The records whose fetch stalls; nil stalls every call.
+    let only: Set<RecordID>?
+    /// Whether a stalled call goes on waiting when it is cancelled, as a request that does not
+    /// stop when it is no longer wanted does.
+    let ignoresCancellation: Bool
+    private(set) var answers = false
+    private(set) var saves = 0
+    /// Calls that reached a stall.
+    private(set) var stalled = 0
+    init(_ wrapped: InMemoryRecordDatabase, only: Set<RecordID>? = nil, ignoresCancellation: Bool = false) {
+        self.wrapped = wrapped
+        self.only = only
+        self.ignoresCancellation = ignoresCancellation
+    }
+    /// The calls waiting out a cancellation, resumed by `answer()`. A continuation, not a loop of
+    /// sleeps: a cancelled task's sleep returns at once, and the loop would spin on the actor.
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func answer() {
+        answers = true
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+    private func stall(_ ids: [RecordID]? = nil) async throws {
+        if let only, let ids, only.isDisjoint(with: ids) { return }
+        guard !answers else { return }
+        stalled += 1
+        if ignoresCancellation {
+            await withCheckedContinuation { waiting.append($0) }
+            return
+        }
+        while !answers { try await Task.sleep(for: .milliseconds(10)) }
+    }
+    func save(_ records: [Record]) async throws -> [Record] { saves += 1; try await stall(); return try await wrapped.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await stall(ids); return try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await stall(); return try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await stall(); return try await wrapped.records(ofType: type) }
+}
+
+/// A zone made only once `open()` is called: until then `wait()` does not return, cancelled or not.
+private actor Gate {
+    private(set) var waiting = 0
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        waiting += 1
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
 }
 
 /// A wait as real time would leave the record: the sleep is instant, so the lease that the wait
