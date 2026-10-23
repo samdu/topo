@@ -102,6 +102,10 @@
 # script share it, each from its first suite here; a run of the script as it was waits for as
 # long as any of these that has run a suite here is going,
 # a suite one of them left behind included.
+# The whole script is one { … } block ending in `exit`, so bash parses it all before running
+# any of it. Bash otherwise reads a script as it goes, from the engineer's worktree, and an edit
+# to this file there while a suite runs would hand the rest of the run a different file.
+{
 set -euo pipefail
 
 cache="${TOPO_VALIDATE_CACHE:-$HOME/Library/Caches/topo-validate}"
@@ -891,3 +895,5 @@ rerun_test() {
 [ -n "$red" ] || rerun_test
 
 [ -z "$red" ] || exit 1
+exit
+}
