@@ -28,8 +28,14 @@ final class ContinuedTurnTask: ContinuedTask {
         // actor either way, at once when it is already there. The pill says the turn is being
         // stopped first, for the moment it stays up while the way out runs.
         let task = Expiring(task: task)
-        task.task.expirationHandler = { @Sendable in
-            task.task.updateTitle(ContinuedTurns.title, subtitle: ContinuedTurns.stopping)
+        task.task.expirationHandler = Self.expiration(retitle: { task.task.updateTitle($0, subtitle: $1) }, then: handler)
+    }
+
+    /// The expiration handler: the pill's words first, then `handler` on the main actor.
+    nonisolated static func expiration(retitle: @escaping @Sendable (_ title: String, _ subtitle: String) -> Void,
+                                       then handler: @escaping @MainActor () -> Void) -> @Sendable () -> Void {
+        { @Sendable in
+            retitle(ContinuedTurns.title, ContinuedTurns.stopping)
             if Thread.isMainThread {
                 MainActor.assumeIsolated { handler() }
             } else {

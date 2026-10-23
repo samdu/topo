@@ -327,7 +327,7 @@ final class GuestSessionTests: XCTestCase {
         try await session.ready()
         let note = try XCTUnwrap(launcher.notesTold.last ?? nil)
         XCTAssertTrue(note.contains("2026-10-22T16:00:00 UTC"), note)
-        XCTAssertTrue(note.contains("15 seconds later the time iOS allowed ran out"), note)
+        XCTAssertTrue(note.contains("15 seconds later the time Topo had behind another app ended (iOS's allowance ran out, or the person stopped it)"), note)
         XCTAssertTrue(note.contains("the turn you were answering"), note)
         XCTAssertFalse(note.contains("background task"), note)
         XCTAssertEqual(launcher.notesTold.first ?? "none", nil, "the first launch was told of a cut")

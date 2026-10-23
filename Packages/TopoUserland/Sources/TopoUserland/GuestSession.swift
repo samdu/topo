@@ -206,9 +206,11 @@ public actor GuestSession {
                 went.append(backgroundTasks == 1 ? "a background task you had started"
                                                  : "\(backgroundTasks) background tasks you had started")
             }
-            // A turn cut is the time iOS allowed running out; with none in flight the process was
-            // ended as every one is once its reply is done and Topo is off the screen.
-            let why = turn ? "the time iOS allowed ran out and the process was ended"
+            // A turn cut is the time behind another app ending, which iOS's allowance running out
+            // and the person stopping it from the pill both are, and nothing here tells them apart;
+            // with none in flight the process was ended as every one is once its reply is done and
+            // Topo is off the screen.
+            let why = turn ? "the time Topo had behind another app ended (iOS's allowance ran out, or the person stopped it) and the process was ended"
                            : "the process was ended, as every one is once its reply is done and Topo is not on the screen"
             return "Your last process was cut short. Topo went behind another app at \(at) UTC, and \(after) seconds "
                 + "later \(why). Ended with it: \(went.joined(separator: "; ")). "
@@ -232,7 +234,8 @@ public actor GuestSession {
     private let launcher: any ResidentLauncher
     private let store: SessionFile
     private let cuts: CutFile
-    private let now: @Sendable () -> Date
+    /// The session's clock, which the lifecycle reads for the moment the app left.
+    public nonisolated let now: @Sendable () -> Date
     /// The model every process is started with.
     private var model: String?
     /// What every process is told of its memory: mounted, not, or nothing.
@@ -478,11 +481,13 @@ public actor GuestSession {
     /// turn held up by something other than the grace (a continued-processing task): it is waited
     /// for with no deadline until `limit` gives one or `expire` ends the wait. Returns once
     /// nothing is resident, with what that came to — or at once with `kept` when the app came back
-    /// before the teardown began, or when this call is older than one already seen.
-    public func background(budget: Duration?, generation given: Int? = nil) async -> BackgroundOutcome {
+    /// before the teardown began, or when this call is older than one already seen. `left` is when
+    /// the app went behind another app, read by the lifecycle at that moment (`now`), since the
+    /// way out is called a tick later; this call's own time when not given.
+    public func background(budget: Duration?, generation given: Int? = nil, left leftAt: Date? = nil) async -> BackgroundOutcome {
+        let left = leftAt ?? now()
         guard admit(given) else { return .kept }
         let mine = generation
-        let left = now()
         inForeground = false
         // A start still pending ends what it made as it lands; a teardown already under way (a
         // restart, a process that died) is waited out, so nothing is resident when this answers.

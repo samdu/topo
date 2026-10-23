@@ -1,4 +1,5 @@
 import BackgroundTasks
+import os
 import TopoUserland
 import XCTest
 
@@ -14,6 +15,17 @@ final class ContinuedTurnTests: XCTestCase {
         XCTAssertEqual(request.strategy, .fail, "a turn's task is worth having now or not at all")
         XCTAssertEqual(request.title, "Topo")
         XCTAssertEqual(request.subtitle, "Still working. Tap to keep it going", "the pill is drawn on the lock screen: fixed words, never the turn's")
+    }
+
+    /// At expiry, or the person's cancel, the pill says the turn is stopping before the way out runs.
+    @MainActor
+    func testAtExpiryThePillSaysTheTurnIsStoppingBeforeTheWayOutRuns() throws {
+        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTask is iOS 26 on") }
+        let seen = OSAllocatedUnfairLock(initialState: [String]())
+        let expire = ContinuedTurnTask.expiration(retitle: { title, subtitle in seen.withLock { $0.append("\(title) — \(subtitle)") } },
+                                                  then: { seen.withLock { $0.append("the way out") } })
+        expire()
+        XCTAssertEqual(seen.withLock { $0 }, ["Topo — Stopping. Open Topo to carry on", "the way out"])
     }
 
     func testTheIdentifierIsUnderTheWildcardThePlistPermits() throws {
