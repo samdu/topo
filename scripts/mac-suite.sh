@@ -380,10 +380,10 @@ suite_topo_unit() {
     # than on a phone.
     # GuestDNSTests' stub stands on port 53, which a VM's DNS proxy holds while one runs here; a
     # Mac that runs VMs keeps the port from its login (dotfiles tools/port53-holder) and lends it.
+    # A socket left by a holder that died refuses the connection, and the stub binds the port itself.
     say "xcodebuild test (Topo, unit and userland)"
-    local port53=()
-    [ -S "$HOME/Library/Caches/port53-holder/socket" ] \
-      && port53=("TEST_RUNNER_TOPO_PORT53_SOCKET=$HOME/Library/Caches/port53-holder/socket")
+    local port53=() holder="${TOPO_PORT53_HOLDER:-$HOME/Library/Caches/port53-holder/socket}"
+    [ -S "$holder" ] && port53=("TEST_RUNNER_TOPO_PORT53_SOCKET=$holder")
     rm -rf "$RESULTS/Topo-unit.xcresult"
     run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \

@@ -14,7 +14,8 @@ import Foundation
 /// keeps every loopback datagram after the proxy binds beside it, so the Mac's holder keeps one
 /// from its login and hands a copy of it to each caller. A borrowed socket is the holder's too:
 /// it is closed and never shut down, since a shutdown would end it for the holder and every
-/// later borrower. With no holder named, the stub binds the port itself.
+/// later borrower. With no holder named, or one that refuses the connection or whose socket is
+/// gone (a holder that died), the stub binds the port itself.
 final class StubDNS: @unchecked Sendable {
     static let holderVariable = "TOPO_PORT53_SOCKET"
 
@@ -31,9 +32,17 @@ final class StubDNS: @unchecked Sendable {
     init(address: [UInt8], onPort53: Bool = false) throws {
         self.address = address
         loopbackOnly = onPort53
-        let fd: Int32
+        var lent: Int32?
         if onPort53, let holder = ProcessInfo.processInfo.environment[Self.holderVariable], !holder.isEmpty {
-            fd = try Self.borrow(from: holder)
+            do {
+                lent = try Self.borrow(from: holder)
+            } catch let error as POSIXError where error.code == .ECONNREFUSED || error.code == .ENOENT {
+                // A holder that died leaves its socket behind: nobody lends, and the stub binds.
+            }
+        }
+        let fd: Int32
+        if let lent {
+            fd = lent
         } else {
             fd = socket(AF_INET, SOCK_DGRAM, 0)
             guard fd >= 0 else { throw Self.failure() }
