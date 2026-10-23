@@ -179,10 +179,9 @@ final class GuestDNSTests: XCTestCase {
 
     /// Review focus 3, in the guest: a lookup resolves through the forwarder; the forwarder
     /// stops, the rewrite is cleared and the phone's servers written, as `GuestResolver` does on
-    /// the phone; and the next lookup resolves through the server standing in for the phone's.
+    /// the phone; and the next lookup resolves through the server standing in for the phone's,
+    /// on port 53, which is taken last since a virtual machine on this Mac can be holding it.
     func testLookupSurvivesForwarderStop() async throws {
-        let phone = try StubDNS(address: [10, 7, 7, 7], onPort53: true)
-        defer { phone.stop() }
         let forwarder = try await forwarder(["svc.example.": [1: [record("svc.example.", 1, [10, 9, 8, 7])],
                                                              28: [RecordAnswer(outcome: .noSuchRecord)]]])
         let down = expectation(description: "the forwarder went down")
@@ -200,6 +199,8 @@ final class GuestDNSTests: XCTestCase {
         await fulfillment(of: [down], timeout: 10)
         let resolver = try await Guest.shared.run("/bin/cat", ["/etc/resolv.conf"])
         XCTAssertEqual(resolver.output, "nameserver 127.0.0.1\n")
+        let phone = try await StubDNS.onPort53(address: [10, 7, 7, 7])
+        defer { phone.stop() }
         let second = try await run("resolve", ["svc.example"])
         XCTAssertEqual(second, "A 10.7.7.7\n")
         XCTAssertGreaterThan(phone.queries, 0)

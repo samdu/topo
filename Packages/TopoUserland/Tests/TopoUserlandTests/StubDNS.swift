@@ -4,7 +4,8 @@ import Foundation
 /// `address` and every other type with no answers, and counts what it was asked. On `127.0.0.1`
 /// at a port of its own, or, as `onPort53`, where a `resolv.conf` can name it: port 53, which
 /// Darwin lets an unprivileged process bind only on every address, so it answers loopback peers
-/// alone. Blocking reads on a thread of its own; `stop` closes the socket, which ends them.
+/// alone. Blocking reads on a thread of its own; `stop` closes the socket, which ends them. A
+/// socket call that fails throws its own errno.
 final class StubDNS: @unchecked Sendable {
     let port: UInt16
     let address: [UInt8]
@@ -18,6 +19,7 @@ final class StubDNS: @unchecked Sendable {
         self.address = address
         loopbackOnly = onPort53
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else { throw Self.failure() }
         self.fd = fd
         var local = sockaddr_in()
         local.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -25,15 +27,35 @@ final class StubDNS: @unchecked Sendable {
         local.sin_addr.s_addr = onPort53 ? INADDR_ANY : inet_addr("127.0.0.1")
         local.sin_port = onPort53 ? UInt16(53).bigEndian : 0
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let bound = withUnsafeMutablePointer(to: &local) {
+        let failure: POSIXError? = withUnsafeMutablePointer(to: &local) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0 ? nil : Self.failure()
             }
         }
-        guard bound else { close(fd); throw POSIXError(.EADDRNOTAVAIL) }
+        if let failure { close(fd); throw failure }
         port = UInt16(bigEndian: local.sin_port)
         let thread = Thread { [self] in serve() }
         thread.start()
+    }
+
+    /// The stub on port 53 once it can be had. While a virtual machine runs on this Mac (a Tart
+    /// runner's), vmnet's DNS proxy, mDNSResponder, holds port 53 on every address, and a user
+    /// cannot share it: the bind is EADDRINUSE until the machine stops. A runner Mac with one VM
+    /// slot leaves a gap between machines, so the bind is tried again while that is the answer,
+    /// for `patience` at most; any other failure, or the last, throws.
+    static func onPort53(address: [UInt8], patience: Duration = .seconds(300)) async throws -> StubDNS {
+        let deadline = ContinuousClock.now + patience
+        while true {
+            do {
+                return try StubDNS(address: address, onPort53: true)
+            } catch let error as POSIXError where error.code == .EADDRINUSE && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private static func failure() -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     var queries: Int { lock.withLock { asked } }
