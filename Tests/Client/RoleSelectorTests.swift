@@ -205,7 +205,7 @@ final class RoleSelectorTests: XCTestCase {
         let s = RoleSelector(database: slow, device: me, defaults: defaults(), isSignedIn: { true }, ensureZone: {},
                              deadline: { _ in
                                  // Run out only once the lease read is the one waiting.
-                                 for _ in 0..<1000 { if await slow.stalled > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
+                                 for _ in 0..<6000 { if await slow.stalled > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
                              })
         await s.decide()
         XCTAssertNil(s.role, "a login was taken as the evidence over a lease read that ran out")
@@ -222,7 +222,7 @@ final class RoleSelectorTests: XCTestCase {
         let fresh = RoleSelector(database: empty, device: me, defaults: defaults(), isSignedIn: { false },
                                  ensureZone: { await zone.wait() },
                                  deadline: { _ in
-                                     for _ in 0..<1000 { if await zone.waiting > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
+                                     for _ in 0..<6000 { if await zone.waiting > 0 { break }; try await Task.sleep(for: .milliseconds(5)) }
                                  })
         await fresh.decide()
         XCTAssertNil(fresh.role)
@@ -481,14 +481,23 @@ private actor Stalling: RecordDatabase {
         self.only = only
         self.ignoresCancellation = ignoresCancellation
     }
-    func answer() { answers = true }
+    /// The calls waiting out a cancellation, resumed by `answer()`. A continuation, not a loop of
+    /// sleeps: a cancelled task's sleep returns at once, and the loop would spin on the actor.
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func answer() {
+        answers = true
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
     private func stall(_ ids: [RecordID]? = nil) async throws {
         if let only, let ids, only.isDisjoint(with: ids) { return }
         guard !answers else { return }
         stalled += 1
-        while !answers {
-            if ignoresCancellation { try? await Task.sleep(for: .milliseconds(10)) } else { try await Task.sleep(for: .milliseconds(10)) }
+        if ignoresCancellation {
+            await withCheckedContinuation { waiting.append($0) }
+            return
         }
+        while !answers { try await Task.sleep(for: .milliseconds(10)) }
     }
     func save(_ records: [Record]) async throws -> [Record] { saves += 1; try await stall(); return try await wrapped.save(records) }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await stall(ids); return try await wrapped.fetch(ids) }
@@ -500,11 +509,17 @@ private actor Stalling: RecordDatabase {
 private actor Gate {
     private(set) var waiting = 0
     private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
     func wait() async {
         waiting += 1
-        while !isOpen { try? await Task.sleep(for: .milliseconds(10)) }
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
-    func open() { isOpen = true }
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
 }
 
 /// A wait as real time would leave the record: the sleep is instant, so the lease that the wait
