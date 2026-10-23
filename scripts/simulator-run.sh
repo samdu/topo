@@ -168,9 +168,10 @@ echo "$$" >"$pids"
 # Everything printed from here goes to the run's log as well as to where it was going. tee reads
 # a fifo rather than a process substitution, so its pid is known and `cleanup` can wait for the
 # last line to be written; it ignores SIGPIPE and SIGINT, so a caller that has gone, or a ^C,
-# leaves the file whole. That wait is bounded at about two seconds of the clock, not a count of
-# polls: tee ends when the last writer of the fifo does, and a process an ended xcodebuild left
-# behind may still hold it. A poll is a builtin and a `sleep`, and the clock ends it: on a loaded
+# leaves the file whole. That wait is bounded by the clock, not a count of polls: tee ends when
+# the last writer of the fifo does, and a process an ended xcodebuild left behind may still hold
+# it. The wait ends at the first poll after two seconds (one to two, `$SECONDS` being whole), so
+# it is that plus the one `sleep` in progress; a poll starts no other process, since on a loaded
 # Mac every process a poll starts is slower, and a count of polls would stretch with them. The
 # poll is `kill -0`, not `cleanup`'s running-child test: a pid reissued once tee is reaped costs
 # nothing worse than the wait's bound.

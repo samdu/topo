@@ -296,7 +296,8 @@ case_ guest-turns-times-out-silent         fail silent               "$slow" --g
 # is ended by SIGTERM to its first pid, the script's own, and takes its second, the child it was
 # waiting on, with it, within the `quick` limit; the log is the run's whole output, kept after it.
 # On a slow Mac, where every `sleep` the script starts takes half a second longer, it still ends
-# within the limit: what it waits for is bounded by the clock.
+# within `quick`, the same load-relative limit as every case: its wait for tee is bounded by the
+# clock and grows by one slow poll, not by twenty.
 #
 # ended <name> <the child's command> <whole log: yes|no> <slow: yes|no> [script args...]
 ended() {
