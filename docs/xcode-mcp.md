@@ -10,6 +10,8 @@ Xcode 27 serves its own tools to an agent over MCP and ships Apple-written skill
 
 `.mcp.json` registers one server, `xcode`, as `xcrun mcpbridge` over stdio, which is the registration Apple's own plugin carries. It is the only registration: none is kept at user scope, so `claude mcp get xcode` names the project file as its source. A session started in the repository or a worktree of it gets the tools as `mcp__xcode__*`, once Claude Code's own approval of a project's servers has been given for that checkout (an interactive session is asked the first time; until then `claude mcp list` shows the server as pending approval), which is a different gate from the server's approval of the agent below; on a host with no Xcode the server fails to connect and nothing else changes. The command is not wrapped (no `timeout`, no shell), because the server approves the signed process that starts the bridge, and a wrapper is what would be approved in the agent's place.
 
+`xcrun mcpbridge run-agent claude` is not a way in on buddybox: it fails with `Could not find 'claude' binary` (`--dry-run` too) with buddy's `claude` on `PATH` in `~/.local/bin`, which it does not look at. A session gets the tools by starting in the repository, as above.
+
 The bridge talks to Xcode's headless server (`xcrun mcp-server`), which runs with no Xcode window and starts on the first call. `xcrun mcp-server status` prints what it permits. The Mac needs headless mode on, the two folders permitted and the agent approved, each with `sudo`:
 
 ```sh

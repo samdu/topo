@@ -1,5 +1,6 @@
 #if os(iOS)
 import Foundation
+import OSLog
 import TopoCore
 import TopoTurn
 import TopoUserland
@@ -317,16 +318,20 @@ actor GuestBridge: Brain {
     /// The nonces `hear` is at work on, each with the calls for the same nonce waiting on it.
     private var hearing: [String: [CheckedContinuation<Bool, Never>]] = [:]
     private let heardObserver: @Sendable (GuestHeard) async -> Void
+    /// Where a request's failure is told (`failing`): the unified log at `notice` outside a test.
+    private let note: @Sendable (String) -> Void
 
     /// `file` is the ledger; everything the bridge knows across launches is read from it here, or,
     /// when it cannot be read, at each request until it can.
     init(conversation: any GuestConversation, ledger file: URL,
          observe: @escaping @Sendable (GuestActivity) async -> Void = { _ in },
-         heard: @escaping @Sendable (GuestHeard) async -> Void = { _ in }) {
+         heard: @escaping @Sendable (GuestHeard) async -> Void = { _ in },
+         note: @escaping @Sendable (String) -> Void = GuestBridge.notice) {
         self.conversation = conversation
         self.file = file
         self.observe = observe
         heardObserver = heard
+        self.note = note
         do {
             ledger = try GuestLedger.load(file)
             loaded = true
@@ -337,7 +342,29 @@ actor GuestBridge: Brain {
 
     // MARK: - Brain
 
+    /// Answers `request` through the guest. Whatever it fails with is told at notice: by
+    /// `failing` where the place is known, and here for anything that reached the caller untold
+    /// (the guest not ready, a ledger that could not be written), by its kind alone.
     func answer(_ request: BrainRequest) async throws -> Reply {
+        let told = Told()
+        do {
+            return try await Told.$current.withValue(told) { try await answering(request) }
+        } catch {
+            if !told.said {
+                let kind = (error as? GuestBridgeError).map(Self.kind(of:)) ?? "failed (\(type(of: error)))"
+                note("bridge: \(kind) at the request")
+            }
+            throw error
+        }
+    }
+
+    /// Whether this request's failure has been told yet, carried down the request's own task.
+    final class Told: @unchecked Sendable {
+        @TaskLocal static var current: Told?
+        var said = false
+    }
+
+    private func answering(_ request: BrainRequest) async throws -> Reply {
         let login = self.login
         // A request bound to words the guest was given ahead of their turn is answered by that
         // input: waited for while the guest is still on it, and handed over without the slot,
@@ -381,7 +408,7 @@ actor GuestBridge: Brain {
 
         // A ledger that cannot be read may hold an input the guest received: nothing is sent
         // until it can be read and that input reconciled.
-        guard readLedger() else { throw GuestBridgeError.failed(Self.ledgerUnreadable) }
+        guard readLedger() else { throw failing(.failed(Self.ledgerUnreadable), at: "ledger unreadable") }
         // What an input the log moved past carried: the guest received it, so it is not told
         // again, but it is counted seen only when this request's reply lands, which covers it.
         var received = Coverage()
@@ -398,7 +425,7 @@ actor GuestBridge: Brain {
             // killed: read off the guest's transcript before anything else is sent.
             guard await settleEarly() else {
                 try stillCurrent(login)
-                throw GuestBridgeError.failed(Self.unknown)
+                throw failing(.failed(Self.unknown), at: "an early input's end not known")
             }
             try stillCurrent(login)
             repeat { reconciling: while let pending = ledger.pending {
@@ -427,11 +454,11 @@ actor GuestBridge: Brain {
                         ledger.pending?.covers.formUnion(received)
                         try? save()
                     }
-                    throw GuestBridgeError.failed("a reply the guest finished is still to be written")
+                    throw failing(.failed("a reply the guest finished is still to be written"), at: "reconciling: a reply owed")
                 case .unresolved:
                     ledger.pending?.state = .unresolved
                     try save()
-                    throw GuestBridgeError.unresolved
+                    throw failing(.unresolved, at: "reconciling: the pending input unresolved")
                 case .askAgain:
                     break
                 case .superseded:
@@ -439,14 +466,14 @@ actor GuestBridge: Brain {
                     // since the log was read is read with the next request.
                     let read = Set((request.context + request.answering).map(\.ref))
                     guard pending.answering.allSatisfy({ read.contains($0) }) else {
-                        throw GuestBridgeError.failed("a turn the guest was cut off on was saved since the log was read")
+                        throw failing(.failed("a turn the guest was cut off on was saved since the log was read"), at: "reconciling: superseded since the read")
                     }
                     received.formUnion(pending.covers)
                     try record(nil)
                 case .hold:
                     break
                 case .unknown:
-                    throw GuestBridgeError.failed(Self.unknown)
+                    throw failing(.failed(Self.unknown), at: "reconciling: the pending input's end not known")
                 }
                 break reconciling
             } } while promote()
@@ -506,7 +533,7 @@ actor GuestBridge: Brain {
             // Refused before anything was written: not received. The record may have landed
             // and another taken its place while the guest was asked for its process.
             if self.login == login, ledger.pending?.input == id { try? record(nil) }
-            throw GuestBridgeError.failed(String(describing: error))
+            throw failing(.failed(String(describing: error)), at: "send refused (\(type(of: error)))")
         }
 
         let answering = request.answering.map(\.ref)
@@ -567,19 +594,21 @@ actor GuestBridge: Brain {
                 ledger.pending?.state = .unresolved
                 try? save()
             }
-            throw GuestBridgeError.unresolved
+            throw failing(.unresolved, at: "the turn ended", end: end)
         }
         // Anything else is read off the transcript once nothing can still be writing it.
         let final = await conversation.settle()
         guard self.login == login else { throw CancellationError() }
-        guard let pending = ledger.pending, pending.input == id else { throw GuestBridgeError.failed(Self.describe(end)) }
+        guard let pending = ledger.pending, pending.input == id else {
+            throw failing(.failed(Self.describe(end)), at: "the record moved while the turn ran", end: end)
+        }
         // A process not confirmed gone may still be writing: the record stays, and the next
         // request reads again.
-        guard final else { throw GuestBridgeError.failed(Self.unknown) }
+        guard final else { throw failing(.failed(Self.unknown), at: "the process not confirmed gone", end: end) }
         switch GuestTranscript.verdict(for: id, home: conversation.home, session: pending.session, since: pending.sentAt) {
         case .notReceived:
             try? record(nil)
-            throw GuestBridgeError.failed(Self.describe(end))
+            throw failing(.failed(Self.describe(end)), at: "the transcript: not received", end: end)
         case .answered(let text):
             ledger.pending?.state = .answered
             ledger.pending?.text = text
@@ -588,10 +617,10 @@ actor GuestBridge: Brain {
         case .unresolved:
             ledger.pending?.state = .unresolved
             try? save()
-            throw GuestBridgeError.unresolved
+            throw failing(.unresolved, at: "the transcript: unresolved", end: end)
         case .unreadable:
             // The record stays: the next request reads again before it sends anything.
-            throw GuestBridgeError.failed(Self.unknown)
+            throw failing(.failed(Self.unknown), at: "the transcript: unreadable", end: end)
         }
     }
 
@@ -1189,6 +1218,49 @@ actor GuestBridge: Brain {
     }
 
     private func save() throws { try ledger.save(file) }
+
+    /// Where the bridge's failures are told: at `notice`, which the phone keeps, so a run read
+    /// afterwards says why a reply failed. A line names the place the request stopped and the
+    /// kind of end the turn came to, never what was said: an error result's text and a process's
+    /// last words can hold the person's words or the reply's.
+    static let notice: @Sendable (String) -> Void = { line in
+        Logger(subsystem: "zone.hexagon.topo", category: "bridge").notice("\(line, privacy: .public)")
+    }
+
+    static func kind(of error: GuestBridgeError) -> String {
+        switch error {
+        case .notReady: "not ready"
+        case .unresolved: "unresolved"
+        case .failed: "failed"
+        }
+    }
+
+    private func failing(_ error: GuestBridgeError, at place: String, end: GuestSession.TurnEnd? = nil) -> GuestBridgeError {
+        note("bridge: \(Self.kind(of: error)) at \(place)" + (end.map { "; the turn \(Self.kind(of: $0))" } ?? ""))
+        Told.current?.said = true
+        return error
+    }
+
+    /// An error result's subtype as a line may carry it: Claude Code's own are lowercase words
+    /// joined by underscores, and anything else is said as `other`, since the field is whatever the
+    /// process wrote.
+    static func subtype(_ subtype: String) -> String {
+        let plain = !subtype.isEmpty && subtype.count <= 48
+            && subtype.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || $0 == "_" }
+        return plain ? subtype : "other"
+    }
+
+    /// The kind of end a turn came to, with nothing it carried but an error result's subtype.
+    static func kind(of end: GuestSession.TurnEnd) -> String {
+        switch end {
+        case .answered: "answered"
+        case .abandoned: "was abandoned"
+        case .failed(.result(let result)): "ended with an error result (\(Self.subtype(result.subtype)))"
+        case .failed(.exited): "lost its process mid-turn"
+        case .failed(.silent(let bound)): "heard nothing for \(bound)"
+        case .failed(.input): "could not be written"
+        }
+    }
 
     private static func describe(_ end: GuestSession.TurnEnd?) -> String {
         switch end {

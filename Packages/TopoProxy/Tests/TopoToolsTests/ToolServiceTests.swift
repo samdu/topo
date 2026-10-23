@@ -216,6 +216,90 @@ import TopoProxy
     }
 }
 
+@Suite struct ToolListenerLossTests {
+    /// A listener that says it was cancelled once it is up is the service down and logged, a call
+    /// in flight closed rather than answered at its bound; the next start listens again with the
+    /// same token, and a call through it runs.
+    @Test func aListenerLostIsTheServiceDownWithItsConnectionsClosed() async throws {
+        let stuck = ScriptedTool(name: "stuck") { _ in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 20) { continuation.resume() }
+            }
+            return .ok("never")
+        }
+        let tool = ScriptedTool()
+        let (service, first, logs) = try await startedService([stuck, tool], bound: .seconds(30))
+        defer { Task { await service.stop() } }
+        let token = await service.token
+        let started = ContinuousClock.now
+        async let inFlight = { () async throws -> Int? in
+            let (head, body) = call(port: first, token: token, ["stuck"])
+            return try await exchange(port: first, head, body: body).status
+        }()
+        for _ in 0..<500 where stuck.calls.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        await service.listener?.cancel()
+        #expect(try await inFlight == nil, "a call in flight was answered after the listener was lost")
+        #expect(ContinuousClock.now - started < .seconds(10))
+        for _ in 0..<500 where await service.port != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await service.port == nil)
+        #expect(logs.lines.contains { $0.hasPrefix("listener lost (it was cancelled)") })
+        let second = try await service.start()
+        #expect(await service.token == token)
+        let (head, body) = call(port: second, token: token, ["echo", "back"])
+        let answer = try await exchange(port: second, head, body: body)
+        #expect(answer.status == 200)
+        #expect(tool.calls == [["back"]])
+    }
+
+    /// Codex on #448: with no word from the old listener, and its port bound again by another
+    /// process, `relisten` starts a listener of the service's own, with the same token, on a
+    /// port other than the old one.
+    @Test func relistenStartsANewListenerWhateverBecameOfTheOldPort() async throws {
+        let tool = ScriptedTool()
+        let (service, first, _) = try await startedService([tool])
+        defer { Task { await service.stop() } }
+        let token = await service.token
+        await service.set(hearsLoss: false)
+        await service.listener?.cancel()
+        for _ in 0..<500 where await LoopbackProbe.answers(port: first, within: .milliseconds(200)) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await service.port == first, "control: the service has not heard of the loss")
+        let squatter = try await squat(first)
+        defer { squatter.cancel() }
+        let second = try await service.relisten()
+        #expect(second != first)
+        #expect(await service.token == token)
+        let (head, body) = call(port: second, token: token, ["echo", "x"])
+        #expect(try await exchange(port: second, head, body: body).status == 200)
+        #expect(tool.calls == [["x"]], "the call reached a listener other than the service's")
+    }
+
+    /// A port that cannot be bound fails the start rather than leaving it waiting.
+    @Test func aPortThatCannotBeBoundFailsTheStart() async throws {
+        let (holder, taken, _) = try await startedService([])
+        defer { Task { await holder.stop() } }
+        let service = try ToolService(tools: [])
+        defer { Task { await service.stop() } }
+        await service.set(requestedPort: NWEndpoint.Port(rawValue: taken)!)
+        let started = ContinuousClock.now
+        await #expect(throws: (any Error).self) { _ = try await service.start() }
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(await service.port == nil)
+    }
+
+    /// A stop is not a loss, and a start after it listens again.
+    @Test func aStopThenAStartListensAgain() async throws {
+        let (service, _, logs) = try await startedService([])
+        await service.stop()
+        #expect(await service.port == nil)
+        let port = try await service.start()
+        #expect(await LoopbackProbe.answers(port: port))
+        await service.stop()
+        #expect(!logs.lines.contains { $0.hasPrefix("listener lost") })
+    }
+}
+
 @Suite struct ToolLoopbackTests {
     /// Review focus 2: the listener is bound to 127.0.0.1 and nothing else.
     @Test func theListenerIsBoundToLoopbackAlone() async throws {

@@ -22,6 +22,10 @@ import TopoProxy
 /// and closed, and a call not answered by then is answered with `ToolReply.timedOut` whether or
 /// not the tool has stopped. It logs each call's tool, status and time, and each refusal's reason,
 /// and never an argument, a header value or anything a tool said.
+///
+/// A listener that fails or is cancelled once it is up — iOS takes a suspended app's away — is the
+/// service down: its port is forgotten, its connections closed and the loss logged, and the next
+/// `start` listens again on a port of its own. The token is the service's and stays. `relisten` starts a new listener whatever the old one's state, which is what each launch of the resident asks for: iOS's word of a loss can come late, and a port it freed can be bound again by another process.
 public actor ToolService {
     public typealias Log = @Sendable (String) -> Void
 
@@ -42,18 +46,19 @@ public actor ToolService {
     private let table: ToolTable
     private let bound: Duration
     private let log: Log
-    private let listener: NWListener
+    /// The listener of the running generation; nil while down.
+    private(set) var listener: NWListener?
+    /// Bumped by every start and every stop or loss, so a late state from a listener that is no
+    /// longer the running one reaches nothing.
+    private(set) var generation = 0
     private let queue = DispatchQueue(label: "zone.hexagon.topo.tools")
-    private var ready: CheckedContinuation<UInt16, any Error>?
+    /// Starts waiting for the running listener to be ready.
+    private var waiting: [CheckedContinuation<UInt16, any Error>] = []
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     public private(set) var port: UInt16?
 
     public init(tools: [any Tool], token: String = ToolService.newToken(), bound: Duration = ToolService.defaultBound,
                 log: @escaping Log = ToolService.defaultLog) throws {
-        let parameters = NWParameters.tcp
-        // Loopback only: no other interface, and no LAN peer, reaches it.
-        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
-        listener = try NWListener(using: parameters)
         table = ToolTable(tools)
         self.token = token
         self.bound = bound
@@ -68,29 +73,48 @@ public actor ToolService {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Starts listening and returns the port, once bound.
+    /// Starts listening and returns the port, once bound; the port it has when already up. A
+    /// start while another is waiting for its listener waits for the same one.
     public func start() async throws -> UInt16 {
         if let port { return port }
-        listener.newConnectionHandler = { [weak self] connection in
-            guard let self else { connection.cancel(); return }
-            Task { await self.accept(connection) }
+        if listener == nil {
+            let parameters = NWParameters.tcp
+            // Loopback only: no other interface, and no LAN peer, reaches it.
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: requestedPort)
+            let listener = try NWListener(using: parameters)
+            generation += 1
+            let current = generation
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self else { connection.cancel(); return }
+                Task { await self.accept(connection, generation: current) }
+            }
+            listener.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                Task { await self.stateChanged(state, generation: current) }
+            }
+            self.listener = listener
+            listener.start(queue: queue)
         }
-        listener.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            Task { await self.stateChanged(state) }
-        }
-        listener.start(queue: queue)
         return try await withCheckedThrowingContinuation { continuation in
-            ready = continuation
+            waiting.append(continuation)
         }
+    }
+
+    /// Lets the listener go and starts a new one, on a port of its own, whatever the old one's
+    /// state: a listener bound a moment ago is this one's by construction, where a held port may
+    /// have been taken away while the app was suspended, its word of that not yet come, and even
+    /// bound again by another process. Closes every connection, so it is for a moment nothing is
+    /// using them: the resident's launch.
+    public func relisten() async throws -> UInt16 {
+        down()
+        settle(.failure(CancellationError()))
+        return try await start()
     }
 
     /// Stops listening and closes every connection.
     public func stop() {
-        listener.cancel()
-        port = nil
-        for connection in connections.values { connection.cancel() }
-        connections = [:]
+        down()
+        settle(.failure(CancellationError()))
     }
 
     /// What the guest's environment gains so its `topo` reaches the service on `port`. The token
@@ -99,26 +123,73 @@ public actor ToolService {
         [urlVariable: "http://127.0.0.1:\(port)", tokenVariable: token]
     }
 
-    private func stateChanged(_ state: NWListener.State) {
+    private func stateChanged(_ state: NWListener.State, generation current: Int) async {
+        guard current == generation, let listener else { return }
         switch state {
         case .ready:
-            let bound = listener.port?.rawValue ?? 0
+            if let holdReady {
+                await holdReady()
+                guard current == generation else { return }
+            }
+            // A listener that cannot name its port is a failed start.
+            guard let bound = listener.port?.rawValue, bound != 0 else {
+                down()
+                settle(.failure(POSIXError(.EADDRNOTAVAIL)))
+                return
+            }
             port = bound
-            ready?.resume(returning: bound)
-            ready = nil
-        case .failed(let error):
-            ready?.resume(throwing: error)
-            ready = nil
-        case .cancelled:
-            ready?.resume(throwing: CancellationError())
-            ready = nil
+            settle(.success(bound))
+        case .failed(let error) where hearsLoss:
+            lost("it failed", error)
+        case .cancelled where hearsLoss:
+            lost("it was cancelled", CancellationError())
+        case .waiting(let error) where port == nil:
+            // A port that cannot be bound waits for one that can; a start takes it as failed.
+            down()
+            settle(.failure(error))
         default:
             break
         }
     }
 
-    private func accept(_ connection: NWConnection) {
-        guard listener.state != .cancelled, let port else { connection.cancel(); return }
+    /// The running listener went away without being stopped: down until the next start.
+    private func lost(_ how: String, _ error: any Error) {
+        if port != nil { log("listener lost (\(how)); the next start listens again") }
+        down()
+        settle(.failure(error))
+    }
+
+    // MARK: Seams for the tests
+
+    /// The port the next listener asks for; any, outside a test that needs one taken.
+    var requestedPort: NWEndpoint.Port = .any
+    /// Whether a listener's own word that it failed or was cancelled is heard; a test turns it off
+    /// to stand for the word not having come yet.
+    var hearsLoss = true
+    /// Awaited before a listener's readiness is settled, so a test can hold a start pending.
+    var holdReady: (@Sendable () async -> Void)?
+    var waitingStarts: Int { waiting.count }
+    func set(requestedPort: NWEndpoint.Port) { self.requestedPort = requestedPort }
+    func set(hearsLoss: Bool) { self.hearsLoss = hearsLoss }
+    func set(holdReady: (@Sendable () async -> Void)?) { self.holdReady = holdReady }
+
+    private func down() {
+        generation += 1
+        listener?.cancel()
+        listener = nil
+        port = nil
+        for connection in connections.values { connection.cancel() }
+        connections = [:]
+    }
+
+    private func settle(_ result: Result<UInt16, any Error>) {
+        let starts = waiting
+        waiting = []
+        for start in starts { start.resume(with: result) }
+    }
+
+    private func accept(_ connection: NWConnection, generation current: Int) {
+        guard current == generation, let port else { connection.cancel(); return }
         let id = ObjectIdentifier(connection)
         connections[id] = connection
         let inbound = Inbound(connection, limit: Self.bodyLimit + RequestReader.headLimit + 1024)

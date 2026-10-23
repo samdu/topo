@@ -11,17 +11,23 @@ import TopoCoreTesting
 /// nothing then waits on iCloud or the network, so a UI suite's first screen on a freshly booted
 /// simulator is not as slow as CloudKit is (#434). Every part takes the same instance, so the role
 /// a launch decides is the one the harness and the sweep read. The hub's unsigned build does the
-/// same with `TOPO_STORE=memory`.
+/// same with `TOPO_STORE=memory`. `TOPO_DEBUG_STORE=stalled` gets a store that never answers and
+/// a zone that is never made: CloudKit at its slowest, for seeing what the first screen does while
+/// iCloud keeps it waiting (#436).
 enum AppRecords {
     #if DEBUG
     static let storeVariable = "TOPO_DEBUG_STORE"
-    private static let memory: InMemoryRecordDatabase? =
-        ProcessInfo.processInfo.environment[storeVariable] == "memory" ? InMemoryRecordDatabase() : nil
+    private static let debugStore: (any ZoneDatabase)? = switch ProcessInfo.processInfo.environment[storeVariable] {
+    case "memory": InMemoryRecordDatabase()
+    case "stalled": StalledRecordDatabase()
+    default: nil
+    }
+    private static var stalled: Bool { debugStore is StalledRecordDatabase }
     #endif
 
     static func database() -> any ZoneDatabase {
         #if DEBUG
-        if let memory { return memory }
+        if let debugStore { return debugStore }
         #endif
         return TopoCloudKit.database()
     }
@@ -30,7 +36,7 @@ enum AppRecords {
     /// something: the in-memory store has nothing to subscribe to, and a launch on it saves none.
     static var isCloudKit: Bool {
         #if DEBUG
-        return memory == nil
+        return debugStore == nil
         #else
         return true
         #endif
@@ -38,8 +44,24 @@ enum AppRecords {
 
     static let ensureZone: @Sendable () async throws -> Void = {
         #if DEBUG
-        if memory != nil { return }
+        if stalled { try await StalledRecordDatabase.never() }
+        if debugStore != nil { return }
         #endif
         try await TopoCloudKit.ensureZone()
     }
 }
+
+#if DEBUG
+/// A record store whose every call waits until it is cancelled, and is never answered.
+private struct StalledRecordDatabase: ZoneDatabase {
+    static func never() async throws -> Never {
+        while true { try await Task.sleep(for: .seconds(3600)) }
+    }
+    func save(_ records: [Record]) async throws -> [Record] { try await Self.never() }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await Self.never() }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await Self.never() }
+    func records(ofType type: String) async throws -> [Record] { try await Self.never() }
+    func delete(_ ids: [RecordID]) async throws { try await Self.never() }
+    func changes(ofType type: String, since token: Data?) async throws -> RecordChanges { try await Self.never() }
+}
+#endif

@@ -223,7 +223,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case .errorResult(let why):
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
             continuation.yield(.ended(.failed(.result(.init(isError: true, subtype: "error_during_execution", text: why,
-                                                            session: session, duration: .milliseconds(10))))))
+                                                            session: session, duration: .milliseconds(10), errors: [why])))))
             continuation.finish()
         case .hang:
             write(input: text, id: id, session: session)
