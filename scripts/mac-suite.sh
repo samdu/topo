@@ -378,9 +378,14 @@ suite_topo_unit() {
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather
     # than on a phone.
+    # GuestDNSTests' stub stands on port 53, which a VM's DNS proxy holds while one runs here; a
+    # Mac that runs VMs keeps the port from its login (dotfiles tools/port53-holder) and lends it.
     say "xcodebuild test (Topo, unit and userland)"
+    local port53=()
+    [ -S "$HOME/Library/Caches/port53-holder/socket" ] \
+      && port53=("TEST_RUNNER_TOPO_PORT53_SOCKET=$HOME/Library/Caches/port53-holder/socket")
     rm -rf "$RESULTS/Topo-unit.xcresult"
-    run "$RESULTS/Topo-unit.log" bounded 2400 env \
+    run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
       "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
       xcodebuild test-without-building \
