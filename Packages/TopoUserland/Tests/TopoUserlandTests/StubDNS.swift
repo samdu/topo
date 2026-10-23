@@ -15,7 +15,8 @@ import Foundation
 /// from its login and hands a copy of it to each caller. A borrowed socket is the holder's too:
 /// it is closed and never shut down, since a shutdown would end it for the holder and every
 /// later borrower. With no holder named, or one that refuses the connection or whose socket is
-/// gone (a holder that died), the stub binds the port itself.
+/// gone (a holder that died), the stub binds the port itself, and asks the holder again while the
+/// port is in use (a holder restarting).
 final class StubDNS: @unchecked Sendable {
     static let holderVariable = "TOPO_PORT53_SOCKET"
 
@@ -32,28 +33,9 @@ final class StubDNS: @unchecked Sendable {
     init(address: [UInt8], onPort53: Bool = false) throws {
         self.address = address
         loopbackOnly = onPort53
-        var lent: Int32?
-        if onPort53, let holder = ProcessInfo.processInfo.environment[Self.holderVariable], !holder.isEmpty {
-            do {
-                lent = try Self.borrow(from: holder)
-            } catch let error as POSIXError where error.code == .ECONNREFUSED || error.code == .ENOENT {
-                // A holder that died leaves its socket behind: nobody lends, and the stub binds.
-            }
-        }
-        let fd: Int32
-        if let lent {
-            fd = lent
-        } else {
-            fd = socket(AF_INET, SOCK_DGRAM, 0)
-            guard fd >= 0 else { throw Self.failure() }
-            var local = Self.local(onPort53 ? INADDR_ANY : inet_addr("127.0.0.1"), port: onPort53 ? 53 : 0)
-            let failure: POSIXError? = withUnsafeMutablePointer(to: &local) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 ? nil : Self.failure()
-                }
-            }
-            if let failure { close(fd); throw failure }
-        }
+        let variable = ProcessInfo.processInfo.environment[Self.holderVariable] ?? ""
+        let holder = onPort53 && !variable.isEmpty ? variable : nil
+        let fd = try Self.open(onPort53: onPort53, holder: holder)
         var local = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let named = withUnsafeMutablePointer(to: &local) {
@@ -93,6 +75,39 @@ final class StubDNS: @unchecked Sendable {
 
     private static func failure() -> POSIXError {
         POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+
+    /// The stub's socket: the holder's, while one lends it, or one of its own. A holder that died
+    /// leaves its socket behind, which refuses, and the stub binds; one restarting between the two
+    /// holds the port before its socket is back, so a bind refused as in use asks it again, for
+    /// two seconds at most.
+    private static func open(onPort53: Bool, holder: String?) throws -> Int32 {
+        guard let holder else { return try bound(onPort53: onPort53) }
+        let deadline = Date().addingTimeInterval(2)
+        while true {
+            do {
+                return try borrow(from: holder)
+            } catch let error as POSIXError where error.code == .ECONNREFUSED || error.code == .ENOENT {}
+            do {
+                return try bound(onPort53: true)
+            } catch let error as POSIXError where error.code == .EADDRINUSE && Date() < deadline {
+                usleep(50_000)
+            }
+        }
+    }
+
+    /// A socket of the stub's own: port 53 on every address, or a port of its own on `127.0.0.1`.
+    private static func bound(onPort53: Bool) throws -> Int32 {
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else { throw failure() }
+        var here = Self.local(onPort53 ? INADDR_ANY : inet_addr("127.0.0.1"), port: onPort53 ? 53 : 0)
+        let failure: POSIXError? = withUnsafeMutablePointer(to: &here) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 ? nil : Self.failure()
+            }
+        }
+        if let failure { close(fd); throw failure }
+        return fd
     }
 
     /// A copy of the holder's socket, passed as `SCM_RIGHTS` over its Unix socket at `path`.
