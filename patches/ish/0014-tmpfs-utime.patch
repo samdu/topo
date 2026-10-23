@@ -1,5 +1,5 @@
 diff --git a/fs/tmp.c b/fs/tmp.c
-index 462ace4..d3fc28a 100644
+index 462ace4..48d80cd 100644
 --- a/fs/tmp.c
 +++ b/fs/tmp.c
 @@ -5,6 +5,7 @@
@@ -10,7 +10,7 @@ index 462ace4..d3fc28a 100644
  #include "debug.h"
  
  // ========================
-@@ -319,6 +320,37 @@ static int tmpfs_stat(struct mount *mount, const char *path, struct statbuf *sta
+@@ -319,6 +320,42 @@ static int tmpfs_stat(struct mount *mount, const char *path, struct statbuf *sta
      return 0;
  }
  
@@ -33,6 +33,11 @@ index 462ace4..d3fc28a 100644
 +    struct tmp_dirent *dirent = tmpfs_lookup(mount, path);
 +    if (IS_ERR(dirent))
 +        return PTR_ERR(dirent);
++    // Both omitted changes nothing, ctime included, as on Linux.
++    if (atime.tv_nsec == TMPFS_UTIME_OMIT && mtime.tv_nsec == TMPFS_UTIME_OMIT) {
++        tmp_dirent_release(dirent);
++        return 0;
++    }
 +    struct tmp_inode *inode = dirent->inode;
 +    struct timespec now = timespec_now(CLOCK_REALTIME);
 +    lock(&inode->lock);
@@ -48,7 +53,7 @@ index 462ace4..d3fc28a 100644
  static int tmpfs_close(struct fd *fd) {
      // shouldn't need locking as this is the last reference to the fd
      tmp_dirent_release(fd->tmpfs.dirent);
-@@ -501,6 +533,7 @@ const struct fs_ops tmpfs = {
+@@ -501,6 +538,7 @@ const struct fs_ops tmpfs = {
      .close = tmpfs_close,
      .stat = tmpfs_stat,
      .fstat = tmpfs_fstat,

@@ -154,6 +154,29 @@ final class GuestMountTests: XCTestCase {
         XCTAssertEqual(touched.status, 0, touched.errors)
     }
 
+    /// `utimensat` on that tmpfs, as Linux has it (`Tests/Programs/utimes.c`): times set to the
+    /// nanosecond, both `UTIME_OMIT` moving nothing, ctime included, `UTIME_OMIT` beside
+    /// `UTIME_NOW` keeping atime and moving mtime and ctime to now, and ENOENT for a missing name.
+    func testUtimensatOnTheGuestsOwnTmpfsSetsOmitsAndTakesNow() async throws {
+        let program = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Programs/utimes")
+        let dir = fm.temporaryDirectory.appendingPathComponent("utimes-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        hosts.append(dir)
+        let copy = dir.appendingPathComponent("utimes")
+        try fm.copyItem(at: program, to: copy)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: copy.path)
+        let bin = "/opt/utimes-\(UUID().uuidString.prefix(8))"
+        try Guest.shared.mount(dir, at: bin)
+
+        let point = "/mnt/utimes-\(UUID().uuidString.prefix(8))"
+        let run = try await sh("mkdir -p \(point) && mount -t tmpfs tmpfs \(point) && cd \(point) "
+            + "&& \(bin)/utimes; status=$?; cd /; umount \(point); exit $status")
+        XCTAssertEqual(run.output, "set=0:1000.111,2000.222 omit=0:same now=0:a-kept,m-now,c-moved absent=-2\n", run.errors)
+        XCTAssertEqual(run.status, 0, run.errors)
+    }
+
     /// Lookups under a tmpfs's point beside a loop that mounts and unmounts it
     /// (`patches/ish/0011-mount-find-cache-under-lock.patch`): each reader is one shell testing
     /// for the directory's own `under` and the tmpfs's `over` with a builtin, so every lookup is
