@@ -332,7 +332,8 @@ final class GuestSessionTests: XCTestCase {
     }
 
     /// `/compact` as Claude Code 2.1.285 writes it: its init, the boundary, the summary and the
-    /// command's own output come before the input's echo, and the boundary is the turn's.
+    /// command's own output come before the input's echo, and the boundary is the turn's; the
+    /// output's own echo is not.
     func testACompactionsBoundaryBeforeItsEchoIsTheTurns() async throws {
         let (session, process) = try await resident()
         process.echoes = false
@@ -350,6 +351,7 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(turn.events.first, .started(session: "S1", model: "claude-haiku-4-5-20251001"))
         XCTAssertTrue(turn.events.contains(.compacted(.init(trigger: "manual", pre: 31502, post: 1471))),
                       "the boundary before the echo was dropped")
+        XCTAssertFalse(turn.events.contains(.received(id: "local-output")), "another input's echo reached the turn")
     }
 
     /// A turn sent with no id is given one, and its echo is what begins it.

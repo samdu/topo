@@ -670,6 +670,8 @@ public actor GuestSession {
                 if case .result(let result) = event { resident.strayResult = result }
                 continue
             }
+            // Another input's echo is no event of this turn's.
+            if case .received(let id) = event, id != turn.id { continue }
             if !turn.begun {
                 switch event {
                 case .received(let id) where id == turn.id:
