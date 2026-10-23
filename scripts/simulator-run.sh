@@ -171,7 +171,9 @@ echo "$$" >"$pids"
 # leaves the file whole. That wait is bounded at about two seconds of the clock, not a count of
 # polls: tee ends when the last writer of the fifo does, and a process an ended xcodebuild left
 # behind may still hold it. A poll is a builtin and a `sleep`, and the clock ends it: on a loaded
-# Mac every process a poll starts is slower, and a count of polls would stretch with them.
+# Mac every process a poll starts is slower, and a count of polls would stretch with them. The
+# poll is `kill -0`, not `cleanup`'s running-child test: a pid reissued once tee is reaped costs
+# nothing worse than the wait's bound.
 fifo="$derived/simulator-run.$$.fifo"
 rm -f "$fifo"
 mkfifo "$fifo"
