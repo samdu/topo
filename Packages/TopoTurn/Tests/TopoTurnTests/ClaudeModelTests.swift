@@ -19,7 +19,7 @@ import Testing
         #expect(ClaudeModel(setting: kept) == model)
     }
 
-    @Test(arguments: ["", "claude-haiku-4-5-20251001", "haiku", "gpt-5", "claude-sonnetish", "sonnet-5"])
+    @Test(arguments: ["", "claude-haiku-5-5", "haiku", "gpt-5", "claude-sonnetish", "sonnet-5"])
     func aSettingThatNamesNoOfferedModelIsNone(_ kept: String) {
         #expect(ClaudeModel(setting: kept) == nil)
     }

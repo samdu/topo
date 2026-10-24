@@ -588,7 +588,7 @@ import TopoAuth
     #if DEBUG
     /// Review focus 8: a debug build sends Haiku whatever model the guest asked for.
     @Test func aDebugBuildSendsHaikuWhateverTheGuestAskedFor() async throws {
-        #expect(APIProxy.pinnedModel == "claude-haiku-4-5-20251001")
+        #expect(APIProxy.pinnedModel == "claude-haiku-5-5")
         let upstream = StubUpstream()
         let (proxy, port, _) = try await startedProxy(upstream)
         defer { Task { await proxy.stop() } }
@@ -597,7 +597,7 @@ import TopoAuth
         #expect(try await client.readResponse().head.status == 200)
         let seen = try #require(upstream.requests.first)
         let body = try #require(try JSONSerialization.jsonObject(with: seen.body ?? Data()) as? [String: Any])
-        #expect(body["model"] as? String == "claude-haiku-4-5-20251001")
+        #expect(body["model"] as? String == "claude-haiku-5-5")
         #expect(body["max_tokens"] as? Int == 5)
         #expect(body["stream"] as? Bool == true)
         #expect((body["messages"] as? [[String: Any]])?.first?["content"] as? String == "hi")
@@ -617,7 +617,7 @@ import TopoAuth
         #expect(try await client.readResponse().head.status == 200)
         let seen = try #require(upstream.requests.first)
         let body = try #require(try JSONSerialization.jsonObject(with: seen.body ?? Data()) as? [String: Any])
-        #expect(body["model"] as? String == "claude-haiku-4-5-20251001", "\(target) went upstream unpinned")
+        #expect(body["model"] as? String == "claude-haiku-5-5", "\(target) went upstream unpinned")
     }
 
     /// A target still percent-encoded after the decode passes is refused before its body is read,

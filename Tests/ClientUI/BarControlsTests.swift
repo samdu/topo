@@ -17,7 +17,7 @@ final class BarControlsTests: XCTestCase {
     }
 
     /// The model a debug build asks whatever is chosen (`ClaudeModel.effective`).
-    static let pin = "claude-haiku-4-5-20251001"
+    static let pin = "claude-haiku-5-5"
 
     /// The mute is one control with two states, and a press changes which it is.
     func testTheMuteInTheBarTurnsReadingAloudOffAndOnAgain() throws {

@@ -409,7 +409,7 @@ if [ -n "$guestturn" ]; then
   count="$(awk -F ' \\|\\| ' '{ n = 0; for (i = 1; i <= NF; i++) if ($i ~ /[^ ]/) n++; print n }' <<< "$guestturn")"
   resident=""
   for n in $(seq 1 "$count"); do
-    started="$(grep -E "^\[topo-debug\] guest turn $n model: claude-haiku-4-5[^ ]*, session [^ ]+, process [0-9]+$" <<< "$lines" | head -1 || true)"
+    started="$(grep -E "^\[topo-debug\] guest turn $n model: claude-haiku-5-5[^ ]*, session [^ ]+, process [0-9]+$" <<< "$lines" | head -1 || true)"
     [ -n "$started" ] || fail "guest turn $n did not start on Haiku in a named session and process"
     grep -Eq "^\[topo-debug\] guest turn $n answered in [0-9.]+ s: " <<< "$lines" \
       || fail "guest turn $n was not answered"
