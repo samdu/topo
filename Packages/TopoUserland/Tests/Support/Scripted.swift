@@ -86,11 +86,23 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
 
     var terminated: Bool { lock.withLock { ended } }
 
+    /// Whether a turn written to it is echoed at once, as `--replay-user-messages` echoes it when
+    /// its turn begins: a suite that plays what comes before the echo turns it off and emits
+    /// `Lines.echo` itself.
+    var echoes: Bool {
+        get { lock.withLock { echoing } }
+        set { lock.withLock { echoing = newValue } }
+    }
+    private var echoing = true
+
     func write(_ line: String) async throws {
-        try lock.withLock {
+        let echo = try lock.withLock { () -> String? in
             if ended { throw GuestProcess.Failure.inputClosed }
             sent.append(line)
+            guard echoing else { return nil }
+            return ((try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any])?["uuid"] as? String
         }
+        if let echo { continuation.yield(Lines.echo(echo)) }
     }
 
     func emit(_ line: String) { continuation.yield(line) }
@@ -214,6 +226,11 @@ enum Lines {
 
     static func text(_ text: String) -> String {
         #"{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"\#(text)"}],"usage":{"input_tokens":3,"cache_creation_input_tokens":10,"cache_read_input_tokens":100,"output_tokens":5}},"session_id":"s"}"#
+    }
+
+    /// An input echoed as its turn begins (`--replay-user-messages`).
+    static func echo(_ id: String, text: String = "hi") -> String {
+        #"{"type":"user","message":{"role":"user","content":"\#(text)"},"uuid":"\#(id)","isReplay":true,"session_id":"s"}"#
     }
 
     static func result(_ text: String, session: String, error: Bool = false) -> String {

@@ -10,18 +10,24 @@
 // counted per writer; the line is the counts and the mismatches, and the
 // status is 1 if there were any.
 //
-// It holds the emulator to its own promise: a store that reaches a page of
-// translated code is in what the next run of that page executes. ARM itself
-// promises that only after the writer's IC IVAU and ISB, which this program
-// does not issue, so on hardware the result would be undefined.
+// Built two ways, by how a writer stores its instruction:
 //
-// Freestanding and static, so it runs on the bare minirootfs. `codeshare`
-// beside this file is its build, made with Homebrew's llvm and lld:
+//   codeshare       a plain `str`, which the emulator makes in a gadget;
+//   codeshare-swp   a `swp` (LSE), which it makes in a C helper (c_atomic_rmw).
+//
+// Both hold the emulator to its own promise: a store that reaches a page of
+// translated code is in what the next run of that page executes. ARM itself
+// promises that only after the writer's IC IVAU and ISB, which neither
+// issues, so on hardware the result would be undefined.
+//
+// Freestanding and static, so it runs on the bare minirootfs. The two
+// binaries beside this file are its builds, made with Homebrew's llvm and lld:
 //
 //   llvm=$(brew --prefix llvm)/bin
-//   $llvm/clang --target=aarch64-linux-gnu -O1 -ffreestanding -nostdlib -static \
-//     -fno-stack-protector -fuse-ld=lld --ld-path=$(brew --prefix lld)/bin/ld.lld \
-//     -o codeshare codeshare.c && $llvm/llvm-strip codeshare
+//   build() { $llvm/clang --target=aarch64-linux-gnu -march=armv8.1-a -O1 -ffreestanding \
+//     -nostdlib -static -fno-stack-protector -fuse-ld=lld \
+//     --ld-path=$(brew --prefix lld)/bin/ld.lld "$@" codeshare.c && $llvm/llvm-strip "$2"; }
+//   build -o codeshare; build -o codeshare-swp -DCODESHARE_SWP
 
 typedef long L;
 typedef unsigned int U32;
@@ -72,6 +78,16 @@ static U32 *word(int lane, int index) { return (U32 *)(region + (L)lane * PAGE) 
 // `movk x0, #v, lsl #(16 * lane)`.
 static U32 movk(int lane, U32 v) { return 0xf2800000u | ((U32)lane << 21) | ((v & 0xffff) << 5); }
 
+// Writer's store of `insn` to `at`, made the way this build makes it.
+static void store(U32 *at, U32 insn) {
+#if defined(CODESHARE_SWP)
+    U32 old;
+    __asm__ volatile("swp %w1, %w0, [%2]" : "=&r"(old) : "r"(insn), "r"(at) : "memory");
+#else
+    *(volatile U32 *)at = insn;
+#endif
+}
+
 static U64 run(void) {
     U64 (*fn)(U64) = (U64 (*)(U64))region;
     return fn(0);
@@ -84,7 +100,7 @@ static void thread(L who) {
         int lane = (int)who;
         for (int r = 1; r <= ROUNDS; r++) {
             U32 v = 2 + (r & 0x7fff);
-            *(volatile U32 *)word(lane, 0) = movk(lane, v);
+            store(word(lane, 0), movk(lane, v));
             __asm__ volatile("" ::: "memory");
             U64 x = run();
             if (((x >> (16 * lane)) & 0xffff) != v)

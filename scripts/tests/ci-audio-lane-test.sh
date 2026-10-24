@@ -7,8 +7,13 @@
 # arrives while another is held inside start refuses; a pid file naming a live process that is
 # not the recorded supervisor refuses nothing; stop leaves nothing of its lane behind and puts
 # the defaults back; and after the pid file of a running lane is lost and a second lane started,
-# stop names the first lane's feeder and supervisor by pid and leaves them running. macOS only:
-# the script locks with lockf(1).
+# stop names the first lane's feeder and supervisor by pid and leaves them running; a silent input
+# names the missing microphone grant when the meter reports auth=0, and only then. The --talk
+# recipe in docs/simulator.md, run as written against a fake ssh and tmux, exits 1 naming the
+# desktop session when no tmux server is running and never starts one, waits for the run whether
+# its signal comes before or after the wait, exits with --talk's status and the end of its log when
+# that is not 0 and 0 when it is, and answers each of two overlapping runs with its own status. macOS only: the script locks
+# with lockf(1).
 #
 #   scripts/tests/ci-audio-lane-test.sh
 #   SCRIPT=/path/to/other/ci-audio-lane.sh scripts/tests/ci-audio-lane-test.sh
@@ -172,6 +177,95 @@ hold "stop with an orphan: its own supervisor and feeder are gone" eval '! alive
 hold "stop with an orphan: warns of the orphaned feeder and its supervisor by pid" grep -q "::warning::audio lane: feeder $lost_feeder (supervisor $lost_supervisor) is still running" "$work/orphan.out"
 hold "stop with an orphan: warns of nothing it stopped" eval '! grep -q "feeder $second_feeder " "$work/orphan.out"'
 hold "stop with an orphan: leaves both running" eval 'alive "$lost_supervisor" && alive "$lost_feeder"'
+
+# A silent input says why when the meter's process holds no microphone grant (auth=0, a shell
+# started over ssh), and only then.
+run start "$work/fixture.wav" > /dev/null 2>&1
+record
+cp "$state/ci-audio-meter" "$work/meter.hears"
+printf '#!/bin/sh\necho "auth=0 rate=48000 buffers=30 frames=144000 rms=0.0000 peak=0.0000"\n' > "$state/ci-audio-meter"
+run check "before" > "$work/ungranted.out" 2>&1; status=$?
+hold "ungranted meter: check exits 1 (got $status)" [ "$status" = 1 ]
+hold "ungranted meter: names the missing grant and tmux" grep -q "auth=0 is a process that holds no microphone grant.*tmux server" "$work/ungranted.out"
+printf '#!/bin/sh\necho "auth=3 rate=48000 buffers=30 frames=144000 rms=0.0000 peak=0.0000"\n' > "$state/ci-audio-meter"
+run check "before" > "$work/granted-silent.out" 2>&1; status=$?
+hold "granted, silent meter: check exits 1 (got $status)" [ "$status" = 1 ]
+hold "granted, silent meter: says nothing of a grant" eval '! grep -q "microphone grant" "$work/granted-silent.out"'
+cp "$work/meter.hears" "$state/ci-audio-meter"
+run stop > /dev/null 2>&1
+
+# The --talk recipe, as docs/simulator.md writes it with a UDID put in. ssh runs the string in a
+# shell under a fake home. The fake tmux logs every call and, unless $talk/no-server exists, keeps
+# tmux's order: new-window returns at once and its command runs behind it, `wait-for -S` marks the
+# channel signalled whether or not anyone waits yet, and `wait-for` returns once it is (30 s at
+# most). TALK_SLEEP holds --talk back, so its signal comes after the wait; WAIT_SLEEP holds the
+# wait back, so the signal comes first. No verb of the fake starts a server.
+doc="${DOC:-$here/../../docs/simulator.md}"
+recipe="$(awk '/^ssh buddybox .*talk/ { on = 1 } on && /^```/ { exit } on' "$doc" | sed 's/<udid>/a-udid/g')"
+talk="$work/talk"; talk_home="$talk/home"
+mkdir -p "$talk/bin" "$talk/channels" "$talk_home/github/topo/scripts"
+cat > "$talk/bin/ssh" <<FAKE
+#!/bin/sh
+shift
+HOME="$talk_home" PATH="$talk/bin:\$PATH" exec bash -c "\$1"
+FAKE
+cat > "$talk/bin/tmux" <<FAKE
+#!/bin/sh
+echo "\$*" >> "$talk/calls"
+if [ -e "$talk/no-server" ]; then
+  echo "error connecting to /private/tmp/tmux-501/default (No such file or directory)" >&2; exit 1
+fi
+case "\$1" in
+  new-window) for last; do :; done; (cd "$talk_home" && sh -c "\$last") > /dev/null 2>&1 & ;;
+  wait-for)
+    if [ "\$2" = -S ]; then touch "$talk/channels/\$3"; exit 0; fi
+    sleep "\${WAIT_SLEEP:-0}"
+    for _ in \$(seq 300); do [ -e "$talk/channels/\$2" ] && { rm "$talk/channels/\$2"; exit 0; }; sleep 0.1; done
+    echo "fake tmux: \$2 was never signalled" >&2; exit 1 ;;
+  *) echo "fake tmux: \$1 is not a verb the recipe uses" >&2; exit 1 ;;
+esac
+FAKE
+cat > "$talk_home/github/topo/scripts/simulator-run.sh" <<'FAKE'
+#!/bin/sh
+sleep "${TALK_SLEEP:-0}"
+echo "talk: run $TALK_EXIT's own reason"
+exit "${TALK_EXIT:-0}"
+FAKE
+chmod +x "$talk/bin/ssh" "$talk/bin/tmux" "$talk_home/github/topo/scripts/simulator-run.sh"
+talk() { : > "$talk/calls"; PATH="$talk/bin:$PATH" bash -c "$recipe"; }
+hold "talk recipe: found in docs/simulator.md" eval '[ -n "$recipe" ]'
+
+touch "$talk/no-server"
+talk > "$work/talk-no-server.out" 2>&1; status=$?
+rm "$talk/no-server"
+hold "talk, no tmux server: exits 1 (got $status)" [ "$status" = 1 ]
+hold "talk, no tmux server: relays tmux's error" grep -q "error connecting to" "$work/talk-no-server.out"
+hold "talk, no tmux server: names the desktop session" grep -q "no tmux server running: start it from the desktop session" "$work/talk-no-server.out"
+hold "talk, no tmux server: calls nothing that starts one" eval '! grep -qE "^(new-session|new|start-server|start)( |$)" "$talk/calls"'
+hold "talk, no tmux server: runs nothing" eval '! ls "$talk_home/github/topo/build"/*.log > /dev/null 2>&1'
+
+TALK_EXIT=7 TALK_SLEEP=1 talk > "$work/talk-fails.out" 2>&1; status=$?
+hold "talk, --talk fails after the wait began: exits with its status (got $status)" [ "$status" = 7 ]
+hold "talk, --talk fails after the wait began: says so" grep -q -- "--talk exited 7" "$work/talk-fails.out"
+hold "talk, --talk fails after the wait began: prints the run's reason" grep -q "talk: run 7's own reason" "$work/talk-fails.out"
+
+TALK_EXIT=5 WAIT_SLEEP=1 talk > "$work/talk-fails-early.out" 2>&1; status=$?
+hold "talk, --talk fails before the wait began: exits with its status (got $status)" [ "$status" = 5 ]
+
+TALK_EXIT=0 TALK_SLEEP=1 talk > "$work/talk-passes.out" 2>&1; status=$?
+hold "talk, --talk passes: exits 0 (got $status)" [ "$status" = 0 ]
+hold "talk, --talk passes: reports no failure" eval '! grep -q "exited" "$work/talk-passes.out"'
+hold "talk: never calls new-session" eval '! grep -q "new-session" "$talk/calls"'
+
+# Two runs at once: the second's failure, signalled while the first still runs, is not the
+# first's answer.
+TALK_EXIT=0 TALK_SLEEP=3 talk > "$work/talk-first.out" 2>&1 &
+first=$!
+sleep 1
+TALK_EXIT=3 talk > "$work/talk-second.out" 2>&1; second_status=$?
+wait "$first"; first_status=$?
+hold "talk, overlapping runs: the second exits with its own status (got $second_status)" [ "$second_status" = 3 ]
+hold "talk, overlapping runs: the first exits with its own status (got $first_status)" [ "$first_status" = 0 ]
 
 if [ "$failures" -gt 0 ]; then
   for out in "$work"/*.out; do echo "--- $out"; cat "$out"; done

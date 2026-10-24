@@ -17,7 +17,7 @@
 # being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
 # and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
 # build's directory is built over for the pins it was built from and made afresh for any
-# other; and the display is held on under `topo_ui`, by a hold that waits on the script's own
+# other; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
 # pid and is running from before its lane starts to after it stops: one that did not start or
 # took no assertion starts no lane, one that ended before the tests runs none, and one that
 # ended under the tests is red.
@@ -81,6 +81,9 @@ case "$*" in
   *test-without-building*-only-testing:TopoUITests*)
     echo "ui flags: input=${TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT-} reset=${TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET-} models=${TEST_RUNNER_TOPO_UITEST_EAR_MODELS-}" >> "$CALLS"
     exit "${UI_TEST:-0}" ;;
+  *test-without-building*-skip-testing:TopoUITests*)
+    echo "unit port53=${TEST_RUNNER_TOPO_PORT53_SOCKET-}" >> "$CALLS"
+    exit 0 ;;
   *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
 esac'
@@ -132,7 +135,7 @@ suite() {
   local name="$1"; shift
   export CALLS="$work/$name.calls" RESULTS_DIR="$work/$name.results"
   : > "$CALLS"
-  (cd "$tree" && PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane "${LANE:-fast}" --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
+  (cd "$tree" && TOPO_PORT53_HOLDER="${PORT53:-$work/no-holder}" PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane "${LANE:-fast}" --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
     > "$work/$name.log" 2>&1 && status=0 || status=$?
 }
 calls() { grep -c "^$1" "$CALLS"; }
@@ -140,6 +143,7 @@ results() { tr '\n' ' ' < "$RESULTS_DIR/suites.txt"; }
 
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
+is "green: no port 53 holder here, none handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53="
 is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
@@ -612,6 +616,15 @@ is "check, a stale framework and no tools: exits 1" "$status" 1
 names "check, a stale framework and no tools: meson is named" "meson is not installed"
 names "check, a stale framework and no tools: llvm and lld are named" "llvm and lld are not installed"
 fake "$tree/scripts/build-ish.sh" 'exit 0'
+
+# A Mac's port 53 holder: its socket's path is handed to the unit tests, and a plain file at
+# that path is not a socket.
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$work/holder.sock"
+PORT53="$work/holder.sock" suite holder topo_unit
+is "holder: its socket is handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53=$work/holder.sock"
+: > "$work/not-a-socket"
+PORT53="$work/not-a-socket" suite holder-file topo_unit
+is "holder: a file that is not a socket is not handed on" "$(grep '^unit port53' "$CALLS")" "unit port53="
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

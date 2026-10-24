@@ -143,7 +143,10 @@ check() {
     heard="$("$meter" 3 2>&1 | tail -1)"
     rms="$(printf '%s\n' "$heard" | sed -nE 's/.* rms=([0-9.]+).*/\1/p')"
     if [ -z "$rms" ] || ! awk -v r="$rms" -v t="$audible" 'BEGIN { exit !(r >= t) }'; then
-      failures+=("$device's input is silent over 3 s ($heard)")
+      case "$heard" in
+        auth=0\ *) failures+=("$device's input is silent over 3 s ($heard): auth=0 is a process that holds no microphone grant, which a shell started over ssh never does; start it from buddy's tmux server (docs/simulator.md)") ;;
+        *) failures+=("$device's input is silent over 3 s ($heard)") ;;
+      esac
     fi
   else
     failures+=("the meter was never built ($meter)")

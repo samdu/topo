@@ -160,13 +160,14 @@ esac
 EOF
 
 # The suite `--press-mic` runs: a pass, or with FAKE_XCODEBUILD=hangs one that never finishes and
-# has a child of its own holding its output, as a build service outliving xcodebuild would.
+# has a child of its own holding its output, as a build service outliving xcodebuild would. Its
+# sleeps are /bin/sleep's, so a case's slow `sleep` slows the script alone.
 cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
 if [ "${FAKE_XCODEBUILD:-}" = hangs ]; then
-  sleep 30 &
-  exec sleep 31
+  /bin/sleep 30 &
+  exec -a sleep /bin/sleep 31
 fi
 echo "** TEST SUCCEEDED **"
 EOF
@@ -294,12 +295,17 @@ case_ guest-turns-times-out-silent         fail silent               "$slow" --g
 # The pids file names what a run started and the script ends exactly those. A run left waiting
 # is ended by SIGTERM to its first pid, the script's own, and takes its second, the child it was
 # waiting on, with it, within the `quick` limit; the log is the run's whole output, kept after it.
+# On a slow Mac, where every `sleep` the script starts takes half a second longer, it still ends
+# within `quick`, the same load-relative limit as every case: its wait for tee is bounded by the
+# clock and grows by one slow poll, not by twenty.
 #
-# ended <name> <the child's command> <whole log: yes|no> [script args...]
+# ended <name> <the child's command> <whole log: yes|no> <slow: yes|no> [script args...]
 ended() {
-  local name="$1" child="$2" whole="$3"; shift 3
+  local name="$1" child="$2" whole="$3" slow="$4"; shift 4
   local sim="$work/root/build/sim" out="$work/$name.out" runner waited=0 script_pid child_pid problem="" start status
-  PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=60 FAKE_LAUNCH=silent FAKE_XCODEBUILD=hangs \
+  local path="$work/bin:$PATH"
+  [ "$slow" = no ] || path="$work/slow:$path"
+  PATH="$path" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=60 FAKE_LAUNCH=silent FAKE_XCODEBUILD=hangs \
     "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null &
   runner=$!
   until [ "$(cat "$sim/simulator-run.pids" 2>/dev/null | wc -l)" -ge 2 ] || [ "$waited" -ge $((10 + overhead)) ]; do
@@ -341,10 +347,15 @@ ended() {
   fi
 }
 
-ended ended-waiting-on-the-launcher "sleep 600" yes --send hello
+mkdir -p "$work/slow"
+printf '#!/bin/sh\n/bin/sleep 0.5\nexec /bin/sleep "$@"\n' >"$work/slow/sleep"
+chmod +x "$work/slow/sleep"
+
+ended ended-waiting-on-the-launcher "sleep 600" yes no --send hello
 # The suite's own child still holds the run's output when the script ends, so the script's exit is
 # what is held here and not that the log is whole yet.
-ended ended-during-the-suite        "sleep 31"  no  --press-mic
+ended ended-during-the-suite        "sleep 31"  no  no  --press-mic
+ended ended-during-the-suite-slowly "sleep 31"  no  yes --press-mic
 
 # --talk and the audio lane, against fakes of the lane and the two model fetches; the lane's fake
 # writes what it was called with to a file. A start that refuses (exit 3) found another run's
