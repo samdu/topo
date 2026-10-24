@@ -252,6 +252,8 @@ public actor GuestSession {
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
+    /// How the line a kept cut is logged with begins; the app keeps that line on disk (`GuestResident.log`).
+    public static let cutLine = "the way out cut short"
 
     private var phase: State = .idle
     private var inForeground = false
@@ -529,7 +531,7 @@ public actor GuestSession {
             let cut = Cut(left: left, ended: now(), turn: fate == .abandoned, backgroundTasks: running)
             // A process of a forgotten conversation leaves nothing for the next login's.
             if still.conversation == conversation { cuts.save(cut) }
-            log("the way out cut short \(fate == .abandoned ? "a turn" : "no turn") and \(running) background task\(running == 1 ? "" : "s"); the next process is told")
+            log("\(Self.cutLine) \(fate == .abandoned ? "a turn" : "no turn") and \(running) background task\(running == 1 ? "" : "s"); the next process is told")
         }
         let termination = await end(still, reason: fate == .abandoned ? "the teardown point, turn abandoned" : "the background",
                                     restart: true).value

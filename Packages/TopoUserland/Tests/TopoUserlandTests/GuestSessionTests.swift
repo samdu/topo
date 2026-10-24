@@ -461,7 +461,12 @@ final class GuestSessionTests: XCTestCase {
     /// The more common cut: the reply landed, the app left, and a background task the turn
     /// started went with the process. A process that never began keeps the note for the next.
     func testABackgroundTaskEndedWithTheProcessIsToldToTheNextUntilOneBegins() async throws {
-        let (session, process) = try await resident()
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
         // The task is started inside a turn, as `run_in_background` starts one; the turn's end
         // comes after the line, so the line has been read once the turn has ended.
         let (_, done) = collect(try await session.send("log for ten minutes"))
@@ -472,6 +477,9 @@ final class GuestSessionTests: XCTestCase {
         process.emit(Lines.result("started", session: "S1"))
         await done.value
         guard case .ended(nil, _) = await session.background(budget: .seconds(15)) else { return XCTFail("not ended") }
+        // The line the app keeps on disk for a device check (`GuestResident.log`) begins with the prefix it routes by.
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix(GuestSession.cutLine) && $0.contains("no turn and 1 background task") },
+                      "\(lines.all)")
         await session.foreground()
         try await session.ready()
         let note = try XCTUnwrap(launcher.notesTold.last ?? nil)
