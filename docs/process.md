@@ -63,7 +63,7 @@ A `- [ ] device: …` box is a claim only a physical device can show. It is word
 
 When a PR, or several PRs at once, have device boxes to run:
 
-1. **One dev build per PR.** `publish-topo.sh --dev <PR>` (the script `docs/install.md` describes under *Cutting a build*, from a GUI-session shell on buddybox) publishes the PR's head into that PR's own slot on the install page, leaving main's and every other PR's alone, and prints its build number and commit. It refuses a branch with no open PR, so a build is always a head the suites ran on: PRs are checked each on its own build, never merged into a combined branch. The engineer cuts the build for its own PR, and opens its issue (step 2) straight after, since the issue is what holds Sam's device on that build against the next push.
+1. **One dev build per PR.** `publish-topo.sh --dev <PR>` (the script `docs/install.md` describes under *Cutting a build*, from a GUI-session shell on buddybox) publishes the PR's head into that PR's own slot on the install page, leaving main's and every other PR's alone, and prints its build number and commit. It refuses a branch with no open PR, and a head whose combined commit status is not `success`, so a build is always a head `scripts/validate-and-push.sh`'s suites passed: PRs are checked each on its own build, never merged into a combined branch. The engineer cuts the build for its own PR, and opens its issue (step 2) straight after, since the issue is what holds Sam's device on that build against the next push.
 2. **One issue for the build in samdu/topo-link**, titled `Build <number> (<commit>)`, which is how Topo and the janitor find it. It says what the build is (the ref, the PRs in it) and holds one section per box:
 
     ```markdown
