@@ -103,7 +103,8 @@ Struck through: shipped, then removed, with the reason.
 - **The hub as a running mind.** `TopoHub` runs no turns; the phone is the primary until the guest path is complete, since it has to stand alone as someone's only device. Full Messages access is the hub's alone (iOS gives an app no way to read or send iMessages) and waits on it.
 - **Pairing.** The phone's half (`DeviceDirectory.pair`) is built and nothing calls it: no scanner, no `topo://pair` handler (`docs/pairing.md`). Phones registering a `Device` record of their own (#371) goes with it.
 - **Sockets and the tunnel.** `TopoLink` carries the hub's lease probe and the LAN surfaces; the phone's probe never confirms, and there are no turn sockets and no tunnel. CloudKit is truth and works with no socket; speed comes after the mind does.
-- **The house board** (`docs/board.md`). Womble draws it read-only; nothing writes a card until one person's mind is worth sharing a wall with.
+- Create arbitrary live activities
+- Flic Duo button support
 - **Two lease rules.** The heartbeat runs on after sign-out and a demotion, since `Harness.forget()` drops the lease without abandoning it (#148); a phone that staked primary at first launch and lost the lease to the hub is never demoted, since a stake writes no role record (#273).
 - **The mascot as a movement system (#177)** and the ink he splashes on a correction (#181): the survey of game characters and NPCs comes first and is not begun. Send as a thrown plane Topo catches and reads (#330), after the composer.
 - **A hidden terminal onto the guest's Claude Code (#133)**, an escape hatch for a prompt the app does not draw, once the headless path has settled.
@@ -118,4 +119,3 @@ Struck through: shipped, then removed, with the reason.
 - **Picture-in-picture as the way to keep working behind another app**: its tile is opaque, with no transparency.
 - **swift-markdown as the parser (#179)**: everything a reply draws, tables and links included, comes from Foundation's parser, so nothing on the screen needs the dependency.
 - **Kyutai's `english_2026-09_2` weights**: they convert and keep a sentence's opening word, but stop a sentence early at a number written in digits, in Kyutai's own model as in the conversion. They wait on Topo spelling numbers out before synthesis, or on later weights. `english_24l` is not converted.
-- **Daphne's voice work not ported**: Kokoro's Prosody_v2 and `.aneTailCpu` (samdu/daphne-assistant#205), because Topo speaks Pocket; ramble mode and tail padding (samdu/daphne-assistant#210), because both feed an audio-native brain and Topo's mind gets Parakeet's text; open mic (samdu/daphne-assistant#214), because Topo is push to talk; the fixed-phrase memo (samdu/daphne-assistant#207), because Topo's fixed lines carry a number and the memo fixed eviction rather than measuring a gain.
