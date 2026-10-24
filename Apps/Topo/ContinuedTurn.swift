@@ -25,14 +25,29 @@ final class ContinuedTurnTask: ContinuedTask {
 
     func onExpiry(_ handler: @escaping @MainActor () -> Void) {
         // The queue the handler is called on is not documented: the grace is begun from the main
-        // actor either way, at once when it is already there.
-        task.expirationHandler = { @Sendable in
+        // actor either way, at once when it is already there. The pill says the turn is being
+        // stopped first, for the moment it stays up while the way out runs.
+        let task = Expiring(task: task)
+        task.task.expirationHandler = Self.expiration(retitle: { task.task.updateTitle($0, subtitle: $1) }, then: handler)
+    }
+
+    /// The expiration handler: the pill's words first, then `handler` on the main actor.
+    nonisolated static func expiration(retitle: @escaping @Sendable (_ title: String, _ subtitle: String) -> Void,
+                                       then handler: @escaping @MainActor () -> Void) -> @Sendable () -> Void {
+        { @Sendable in
+            retitle(ContinuedTurns.title, ContinuedTurns.stopping)
             if Thread.isMainThread {
                 MainActor.assumeIsolated { handler() }
             } else {
                 Task { @MainActor in handler() }
             }
         }
+    }
+
+    /// The task, carried into its expiration handler, which runs on a queue nobody names and
+    /// touches nothing of it but its words.
+    private struct Expiring: @unchecked Sendable {
+        let task: BGContinuedProcessingTask
     }
 
     func complete(success: Bool) {
@@ -49,13 +64,16 @@ final class ContinuedTurnTask: ContinuedTask {
 /// before its request is submitted, as Apple's "Performing long-running tasks on iOS and iPadOS"
 /// does: a handler registered for the wildcard pattern itself is refused. The request fails rather
 /// than queues, since a turn's task is only worth having now; a refusal leaves the turn to the
-/// grace. The pill's words are fixed, never the turn's: it is drawn on the lock screen.
+/// grace. The pill's words are fixed, never the turn's: it is drawn on the lock screen. They say
+/// what a tap does, since iOS's time is short and opening Topo is what keeps the turn going, and
+/// once the task expires they say the turn is being stopped.
 @available(iOS 26, *)
 @MainActor
 enum ContinuedTurns {
     nonisolated static let prefix = "zone.hexagon.topo.turn"
     nonisolated static let title = "Topo"
-    nonisolated static let subtitle = "Working on a reply"
+    nonisolated static let subtitle = "Still working. Tap to keep it going"
+    nonisolated static let stopping = "Stopping. Open Topo to carry on"
 
     /// The scheduler's two calls, apart so a suite can see what each is given.
     struct Scheduler {

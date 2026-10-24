@@ -39,6 +39,10 @@ public enum StreamEvent: Sendable, Equatable {
     case compacted(Compacted)
     /// `system`/`status` saying a compaction was tried and failed, with Claude Code's reason.
     case compactFailed(String)
+    /// `system`/`background_tasks_changed`: how many tasks Claude Code has running in the
+    /// background now (a `run_in_background` command, a background agent). Nothing of what they
+    /// are is read: a task's description is the model's words and can carry the person's.
+    case backgroundTasks(Int)
     /// An input of the app's echoed back as Claude Code takes it up (`--replay-user-messages`):
     /// a `user` line marked `isReplay`, carrying the `uuid` the input was written with. It comes
     /// after the `system/init` of the turn that answers that input and before any of that turn's
@@ -136,6 +140,9 @@ public enum StreamJSON {
                 return [.other("system/compact_boundary")]
             }
             return [.compacted(.init(trigger: metadata["trigger"] as? String ?? "", pre: pre.intValue, post: post.intValue))]
+        case ("system", "background_tasks_changed"):
+            guard let tasks = object["tasks"] as? [Any] else { return [.other("system/background_tasks_changed")] }
+            return [.backgroundTasks(tasks.count)]
         case ("system", "status") where object["compact_result"] as? String == "failed":
             return [.compactFailed(clip(object["compact_error"] as? String ?? "no reason given"))]
         case ("assistant", _):
