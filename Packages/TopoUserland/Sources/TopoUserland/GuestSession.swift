@@ -250,13 +250,25 @@ public actor GuestSession {
     /// A turn in flight, on the actor alone as `Resident` is.
     private final class Turn: @unchecked Sendable {
         let continuation: AsyncStream<TurnUpdate>.Continuation
+        /// The uuid the input was written with, which Claude Code echoes as the turn that answers
+        /// it begins (`StreamEvent.received`).
+        let id: String
+        /// Whether that echo has come. Until it has, what Claude Code writes is a turn of its own
+        /// (`held`), and a result ends that turn, not this one.
+        var begun = false
+        /// What has come since the last `system/init` while the turn has not begun: handed to the
+        /// turn at its echo, which comes after its own init, and dropped at a result.
+        var held: [StreamEvent] = []
         /// Counts every line while the turn is in flight, so the watchdog can tell silence.
         var ticks = 0
         var watchdog: Task<Void, Never>?
         /// Callers of `settle()` waiting for the turn to end, whoever is listening to it.
         var settling: [CheckedContinuation<Void, Never>] = []
 
-        init(continuation: AsyncStream<TurnUpdate>.Continuation) { self.continuation = continuation }
+        init(continuation: AsyncStream<TurnUpdate>.Continuation, id: String) {
+            self.continuation = continuation
+            self.id = id
+        }
     }
 
     public init(launcher: any ResidentLauncher, store: SessionFile, model: String? = nil, memory: Bool? = nil,
@@ -494,14 +506,18 @@ public actor GuestSession {
 
     /// Sends the person's `text` as a turn. Refused while another turn is in flight and while
     /// nothing is resident; otherwise the turn's events arrive on the stream, then how it ended.
-    /// `id` is the input's uuid, which Claude Code keeps on the transcript entry it writes for it.
+    /// `id` is the input's uuid, which Claude Code keeps on the transcript entry it writes for it
+    /// and echoes as the turn that answers it begins; one is made when none is given. The turn's
+    /// events are the ones from that turn alone: a turn Claude Code runs of its own meanwhile, to
+    /// answer a background task's notice, is not this one, and its result does not end it.
     /// A turn never goes to a process started with a model, memory or conversation the session no longer
     /// says: an idle stale process is replaced first, and one being replaced is waited for.
     public func send(_ text: String, id: String? = nil) async throws -> AsyncStream<TurnUpdate> {
         let resident = try await current()
         guard resident.turn == nil else { throw Refusal.turnInFlight }
+        let id = id ?? UUID().uuidString.lowercased()
         let (stream, continuation) = AsyncStream<TurnUpdate>.makeStream()
-        let turn = Turn(continuation: continuation)
+        let turn = Turn(continuation: continuation, id: id)
         resident.turn = turn
         turn.watchdog = watch(turn, of: resident)
         do {
@@ -630,10 +646,14 @@ public actor GuestSession {
         resident.turn?.ticks += 1
         if resident.turn?.ticks == 1 { Perf.mark("turn.guest.firstLine") }
         for event in StreamJSON.events(in: line) {
+            // A turn's marks are its own: lines of a turn Claude Code runs of its own, before the
+            // input's echo or with no turn in flight, are marked apart.
+            let own = resident.turn?.begun == true
             switch event {
-            case .text: Perf.mark("turn.guest.text")
-            case .toolUse: Perf.mark("turn.guest.toolUse")
-            case .result: Perf.mark("turn.guest.result")
+            case .text where own: Perf.mark("turn.guest.text")
+            case .toolUse where own: Perf.mark("turn.guest.toolUse")
+            case .result where own: Perf.mark("turn.guest.result")
+            case .result: Perf.mark("turn.guest.result.other")
             default: break
             }
             switch event {
@@ -648,6 +668,28 @@ public actor GuestSession {
             }
             guard let turn = resident.turn else {
                 if case .result(let result) = event { resident.strayResult = result }
+                continue
+            }
+            // Another input's echo is no event of this turn's.
+            if case .received(let id) = event, id != turn.id { continue }
+            if !turn.begun {
+                switch event {
+                case .received(let id) where id == turn.id:
+                    // The turn's own begins: what came since its init is its own.
+                    turn.begun = true
+                    let held = turn.held
+                    turn.held = []
+                    held.forEach { turn.continuation.yield(.event($0)) }
+                case .started:
+                    turn.held = [event]
+                case .result(let result):
+                    // A turn of Claude Code's own ended, before this one began.
+                    resident.strayResult = result
+                    turn.held = []
+                    log("a turn of Claude Code's own ended before the input it was sent was taken up; its result is not this turn's")
+                default:
+                    turn.held.append(event)
+                }
                 continue
             }
             turn.continuation.yield(.event(event))

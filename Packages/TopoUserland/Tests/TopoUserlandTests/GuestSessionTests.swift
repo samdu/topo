@@ -250,6 +250,121 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertFalse(second.events.contains(.text("late answer")))
     }
 
+    /// #447, as Claude Code 2.1.285 wrote it: a background task finished, Claude Code began a turn
+    /// of its own to answer the notice, and the person's turn was written while that ran. The
+    /// notice's result came first. It is not the person's reply, and their reply is not lost.
+    func testATurnClaudeCodeRunsOfItsOwnIsNotTheTurnSentWhileItRan() async throws {
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        process.echoes = false
+        let (turn, done) = collect(try await session.send("Reply only with the word PONG.",
+                                                          id: "22222222-2222-4222-8222-222222222222"))
+        await eventually("written") { process.turns.count == 1 }
+        let recorded = try Recording.lines("notice-before-turn")
+        recorded.forEach(process.emit)
+        await done.value
+        guard case .answered(let result) = turn.ends.first, turn.ends.count == 1 else { return XCTFail("\(turn.ends)") }
+        XCTAssertEqual(result.text, "PONG")
+        let words = turn.events.compactMap { if case .text(let text, _) = $0 { return text } else { return nil } }
+        XCTAssertEqual(words, ["PONG"], "the notice's words reached the person's turn")
+        // Exactly the lines from the turn's own init on, its echo aside: none of the notice's.
+        let own = try XCTUnwrap(recorded.lastIndex { $0.contains(#""subtype":"init""#) })
+        var expected = recorded[own...].flatMap(StreamJSON.events(in:)).filter {
+            if case .received = $0 { false } else { true }
+        }
+        // What comes after the turn's result is no turn's.
+        let end = try XCTUnwrap(expected.firstIndex { if case .result = $0 { true } else { false } })
+        expected = Array(expected[...end])
+        XCTAssertEqual(turn.events, expected, "the turn's events are not its own lines alone")
+        XCTAssertEqual(turn.events.filter { if case .started = $0 { true } else { false } }.count, 1)
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix("a turn of Claude Code's own ended before") })
+    }
+
+    /// The same order in miniature, and a result before any echo: the turn is not ended by it, and
+    /// one whose echo never comes is ended at the bound, as any turn that hears nothing is.
+    func testAResultBeforeTheTurnsEchoDoesNotEndIt() async throws {
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        process.echoes = false
+        let stray = "a turn of Claude Code's own ended before"
+        let (turn, done) = collect(try await session.send("hi", id: "input-1"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(Lines.text("the job is done"))
+        process.emit(Lines.result("the job is done", session: "S1"))
+        process.emit(Lines.echo("another-input"))
+        // The log line says the other turn's result has been read, and ended nothing.
+        await eventually("the other turn's result read") { lines.all.filter { $0.hasPrefix(stray) }.count == 1 }
+        XCTAssertTrue(turn.ends.isEmpty, "another turn's result ended this one")
+        process.emit(Lines.`init`("S1"))
+        process.emit(Lines.echo("input-1"))
+        process.emit(Lines.text("hello"))
+        process.emit(Lines.result("hello", session: "S1"))
+        await done.value
+        guard case .answered(let result) = turn.ends.first else { return XCTFail("\(turn.ends)") }
+        XCTAssertEqual(result.text, "hello")
+        XCTAssertFalse(turn.events.contains(.text("the job is done")))
+        XCTAssertEqual(turn.events.first, .started(session: "S1", model: "claude-haiku-4-5-20251001"))
+
+        // An input never echoed: the other turn's result ends nothing, and the bound ends the turn.
+        let (silent, silentDone) = collect(try await session.send("again", id: "input-2"))
+        await eventually("written") { process.turns.count == 2 }
+        await eventually("the watchdog asleep") { await clock.pending == 1 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(Lines.result("not yours", session: "S1"))
+        await eventually("the other turn's result read") { lines.all.filter { $0.hasPrefix(stray) }.count == 2 }
+        XCTAssertTrue(silent.ends.isEmpty, "another turn's result ended this one")
+        // The lines it heard reset the watchdog once; a whole bound of nothing after that ends it.
+        await clock.advance(by: bound)
+        await eventually("the watchdog asleep again") { await clock.pending == 1 }
+        XCTAssertTrue(silent.ends.isEmpty)
+        await clock.advance(by: bound)
+        await silentDone.value
+        XCTAssertEqual(silent.ends, [.failed(.silent(bound))])
+    }
+
+    /// `/compact` as Claude Code 2.1.285 writes it: its init, the boundary, the summary and the
+    /// command's own output come before the input's echo, and the boundary is the turn's; the
+    /// output's own echo is not.
+    func testACompactionsBoundaryBeforeItsEchoIsTheTurns() async throws {
+        let (session, process) = try await resident()
+        process.echoes = false
+        let (turn, done) = collect(try await session.send("/compact", id: "compact-1"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(#"{"type":"system","subtype":"status","session_id":"S1"}"#)
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"system","subtype":"compact_boundary","session_id":"S1","compact_metadata":{"trigger":"manual","pre_tokens":31502,"post_tokens":1471}}"#)
+        process.emit(#"{"type":"user","message":{"role":"user","content":"This session is being continued"},"uuid":"summary","session_id":"S1"}"#)
+        process.emit(Lines.echo("local-output"))
+        process.emit(Lines.echo("compact-1"))
+        process.emit(Lines.result("", session: "S1"))
+        await done.value
+        guard case .answered = turn.ends.first else { return XCTFail("\(turn.ends)") }
+        XCTAssertEqual(turn.events.first, .started(session: "S1", model: "claude-haiku-4-5-20251001"))
+        XCTAssertTrue(turn.events.contains(.compacted(.init(trigger: "manual", pre: 31502, post: 1471))),
+                      "the boundary before the echo was dropped")
+        XCTAssertFalse(turn.events.contains(.received(id: "local-output")), "another input's echo reached the turn")
+    }
+
+    /// A turn sent with no id is given one, and its echo is what begins it.
+    func testATurnSentWithNoIdIsGivenOne() async throws {
+        let (session, process) = try await resident()
+        let (turn, done) = collect(try await session.send("hi"))
+        await eventually("written") { process.turns.count == 1 }
+        XCTAssertNotNil(process.ids.first ?? nil)
+        answer(process, "ok")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+    }
+
     // MARK: - The way out and back
 
     func testATurnFinishingInsideTheGraceIsDeliveredOnceAndTheNextForegroundResumes() async throws {
@@ -706,4 +821,12 @@ final class GuestSessionTests: XCTestCase {
         await freshDone.value
         XCTAssertEqual(store.load(), "NEW", "the replacement's own session was not kept")
     }
+}
+
+/// What a session logged, in order.
+private final class Logged: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    var all: [String] { lock.withLock { lines } }
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
 }
