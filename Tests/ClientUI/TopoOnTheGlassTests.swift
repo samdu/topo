@@ -26,6 +26,14 @@ final class TopoOnTheGlassTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Once, after the class's last test: two tests keep an override (`TOPO_DEBUG_TUNING`) and
+    /// every launch here sets its own, so only what the class leaves behind it needs clearing.
+    override class func tearDown() {
+        // XCTest calls it on the main thread.
+        MainActor.assumeIsolated { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
+        super.tearDown()
+    }
+
     /// A full transcript and an empty one, each with him where it puts him, photographed as he
     /// stands, then pressed.
     func testAPressOnTheWellReachesTheMicrophoneWhereverHeStands() throws {
@@ -216,9 +224,8 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// over it, a tap and a hold long enough to have been a drag each reach `VoiceInput` — the press
     /// and its release both counted — and no drag began. The pin over the well is worked out from
     /// where the chat reports the well, a fraction of the transcript's frame carried to the pane's
-    /// foot, and kept as a drag would keep it (`TOPO_DEBUG_TUNING`), which the test clears after.
+    /// foot, and kept as a drag would keep it (`TOPO_DEBUG_TUNING`), which the class clears after.
     func testThroughAPlacedTopoThePressIsTheMicrophones() throws {
-        addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
         let beside = ChatReading.launch(transcript: "empty", tuning: #"{"mascot": {"placement": "glass"}}"#)
         XCTAssertTrue(ChatReading.microphone(beside).waitForExistence(timeout: 60), "the chat screen")
         let (_, glass) = try ChatReading.wait(beside, "on the glass beside the well") { _, topo in
@@ -250,7 +257,6 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// cleared after): the chat's report says he is drawn, his frame inside the screen and off the
     /// glass, the decision cleared no place and he stands at his roost.
     func testWithNoPlaceClearOfTheWordsHeIsDrawnOverThemAndTheWellKeepsItsPress() throws {
-        addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
         let app = ChatReading.launch(transcript: "full", tuning: Self.noClearPlace)
         let mic = ChatReading.microphone(app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen")
