@@ -84,7 +84,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         for _ in 0..<3 where !app.keyboards.element.exists {
             flank.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
-            dismissAccountAlert()
+            ChatReading.dismissAccountAlert(timeout: 3)
         }
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the flank raised no keyboard")
         let deadline = Date().addingTimeInterval(10)
@@ -146,7 +146,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         for _ in 0..<3 where !app.keyboards.element.exists {
             flank.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
-            dismissAccountAlert()
+            ChatReading.dismissAccountAlert(timeout: 3)
         }
         let keyboard = app.keyboards.element
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the flank raised no keyboard")
@@ -340,16 +340,8 @@ final class TopoOnTheGlassTests: XCTestCase {
         app.launchEnvironment["TOPO_DEBUG_TUNING"] = ""
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
-        dismissAccountAlert()
+        ChatReading.dismissAccountAlert()
         return app
-    }
-
-    /// A simulator signed into iCloud can ask for the account's password over the app, which puts
-    /// the scene out of the foreground and stops him; it is the simulator's alert and not Topo's,
-    /// so it is put away.
-    private func dismissAccountAlert() {
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
-        if alert.waitForExistence(timeout: 3) { alert.buttons["Not Now"].tap() }
     }
 
     private func attach(_ app: XCUIApplication, _ name: String) {
@@ -409,7 +401,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         var seen = topo(in: app)
         // The simulator's account alert can arrive at any point of a run and puts the scene out
         // of the foreground, which stops him; it is put away whenever it is up.
-        let accountAlert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
+        let accountAlert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts[AccountAlert.title]
         while seen.map(wanted) != true, Date() < deadline {
             if accountAlert.exists { accountAlert.buttons["Not Now"].tap() }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
