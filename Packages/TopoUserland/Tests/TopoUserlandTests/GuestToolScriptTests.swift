@@ -251,6 +251,31 @@ final class GuestToolScriptTests: XCTestCase {
         XCTAssertEqual(exit.output, "status 0\n", "the token is in a file: " + exit.output + exit.errors)
     }
 
+    /// A `topo` killed before its `wget` has opened the FIFO leaves its writer blocked on the open
+    /// until the writer's own bound, and that writer holds none of its caller's descriptors: a
+    /// caller reading `topo`'s output and error to their end is answered once `topo` is gone, not
+    /// at the writer's bound. The `wget` here never opens the FIFO and says when it has started,
+    /// which is after the writer has; the outer `timeout` turns a held pipe into a failure at 15 s
+    /// rather than a wait of 110.
+    func testATopoKilledBeforeItsWgetLeavesNothingHoldingItsCallersPipes() async throws {
+        let environment = try await startedGitHub(token: "gho_x")
+        let exit = try await shell("""
+        shim="$(mktemp -d)"
+        printf '#!/bin/sh\\ntouch "%s/started"\\nexec sleep 5\\n' "$shim" > "$shim/wget"; chmod +x "$shim/wget"
+        timeout 15 bash -c '
+            held=$( {
+                PATH="$1:$PATH" topo github token & p=$!
+                while [ ! -e "$1/started" ]; do sleep 0.05; done
+                kill -9 $p; wait $p
+            } 2>&1 )
+            echo answered
+        ' held "$shim"; echo "status $?"
+        rm -rf "$shim"
+        """, environment)
+        XCTAssertEqual(exit.output, "answered\nstatus 0\n",
+                       "a killed topo left something holding its caller's pipes: " + exit.output + exit.errors)
+    }
+
     func testTheGhWrapperHandsTheTokenToGhAlone() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
