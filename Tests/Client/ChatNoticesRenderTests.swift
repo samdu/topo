@@ -112,51 +112,63 @@ final class ChatNoticesRenderTests: XCTestCase {
     /// drawn shorter than two lines of the font, so scaled before they are truncated. The
     /// failure is wrapped onto a second line rather than cut short.
     func testEachFixtureIsDrawnWholeInTheBarsRoom() throws {
-        let font = UIFont.preferredFont(forTextStyle: .caption1)
+        let look = Look()
+        let line = try tall(lines: 1, look: look)
         for fixture in Self.fixtures {
             let said = try XCTUnwrap(DebugRun.notices(["TOPO_DEBUG_NOTICES": fixture]), fixture)
-            let drawn = try whole(said, look: Look(), font: font, fixture)
+            let drawn = try whole(said, look: look, fixture)
             if fixture == "error" {
-                XCTAssertGreaterThan(drawn, font.lineHeight * 1.5,
-                                     "the failure is \(drawn) tall, one line, cut short rather than wrapped")
+                XCTAssertGreaterThan(drawn, line * 1.5,
+                                     "the failure is \(drawn) tall, one line of \(line), cut short rather than wrapped")
             }
         }
     }
 
     /// A look whose notice font is absurdly large, read through the document's reader as the
     /// phone reads it, still draws every fixture whole at no more than two lines of the largest
-    /// the bar holds (`Look.Transcript.largestNotice`): the size is drawn at 15 points, and the
-    /// text-size setting reaches no further than `ChatNotices.largestType`.
+    /// the bar holds (`Look.Transcript.largestNotice`, a look's own 15 points, measured): the
+    /// size is drawn at 15 points, and the text-size setting reaches no further than
+    /// `ChatNotices.largestType`.
     func testAnAbsurdNoticeFontIsDrawnAtNoMoreThanTwoLinesOfTheLargest() throws {
         let look = LookDocument.read(#"{"transcript": {"noticeFont": {"size": 400}}}"#).look
-        let largest = UIFont.systemFont(ofSize: CGFloat(Look.Transcript.largestNotice))
+        var largest = Look()
+        largest.transcript.noticeFont = .system(size: CGFloat(Look.Transcript.largestNotice))
+        let tallest = try tall(lines: 2, look: largest)
         for fixture in Self.fixtures {
             let said = try XCTUnwrap(DebugRun.notices(["TOPO_DEBUG_NOTICES": fixture]), fixture)
-            let drawn = try whole(said, look: look, font: largest, fixture)
-            XCTAssertLessThanOrEqual(drawn, 2 * largest.lineHeight + 1,
-                                     "\(fixture): drawn \(drawn) tall, more than two lines of the bar's largest")
+            let drawn = try whole(said, look: look, fixture)
+            XCTAssertLessThanOrEqual(drawn, tallest + 0.5,
+                                     "\(fixture): drawn \(drawn) tall, more than two lines of the bar's largest, \(tallest)")
         }
     }
 
     /// `TOPO_DEBUG_NOTICES`'s fixtures that say something.
     private static let fixtures = ["busy", "busy-long", "error", "info", "busy-info", "error-busy"]
 
-    /// The notice for `said` drawn in the bar's room, and its height. Unbounded it is as tall
-    /// as its words take at `font`; within the bar's two lines it is either that tall (they fit)
-    /// or, where they take more, shorter than two lines of `font`, which a notice only the line
-    /// limit cut would be exactly. That it then fits the two lines at the least the bar draws it
-    /// is the arithmetic of the tests above.
-    private func whole(_ said: ChatNotices.Said, look: Look, font: UIFont, _ fixture: String) throws -> CGFloat {
+    /// The notice for `said` drawn in the bar's room under `look`, and its height. Unbounded it
+    /// is as tall as its words take at the look's font; within the bar's two lines it is either
+    /// that tall (they fit) or, where they take more, shorter than two lines of that font, which
+    /// a notice only the line limit cut would be exactly. That it then fits the two lines at the
+    /// least the bar draws it is the arithmetic of the tests above.
+    private func whole(_ said: ChatNotices.Said, look: Look, _ fixture: String) throws -> CGFloat {
+        let two = try tall(lines: 2, look: look)
         let drawn = try height(ChatNotices(notices: said), look: look, wide: Self.room)
         let unbounded = try height(ChatNotices(notices: said, lineLimit: nil), look: look, wide: Self.room)
-        if unbounded <= 2 * font.lineHeight + 1 {
+        if unbounded <= two + 0.5 {
             XCTAssertEqual(drawn, unbounded, accuracy: 0.5,
                            "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, cut or scaled though they fit")
         } else {
-            XCTAssertLessThan(drawn, 2 * font.lineHeight - 1,
-                              "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, two lines of the font: cut short and not drawn smaller")
+            XCTAssertLessThan(drawn, two - 0.5,
+                              "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, two lines of \(two): cut short and not drawn smaller")
         }
         return drawn
+    }
+
+    /// How tall `lines` lines of a notice are at `look`'s font, laid out as the notices are:
+    /// a line's height is SwiftUI's, which is not `UIFont.lineHeight`, so it is measured.
+    private func tall(lines: Int, look: Look) throws -> CGFloat {
+        let words = Array(repeating: "Ag", count: lines).joined(separator: "\n")
+        return try height(ChatNotices(notices: ChatNotices.Said(info: words), lineLimit: nil), look: look, wide: Self.room)
     }
 
     /// How tall `view` is laid out in a window on the host app's scene, offered `wide` points,
