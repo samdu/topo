@@ -35,7 +35,7 @@ final class ChatNoticesRenderTests: XCTestCase {
         XCTAssertEqual(infoOnly.notice, .info("Saved. hub will answer here."))
     }
 
-    /// The fixtures the UI suite holds in the bar are the harness's own words.
+    /// The fixtures the bar is held to, here and in the UI suite, are the harness's own words.
     func testTheFixturesSayWhatTheHarnessSays() {
         let refused = ChatNotices.Notice.trouble("iCloud refused the read. Check you're signed in on this device.")
         XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "none"]), ChatNotices.Said())
@@ -106,12 +106,91 @@ final class ChatNoticesRenderTests: XCTestCase {
         }
     }
 
+    /// Each of `TOPO_DEBUG_NOTICES`'s fixtures laid out in a window in the room the bar leaves
+    /// it, at the default look, drawn whole: words that fit two lines at the notice's font are
+    /// drawn as tall as they are unbounded, so neither cut nor scaled, and words that do not are
+    /// drawn shorter than two lines of the font, so scaled before they are truncated. The
+    /// failure is wrapped onto a second line rather than cut short.
+    func testEachFixtureIsDrawnWholeInTheBarsRoom() throws {
+        let font = UIFont.preferredFont(forTextStyle: .caption1)
+        for fixture in Self.fixtures {
+            let said = try XCTUnwrap(DebugRun.notices(["TOPO_DEBUG_NOTICES": fixture]), fixture)
+            let drawn = try whole(said, look: Look(), font: font, fixture)
+            if fixture == "error" {
+                XCTAssertGreaterThan(drawn, font.lineHeight * 1.5,
+                                     "the failure is \(drawn) tall, one line, cut short rather than wrapped")
+            }
+        }
+    }
+
+    /// A look whose notice font is absurdly large, read through the document's reader as the
+    /// phone reads it, still draws every fixture whole at no more than two lines of the largest
+    /// the bar holds (`Look.Transcript.largestNotice`): the size is drawn at 15 points, and the
+    /// text-size setting reaches no further than `ChatNotices.largestType`.
+    func testAnAbsurdNoticeFontIsDrawnAtNoMoreThanTwoLinesOfTheLargest() throws {
+        let look = LookDocument.read(#"{"transcript": {"noticeFont": {"size": 400}}}"#).look
+        let largest = UIFont.systemFont(ofSize: CGFloat(Look.Transcript.largestNotice))
+        for fixture in Self.fixtures {
+            let said = try XCTUnwrap(DebugRun.notices(["TOPO_DEBUG_NOTICES": fixture]), fixture)
+            let drawn = try whole(said, look: look, font: largest, fixture)
+            XCTAssertLessThanOrEqual(drawn, 2 * largest.lineHeight + 1,
+                                     "\(fixture): drawn \(drawn) tall, more than two lines of the bar's largest")
+        }
+    }
+
+    /// `TOPO_DEBUG_NOTICES`'s fixtures that say something.
+    private static let fixtures = ["busy", "busy-long", "error", "info", "busy-info", "error-busy"]
+
+    /// The notice for `said` drawn in the bar's room, and its height. Unbounded it is as tall
+    /// as its words take at `font`; within the bar's two lines it is either that tall (they fit)
+    /// or, where they take more, shorter than two lines of `font`, which a notice only the line
+    /// limit cut would be exactly. That it then fits the two lines at the least the bar draws it
+    /// is the arithmetic of the tests above.
+    private func whole(_ said: ChatNotices.Said, look: Look, font: UIFont, _ fixture: String) throws -> CGFloat {
+        let drawn = try height(ChatNotices(notices: said), look: look, wide: Self.room)
+        let unbounded = try height(ChatNotices(notices: said, lineLimit: nil), look: look, wide: Self.room)
+        if unbounded <= 2 * font.lineHeight + 1 {
+            XCTAssertEqual(drawn, unbounded, accuracy: 0.5,
+                           "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, cut or scaled though they fit")
+        } else {
+            XCTAssertLessThan(drawn, 2 * font.lineHeight - 1,
+                              "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, two lines of the font: cut short and not drawn smaller")
+        }
+        return drawn
+    }
+
+    /// How tall `view` is laid out in a window on the host app's scene, offered `wide` points,
+    /// under `look`: the size the bar's item is drawn at, with the window's own text-size setting.
+    private func height(_ view: ChatNotices, look: Look, wide: CGFloat) throws -> CGFloat {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        final class Size { var value: CGSize? }
+        let size = Size()
+        let laid = view
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size.value = $0 }
+            .frame(width: wide)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .environment(\.look, look)
+            .transaction { $0.animation = nil }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: LookStage.size)
+        window.rootViewController = UIHostingController(rootView: laid)
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for _ in 0..<4 { window.layoutIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        let measured = try XCTUnwrap(size.value, "the notice was never laid out")
+        XCTAssertLessThanOrEqual(measured.width, wide + 0.5, "the notice is wider than the room it was offered")
+        return measured.height
+    }
+
     /// The room a notice has in the bar on a 390-point phone, between the model and the mute and
     /// the badge: the 196 points the running bar leaves it on a 402-point one, measured, since
     /// the bar lays its items out and says nothing of how, less the 12 the screen is narrower
-    /// by. A turn in flight has that less the spinner and the room beside it. This suite is
-    /// arithmetic over the harness's words; that the running bar draws a notice smaller before
-    /// it cuts it is `TopoUITests/StatusNoticeTests`.
+    /// by. A turn in flight has that less the spinner and the room beside it. That the running
+    /// bar holds a notice level with the badge, between it and the controls and above the
+    /// transcript, is `TopoUITests/StatusNoticeTests`.
     private static let room: CGFloat = 184
     private static let spinner: CGFloat = 28
 
