@@ -78,10 +78,11 @@ public enum GuestTools {
     # disk, so neither the token nor an argument is ever written down, and the answer comes back
     # on wget's standard output. The writer is bounded, so one whose reader never came (a wget
     # that failed first, a `topo` killed) is gone within the call's own bound, and it writes
-    # nothing unless it opened the FIFO: a `topo` ended before then has removed the directory.
-    # It is given none of the caller's descriptors, so one left blocked on the open after its
-    # `topo` was killed holds no pipe its caller reads to the end, and had it carried on past a
-    # failed open it would have printed the token nowhere. `wget -q` says
+    # nothing unless it opened the FIFO: a `topo` ended by a signal it traps has removed the
+    # directory by then (a SIGKILL skips the trap and leaves the empty FIFO behind). Its standard
+    # input, output and error are /dev/null, so one left blocked on the open after its `topo` was
+    # killed holds neither the output nor the error its caller reads to the end, and one that
+    # carried on past a failed open would print the token nowhere. `wget -q` says
     # nothing on success, so its standard error joins the answer only when it failed; the
     # trailing `.` keeps the answer's last newlines, which a command substitution would strip.
     fifo_dir="$(mktemp -d)" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }

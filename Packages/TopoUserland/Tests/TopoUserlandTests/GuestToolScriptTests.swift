@@ -252,9 +252,9 @@ final class GuestToolScriptTests: XCTestCase {
     }
 
     /// A `topo` killed before its `wget` has opened the FIFO leaves its writer blocked on the open
-    /// until the writer's own bound (110 s), and that writer holds none of its caller's
-    /// descriptors: a caller reading `topo`'s output and error to their end is answered once
-    /// `topo` is gone, not at the writer's bound. The `wget` here never opens the FIFO, says when
+    /// until the writer's own bound (110 s), and that writer holds neither the output nor the
+    /// error of its caller: a caller reading them to their end is answered once `topo` and its
+    /// `wget` are gone, not at the writer's bound. The `wget` here never opens the FIFO, says when
     /// it has started (after the writer has) and is gone a second later. The wait is timed in the
     /// guest rather than cut short there: a signal can miss a guest task parked in a read.
     func testATopoKilledBeforeItsWgetLeavesNothingHoldingItsCallersPipes() async throws {
@@ -266,12 +266,15 @@ final class GuestToolScriptTests: XCTestCase {
         held=$( {
             PATH="$shim:$PATH" topo github token & p=$!
             while [ ! -e "$shim/started" ]; do sleep 0.05; done
-            kill -9 $p; wait $p
+            kill -9 $p; wait $p; echo "topo $?"
         } 2>&1 )
         echo "answered in $SECONDS"
+        echo "$held" | tail -1
         rm -rf "$shim"
         """, environment)
-        let seconds = Int(exit.output.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "answered in ", with: ""))
+        let said = exit.output.split(separator: "\n").map(String.init)
+        XCTAssertEqual(said.last, "topo 137", "the kill did not end topo: " + exit.output + exit.errors)
+        let seconds = said.first.flatMap { Int($0.replacingOccurrences(of: "answered in ", with: "")) }
         XCTAssertNotNil(seconds, exit.output + exit.errors)
         XCTAssertLessThan(seconds ?? .max, 30, "a killed topo left something holding its caller's pipes: " + exit.output + exit.errors)
     }
