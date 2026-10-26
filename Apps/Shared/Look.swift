@@ -713,9 +713,17 @@ struct Look: Equatable, Sendable {
         /// seconds: the transcript reports its geometry on every frame of a scroll, and he goes
         /// once it settles, not on every frame of it.
         var roamSettle = 0.6
-        /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
-        /// motion was judged at and half the work of the display's rate.
-        var frameInterval = 1.0 / 30
+        /// How long a frame of him is on the screen, in seconds, while he does anything: a
+        /// twenty-fourth, which is the slowest his motion reads as motion. The display gives the
+        /// nearest rate it has in reach of it, so a ProMotion screen draws him at 24 exactly.
+        var frameInterval = 1.0 / 24
+        /// How long a frame lasts once he has rested, in seconds: a twelfth, half the frames of
+        /// `frameInterval`, for the breathing and the blinking of a Topo with nothing to do.
+        var restInterval = 1.0 / 12
+        /// How long he has to have been at rest — idle, standing still, no finger on him —
+        /// before his frames come at `restInterval`, in seconds. Anything he does brings
+        /// `frameInterval` back on the frame it is seen.
+        var restAfter = 4.0
         /// Where he sits, as a policy: roaming the gaps the words leave, on the composer's glass,
         /// or pinned at `pin`. A drag on him writes `pinned` and the pin to this device's override
         /// (`Tuning`).

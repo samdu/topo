@@ -197,6 +197,7 @@
 		5ADB9E3D8ACFC40D15A2B63E /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		5AE26F89BB6C5FAD78CC6E2F /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */; };
 		5C3D41F423BAB30C7913C372 /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
+		5C9A05C598E1298DDCD4EE64 /* MascotCadenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB9C361CC5667B26445644C /* MascotCadenceTests.swift */; };
 		5CAFD5862DC2B9484E9493EF /* womble.css in Resources */ = {isa = PBXBuildFile; fileRef = C29E502597377F5D2A77876B /* womble.css */; };
 		5CB7BFF3728369F54465A139 /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
 		5D1CA22207CAE02C962F417D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176612C66B66529BC2738F9 /* RootView.swift */; };
@@ -710,6 +711,7 @@
 		3BE447F6D164A10E8BC7A28E /* LookLiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookLiveTests.swift; sourceTree = "<group>"; };
 		3C73B06423A3D15D5A7B7093 /* WebAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuth.swift; sourceTree = "<group>"; };
 		3C85E2F26724D2DFDA22E0E7 /* ClaudeCodeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeInstallerTests.swift; sourceTree = "<group>"; };
+		3DB9C361CC5667B26445644C /* MascotCadenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotCadenceTests.swift; sourceTree = "<group>"; };
 		3EA598B0990C965B7E3F0F6A /* TopoMoment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoMoment.swift; sourceTree = "<group>"; };
 		3EC5770ED2DCA16F30AA7C93 /* crossing-up.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crossing-up.json"; sourceTree = "<group>"; };
 		3F565D23B2B08962CD323D1E /* FirstRunScreenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunScreenTests.swift; sourceTree = "<group>"; };
@@ -1441,6 +1443,7 @@
 				5C412163D6089D2EB33C5B57 /* MapsToolTests.swift */,
 				42501D49784FE49024ED6C10 /* MarkdownRenderTests.swift */,
 				999383D4C5743811758B9CEF /* MarkdownTests.swift */,
+				3DB9C361CC5667B26445644C /* MascotCadenceTests.swift */,
 				9595FA9BE88E06B2220A262C /* MascotCrossingTests.swift */,
 				7F8E7A9C85F0395AEB61379F /* MascotDriverTests.swift */,
 				D1EB8233D6C5D8507C7D34F2 /* MascotGeometryTests.swift */,
@@ -2513,6 +2516,7 @@
 				9A8BD78984E162959CE2F6FD /* MapsToolTests.swift in Sources */,
 				E07568309A0FBA96E0A9BF7C /* MarkdownRenderTests.swift in Sources */,
 				10D6FD035A102C6FBE532658 /* MarkdownTests.swift in Sources */,
+				5C9A05C598E1298DDCD4EE64 /* MascotCadenceTests.swift in Sources */,
 				73E254E137E14567F45A6FE9 /* MascotCrossingTests.swift in Sources */,
 				879FBB0E8AC74C681499F329 /* MascotDriverTests.swift in Sources */,
 				C6533550A01BE60476257107 /* MascotGeometryTests.swift in Sources */,
