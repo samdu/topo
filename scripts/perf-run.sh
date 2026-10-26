@@ -8,7 +8,8 @@
 #
 # --spoken sends the questions as spoken turns, so the replies are read aloud from the phone.
 # --fresh times a first run: it deletes the app from the phone (its container, every download and
-# compiled model with it) before installing, so it needs --app or --build, and the app waits for
+# compiled model with it) before installing, so it needs --app or --build naming a Topo bundle (an
+# --app that is not one deletes nothing), and the app waits for
 # every setup line to be done (TOPO_PERF_SETUP=1, `perf.setup.done`) before its first question.
 # A reinstalled phone is a new device to the lease, so it usually opens as a viewer: make it the
 # primary at the phone ("Make this device the primary…"). Its timeout is an hour unless --timeout says.
@@ -64,16 +65,25 @@ if [ "$build" = yes ]; then
   app="build/dd/Build/Products/Release-iphoneos/Topo.app"
 fi
 if [ "$fresh" = 1 ]; then
-  # Nothing is deleted unless there is a bundle to put back.
-  [ -d "$app" ] || { echo "--fresh: no app bundle at $app, so nothing was deleted" >&2; exit 2; }
-  echo "==> deleting $bundle from the phone"
-  # A delete that failed would leave the container, and a warm run would read as a first one;
-  # a phone without the app has nothing to delete.
-  if ! removed="$(xcrun devicectl device uninstall app --device "$device" "$bundle" 2>&1)"; then
-    case "$removed" in
-      *"not installed"*|*"No such"*|*"not found"*) ;;
-      *) echo "$removed" >&2; echo "--fresh: the delete failed, so this would not be a first run" >&2; exit 1 ;;
-    esac
+  # Nothing is deleted unless there is a Topo bundle to put back: a folder that is not one, or
+  # another app, is refused before the phone is asked anything.
+  identifier="$( [ -f "$app/Info.plist" ] && plutil -extract CFBundleIdentifier raw -o - "$app/Info.plist" 2>/dev/null || true)"
+  [ "$identifier" = "$bundle" ] || { echo "--fresh: $app is not a $bundle bundle, so nothing was deleted" >&2; exit 2; }
+  # Whether the phone has the app is asked, not inferred from an error's words: a delete that
+  # failed would leave the container, and a warm run would read as a first one.
+  listed="$(mktemp "${TMPDIR:-/tmp}/perf-run-apps.XXXXXX")"
+  if ! xcrun devicectl device info apps --device "$device" --bundle-id "$bundle" --json-output "$listed" >/dev/null 2>&1; then
+    rm -f "$listed"
+    echo "--fresh: the phone did not say whether $bundle is installed, so nothing was deleted" >&2; exit 1
+  fi
+  if python3 -c 'import json,sys; apps=json.load(open(sys.argv[1])).get("result",{}).get("apps",[]); sys.exit(0 if any(a.get("bundleIdentifier")==sys.argv[2] for a in apps) else 1)' "$listed" "$bundle"; then
+    rm -f "$listed"
+    echo "==> deleting $bundle from the phone"
+    xcrun devicectl device uninstall app --device "$device" "$bundle" --quiet \
+      || { echo "--fresh: the delete failed, so this would not be a first run" >&2; exit 1; }
+  else
+    rm -f "$listed"
+    echo "==> $bundle is not on the phone; nothing to delete"
   fi
 fi
 if [ -n "$app" ]; then

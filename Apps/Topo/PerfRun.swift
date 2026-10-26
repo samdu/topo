@@ -51,6 +51,33 @@ enum PerfRun {
     /// transcript: a turn saved as a limb's is answered by another device, in its own time.
     static let replyWait: Duration = .seconds(60)
 
+    /// Where a timed first run's setup stands: still waiting on the lines named, done, or failed
+    /// at the part named. A failed line is retried only at the next foreground, which a run with
+    /// nobody at the phone never has, so it ends the wait.
+    enum SetupOutcome: Equatable {
+        case waiting([String])
+        case done
+        case failed(String)
+    }
+
+    static func setupOutcome(_ lines: [Setup.Line]) -> SetupOutcome {
+        if let line = lines.first(where: { if case .failed = $0.state { true } else { false } }) {
+            return .failed(line.title)
+        }
+        let left = Setup.pending(lines)
+        return left.isEmpty ? .done : .waiting(left.map(\.title))
+    }
+
+    /// The mark the wait ends with. A failure names its part and not why, since a reason may
+    /// carry a path.
+    static func setupMark(_ outcome: SetupOutcome, seconds: Int64, thermal: Int) -> String {
+        switch outcome {
+        case .done: "perf.setup.done s=\(seconds) thermal=\(thermal)"
+        case .failed(let part): "perf.setup.failed \(part)"
+        case .waiting(let left): "perf.setup.unfinished \(left.joined(separator: ","))"
+        }
+    }
+
     /// Sends the questions one at a time, then marks `perf.run.done answered=<n>/<m>`, which is
     /// what the script waits for and checks. A question goes only after the reply to the one
     /// before it, and the run ends at the first that gets none; nothing is sent at all when the
@@ -64,22 +91,12 @@ enum PerfRun {
         if environment[setupVariable] == "1" {
             let start = ContinuousClock.now
             let deadline = start + setupWait
-            func lines() -> [Setup.Line] { Setup.lines(ear: ear, voice: speaker.voice) }
-            // A failed line is retried only at the next foreground, which a run with nobody at the
-            // phone never has, so it ends the wait.
-            while !Setup.pending(lines()).isEmpty, Setup.trouble(lines()) == nil, !Task.isCancelled,
-                  ContinuousClock.now < deadline {
+            func outcome() -> SetupOutcome { setupOutcome(Setup.lines(ear: ear, voice: speaker.voice)) }
+            while case .waiting = outcome(), !Task.isCancelled, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            let left = Setup.pending(lines())
-            if let trouble = Setup.trouble(lines()) {
-                // The part that failed, not why: a reason may carry a path.
-                Perf.mark("perf.setup.failed \(trouble.prefix(while: { $0 != ":" }))")
-            } else if left.isEmpty {
-                Perf.mark("perf.setup.done s=\((ContinuousClock.now - start).components.seconds) thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
-            } else {
-                Perf.mark("perf.setup.unfinished \(left.map(\.title).joined(separator: ","))")
-            }
+            Perf.mark(setupMark(outcome(), seconds: (ContinuousClock.now - start).components.seconds,
+                                thermal: ProcessInfo.processInfo.thermalState.rawValue))
         }
         let spoken = environment[spokenVariable] == "1"
         // A spoken turn needs the voice resident at the send, as a press of the microphone does.
