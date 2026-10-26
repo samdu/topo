@@ -12,7 +12,8 @@
 # lane's start is refusing another run's lane leaves that lane alone; a signal ends the
 # command the run is waiting on, a bounded one included; and --check makes, builds and boots
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
-# the pinned Xcode, a simulator of a pinned runtime, the tools the guest's framework is built
+# the pinned Xcode (selected, or found under the search root and run through DEVELOPER_DIR,
+# which every build is then run under), a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
 # being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
 # and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
@@ -24,10 +25,15 @@
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
+# The run under test exports DEVELOPER_DIR when its Xcode is not the selected one, and runs
+# this test from `others` under it: the fakes answer from it, so a case starts with none.
+unset DEVELOPER_DIR
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$here/../.."
 work="$(mktemp -d -t mac-suite-test)"
+# No case reaches this Mac's own Xcodes: those that want some name their own root.
+export TOPO_XCODE_APPS="$work/no-apps"
 running=""
 finish() {
   if [ -n "$running" ]; then
@@ -75,9 +81,15 @@ fake "$tree/scripts/check-built-plist.sh" 'exit 0'
 fake "$tree/scripts/fetch-pinned.sh" 'echo "$2"'
 fake "$tree/scripts/fetch-ear-models.sh" 'exit 0'
 fake "$tree/scripts/model-manifest.sh" 'exit 0'
+# The pinned Xcode is the selected one unless FAKE_XCODE names another; with DEVELOPER_DIR set,
+# it is the version that Xcode's version.plist names, and nothing for one marked broken. Each build-for-testing notes the
+# DEVELOPER_DIR it ran under in $CALLS.developer.
+pin="$(sed -n 's/^XCODE_VERSION="\(.*\)"$/\1/p' "$root/scripts/mac-suite.sh")"
 fake "$work/bin/xcodebuild" '
 case "$*" in
-  -version) echo "Xcode ${FAKE_XCODE:-27.0}"; echo "Build version 1" ;;
+  -version) [ ! -e "${DEVELOPER_DIR:-/nonexistent}/broken" ] || exit 1
+    if [ -n "${DEVELOPER_DIR-}" ]; then echo "Xcode $(plutil -extract CFBundleShortVersionString raw -o - "$DEVELOPER_DIR/../version.plist")"; else echo "Xcode ${FAKE_XCODE:-'"$pin"'}"; fi; echo "Build version 1" ;;
+  build-for-testing*) echo "${DEVELOPER_DIR-selected}" >> "$CALLS.developer"; exit 0 ;;
   *test-without-building*-only-testing:TopoUITests*)
     echo "ui flags: input=${TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT-} reset=${TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET-} models=${TEST_RUNNER_TOPO_UITEST_EAR_MODELS-}" >> "$CALLS"
     exit "${UI_TEST:-0}" ;;
@@ -135,7 +147,7 @@ suite() {
   local name="$1"; shift
   export CALLS="$work/$name.calls" RESULTS_DIR="$work/$name.results"
   : > "$CALLS"
-  (cd "$tree" && TOPO_PORT53_HOLDER="${PORT53:-$work/no-holder}" PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane "${LANE:-fast}" --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
+  (cd "$tree" && TOPO_XCODE_APPS="${XCODE_APPS:-$TOPO_XCODE_APPS}" TOPO_PORT53_HOLDER="${PORT53:-$work/no-holder}" PATH="$work/bin:$PATH" scripts/mac-suite.sh --lane "${LANE:-fast}" --results "$RESULTS_DIR" --cache "$work/cache" "$@") \
     > "$work/$name.log" 2>&1 && status=0 || status=$?
 }
 calls() { grep -c "^$1" "$CALLS"; }
@@ -460,6 +472,51 @@ is "off the pin: exits 1" "$status" 1
 is "off the pin: each suite a failure" "$(results)" "topo_unit=failure others=failure "
 is "off the pin: nothing built or tested" "$(grep -c '^xcodebuild .*\(build\|test\)' "$CALLS")" 0
 
+# xcode_app <dir> <name> <version> — an installed Xcode as the locator reads it.
+xcode_app() {
+  mkdir -p "$1/$2/Contents/Developer"
+  plutil -create xml1 "$1/$2/Contents/version.plist"
+  plutil -insert CFBundleShortVersionString -string "$3" "$1/$2/Contents/version.plist"
+}
+xcode_app "$work/apps-beside" Xcode.app 26.4
+xcode_app "$work/apps-beside" Xcode-pinned.app "$pin"
+xcode_app "$work/apps-other" Xcode.app 26.4
+xcode_app "$work/apps-other" Xcode-99.app 99.0
+xcode_app "$work/apps-broken" Xcode-half.app "$pin"
+: > "$work/apps-broken/Xcode-half.app/Contents/Developer/broken"
+xcode_app "$work/apps-broken" Xcode-pinned.app "$pin"
+mkdir -p "$work/apps-empty"
+# The pinned Xcode selected: the run uses it, and no DEVELOPER_DIR is set.
+XCODE_APPS="$work/apps-beside" suite pin-selected topo_unit
+is "pin selected: exits 0" "$status" 0
+is "pin selected: built with the selected Xcode" "$(sort -u "$CALLS.developer")" "selected"
+# The first simctl call, which a CoreSimulator newer than its loaded service refuses once, is
+# the toolchain's own and not a suite's.
+is "pin selected: the first simctl call is the toolchain's" "$(grep -m1 '^xcrun ' "$CALLS")" "xcrun simctl list runtimes"
+# The pinned Xcode beside another selected one: everything the run starts is pointed at it.
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-beside" suite pin-beside topo_unit
+is "pin beside the selected Xcode: exits 0" "$status" 0
+is "pin beside the selected Xcode: built with it" "$(sort -u "$CALLS.developer")" "$work/apps-beside/Xcode-pinned.app/Contents/Developer"
+grep -q "^DEVELOPER_DIR=$work/apps-beside/Xcode-pinned.app/Contents/Developer$" "$work/pin-beside.log" \
+  && ok "pin beside the selected Xcode: the log names it" || fail "pin beside the selected Xcode: the log does not name it: $(grep DEVELOPER_DIR "$work/pin-beside.log")"
+# A bundle that names the pin and whose xcodebuild does not run is passed over for the next.
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-broken" suite pin-half topo_unit
+is "pin beside a half-copied one: exits 0" "$status" 0
+is "pin beside a half-copied one: built with the whole one" "$(sort -u "$CALLS.developer")" "$work/apps-broken/Xcode-pinned.app/Contents/Developer"
+rm -r "$work/apps-broken/Xcode-pinned.app"
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-broken" suite pin-half-alone topo_unit
+is "only a half-copied pin: exits 1" "$status" 1
+grep -q "(found: Xcode-half.app $pin, whose xcodebuild does not say so)" "$work/pin-half-alone.log" \
+  && ok "only a half-copied pin: refused, naming it" || fail "only a half-copied pin: $(grep error: "$work/pin-half-alone.log")"
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-empty" suite pin-nothing topo_unit
+grep -q "(found: nothing)" "$work/pin-nothing.log" && ok "no Xcode at all under the root: found nothing" || fail "no Xcode at all: $(grep error: "$work/pin-nothing.log")"
+# No pinned Xcode anywhere: refused, naming what was found.
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-other" suite pin-none topo_unit
+is "no pinned Xcode: exits 1" "$status" 1
+is "no pinned Xcode: nothing built" "$(cat "$CALLS.developer" 2>/dev/null)" ""
+grep -q "error: this Mac's selected Xcode is 'Xcode 26.4', not Xcode $pin, and no Xcode\*.app under $work/apps-other is (found: Xcode-99.app 99.0; Xcode.app 26.4)" "$work/pin-none.log" \
+  && ok "no pinned Xcode: refused, naming what it found" || fail "no pinned Xcode: $(grep error: "$work/pin-none.log")"
+
 # signalled <case> <where> <suite> — starts the run, waits for it to reach the held command, sends
 # it a TERM by the pid it recorded, and waits for it to end. The held command's marker is $HOLD.
 signalled() {
@@ -517,7 +574,7 @@ check() {  # check <case> [suite...] — its exit in $status, what it said in $s
   local name="$1"; shift
   export CALLS="$work/$name.calls"
   : > "$CALLS"
-  said="$(cd "$tree" && PATH="$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
+  said="$(cd "$tree" && TOPO_XCODE_APPS="${XCODE_APPS:-$TOPO_XCODE_APPS}" PATH="$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
 }
 names() { case "$said" in *"error: "*"$2"*) ok "$1" ;; *) fail "$1: $said" ;; esac; }
 mkdir -p "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
@@ -530,6 +587,11 @@ is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen 
 FAKE_XCODE=26.4 check xcode others
 is "check, another Xcode: exits 1" "$status" 1
 names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-beside" check xcode-beside others
+is "check, the pinned Xcode beside the selected one: exits 0" "$status" 0
+FAKE_XCODE=26.4 XCODE_APPS="$work/apps-other" check xcode-none others
+is "check, no pinned Xcode: exits 1" "$status" 1
+names "check, no pinned Xcode: what was found is named" "(found: Xcode-99.app 99.0; Xcode.app 26.4)"
 FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
 names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
 is "check, no pinned runtime: exits 1" "$status" 1
