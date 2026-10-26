@@ -1049,7 +1049,8 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let open = Task { await phone.answering(every: .seconds(5)) }
         try await eventually("the first pass") { await beats.passes >= 1 }
-        XCTAssertEqual(try await log(memory).map(\.text), ["first", "first back"])
+        let answered = try await log(memory).map(\.text)
+        XCTAssertEqual(answered, ["first", "first back"])
 
         let before = await db.reads(ofType: Turn.recordType)
         await beats.tick()
@@ -1061,7 +1062,8 @@ final class HarnessIntegrationTests: XCTestCase {
         try await limb(memory, "second")
         await beats.tick()
         try await eventually("the pass that answers the limb") { await beats.passes >= 3 }
-        XCTAssertEqual(try await log(memory).map(\.text), ["first", "first back", "second", "second back"])
+        let both = try await log(memory).map(\.text)
+        XCTAssertEqual(both, ["first", "first back", "second", "second back"])
         XCTAssertEqual(transport.sent.count, 2)
 
         open.cancel()
