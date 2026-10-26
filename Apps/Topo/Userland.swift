@@ -377,7 +377,7 @@ final class Userland {
         DispatchQueue.global(qos: .utility).async {
             Perf.mark("guest.import.begin")
             let result = Result { try installer.install(rootfs: rootfs, packages: packages) }
-            Perf.mark("guest.import.end")
+            Perf.mark((try? result.get()) == nil ? "guest.import.failed" : "guest.import.end")
             Task { @MainActor in self.finish(result) }
         }
     }

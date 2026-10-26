@@ -19,7 +19,8 @@ enum PerfRun {
     /// `TOPO_PERF_SETUP=1` (`perf-run.sh --fresh`): a first run, timed. Before anything is sent the
     /// run waits, for up to `setupWait`, until every setup line is done — the workspace, the ear
     /// and the voice — and marks `perf.setup.done` with how many seconds that took from the run's
-    /// start (the scene's first appearance) and the phone's thermal state, or `perf.setup.unfinished` with the lines still to come.
+    /// start (the scene's first appearance) and the phone's thermal state; `perf.setup.failed` with the part that failed, at once;
+    /// or `perf.setup.unfinished` with the lines still to come.
     static let setupVariable = "TOPO_PERF_SETUP"
     static let setupWait: Duration = .seconds(3000)
 
@@ -61,15 +62,21 @@ enum PerfRun {
         guard !questions.isEmpty, !began else { return }
         began = true
         if environment[setupVariable] == "1" {
-            let began = ContinuousClock.now
-            let deadline = began + setupWait
-            func pending() -> [Setup.Line] { Setup.pending(Setup.lines(ear: ear, voice: speaker.voice)) }
-            while !pending().isEmpty, !Task.isCancelled, ContinuousClock.now < deadline {
+            let start = ContinuousClock.now
+            let deadline = start + setupWait
+            func lines() -> [Setup.Line] { Setup.lines(ear: ear, voice: speaker.voice) }
+            // A failed line is retried only at the next foreground, which a run with nobody at the
+            // phone never has, so it ends the wait.
+            while !Setup.pending(lines()).isEmpty, Setup.trouble(lines()) == nil, !Task.isCancelled,
+                  ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(250))
             }
-            let left = pending()
-            if left.isEmpty {
-                Perf.mark("perf.setup.done s=\((ContinuousClock.now - began).components.seconds) thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
+            let left = Setup.pending(lines())
+            if let trouble = Setup.trouble(lines()) {
+                // The part that failed, not why: a reason may carry a path.
+                Perf.mark("perf.setup.failed \(trouble.prefix(while: { $0 != ":" }))")
+            } else if left.isEmpty {
+                Perf.mark("perf.setup.done s=\((ContinuousClock.now - start).components.seconds) thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
             } else {
                 Perf.mark("perf.setup.unfinished \(left.map(\.title).joined(separator: ","))")
             }

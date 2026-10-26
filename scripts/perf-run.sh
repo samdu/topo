@@ -10,7 +10,8 @@
 # --fresh times a first run: it deletes the app from the phone (its container, every download and
 # compiled model with it) before installing, so it needs --app or --build, and the app waits for
 # every setup line to be done (TOPO_PERF_SETUP=1, `perf.setup.done`) before its first question.
-# Someone signs in at the phone meanwhile. Its timeout is an hour unless --timeout says.
+# A reinstalled phone is a new device to the lease, so it usually opens as a viewer: make it the
+# primary at the phone ("Make this device the primary…"). Its timeout is an hour unless --timeout says.
 # --build makes the Release build first (build/dd, signed for TOPO_DEVELOPMENT_TEAM if set); --app installs that bundle; with neither the
 # build already on the phone is the one timed. It exits 4 when a question got no reply. The marks land in --out (default
 # build/perf/<UTC stamp>.txt), one `mark t=<epoch ms> <name>` a line, which is what
@@ -63,8 +64,17 @@ if [ "$build" = yes ]; then
   app="build/dd/Build/Products/Release-iphoneos/Topo.app"
 fi
 if [ "$fresh" = 1 ]; then
+  # Nothing is deleted unless there is a bundle to put back.
+  [ -d "$app" ] || { echo "--fresh: no app bundle at $app, so nothing was deleted" >&2; exit 2; }
   echo "==> deleting $bundle from the phone"
-  xcrun devicectl device uninstall app --device "$device" "$bundle" --quiet || true
+  # A delete that failed would leave the container, and a warm run would read as a first one;
+  # a phone without the app has nothing to delete.
+  if ! removed="$(xcrun devicectl device uninstall app --device "$device" "$bundle" 2>&1)"; then
+    case "$removed" in
+      *"not installed"*|*"No such"*|*"not found"*) ;;
+      *) echo "$removed" >&2; echo "--fresh: the delete failed, so this would not be a first run" >&2; exit 1 ;;
+    esac
+  fi
 fi
 if [ -n "$app" ]; then
   echo "==> installing $app"
