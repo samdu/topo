@@ -277,10 +277,17 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         for old in files.dropLast(keep) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(old)) }
     }
 
+    /// The payloads on disk and the newest's time, read from the names (`<prefix>-<seconds>.json`)
+    /// rather than the files' dates: a file's timestamp is an API the privacy manifest would have
+    /// to give a reason for, and the name already says it.
     private static func kept() -> (count: Int, newest: Date?) {
-        guard let dir, let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        guard let dir, let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
         else { return (0, nil) }
-        let newest = files.compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }.max()
+        let newest = files.compactMap { name -> Date? in
+            guard let dash = name.lastIndex(of: "-"), let dot = name.lastIndex(of: "."), dash < dot,
+                  let seconds = Int64(name[name.index(after: dash)..<dot]) else { return nil }
+            return Date(timeIntervalSince1970: TimeInterval(seconds))
+        }.max()
         return (files.count, newest)
     }
 }
