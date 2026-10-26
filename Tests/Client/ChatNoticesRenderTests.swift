@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Vision
 import TopoAuth
 import TopoCore
 import TopoTurn
@@ -107,16 +108,17 @@ final class ChatNoticesRenderTests: XCTestCase {
     }
 
     /// Each of `TOPO_DEBUG_NOTICES`'s fixtures laid out in a window in the room the bar leaves
-    /// it, at the default look, drawn whole: words that fit two lines at the notice's font are
-    /// drawn as tall as they are unbounded, so neither cut nor scaled, and words that do not are
-    /// drawn shorter than two lines of the font, so scaled before they are truncated. The
-    /// failure is wrapped onto a second line rather than cut short.
+    /// it, at the default look, saying its words and drawn whole: words that fit two lines at
+    /// the notice's font are drawn as tall as they are unbounded, so neither cut nor scaled, and
+    /// words that do not are drawn at the size they fit two lines at, so scaled before they are
+    /// truncated. The failure is wrapped onto a second line rather than cut short.
     func testEachFixtureIsDrawnWholeInTheBarsRoom() throws {
         let look = Look()
-        let line = try tall(lines: 1, look: look)
-        for fixture in Self.fixtures {
+        let size = UIFont.preferredFont(forTextStyle: .caption1).pointSize
+        let line = try laid(Self.lines(1), look: look)
+        for (fixture, words) in Self.fixtures {
             let said = try XCTUnwrap(DebugRun.notices(["TOPO_DEBUG_NOTICES": fixture]), fixture)
-            let drawn = try whole(said, look: look, fixture)
+            let drawn = try whole(said, look: look, size: size, words: words, fixture)
             if fixture == "error" {
                 XCTAssertGreaterThan(drawn, line * 1.5,
                                      "the failure is \(drawn) tall, one line of \(line), cut short rather than wrapped")
@@ -125,58 +127,100 @@ final class ChatNoticesRenderTests: XCTestCase {
     }
 
     /// A look whose notice font is absurdly large, read through the document's reader as the
-    /// phone reads it, still draws every fixture whole at no more than two lines of the largest
-    /// the bar holds (`Look.Transcript.largestNotice`, a look's own 15 points, measured): the
-    /// size is drawn at 15 points, and the text-size setting reaches no further than
-    /// `ChatNotices.largestType`.
+    /// phone reads it, still draws every fixture whole, in its words, at no more than two lines
+    /// of the largest the bar holds (`Look.Transcript.largestNotice`, a look's own 15 points,
+    /// measured): the size is drawn at 15 points, and the text-size setting reaches no further
+    /// than `ChatNotices.largestType`.
     func testAnAbsurdNoticeFontIsDrawnAtNoMoreThanTwoLinesOfTheLargest() throws {
         let look = LookDocument.read(#"{"transcript": {"noticeFont": {"size": 400}}}"#).look
-        var largest = Look()
-        largest.transcript.noticeFont = .system(size: CGFloat(Look.Transcript.largestNotice))
-        let tallest = try tall(lines: 2, look: largest)
-        for fixture in Self.fixtures {
+        let size = CGFloat(Look.Transcript.largestNotice)
+        let tallest = try laid(Self.lines(2), look: Self.look(look, size: size))
+        for (fixture, words) in Self.fixtures {
             let said = try XCTUnwrap(DebugRun.notices(["TOPO_DEBUG_NOTICES": fixture]), fixture)
-            let drawn = try whole(said, look: look, fixture)
+            let drawn = try whole(said, look: look, size: size, words: words, fixture)
             XCTAssertLessThanOrEqual(drawn, tallest + 0.5,
                                      "\(fixture): drawn \(drawn) tall, more than two lines of the bar's largest, \(tallest)")
         }
     }
 
-    /// `TOPO_DEBUG_NOTICES`'s fixtures that say something.
-    private static let fixtures = ["busy", "busy-long", "error", "info", "busy-info", "error-busy"]
+    /// `TOPO_DEBUG_NOTICES`'s fixtures that say something, and the words each has to show, written
+    /// out rather than taken from the harness, so a change to what the bar draws is a failure here.
+    private static let fixtures: [(String, String)] = [
+        ("busy", "Reaching iCloud… · 2 waiting"),
+        // The longest status the harness sets, beside the spinner and a two-digit count.
+        ("busy-long", "Checking this device is primary… · 11 waiting"),
+        ("error", "iCloud refused the read. Check you're signed in on this device."),
+        ("info", "Saved. Another device will answer here."),
+        // A turn left for another primary while the next is on its way: the bar holds one notice,
+        // and the turn in flight is it.
+        ("busy-info", "Reaching iCloud… · 1 waiting"),
+        // A failure while a turn is on its way is the one notice.
+        ("error-busy", "iCloud refused the read. Check you're signed in on this device."),
+    ]
 
-    /// The notice for `said` drawn in the bar's room under `look`, and its height. Unbounded it
-    /// is as tall as its words take at the look's font; within the bar's two lines it is either
-    /// that tall (they fit) or, where they take more, shorter than two lines of that font, which
-    /// a notice only the line limit cut would be exactly. That it then fits the two lines at the
-    /// least the bar draws it is the arithmetic of the tests above.
-    private func whole(_ said: ChatNotices.Said, look: Look, _ fixture: String) throws -> CGFloat {
-        let two = try tall(lines: 2, look: look)
-        let drawn = try height(ChatNotices(notices: said), look: look, wide: Self.room)
-        let unbounded = try height(ChatNotices(notices: said, lineLimit: nil), look: look, wide: Self.room)
-        if unbounded <= two + 0.5 {
+    /// The notice for `said` drawn in the bar's room under `look`, whose font is drawn at `size`
+    /// points, and its height. What it says is `words`, read off its pixels, so a word changed,
+    /// dropped or cut short in the drawing is a failure. Unbounded it is as tall as its words
+    /// take; within the bar's two lines it is either that tall (they fit) or, where they take
+    /// more, as tall as the whole of them laid out unbounded at the largest share of `size` they
+    /// fit two lines at, found here independently of the view's own scaling. A notice the line
+    /// limit cut, at any size, is shorter or taller than that by a line.
+    private func whole(_ said: ChatNotices.Said, look: Look, size: CGFloat, words: String,
+                       _ fixture: String) throws -> CGFloat {
+        let drawn = try laid(ChatNotices(notices: said), look: look)
+        let read = try Self.read(ChatNotices(notices: said), look: look)
+        XCTAssertTrue(Self.letters(read).contains(Self.letters(words)),
+                      "\(fixture): the bar's notice reads \"\(read)\", not \"\(words)\"")
+        let unbounded = try laid(ChatNotices(notices: said, lineLimit: nil), look: look)
+        if try fits(said, look: look, size: size, scale: 1) {
             XCTAssertEqual(drawn, unbounded, accuracy: 0.5,
                            "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, cut or scaled though they fit")
-        } else {
-            XCTAssertLessThan(drawn, two - 0.5,
-                              "\(fixture): the words take \(unbounded) and were drawn \(drawn) tall, two lines of \(two): cut short and not drawn smaller")
+            return drawn
         }
+        // The largest scale, to a hundredth, at which the whole of the words fit two lines.
+        var low = look.transcript.noticeLeastScale, high: CGFloat = 1
+        XCTAssertTrue(try fits(said, look: look, size: size, scale: low),
+                      "\(fixture): the words do not fit two lines at the least the bar draws them")
+        while high - low > 0.01 {
+            let middle = (low + high) / 2
+            if try fits(said, look: look, size: size, scale: middle) { low = middle } else { high = middle }
+        }
+        let whole = try laid(ChatNotices(notices: said, lineLimit: nil), look: Self.look(look, size: size * low))
+        XCTAssertEqual(drawn, whole, accuracy: 1.5,
+                       "\(fixture): the words take \(whole) whole at \(low) of their size and were drawn \(drawn) tall: cut short rather than drawn smaller")
         return drawn
     }
 
-    /// How tall `lines` lines of a notice are at `look`'s font, laid out as the notices are:
-    /// a line's height is SwiftUI's, which is not `UIFont.lineHeight`, so it is measured.
-    private func tall(lines: Int, look: Look) throws -> CGFloat {
-        let words = Array(repeating: "Ag", count: lines).joined(separator: "\n")
-        return try height(ChatNotices(notices: ChatNotices.Said(info: words), lineLimit: nil), look: look, wide: Self.room)
+    /// Whether the whole of a notice's words, laid out unbounded at `scale` of `size`, is no
+    /// taller than two lines at that size.
+    private func fits(_ said: ChatNotices.Said, look: Look, size: CGFloat, scale: CGFloat) throws -> Bool {
+        let scaled = Self.look(look, size: size * scale)
+        let two = try laid(Self.lines(2), look: scaled)
+        return try laid(ChatNotices(notices: said, lineLimit: nil), look: scaled) <= two + 0.5
     }
 
-    /// How tall `view` is laid out in a window on the host app's scene, offered `wide` points,
-    /// under `look`: the size the bar's item is drawn at, with the window's own text-size setting.
-    private func height(_ view: ChatNotices, look: Look, wide: CGFloat) throws -> CGFloat {
+    /// `look` with its notice font a fixed `size`.
+    private static func look(_ look: Look, size: CGFloat) -> Look {
+        var look = look
+        look.transcript.noticeFont = .system(size: size)
+        return look
+    }
+
+    /// A notice of `count` lines, laid out unbounded, which is how tall that many lines of the
+    /// look's font are: a line's height is SwiftUI's, which is not `UIFont.lineHeight`, so it is
+    /// measured.
+    private static func lines(_ count: Int) -> ChatNotices {
+        ChatNotices(notices: ChatNotices.Said(info: Array(repeating: "Ag", count: count).joined(separator: "\n")),
+                    lineLimit: nil)
+    }
+
+    /// `view` laid out in a window on the host app's scene, offered the bar's room, under `look`:
+    /// how tall it is drawn, with the window's own text-size setting.
+    private func laid(_ view: ChatNotices, look: Look) throws -> CGFloat {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         final class Size { var value: CGSize? }
         let size = Size()
+        let wide = Self.room
         let laid = view
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size.value = $0 }
             .frame(width: wide)
@@ -195,6 +239,43 @@ final class ChatNoticesRenderTests: XCTestCase {
         let measured = try XCTUnwrap(size.value, "the notice was never laid out")
         XCTAssertLessThanOrEqual(measured.width, wide + 0.5, "the notice is wider than the room it was offered")
         return measured.height
+    }
+
+    /// The words `view` draws in the bar's room under `look`, read off its pixels by Vision's
+    /// text recognition, top line first. The hosted view exposes no accessibility tree to a
+    /// unit test, so what the notice says is read the way a person reads it.
+    private static func read(_ view: ChatNotices, look: Look) throws -> String {
+        let renderer = ImageRenderer(content: view
+            .environment(\.look, look)
+            .frame(width: room)
+            .padding(12)
+            .background(Color.white))
+        renderer.scale = 4
+        let image = try XCTUnwrap(renderer.uiImage?.cgImage, "the notice rendered to nothing")
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        return (request.results ?? [])
+            .sorted { $0.boundingBox.midY > $1.boundingBox.midY }
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: " ")
+    }
+
+    /// The letters and digits of `words`, lower-cased, with the shapes text recognition takes
+    /// for one another (`i`, `l` and `1`; `o` and `0`) made one: what is compared of a notice
+    /// read off its pixels is its words, not its punctuation, its spacing or its glyphs'
+    /// look-alikes.
+    private static func letters(_ words: String) -> String {
+        String(words.lowercased().compactMap { character -> Character? in
+            guard character.isLetter || character.isNumber else { return nil }
+            switch character {
+            case "i", "1": return "l"
+            case "0": return "o"
+            default: return character
+            }
+        })
     }
 
     /// The room a notice has in the bar on a 390-point phone, between the model and the mute and
