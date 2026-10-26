@@ -381,29 +381,46 @@ final class ModelDownloads {
         }
     }
 
-    /// Whether a model is held back: one of the models it was asked for after is wanted, not on
-    /// the phone, and has not failed. A failed one lets it go, so a broken ear never costs the
-    /// voice.
+    /// Whether a model is held back: one of the models it was asked for after is wanted and not
+    /// on the phone, and none of them has failed. Any one failing lets it go, so a broken ear —
+    /// either of its two models — never costs the voice.
     nonisolated static func held(_ id: String, after: [String: [String]], wanted: Set<String>,
                                  present: Set<String>, failed: Set<String>) -> Bool {
-        (after[id] ?? []).contains { wanted.contains($0) && !present.contains($0) && !failed.contains($0) }
+        let first = after[id] ?? []
+        guard !first.contains(where: failed.contains) else { return false }
+        return first.contains { wanted.contains($0) && !present.contains($0) }
     }
+
+    /// What one pass does with the manifest's models, in its order: the ones it enqueues (wanted,
+    /// not on the phone, not held, and, for one that failed, only on a pass that retries) and the
+    /// ones it holds back. Holding is judged before any failure is cleared, so a model held for
+    /// one that failed goes on the same pass as that one's retry.
+    nonisolated static func plan(_ models: [String], after: [String: [String]], wanted: Set<String>,
+                                 present: Set<String>, failed: Set<String>, retry: Bool)
+        -> (enqueue: [String], holding: Set<String>) {
+        let holding = Set(models.filter {
+            wanted.contains($0) && held($0, after: after, wanted: wanted, present: present, failed: failed)
+        })
+        let enqueue = models.filter {
+            wanted.contains($0) && !present.contains($0) && !holding.contains($0) && (retry || !failed.contains($0))
+        }
+        return (enqueue, holding)
+    }
+
+    /// Whether any of these models' downloads has failed since it was last tried.
+    func failed(_ ids: [String]) -> Bool { ids.contains { failures[$0] != nil } }
 
     private func held(_ id: String) -> Bool {
         Self.held(id, after: after, wanted: wanted, present: present, failed: Set(failures.keys))
     }
 
     private func enqueue(_ manifest: ModelManifest, excluding running: Set<String>, retry: Bool) {
-        // Judged before this pass clears any failure, so a model held for one that failed
-        // goes now, beside that one's retry.
-        let holding = Set(manifest.models.map(\.id).filter { wanted.contains($0) && held($0) })
-        heldBack = holding
-        for model in manifest.models where wanted.contains(model.id) && !present.contains(model.id) {
-            guard !holding.contains(model.id) else { continue }
-            if failures[model.id] != nil {
-                guard retry else { continue }
-                failures[model.id] = nil
-            }
+        let plan = Self.plan(manifest.models.map(\.id), after: after, wanted: wanted, present: present,
+                             failed: Set(failures.keys), retry: retry)
+        heldBack = plan.holding
+        let due = Set(plan.enqueue)
+        for model in manifest.models where due.contains(model.id) {
+            failures[model.id] = nil
             for file in store.unverified(model) {
                 let key = Self.key(model, file)
                 if running.contains(key) {

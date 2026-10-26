@@ -45,14 +45,16 @@ final class Voice {
     private(set) var state: State = .cold
     /// Why the voice is not available, when it is not. Cleared by the next `prepare`.
     private(set) var trouble: String?
-    /// Whether the ear is compiling. The ear comes first, since the first thing a person does is
-    /// talk and a reply can be text until the voice is in: the voice's files are asked for after
-    /// the ear's (`ModelDownloads.start(_:after:)`), and its compile waits while the ear's runs,
-    /// so the two are not compiled at once. Only the compile is waited on: an ear whose download
-    /// failed sits in `fetching` until a later foreground, and a voice waiting on that would be a
-    /// broken ear costing the voice. Unset (a voice with no ear beside it, or a debug stand-in
-    /// ear) waits for nothing; whoever sets it calls `earSettled` when the compile ends.
-    var earBusy: (@MainActor () -> Bool)?
+    /// The ear beside the voice, which comes first: the first thing a person does is talk, and a
+    /// reply can be text until the voice is in. The voice's files are asked for after the ear's
+    /// (`ModelDownloads.start(_:after:)`), and its compile waits while the ear is still to be
+    /// fetched or is compiling (`mayLoad`), so the two are not compiled at once even when the
+    /// voice's files are already here. An ear whose download failed lets the voice go, since a
+    /// broken ear never costs the voice. Unset (a debug stand-in ear) waits for nothing. Whoever
+    /// sets it has the ear call `earSettled` when its compile ends.
+    weak var ear: Ear?
+    /// Whether a wait on the ear's download is registered, so a refusal registers one only.
+    private var awaitingEarFiles = false
     /// Whether every file is on the phone while the state is still `fetching`: the compile is
     /// waiting on the ear.
     private var filesHere = false
@@ -65,6 +67,16 @@ final class Voice {
 
     /// What the voice's line says while its files are here and its compile waits on the ear's.
     nonisolated static let afterEar = "waiting for the ear"
+
+    /// Whether the voice may compile, given the ear: none beside it, or one neither still to be
+    /// fetched nor compiling. An ear being fetched lets the voice go once its download failed.
+    static func mayLoad(ear: Ear.State?, earDownloadFailed: Bool) -> Bool {
+        switch ear {
+        case nil, .cold, .ready, .failed: true
+        case .loading: false
+        case .fetching: earDownloadFailed
+        }
+    }
 
     /// Whether the compile is waiting on the ear, with every file on the phone.
     var waitsForEar: Bool { state == .fetching && filesHere }
@@ -157,9 +169,26 @@ final class Voice {
         loadIfDue(base: ModelDownloads.shared.pocketBase)
     }
 
-    /// The compile, once the files are here and the ear is not compiling.
+    /// The compile, once the files are here and the ear allows it. Refused for an ear still being
+    /// fetched, it waits for the ear's download to settle: a failure lets the voice go, and an
+    /// arrival puts the ear into its compile, whose end calls `earSettled`.
     private func loadIfDue(base: URL) {
-        guard state == .fetching, filesHere, earBusy?() != true else { return }
+        guard state == .fetching, filesHere else { return }
+        let downloads = ModelDownloads.shared
+        guard Self.mayLoad(ear: ear?.state, earDownloadFailed: downloads.failed(Ear.models)) else {
+            if ear?.state == .fetching, !awaitingEarFiles {
+                awaitingEarFiles = true
+                downloads.whenSettled(Ear.models) { [weak self] _ in
+                    // A turn later, so the ear's own wait on the same arrival has put it into
+                    // its compile first.
+                    Task { @MainActor in
+                        self?.awaitingEarFiles = false
+                        self?.earSettled()
+                    }
+                }
+            }
+            return
+        }
         load(base: base)
     }
 

@@ -184,11 +184,34 @@ final class ModelWaitersTests: XCTestCase {
         XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear", "spotter"], failed: []))
         XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear"], failed: ["spotter"]),
                        "a failed one lets it go")
+        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: [], failed: ["spotter"]),
+                       "one failed lets it go while the other is still to come")
         XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: ["voice"], present: [], failed: []),
                        "an ear nobody asked for holds nothing")
         XCTAssertFalse(ModelDownloads.held("ear", after: after, wanted: both, present: [], failed: []),
                        "a model asked for after nothing is never held")
         XCTAssertFalse(ModelDownloads.held("voice", after: [:], wanted: both, present: [], failed: []))
+    }
+
+    /// A pass enqueues the ear's models first and holds the voice back; the arrival of both, or
+    /// the failure of either, lets the voice go. A failed model is enqueued again only by a pass
+    /// that retries (a foreground's `start`), never by the pass a release makes.
+    func testAPassEnqueuesTheEarAndHoldsTheVoiceUntilTheEarIsHereOrFailed() {
+        let models = ["ear", "spotter", "voice", "rootfs"]
+        let after = ["voice": ["ear", "spotter"]]
+        let all = Set(models)
+        let fresh = ModelDownloads.plan(models, after: after, wanted: all, present: [], failed: [], retry: true)
+        XCTAssertEqual(fresh.enqueue, ["ear", "spotter", "rootfs"])
+        XCTAssertEqual(fresh.holding, ["voice"])
+        let earHere = ModelDownloads.plan(models, after: after, wanted: all, present: ["ear", "spotter"], failed: [], retry: false)
+        XCTAssertEqual(earHere.enqueue, ["voice", "rootfs"])
+        XCTAssertEqual(earHere.holding, [])
+        let spotterFailed = ModelDownloads.plan(models, after: after, wanted: all, present: [], failed: ["spotter"], retry: false)
+        XCTAssertEqual(spotterFailed.enqueue, ["ear", "voice", "rootfs"], "a release retries nothing and lets the voice go")
+        let retried = ModelDownloads.plan(models, after: after, wanted: all, present: [], failed: ["spotter"], retry: true)
+        XCTAssertEqual(retried.enqueue, ["ear", "spotter", "voice", "rootfs"], "a foreground retries the failure beside the voice")
+        let notAsked = ModelDownloads.plan(models, after: after, wanted: ["voice"], present: [], failed: [], retry: true)
+        XCTAssertEqual(notAsked.enqueue, ["voice"], "an ear nobody asked for holds nothing")
     }
 
     /// The bar and the words beside it are one count: a model on the phone counts whole, one
