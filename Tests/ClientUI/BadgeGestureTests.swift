@@ -107,7 +107,7 @@ final class BadgeGestureTests: XCTestCase {
     /// moves only on the canvas's display-link ticks. Then, at the moment of the press, a
     /// simulator's own account alert is put away and the badge can be hit: an alert arriving over
     /// a press takes the touch, and the press it was meant as never reaches the badge.
-    private func badge(in app: XCUIApplication) -> XCUIElement {
+    private func badge(in app: TopoApplication) -> XCUIElement {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
         let standing = { ChatReading.chat(app)?.mascot?.standing ?? false }
@@ -120,7 +120,7 @@ final class BadgeGestureTests: XCTestCase {
         return badge
     }
 
-    private func launch() -> XCUIApplication {
+    private func launch() -> TopoApplication {
         let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
