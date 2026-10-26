@@ -329,6 +329,8 @@ struct ChatView: View {
         // the keyboard ends a spoken turn: what was heard so far stays, and what is typed is not
         // written over by the next caption.
         .onChange(of: row.text) { _, text in
+            // Words typed are the person here: a pause the loop had backed off to ends now.
+            harness.touched()
             guard voice.owner == .chat, voice.listening, !dictation.standing(in: text) else { return }
             voice.cancel(.chat)
         }
@@ -630,8 +632,8 @@ struct ChatView: View {
                             micReport: micReport,
                             focused: {
                                 focused = $0
-                                // A finger in the field is the person here: the loop's pause is
-                                // the live one again.
+                                // The field taking focus is the person here: the loop's pause
+                                // is the live one again.
                                 if $0 { Task { await harness.wake() } }
                             },
                             room: room)

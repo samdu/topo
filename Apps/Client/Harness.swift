@@ -185,6 +185,12 @@ final class Harness {
     static let backoffSteps = [3, 6, 12]
     private var quietFor: Duration = .zero
     private var backoffStep = 0
+    /// The heads of the log as last read whose turn is the person's: a reply is owed each, so a
+    /// loop with one in sight is live, whatever the last turn in order is.
+    private var personHeads: Set<TurnRef> = []
+    /// The person turns the brain holds as cut off, as last read (`refreshUnfinished`): a head
+    /// among them is not answered until the person asks again, so it does not keep the loop live.
+    private var unresolvedHeads: Set<TurnRef> = []
     /// The loop's pause in progress, which `wake()` cancels.
     private var sleeping: Task<Void, any Error>?
     /// `wake()` callers waiting for their pass to finish.
@@ -197,7 +203,7 @@ final class Harness {
     private(set) var info: String?
     private var inFlight: Task<Bool, Never>?
     /// The answering passes running now, which a sign-out cancels as it cancels the turn in flight.
-    private var passes: Set<Task<Void, Never>> = []
+    private var passes: Set<Task<Bool, Never>> = []
     /// Counts sign-outs and demotions. A pass or a loop begun under an earlier count belongs to a
     /// login that has gone: it shows nothing and writes nothing, and the loop ends.
     private var login = 0
@@ -575,6 +581,7 @@ final class Harness {
             if dropped > 0 { Perf.mark("chat.refresh.dropped \(dropped)") }
             turns = transcript.ordered
             turns.forEach(seen)
+            personHeads = Set(transcript.heads.filter { transcript[$0]?.role == .person })
             notice = TranscriptStore.notice(for: transcript)
             hasRead = true
             clearReadFailure()
@@ -582,6 +589,7 @@ final class Harness {
         } catch {
             guard !TopoCloudKit.meansNoLogYet(error) else {
                 turns = []
+                personHeads = []
                 hasRead = true
                 clearReadFailure()
                 return true
@@ -1216,11 +1224,18 @@ final class Harness {
             // The guest is warmed as the chat runs, so it is up by the time the words are; this
             // waits for nothing.
             if let guest { Task { await guest.warm() } }
-            await answerPending()
+            let answered = await answerPending()
             served.forEach { $0.resume() }
             if woken { continue }
-            let quiet = read && !busy && !hasWaiting && unsaved.isEmpty && turns.last?.role != .person
-                && turns == before
+            // Quiet is a pass that read the log and found it as the pass before did, ran to its
+            // end, and left nothing to answer: no turn in flight, nothing on the line, no turn
+            // of the guest's that iCloud is behind, no person's turn at any head the brain has
+            // not been cut off on, and, asked last since it may read the guest's transcript, no
+            // reply the brain owes the log.
+            var quiet = read && answered && !busy && !hasWaiting && unsaved.isEmpty && turns == before
+                && personHeads.subtracting(unresolvedHeads).isEmpty
+            if quiet, await brain.owed() != nil { quiet = false }
+            guard self.login == login else { return }
             let wait = nextPause(interval, quiet: quiet)
             let pausing = Task { [pause] in try await pause(wait) }
             sleeping = pausing
@@ -1242,9 +1257,11 @@ final class Harness {
         await withCheckedContinuation { wakers.append($0) }
     }
 
-    /// The person is here: a send, typed or spoken. The count of quiet starts again, and a pause
-    /// the loop had backed off to ends now with a pass, as a wake's does; a live pause runs its
-    /// five seconds out, and nothing waits on either.
+    /// The person is here: words typed into the field, a send typed or spoken (`retry`). The
+    /// count of quiet starts again, and a pause the loop had backed off to ends now with a pass,
+    /// as a wake's does; a live pause runs its five seconds out, and nothing waits on either.
+    func touched() { nudge() }
+
     private func nudge() {
         let backedOff = backoffStep > 0
         quietFor = .zero
@@ -1274,28 +1291,33 @@ final class Harness {
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
     /// The pass is a task of its own, so a sign-out can cancel it as it cancels a send; cancelling
-    /// the caller cancels it too.
-    func answerPending() async {
-        guard !busy else { return }
+    /// the caller cancels it too. Answers whether the pass ran to its end: a pass another device's
+    /// lease turned away did, since that device answers and its push wakes this one; one a turn
+    /// in flight kept from running, one cancelled, or one that failed on a read or a write did
+    /// not, and the loop stays live over it.
+    @discardableResult
+    func answerPending() async -> Bool {
+        guard !busy else { return false }
         let login = self.login
         let pass = Task { await self.pass(under: login) }
         passes.insert(pass)
-        await withTaskCancellationHandler { await pass.value } onCancel: { pass.cancel() }
+        let completed = await withTaskCancellationHandler { await pass.value } onCancel: { pass.cancel() }
         passes.remove(pass)
+        return completed
     }
 
-    private func pass(under login: Int) async {
+    private func pass(under login: Int) async -> Bool {
         do {
             if runner == nil {
                 try await ensureZone()
-                guard self.login == login else { return }
+                guard self.login == login else { return false }
                 runner = try await makeRunner()
             }
-            guard let runner, self.login == login else { return }
+            guard let runner, self.login == login else { return false }
             defer { keepStanding(of: runner, under: login) }
             let answered = try await runner.answerPending(model: model)
             // A sign-out during the pass: what it found is for a screen that has gone.
-            guard self.login == login else { return }
+            guard self.login == login else { return false }
             if let reply = answered {
                 // This device answered: the lease is its own, and the line is given ahead again.
                 handedBack = false
@@ -1306,24 +1328,29 @@ final class Harness {
                 await onPass?()
             }
             await refreshUnfinished()
+            return true
         } catch TurnRunnerError.notPrimary {
             // Another device holds the lease and this one has yielded to it; that device answers.
+            return true
         } catch TurnRunnerError.displaced {
             // Another device took the lease as the reply was ready; it answers.
             dropWriting()
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
-            guard self.login == login else { return }
+            guard self.login == login else { return false }
             dropWriting()
             failure = Failure(words: Self.describe(error))
             await refreshUnfinished()
+            return false
         }
     }
 
     /// Reads which of the log's turns the brain holds as cut off, for the control that asks again.
     private func refreshUnfinished() async {
         let refs = await brain.unresolved()
+        unresolvedHeads = refs
         unfinished = refs.isEmpty ? nil : turns.last { refs.contains($0.ref) }
     }
 
