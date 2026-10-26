@@ -2043,26 +2043,6 @@ final class RecordingDatabaseTests: XCTestCase {
     }
 }
 
-/// The in-memory database that counts the reads of each type's change feed, which over CloudKit
-/// are the round trips an idle pass costs.
-private actor CountingDatabase: RecordDatabase {
-    let wrapped: InMemoryRecordDatabase
-    private var feedReads: [String: Int] = [:]
-
-    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
-
-    func reads(ofType type: String) -> Int { feedReads[type] ?? 0 }
-
-    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-
-    func records(ofType type: String) async throws -> [Record] {
-        feedReads[type, default: 0] += 1
-        return try await wrapped.records(ofType: type)
-    }
-}
-
 /// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
 private actor ReadFailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
