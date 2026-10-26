@@ -76,15 +76,28 @@ if [ "$fresh" = 1 ]; then
     rm -f "$listed"
     echo "--fresh: the phone did not say whether $bundle is installed, so nothing was deleted" >&2; exit 1
   fi
-  if python3 -c 'import json,sys; apps=json.load(open(sys.argv[1])).get("result",{}).get("apps",[]); sys.exit(0 if any(a.get("bundleIdentifier")==sys.argv[2] for a in apps) else 1)' "$listed" "$bundle"; then
-    rm -f "$listed"
-    echo "==> deleting $bundle from the phone"
-    xcrun devicectl device uninstall app --device "$device" "$bundle" --quiet \
-      || { echo "--fresh: the delete failed, so this would not be a first run" >&2; exit 1; }
-  else
-    rm -f "$listed"
-    echo "==> $bundle is not on the phone; nothing to delete"
-  fi
+  # 10: installed; 11: confirmed absent, a list of apps naming no Topo; anything else (an empty
+  # file, JSON that is not that shape) is no answer.
+  set +e
+  python3 -c '
+import json, sys
+try:
+    apps = json.load(open(sys.argv[1]))["result"]["apps"]
+    assert isinstance(apps, list) and all(isinstance(a, dict) for a in apps)
+except Exception:
+    sys.exit(12)
+sys.exit(10 if any(a.get("bundleIdentifier") == sys.argv[2] for a in apps) else 11)' "$listed" "$bundle"
+  answer=$?
+  set -e
+  rm -f "$listed"
+  case "$answer" in
+    10)
+      echo "==> deleting $bundle from the phone"
+      xcrun devicectl device uninstall app --device "$device" "$bundle" --quiet \
+        || { echo "--fresh: the delete failed, so this would not be a first run" >&2; exit 1; } ;;
+    11) echo "==> $bundle is not on the phone; nothing to delete" ;;
+    *) echo "--fresh: the phone's answer did not say whether $bundle is installed, so nothing was deleted" >&2; exit 1 ;;
+  esac
 fi
 if [ -n "$app" ]; then
   echo "==> installing $app"

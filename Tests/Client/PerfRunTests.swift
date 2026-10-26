@@ -41,6 +41,29 @@ final class PerfRunTests: XCTestCase {
                        "perf.setup.unfinished \(Setup.hearing),\(Setup.speaking)")
     }
 
+    /// The wait itself: it reads the setup until a line fails or every line is done, and gives up
+    /// at its deadline with what is still to come.
+    @MainActor
+    func testTheWaitEndsAtDoneAtAFailureOrAtItsDeadline() async {
+        func run(_ sequence: [PerfRun.SetupOutcome], deadline: Duration = .seconds(30)) async -> (PerfRun.SetupOutcome, Int) {
+            var reads = 0
+            let outcome = await PerfRun.waitForSetup(until: .now + deadline, tick: .milliseconds(1)) {
+                defer { reads += 1 }
+                return sequence[min(reads, sequence.count - 1)]
+            }
+            return (outcome, reads)
+        }
+        let toDone = await run([.waiting(["a", "b"]), .waiting(["b"]), .done, .waiting(["never read"])])
+        XCTAssertEqual(toDone.0, .done)
+        XCTAssertEqual(toDone.1, 3, "it stops at the first read that is not waiting")
+        let toFailure = await run([.waiting(["a"]), .failed("a"), .done])
+        XCTAssertEqual(toFailure.0, .failed("a"))
+        XCTAssertEqual(toFailure.1, 2)
+        let stuck = await run([.waiting(["a"])], deadline: .milliseconds(30))
+        XCTAssertEqual(stuck.0, .waiting(["a"]), "the deadline ends it with what is still to come")
+        XCTAssertGreaterThan(stuck.1, 1)
+    }
+
     func testTheGapIsFiveSecondsUnlessSaid() {
         XCTAssertEqual(PerfRun.gap([:]), 5)
         XCTAssertEqual(PerfRun.gap(["TOPO_PERF_GAP": "0.5"]), 0.5)

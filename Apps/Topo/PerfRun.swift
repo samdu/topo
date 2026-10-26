@@ -68,6 +68,19 @@ enum PerfRun {
         return left.isEmpty ? .done : .waiting(left.map(\.title))
     }
 
+    /// Asks `outcome` every `tick` until it is not waiting, the task is cancelled, or `deadline`
+    /// passes, and answers the last outcome it read.
+    @MainActor
+    static func waitForSetup(until deadline: ContinuousClock.Instant, tick: Duration = .milliseconds(250),
+                             _ outcome: @MainActor () -> SetupOutcome) async -> SetupOutcome {
+        var last = outcome()
+        while case .waiting = last, !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: tick)
+            last = outcome()
+        }
+        return last
+    }
+
     /// The mark the wait ends with. A failure names its part and not why, since a reason may
     /// carry a path.
     static func setupMark(_ outcome: SetupOutcome, seconds: Int64, thermal: Int) -> String {
@@ -90,12 +103,10 @@ enum PerfRun {
         began = true
         if environment[setupVariable] == "1" {
             let start = ContinuousClock.now
-            let deadline = start + setupWait
-            func outcome() -> SetupOutcome { setupOutcome(Setup.lines(ear: ear, voice: speaker.voice)) }
-            while case .waiting = outcome(), !Task.isCancelled, ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(250))
+            let outcome = await waitForSetup(until: start + setupWait) {
+                setupOutcome(Setup.lines(ear: ear, voice: speaker.voice))
             }
-            Perf.mark(setupMark(outcome(), seconds: (ContinuousClock.now - start).components.seconds,
+            Perf.mark(setupMark(outcome, seconds: (ContinuousClock.now - start).components.seconds,
                                 thermal: ProcessInfo.processInfo.thermalState.rawValue))
         }
         let spoken = environment[spokenVariable] == "1"
