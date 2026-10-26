@@ -184,6 +184,9 @@ hold "stop with an orphan: leaves both running" eval 'alive "$lost_supervisor" &
 # The run a lane was started for, AUDIO_LANE_OWNER, decides whether a later start may stop it.
 # A run is a `sleep` here; killing it with SIGKILL is the run ended with no trap to stop its lane.
 # The orphaned lane from the case before is still up, unrecorded; it plays into nothing here.
+# The lane before left BlackHole as both defaults; the Mac's own are put back for the owned
+# lane's start to find.
+printf 'Fake Microphone\n' > "$work/input"; printf 'Fake Speakers\n' > "$work/output"
 sleep 300 & owner=$!
 started+=("$owner")
 AUDIO_LANE_OWNER="$owner" run start "$work/fixture.wav" > /dev/null 2>&1
