@@ -119,6 +119,9 @@ struct TopoApp: App {
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil },
                                                          ensureZone: AppRecords.ensureZone))
         let audio = AudioSession()
+        if ProcessInfo.processInfo.arguments.contains("--stay-awake") {
+            audio.wantScreenAwake(true, for: .profiling)
+        }
         Perf.mark("app.housekeeping.begin")
         _audio = State(initialValue: audio)
         // The compile cache a new install leaves behind is cleared before the ear and the voice

@@ -15,7 +15,8 @@ import UIKit
 @MainActor
 final class AudioSession {
     enum RecordClaim: Hashable { case firstRun, chat, warm }
-    enum ScreenClaim: Hashable { case listening, speaking }
+    /// `.profiling` is a run from a Mac (`--stay-awake`): a locked phone takes no launch and no copy.
+    enum ScreenClaim: Hashable { case listening, speaking, profiling }
     /// Who is keeping the process running behind the lock: the wait for a spoken turn's reply,
     /// one claim per turn outstanding, and the reading of a reply. Counted like the other two, so
     /// the one letting go cannot cut what the other is still paying for — a reply handed to the

@@ -5,7 +5,9 @@ import UIKit
 import os
 
 /// The phone's own account of what this process costs: a line a minute while the process runs,
-/// and MetricKit's daily payloads as they land. Nothing leaves the phone.
+/// and MetricKit's daily payloads as they land. Nothing is sent off the phone: like every
+/// `Perf` mark a line reaches the guest through `topo log`, and it carries counters and the
+/// app's state, nothing of the person's.
 ///
 /// The pulse is the kernel's counters for this task (`TASK_POWER_INFO`): CPU time and idle
 /// wakeups since the last pulse, against the battery, the charger, the thermal state and Low Power
@@ -13,8 +15,7 @@ import os
 /// what Instruments would read, without the cable. Each line is a `Perf` mark (`energy …`), so it
 /// is in the unified log under `perf` and in a timed run's file; and it is appended to
 /// `tmp/topo-energy.log` in the container, which `devicectl device copy from` reads off a phone
-/// nobody is at. Only this process: the audio server's and the emulator's host-side share are
-/// Instruments' alone.
+/// nobody is at. Only this process: the audio server's share is Instruments' alone.
 ///
 /// MetricKit adds the system's view, once a day: per-process CPU, display and network energy, time
 /// in the foreground and the background. Each payload is kept in Application Support/metrickit, the
@@ -40,6 +41,7 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     private var counters: (cpu: Double, idle: UInt64, interrupts: UInt64, at: Date)?
     private var started = false
     private var file: FileHandle?
+    private var written = 0
 
     private override init() {}
 
@@ -47,11 +49,6 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         guard !started else { return }
         started = true
         UIDevice.current.isBatteryMonitoringEnabled = true
-        // A profiling run from a Mac (`--stay-awake`) holds auto-lock off, since a locked phone
-        // takes no launch and no copy; nothing else here touches the idle timer.
-        if ProcessInfo.processInfo.arguments.contains("--stay-awake") {
-            UIApplication.shared.isIdleTimerDisabled = true
-        }
         mainThread = pthread_self()
         MXMetricManager.shared.add(self)
         counters = Self.read().map { ($0.cpu, $0.idle, $0.interrupts, Date()) }
@@ -109,10 +106,23 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         if !threads.isEmpty { write("energy threads " + threads) }
     }
 
+    /// A write that fails (the disk full) drops the file for the rest of the process; the marks
+    /// still go to the log. The throwing `FileHandle` calls are used: the older ones raise an
+    /// exception Swift cannot catch.
     private func write(_ line: String) {
         Perf.mark(line)
-        let stamped = "\(Int64(Date().timeIntervalSince1970)) \(line)\n"
-        file?.write(Data(stamped.utf8))
+        guard let file else { return }
+        let stamped = Data("\(Int64(Date().timeIntervalSince1970)) \(line)\n".utf8)
+        do {
+            if written > Self.fileCap {
+                try file.truncate(atOffset: 0)
+                written = 0
+            }
+            try file.write(contentsOf: stamped)
+            written += stamped.count
+        } catch {
+            self.file = nil
+        }
     }
 
     /// `tmp/topo-energy.log`, appended to; started afresh when it has grown past the cap.
@@ -122,8 +132,9 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         if size > Self.fileCap || size == 0 {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        handle.seekToEndOfFile()
+        guard let handle = try? FileHandle(forWritingTo: url),
+              let end = try? handle.seekToEnd() else { return }
+        written = Int(end)
         file = handle
     }
 
@@ -133,7 +144,9 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     private var mainThread: pthread_t?
 
     /// The threads that spent the most CPU since the last pulse, by name: what a Time Profiler
-    /// would say about a minute, from inside. Unnamed threads are summed as one.
+    /// would say about a minute, from inside. Unnamed threads are summed as one, and the guest's
+    /// are summed as `guest`: the emulator names a guest process's thread after its command, which
+    /// is the person's.
     private func topThreads() -> String {
         var list: thread_act_array_t?
         var count: mach_msg_type_number_t = 0
@@ -178,7 +191,8 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
                 } else {
                     var buf = [CChar](repeating: 0, count: 64)
                     pthread_getname_np(p, &buf, 64)
-                    name = String(cString: buf)
+                    name = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+                    if Self.isGuestThread(name) { name = "guest" }
                 }
             }
             if name.isEmpty { name = "unnamed" }
@@ -260,11 +274,22 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         return parts.joined(separator: " ")
     }
 
+    /// A guest process's host thread: the emulator names it `<command>-<pid>`.
+    static func isGuestThread(_ name: String) -> Bool {
+        guard let dash = name.lastIndex(of: "-"), dash != name.startIndex else { return false }
+        let pid = name[name.index(after: dash)...]
+        return !pid.isEmpty && pid.allSatisfy(\.isNumber)
+    }
+
+    /// Application Support/metrickit, kept out of the backup.
     private static var dir: URL? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         else { return nil }
-        let d = base.appendingPathComponent("metrickit", isDirectory: true)
+        var d = base.appendingPathComponent("metrickit", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? d.setResourceValues(values)
         return d
     }
 
@@ -272,22 +297,32 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         guard let dir else { return }
         let name = "\(prefix)-\(Int64(at.timeIntervalSince1970)).json"
         try? json.write(to: dir.appendingPathComponent(name), options: .atomic)
-        // The newest `keep` stay; a name sorts by its time stamp.
-        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
-        for old in files.dropLast(keep) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(old)) }
+        prune(dir, prefix: prefix, keep: keep)
     }
 
-    /// The payloads on disk and the newest's time, read from the names (`<prefix>-<seconds>.json`)
-    /// rather than the files' dates: a file's timestamp is an API the privacy manifest would have
-    /// to give a reason for, and the name already says it.
+    /// The newest `keep` payloads of a kind stay, by the time in the name; the other kind is
+    /// not touched.
+    static func prune(_ dir: URL, prefix: String, keep: Int) {
+        let same = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasPrefix(prefix + "-") }
+            .sorted { (seconds(in: $0) ?? 0) < (seconds(in: $1) ?? 0) }
+        for old in same.dropLast(keep) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(old)) }
+    }
+
+    /// The seconds in a payload's name (`<prefix>-<seconds>.json`), read rather than the file's
+    /// date: a file's timestamp is an API the privacy manifest would have to give a reason for,
+    /// and the name already says it.
+    private static func seconds(in name: String) -> Int64? {
+        guard let dash = name.lastIndex(of: "-"), let dot = name.lastIndex(of: "."), dash < dot
+        else { return nil }
+        return Int64(name[name.index(after: dash)..<dot])
+    }
+
+    /// The payloads on disk, of both kinds, and the newest's time.
     private static func kept() -> (count: Int, newest: Date?) {
         guard let dir, let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
         else { return (0, nil) }
-        let newest = files.compactMap { name -> Date? in
-            guard let dash = name.lastIndex(of: "-"), let dot = name.lastIndex(of: "."), dash < dot,
-                  let seconds = Int64(name[name.index(after: dash)..<dot]) else { return nil }
-            return Date(timeIntervalSince1970: TimeInterval(seconds))
-        }.max()
+        let newest = files.compactMap(seconds(in:)).max().map { Date(timeIntervalSince1970: TimeInterval($0)) }
         return (files.count, newest)
     }
 }
