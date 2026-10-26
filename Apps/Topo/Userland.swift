@@ -341,6 +341,10 @@ final class Userland {
             let fakefs = try await self.ready()
             let claude = try await self.claudeCode()
             Perf.mark("guest.downloads.present")
+            // The digest reads only the host's file, so it runs while the guest boots.
+            let checking = Task {
+                try await Self.offThePool { try claude.checked() }
+            }
             try Guest.shared.boot(fakefs: fakefs)
             Perf.mark("guest.kernel.booted")
             // The forwarder first, so the resolver's first write is already its stub; one that
@@ -357,11 +361,8 @@ final class Userland {
             try? Guest.shared.mountZoneinfo()
             await self.clock.start()
             Perf.mark("guest.tmp.zone.done")
-            let installed = try await withCheckedThrowingContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(with: Result { try claude.install(into: Guest.shared) })
-                }
-            }
+            let checked = try await checking.value
+            let installed = try claude.mount(checked, into: Guest.shared)
             Perf.mark("guest.claude.verified")
             return installed
         }

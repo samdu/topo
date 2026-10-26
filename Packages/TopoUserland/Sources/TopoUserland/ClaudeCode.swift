@@ -87,6 +87,20 @@ public struct ClaudeCodeInstaller: Sendable {
     /// it off the main thread. Throws, having mounted nothing, when the file is not the pinned
     /// one, and what the guest threw when the mount or the link was refused.
     public func install(into guest: some GuestMounts) throws -> Installed {
+        try mount(try checked(), into: guest)
+    }
+
+    /// A binary that matched the pin and was made executable, and how long the digest took: what
+    /// `mount` takes, so nothing is mounted that was not checked.
+    public struct Checked: Sendable, Equatable {
+        public let verification: Duration
+        fileprivate init(verification: Duration) { self.verification = verification }
+    }
+
+    /// The host's half of `install`: the size and digest checked against the pin, the file made
+    /// executable when they match and not executable when they do not. It needs no guest, so the
+    /// app runs it while the kernel boots. Blocking, as `install` is.
+    public func checked() throws -> Checked {
         let started = ContinuousClock.now
         do {
             try verify()
@@ -96,9 +110,14 @@ public struct ClaudeCodeInstaller: Sendable {
         }
         let verification = ContinuousClock.now - started
         try allowExecution()
+        return Checked(verification: verification)
+    }
+
+    /// The guest's half: the binary's home mounted and `command` linked to it.
+    public func mount(_ checked: Checked, into guest: some GuestMounts) throws -> Installed {
         try guest.mount(binary.deletingLastPathComponent(), at: mountPoint)
         try guest.link("\(mountPoint)/\(binary.lastPathComponent)", at: command)
-        return Installed(version: pin.version, command: command, verification: verification)
+        return Installed(version: pin.version, command: command, verification: checked.verification)
     }
 
     func verify() throws {

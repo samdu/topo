@@ -745,7 +745,9 @@ public actor GuestSession {
             switch event {
             case .text where own: Perf.mark("turn.guest.text")
             case .toolUse where own: Perf.mark("turn.guest.toolUse")
-            case .result where own: Perf.mark("turn.guest.result")
+            case .result(let result) where own:
+                Perf.mark("turn.guest.result")
+                if let timing = result.timing { Perf.mark("turn.guest.timing \(timing.words)") }
             case .result: Perf.mark("turn.guest.result.other")
             default: break
             }

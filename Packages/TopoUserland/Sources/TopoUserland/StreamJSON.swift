@@ -102,16 +102,55 @@ public enum StreamEvent: Sendable, Equatable {
         /// (`modelUsage.<model>.contextWindow`, the largest where it names several); nil when it
         /// names none.
         public let window: Int?
+        /// How long Claude Code took to send the turn's first request, when it says
+        /// (`CLAUDE_CODE_EMIT_STARTUP_TIMING`, set only in a timed run).
+        public let timing: Timing?
 
         public init(isError: Bool, subtype: String, text: String?, session: String?, duration: Duration?,
-                    errors: [String] = [], window: Int? = nil) {
+                    errors: [String] = [], window: Int? = nil, timing: Timing? = nil) {
             self.window = window
+            self.timing = timing
             self.isError = isError
             self.subtype = subtype
             self.text = text
             self.session = session
             self.duration = duration
             self.errors = errors
+        }
+    }
+}
+
+extension StreamEvent.TurnResult {
+    /// Claude Code's own account of the time from a turn's start to its first model request:
+    /// numbers and the names of its phases, nothing of what was said.
+    public struct Timing: Sendable, Equatable {
+        /// `time_to_request_ms`: from the turn's start to its first request.
+        public let toRequest: Int
+        /// `time_to_request_cpu_ms`: the CPU the process spent in that window.
+        public let cpu: Int?
+        /// `time_to_request_from_spawn_ms`: from the process's spawn to that request, on a
+        /// process's first turn.
+        public let fromSpawn: Int?
+        /// `time_to_request_phases_ms`: the window by phase, in milliseconds.
+        public let phases: [String: Int]
+
+        public init(toRequest: Int, cpu: Int? = nil, fromSpawn: Int? = nil, phases: [String: Int] = [:]) {
+            self.toRequest = toRequest
+            self.cpu = cpu
+            self.fromSpawn = fromSpawn
+            self.phases = phases
+        }
+
+        /// The mark's words: `request=<ms> cpu=<ms> spawn=<ms> phases=<name>:<ms>,…`, the phases
+        /// largest first, and a phase name that is not a plain identifier left out.
+        public var words: String {
+            var words = ["request=\(toRequest)"]
+            if let cpu { words.append("cpu=\(cpu)") }
+            if let fromSpawn { words.append("spawn=\(fromSpawn)") }
+            let named = phases.filter { $0.key.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") } }
+                .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            if !named.isEmpty { words.append("phases=" + named.map { "\($0.key):\($0.value)" }.joined(separator: ",")) }
+            return words.joined(separator: " ")
         }
     }
 }
@@ -257,7 +296,15 @@ public enum StreamJSON {
             .compactMap { ($0 as? [String: Any])?["contextWindow"] as? NSNumber }.map(\.intValue).filter { $0 > 0 }
         return .init(isError: isError, subtype: subtype, text: object["result"] as? String,
                      session: object["session_id"] as? String, duration: duration, errors: errors,
-                     window: windows?.max())
+                     window: windows?.max(), timing: timing(object))
+    }
+
+    private static func timing(_ object: [String: Any]) -> StreamEvent.TurnResult.Timing? {
+        guard let toRequest = (object["time_to_request_ms"] as? NSNumber)?.intValue else { return nil }
+        let phases = (object["time_to_request_phases_ms"] as? [String: Any])?
+            .compactMapValues { ($0 as? NSNumber)?.intValue } ?? [:]
+        return .init(toRequest: toRequest, cpu: (object["time_to_request_cpu_ms"] as? NSNumber)?.intValue,
+                     fromSpawn: (object["time_to_request_from_spawn_ms"] as? NSNumber)?.intValue, phases: phases)
     }
 
     private static func int(_ value: Any?) -> Int { (value as? NSNumber)?.intValue ?? 0 }
