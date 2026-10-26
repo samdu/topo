@@ -169,8 +169,8 @@ final class ChatNoticesRenderTests: XCTestCase {
                        _ fixture: String) throws -> CGFloat {
         let drawn = try laid(ChatNotices(notices: said), look: look)
         let read = try Self.read(ChatNotices(notices: said), look: look)
-        XCTAssertTrue(Self.letters(read).contains(Self.letters(words)),
-                      "\(fixture): the bar's notice reads \"\(read)\", not \"\(words)\"")
+        XCTAssertEqual(Self.normalized(read), Self.normalized(words),
+                       "\(fixture): the bar's notice reads \"\(read)\", not \"\(words)\"")
         let unbounded = try laid(ChatNotices(notices: said, lineLimit: nil), look: look)
         if try fits(said, look: look, size: size, scale: 1) {
             XCTAssertEqual(drawn, unbounded, accuracy: 0.5,
@@ -263,19 +263,19 @@ final class ChatNoticesRenderTests: XCTestCase {
             .joined(separator: " ")
     }
 
-    /// The letters and digits of `words`, lower-cased, with the shapes text recognition takes
-    /// for one another (`i`, `l` and `1`; `o` and `0`) made one: what is compared of a notice
-    /// read off its pixels is its words, not its punctuation, its spacing or its glyphs'
-    /// look-alikes.
-    private static func letters(_ words: String) -> String {
-        String(words.lowercased().compactMap { character -> Character? in
-            guard character.isLetter || character.isNumber else { return nil }
-            switch character {
-            case "i", "1": return "l"
-            case "0": return "o"
-            default: return character
-            }
-        })
+    /// `words` as what is compared of a notice read off its pixels against the words it has to
+    /// say, the whole of each and nothing else: lower-cased, its curly quotes straight, its
+    /// ellipses three dots and its middle dots one mark, with every run of white space one
+    /// space, and none at either end.
+    private static func normalized(_ words: String) -> String {
+        words.lowercased()
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .replacingOccurrences(of: "\u{2018}", with: "'")
+            .replacingOccurrences(of: "\u{2026}", with: "...")
+            .replacingOccurrences(of: "\u{2022}", with: "\u{00B7}")
+            .replacingOccurrences(of: "\u{2219}", with: "\u{00B7}")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
     }
 
     /// The room a notice has in the bar on a 390-point phone, between the model and the mute and
