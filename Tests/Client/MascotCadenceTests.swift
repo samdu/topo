@@ -45,6 +45,30 @@ final class MascotCadenceTests: XCTestCase {
     /// What a frame lasts now, and what the link asks the display for, which is the saving.
     private func rate(_ canvas: MascotCanvas) -> (cadence: Double, link: Float?) { (canvas.cadence, canvas.frameRate) }
 
+    /// The sheet's rate reaches the link on the frame it is seen, on a link that already exists,
+    /// and the rest's rate is the look's whatever the sheet says.
+    func testTheSheetsRateReachesTheLinkAndTheRestsRateIsTheLooks() throws {
+        let window = try stageWindow()
+        defer { window.isHidden = true }
+        let canvas = canvas(in: window)
+        var open = MascotState(model: "claude-sonnet-5")
+        open.turnOpen = true
+        for rate in [20.0, 30.0, 24.0] {
+            canvas.apply(input: open.input, field: MascotPlacementTests.field(),
+                         settings: MascotPlacementTests.settings(.roam), interval: 1 / rate,
+                         restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
+            XCTAssertEqual(canvas.cadence, 1 / rate, "\(rate)")
+            XCTAssertEqual(canvas.frameRate, Float(rate), "\(rate) did not reach the link")
+        }
+        open.turnOpen = false
+        canvas.apply(input: open.input, field: MascotPlacementTests.field(),
+                     settings: MascotPlacementTests.settings(.roam), interval: 1 / 30,
+                     restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
+        for _ in 0..<Int(((look.restAfter + 2) * 30).rounded(.up)) { canvas.step(1 / 30) }
+        XCTAssertEqual(canvas.cadence, look.restInterval, "rested at 30, his frames come at the rest's rate")
+        XCTAssertEqual(canvas.frameRate, 12)
+    }
+
     func testHeRestsToTheRestsRateAndAnythingHeDoesBringsTheLooksBack() throws {
         let window = try stageWindow()
         defer { window.isHidden = true }

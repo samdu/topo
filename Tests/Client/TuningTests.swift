@@ -120,6 +120,51 @@ final class TuningTests: XCTestCase {
         XCTAssertEqual(back.mascot.pin, CGPoint(x: 0.1, y: 0.2))
     }
 
+    // MARK: His frame rate
+
+    /// The sheet's frame rate is worn as the look's `frameInterval` and nothing else moves, the
+    /// rest's interval included; a release build, which wears no slider, wears it, since it is read
+    /// beside the placement and not as a knob; Reset gives the vault's back.
+    func testTheFrameRateIsWornInEveryBuildAndResetGivesTheVaultsBack() throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        tuning.set(frameRate: 20)
+        XCTAssertEqual(tuning.frameRate, 20)
+        let worn = tuning.worn(over: vault)
+        XCTAssertEqual(worn.mascot.frameInterval, 1.0 / 20)
+        XCTAssertEqual(worn.mascot.restInterval, vault.mascot.restInterval, "the rest's rate is not the sheet's")
+        XCTAssertEqual(try LookCensus.different(worn, vault), ["mascot.frameInterval"])
+        let release = Tuning(defaults: store, knobs: false)
+        XCTAssertEqual(release.frameRate, 20, "a release build left the rate unworn")
+        XCTAssertEqual(release.worn(over: vault).mascot.frameInterval, 1.0 / 20)
+        for rate in [Tuning.frameRates.lowerBound, 24, Tuning.frameRates.upperBound] {
+            tuning.set(frameRate: rate)
+            XCTAssertEqual(Tuning(defaults: store).frameRate, rate, "\(rate) came back a hair off")
+            XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, 1 / rate)
+        }
+        tuning.reset()
+        XCTAssertNil(tuning.frameRate)
+        XCTAssertNil(store.string(forKey: Tuning.key))
+        XCTAssertEqual(try LookCensus.different(Tuning(defaults: store).worn(over: vault), vault), [])
+    }
+
+    /// The mind setting `mascot.frameInterval` drops the sheet's rate, the sheet drops the mind's,
+    /// and taking the field back leaves the vault's.
+    func testTheFrameRateAndTheMindsIntervalAreOneField() throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        tuning.set(frameRate: 30)
+        let set = tuning.set(["mascot", "frameInterval"], to: 1.0 / 25, over: vault)
+        XCTAssertEqual(set.kept, ["mascot.frameInterval"])
+        XCTAssertNil(tuning.frameRate, "the mind's interval left the sheet's rate standing")
+        XCTAssertEqual(tuning.worn(over: vault).mascot.frameInterval, 1.0 / 25)
+        tuning.set(frameRate: 22)
+        XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, 1.0 / 22, "the mind's interval outranked the sheet's")
+        XCTAssertEqual(tuning.reset([["mascot", "frameInterval"]]), [.reset])
+        XCTAssertNil(tuning.frameRate)
+        XCTAssertEqual(try LookCensus.different(Tuning(defaults: store).worn(over: vault), vault), [])
+    }
+
     /// The settings sheet's placement is kept on its own, and choosing `pinned` there keeps
     /// whatever pin there is — the one a drag left, or the look's.
     func testThePlacementChosenKeepsThePin() {

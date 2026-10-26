@@ -716,7 +716,8 @@ struct Look: Equatable, Sendable {
         /// How long a frame of him is on the screen, in seconds, while he does anything: a
         /// twenty-fourth, which is the slowest his motion reads as motion. The display gives the
         /// nearest rate it has in reach of it: a ProMotion screen draws him at 24 exactly, a 60 Hz
-        /// one, which has no 24, at 20.
+        /// one, which has no 24, at 20. The settings sheet sets it on one device, 20 to 30 a
+        /// second (`Tuning.frameRates`).
         var frameInterval = 1.0 / 24
         /// How long a frame lasts once he has rested, in seconds: a twelfth, half the frames of
         /// `frameInterval`, for the idle cycle of a Topo with nothing to do, his breathing, his
