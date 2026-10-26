@@ -50,7 +50,8 @@
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
 #
 # --check runs nothing: it says whether a Mac other than buddybox can run the suites named, and exits 1 with an
-# `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
+# `error:` line for each thing it lacks: the pinned Xcode (selected, or installed under
+# TOPO_XCODE_APPS) and XcodeGen, jq, a simulator of each
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
 # counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
@@ -65,9 +66,13 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root" || exit 2
 
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
-# change what it is compiled and run with. XcodeGen's is the version the committed projects are
-# generated with.
-XCODE_VERSION="27.0"
+# change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
+# otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
+# selected Xcode other work is pinned to need not change it. The simulator runtimes are 27.0's,
+# which Xcode 27.1 runs. XcodeGen's is the version the committed
+# projects are generated with.
+XCODE_VERSION="27.1"
+XCODE_APPS="${TOPO_XCODE_APPS:-/Applications}"
 IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 XCODEGEN_VERSION="2.46.0"
@@ -116,11 +121,39 @@ done
 
 err() { echo "error: $*" >&2; }
 
-# The pinned Xcode and XcodeGen, each an `error:` line when this Mac's is another.
+# The pinned Xcode and XcodeGen, each an `error:` line when this Mac lacks it. The selected
+# Xcode is used when it is the pin; otherwise DEVELOPER_DIR is exported, for everything the run
+# starts, to the first Xcode*.app under XCODE_APPS whose version.plist names the pin and whose
+# xcodebuild says so (a bundle still being copied has the one and not the other).
 pinned_tools() {
-  local xcode status=0
+  local xcode app version found=() status=0
   xcode="$(xcodebuild -version 2>/dev/null | head -n 1)"
-  [ "$xcode" = "Xcode $XCODE_VERSION" ] || { err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION; pick the Xcode it has on purpose."; status=1; }
+  if [ "$xcode" != "Xcode $XCODE_VERSION" ]; then
+    for app in "$XCODE_APPS"/Xcode*.app; do
+      [ -d "$app" ] || continue
+      version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/version.plist" 2>/dev/null)"
+      if [ "$version" = "$XCODE_VERSION" ] \
+        && [ "$(DEVELOPER_DIR="$app/Contents/Developer" xcodebuild -version 2>/dev/null | head -n 1)" != "Xcode $XCODE_VERSION" ]; then
+        found+=("$(basename "$app") $version, whose xcodebuild does not say so")
+        continue
+      fi
+      found+=("$(basename "$app") ${version:-with no version}")
+      [ "$version" = "$XCODE_VERSION" ] || continue
+      export DEVELOPER_DIR="$app/Contents/Developer"
+      xcode="Xcode $XCODE_VERSION"
+      break
+    done
+  fi
+  if [ "$xcode" != "Xcode $XCODE_VERSION" ]; then
+    local listed="nothing"
+    if [ "${#found[@]}" -gt 0 ]; then listed="$(printf '%s; ' "${found[@]}")"; listed="${listed%; }"; fi
+    err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION, and no Xcode*.app under $XCODE_APPS is (found: $listed); install the pinned Xcode there."; status=1
+  else
+    # The first simctl call after an Xcode's first launch has installed a newer CoreSimulator
+    # finds the older version's service still loaded, is refused while it replaces it, and the
+    # call after it reaches the new one. This call is that first one, so no suite's is.
+    xcrun simctl list runtimes >/dev/null 2>&1 || true
+  fi
   xcodegen --version 2>/dev/null | grep -qx "Version: $XCODEGEN_VERSION" \
     || { err "xcodegen is '$(xcodegen --version 2>&1 | head -n 1)', not Version: $XCODEGEN_VERSION."; status=1; }
   return "$status"
@@ -311,6 +344,7 @@ prepare() {
   say "Toolchain"
   [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; return 1; }
   pinned_tools || return 1
+  echo "DEVELOPER_DIR=${DEVELOPER_DIR:-(the selected Xcode)}"
   sw_vers
   xcodebuild -version
   swift --version
