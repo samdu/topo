@@ -39,7 +39,8 @@
 # And of the line for a slot: runs that wait have it in the order they began, whichever asks
 # oftener or reached the line first; a run's ticket taken from under it is back under its own name; a ticket of a pid
 # that is gone or another's, or one not whole, is removed and holds nobody, and a file that is
-# no ticket is left; a run signalled in the line leaves no ticket; a run trying a busy Mac
+# no ticket is left; a run in a line that moves waits past the allowance, keeping its place;
+# a run signalled in the line leaves no ticket; a run trying a busy Mac
 # keeps its place, and is out of the line while its suite runs there. And of --hold: the
 # command runs with the slot held and its own status, in any tree, a validation waiting
 # meanwhile; nothing is pushed or posted; what it leaves behind holds nothing; a signal ends
@@ -1070,6 +1071,23 @@ kill "$alive"; wait "$alive" 2>/dev/null
 LOCK_WAIT=0 validate
 is "the process ahead ended: the run waits for nothing" "$status" 0
 is "the process ahead ended: its ticket is removed" "$(tickets)" ""
+# A line that moves: two runs ahead, each served in a little over half the allowance, so the
+# whole wait is longer than the allowance and no part of it is. The run keeps its place and
+# has the checkout, where a run sent away at the allowance would come back behind every run
+# that began since.
+sleep 30 & first_ahead=$!
+sleep 30 & second_ahead=$!
+printf '%s\n%s\n%s\n' "$first_ahead" "$(began "$first_ahead")" "ahead 0000007" > "$q/0000000000000007-0000007"
+printf '%s\n%s\n%s\n' "$second_ahead" "$(began "$second_ahead")" "ahead 0000008" > "$q/0000000000000008-0000008"
+(perl -e 'select(undef,undef,undef,2.5)'; kill "$first_ahead"; perl -e 'select(undef,undef,undef,2.5)'; kill "$second_ahead") 2>/dev/null &
+server=$!
+began_at=$SECONDS
+LOCK_WAIT=4 validate
+wait "$server" "$first_ahead" "$second_ahead" 2>/dev/null
+is "a line that moves: the run waits it out and exits 0" "$status" 0
+case "$out" in *"Waiting for a checkout (2 ahead in the line, the first ahead 0000007, "*"Waiting for a checkout (1 ahead in the line, the first ahead 0000008, "*) ok "a line that moves: it waited behind each in turn" ;; *) fail "a line that moves: $out" ;; esac
+[ $((SECONDS - began_at)) -ge 4 ] && ok "a line that moves: it waited longer than the allowance" || fail "a line that moves: waited only $((SECONDS - began_at)) s"
+is "a line that moves: its suite ran" "$(recorded suites)" "topo_unit topo_ui others"
 
 # With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
 # out of the line for each asking and back under its own name, so a run that came later does
