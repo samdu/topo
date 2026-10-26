@@ -39,7 +39,9 @@
 # And of the line for a slot: runs that wait have it in the order they began, whichever asks
 # oftener or reached the line first; a run's ticket taken from under it is back under its own name; a ticket of a pid
 # that is gone or another's, or one not whole, is removed and holds nobody, and a file that is
-# no ticket is left; a run in a line that moves waits past the allowance, keeping its place;
+# no ticket is left; a run or a hold in a line that moves, or behind a slot that changes hands,
+# waits past the allowance, keeping its place, and one behind a line that stands still while
+# its names flicker gives up on time;
 # a run signalled in the line leaves no ticket; a run trying a busy Mac
 # keeps its place, and is out of the line while its suite runs there. And of --hold: the
 # command runs with the slot held and its own status, in any tree, a validation waiting
@@ -1074,20 +1076,70 @@ is "the process ahead ended: its ticket is removed" "$(tickets)" ""
 # A line that moves: two runs ahead, each served in a little over half the allowance, so the
 # whole wait is longer than the allowance and no part of it is. The run keeps its place and
 # has the checkout, where a run sent away at the allowance would come back behind every run
-# that began since.
-sleep 30 & first_ahead=$!
-sleep 30 & second_ahead=$!
-printf '%s\n%s\n%s\n' "$first_ahead" "$(began "$first_ahead")" "ahead 0000007" > "$q/0000000000000007-0000007"
-printf '%s\n%s\n%s\n' "$second_ahead" "$(began "$second_ahead")" "ahead 0000008" > "$q/0000000000000008-0000008"
-(perl -e 'select(undef,undef,undef,2.5)'; kill "$first_ahead"; perl -e 'select(undef,undef,undef,2.5)'; kill "$second_ahead") 2>/dev/null &
-server=$!
+# that began since. Its own end is what is timed, not the end of what served the line.
+two_ahead() {
+  sleep 30 & first_ahead=$!
+  sleep 30 & second_ahead=$!
+  printf '%s\n%s\n%s\n' "$first_ahead" "$(began "$first_ahead")" "ahead 0000007" > "$q/0000000000000007-0000007"
+  printf '%s\n%s\n%s\n' "$second_ahead" "$(began "$second_ahead")" "ahead 0000008" > "$q/0000000000000008-0000008"
+  (perl -e 'select(undef,undef,undef,2.5)'; kill "$first_ahead"; perl -e 'select(undef,undef,undef,2.5)'; kill "$second_ahead") 2>/dev/null &
+  server=$!
+}
+two_ahead
 began_at=$SECONDS
 LOCK_WAIT=4 validate
+done_at=$SECONDS
 wait "$server" "$first_ahead" "$second_ahead" 2>/dev/null
 is "a line that moves: the run waits it out and exits 0" "$status" 0
 case "$out" in *"Waiting for a checkout (2 ahead in the line, the first ahead 0000007, "*"Waiting for a checkout (1 ahead in the line, the first ahead 0000008, "*) ok "a line that moves: it waited behind each in turn" ;; *) fail "a line that moves: $out" ;; esac
-[ $((SECONDS - began_at)) -ge 4 ] && ok "a line that moves: it waited longer than the allowance" || fail "a line that moves: waited only $((SECONDS - began_at)) s"
+[ $((done_at - began_at)) -gt 4 ] && ok "a line that moves: it waited longer than the allowance" || fail "a line that moves: done in $((done_at - began_at)) s, within the allowance"
 is "a line that moves: its suite ran" "$(recorded suites)" "topo_unit topo_ui others"
+# A hold through a line that moves keeps its place the same way.
+two_ahead
+began_at=$SECONDS
+held_out="$(cd "$work" && PATH="$work/bin:$PATH" LOCK_WAIT=4 "$repo/scripts/validate-and-push.sh" --hold -- sh -c 'echo held' 2>&1)" && status=0 || status=$?
+done_at=$SECONDS
+wait "$server" "$first_ahead" "$second_ahead" 2>/dev/null
+out="$held_out"
+is "a hold through a line that moves: exits 0" "$status" 0
+case "$held_out" in *held) ok "a hold through a line that moves: its command ran" ;; *) fail "a hold through a line that moves: $held_out" ;; esac
+[ $((done_at - began_at)) -gt 4 ] && ok "a hold through a line that moves: it waited longer than the allowance" || fail "a hold through a line that moves: done in $((done_at - began_at)) s"
+# The slot changing hands is the line moving, with nobody ahead in it: the slot is held for a
+# little over half the allowance, then by another, then let go.
+mkdir -p "$TOPO_VALIDATE_CACHE/slots/1"
+lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" sh -c "echo \$\$ > '$q/../slot-held'; exec sleep 60" &
+slot_lock=$!
+until_true reached "$q/../slot-held" || fail "the slot changing hands: the slot was never held"
+echo "one 0000009, pid 9, since 00:00" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+(perl -e 'select(undef,undef,undef,2.5)'; echo "another 0000010, pid 10, since 00:01" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+ perl -e 'select(undef,undef,undef,2.5)'; rm -f "$TOPO_VALIDATE_CACHE/slots/1/holder"; kill "$(cat "$q/../slot-held")") 2>/dev/null &
+server=$!
+began_at=$SECONDS
+LOCK_WAIT=4 validate
+done_at=$SECONDS
+wait "$server" "$slot_lock" 2>/dev/null; rm -f "$q/../slot-held"
+is "the slot changing hands: the run waits it out and exits 0" "$status" 0
+case "$out" in *"Waiting for a checkout (slot 1: one 0000009, "*) ok "the slot changing hands: it waited for the slot, nobody ahead" ;; *) fail "the slot changing hands: $out" ;; esac
+[ $((done_at - began_at)) -gt 4 ] && ok "the slot changing hands: it waited longer than the allowance" || fail "the slot changing hands: done in $((done_at - began_at)) s"
+# A line that stands still while which of a ticket's names reads free flickers, as it does
+# when every run in the line asks those locks at each look: the same ticket ahead, the same
+# slot, and the allowance runs out on time.
+sleep 30 & still=$!
+printf '%s\n%s\n%s\n%s\n' "$still" "$(began "$still")" "still 0000011" "topo_unit others" > "$q/0000000000000011-0000011"
+(for _ in 1 2 3 4 5 6 7 8; do
+   lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_unit.lock" perl -e 'select(undef,undef,undef,0.7)'
+   lockf -k "$TOPO_VALIDATE_CACHE/suite-others.lock" perl -e 'select(undef,undef,undef,0.7)'
+ done) 2>/dev/null &
+flicker=$!
+began_at=$SECONDS
+LOCK_WAIT=3 validate
+done_at=$SECONDS
+kill "$flicker" "$still" 2>/dev/null; wait "$flicker" "$still" 2>/dev/null
+is "a flickering line that stands still: exits 2" "$status" 2
+case "$out" in *"the first still 0000011, pid $still, for "*) ok "a flickering line that stands still: it waited behind the one ahead" ;; *) fail "a flickering line that stands still: $out" ;; esac
+[ $((done_at - began_at)) -le 5 ] && ok "a flickering line that stands still: gave up within the allowance" || fail "a flickering line that stands still: gave up after $((done_at - began_at)) s"
+is "a flickering line that stands still: no suite ran" "$(recorded suites)" ""
+rm -f "$q/0000000000000011-0000011"
 
 # With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
 # out of the line for each asking and back under its own name, so a run that came later does
