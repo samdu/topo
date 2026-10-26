@@ -207,7 +207,8 @@ enum DebugRun {
     #endif
 
     /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
-    /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be
+    /// while the chat is live, in place of the five seconds it ordinarily waits (the back-off
+    /// multiplies it the same). A minute makes the loop too slow to be
     /// what carried a revision to the folder, so what arrives in the meantime arrived by push.
     /// Nil when the variable is absent, which is every ordinary run.
     static func loopSeconds(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Double? {

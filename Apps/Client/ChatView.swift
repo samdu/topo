@@ -712,7 +712,6 @@ struct ChatView: View {
         voice.cancel(.chat)
         guard row.send(via: harness) != nil else { return }
         Task { await harness.retry() }
-        Task { await harness.wake() }
     }
 
     /// What holding a turn in the transcript offers. Holding one of the person's own puts its

@@ -168,18 +168,19 @@ final class Harness {
     private var answeringLoop = false
     /// The memory's mirror, where the loop is what drives it. Called at the top of every
     /// answering pass, before the log is read, so a revision written on another device reaches
-    /// the folder within the interval with no push and no turn; and again after a reply is in
+    /// the folder within the loop's pause with no push and no turn; and again after a reply is in
     /// the log, whoever's turn it answered — one this device typed or one a limb wrote — since
     /// that is where anything a turn leaves in the memory goes out from. Nil on a screen that is
     /// not answering.
     var onPass: (@MainActor () async -> Void)?
     /// Set by `wake()`: the loop skips or ends its pause and runs the next pass now.
     private var woken = false
-    /// How long the chat has to have been quiet — no turn in flight, nothing on the line, the log
-    /// as the pass before read it — before the loop backs off, and the pauses it backs off to,
-    /// each as a multiple of the loop's interval, the last held: at five seconds, two quiet
-    /// minutes, then 15, 30 and 60 s. A wake — a push, a touch, the chat coming to the front —
-    /// is the first pause again.
+    /// How long the chat has to have been quiet — the pass read the log and found it as the pass
+    /// before did, no turn in flight, nothing on the line, no reply owed the log, no person's
+    /// turn at its head — before the loop backs off, and the pauses it backs off to, each as a
+    /// multiple of the loop's interval, the last held: at five seconds, two quiet minutes, then
+    /// 15, 30 and 60 s. A wake — a push, a touch, the chat coming to the front — is the first
+    /// pause again, and so is a send (`nudge`).
     static let backoffAfter: Duration = .seconds(120)
     static let backoffSteps = [3, 6, 12]
     private var quietFor: Duration = .zero
@@ -727,6 +728,7 @@ final class Harness {
 
     /// Sends the line from its head, after a turn that stopped it or a launch that found it.
     func retry() async {
+        nudge()
         await drain()
     }
 
@@ -1189,6 +1191,8 @@ final class Harness {
     func answering(every interval: Duration) async {
         let login = self.login
         answeringLoop = true
+        quietFor = .zero
+        backoffStep = 0
         defer {
             answeringLoop = false
             let left = wakers
@@ -1215,7 +1219,9 @@ final class Harness {
             await answerPending()
             served.forEach { $0.resume() }
             if woken { continue }
-            let wait = nextPause(interval, quiet: !busy && !hasWaiting && turns == before)
+            let quiet = read && !busy && !hasWaiting && unsaved.isEmpty && turns.last?.role != .person
+                && turns == before
+            let wait = nextPause(interval, quiet: quiet)
             let pausing = Task { [pause] in try await pause(wait) }
             sleeping = pausing
             let slept = await withTaskCancellationHandler { await pausing.result } onCancel: { pausing.cancel() }
@@ -1234,6 +1240,18 @@ final class Harness {
         woken = true
         sleeping?.cancel()
         await withCheckedContinuation { wakers.append($0) }
+    }
+
+    /// The person is here: a send, typed or spoken. The count of quiet starts again, and a pause
+    /// the loop had backed off to ends now with a pass, as a wake's does; a live pause runs its
+    /// five seconds out, and nothing waits on either.
+    private func nudge() {
+        let backedOff = backoffStep > 0
+        quietFor = .zero
+        backoffStep = 0
+        guard backedOff, answeringLoop, sleeping != nil else { return }
+        woken = true
+        sleeping?.cancel()
     }
 
     /// The loop's next pause: `interval` while the chat is live, and once it has been quiet for

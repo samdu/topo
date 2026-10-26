@@ -1034,8 +1034,6 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(transport.sent.count, 3)
     }
 
-    /// What a silent push does: a limb writes, and the paused loop answers with no tick of its
-    /// pause, through the loop rather than beside it.
     /// The loop's pause while the chat is quiet: the interval for two minutes of quiet passes,
     /// then 15, 30 and 60 s, held at 60; a limb's turn answered starts the count again, and a
     /// wake is the interval again at once.
@@ -1084,6 +1082,8 @@ final class HarnessIntegrationTests: XCTestCase {
         await open.value
     }
 
+    /// What a silent push does: a limb writes, and the paused loop answers with no tick of its
+    /// pause, through the loop rather than beside it.
     func testAWakeRunsTheNextPassWithoutWaitingOutThePause() async throws {
         let db = InMemoryRecordDatabase()
         let transport = ScriptedTransport((200, reply("first back")), (200, reply("second back")))
