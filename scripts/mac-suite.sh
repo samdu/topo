@@ -435,28 +435,63 @@ display_held() {
 # helper the application is handed to, a loop, or a key that is not a literal is not caught.
 # What the part's tests fetched is `quiet_models`, after them.
 QUIET_TESTS=Tests/ClientUI
-# An awk function both readers start each line with: the line with its comments taken out, a
-# string literal's contents kept, and a block comment's depth carried to the next line.
+# The awk both readers start with. `code` is each line with its comments taken out, a string
+# literal's contents kept: a small lexer whose state runs across lines, so a string is read
+# before a comment mark is (plain `"…"` with its `\` escapes, multiline `"""…"""`, and raw
+# `#"…"#` and `#"""…"""#` with any number of `#`, each with its interpolations `\(…)`, read as
+# code to their closing parenthesis), and a block comment nests and spans lines. A string that
+# is not multiline ends with its line. `declared` is a line past its leading attributes, their
+# arguments read to the parenthesis that closes them outside a string literal.
 SOURCE_CODE_AWK='
-function code(line,   out, i, n, c, two, quoted) {
-  out = ""; n = length(line); quoted = 0
+function rep(s, n,   r) { r = ""; while (n-- > 0) r = r s; return r }
+function code(line,   out, i, n, c, k, q, w) {
+  out = ""; n = length(line)
   for (i = 1; i <= n; i++) {
-    c = substr(line, i, 1); two = substr(line, i, 2)
+    c = substr(line, i, 1)
     if (depth > 0) {
-      if (two == "/*") { depth++; i++ } else if (two == "*/") { depth--; i++; if (depth == 0) out = out " " }
+      if (substr(line, i, 2) == "/*") { depth++; i++ } else if (substr(line, i, 2) == "*/") { depth--; i++; if (depth == 0) out = out " " }
       continue
     }
-    if (quoted) {
-      out = out c
-      if (c == "\\") { out = out substr(line, i + 1, 1); i++ } else if (c == "\"") quoted = 0
-      continue
+    if (sp && kind[sp] == "s") {
+      k = hash[sp]; q = ml[sp] ? "\"\"\"" : "\""; w = length(q) + k
+      if (c == "\\" && substr(line, i + 1, k) == rep("#", k)) {
+        out = out substr(line, i, k + 2)
+        if (substr(line, i + k + 1, 1) == "(") { sp++; kind[sp] = "i"; paren[sp] = 0 }
+        i += k + 1; continue
+      }
+      if (substr(line, i, w) == q rep("#", k)) { out = out substr(line, i, w); i += w - 1; sp--; continue }
+      out = out c; continue
     }
-    if (two == "//") break
-    if (two == "/*") { depth = 1; i++; continue }
-    if (c == "\"") quoted = 1
+    if (sp && kind[sp] == "i") {
+      if (c == "(") paren[sp]++
+      else if (c == ")") { if (paren[sp] == 0) { sp--; out = out c; continue } paren[sp]-- }
+    }
+    if (substr(line, i, 2) == "//") break
+    if (substr(line, i, 2) == "/*") { depth = 1; i++; continue }
+    for (k = 0; substr(line, i + k, 1) == "#"; k++) ;
+    if (substr(line, i + k, 1) == "\"") {
+      sp++; kind[sp] = "s"; hash[sp] = k; ml[sp] = (substr(line, i + k, 3) == "\"\"\"")
+      w = k + (ml[sp] ? 3 : 1); out = out substr(line, i, w); i += w - 1; continue
+    }
     out = out c
   }
+  while (sp > 0 && !(kind[sp] == "s" && ml[sp])) sp--
   return out
+}
+function declared(line,   i, n, c, d, q) {
+  n = length(line); i = 1
+  while (1) {
+    while (i <= n && substr(line, i, 1) ~ /[ \t]/) i++
+    if (substr(line, i, 1) != "@") break
+    for (i++; i <= n && substr(line, i, 1) ~ /[A-Za-z0-9_.]/; i++) ;
+    if (substr(line, i, 1) != "(") continue
+    for (d = 0; i <= n; i++) {
+      c = substr(line, i, 1)
+      if (q) { if (c == "\\") i++; else if (c == "\"") q = 0; continue }
+      if (c == "\"") q = 1; else if (c == "(") d++; else if (c == ")" && --d == 0) { i++; break }
+    }
+  }
+  return substr(line, i)
 }
 { $0 = code($0) }
 '
@@ -467,8 +502,9 @@ quiet_launches() {
     case "$file" in
       */"$mic.swift")
         out="$(awk -v file="$file" -v mic="$mic" "$SOURCE_CODE_AWK"'
-          match($0, /^[ \t]*(@[A-Za-z_][A-Za-z0-9_.]*(\([^)]*\))?[ \t]+)*((final|private|fileprivate|public|internal|package|open|nonisolated)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
-            name = substr($0, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
+          { rest = declared($0) }
+          match(rest, /^((final|private|fileprivate|public|internal|package|open|nonisolated)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+            name = substr(rest, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
             if (name != mic && name != "func" && name != "var" && name != "let") print file ":" NR ": class " name ", which the quiet part runs and this does not read"
           }' "$file")"
         [ -z "$out" ] || { echo "$out"; bad=1; }
@@ -511,19 +547,41 @@ quiet_launches() {
 # `Models/parakeet-ctc-110m-coreml`, where a set made before its home sits until `rehome`
 # moves it). The rest of `Models/` is the guest's (its rootfs, bash, Claude Code), which the
 # quiet part fetches. Each file found is named; no folder, or folders with no file in them,
-# is nothing fetched. A container that cannot be read is a failure, since nothing was proved.
+# is nothing fetched. A container, a folder on the way to a home or a folder in one that cannot
+# be read is a failure, named, since nothing was proved there.
 quiet_models() {
-  local container home found=""
+  local container home at part parts files found="" unread="" status=0
   container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
     || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
   for home in Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Models/pocket-tts Models/pocket-tts-coreml FluidAudio/Models; do
-    home="Library/Application Support/$home"
-    [ -d "$container/$home" ] || continue
-    found+="$(cd "$container" && find "$home" ! -type d | sed 's/^/  /')"$'\n'
+    # Down to the home a folder at a time: a folder that cannot be listed or entered is unread,
+    # and only a name missing from one that can be is no home.
+    IFS=/ read -ra parts <<<"Library/Application Support/$home"
+    at="$container"
+    for part in "${parts[@]}"; do
+      [ -r "$at" ] && [ -x "$at" ] || { unread+="  ${at#"$container/"}: cannot be listed or entered"$'\n'; at=""; break; }
+      [ -e "$at/$part" ] || [ -L "$at/$part" ] || { at=""; break; }
+      at="$at/$part"
+    done
+    [ -n "$at" ] || continue
+    if files="$(cd "$container" && find "${at#"$container/"}" ! -type d 2>"$RESULTS/quiet-models.err")"; then
+      [ -z "$files" ] || found+="$(sed 's/^/  /' <<<"$files")"$'\n'
+    else
+      unread+="$(sed 's/^/  /' "$RESULTS/quiet-models.err")"$'\n'
+      [ -z "$files" ] || found+="$(sed 's/^/  /' <<<"$files")"$'\n'
+    fi
   done
-  found="$(sed '/^$/d' <<<"$found")"
-  [ -z "$found" ] || { err "topo_ui:quiet fetched models its launches hold loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE); in the app's data container on $1:"; echo "$found" >&2; return 1; }
-  echo "No ear or voice model in the app's data container."
+  rm -f "$RESULTS/quiet-models.err"
+  if [ -n "$found" ]; then
+    err "topo_ui:quiet fetched models its launches hold loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE); in the app's data container on $1:"
+    printf '%s' "$found" >&2; status=1
+  fi
+  if [ -n "$unread" ]; then
+    err "topo_ui:quiet: part of the app's data container on $1 could not be read, so nothing shows the part fetched no model there:"
+    printf '%s' "$unread" >&2; status=1
+  fi
+  [ "$status" = 1 ] || echo "No ear or voice model in the app's data container."
+  return "$status"
 }
 # suite_topo_ui <whole|quiet|mic>
 suite_topo_ui() {

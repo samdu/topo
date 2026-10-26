@@ -21,11 +21,13 @@
 # pid and is running from before its lane starts to after it stops: one that did not start or
 # took no assertion starts no lane, one that ended before the tests runs none, and one that
 # ended under the tests is red; and `topo_ui:quiet` runs no test when the tests' source, read with
-# its comments taken out, names a launch that does not leave the ear and the voice loading or
+# its comments taken out (a comment mark inside a string literal of any Swift form is the
+# string's), names a launch that does not leave the ear and the voice loading or
 # another class (attributes and modifiers ahead of it included) in the microphone's file, runs
 # over the repository's own UI tests, and is red, naming each file, when the app's data
 # container on its simulator, read after its tests and before the simulator is deleted, holds
-# a file under a model's home, or cannot be read.
+# a file under a model's home, or cannot be read, a folder on the way to a home or in one
+# included.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -40,6 +42,7 @@ finish() {
     rm -f "$work"/*.hold
     wait "$running" 2>/dev/null
   fi
+  chmod -R u+rwx "$work" 2>/dev/null
   rm -rf "$work"
 }
 trap finish EXIT
@@ -225,28 +228,44 @@ is "the quiet part: the app's data container is read on its own simulator" "$(gr
 is "the quiet part: the container is read after the tests and before the simulator goes" \
   "$(grep -E '^xcrun simctl (get_app_container|shutdown|delete)|^xcodebuild test-without-building' "$CALLS" | cut -d' ' -f1-3 | tr '\n' '|')" \
   "xcodebuild test-without-building -project|xcrun simctl get_app_container|xcrun simctl shutdown|xcrun simctl delete|"
-# What the quiet part's tests fetched, in that container: a file under either model home is red
-# and named; folders with nothing in them are nothing fetched; a container not read is red.
-models() {  # models <case> <want status:results> <named or ""> [paths under the container, a trailing / a folder]
-  local case="$1" want="$2" named="$3" path; shift 3
-  rm -rf "$work/models-$case.calls.container"
+# What the quiet part's tests fetched, in that container: a file under any model home is red
+# and every one is named; folders with nothing in them are nothing fetched; a container, a
+# folder on the way to a home or one in a home that cannot be read is red and named.
+models() {  # models <case> <want status:results> <named, |-separated, or ""> [paths under the container, a trailing / a folder]
+  local case="$1" want="$2" named="$3" path c="$work/models-$1.calls.container" one; shift 3
+  chmod -R u+rwx "$c" 2>/dev/null; rm -rf "$c"
   for path in "$@"; do
-    case "$path" in */) mkdir -p "$work/models-$case.calls.container/$path" ;; *) mkdir -p "$(dirname "$work/models-$case.calls.container/$path")"; : > "$work/models-$case.calls.container/$path" ;; esac
+    case "$path" in */) mkdir -p "$c/$path" ;; *) mkdir -p "$(dirname "$c/$path")"; : > "$c/$path" ;; esac
   done
+  [ -z "${UNREADABLE-}" ] || chmod 000 "$c/$UNREADABLE"
   suite "models-$case" topo_ui:quiet
+  chmod -R u+rwx "$c" 2>/dev/null
   is "the quiet part, $case: $want" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "$want:1"
-  [ -z "$named" ] || case "$(cat "$work/models-$case.log")" in *"$named"*) ok "the quiet part, $case: named" ;; *) fail "the quiet part, $case: not named: $(tail -3 "$work/models-$case.log")" ;; esac
+  local IFS='|'
+  for one in $named; do
+    case "$(cat "$work/models-$case.log")" in *"$one"*) ok "the quiet part, $case: $one named" ;; *) fail "the quiet part, $case: $one not named: $(tail -5 "$work/models-$case.log")" ;; esac
+  done
 }
-models an-ears-file "1:topo_ui:quiet=failure " "Library/Application Support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin" \
-  "Library/Application Support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin"
-models a-voice-before-its-home "1:topo_ui:quiet=failure " "Library/Application Support/Models/pocket-tts-coreml/constants.bin" "Library/Application Support/Models/pocket-tts-coreml/constants.bin"
-models the-guests-downloads "0:topo_ui:quiet=success " "" "Library/Application Support/Models/claude-code/claude" "Library/Application Support/Models/alpine-bash/.verified.json"
-models a-voices-ledger "1:topo_ui:quiet=failure " "Library/Application Support/Models/pocket-tts/.verified.json" "Library/Application Support/Models/pocket-tts/.verified.json"
-models the-spotters-file "1:topo_ui:quiet=failure " "Library/Application Support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json" \
-  "Library/Application Support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json"
-models empty-homes "0:topo_ui:quiet=success " "" "Library/Application Support/Models/pocket-tts/" "Library/Application Support/FluidAudio/Models/"
-models elsewhere-in-the-container "0:topo_ui:quiet=success " "" "Library/Application Support/notes.json" "Library/Caches/x"
+support="Library/Application Support"
+models an-ears-file "1:topo_ui:quiet=failure " "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin" \
+  "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin"
+models a-voice-before-its-home "1:topo_ui:quiet=failure " "$support/Models/pocket-tts-coreml/constants.bin" "$support/Models/pocket-tts-coreml/constants.bin"
+models a-spotter-before-its-home "1:topo_ui:quiet=failure " "$support/Models/parakeet-ctc-110m-coreml/vocab.json" "$support/Models/parakeet-ctc-110m-coreml/vocab.json"
+models a-voices-ledger "1:topo_ui:quiet=failure " "$support/Models/pocket-tts/.verified.json" "$support/Models/pocket-tts/.verified.json"
+models resume-data "1:topo_ui:quiet=failure " "$support/Models/pocket-tts/mimi.mlmodelc/weights.bin.resume" "$support/Models/pocket-tts/mimi.mlmodelc/weights.bin.resume"
+models the-spotters-file "1:topo_ui:quiet=failure " "$support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json" \
+  "$support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json"
+models every-file-named "1:topo_ui:quiet=failure " \
+  "$support/Models/parakeet-tdt-0.6b-v2/a.bin|$support/Models/parakeet-tdt-0.6b-v2/b.bin|$support/Models/pocket-tts/c.bin|$support/FluidAudio/Models/x/d.bin" \
+  "$support/Models/parakeet-tdt-0.6b-v2/a.bin" "$support/Models/parakeet-tdt-0.6b-v2/b.bin" "$support/Models/pocket-tts/c.bin" "$support/FluidAudio/Models/x/d.bin"
+models empty-homes "0:topo_ui:quiet=success " "No ear or voice model" "$support/Models/pocket-tts/" "$support/FluidAudio/Models/"
+models the-guests-downloads "0:topo_ui:quiet=success " "" "$support/Models/claude-code/claude" "$support/Models/alpine-bash/.verified.json"
+models elsewhere-in-the-container "0:topo_ui:quiet=success " "" "$support/notes.json" "Library/Caches/x"
 FAKE_NO_CONTAINER=1 models no-container "1:topo_ui:quiet=failure " "could not be read"
+UNREADABLE="$support/Models/pocket-tts" models a-home-not-listable "1:topo_ui:quiet=failure " "could not be read|Models/pocket-tts" "$support/Models/pocket-tts/c.bin"
+UNREADABLE="$support/Models/pocket-tts/mimi" models a-folder-in-a-home-not-listable "1:topo_ui:quiet=failure " "could not be read|Models/pocket-tts/mimi|$support/Models/pocket-tts/c.bin" \
+  "$support/Models/pocket-tts/c.bin" "$support/Models/pocket-tts/mimi/d.bin"
+UNREADABLE="$support" models an-ancestor-not-enterable "1:topo_ui:quiet=failure " "could not be read|$support: cannot be listed or entered" "$support/Models/pocket-tts/c.bin"
 REQUIRE_RED=absent suite quiet-has-mic topo_ui:quiet
 is "the quiet part with the microphone's class in its results: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
 UI_TEST=1 suite quiet-red topo_ui:quiet
@@ -281,6 +300,17 @@ is "the quiet part, a merge ahead of the two and other keys after: runs" "$statu
 MIC_SOURCE='final class OtherTests: XCTestCase {}' loud class-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
 MIC_SOURCE='@MainActor final class OtherTests: XCTestCase {}' loud attributed-class-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
 MIC_SOURCE='@available(iOS 17, *) @MainActor public final class OtherTests: XCTestCase {}' loud two-attributes-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+MIC_SOURCE='@available(*, deprecated, message: "Use replacement()") @MainActor final class OtherTests: XCTestCase {}' loud a-parenthesis-in-an-attributes-string "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+MIC_SOURCE='package class OtherTests: XCTestCase {}' loud a-package-class "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+MIC_SOURCE='nonisolated final class OtherTests: XCTestCase {}' loud a-nonisolated-class "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+# Comment marks inside a Swift string of each form are the string's: a launch after it is read.
+loose=('let clean = TopoLaunch.app()' 'clean.launch()')
+loud mark-in-an-interpolations-string "QuietTests.swift:7: clean.launch()" 'let note = "\(a + "/*")"' "${loose[@]}"
+loud mark-after-an-escaped-quote "QuietTests.swift:7: clean.launch()" 'let note = "say \" /* no"' "${loose[@]}"
+loud mark-in-a-multiline-string "QuietTests.swift:9: clean.launch()" 'let note = """' 'see /* below' '"""' "${loose[@]}"
+loud mark-in-a-raw-string "QuietTests.swift:7: clean.launch()" 'let note = #"quote " /*"#' "${loose[@]}"
+loud mark-in-a-raw-multiline-string "QuietTests.swift:10: clean.launch()" 'let note = #"""' 'a /* b' '""" is not its end' '"""#' "${loose[@]}"
+loud mark-in-a-raw-strings-interpolation "QuietTests.swift:7: clean.launch()" 'let note = ##"\##(f("x")) a " /* b"##' "${loose[@]}"
 # A comment is not source: a key set in one is not set, and a class in one is no class.
 loud ear-set-in-a-comment "QuietTests.swift:8: clean.launch()" 'let clean = XCUIApplication()' '// clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' "${both[2]}" 'clean.launch()'
 loud voice-set-in-a-block-comment "QuietTests.swift:10: clean.launch()" "${both[@]:0:2}" '/*' "${both[2]}" '*/' 'clean.launch()'
