@@ -403,6 +403,23 @@ is "the lock free again: exits 0" "$status" 0
 TOPO_VALIDATE_SLOTS=0 validate
 is "no slots at all: exits 2" "$status" 2
 
+# The script that began a run is the one that ends it: the worktree's copy rewritten in place
+# while a suite runs, with a line that exits 99 just past the block the run is waiting in, is
+# not read into the run.
+scratch edited Apps/Client/SettingsView.swift
+begin "$repo" "$work/edited/record" "$work/edited/hold" FAKE_HOLD_SUITE=topo_unit
+edited="$repo/scripts/validate-and-push.sh"
+past="$(awk '/^if \[ "\$\{#chosen\[@\]\}" -gt 0 \]; then$/ { inside = 1 } inside && /^fi$/ { print NR; exit }' "$edited")"
+[ -n "$past" ] || fail "an edit mid-run: no end to the suites' block in the script"
+{ head -n "$past" "$edited"; echo 'echo EDITED-MID-RUN >&2; exit 99'; tail -n +"$((past + 1))" "$edited"; } > "$work/edited/script"
+cat "$work/edited/script" > "$edited"
+release "$work/edited/hold"
+wait "$run"; status=$?
+out="$(cat "$work/edited/record.out")"
+is "an edit mid-run: the run exits 0" "$status" 0
+is "an edit mid-run: the run pushed" "$(origin_head)" "$sha"
+case "$out" in *EDITED-MID-RUN*) fail "an edit mid-run: the run read the edit: $out" ;; *) ok "an edit mid-run: the run did not read the edit" ;; esac
+
 # One checkout unless more are asked for: a second run waits for the first whatever its
 # suites are, so one suite's simulators are booted on this Mac at a time.
 scratch single Apps/Client/SettingsView.swift

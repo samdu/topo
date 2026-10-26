@@ -216,10 +216,26 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(message["content"] as? String, "say \"hi\"\nplease")
     }
 
+    /// An input echoed as its turn begins names the input by its uuid; a replayed line with no uuid
+    /// names none, and a tool's result, which is a `user` line too, is read as before.
+    func testAnEchoedInputIsReadAsReceived() throws {
+        let events = try events("notice-before-turn")
+        XCTAssertEqual(events.compactMap { if case .received(let id) = $0 { return id } else { return nil } },
+                       ["22222222-2222-4222-8222-222222222222"])
+        let results = events.compactMap { if case .result(let result) = $0 { return result.text } else { return nil } }
+        XCTAssertEqual(results, ["Background task completed successfully.", "PONG"],
+                       "the recording is the order #447 needs: the notice's result first")
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"user","isReplay":true,"message":{"role":"user","content":"hi"}}"#),
+                       [.other("user/replay")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"user","uuid":"u","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}"#),
+                       [.toolResult(isError: false, text: "ok")])
+    }
+
     func testClaudeCodesArguments() {
         XCTAssertEqual(ClaudeLauncher.arguments(model: "claude-haiku-4-5-20251001", resume: nil),
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                        "--include-partial-messages", "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001"])
+                        "--include-partial-messages", "--replay-user-messages", "--dangerously-skip-permissions",
+                        "--model", "claude-haiku-4-5-20251001"])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
         let launcher = ClaudeLauncher { [:] }
         XCTAssertEqual(Array(launcher.commandLine(resume: nil, model: nil).prefix(4)),

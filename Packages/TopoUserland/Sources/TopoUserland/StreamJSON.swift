@@ -39,6 +39,13 @@ public enum StreamEvent: Sendable, Equatable {
     case compacted(Compacted)
     /// `system`/`status` saying a compaction was tried and failed, with Claude Code's reason.
     case compactFailed(String)
+    /// An input of the app's echoed back as Claude Code takes it up (`--replay-user-messages`):
+    /// a `user` line marked `isReplay`, carrying the `uuid` the input was written with. It comes
+    /// after the `system/init` of the turn that answers that input and before any of that turn's
+    /// messages, so it is what says which turn is whose: Claude Code also runs turns of its own,
+    /// answering a background task's notice, whose lines and result come between an input being
+    /// written and its turn beginning.
+    case received(id: String)
     /// The turn's end, answered or failed.
     case result(TurnResult)
     /// A well-formed event of a kind the app does not read — a hook's lines, a rate-limit notice,
@@ -133,6 +140,10 @@ public enum StreamJSON {
             return [.compactFailed(clip(object["compact_error"] as? String ?? "no reason given"))]
         case ("assistant", _):
             return assistant(object) ?? [.malformed(clip(trimmed))]
+        case ("user", _) where object["isReplay"] as? Bool == true:
+            // An echo has no tool result to read; one with no uuid names no input of the app's.
+            guard let id = object["uuid"] as? String else { return [.other("user/replay")] }
+            return [.received(id: id)]
         case ("user", _):
             let results = toolResults(object)
             return results.isEmpty ? [.other(subtype.map { "\(type)/\($0)" } ?? type)] : results

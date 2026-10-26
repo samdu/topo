@@ -54,15 +54,14 @@ From scratch, not a fork: the current app is a Daphne client with a Buddy screen
 
 ## Order of build
 
-What is built: sign in with Claude, the CloudKit log and lease, the phone's own harness, the memory (the mirror, both homes on the phone, revisions and conflict copies), push to talk with the on-device ear and voice (one of each, both FluidAudio on the device, no fallback), a spoken reply heard behind the lock under a bounded audio hold, the voice surviving a media services reset, the push that wakes the primary, Claude Code in the userland answering the chat, fetched at first launch and warmed on foreground, with its turns written to the log and the memory folder mounted into it, the guest on the network with its names resolved through the app, the phone's own tools through the userland (reminders and the calendar through EventKit, notifications, contacts, location, the home through HomeKit, places and routes through MapKit), the GitHub and 1Password connections, the widgets and controls the mind writes, the watch and the TV as viewers, and Womble as a viewer. What follows, in order; each step is the next thing the one before it makes possible. The work in hand, issue by issue, is `docs/roadmap.md`.
+What is built: sign in with Claude, the CloudKit log and lease, the phone's own harness, the memory (the mirror, both homes on the phone, revisions and conflict copies), push to talk with the on-device ear and voice (one of each, both FluidAudio on the device, no fallback), a spoken reply heard behind the lock under a bounded audio hold, the voice surviving a media services reset, the push that wakes the primary, Claude Code in the userland answering the chat, fetched at first launch and warmed on foreground, with its turns written to the log, the memory folder mounted into it, and a turn sent in front running on behind another app, the guest on the network with its names resolved through the app, the phone's own tools through the userland (reminders and the calendar through EventKit, notifications, contacts, location, the home through HomeKit, places and routes through MapKit, Photos, the document picker, a screen share), the share sheet and Shortcuts as ways things arrive, the GitHub and 1Password connections, the widgets and controls the mind writes, the watch and the TV as viewers, and Womble as a viewer. What follows, in order; each step is the next thing the one before it makes possible. The work in hand, issue by issue, is `docs/roadmap.md`.
 
-1. **The rest of the phone's own tools**, through the userland. Photos and the document picker, the share sheet as the way things arrive, Shortcuts intents, a screen share. OpenMinis is the map for which tools a phone agent needs and how they are shaped; the code is native Swift against the platform frameworks, because OpenMinis is GPL and nothing of it ships in a bundle.
-2. **What the phone already does, made right.** The tools' own faults, the guest holding up, the widgets' and controls' second round, a reply's second round on the screen, the first run and a full context, an effort selector: items 2 to 7 of `docs/roadmap.md`'s order, issue by issue.
-3. **TestFlight with the production schema.** After those, and not before Sam would show Topo to someone else: each step before it changes what review sees.
-4. **The hub.** The Mac app with the CLI, pairing, the lease taken from a live holder, the lid opening after a week.
-5. **The board.** Old iPads on the wall, the household container, the house agent.
-6. **Away from home.** The punched tunnel over CloudKit signalling; a direct LAN socket only if the push proves too slow to feel live.
-7. **Two Buddies meeting** under the contract.
+1. **What the phone already does, made right.** The tools' and the harness's own faults, the widgets' and controls' second round, a reply's second round on the screen, an effort selector, the mind working on behind another app, the ear and the voice: `docs/roadmap.md`'s *Next, in order*, issue by issue.
+2. **TestFlight with the production schema.** After those, and not before Sam would show Topo to someone else: each step before it changes what review sees.
+3. **The hub.** The Mac app with the CLI, pairing, the lease taken from a live holder, the lid opening after a week.
+4. **The board.** Old iPads on the wall, the household container, the house agent.
+5. **Away from home.** The punched tunnel over CloudKit signalling; a direct LAN socket only if the push proves too slow to feel live.
+6. **Two Buddies meeting** under the contract.
 
 ## Identity
 

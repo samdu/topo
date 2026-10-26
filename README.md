@@ -4,16 +4,18 @@ Topo is one always-on mind per person, with every Apple device you own as a limb
 
 On the phone the mind is the real Claude Code, running in an Alpine userland inside the app and signed in with your own Claude account. You talk to it by holding the microphone; the words are recognised on the phone and its replies are read aloud on the phone. Its memory is an Obsidian vault that lives in your iCloud.
 
+The userland is the sandbox, so Claude Code runs in it with permissions bypassed, and what it can reach is the holes the app makes: the memory's folder mounted into it, a loopback proxy that holds the Claude login, a loopback tool service behind a `topo` command (reminders, the calendar, contacts, location, the home, Maps, Photos, a file the person picks, their shared screen, the widgets and controls it designs, and a GitHub or 1Password token handed to one command at a time), a DNS forwarder onto the phone's own resolver, and the internet. Things reach it from the share sheet, Shortcuts and the widgets; [docs/guest.md](docs/guest.md) is each hole in full.
+
 ## What is in the repository
 
 - **The client** (`Apps/Client`): one SwiftUI codebase for iPhone, iPad, Apple Watch and Apple TV. Only the iOS app (iPhone and iPad) signs in and answers; the watch and TV show the transcript.
 - **The hub** (`Apps/TopoHub`): the macOS menu-bar app bundling the Claude CLI, which holds the primary lease and shows the pairing code.
-- **Womble** (`Womble/`): a viewer-only app for devices as old as iOS 12, which puts the transcript and the house board on a drawer iPad.
-- **The packages** (`Packages/`): the logic, each with its own tests — the CloudKit log and lease (`TopoCore`), the socket layer (`TopoLink`), Sign in with Claude (`TopoAuth`), the phone harness (`TopoTurn`), the guest userland (`TopoUserland`), the guest's API proxy (`TopoProxy`) and the octopus's pixel engine (`TopoMascot`).
+- **Womble** (`Womble/`): a viewer-only app for devices as old as iOS 15, which puts the transcript and the house board on a drawer iPad.
+- **The packages** (`Packages/`): the logic, each with its own tests — the CloudKit log and lease (`TopoCore`), the socket layer (`TopoLink`), Sign in with Claude and the connections' tokens (`TopoAuth`), the phone harness (`TopoTurn`), the guest userland (`TopoUserland`), the guest's API proxy, DNS forwarder and the phone's tool service (`TopoProxy`, with `TopoTools`) and the octopus's pixel engine (`TopoMascot`).
 
 ## Building
 
-You need Xcode 16 or later, [XcodeGen](https://github.com/yonaskolb/XcodeGen), and, for the guest's emulator, meson, ninja and Homebrew's `llvm` and `lld`.
+You need Xcode 27, [XcodeGen](https://github.com/yonaskolb/XcodeGen), and, for the guest's emulator, meson, ninja and Homebrew's `llvm` and `lld`.
 
 ```bash
 xcodegen generate            # Topo.xcodeproj from project.yml
@@ -28,6 +30,7 @@ Every target builds unsigned for a simulator. Each package's suite runs with `sw
 How it is meant to work:
 
 - [docs/design.md](docs/design.md) — the design: the roles, the decisions, the order of build, the identity.
+- [docs/roadmap.md](docs/roadmap.md) — what is built, what is in hand, what comes next and what is parked.
 - [docs/pairing.md](docs/pairing.md) — how the devices on one Apple ID come to know each other.
 - [docs/surfaces.md](docs/surfaces.md) and [docs/board.md](docs/board.md) — screens on the home network and the shared house board.
 
@@ -40,6 +43,8 @@ How each part is built:
 - [docs/chat.md](docs/chat.md) — the chat screen and the `Look` it is drawn from.
 - [docs/mascot.md](docs/mascot.md) — Topo the octopus on the glass.
 - [docs/memory.md](docs/memory.md) — the vault on the phone.
+- [docs/widgets.md](docs/widgets.md) — the widgets, the watch's complications and the controls the mind writes.
+- [docs/perf.md](docs/perf.md) — timing a launch and a turn.
 - [docs/cloudkit.md](docs/cloudkit.md) — the log, the lease and the packages.
 - [Womble/README.md](Womble/README.md) and [Design/README.md](Design/README.md) — the old-device app, and the mark and icons.
 
@@ -47,6 +52,7 @@ Working on it:
 
 - [docs/process.md](docs/process.md) — how a change lands.
 - [docs/testing.md](docs/testing.md) and [docs/simulator.md](docs/simulator.md) — the PR check and simulator runs.
+- [docs/janitor.md](docs/janitor.md) and [docs/xcode-mcp.md](docs/xcode-mcp.md) — the pipeline's upkeep, and Xcode's tools for agents.
 - [docs/install.md](docs/install.md) and [docs/testflight.md](docs/testflight.md) — builds on a phone and the road to TestFlight.
 - [CLAUDE.md](CLAUDE.md) — the rules and invariants every agent session in this repository works to.
 

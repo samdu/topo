@@ -1,101 +1,121 @@
-# Roadmap
+# Topo roadmap
 
-What is built, what comes next and in what order, what is parked, and the threads open right now. Sam's decisions and the reasoning behind them live in the wiki page [buddy-for-helen](https://github.com/samdu/memory/blob/main/wiki/buddy-for-helen.md) in `samdu/memory`; this page is the build order that follows from them. The design is `docs/design.md`, the process `docs/process.md`.
+How the pieces fit together is in `README.md`, `docs/design.md` and the area docs it links; this file is what has been built, what is in hand, what comes next, and what is parked or was tried and left. Sam's decisions and the reasoning behind them are the wiki page [buddy-for-helen](https://github.com/samdu/memory/blob/main/wiki/buddy-for-helen.md) in `samdu/memory`; the process is `docs/process.md`. Defects are [this repo's issues](https://github.com/samdu/topo/issues); tests that fail now and then and pass on a rerun carry the [`flake`](https://github.com/samdu/topo/issues?q=is%3Aopen+label%3Aflake) label.
 
-## Built and shipped
+## Today
 
-- The CloudKit log, the primary lease, the device directory and the role record (`Packages/TopoCore`), with the in-memory database the suites run against. The lease runs one operation at a time with every request bounded at 4 s (#314), and a reply is saved when the lease's heartbeats ran late and nobody else claimed (#302).
-- A sent message does not wait on CloudKit: the guest hears the words before the lease is taken and the turn saved, so with iCloud away and Anthropic reachable a phone that has read the log keeps answering (#323).
-- Sign in with Claude (`Packages/TopoAuth`): the ordinary tokens and the guest's long-lived token, both in the device keychain.
-- The phone harness (`Packages/TopoTurn`): the outbox and the row, the nonce contract, the answering loop, the silent push for a limb's turn.
-- The guest: iSH's arm64 kernel in the app's process, Alpine with bash, Claude Code pinned at 2.1.285 and mounted, the API proxy on loopback, the resident process with its lifecycle across foreground and background (`Packages/TopoUserland`, `Packages/TopoProxy`). The emulator decodes the NEON that Claude Code's binary uses (#250, #320), keeps the phone's time zone (#251), survives a guest `umount` of a tmpfs (#318) and chains a translated block's exit only while its slot still holds it (#316).
-- The transcript bridge: the guest is the only brain, the ledger lines its conversation up with the log across crashes, and an unfinished turn is asked again by hand.
-- One brain (P5b): `TurnRunner` asks a `Brain` and the app has one, the guest; the package suite drives the runner over a scripted brain and the app's suites drive the harness over the guest.
-- Voice: push to talk on Parakeet, replies read on Pocket TTS, both downloaded by the app and held behind the lock. The voice starts at a reply's first sentence, as it is written (#297).
-- The memory as an Obsidian vault: local or in iCloud Drive, mirrored both ways under file coordination, moved between homes with one commit point, and mounted into the guest at `/home/topo/memory` with every open coordinated, so the mind reads and writes its own notes; the mirror's `.topo` is hidden from it, so a listing of the memory exits 0 (#246).
-- The look as a document (`look.json`), the glass composer, the badge, and the transcript drawn by phone, watch and television.
-- Topo on the glass: the pixel engine, poses from the guest's events, a calm idle with yoga, facing by side, roaming the chat without juddering under a turn. He is thinking from a turn's start to its end, and idle only when no turn is open (#305).
-- The composer as one row of glass (#329): with the keyboard up the pane widens to near the screen's edge and holds, leading to trailing, the jewel at its compact size, a `+` that opens nothing yet, the draft field in its purple outline and a borderless `paperplane` send; a press on the jewel there dictates into the draft; the keyboard goes down by a drag down the transcript or a tap on its empty space. With the keyboard down the jewel is centred, with `+` on the leading flank and the way to the keyboard on the trailing one.
-- The mute and the model's control in the chat's navigation bar, standing apart, the model's a brain that opens a slider on a glass under the bar with Topo hanging under the model chosen (#340, #353); the models sent as aliases and named by the look (#319); the settings sheet with where Topo sits first, Tuning's sliders in debug, diagnostics, About with the GPL text and the source commit.
-- Topo's placement: roam, glass or pinned by a long-press drag, kept in this device's override (#165); when nothing clears the words he stands where the least of his box covers them (#172).
-- A reply on the screen: Topo's turns drawn as markdown from Foundation's parser, styled by `Look.Markdown` — fenced and inline code, emphasis, headings, lists, quotes and rules (#173), tables that scroll sideways, web links that open on a tap, the words written before a tool call, and images read through the guest (#324). A cued code block pulses and stays scrolled to (#212, #239).
-- The phone's own tools (P7): a loopback tool service and the `topo` CLI in the guest, found by a skill, with `topo look`, reminders, calendar, notify, contacts and location (#189, #214). `topo reminders` with nothing after it lists what has a due date, 24 KB at most, and counts the rest (#245). `topo location` says the place the vault's `places.json` names when the phone is inside one, and marks the geocoder's address as the nearest (#247). `topo log` answers the app's own unified-log lines, the resident's among them (#281).
-- P7c's HomeKit and Maps: `topo home` lists, gets and sets accessories and runs scenes, behind the HomeKit entitlement (#226); `topo maps` answers places, a route and a travel time from Apple Maps through MapKit, without opening Maps (#287), each answer carrying an Apple Maps link the person can tap (#289).
-- P7c's screen share: the person shares their screen with Topo from the system's own sheet (a ReplayKit broadcast extension, so it runs while they are in another app), the extension keeps a still when the screen changes, at most one every second or two, and `topo screen` gives the mind the newest to look at; stills, never video (`docs/guest.md`).
-- P7c's Photos and the file picker: `topo photos` lists albums, finds photos by album, date and kind, exports one into the guest's home as a still to look at and saves a picture as a new photo; `topo files pick` puts up the phone's file picker and copies the file the person picks into the memory's `inbox`.
-- P7c's Shortcuts actions: Ask Topo, which opens it with a prompt, and Follow up with Topo and Topo quick task, which send a turn without opening it; each is a turn kept and drained as a share is, and none waits for the reply (`docs/harness.md`). They are ways in, like the share sheet, so neither is a `topo` verb.
-- P7c's share sheet: Topo is in other apps' share sheets for text, a link, an image or a file, one a share, with a field to say something about it; the share waits in the app group and becomes a turn when Topo next comes to the front, an image or a file kept in the guest's home at the path the turn names (`docs/harness.md`).
-- P7d, the guest on the network: it reaches the internet directly through the app's sockets and does its own TLS, and it resolves names through the phone's own resolver while the forwarder is up: its `/etc/resolv.conf` names `127.0.0.53`, which the emulator carries to a loopback DNS forwarder in the app, so Private Relay, a VPN's split DNS and a DNS profile follow the phone; what the file holds when the forwarder is down is `docs/guest.md`'s (#225, #242, #269). There is no egress proxy. `apk` works from the guest as it is, and git and `gh` are one `apk add` away, since the rootfs ships only Alpine's minirootfs and bash.
-- Connections: GitHub by device flow against Topo's OAuth App and a 1Password vault by a service-account token, connected from a Connections screen. The app holds each token in the Keychain, and the guest gets one on demand for a single `git`, `gh` or `op` process through `topo github` and `topo secret`, never keeping it (#236, #238, #267). `topo secret show` names an item's fields and files with no value, and `get op://VAULT/ITEM` reads a Document's one file (#249).
-- The phone's widgets and controls: `topo widget` writes home-screen and lock-screen widgets the mind designs, with controls that cue a turn or run one `topo` call, drawn by a WidgetKit extension from the app group, over a default of the newest reply (#262). The phone's slots reach the watch face as `Surface` records, where a tap cues a turn or opens Topo (#270). `topo control` writes a Topo Button and a Topo Toggle for Control Center, the lock screen and the Action button, with a `request` action that reaches a URL (#271). `docs/widgets.md`.
-- Speed: a whole-type read asks CloudKit only for what changed, the guest and Claude Code start as the chat appears, and a reply is streamed to the row (#297), measured by marks at every step of a launch and a turn and a hands-free timed run (#296, `docs/perf.md`).
-- The first run: nothing after sign-in is decided before the log is read. The chat says it is reading the conversation until the first read returns, asks the first-run question only over a log read and found empty, and draws a bar for each part of the setup still to come (the guest, the ear and the voice) in the middle of the chat's navigation bar and under the first-run question (#161, #128).
-- Womble for iOS 15 devices, viewer only.
-- The hub app skeleton (`TopoHub`), holding the lease and showing the pairing code.
-- CI: the three-suite PR check with the audio lane, run on buddybox before each push, suites chosen by the paths a PR changes, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns a reviewer that never ran, republishes the install page, sweeps merged worktrees and triages new issues into `next`, `parked` and `flake` (#303).
-- A turn behind another app: a turn sent while the app is in front asks iOS for a continued-processing task (iOS 26 on), which keeps the app running after it is backgrounded, under the system's progress pill and its cancel, until the turn ends and the resident process is ended; when iOS or the person ends the task first, the ~29 s grace takes over what is left (`docs/guest.md`). The proxy's and the tool service's listeners a suspension takes are started again at the next launch of the resident.
-- A full context: Claude Code compacts the mind's conversation at a threshold the person sets in Settings and the mind sets with `topo context` (Automatic is Claude Code's own, enforced on every model), either can compact it now, and Topo's colour is the context's fill on that threshold's scale (#255).
+Topo is the phone app. Signed in with Claude, the iPhone is the primary: the real Claude Code, pinned at 2.1.285, runs resident in an Alpine userland inside the app (iSH's arm64 emulator) with permissions bypassed, because the guest is the sandbox and what it reaches is the holes the app makes: the memory's folder mounted at `/home/topo/memory`, a loopback proxy that holds the login, a loopback tool service behind the `topo` command, a DNS forwarder onto the phone's resolver, and the internet directly. Every turn is written to the CloudKit log, which the watch, the TV, other iPhones and iPads as viewers, and Womble on old iPads read.
+
+You talk to it by holding the jewel: Parakeet hears on the phone and Pocket TTS reads the reply aloud as it streams, behind the lock. The memory is an Obsidian vault, local or in iCloud Drive, that the mind reads and writes. Through `topo` the mind reaches reminders, the calendar, notifications, contacts, location, HomeKit, Apple Maps, Photos, the file picker, a shared screen, GitHub and 1Password, and writes the phone's widgets, the watch face's slots and Control Center controls. Things reach it from the share sheet and Shortcuts. A turn sent in front keeps running behind another app.
+
+The Mac hub (`TopoHub`) holds the lease, shows the pairing code and serves the house's LAN surfaces; it runs no turns. Nothing is on TestFlight: Sam's gate is that it goes when he would show Topo to someone else.
+
+## Done
+
+Struck through: shipped, then removed, with the reason.
+
+**The log and the roles**
+
+- The CloudKit log, the primary lease, the device directory and the role record, against an in-memory database with CloudKit's semantics (#1, #21, #24); a whole-type read asks only for what changed (#297)
+- The role at first launch from the lease record, a viewer making itself primary, a takeover that refuses a live holder (#27, #34, #36); a login found at first launch never makes a second primary beside another device's lease (#360)
+- The lease runs one operation at a time with every request bounded at 4 s (#314); a fresh lease is renewed with the person's save (#306); a reply is saved when heartbeats ran late and nobody claimed (#302)
+- A sent message does not wait on CloudKit: the guest hears the words before the save (#323)
+- A limb's turn wakes the primary by a silent push (#44)
+
+**The guest**
+
+- iSH vendored and built, Claude Code fetched at its pin and mounted, bash, the API proxy on a token of its own (#116, #119, #120, #150)
+- Claude Code resident, permissions bypassed, with its lifecycle across foreground and background (#134, #138, #139); the proxy's and the tool service's listeners started again after iOS takes them (#448)
+- The guest is the only brain, behind one `Brain` seam, with the transcript bridge and its ledger (#143, #186)
+- The emulator: NEON for Claude Code's binary (#250, #320), the phone's time zone (#251), a tmpfs `umount` (#318), block chaining (#316), a store to translated code (#428), `mount_find` under its lock (#427); `Guest.run` bounded (#422)
+- The guest on the network: its own resolver, the phone's name servers, then the DNS forwarder at `127.0.0.53` (#225, #242, #269)
+- A turn behind another app under a continued-processing task, with the ~29 s grace as the floor (#440); the bridge says why a reply failed (#449)
+- A full context: compact now, a threshold the person and the mind set (#388)
+
+**Voice**
+
+- Push to talk with Parakeet on the device and the person's own vocabulary (#48, #51, #57, #85); replies in Pocket TTS behind the lock (#55, #86, #89); recovery from a media services reset (#78)
+- Speakable text and code blocks cued by number (#207, #212); the voice from a reply's first sentence as it streams (#297)
+- FluidAudio pinned at 0.17.7, which keeps a sentence whole up to Pocket's 512-position cache (#397); `marius` as the voice, at his own pace (#400); the voice's temperature as a setting, 0.5 unless changed (#411); Topo's own voice pack (#415); noise suppression through Apple's voice processing (#385)
+- ~~Kokoro's `bm_buddy` blend as the voice~~ (#49; replaced in #55 by Pocket TTS on the device)
+- ~~Apple speech as the ear's and the voice's fallback~~ (#48, #49; removed in #85, #86: one ear and one voice, both FluidAudio on the device, no fallback)
+- ~~Pocket's `eponine` as the voice~~ (#55; `marius` in #400)
+
+**The chat and Topo**
+
+- The look as a document the mind writes (#106); the glass composer and the cabochon (#104, #110, #113); the composer as one row of glass (#333)
+- The mute and the model's brain in the bar, the model's slider under it, models sent as aliases (#319, #347, #366)
+- Topo on the glass: idle and yoga, roaming, facing, placement by long-press drag, never undrawn for want of a clear spot (#140, #155, #157, #162, #165, #172); thinking from a turn's start to its end (#305)
+- A reply drawn as markdown from Foundation's parser: code, quotes, lists, tables, links, the words before a tool call, images (#173, #182, #324)
+- The first run: nothing decided before the log is read, the question held on Topo's sign (#386, #443); Sign in with Claude ends on the chat (#405); the GitHub device code on a sign (#444)
+- Perf marks and a hands-free timed run (#296)
+
+**The memory**
+
+- The vault, mirrored both ways, in the app's container or a folder in iCloud Drive, moved between homes (#14, #93, #100); mounted into the guest with every open coordinated, `.topo` hidden (#200, #342)
+
+**The phone's tools**
+
+- The tool service and `topo look` (#189); reminders, calendar, notify, contacts, location (#214, #341, #348); `topo home` (#226); `topo maps` with a tappable Apple Maps link (#287, #348); `topo log` (#348)
+- Photos and the file picker (#362); the screen share (#377)
+- Connections: GitHub by device flow and 1Password by service-account token, held by the app (#236, #238, #267, #348)
+- Widgets, the watch face's slots and Control Center controls the mind writes (#262, #270, #271)
+- Ways in: the share sheet (#372, #380) and Shortcuts (#376)
+
+**Other bundles**
+
+- Womble, viewer only, on iOS 15, with the house board read-only beside the transcript (#4, #25, #375)
+- The watch and the TV as viewers (#10)
+- `TopoHub`: the lease, the pairing code, the device list and the LAN surfaces (#11, #41, #42); the phone's half of pairing, uncalled (#387)
+- The CloudKit schema promoted to production as a checked step (#381)
+
+**Pipeline**
+
+- Suites run on buddybox before the push by `validate-and-push.sh`, chosen by the paths a PR changes, one suite at a time in order of arrival, a Mac lent by hand (#335, #401, #402, #404, #412, #430); every hosted job on `vm-linux` (#431)
+- The Codex reviewer and its gate (#2, #156, #437); the janitor and its triage (#202, #303); device checks as one build and one topo-link issue (#361); Xcode's MCP tools, advisory (#379)
+
+## In progress
+
+- **topo-guest**: the emulator's code-page races (#423, #424, #425) and `touch` on a guest tmpfs (#426).
+- **topo-background**: a background job the guest starts outliving iOS's budget (#452), the turn after a background resume (#447), `RoleSelector.decide()`'s unbounded first reads (#436).
+- **topo-flakes**: #393, #365, #364, #349.
+- #399, a suite over plain ssh getting no microphone, in PR #450.
 
 ## Next, in order
 
-1. **The guest holds up.** `Guest.run` answers status 0 with empty output when the guest command hangs (#295); a store to a page of translated code can be followed by a compile of the old bytes (#315); `mount_find`'s thread-local cache is read outside `mounts_lock`, so a concurrent umount can hand back a freed mount (#317). Each is a patch under `patches/ish/` or a bound in `Guest`.
-2. **Widgets and controls, round two.** The watch's `run` action runs in place rather than opening the app (#327); a control's slot picker shows each slot's title (#280); a widget's tint keeps its alpha, so a clear background is reachable (#282); a widget's action carries the control's `request` (#283) and can run a Shortcut or open a URL (#284).
-3. **A reply on the screen, round two.** A control on a code block or a table that opens it full screen, and a copy button on code (#179, #217); a list item whose first block is a quote keeps its bullet (#183); an image re-read after a vault change does not wait behind the read in flight (#325).
-4. **An effort selector beside the model's control (#329).** Nothing carries an effort to the guest yet, so it is the resident's launch and the harness as well as a control in the bar.
-5. **The mind keeps working behind another app.** Picture-in-picture is not the way: its tile is opaque, with no transparency.
-    - A spoken back-and-forth is a CallKit call: the app reports a real call, so it runs with the mic for the call's length, and hanging up ends it. For voice turns it replaces the silent-audio keeper's 120 s ceiling (`Speaker.ceiling`).
-    - The keeper is real audio: spoken progress receipts and, if chosen, ambient "working" sounds, held for the whole run in place of `PlayQueue`'s looping silence. The sound design matters. A setting chooses off, receipts only or sounds; a typed session holds no audio at all, so it never interrupts a podcast, and the audio session mixes with others, so other playback ducks rather than stops.
-6. **Topo's ears and mouth take Daphne's gains.** Daphne's phone runs the same FluidAudio, Parakeet and Pocket stack, and what her client measured carries over.
-    - FluidAudio is pinned at 0.17.7 (`project.yml`'s `exactVersion`, `Package.resolved`), the precondition for the rest; the app builds against it with no source changes, as Daphne's client does (samdu/daphne-assistant#205).
-    - The ear is Parakeet Ultra (`AsrModelVersion.ultra`, a pinned `FluidInference/parakeet-ultra-coreml` entry in `models.json` from `scripts/model-manifest.sh`) in place of v2, with the CTC spotter and `Vocabulary` unchanged, since the booster rescores on the spotter's own tokenizer (samdu/daphne-assistant#205). On Sam's 22 bench recordings through Daphne's path it measured WER 0.027 against v2's 0.059 under the same booster (6 word errors against 13 over 222 words), with 17 of 20 house words against 18. The encoder is ~595 MB of int8 against v2's 442 MB, so the download grows; first-load time and resident memory on a phone are unmeasured, and `Ear`'s ~120 MB figure is v2's.
-    - Pocket's Mimi encoder is pinned `.cpuOnly` beside the decoder (samdu/daphne-assistant#205). It is never loaded for a stock voice, so there is no measured effect; it closes the last stage whose default (`.cpuAndGPU`) can reach the GPU.
-    - Pocket keeps a sentence whole while the voice's own prompt, the sentence's tokens and the frames estimated for it fit the 512-position cache (FluidInference/FluidAudio#938), which with `marius`, whose prompt takes 126 positions, is a sentence of about 45 words; a longer one is still cut, and a cut restarts the prosody and lands a pause mid-phrase. Ordinary prose sentences run 52–70 tokens, past the 50 Pocket treats as a guideline. A sentence whose generation runs out of cache throws once its first frames are made: `Speaker` has queued those, they play whether or not they had been heard when the error arrived, and it takes the error as the sentence's end. First-audio time on a long sentence is unmeasured.
-    - Pocket's temperature: Kyutai's English default moved from 0.7 to 0.3 (kyutai-labs/pocket-tts#223), preferred in 53.5% of 400 judgements, with the error rate 0.92% → 0.82% and UTMOS 4.318 → 4.358. Topo speaks at 0.5, between the two and chosen by ear, unless the setting is changed (`VoiceTemperature`, handed to `synthesizeStreaming(temperature:)`, FluidAudio's own default being 0.7).
-    - Kyutai's newer weights: `english_2026-09_2` converts through the voice pack's recipe and keeps a sentence's opening word, which the April weights sometimes drop, but stops a sentence early at a number written in digits (a time with a colon, a decimal, a phone number), in Kyutai's own PyTorch model as in the conversion, so it waits on Topo spelling numbers out before synthesis or on a later set of weights. `english_24l` is not converted.
-    - A reply's opening piece ends at its first comma, semicolon or dash past 30 characters, not only at a sentence end (samdu/daphne-assistant#207). Topo already reads settled sentences as the reply streams, so this moves the text-side wait before the first synthesis. On Daphne's eval it changed 9 of 45 turns and on those the piece was ready a median 0.28 s sooner (max 0.44 s); the overall medians did not move, since most replies open short. The code-block cue stays a sentence of its own, the seam where Pocket starts afresh at the cut has not been heard on a device, and the gain is measured here with `docs/perf.md`'s marks.
-    - Not ported: Kokoro's Prosody_v2 and `.aneTailCpu` (samdu/daphne-assistant#205), because Topo speaks Pocket; ramble mode and tail padding (samdu/daphne-assistant#210), because both act on audio fed to an audio-native brain and Topo's mind gets Parakeet's text; open mic or off (samdu/daphne-assistant#214), because Topo is push to talk; the fixed-phrase memo (samdu/daphne-assistant#207), because Topo's fixed lines carry a number ("See code block N.") and the memo fixed eviction rather than measuring a gain.
-7. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`), and the `Surface` schema promoted to production first (#285). Last, and not before Sam would show Topo to someone else: each step before it changes what review sees, and living on Topo day to day is what finds the steps.
+1. **What the phone does, made right.** A primary whose token refresh fails sits behind "Claude Code did not start" with no way back to sign-in (#351); a resumed guest can say the vault is unreachable while it is mounted (#357); `turn.heard` is logged several times a message (#354) and the person's turn is saved ~4 s after it (#355); `topo log` is slow and fills with polling (#356); the mirror names every non-text file as skipped at every pass (#339); the `.topo` guard is case-sensitive (#367); a picked file's hidden copy is named by pid alone (#368); a widget cue or a share's file can cross a sign-out (#370, #373); a lease timeout in the preflight fetch escapes unmapped (#321).
+2. **Widgets and controls, round two.** The watch's `run` runs in place (#327); the slot picker shows each slot's title (#280); a widget's tint keeps its alpha (#282); a widget's action carries a control's `request` (#283) and can run a Shortcut or open a URL (#284).
+3. **A reply on the screen, round two.** A code block or a table opens full screen (#179), a copy button on code (#217); a list item whose first block is a quote keeps its bullet (#183); an image re-read after a vault change does not wait behind the read in flight (#325).
+4. **An effort selector beside the model's brain.** Nothing carries an effort to the guest, so it is the resident's launch and the harness as well as a control in the bar. No issue of its own.
+5. **The mind keeps working behind another app.**
+    - A spoken back-and-forth is a CallKit call: the app runs with the mic for the call's length, and hanging up ends it. For voice turns it replaces the silent keeper's 120 s ceiling (`Speaker.ceiling`).
+    - The keeper is real audio: spoken progress receipts and, if chosen, ambient "working" sounds, in place of `PlayQueue`'s looping silence. A setting chooses off, receipts only or sounds; a typed session holds no audio, and the session mixes with others so other playback ducks rather than stops.
+6. **Topo's ears and mouth take Daphne's gains.**
+    - The ear is Parakeet Ultra (`AsrModelVersion.ultra`, a pinned entry in `models.json`) in place of v2, the spotter and `Vocabulary` unchanged. On Sam's 22 bench recordings through Daphne's path it measured WER 0.027 against v2's 0.059 (samdu/daphne-assistant#205). The encoder is ~595 MB against 442 MB; first load and resident memory on a phone are unmeasured.
+    - Pocket's Mimi encoder pinned `.cpuOnly` beside the decoder (`PocketTtsComputeUnits.mimiEncoder`), closing the last stage whose default can reach the GPU.
+    - A reply's opening piece ends at its first comma, semicolon or dash past 30 characters, not only at a sentence end (samdu/daphne-assistant#207): on Daphne's eval the piece was ready a median 0.28 s sooner on the 9 of 45 turns it changed. Measured here with `docs/perf.md`'s marks.
+7. **P8: TestFlight.** The bundle's size; export compliance re-judged now that the rootfs ships OpenSSL (`docs/testflight.md` says no cryptography of its own); the App Review risk and the usage strings the tools ask for written in `docs/testflight.md`; the zone mirror's cache keyed by CloudKit environment, so a TestFlight install over a debug build never offers production a development change token (#384). Last, and not before Sam would show Topo to someone else: each step before it changes what review sees, and living on Topo day to day is what finds the steps.
 
-Beside the order, on the pipeline rather than the product: the simulator's iCloud sign-in lapses and is re-authenticated by hand (#83); `pm-guard` refuses code edits in an engineer's worktree when the session's project dir is that worktree (#310); `ci-audio-lane.sh start` leaves the last lane's `supervisor.started` in place until the new supervisor is up (#311); two lease follow-ups from #314's review (#321).
+**The pipeline**, beside the order: the simulator's iCloud sign-in lapses and is re-authenticated by hand (#83); `.claude/hooks/pm-guard.py` refuses code edits when the session's project dir is a linked worktree (#310); `ci-audio-lane.sh start` can leave a stale `supervisor.started` (#311); `validate-and-push.sh` gives up after 180 min while the holder is alive (#363) and its test never asserts which commit a returning suite ran at (#432); `build-for-testing` on the generic simulator destination fails on Xcode 27 (#433); `StubDNS` hides bind's errno and two runs collide on port 53 (#435); five suite-minute cuts (#439); the hosted-runner flakes recheck (#312, #308).
 
 ## Parked, and why
 
-- **The hub as a running mind.** `TopoHub` holds the lease and shows the pairing code but runs no turns; the phone is the primary until the guest path is complete, since it has to stand-alone if it's a user's only device.
-- **Full Messages access on the hub.** iOS gives a third-party app no way to read or send iMessages, so this is the Mac's alone: the hub reads the Messages database and sends through Messages.app, the way the buddybox relay does. Waits on the hub running turns.
-- **Sockets and the tunnel** (`Packages/TopoLink` beyond the LAN probe). CloudKit is truth and works with no socket; speed comes after the mind does.
-- **The house board** (`docs/board.md`). Designed, with `TopoBoard` in place; no screen draws it until one person's mind is worth sharing a wall with.
-- **A fresh lease renewed with the person's save (#306).** Two CloudKit round trips out of every warm turn, by saving the turn in the renewal's batch. Its review holds it on a successor instance's claim being taken for this instance's own, and it rewrites the top of `TurnRunner.run`, which #323 has since changed under it.
-- **What the lease's redesign (#314) left.** The heartbeat runs on after sign-out and after a demotion, since `Harness.forget()` drops the lease without abandoning it (#148); a phone that staked primary at first launch and then lost the lease to the hub is never demoted, since a first-launch stake writes no role record (#273). Both wait on a rule for them in `PrimaryLease`.
-- **swift-markdown as the parser (#179).** The parser #179 names. Everything a reply draws today, tables and links included, comes from Foundation's parser, so nothing on the screen needs the dependency.
-- **The mascot as a movement system (#177)** and the ink he splashes on a correction (#181). An extensible, agent-programmable engine with a jet, studied from game characters and NPCs; the survey comes first and is not begun.
-- **A hidden terminal onto the guest's Claude Code (#133).** An escape hatch for a prompt the app does not draw; waits until the headless path has settled.
-- **On-device storage (#309, #117, #87).** Bounding the ANE compile cache, clearing tmp on launch and the model housekeeping residue start from a fresh measurement on the phone; the voice pack's ten-minute download is the same subject.
-- **The local gate's aftermath (#312, #308).** With the Mac suites on buddybox, what is left is confirming the hosted macOS jobs are gone and rechecking the flakes seen only on hosted runners.
-- Small ones, each a nice-to-have or hardening residue with nothing failing today: a claim change with no hold standing is still attempted from the background (#90); an empty parents list is left off the wire (#96); the same-folder guard on a move compares URLs, not directory identity (#103); a query of mostly digits is read as a number (#240); an existing fakefs never gets a package added to the manifest after import (#254); the resident keeps its own clock across a zone change until the next launch (#256).
+- **The hub as a running mind.** `TopoHub` runs no turns; the phone is the primary until the guest path is complete, since it has to stand alone as someone's only device. Full Messages access is the hub's alone (iOS gives an app no way to read or send iMessages) and waits on it.
+- **Pairing.** The phone's half (`DeviceDirectory.pair`) is built and nothing calls it: no scanner, no `topo://pair` handler (`docs/pairing.md`). Phones registering a `Device` record of their own (#371) goes with it.
+- **Sockets and the tunnel.** `TopoLink` carries the hub's lease probe and the LAN surfaces; the phone's probe never confirms, and there are no turn sockets and no tunnel. CloudKit is truth and works with no socket; speed comes after the mind does.
+- Create arbitrary live activities
+- Flic Duo button support
+- **Two lease rules.** The heartbeat runs on after sign-out and a demotion, since `Harness.forget()` drops the lease without abandoning it (#148); a phone that staked primary at first launch and lost the lease to the hub is never demoted, since a stake writes no role record (#273).
+- **The mascot as a movement system (#177)** and the ink he splashes on a correction (#181): the survey of game characters and NPCs comes first and is not begun. Send as a thrown plane Topo catches and reads (#330), after the composer.
+- **A hidden terminal onto the guest's Claude Code (#133)**, an escape hatch for a prompt the app does not draw, once the headless path has settled.
+- **Topo as a mesh peer (#277).** The topo-link issue mailbox carries device checks today; an addressable peer with an allowlist of what it runs unasked is not built.
+- **On-device storage (#309, #117, #87).** The ANE compile cache, tmp at launch, the model housekeeping residue and the voice pack's ten-minute download start from a fresh measurement on the phone.
+- **Ideas with no code yet:** a Topo menu the agent populates, on a long-press of the octopus (which conflicts with dragging him); what the composer's `+` opens, attachments first; Maps results as a card (#358); a contact sheet of the screen share's stills (#378); Topo walking the person through the first run himself in place of the iCloud Drive offer card (#395).
+- **Small ones**, hardening with nothing failing today: a claim change attempted from the background (#90); an empty parents list left off the wire (#96); the same-folder guard compares URLs (#103); a query of mostly digits read as a number (#240); a package added to the manifest never reaches an existing fakefs (#254); the resident keeps its clock across a zone change until its next launch (#256); a look with `composer.flank.font` at 400 draws the resting keyboard mark past the pane (#337); guest transcripts under the guest's home outlive sign-out (no issue).
+- **Proof gaps** a review left non-blocking, each against the PR it came from: #132, #147, #149, #153, #160, #211, #213, #221, #286, #292, #338.
 
-## Open threads
+## Explored, not done
 
-- **Topo as a mesh peer (#277).** Sessions hand Topo a device check and get the output back without Sam relaying; today a mailbox on `samdu/topo-link#1` carries it.
-- **A "topo" menu** with menu-items populated by the agent themselves. Quick access to frequent settings, long-press the octopus (conflicts with dragging topo, TBD)
-- **Send is a throw (#330).** The plane flies from the trailing edge to Topo, who catches it and reads the page for as long as the reply takes; it lands in the mascot engine and follows #329's send. Not sequenced.
-- What the `+` on the glass opens: attachments first, a menu later (#329 places the button and nothing behind it).
-
-### Deferred proof gaps
-
-Findings a review left non-blocking, each kept as an issue against the PR it came from.
-
-- **#132**: `StoredTokenProvider`'s overlap test ignores its hold's timeout, and nothing tests another writer replacing tokens mid-refresh.
-- **#147**: the review-prompt tests bind `HEAD_SHA` and `BASE_SHA` directly and leave the truncation defaults untested.
-- **#149**: five corner cases of the transcript bridge from #143's last read.
-- **#153**: no test that a package file wins over a rootfs path it shares in the combined import.
-- **#160**: the mascot and the glass, from #151 and #157.
-- **#211**: three voice cases of speakable text, from #207.
-- **#213**: three findings on the memory mount, from #200.
-- **#221**: the phone's tools, from #214 and #226.
-- **#286**: the watch's widgets, from #270.
-- **#292**: `StoneRenderTests`' floor-of-the-cut needs a second stone asset, and `ComposerRenderTests` should assert `openCast` reaches the floor alone.
-- Guest transcripts under the guest's home are not wiped at sign-out; no issue yet.
-
-### Flakes on CI
-
-#88, #97, #124, #227, #231, #257, #264, #293, #313, #322: each fails now and then and passes on a rerun, noted rather than fixed; #231 is also labelled `next`. #308 holds the ones seen only on GitHub's hosted macOS runners.
+- **Picture-in-picture as the way to keep working behind another app**: its tile is opaque, with no transparency.
+- **swift-markdown as the parser (#179)**: everything a reply draws, tables and links included, comes from Foundation's parser, so nothing on the screen needs the dependency.
+- **Kyutai's `english_2026-09_2` weights**: they convert and keep a sentence's opening word, but stop a sentence early at a number written in digits, in Kyutai's own model as in the conversion. They wait on Topo spelling numbers out before synthesis, or on later weights. `english_24l` is not converted.

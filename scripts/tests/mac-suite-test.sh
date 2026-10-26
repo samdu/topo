@@ -331,6 +331,14 @@ is "red UI run: exits 1" "$status" 1
 is "red UI run: topo_ui failed, others ran and passed" "$(results)" "topo_ui=failure others=success "
 is "red UI run: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
 
+# The unit suite's simulator is booted once, the grants made on it as it first comes up, and
+# shut down only as the run ends and deletes it.
+suite unit-boot topo_unit
+is "unit suite: exits 0" "$status" 0
+is "unit suite: its simulator is booted once" "$(calls 'xcrun simctl boot ')" 1
+is "unit suite: and shut down once, as the run deletes it" "$(calls 'xcrun simctl shutdown')" 1
+is "unit suite: the shutdown is after the tests" "$(grep -E '^xcrun simctl shutdown|^xcodebuild test-without-building' "$CALLS" | cut -d' ' -f1-3 | tr '\n' '|')" "xcodebuild test-without-building -project|xcrun simctl shutdown|"
+
 # A photos grant that is not full access would put a prompt up under the tests: no test runs.
 PHOTOS_GRANT="2|1" suite photos-grant topo_unit
 is "photos grant not full access: exits 1" "$status" 1

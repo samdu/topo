@@ -363,17 +363,13 @@ suite_topo_unit() {
     for service in calendar reminders contacts photos; do
       xcrun simctl privacy "$udid" grant "$service" zone.hexagon.topo || return 1
     done
-    # simctl writes the photos grant at the first version of the permission, which iOS 26 reads
-    # as leave to add only, so a read of the library would put the prompt up. The row is marked
-    # full access where the simulator keeps it, with the simulator down so nothing holds the old
-    # row.
+    # The photos grant is full access only at the permission's second version: a row at the
+    # first reads as leave to add only, and a read of the library would put the prompt up.
+    # simctl of the pinned Xcode writes the second, so the simulator is booted once; the row is
+    # read where the simulator keeps it, and one at any other version fails here by name.
     local tcc="$HOME/Library/Developer/CoreSimulator/Devices/$udid/data/Library/TCC/TCC.db"
-    xcrun simctl shutdown "$udid" || return 1
-    sqlite3 "$tcc" "update access set auth_version=2 where client='zone.hexagon.topo' and service='kTCCServicePhotos'" || return 1
     [ "$(sqlite3 "$tcc" "select auth_value, auth_version from access where client='zone.hexagon.topo' and service='kTCCServicePhotos'")" = "2|2" ] \
-      || { echo "the simulator's photos grant is not full access" >&2; return 1; }
-    xcrun simctl boot "$udid" || return 1
-    xcrun simctl bootstatus "$udid" -b >/dev/null || return 1
+      || { err "the simulator's photos grant is not full access (auth_value|auth_version 2|2 in $tcc)."; return 1; }
 
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather

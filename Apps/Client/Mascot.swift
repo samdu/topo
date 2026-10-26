@@ -13,7 +13,7 @@ import TopoUserland
 /// him in is a thing a test can hold over recorded stream-json rather than a view reading a
 /// harness.
 struct MascotState: Equatable, Sendable {
-    /// The model as the setting's alias or the API's id names it (`sonnet`, `claude-haiku-4-5-20251001`):
+    /// The model as the setting's alias or the API's id names it (`sonnet`, `claude-haiku-5-5`):
     /// its family is the head, sonnet's and haiku's the smallest, then opus's, then fable's.
     var model: String
     /// The tokens of context the last message was written over: input and both cache counts.
@@ -119,7 +119,7 @@ enum MascotMapping {
         case .compacted(let compacted):
             // What he carries is what is left after it.
             next.tokens = compacted.post
-        case .text, .writing, .writingBegan, .result, .compactFailed, .other, .malformed:
+        case .text, .writing, .writingBegan, .received, .result, .compactFailed, .other, .malformed:
             break
         }
         return next

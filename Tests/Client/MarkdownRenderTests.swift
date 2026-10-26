@@ -168,15 +168,18 @@ final class MarkdownRenderTests: XCTestCase {
     /// What the pulse ink blends to over anything at a part of its opacity: far bluer than it is
     /// green or red, which neither the page, the enclosure, its outline nor the code's ink is.
     private func pulsing(_ pixels: Pixels, rows: ClosedRange<Int>) -> Int {
-        var n = 0
-        for y in rows where y >= 0 && y < pixels.height {
-            for x in 0..<pixels.width {
-                let i = (y * pixels.width + x) * 4
-                let r = Int(pixels.bytes[i]), g = Int(pixels.bytes[i + 1]), b = Int(pixels.bytes[i + 2])
+        let (top, bottom) = (max(0, rows.lowerBound), min(pixels.height - 1, rows.upperBound))
+        guard top <= bottom else { return 0 }
+        return pixels.bytes.withUnsafeBufferPointer { bytes in
+            var n = 0, i = top * pixels.width * 4
+            let end = (bottom + 1) * pixels.width * 4
+            while i < end {
+                let r = Int(bytes[i]), g = Int(bytes[i + 1]), b = Int(bytes[i + 2])
                 if b - g > 60 && b - r > 30 { n += 1 }
+                i += 4
             }
+            return n
         }
-        return n
     }
 
     /// The cue a live transcript is handed, which the test moves on as the speaker does.
@@ -969,65 +972,97 @@ final class MarkdownRenderTests: XCTestCase {
             scale = CGFloat(width) / image.size.width
         }
 
-        private func matches(_ colour: UIColor, _ index: Int) -> Bool {
+        /// Where a colour is found: how many pixels, and which rows and which columns hold one.
+        /// A pixel is the colour when each channel is within 6 of it. One pass over the bytes
+        /// through a pointer, since this bundle is built `-Onone` (`LookStage.distinct`).
+        private struct Found {
+            var count = 0
+            var rows: [Bool]
+            var columns: [Bool]
+        }
+
+        private func found(_ colour: UIColor) -> Found {
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             colour.getRed(&r, green: &g, blue: &b, alpha: &a)
-            let want = [r, g, b].map { Int($0 * 255 + 0.5) }
-            return (0..<3).allSatisfy { abs(Int(bytes[index + $0]) - want[$0]) <= 6 }
+            let (wr, wg, wb) = (Int(r * 255 + 0.5), Int(g * 255 + 0.5), Int(b * 255 + 0.5))
+            var found = Found(rows: [Bool](repeating: false, count: height),
+                              columns: [Bool](repeating: false, count: width))
+            let (width, height) = (width, height)
+            bytes.withUnsafeBufferPointer { bytes in
+                found.rows.withUnsafeMutableBufferPointer { rows in
+                    found.columns.withUnsafeMutableBufferPointer { columns in
+                        var y = 0, i = 0
+                        while y < height {
+                            var x = 0
+                            while x < width {
+                                let dr = Int(bytes[i]) - wr, dg = Int(bytes[i + 1]) - wg, db = Int(bytes[i + 2]) - wb
+                                if dr <= 6, dr >= -6, dg <= 6, dg >= -6, db <= 6, db >= -6 {
+                                    found.count += 1
+                                    rows[y] = true
+                                    columns[x] = true
+                                }
+                                x += 1
+                                i += 4
+                            }
+                            y += 1
+                        }
+                    }
+                }
+            }
+            return found
         }
 
-        func count(_ colour: UIColor) -> Int {
-            stride(from: 0, to: bytes.count, by: 4).filter { matches(colour, $0) }.count
-        }
-
-        /// The columns a colour is found in, first to last.
-        func columns(_ colour: UIColor) -> ClosedRange<Int>? {
-            var found: [Int] = []
-            for y in 0..<height { for x in 0..<width where matches(colour, (y * width + x) * 4) { found.append(x) } }
-            guard let low = found.min(), let high = found.max() else { return nil }
+        /// The first to the last index that is true.
+        private static func span(_ hits: [Bool]) -> ClosedRange<Int>? {
+            guard let low = hits.firstIndex(of: true), let high = hits.lastIndex(of: true) else { return nil }
             return low...high
         }
 
-        /// The disjoint column runs a colour is found in, leading first: one per bar, so two bars
-        /// are two runs and one bar of twice the width is one.
-        func runs(_ colour: UIColor) -> [ClosedRange<Int>]? {
-            var found: Set<Int> = []
-            for y in 0..<height { for x in 0..<width where matches(colour, (y * width + x) * 4) { found.insert(x) } }
-            guard !found.isEmpty else { return nil }
+        /// The disjoint runs of indices that are true, first first.
+        private static func runs(_ hits: [Bool]) -> [ClosedRange<Int>]? {
             var runs: [ClosedRange<Int>] = []
-            for x in found.sorted() {
-                if let last = runs.last, x == last.upperBound + 1 { runs[runs.count - 1] = last.lowerBound...x }
-                else { runs.append(x...x) }
+            var index = 0
+            while index < hits.count {
+                if hits[index] {
+                    if let last = runs.last, index == last.upperBound + 1 { runs[runs.count - 1] = last.lowerBound...index }
+                    else { runs.append(index...index) }
+                }
+                index += 1
             }
-            return runs
+            return runs.isEmpty ? nil : runs
         }
 
+        func count(_ colour: UIColor) -> Int { found(colour).count }
+
+        /// The columns a colour is found in, first to last.
+        func columns(_ colour: UIColor) -> ClosedRange<Int>? { Self.span(found(colour).columns) }
+
+        /// The disjoint column runs a colour is found in, leading first: one per bar, so two bars
+        /// are two runs and one bar of twice the width is one.
+        func runs(_ colour: UIColor) -> [ClosedRange<Int>]? { Self.runs(found(colour).columns) }
+
         /// The disjoint row runs a colour is found in, top first: one per enclosure.
-        func rowRuns(_ colour: UIColor) -> [ClosedRange<Int>]? {
-            let found = (0..<height).filter { y in (0..<width).contains { matches(colour, (y * width + $0) * 4) } }
-            guard !found.isEmpty else { return nil }
-            var runs: [ClosedRange<Int>] = []
-            for y in found {
-                if let last = runs.last, y == last.upperBound + 1 { runs[runs.count - 1] = last.lowerBound...y }
-                else { runs.append(y...y) }
-            }
-            return runs
-        }
+        func rowRuns(_ colour: UIColor) -> [ClosedRange<Int>]? { Self.runs(found(colour).rows) }
 
         /// The caption ink's pixels in a region, cropped to where they are: anything drawn in it
         /// on white, antialiased edges included, since the ink has no blue and white is all blue.
         /// Nil when there are none.
         func mask(rows: Range<Int>, columns: ClosedRange<Int>) -> [[Bool]]? {
-            let inked = { (x: Int, y: Int) in
-                let i = (y * width + x) * 4
-                return bytes[i + 2] < 128 && bytes[i] > 200
+            let width = width
+            let grid: [[Bool]] = bytes.withUnsafeBufferPointer { bytes in
+                rows.map { y in
+                    columns.map { x in
+                        let i = (y * width + x) * 4
+                        return bytes[i + 2] < 128 && bytes[i] > 200
+                    }
+                }
             }
-            let ys = rows.filter { y in columns.contains { inked($0, y) } }
-            let xs = columns.filter { x in rows.contains { inked(x, $0) } }
+            let ys = grid.indices.filter { grid[$0].contains(true) }
+            let xs = (0..<columns.count).filter { x in grid.contains { $0[x] } }
             guard let top = ys.first, let bottom = ys.last, let left = xs.first, let right = xs.last else {
                 return nil
             }
-            return (top...bottom).map { y in (left...right).map { inked($0, y) } }
+            return (top...bottom).map { Array(grid[$0][left...right]) }
         }
 
         /// How many pixels of a colour run from `x` rightward along row `y`.
@@ -1037,36 +1072,53 @@ final class MarkdownRenderTests: XCTestCase {
             return n
         }
 
+        private func matches(_ colour: UIColor, _ index: Int) -> Bool {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            colour.getRed(&r, green: &g, blue: &b, alpha: &a)
+            let want = [r, g, b].map { Int($0 * 255 + 0.5) }
+            return (0..<3).allSatisfy { abs(Int(bytes[index + $0]) - want[$0]) <= 6 }
+        }
+
         /// The rows a colour is found in, first to last.
-        func rows(_ colour: UIColor) -> ClosedRange<Int>? {
-            let found = (0..<height).filter { y in (0..<width).contains { matches(colour, (y * width + $0) * 4) } }
-            guard let low = found.first, let high = found.last else { return nil }
-            return low...high
+        func rows(_ colour: UIColor) -> ClosedRange<Int>? { Self.span(found(colour).rows) }
+
+        /// Where anything but white is drawn in `rows` — a pixel any channel of which is under
+        /// 200 — in one pass, as `found` is.
+        private func inked(in rows: Range<Int>) -> Found {
+            var found = Found(rows: [Bool](repeating: false, count: height),
+                              columns: [Bool](repeating: false, count: width))
+            let width = width
+            let rows = max(0, rows.lowerBound)..<min(height, rows.upperBound)
+            bytes.withUnsafeBufferPointer { bytes in
+                found.rows.withUnsafeMutableBufferPointer { hitRows in
+                    found.columns.withUnsafeMutableBufferPointer { hitColumns in
+                        var y = rows.lowerBound
+                        while y < rows.upperBound {
+                            var x = 0, i = y * width * 4
+                            while x < width {
+                                if bytes[i] < 200 || bytes[i + 1] < 200 || bytes[i + 2] < 200 {
+                                    found.count += 1
+                                    hitRows[y] = true
+                                    hitColumns[x] = true
+                                }
+                                x += 1
+                                i += 4
+                            }
+                            y += 1
+                        }
+                    }
+                }
+            }
+            return found
         }
 
         /// How many pixels in `rows` are anything but white.
-        func ink(rows: Range<Int>) -> Int {
-            rows.reduce(0) { total, y in
-                total + (0..<width).filter { x in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }.count
-            }
-        }
+        func ink(rows: Range<Int>) -> Int { inked(in: rows).count }
 
         /// The columns anything but white is drawn in, first to last.
-        var inkedColumns: ClosedRange<Int>? {
-            let found = (0..<width).filter { x in
-                (0..<height).contains { y in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }
-            }
-            guard let low = found.first, let high = found.last else { return nil }
-            return low...high
-        }
+        var inkedColumns: ClosedRange<Int>? { Self.span(inked(in: 0..<height).columns) }
 
         /// The rows anything but white is drawn in, first to last.
-        var inked: ClosedRange<Int>? {
-            let found = (0..<height).filter { y in
-                (0..<width).contains { x in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }
-            }
-            guard let low = found.first, let high = found.last else { return nil }
-            return low...high
-        }
+        var inked: ClosedRange<Int>? { Self.span(inked(in: 0..<height).rows) }
     }
 }

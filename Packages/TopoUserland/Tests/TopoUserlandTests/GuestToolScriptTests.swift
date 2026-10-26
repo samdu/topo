@@ -251,6 +251,34 @@ final class GuestToolScriptTests: XCTestCase {
         XCTAssertEqual(exit.output, "status 0\n", "the token is in a file: " + exit.output + exit.errors)
     }
 
+    /// A `topo` killed before its `wget` has opened the FIFO leaves its writer blocked on the open
+    /// until the writer's own bound (110 s), and that writer holds neither the output nor the
+    /// error of its caller: a caller reading them to their end is answered once `topo` and its
+    /// `wget` are gone, not at the writer's bound. The `wget` here never opens the FIFO, says when
+    /// it has started (after the writer has) and is gone a second later. The wait is timed in the
+    /// guest rather than cut short there: a signal can miss a guest task parked in a read.
+    func testATopoKilledBeforeItsWgetLeavesNothingHoldingItsCallersPipes() async throws {
+        let environment = try await startedGitHub(token: "gho_x")
+        let exit = try await shell("""
+        shim="$(mktemp -d)"
+        printf '#!/bin/sh\\ntouch "%s/started"\\nexec sleep 1\\n' "$shim" > "$shim/wget"; chmod +x "$shim/wget"
+        SECONDS=0
+        held=$( {
+            PATH="$shim:$PATH" topo github token & p=$!
+            while [ ! -e "$shim/started" ]; do sleep 0.05; done
+            kill -9 $p; wait $p; echo "topo $?"
+        } 2>&1 )
+        echo "answered in $SECONDS"
+        echo "$held" | tail -1
+        rm -rf "$shim"
+        """, environment)
+        let said = exit.output.split(separator: "\n").map(String.init)
+        XCTAssertEqual(said.last, "topo 137", "the kill did not end topo: " + exit.output + exit.errors)
+        let seconds = said.first.flatMap { Int($0.replacingOccurrences(of: "answered in ", with: "")) }
+        XCTAssertNotNil(seconds, exit.output + exit.errors)
+        XCTAssertLessThan(seconds ?? .max, 30, "a killed topo left something holding its caller's pipes: " + exit.output + exit.errors)
+    }
+
     func testTheGhWrapperHandsTheTokenToGhAlone() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
@@ -327,6 +355,53 @@ final class GuestToolScriptTests: XCTestCase {
         """, environment)
         XCTAssertEqual(exit.output.trimmingCharacters(in: .whitespacesAndNewlines), "0",
                        "a terminated topo printed the request: " + exit.output + exit.errors)
+    }
+
+    /// A trace the caller's environment turns on reaches none of the three scripts: with
+    /// `SHELLOPTS=xtrace` (on standard error, and with `BASH_XTRACEFD=1` on standard output) or a
+    /// `set -x` in `BASH_ENV`, `topo github token`, the credential helper and the `gh` wrapper
+    /// print their answer and nothing else, and nothing at all on standard error, where GitHub's
+    /// token and the service's were traced. The calls run under BusyBox `sh`, which reads none of
+    /// the variables, so every line of trace would be one of the scripts'.
+    func testATraceInTheEnvironmentPrintsNoToken() async throws {
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let environment = try await startedGitHub(token: token)
+        let service = try XCTUnwrap(environment[ToolService.tokenVariable])
+        let setup = try await Guest.shared.run("/bin/sh", ["-c", "f=$(mktemp) && echo 'set -x' > \"$f\" && echo \"$f\""])
+        let traced = try XCTUnwrap(setup.output.split(separator: "\n").first.map(String.init), setup.errors)
+        let fake = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ] || { printf '#!/bin/sh\\necho \"token=${GH_TOKEN:-none}\"\\n' > /usr/bin/gh && chmod +x /usr/bin/gh && echo fake; }"])
+        let calls: [(String, String)] = [
+            ("topo github token", token + "\n"),
+            ("printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get", "username=samdu\npassword=\(token)\n"),
+        ] + (fake.output == "fake\n" ? [("gh api user", "token=\(token)\n")] : [])
+        let traces: [(String, [String: String])] = [
+            ("SHELLOPTS=xtrace", ["SHELLOPTS": "xtrace"]),
+            ("SHELLOPTS=xtrace BASH_XTRACEFD=1", ["SHELLOPTS": "xtrace", "BASH_XTRACEFD": "1"]),
+            ("BASH_ENV with set -x", ["BASH_ENV": traced]),
+        ]
+        for (name, trace) in traces {
+            // The control: the guest's bash traces under this environment, so a clean call below
+            // is the scripts turning it off and not a trace that never started.
+            var probe = Guest.environment
+            probe.merge(trace) { _, new in new }
+            let armed = try await Guest.shared.run("/bin/bash", ["-c", "probe=1; :"], environment: probe)
+            XCTAssertTrue((armed.output + armed.errors).contains("+ probe=1"), "\(name) traced nothing: " + armed.output + armed.errors)
+            let plain = try await Guest.shared.run("/bin/sh", ["-c", "probe=1; :"], environment: probe)
+            XCTAssertEqual(plain.output + plain.errors, "", "\(name): the guest's sh traces, so a call's trace is not only the scripts'")
+            for (call, answer) in calls {
+                var env = Guest.environment
+                env.merge(environment) { _, new in new }
+                env.merge(trace) { _, new in new }
+                env["PATH"] = "\(point!)/.topo/bin:" + (env["PATH"] ?? "")
+                let exit = try await Guest.shared.run("/bin/sh", ["-c", call], environment: env)
+                XCTAssertEqual(exit.output, answer, "\(name), \(call): " + exit.errors + " service: " + lines.text)
+                XCTAssertEqual(exit.errors, "", "\(name), \(call) traced")
+                XCTAssertFalse(exit.errors.contains(token), "\(name), \(call) traced GitHub's token: " + exit.errors)
+                XCTAssertFalse(exit.errors.contains(service), "\(name), \(call) traced the service's token: " + exit.errors)
+            }
+        }
+        _ = try await Guest.shared.run("/bin/rm", ["-f", traced])
+        if fake.output == "fake\n" { _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"]) }
     }
 
     func testTheGhWrapperWithNoGhSaysHowToInstallIt() async throws {
