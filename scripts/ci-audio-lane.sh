@@ -96,6 +96,16 @@ feeders() {
 start() {
   fixture="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
   [ -f "$fixture" ] || { echo "no fixture at $1" >&2; exit 1; }
+  # The owner is read once, here, before anything is touched: a run that ends while start works
+  # is still on record by the pid and start time it had, and so is found gone later.
+  owner_started=""
+  if [ -n "${AUDIO_LANE_OWNER:-}" ]; then
+    owner_started="$(ps -o lstart= -p "$AUDIO_LANE_OWNER" 2>/dev/null || true)"
+    if [ -z "$owner_started" ]; then
+      echo "AUDIO_LANE_OWNER=$AUDIO_LANE_OWNER is not a running process" >&2
+      exit 2
+    fi
+  fi
   # Before anything is touched: a second supervisor would orphan the first and its feeder, and
   # two feeders double the level on the device. Exit 3 tells the caller the running lane is not
   # the one it asked for, and so not its to stop. The lock is held until start exits, so of two
@@ -105,10 +115,6 @@ start() {
   if ! lockf -s -t 0 9; then
     echo "::error::audio lane is being started by another \`$0 start\` ($lock is held), and the lane is that one's" >&2
     exit 3
-  fi
-  if [ -n "${AUDIO_LANE_OWNER:-}" ] && ! ps -o lstart= -p "$AUDIO_LANE_OWNER" > /dev/null 2>&1; then
-    echo "AUDIO_LANE_OWNER=$AUDIO_LANE_OWNER is not a running process" >&2
-    exit 2
   fi
   if supervisor_running; then
     if owner_gone; then
@@ -123,6 +129,14 @@ start() {
       echo "::error::audio lane already started: supervisor $(cat "$pidfile") is running ($pidfile) $whose; run \`$0 stop\` first" >&2
       exit 3
     fi
+  fi
+  # The owner is on record before there is a supervisor to own, so no lane is ever recorded
+  # without the owner it was started for. No supervisor is recorded at this point, so an owner
+  # record whose start then dies describes no lane, and the next start writes its own.
+  rm -f "$ownerfile" "$ownerstartedfile"
+  if [ -n "${AUDIO_LANE_OWNER:-}" ]; then
+    echo "$AUDIO_LANE_OWNER" > "$ownerfile"
+    printf '%s\n' "$owner_started" > "$ownerstartedfile"
   fi
   : > "$log"
   brew install --quiet blackhole-2ch switchaudio-osx
@@ -143,11 +157,6 @@ start() {
   nohup "$0" supervise "$fixture" >/dev/null 2>&1 9>&- &
   echo $! > "$pidfile"
   ps -o lstart= -p $! > "$startedfile"
-  rm -f "$ownerfile" "$ownerstartedfile"
-  if [ -n "${AUDIO_LANE_OWNER:-}" ]; then
-    echo "$AUDIO_LANE_OWNER" > "$ownerfile"
-    ps -o lstart= -p "$AUDIO_LANE_OWNER" > "$ownerstartedfile"
-  fi
   for _ in $(seq 20); do
     [ -s "$heartbeat" ] && break
     sleep 0.5

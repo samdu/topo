@@ -10,7 +10,9 @@
 # stop names the first lane's feeder and supervisor by pid and leaves them running; a start
 # stops a running lane and starts its own only when the run on record as that lane's owner has
 # ended (its pid gone or held by a process that began at another time), and refuses one whose
-# owner still runs or is not on record; a silent input
+# owner still runs or is not on record, and finds gone an owner that ended while its start was
+# under way; an owner that is not running is refused with exit 2 before anything is touched,
+# even while another start is under way; a silent input
 # names the missing microphone grant when the meter reports auth=0, and only then. The --talk
 # recipe in docs/simulator.md, run as written against a fake ssh and tmux, exits 1 naming the
 # desktop session when no tmux server is running and never starts one, waits for the run whether
@@ -235,6 +237,34 @@ kill "$owner" 2>/dev/null
 AUDIO_LANE_OWNER=999999 run start "$work/fixture.wav" > "$work/owner-dead.out" 2>&1; status=$?
 hold "an owner that is not running: start exits 2 (got $status)" [ "$status" = 2 ]
 hold "an owner that is not running: no lane is started" [ ! -s "$state/supervisor.pid" ]
+
+# An owner that ends while its start is held inside start (in brew) is on record by the pid and
+# start time it had when start began, so the next start finds it gone and stops its lane. While
+# that start is held, a start naming an owner that is not running exits 2, not 3, and changes
+# nothing.
+rm -f "$work/arrived"
+touch "$work/hold"
+sleep 300 & owner=$!
+started+=("$owner")
+AUDIO_LANE_OWNER="$owner" run start "$work/fixture.wav" > "$work/owner-dies.out" 2>&1 & held=$!
+for _ in $(seq 100); do [ -e "$work/arrived" ] && break; sleep 0.1; done
+hold "owner dies during start: the start is held inside start" [ -e "$work/arrived" ]
+before="$(ls -lT "$state"; cat "$state"/owner.* 2>/dev/null)"
+AUDIO_LANE_OWNER=999999 run start "$work/fixture.wav" > "$work/owner-dead-held.out" 2>&1; status=$?
+hold "an owner that is not running, while a start is held: exits 2 (got $status)" [ "$status" = 2 ]
+hold "an owner that is not running, while a start is held: changes nothing" [ "$(ls -lT "$state"; cat "$state"/owner.* 2>/dev/null)" = "$before" ]
+hold "an owner that is not running, while a start is held: no supervisor is recorded" [ ! -e "$state/supervisor.pid" ]
+kill -KILL "$owner"; wait "$owner" 2>/dev/null
+rm "$work/hold"
+wait "$held"; status=$?
+hold "owner dies during start: that start exits 0 (got $status)" [ "$status" = 0 ]
+hold "owner dies during start: its start time is on record" [ -s "$state/owner.started" ]
+record; dying_supervisor="$supervisor"
+run start "$work/fixture.wav" > "$work/owner-died.out" 2>&1; status=$?
+hold "owner died during start: the next start exits 0 (got $status)" [ "$status" = 0 ]
+hold "owner died during start: its lane is stopped" eval '! alive "$dying_supervisor"'
+record
+run stop > /dev/null 2>&1
 
 # A silent input says why when the meter's process holds no microphone grant (auth=0, a shell
 # started over ssh), and only then.
