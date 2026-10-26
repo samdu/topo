@@ -162,11 +162,21 @@ final class GuestProcessTests: XCTestCase {
             """])
         var lines = ticker.lines.makeAsyncIterator()
         _ = await lines.next()
+        // Read by a fresh process, which a stopped guest still runs; bounded, so a reader that
+        // parks fails the test rather than holding the suite.
         let tick = { () async throws -> Int in
             let cat = try await Guest.shared.spawn("/bin/cat", ["/tmp/topo-freeze-tick"])
-            var out = cat.lines.makeAsyncIterator()
-            let line = await out.next()
-            for await _ in cat.lines {}
+            let read = Task { () -> String? in
+                var out = cat.lines.makeAsyncIterator()
+                let line = await out.next()
+                while await out.next() != nil {}
+                return line
+            }
+            let bound = Task { try await Task.sleep(for: .seconds(5)); read.cancel(); _ = await cat.terminate(within: .seconds(2)) }
+            let line = await read.value
+            bound.cancel()
+            await eventually("the reader exited") { cat.hasExited }
+            XCTAssertEqual(cat.exitStatus, 0, "the reader did not finish")
             return Int(line ?? "") ?? -1
         }
         try await Task.sleep(for: .milliseconds(200))
@@ -181,7 +191,7 @@ final class GuestProcessTests: XCTestCase {
 
         let continued = await GuestProcess.continueAll()
         XCTAssertTrue(continued)
-        await eventually("the ticker moved again") { (try? await tick()).map { $0 > atStop } ?? false }
+        await eventually("the ticker moved again", within: 10) { (try? await tick()).map { $0 > atStop } ?? false }
 
         let again = await GuestProcess.stopAll(within: .seconds(2))
         XCTAssertTrue(again)

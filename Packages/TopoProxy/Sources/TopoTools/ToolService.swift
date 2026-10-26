@@ -86,9 +86,18 @@ public actor ToolService {
         guard let wanted = NWEndpoint.Port(rawValue: port), port != 0 else { throw POSIXError(.EINVAL) }
         down()
         settle(.failure(CancellationError()))
-        let bound = try await listen(requesting: wanted)
-        guard bound == port else { throw POSIXError(.EADDRINUSE) }
-        return bound
+        // A listener of this one's own let go a moment ago may still hold the port while its
+        // cancel lands, so a bind refused as in use is tried again, for half a second at most.
+        for attempt in 1...25 {
+            do {
+                let bound = try await listen(requesting: wanted)
+                guard bound == port else { throw POSIXError(.EADDRINUSE) }
+                return bound
+            } catch NWError.posix(.EADDRINUSE) where attempt < 25 {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        throw POSIXError(.EADDRINUSE)
     }
 
     private func listen(requesting requested: NWEndpoint.Port) async throws -> UInt16 {
@@ -155,6 +164,10 @@ public actor ToolService {
             }
             port = bound
             settle(.success(bound))
+        case .failed(let error) where port == nil:
+            // A start that never came up fails, whether or not a loss is heard.
+            down()
+            settle(.failure(error))
         case .failed(let error) where hearsLoss:
             lost("it failed", error)
         case .cancelled where hearsLoss:
