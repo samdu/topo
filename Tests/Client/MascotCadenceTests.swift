@@ -67,6 +67,17 @@ final class MascotCadenceTests: XCTestCase {
         for _ in 0..<Int(((look.restAfter + 2) * 30).rounded(.up)) { canvas.step(1 / 30) }
         XCTAssertEqual(canvas.cadence, look.restInterval, "rested at 30, his frames come at the rest's rate")
         XCTAssertEqual(canvas.frameRate, 12)
+
+        // A rest is never faster than work: a look whose rest is shorter than its frame rests at
+        // the frame.
+        canvas.apply(input: open.input, field: MascotPlacementTests.field(),
+                     settings: MascotPlacementTests.settings(.roam), interval: 0.05,
+                     restInterval: 1 / 120, restAfter: look.restAfter, conditions: seen)
+        XCTAssertEqual(canvas.cadence, 0.05, "rested, his frames came faster than at work")
+        XCTAssertEqual(canvas.frameRate, 20)
+        for _ in 0..<Int(((look.restAfter + 2) * 20).rounded(.up)) { canvas.step(0.05) }
+        XCTAssertEqual(canvas.cadence, 0.05, "rested longer, his frames came faster than at work")
+        XCTAssertEqual(canvas.frameRate, 20)
     }
 
     func testHeRestsToTheRestsRateAndAnythingHeDoesBringsTheLooksBack() throws {
@@ -93,14 +104,29 @@ final class MascotCadenceTests: XCTestCase {
         run(canvas, seconds: look.restAfter + 2)
         XCTAssertEqual(canvas.cadence, look.frameInterval, "the turn is still open")
 
-        // The turn ends: the rest starts afresh and takes its time again.
+        // The turn ends: the rest starts afresh and takes its `restAfter` again, to the frame: a
+        // frame short of four seconds he is at the look's rate, and a frame past it at the rest's.
         tell(canvas, idle)
         XCTAssertEqual(canvas.cadence, look.frameInterval)
-        run(canvas, seconds: look.restAfter / 2)
-        XCTAssertEqual(canvas.cadence, look.frameInterval, "half a rest is not one")
-        run(canvas, seconds: look.restAfter / 2 + 1)
-        XCTAssertEqual(canvas.cadence, look.restInterval)
+        let frames = Int((look.restAfter / look.frameInterval).rounded())
+        for _ in 0..<(frames - 1) { canvas.step(look.frameInterval) }
+        XCTAssertEqual(canvas.cadence, look.frameInterval, "a frame short of a rest is not one")
+        canvas.step(look.frameInterval)
+        canvas.step(look.frameInterval)
+        XCTAssertEqual(canvas.cadence, look.restInterval, "a frame past four seconds he is not rested")
         XCTAssertEqual(canvas.frameRate, 12)
+
+        // A sign held up is not rest: the look's rate on the frame it is seen.
+        var signed = idle
+        signed.sign = "Hello"
+        tell(canvas, signed)
+        XCTAssertEqual(canvas.cadence, look.frameInterval, "a sign is rest")
+        XCTAssertEqual(canvas.frameRate, 24)
+        run(canvas, seconds: look.restAfter + 2)
+        XCTAssertEqual(canvas.cadence, look.frameInterval, "the sign still stands")
+        tell(canvas, idle)
+        run(canvas, seconds: look.restAfter + 2)
+        XCTAssertEqual(canvas.cadence, look.restInterval)
 
         // A rested Topo's stalled callback moves the clock on by two of his frames and no more.
         let before = canvas.clock
@@ -128,12 +154,33 @@ final class MascotCadenceTests: XCTestCase {
         run(canvas, seconds: look.restAfter + 4)
         XCTAssertEqual(canvas.cadence, look.restInterval, "let go, he rests again")
 
-        // Hidden — the chat covered — the clock stops with the link; back in front he is still rested.
+        // Hidden — the chat covered — the link goes and the clock stops with it; back in front
+        // he is still rested.
         var covered = seen
         covered.covered = true
         tell(canvas, idle, conditions: covered)
+        XCTAssertNil(canvas.frameRate, "the link ran on under a covered chat")
         tell(canvas, idle)
         XCTAssertEqual(canvas.cadence, look.restInterval, "coming back finds him rested")
+        XCTAssertEqual(canvas.frameRate, 12)
+
+        // A rest half done when the chat is covered is half done when it comes back: the hidden
+        // time is not his, and the rest takes the other half from there.
+        var open = idle
+        open.turnOpen = true
+        tell(canvas, open)
+        tell(canvas, idle)
+        run(canvas, seconds: look.restAfter / 2)
+        let clockWhenCovered = canvas.clock
+        tell(canvas, idle, conditions: covered)
+        XCTAssertNil(canvas.frameRate)
+        tell(canvas, idle)
+        XCTAssertEqual(canvas.clock, clockWhenCovered, "the clock moved while he was hidden")
+        XCTAssertEqual(canvas.cadence, look.frameInterval, "half a rest became a whole one under cover")
+        run(canvas, seconds: look.restAfter / 2 - 2 * look.frameInterval)
+        XCTAssertEqual(canvas.cadence, look.frameInterval, "the rest did not take its other half")
+        run(canvas, seconds: 4 * look.frameInterval)
+        XCTAssertEqual(canvas.cadence, look.restInterval)
 
         // A new place is a glide, which is the walk: the look's rate while it lasts.
         let fresh = self.canvas(in: window)

@@ -193,6 +193,25 @@ final class TuningTests: XCTestCase {
         XCTAssertEqual(worn.mascot.pin, vault.mascot.pin)
     }
 
+    /// A kept `frameInterval` that is not a number — `true`, which bridges to 1 through `as?
+    /// Double`, a word — is read as nothing: the vault's interval is worn, the sheet shows no
+    /// rate of its own, and the placement beside it stands.
+    func testAKeptFrameIntervalThatIsNotANumberIsNothing() throws {
+        for planted in ["true", "false", #""fast""#] {
+            let store = defaults()
+            store.set(#"{"mascot": {"frameInterval": \#(planted), "placement": "glass"}}"#, forKey: Tuning.key)
+            let tuning = Tuning(defaults: store)
+            XCTAssertNil(tuning.frameInterval, "\(planted) was read as a number")
+            XCTAssertNil(tuning.frameRate)
+            let worn = tuning.worn(over: vault)
+            XCTAssertEqual(worn.mascot.frameInterval, vault.mascot.frameInterval, "\(planted) reached the look")
+            XCTAssertEqual(worn.mascot.placement, .glass, "\(planted) took the placement down")
+            tuning.place(.roam)
+            XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, vault.mascot.frameInterval,
+                           "\(planted) was written back as a number")
+        }
+    }
+
     /// A kept `frameInterval` out of its field's range — a planted one, since the sheet writes
     /// only its own stops — is refused where it is worn, costs that field alone, and is written
     /// back as it was rather than as a rate it does not come to.

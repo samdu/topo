@@ -359,7 +359,13 @@ final class Tuning {
         if let point = mascot["pin"] as? [String: Double], let x = point["x"], let y = point["y"] {
             pin = CGPoint(x: x, y: y)
         }
-        return (values, placement, pin, mascot["frameInterval"] as? Double)
+        // JSON's `true` bridges to a number, 1, through `as? Double`, and a document written back
+        // from that would carry a second a frame the reader took; a boolean is not a value here.
+        let frameInterval = mascot["frameInterval"].flatMap { kept -> Double? in
+            guard CFGetTypeID(kept as CFTypeRef) != CFBooleanGetTypeID() else { return nil }
+            return kept as? Double
+        }
+        return (values, placement, pin, frameInterval)
     }
 }
 
