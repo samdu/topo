@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import TopoUserland
 
 /// The lifecycle between iOS and the session: the background task asked for on the way out, the
@@ -49,12 +50,12 @@ final class GuestLifecycleTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    private func make() -> (GuestLifecycle, GuestSession, ScriptedLauncher, ManualClock, FakeTime, Outcomes) {
+    private func make(now: @escaping @Sendable () -> Date = Date.init) -> (GuestLifecycle, GuestSession, ScriptedLauncher, ManualClock, FakeTime, Outcomes) {
         let launcher = ScriptedLauncher()
         let clock = ManualClock()
         let time = FakeTime()
         let session = GuestSession(launcher: launcher, store: SessionFile(url: directory.appendingPathComponent("s")),
-                                   sleep: clock.sleep)
+                                   now: now, sleep: clock.sleep)
         let outcomes = Outcomes()
         let lifecycle = GuestLifecycle(session: session, time: time, sleep: clock.sleep,
                                        report: { outcomes.all.append($0) })
@@ -99,6 +100,33 @@ final class GuestLifecycleTests: XCTestCase {
         var ends: [GuestSession.TurnEnd] = []
         for await update in turn { if case .ended(let end) = update { ends.append(end) } }
         XCTAssertEqual(ends, [.abandoned])
+    }
+
+    /// A cut's note says when the app left, which is when `didEnterBackground` was called, not the
+    /// tick later when the way out reads the grace.
+    func testACutsNoteSaysWhenTheAppLeftNotWhenTheWayOutBegan() async throws {
+        let left = Date(timeIntervalSince1970: 1_792_684_800)
+        let clockTime = OSAllocatedUnfairLock(initialState: left)
+        let (lifecycle, session, launcher, clock, time, _) = make(now: { clockTime.withLock { $0 } })
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        lifecycle.didEnterBackground()
+        // The way out reads the grace a second after leaving, and the turn is cut 15 s after that.
+        time.remaining = 28.2
+        await eventually("the first tick asleep") { await clock.pending == 2 }
+        clockTime.withLock { $0 = left.addingTimeInterval(1) }
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the teardown waiting on the turn") { await clock.pending == 2 }
+        clockTime.withLock { $0 = left.addingTimeInterval(16) }
+        await clock.advance(by: .milliseconds(15_200))
+        await eventually("the background task ended") { time.open.isEmpty }
+        let cut = try XCTUnwrap(CutFile(url: directory.appendingPathComponent(".guest-cut.json")).load())
+        XCTAssertEqual(cut.left, left, "the note's time is the way out's, a tick after the app left")
+        XCTAssertTrue(cut.turn)
+        XCTAssertTrue(cut.words.contains("and 16 seconds later"), cut.words)
     }
 
     func testComingBackWithinTheFirstTickEndsTheTaskAndEndsNothing() async throws {

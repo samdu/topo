@@ -216,6 +216,15 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(message["content"] as? String, "say \"hi\"\nplease")
     }
 
+    /// How many tasks Claude Code has running in the background is read, and nothing of what they are.
+    func testBackgroundTasksAreCountedAndNotRead() {
+        let running = #"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1","task_type":"local_bash","description":"log the person's heart rate"}],"session_id":"s"}"#
+        XCTAssertEqual(StreamJSON.events(in: running), [.backgroundTasks(1)])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#), [.backgroundTasks(0)])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"background_tasks_changed"}"#),
+                       [.other("system/background_tasks_changed")])
+    }
+
     /// An input echoed as its turn begins names the input by its uuid; a replayed line with no uuid
     /// names none, and a tool's result, which is a `user` line too, is read as before.
     func testAnEchoedInputIsReadAsReceived() throws {
@@ -235,7 +244,7 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.arguments(model: "claude-haiku-4-5-20251001", resume: nil),
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                         "--include-partial-messages", "--replay-user-messages", "--dangerously-skip-permissions",
-                        "--model", "claude-haiku-4-5-20251001"])
+                        "--model", "claude-haiku-4-5-20251001", "--append-system-prompt", ClaudeLauncher.timePrompt])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
         let launcher = ClaudeLauncher { [:] }
         XCTAssertEqual(Array(launcher.commandLine(resume: nil, model: nil).prefix(4)),
@@ -244,7 +253,42 @@ final class StreamJSONTests: XCTestCase {
 
     /// The resident is told where its memory is when the vault is mounted, and that it cannot be
     /// reached when it is not, as an appended system prompt: an argument, so nothing the resident
-    /// starts inherits it. A launcher asked nothing says nothing.
+    /// starts inherits it. Every launch is told of its time, and one asked nothing of its memory
+    /// says nothing of it.
+    /// A note of the process before is told by a SessionStart hook rather than the appended
+    /// prompt, which a resumed conversation never sends again: the hook is given only with a note,
+    /// on `startup` and `resume` alone, and prints the note and its mark unless the transcript
+    /// already holds the mark.
+    func testANoteIsToldByASessionStartHook() async throws {
+        let noted = ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true, note: "cut")
+        let prompt = try XCTUnwrap(noted.firstIndex(of: "--append-system-prompt").map { noted[$0 + 1] })
+        XCTAssertFalse(prompt.contains("cut"), prompt)
+        let settings = try XCTUnwrap(noted.firstIndex(of: "--settings").map { noted[$0 + 1] })
+        XCTAssertEqual(settings, ClaudeLauncher.noteSettings)
+        XCTAssertEqual(noted.suffix(2), ["--resume", "S1"])
+        XCTAssertFalse(ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true).contains("--settings"))
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(settings.utf8)) as? [String: Any])
+        let hooks = try XCTUnwrap((json["hooks"] as? [String: Any])?["SessionStart"] as? [[String: Any]])
+        XCTAssertEqual(hooks.count, 1)
+        XCTAssertEqual(hooks[0]["matcher"] as? String, "startup|resume")
+        let command = try XCTUnwrap((hooks[0]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+        XCTAssertEqual(command, ClaudeLauncher.noteCommand)
+        XCTAssertTrue(command.contains("transcript_path"), command)
+        XCTAssertTrue(command.contains("grep -qF \"$\(ClaudeLauncher.noteMarkVariable)\""), command)
+        XCTAssertTrue(command.contains("printf '%s\\n%s' \"$\(ClaudeLauncher.noteVariable)\" \"$\(ClaudeLauncher.noteMarkVariable)\""), command)
+        XCTAssertEqual(ClaudeLauncher.noteMark("cut"), ClaudeLauncher.noteMark("cut"))
+        XCTAssertNotEqual(ClaudeLauncher.noteMark("cut at 1"), ClaudeLauncher.noteMark("cut at 2"))
+
+        let launcher = ClaudeLauncher { [ClaudeLauncher.noteVariable: "supplied"] }
+        let told = try await launcher.launchEnvironment(note: "cut")
+        XCTAssertEqual(told[ClaudeLauncher.noteVariable], "cut")
+        XCTAssertEqual(told[ClaudeLauncher.noteMarkVariable], ClaudeLauncher.noteMark("cut"))
+        let untold = try await launcher.launchEnvironment()
+        XCTAssertNil(untold[ClaudeLauncher.noteVariable], "a note the callback supplied was told")
+        XCTAssertNil(untold[ClaudeLauncher.noteMarkVariable])
+    }
+
     func testTheMemoryLineSaysWhetherTheVaultIsMounted() async throws {
         func prompt(_ arguments: [String]) -> String? {
             arguments.firstIndex(of: "--append-system-prompt").map { arguments[$0 + 1] }
@@ -254,7 +298,9 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertTrue(mounted.contains("relative paths"), mounted)
         let unreachable = try XCTUnwrap(prompt(ClaudeLauncher.arguments(model: nil, resume: nil, memory: false)))
         XCTAssertTrue(unreachable.contains("cannot be reached"), unreachable)
-        XCTAssertNil(prompt(ClaudeLauncher.arguments(model: nil, resume: nil)))
+        XCTAssertEqual(prompt(ClaudeLauncher.arguments(model: nil, resume: nil)), ClaudeLauncher.timePrompt)
+        XCTAssertTrue(mounted.hasPrefix(ClaudeLauncher.timePrompt), mounted)
+        XCTAssertTrue(ClaudeLauncher.timePrompt.contains("background commands included"))
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true).suffix(2), ["--resume", "S1"])
         XCTAssertEqual(ClaudeLauncher.memory, ClaudeLauncher.home + "/memory")
 
