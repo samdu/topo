@@ -1203,8 +1203,9 @@ final class Harness {
             await onPass?()
             let read = await refresh()
             // The log as this pass read it, which is what the runner is asked by; a stopped line
-            // sent below moves the log past it, so a pass with one waiting goes by nothing.
-            let justRead = read && !hasWaiting ? lastRead : nil
+            // sent below moves the log past it, so a pass with one waiting goes by nothing, and
+            // a pass with a turn in flight goes by nothing either, so the brain is left alone.
+            let justRead = read && !busy && !hasWaiting ? lastRead : nil
             // A line that stopped on a failure goes again from here, on the loop's own time, once
             // the log can be read at all.
             if read { await retryStoppedLine(every: interval) }
