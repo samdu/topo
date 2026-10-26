@@ -13,6 +13,7 @@ expect 2 --device none
 expect 2 --device none '' 'hello'
 expect 2 --device none '   '
 expect 2 'hello'
+expect 2 --device none --fresh 'hello'
 
 # A copy that brings back the last run's finished file is not taken for this run's: the script
 # waits for a file whose first mark is this launch's. xcrun is a stand-in that serves a stale

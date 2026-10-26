@@ -375,7 +375,9 @@ final class Userland {
         // The digests read five megabytes and the import writes a few thousand files: blocking
         // work, so a queue of its own rather than the cooperative pool.
         DispatchQueue.global(qos: .utility).async {
+            Perf.mark("guest.import.begin")
             let result = Result { try installer.install(rootfs: rootfs, packages: packages) }
+            Perf.mark("guest.import.end")
             Task { @MainActor in self.finish(result) }
         }
     }

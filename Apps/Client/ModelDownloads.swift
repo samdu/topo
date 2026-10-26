@@ -2,6 +2,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import TopoCore
 import UIKit
 #if canImport(FluidAudio)
 import FluidAudio
@@ -292,6 +293,8 @@ final class ModelDownloads {
     /// alone (a debug build given its models on the command line asks for none).
     private var wanted: Set<String> = []
     private var reconciling = false
+    /// The models whose first byte this process has marked (`download.firstByte`).
+    private var flowed: Set<String> = []
     /// What iOS gave `handleEventsForBackgroundURLSession`, called once the session has
     /// delivered the events it woke the app for.
     var completion: (() -> Void)?
@@ -360,12 +363,20 @@ final class ModelDownloads {
     private func enqueue(_ manifest: ModelManifest, excluding running: Set<String>) {
         for model in manifest.models where wanted.contains(model.id) && !present.contains(model.id) {
             failures[model.id] = nil
-            for file in store.unverified(model) {
+            let unverified = store.unverified(model)
+            var made = 0, resumed = 0, carried = 0
+            defer {
+                if made > 0 || carried > 0 {
+                    Perf.mark("download.begin \(model.id) files=\(made) resumed=\(resumed) running=\(carried) bytes=\(unverified.reduce(0) { $0 + $1.size })")
+                }
+            }
+            for file in unverified {
                 let key = Self.key(model, file)
                 if running.contains(key) {
                     // The session's own, from before a relaunch: counted as in flight until it
                     // reports, so the status line does not read "not downloaded" meanwhile.
                     inFlight[key] = inFlight[key] ?? 0
+                    carried += 1
                     continue
                 }
                 guard !verifying.contains(key) else { continue }
@@ -374,11 +385,13 @@ final class ModelDownloads {
                 if let data = try? Data(contentsOf: resume) {
                     task = session.downloadTask(withResumeData: data)
                     try? FileManager.default.removeItem(at: resume)
+                    resumed += 1
                 } else {
                     task = session.downloadTask(with: model.url(for: file))
                 }
                 task.taskDescription = key
                 inFlight[key] = inFlight[key] ?? 0
+                made += 1
                 task.resume()
             }
         }
@@ -506,6 +519,8 @@ final class ModelDownloads {
         case .progress(let key, let bytes):
             waiting.remove(key)
             inFlight[key] = bytes
+            let id = String(key.prefix(while: { $0 != "|" }))
+            if flowed.insert(id).inserted { Perf.mark("download.firstByte \(id)") }
         case .verifying(let key):
             waiting.remove(key)
             inFlight[key] = nil
@@ -514,6 +529,7 @@ final class ModelDownloads {
             verifying.remove("\(id)|\(path)")
             done[id, default: 0] += size
             if let model = manifest?.model(id), store.isPresent(model) {
+                Perf.mark("download.present \(id)")
                 present.insert(id)
                 if let manifest { store.sweep(manifest) }
                 waiters.present(present).forEach { $0(.success(())) }
@@ -524,6 +540,7 @@ final class ModelDownloads {
             inFlight[key] = nil
             let id = String(key.prefix(while: { $0 != "|" }))
             failures[id] = why
+            Perf.mark("download.failed \(id)")
             let failure = ModelDownloadFailure(id: id, why: why)
             waiters.failed(id).forEach { $0(.failure(failure)) }
         case .finished:
@@ -639,7 +656,12 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
         }
         report(.verifying(key))
         do {
+            let began = ContinuousClock.now
             try store.admit(location, as: file, of: model)
+            // The digest and the move, on this session's one delegate queue: every other file's
+            // arrival waits behind it.
+            let took = ContinuousClock.now - began
+            Perf.mark("download.verified \(model.id) bytes=\(file.size) ms=\(took.components.seconds * 1000 + took.components.attoseconds / 1_000_000_000_000_000)")
             report(.verified(id: model.id, path: file.path, size: file.size))
         } catch {
             report(.failed(key, error.localizedDescription))

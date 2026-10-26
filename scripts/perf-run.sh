@@ -3,10 +3,14 @@
 # TOPO_PERF_SEND (Apps/Topo/PerfRun.swift), waits for the app to say the run is done, and copies
 # its marks off the phone. The phone must be unlocked: devicectl refuses to launch on a locked one.
 #
-#   scripts/perf-run.sh [--device <id>] [--app <Topo.app>] [--build] [--gap <seconds>] [--spoken]
+#   scripts/perf-run.sh [--device <id>] [--app <Topo.app>] [--build] [--fresh] [--gap <seconds>] [--spoken]
 #                       [--timeout <seconds>] [--out <marks.txt>] "question" ["question" ...]
 #
 # --spoken sends the questions as spoken turns, so the replies are read aloud from the phone.
+# --fresh times a first run: it deletes the app from the phone (its container, every download and
+# compiled model with it) before installing, so it needs --app or --build, and the app waits for
+# every setup line to be done (TOPO_PERF_SETUP=1, `perf.setup.done`) before its first question.
+# Someone signs in at the phone meanwhile. Its timeout is an hour unless --timeout says.
 # --build makes the Release build first (build/dd, signed for TOPO_DEVELOPMENT_TEAM if set); --app installs that bundle; with neither the
 # build already on the phone is the one timed. It exits 4 when a question got no reply. The marks land in --out (default
 # build/perf/<UTC stamp>.txt), one `mark t=<epoch ms> <name>` a line, which is what
@@ -16,7 +20,7 @@ cd "$(dirname "$0")/.."
 
 bundle=zone.hexagon.topo
 device="${TOPO_PERF_DEVICE:-}"
-app="" build=no gap=5 timeout=600 out="" spoken=0
+app="" build=no gap=5 timeout="" out="" spoken=0 fresh=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --device) device="$2"; shift 2 ;;
@@ -24,6 +28,7 @@ while [ $# -gt 0 ]; do
     --build) build=yes; shift ;;
     --gap) gap="$2"; shift 2 ;;
     --spoken) spoken=1; shift ;;
+    --fresh) fresh=1; shift ;;
     --timeout) timeout="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     --) shift; break ;;
@@ -37,6 +42,10 @@ for question in "$@"; do
   [ -n "${question//[[:space:]]/}" ] || { echo "a question is blank" >&2; exit 2; }
 done
 [ -n "$device" ] || { echo "no device: pass --device or set TOPO_PERF_DEVICE (xcrun devicectl list devices)" >&2; exit 2; }
+[ "$fresh" = 0 ] || [ -n "$app" ] || [ "$build" = yes ] || { echo "--fresh deletes the app, so it needs --app or --build" >&2; exit 2; }
+if [ -z "$timeout" ]; then
+  if [ "$fresh" = 1 ]; then timeout=3600; else timeout=600; fi
+fi
 
 asked=$#
 send="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
@@ -53,6 +62,10 @@ if [ "$build" = yes ]; then
     > build/perf-build.log 2>&1 || { tail -30 build/perf-build.log >&2; exit 1; }
   app="build/dd/Build/Products/Release-iphoneos/Topo.app"
 fi
+if [ "$fresh" = 1 ]; then
+  echo "==> deleting $bundle from the phone"
+  xcrun devicectl device uninstall app --device "$device" "$bundle" --quiet || true
+fi
 if [ -n "$app" ]; then
   echo "==> installing $app"
   xcrun devicectl device install app --device "$device" "$app" --quiet
@@ -62,7 +75,7 @@ fi
 # the new process does and bring back the last run's file, finished: a file is this run's only
 # when its first mark is no older than this launch (less a few seconds for the clocks).
 launching="$(python3 -c 'import time; print(int(time.time() * 1000) - 5000)')"
-environment="$(python3 -c 'import json,sys; print(json.dumps({"TOPO_PERF_SEND": sys.argv[1], "TOPO_PERF_GAP": sys.argv[2], "TOPO_PERF_SPOKEN": sys.argv[3]}))' "$send" "$gap" "$spoken")"
+environment="$(python3 -c 'import json,sys; print(json.dumps({"TOPO_PERF_SEND": sys.argv[1], "TOPO_PERF_GAP": sys.argv[2], "TOPO_PERF_SPOKEN": sys.argv[3], "TOPO_PERF_SETUP": sys.argv[4]}))' "$send" "$gap" "$spoken" "$fresh")"
 echo "==> launching"
 if ! launched="$(xcrun devicectl device process launch --device "$device" --terminate-existing \
      --environment-variables "$environment" "$bundle" 2>&1)"; then
