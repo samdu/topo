@@ -75,12 +75,28 @@ public actor ToolService {
 
     /// Starts listening and returns the port, once bound; the port it has when already up. A
     /// start while another is waiting for its listener waits for the same one.
-    public func start() async throws -> UInt16 {
+    public func start() async throws -> UInt16 { try await listen(requesting: requestedPort) }
+
+    /// Lets the listener go and starts a new one on `port` itself, whatever the old one's state:
+    /// what a frozen resident was launched with, which it can be continued toward only once this
+    /// app holds that port again. A port another process has bound meanwhile is not shared — the
+    /// bind fails, and so does this — so a resident is never continued toward a listener that is
+    /// not the app's.
+    public func relisten(on port: UInt16) async throws -> UInt16 {
+        guard let wanted = NWEndpoint.Port(rawValue: port), port != 0 else { throw POSIXError(.EINVAL) }
+        down()
+        settle(.failure(CancellationError()))
+        let bound = try await listen(requesting: wanted)
+        guard bound == port else { throw POSIXError(.EADDRINUSE) }
+        return bound
+    }
+
+    private func listen(requesting requested: NWEndpoint.Port) async throws -> UInt16 {
         if let port { return port }
         if listener == nil {
             let parameters = NWParameters.tcp
             // Loopback only: no other interface, and no LAN peer, reaches it.
-            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: requestedPort)
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: requested)
             let listener = try NWListener(using: parameters)
             generation += 1
             let current = generation

@@ -436,6 +436,15 @@ final class Userland {
 
 #if DEBUG
 extension Userland {
+    /// The guest's forwarder listening again if it heard its listener go, and the resolver's
+    /// write for it made: a frozen guest is continued only after this, so its lookups have a
+    /// resolver behind them.
+    func reviveForwarder() async {
+        guard await forwarder.port == nil else { return }
+        _ = try? await forwarder.start()
+        await resolver.settle()
+    }
+
     /// Stops the guest's forwarder, as iOS taking its listeners would, and waits for the
     /// resolver's write of the phone's name servers.
     func stopForwarder() async {

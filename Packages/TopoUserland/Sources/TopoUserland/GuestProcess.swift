@@ -209,6 +209,33 @@ public final class GuestProcess: Sendable {
         }
     }
 
+    /// Stops every task in the guest but init (`SIGSTOP`) and answers once each is parked at the
+    /// stop — or at `bound`, false, with some still on their way to it. A stopped guest runs
+    /// nothing until `continueAll`, whatever iOS does with the app meanwhile. SIGKILL ends a
+    /// stopped task as it ends a running one, so a teardown needs no continue first. Blocking work
+    /// is on a queue of its own.
+    public static func stopAll(within bound: Duration) async -> Bool {
+        await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let deadline = ContinuousClock.now + bound
+                while true {
+                    // Again each pass, so a task started since is stopped too.
+                    guard signalAll(TOPO_ISH_SIGSTOP) != nil else { return done.resume(returning: false) }
+                    if topo_ish_unstopped() == 0 { return done.resume(returning: true) }
+                    if ContinuousClock.now >= deadline { return done.resume(returning: false) }
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
+        }
+    }
+
+    /// Continues every task in the guest but init (`SIGCONT`); false when the kernel refused.
+    public static func continueAll() async -> Bool {
+        await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { done.resume(returning: signalAll(TOPO_ISH_SIGCONT) != nil) }
+        }
+    }
+
     /// One line about `pid` as the kernel sees it now.
     static func describe(_ pid: Int32) -> String {
         var line = [CChar](repeating: 0, count: 256)

@@ -149,7 +149,8 @@ final class GuestResident {
                 await userland.bringZoneUpToDate()
                 return try await made()
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile,
+                                       freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
@@ -249,9 +250,56 @@ final class LaunchPorts {
         self.tools = tools
     }
 
+    /// The ports the last launch was told, which a frozen resident still holds in its environment.
+    private(set) var told: (proxy: UInt16, tools: UInt16)?
+
     /// The ports to tell the next launch: each service's, on a listener started for it.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
-        (try await proxy.relisten(), try await tools.relisten())
+        let now = (try await proxy.relisten(), try await tools.relisten())
+        told = now
+        return now
+    }
+
+    /// Both services listening again on the very ports the last launch was told, for a frozen
+    /// resident on its way back; false when either cannot be taken back (another process bound it
+    /// while the app was away) or no launch was told any.
+    func reclaim() async -> Bool {
+        guard let told else { return false }
+        do {
+            _ = try await proxy.relisten(on: told.proxy)
+            _ = try await tools.relisten(on: told.tools)
+            return true
+        } catch {
+            GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+}
+
+/// The app's freezer: every guest task stopped on the way out, and on the way back the proxy and
+/// the tool service taken back on the ports the resident was told and the DNS forwarder up before
+/// any task is continued, so nothing in the guest runs toward a listener the app does not hold.
+@MainActor
+final class GuestFreeze: GuestFreezer {
+    /// How long the stop may take to be confirmed: well inside the grace.
+    static let stopBound: Duration = .seconds(2)
+
+    let ports: LaunchPorts
+    let userland: Userland
+
+    init(ports: LaunchPorts, userland: Userland) {
+        self.ports = ports
+        self.userland = userland
+    }
+
+    nonisolated func stop() async -> Bool {
+        await GuestProcess.stopAll(within: Self.stopBound)
+    }
+
+    nonisolated func resume() async -> Bool {
+        guard await ports.reclaim() else { return false }
+        await userland.reviveForwarder()
+        return await GuestProcess.continueAll()
     }
 }
 

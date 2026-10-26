@@ -478,6 +478,41 @@ import TopoAuth
         #expect(upstream.requests.count == 1, "the request reached a listener other than the proxy's")
     }
 
+    /// A frozen resident was launched toward one port: `relisten(on:)` takes that port back after
+    /// its listener went, connections and all, and what reaches it reaches this proxy.
+    @Test func relistenOnTakesTheSamePortBack() async throws {
+        let upstream = StubUpstream()
+        let (proxy, first, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let held = try await WireClient(port: first)
+        try await held.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
+        _ = try await held.readResponse()
+        await proxy.set(hearsLoss: false)
+        await proxy.listener?.cancel()
+        #expect(try await proxy.relisten(on: first) == first)
+        #expect(await proxy.port == first)
+        let client = try await WireClient(port: first)
+        try await client.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
+        let (head, _) = try await client.readResponse()
+        #expect(head.status == 200)
+        #expect(upstream.requests.count == 2)
+    }
+
+    /// A port another listener holds is never shared: `relisten(on:)` fails, holds no port, and
+    /// the other listener still has it.
+    @Test func relistenOnAPortAnotherListenerHoldsFails() async throws {
+        let (proxy, first, _) = try await startedProxy(StubUpstream())
+        defer { Task { await proxy.stop() } }
+        await proxy.set(hearsLoss: false)
+        await proxy.listener?.cancel()
+        try await Self.refused(first)
+        let squatter = try await squat(first)
+        defer { squatter.cancel() }
+        await #expect(throws: (any Error).self) { _ = try await proxy.relisten(on: first) }
+        #expect(await proxy.port == nil)
+        #expect(await LoopbackProbe.answers(port: first), "control: the other listener still holds it")
+    }
+
     /// A start with a port up is that port, with no new listener and nothing logged.
     @Test func aStartWithAPortUpIsThatPort() async throws {
         let (proxy, first, logs) = try await startedProxy(StubUpstream())

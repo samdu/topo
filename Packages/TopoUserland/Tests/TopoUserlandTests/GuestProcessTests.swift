@@ -152,6 +152,45 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertTrue(termination.confirmed, "\(termination)")
     }
 
+    /// A frozen guest: every task stopped and confirmed so, nothing it runs moving until it is
+    /// continued, and a stopped tree still ended by a terminate, which is the way out of a freeze.
+    func testAStoppedGuestStaysStillUntilContinuedAndAStoppedTreeStillEnds() async throws {
+        _ = try SharedGuest.booted()
+        let ticker = try await Guest.shared.spawn("/bin/sh", ["-c", """
+            echo started
+            i=0; while :; do i=$((i+1)); echo $i > /tmp/topo-freeze-tick; sleep 0.05; done
+            """])
+        var lines = ticker.lines.makeAsyncIterator()
+        _ = await lines.next()
+        let tick = { () async throws -> Int in
+            let cat = try await Guest.shared.spawn("/bin/cat", ["/tmp/topo-freeze-tick"])
+            var out = cat.lines.makeAsyncIterator()
+            let line = await out.next()
+            for await _ in cat.lines {}
+            return Int(line ?? "") ?? -1
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        let stopped = await GuestProcess.stopAll(within: .seconds(2))
+        XCTAssertTrue(stopped, "the stop was not confirmed")
+        let atStop = try await tick()
+        try await Task.sleep(for: .milliseconds(400))
+        let later = try await tick()
+        XCTAssertEqual(later, atStop, "the ticker moved while stopped")
+        XCTAssertFalse(ticker.hasExited)
+
+        let continued = await GuestProcess.continueAll()
+        XCTAssertTrue(continued)
+        await eventually("the ticker moved again") { (try? await tick()).map { $0 > atStop } ?? false }
+
+        let again = await GuestProcess.stopAll(within: .seconds(2))
+        XCTAssertTrue(again)
+        let termination = await ticker.terminate(within: .seconds(5))
+        XCTAssertTrue(termination.confirmed, "a stopped tree did not end: \(termination)")
+        let left = await GuestProcess.guestTasks()
+        XCTAssertEqual(left, [], "\(left.map(GuestProcess.describe))")
+    }
+
     /// Every guest task but init that is not a zombie, read pid by pid.
     private static func guestTasks() -> Set<Int32> {
         Set((2...Int32(1 << 15)).filter { GuestProcess.running([$0]) > 0 })

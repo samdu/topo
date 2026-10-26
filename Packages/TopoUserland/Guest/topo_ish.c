@@ -499,6 +499,28 @@ int topo_ish_signal_session(int sid, int sig) {
     return live;
 }
 
+int topo_ish_unstopped(void) {
+    if (!booted)
+        return _ENODEV;
+    // A task is parked at a group stop when it waits on its group's stopped condition
+    // (`handle_interrupt`); one that has not reached that wait yet is still running guest code or
+    // inside a system call.
+    lock(&pids_lock);
+    int unstopped = 0;
+    for (int id = 2; id <= MAX_PID; id++) {
+        struct task *task = pid_get_task_zombie(id);
+        if (task == NULL || task->zombie || task->exiting)
+            continue;
+        lock(&task->waiting_cond_lock);
+        bool parked = task->waiting_cond == &task->group->stopped_cond;
+        unlock(&task->waiting_cond_lock);
+        if (!parked)
+            unstopped++;
+    }
+    unlock(&pids_lock);
+    return unstopped;
+}
+
 int topo_ish_running(const int *pids, int count) {
     if (!booted)
         return _ENODEV;

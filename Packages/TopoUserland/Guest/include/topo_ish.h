@@ -54,6 +54,9 @@ int topo_ish_wait(int pid, int *status);
 /// The two signals the app sends a guest process tree, in the guest's (Linux) numbering.
 #define TOPO_ISH_SIGKILL 9
 #define TOPO_ISH_SIGTERM 15
+/// And the two a frozen guest is stopped and continued with.
+#define TOPO_ISH_SIGCONT 18
+#define TOPO_ISH_SIGSTOP 19
 
 /// Sends `sig` to every task in the guest but init, and writes the pids of those that are not
 /// zombies (exiting ones included, which are listed and not signalled again) into `pids` up to
@@ -67,6 +70,11 @@ int topo_ish_signal_all(int sig, int *pids, int capacity);
 /// and answers how many there were that are not zombies, or a negative guest errno. Signal 0
 /// only counts. Init's session (1) is refused. Requires a booted kernel.
 int topo_ish_signal_session(int sid, int sig);
+
+/// How many tasks in the guest but init are neither zombies, exiting, nor parked at a group stop:
+/// after `topo_ish_signal_all(TOPO_ISH_SIGSTOP, …)`, the ones that have not stopped yet. A
+/// negative guest errno when the kernel is not booted.
+int topo_ish_unstopped(void);
 
 /// How many of `pids` are still running: a task that exists and is not a zombie. A zombie whose
 /// parent is init — a descendant orphaned when the process above it died — is reaped here, since
