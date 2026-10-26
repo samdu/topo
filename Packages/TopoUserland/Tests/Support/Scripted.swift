@@ -68,6 +68,9 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         pid = Self.pids.withLock { $0 += 1; return $0 }
     }
 
+    /// Every line written to it, in order.
+    var written: [String] { lock.withLock { sent } }
+
     /// The turns written to it, as the text of each `user` message.
     var turns: [String] {
         lock.withLock { sent }.compactMap { line in

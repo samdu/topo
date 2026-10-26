@@ -70,6 +70,31 @@ final class GuestSessionTests: XCTestCase {
 
     // MARK: - Turns
 
+    /// A launch writes `initialize` before anything else, so its answer says when the process is
+    /// ready; that answer is the app's own and never one of a turn's events.
+    func testALaunchAsksForInitializeFirstAndItsAnswerIsNoTurns() async throws {
+        let (session, process) = try await resident()
+        let first = try XCTUnwrap(process.written.first)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(first.utf8)) as? [String: Any])
+        XCTAssertEqual(object["type"] as? String, "control_request")
+        XCTAssertEqual(object["request_id"] as? String, GuestSession.readyRequest)
+        XCTAssertEqual((object["request"] as? [String: Any])?["subtype"] as? String, "initialize")
+
+        let (turn, done) = collect(try await session.send("hello"))
+        await eventually("written") { process.turns.count == 1 }
+        XCTAssertEqual(process.written.count, 2, "the turn went before the initialize, or twice")
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{}}}"#)
+        process.emit(Lines.text("hi"))
+        process.emit(Lines.result("hi", session: "S1"))
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        XCTAssertFalse(turn.events.contains { if case .controlResponse = $0 { return true } else { return false } },
+                       "a control response reached the turn")
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response","response":{"request_id":"r1"}}"#), [.controlResponse(id: "r1")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response"}"#), [.other("control_response")])
+    }
+
     func testTwoTurnsGoToOneResidentProcessAndTheSessionIdIsKept() async throws {
         let (session, process) = try await resident()
         XCTAssertEqual(launcher.resumed, [nil], "a first start resumes nothing")

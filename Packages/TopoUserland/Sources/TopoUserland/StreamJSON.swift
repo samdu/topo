@@ -52,6 +52,9 @@ public enum StreamEvent: Sendable, Equatable {
     case received(id: String)
     /// The turn's end, answered or failed.
     case result(TurnResult)
+    /// Claude Code's answer to a control request of the app's, by the request's id: the answer to
+    /// `StreamJSON.initialize` comes once it reads stdin, which is when it is ready for a turn.
+    case controlResponse(id: String)
     /// A well-formed event of a kind the app does not read — a hook's lines, a rate-limit notice,
     /// a `user` message carrying no tool result — named by its `type` and `subtype`.
     case other(String)
@@ -193,6 +196,11 @@ public enum StreamJSON {
         case ("user", _):
             let results = toolResults(object)
             return results.isEmpty ? [.other(subtype.map { "\(type)/\($0)" } ?? type)] : results
+        case ("control_response", _):
+            guard let response = object["response"] as? [String: Any], let id = response["request_id"] as? String else {
+                return [.other("control_response")]
+            }
+            return [.controlResponse(id: id)]
         case ("result", _):
             return [.result(result(object, subtype: subtype))]
         case ("stream_event", _):
@@ -312,6 +320,15 @@ public enum StreamJSON {
     /// A malformed line as it is reported: its start, since it may be anything.
     private static func clip(_ line: String) -> String {
         line.count <= 200 ? line : String(line.prefix(200)) + "…"
+    }
+
+    /// The control request a launch writes first: `initialize`, carrying nothing, which Claude Code
+    /// answers (`controlResponse`) once it is reading its input, so its answer is the moment the
+    /// process is ready for a turn.
+    public static func initialize(id: String) -> String {
+        let object: [String: Any] = ["type": "control_request", "request_id": id, "request": ["subtype": "initialize"]]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// The input line that asks Claude Code for a turn: a `user` message carrying `text`. `id`,

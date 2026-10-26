@@ -35,6 +35,16 @@ public enum Perf {
         file.withLock { $0 = handle }
     }
 
+    /// The CPU the app's process has used so far, user and system, in milliseconds: the guest runs
+    /// inside it, so the difference between two marks carrying it is what the guest and the app
+    /// spent between them.
+    public static func cpu() -> Int {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return -1 }
+        func ms(_ t: timeval) -> Int { t.tv_sec * 1000 + Int(t.tv_usec) / 1000 }
+        return ms(usage.ru_utime) + ms(usage.ru_stime)
+    }
+
     /// Milliseconds since the process was started, from the kernel's own record of it: what a
     /// launch spent before any of the app's code ran.
     public static func sinceProcessStart() -> Int? {
