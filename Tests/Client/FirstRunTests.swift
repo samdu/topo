@@ -77,9 +77,8 @@ final class FirstRunTests: XCTestCase {
     /// Listening first: once the ear is resident on an install and the voice is still coming,
     /// the line says Topo can hear, and that replies are written meanwhile. Not on a launch, not
     /// before the ear, and not once the voice is resident or has failed.
-    /// The voice compiles only once the ear is neither still to be fetched nor compiling, so the
-    /// two never compile at once; an ear whose download failed lets it go, and no ear beside it
-    /// (a stand-in) holds nothing back.
+    /// The voice compiles only once the ear is neither still to be fetched nor compiling; an ear
+    /// whose download failed lets it go, and no ear beside it (a stand-in) holds nothing back.
     @MainActor
     func testTheVoiceCompilesOnlyOnceTheEarIsNotToComeOrCompiling() {
         XCTAssertTrue(Voice.mayLoad(ear: nil, earDownloadFailed: false))

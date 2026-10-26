@@ -48,9 +48,11 @@ final class Voice {
     /// The ear beside the voice, which comes first: the first thing a person does is talk, and a
     /// reply can be text until the voice is in. The voice's files are asked for after the ear's
     /// (`ModelDownloads.start(_:after:)`), and its compile waits while the ear is still to be
-    /// fetched or is compiling (`mayLoad`), so the two are not compiled at once even when the
-    /// voice's files are already here. An ear whose download failed lets the voice go, since a
-    /// broken ear never costs the voice. Unset (a debug stand-in ear) waits for nothing. Whoever
+    /// fetched or is compiling (`mayLoad`), so the ear's compile is not shared with the voice's,
+    /// even when the voice's files are already here. An ear whose download failed lets the voice
+    /// go, since a broken ear never costs the voice; that is the one way the two can still compile
+    /// at once, when a later foreground's retry brings the ear in while the voice it let go is
+    /// compiling. Nothing holds the ear back for the voice. Unset (a debug stand-in ear) waits for nothing. Whoever
     /// sets it has the ear call `earSettled` when its compile ends.
     weak var ear: Ear?
     /// Whether a wait on the ear's download is registered, so a refusal registers one only.
