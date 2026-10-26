@@ -7,7 +7,10 @@
 # arrives while another is held inside start refuses; a pid file naming a live process that is
 # not the recorded supervisor refuses nothing; stop leaves nothing of its lane behind and puts
 # the defaults back; and after the pid file of a running lane is lost and a second lane started,
-# stop names the first lane's feeder and supervisor by pid and leaves them running; a silent input
+# stop names the first lane's feeder and supervisor by pid and leaves them running; a start
+# stops a running lane and starts its own only when the run on record as that lane's owner has
+# ended (its pid gone or held by a process that began at another time), and refuses one whose
+# owner still runs or is not on record; a silent input
 # names the missing microphone grant when the meter reports auth=0, and only then. The --talk
 # recipe in docs/simulator.md, run as written against a fake ssh and tmux, exits 1 naming the
 # desktop session when no tmux server is running and never starts one, waits for the run whether
@@ -177,6 +180,58 @@ hold "stop with an orphan: its own supervisor and feeder are gone" eval '! alive
 hold "stop with an orphan: warns of the orphaned feeder and its supervisor by pid" grep -q "::warning::audio lane: feeder $lost_feeder (supervisor $lost_supervisor) is still running" "$work/orphan.out"
 hold "stop with an orphan: warns of nothing it stopped" eval '! grep -q "feeder $second_feeder " "$work/orphan.out"'
 hold "stop with an orphan: leaves both running" eval 'alive "$lost_supervisor" && alive "$lost_feeder"'
+
+# The run a lane was started for, AUDIO_LANE_OWNER, decides whether a later start may stop it.
+# A run is a `sleep` here; killing it with SIGKILL is the run ended with no trap to stop its lane.
+# The orphaned lane from the case before is still up, unrecorded; it plays into nothing here.
+sleep 300 & owner=$!
+started+=("$owner")
+AUDIO_LANE_OWNER="$owner" run start "$work/fixture.wav" > /dev/null 2>&1
+record; owned_supervisor="$supervisor"; owned_feeder="$feeder"
+hold "owned lane: the owner is on record" [ "$(cat "$state/owner.pid")" = "$owner" ]
+run start "$work/fixture.wav" > "$work/owner-alive.out" 2>&1; status=$?
+hold "owner still running: a second start exits 3 (got $status)" [ "$status" = 3 ]
+hold "owner still running: names the owner as running" grep -q "for run $owner, which is still running" "$work/owner-alive.out"
+hold "owner still running: the lane still runs" eval 'alive "$owned_supervisor" && alive "$owned_feeder"'
+kill -KILL "$owner"; wait "$owner" 2>/dev/null
+# What a reaped lane leaves to the start after it: the defaults as the dead run's start found them.
+printf 'BlackHole 2ch\n' > "$work/input"; printf 'BlackHole 2ch\n' > "$work/output"
+run start "$work/fixture.wav" > "$work/owner-gone.out" 2>&1; status=$?
+hold "owner gone: a second start exits 0 (got $status)" [ "$status" = 0 ]
+hold "owner gone: names the lane it stopped and its run" grep -q "supervisor $owned_supervisor is still running for run $owner, which has ended" "$work/owner-gone.out"
+hold "owner gone: the dead run's supervisor and feeder are stopped" eval '! alive "$owned_supervisor" && ! alive "$owned_feeder"'
+record; reaped_supervisor="$supervisor"
+hold "owner gone: the new lane runs under its own supervisor" eval '[ "$reaped_supervisor" != "$owned_supervisor" ] && alive "$reaped_supervisor"'
+hold "owner gone: the new lane has no owner on record" [ ! -e "$state/owner.pid" ]
+hold "owner gone: the new start saved the defaults the dead run's start found" [ "$(cat "$state/previous-defaults")" = "Fake Microphone
+Fake Speakers" ]
+hold "owner gone: the lane it did not record is left alone" eval 'alive "$lost_supervisor" && alive "$lost_feeder"'
+
+# A lane with no owner on record is never stopped by a start.
+run start "$work/fixture.wav" > "$work/no-owner.out" 2>&1; status=$?
+hold "no owner on record: a second start exits 3 (got $status)" [ "$status" = 3 ]
+hold "no owner on record: says so" grep -q "with no run on record as its owner" "$work/no-owner.out"
+hold "no owner on record: the lane still runs" alive "$reaped_supervisor"
+run stop > /dev/null 2>&1
+
+# An owner pid that now belongs to another process, by its start time, is a run that has ended.
+sleep 300 & owner=$!
+started+=("$owner")
+AUDIO_LANE_OWNER="$owner" run start "$work/fixture.wav" > /dev/null 2>&1
+record; owned_supervisor="$supervisor"
+echo "Thu Jan  1 00:00:00 1970" > "$state/owner.started"
+run start "$work/fixture.wav" > "$work/owner-recycled.out" 2>&1; status=$?
+hold "owner pid recycled: a second start exits 0 (got $status)" [ "$status" = 0 ]
+hold "owner pid recycled: the old lane is stopped" eval '! alive "$owned_supervisor"'
+hold "owner pid recycled: the process that holds the pid now is left alone" alive "$owner"
+record
+run stop > /dev/null 2>&1
+kill "$owner" 2>/dev/null
+
+# An owner that is not running is refused before anything is touched.
+AUDIO_LANE_OWNER=999999 run start "$work/fixture.wav" > "$work/owner-dead.out" 2>&1; status=$?
+hold "an owner that is not running: start exits 2 (got $status)" [ "$status" = 2 ]
+hold "an owner that is not running: no lane is started" [ ! -s "$state/supervisor.pid" ]
 
 # A silent input says why when the meter's process holds no microphone grant (auth=0, a shell
 # started over ssh), and only then.

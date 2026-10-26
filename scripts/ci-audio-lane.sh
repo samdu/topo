@@ -8,7 +8,8 @@
 #   scripts/ci-audio-lane.sh start [fixture]  # install, pin, and start the supervised feeder
 #                                             # (default Tests/Fixtures/purple-elephants.wav);
 #                                             # refuses (exit 3) while a started lane still runs
-#                                             # or another start is under way
+#                                             # or another start is under way, unless the run
+#                                             # that started that lane is provably gone
 #   scripts/ci-audio-lane.sh check <when>     # fail, naming what died, unless the lane still holds
 #   scripts/ci-audio-lane.sh stop             # stop the feeder, restore the defaults start found,
 #                                             # and warn of any feeder it did not start
@@ -21,6 +22,12 @@
 # (scripts/ci-audio-meter.swift) hears the fixture on BlackHole's input; it prints the feeder's
 # log, with every restart or exit as a warning. It never makes a silent lane pass: the UI test
 # still asserts the fixture's energy at the tap.
+#
+# AUDIO_LANE_OWNER=<pid> in start's environment names the run the lane is for (scripts/mac-suite.sh
+# passes its own pid), and start records it with when it began. A later start that finds the lane
+# still running stops it and starts its own only when that owner is on record and no longer
+# running, which is a run ended by SIGKILL, whose trap never stopped its lane. A lane with no
+# owner on record, or whose owner still runs, is refused.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +38,9 @@ lock="$state/start.lock"
 pidfile="$state/supervisor.pid"
 # When that supervisor began, as ps's lstart gives it.
 startedfile="$state/supervisor.started"
+# The run the lane is for (AUDIO_LANE_OWNER), and when it began, as ps's lstart gives it.
+ownerfile="$state/owner.pid"
+ownerstartedfile="$state/owner.started"
 feederpid="$state/feeder.pid"
 # The default input and output before start pinned BlackHole, one per line, for stop.
 previous="$state/previous-defaults"
@@ -66,6 +76,14 @@ supervisor_running() {
   [ ! -s "$startedfile" ] || [ "$began" = "$(cat "$startedfile")" ]
 }
 
+# Whether the run the lane was started for is on record and has ended: its pid runs no process,
+# or one that began at another time (a pid the Mac has given to something else since). A lane
+# with no owner on record is never taken for one whose owner has gone.
+owner_gone() {
+  [ -s "$ownerfile" ] && [ -s "$ownerstartedfile" ] || return 1
+  [ "$(ps -o lstart= -p "$(cat "$ownerfile")" 2>/dev/null || true)" != "$(cat "$ownerstartedfile")" ]
+}
+
 # Every feeder running on this Mac, one "pid parent" per line: a process whose executable is
 # named ci-audio-feeder, from any lane's state directory, and the supervisor it runs under. ps's
 # comm is the executable's path alone, so no argument can pass for one.
@@ -88,9 +106,23 @@ start() {
     echo "::error::audio lane is being started by another \`$0 start\` ($lock is held), and the lane is that one's" >&2
     exit 3
   fi
+  if [ -n "${AUDIO_LANE_OWNER:-}" ] && ! ps -o lstart= -p "$AUDIO_LANE_OWNER" > /dev/null 2>&1; then
+    echo "AUDIO_LANE_OWNER=$AUDIO_LANE_OWNER is not a running process" >&2
+    exit 2
+  fi
   if supervisor_running; then
-    echo "::error::audio lane already started: supervisor $(cat "$pidfile") is running ($pidfile); run \`$0 stop\` first" >&2
-    exit 3
+    if owner_gone; then
+      echo "::warning::audio lane: supervisor $(cat "$pidfile") is still running for run $(cat "$ownerfile"), which has ended without stopping it; stopping that lane first"
+      release
+    else
+      if [ -s "$ownerfile" ]; then
+        whose="for run $(cat "$ownerfile"), which is still running"
+      else
+        whose="with no run on record as its owner"
+      fi
+      echo "::error::audio lane already started: supervisor $(cat "$pidfile") is running ($pidfile) $whose; run \`$0 stop\` first" >&2
+      exit 3
+    fi
   fi
   : > "$log"
   brew install --quiet blackhole-2ch switchaudio-osx
@@ -111,6 +143,11 @@ start() {
   nohup "$0" supervise "$fixture" >/dev/null 2>&1 9>&- &
   echo $! > "$pidfile"
   ps -o lstart= -p $! > "$startedfile"
+  rm -f "$ownerfile" "$ownerstartedfile"
+  if [ -n "${AUDIO_LANE_OWNER:-}" ]; then
+    echo "$AUDIO_LANE_OWNER" > "$ownerfile"
+    ps -o lstart= -p "$AUDIO_LANE_OWNER" > "$ownerstartedfile"
+  fi
   for _ in $(seq 20); do
     [ -s "$heartbeat" ] && break
     sleep 0.5
@@ -168,10 +205,9 @@ check() {
   echo "audio lane holds $when the microphone test: supervisor $(cat "$pidfile") alive, heartbeat ${age} s old, input and output $device, $heard"
 }
 
-# The supervisor first, so it restarts nothing, then the feeder; then the defaults start found.
-# A feeder still running after that was started by something else, a start whose pid files were
-# lost or another session on this Mac: it and its supervisor are named, and left alone.
-stop() {
+# The lane the pid files name: the supervisor first, so it restarts nothing, then the feeder;
+# then the defaults start found.
+release() {
   # A supervisor pid that now belongs to something else is not this lane's to kill.
   supervisor_running || rm -f "$pidfile"
   for file in "$pidfile" "$feederpid"; do
@@ -182,7 +218,7 @@ stop() {
     if kill -0 "$pid" 2>/dev/null; then echo "error: $pid ($file) is still running" >&2; exit 1; fi
     rm -f "$file"
   done
-  rm -f "$startedfile"
+  rm -f "$startedfile" "$ownerfile" "$ownerstartedfile"
   if [ -s "$previous" ]; then
     { read -r input; read -r output; } < "$previous"
     # A Mac with no input of its own had no default before; with BlackHole installed it stays
@@ -191,6 +227,13 @@ stop() {
     if [ -n "$output" ]; then SwitchAudioSource -t output -s "$output"; else echo "no default output to restore"; fi
     rm -f "$previous"
   fi
+}
+
+# The lane's release, then any feeder still running: one started by something else, a start
+# whose pid files were lost or another session on this Mac. It and its supervisor are named, and
+# left alone.
+stop() {
+  release
   feeders | while read -r pid parent; do
     # A feeder whose supervisor was killed belongs to launchd.
     [ "$parent" != 1 ] || parent=gone
@@ -204,5 +247,5 @@ case "${1:-}" in
   supervise) supervise "$2" ;;
   check) check "${2:-now}" ;;
   stop) stop ;;
-  *) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
