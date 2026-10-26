@@ -237,8 +237,10 @@ models() {  # models <case> <want status:results> <named or ""> [paths under the
   is "the quiet part, $case: $want" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "$want:1"
   [ -z "$named" ] || case "$(cat "$work/models-$case.log")" in *"$named"*) ok "the quiet part, $case: named" ;; *) fail "the quiet part, $case: not named: $(tail -3 "$work/models-$case.log")" ;; esac
 }
-models an-ears-file "1:topo_ui:quiet=failure " "Library/Application Support/Models/parakeet-tdt-0.6b-v2-coreml/Encoder.mlmodelc/coremldata.bin" \
-  "Library/Application Support/Models/parakeet-tdt-0.6b-v2-coreml/Encoder.mlmodelc/coremldata.bin"
+models an-ears-file "1:topo_ui:quiet=failure " "Library/Application Support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin" \
+  "Library/Application Support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin"
+models a-voice-before-its-home "1:topo_ui:quiet=failure " "Library/Application Support/Models/pocket-tts-coreml/constants.bin" "Library/Application Support/Models/pocket-tts-coreml/constants.bin"
+models the-guests-downloads "0:topo_ui:quiet=success " "" "Library/Application Support/Models/claude-code/claude" "Library/Application Support/Models/alpine-bash/.verified.json"
 models a-voices-ledger "1:topo_ui:quiet=failure " "Library/Application Support/Models/pocket-tts/.verified.json" "Library/Application Support/Models/pocket-tts/.verified.json"
 models the-spotters-file "1:topo_ui:quiet=failure " "Library/Application Support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json" \
   "Library/Application Support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json"

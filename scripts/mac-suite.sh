@@ -505,15 +505,19 @@ quiet_launches() {
 }
 # quiet_models <udid> — the proof the quiet part fetched no model: the app's data container on
 # that simulator, read after the part's tests and before the run deletes the simulator, holds no
-# file under the ear's or the voice's homes (`ModelStore`: `Models/` in Application Support, and
-# FluidAudio's own `FluidAudio/Models/` there, the spotter's). Each file found is named; no
-# folder, or folders with no file in them, is nothing fetched. A container that cannot be read
-# is a failure, since nothing was proved.
+# file under the ear's or the voice's homes (`ModelStore.directory(for:)`, in Application
+# Support: `Models/parakeet-tdt-0.6b-v2`, the voice's `Models/pocket-tts`, FluidAudio's own
+# `FluidAudio/Models` where the spotter lives, and `Models/pocket-tts-coreml` and
+# `Models/parakeet-ctc-110m-coreml`, where a set made before its home sits until `rehome`
+# moves it). The rest of `Models/` is the guest's (its rootfs, bash, Claude Code), which the
+# quiet part fetches. Each file found is named; no folder, or folders with no file in them,
+# is nothing fetched. A container that cannot be read is a failure, since nothing was proved.
 quiet_models() {
   local container home found=""
   container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
     || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
-  for home in "Library/Application Support/Models" "Library/Application Support/FluidAudio/Models"; do
+  for home in Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Models/pocket-tts Models/pocket-tts-coreml FluidAudio/Models; do
+    home="Library/Application Support/$home"
     [ -d "$container/$home" ] || continue
     found+="$(cd "$container" && find "$home" ! -type d | sed 's/^/  /')"$'\n'
   done
