@@ -257,7 +257,8 @@ final class StreamJSONTests: XCTestCase {
     /// says nothing of it.
     /// A note of the process before is told by a SessionStart hook rather than the appended
     /// prompt, which a resumed conversation never sends again: the hook is given only with a note,
-    /// on `startup` and `resume` alone, and prints the variable the note is in.
+    /// on `startup` and `resume` alone, and prints the note and its mark unless the transcript
+    /// already holds the mark.
     func testANoteIsToldByASessionStartHook() async throws {
         let noted = ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true, note: "cut")
         let prompt = try XCTUnwrap(noted.firstIndex(of: "--append-system-prompt").map { noted[$0 + 1] })
@@ -272,13 +273,20 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(hooks.count, 1)
         XCTAssertEqual(hooks[0]["matcher"] as? String, "startup|resume")
         let command = try XCTUnwrap((hooks[0]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
-        XCTAssertEqual(command, "printf '%s' \"$\(ClaudeLauncher.noteVariable)\"")
+        XCTAssertEqual(command, ClaudeLauncher.noteCommand)
+        XCTAssertTrue(command.contains("transcript_path"), command)
+        XCTAssertTrue(command.contains("grep -qF \"$\(ClaudeLauncher.noteMarkVariable)\""), command)
+        XCTAssertTrue(command.contains("printf '%s\\n%s' \"$\(ClaudeLauncher.noteVariable)\" \"$\(ClaudeLauncher.noteMarkVariable)\""), command)
+        XCTAssertEqual(ClaudeLauncher.noteMark("cut"), ClaudeLauncher.noteMark("cut"))
+        XCTAssertNotEqual(ClaudeLauncher.noteMark("cut at 1"), ClaudeLauncher.noteMark("cut at 2"))
 
         let launcher = ClaudeLauncher { [ClaudeLauncher.noteVariable: "supplied"] }
         let told = try await launcher.launchEnvironment(note: "cut")
         XCTAssertEqual(told[ClaudeLauncher.noteVariable], "cut")
+        XCTAssertEqual(told[ClaudeLauncher.noteMarkVariable], ClaudeLauncher.noteMark("cut"))
         let untold = try await launcher.launchEnvironment()
         XCTAssertNil(untold[ClaudeLauncher.noteVariable], "a note the callback supplied was told")
+        XCTAssertNil(untold[ClaudeLauncher.noteMarkVariable])
     }
 
     func testTheMemoryLineSaysWhetherTheVaultIsMounted() async throws {

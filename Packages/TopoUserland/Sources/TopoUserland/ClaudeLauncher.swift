@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// How the resident Claude Code is started in the guest: `claude -p` reading turns as stream-json
@@ -85,14 +86,37 @@ public struct ClaudeLauncher: ResidentLauncher {
         return arguments
     }
 
-    /// The variable a launch's note is in (`launchEnvironment(note:)`), for the hook to print.
+    /// The variables a launch's note and its mark are in (`launchEnvironment(note:)`), for the
+    /// hook to print.
     public static let noteVariable = "TOPO_LAST_PROCESS"
+    public static let noteMarkVariable = "TOPO_LAST_PROCESS_MARK"
+
+    /// The line printed after a note, which the hook looks for in the conversation before it tells
+    /// one: the same note gives the same mark, and a cut's note names when the app left, so two
+    /// cuts never share one.
+    public static func noteMark(_ note: String) -> String {
+        let digest = SHA256.hash(data: Data(note.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
+        return "[topo: last process \(digest)]"
+    }
+
+    /// The hook's command: the conversation's transcript is the `transcript_path` of what the hook
+    /// is handed on stdin, and a note whose mark is already in it is not told again, since a
+    /// process ended after its hook ran and before it began leaves the note for the next. A
+    /// transcript that cannot be read tells it, because a note told twice costs a line and one
+    /// never told is a cut nobody hears of.
+    public static let noteCommand = #"f=$(sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p'); "#
+        + #"[ -n "$f" ] && grep -qF "$TOPO_LAST_PROCESS_MARK" "$f" 2>/dev/null || printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK""#
 
     /// The settings a launch with a note is given on top of the home's own, whose hooks still run:
-    /// one SessionStart hook printing the note, which Claude Code adds to the conversation. Only on
-    /// `startup` and `resume`, since a compaction or a clear inside the same process starts a
-    /// session too, and the note told again there would be a second cut that never happened.
-    public static let noteSettings = #"{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"printf '%s' \"$TOPO_LAST_PROCESS\""}]}]}}"#
+    /// one SessionStart hook telling the note (`noteCommand`), which Claude Code adds to the
+    /// conversation. Only on `startup` and `resume`, since a compaction or a clear inside the same
+    /// process starts a session too.
+    public static let noteSettings: String = {
+        let hook: [String: Any] = ["matcher": "startup|resume", "hooks": [["type": "command", "command": noteCommand]]]
+        let settings = ["hooks": ["SessionStart": [hook]]]
+        let data = try! JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes])
+        return String(decoding: data, as: UTF8.self)
+    }()
 
     /// The whole command line: the shell moves into the home and `exec`s Claude Code, so the pid
     /// the app holds is Claude Code's own. `model` is the model every turn is asked of (the
@@ -123,6 +147,7 @@ public struct ClaudeLauncher: ResidentLauncher {
         environment[Self.compactAtVariable] = compactAt.map(String.init)
         // The note is the launcher's as well, so one the callback supplied is never told.
         environment[Self.noteVariable] = note
+        environment[Self.noteMarkVariable] = note.map(Self.noteMark)
         return environment
     }
 
