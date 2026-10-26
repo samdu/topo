@@ -31,7 +31,7 @@ public actor APIProxy {
     /// The model a debug build's requests are rewritten to; nil in a release build.
     public static let pinnedModel: String? = {
         #if DEBUG
-        "claude-haiku-4-5-20251001"
+        "claude-haiku-5-5"
         #else
         nil
         #endif

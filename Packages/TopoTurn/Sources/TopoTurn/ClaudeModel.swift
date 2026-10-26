@@ -4,14 +4,14 @@ import Foundation
 /// `opus` and `fable` to the latest of the family it knows, so what is sent carries no version and a
 /// newer model is a newer Claude Code (the guest's pin, `scripts/model-manifest.sh`) and no change
 /// here. Sonnet is the default; the others are a setting. Haiku is not offered — it is what `pinned`
-/// forces a debug build onto, so it is a case without being a choice, named by its dated id because
+/// forces a debug build onto, so it is a case without being a choice, named by its model id because
 /// that is what the proxy writes at the wire (`APIProxy.pinnedModel`), and `allCases` (the model slider)
 /// is written out rather than synthesised to keep it that way.
 public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     case sonnet
     case opus
     case fable
-    case haiku = "claude-haiku-4-5-20251001"
+    case haiku = "claude-haiku-5-5"
 
     public static let `default` = ClaudeModel.sonnet
     /// What the chat offers, smallest to largest, which is the order of Topo's heads. Haiku is

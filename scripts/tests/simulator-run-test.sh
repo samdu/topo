@@ -91,67 +91,67 @@ case "$2" in
                              say "guest: hi there"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
       userland-dies) say "userland: booted"; exit 42 ;;
       guest-answered) say "userland: booted"; say "guest: starting Claude Code, a fresh session"
-                      say "guest turn 1 sent: a"; say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                      say "guest turn 1 sent: a"; say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                       say "guest turn 1 answered in 9.10 s: ok"; say "guest turn 2 sent: b"
-                      say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
+                      say "guest turn 2 model: claude-haiku-5-5, session S1, process 7"
                       say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
       guest-glued-stderr) say "guest turn 1 sent: a"; printf 'E5RT encountered an STL exception. msg = MILCompilerForANE error.'
-                          say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                          say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                           printf 'E5RT: Failed to load program.'; say "guest turn 1 answered in 9.10 s: ok"; say "guest turn done"
                           exec sleep 600 ;;
-      guest-one-failed) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-one-failed) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                         say "guest turn 1 failed in 12.00 s: the process ended mid-turn"
-                        say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
+                        say "guest turn 2 model: claude-haiku-5-5, session S1, process 7"
                         say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
-      guest-abandoned) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
-                       say "guest turn 1 abandoned after 15.00 s"; say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-abandoned) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
+                       say "guest turn 1 abandoned after 15.00 s"; say "guest turn 2 model: claude-haiku-5-5, session S1, process 7"
                        say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
-      guest-two-processes) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-two-processes) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                            say "guest turn 1 answered in 9.10 s: ok"
-                           say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 12"
+                           say "guest turn 2 model: claude-haiku-5-5, session S1, process 12"
                            say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
-      guest-two-sessions) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-two-sessions) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                           say "guest turn 1 answered in 9.10 s: ok"
-                          say "guest turn 2 model: claude-haiku-4-5-20251001, session S2, process 7"
+                          say "guest turn 2 model: claude-haiku-5-5, session S2, process 7"
                           say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
-      guest-no-process) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1"
+      guest-no-process) say "guest turn 1 model: claude-haiku-5-5, session S1"
                         say "guest turn 1 answered in 9.10 s: ok"
-                        say "guest turn 2 model: claude-haiku-4-5-20251001, session S1"
+                        say "guest turn 2 model: claude-haiku-5-5, session S1"
                         say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                   say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: topo-42"
                   say "guest turn 1 answered in 6.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-no-call) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-no-call) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                           say "guest turn 1 answered in 2.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-failed) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-failed) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                          say "guest turn 1 tool: Bash"
                          say "guest turn 1 tool result: Bash: error: No suitable shell found. topo-42"
                          say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-other-output) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-other-output) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                                say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: topo-41"
                                say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-other-tool) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-other-tool) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                              say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: error: no shell"
                              say "guest turn 1 tool: Read"; say "guest turn 1 tool result: Read: ok: topo-42"
                              say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-reply-silent) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-reply-silent) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                                say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: topo-42"
                                say "guest turn 1 answered in 4.00 s: done"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-ok-only-in-prefix) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-ok-only-in-prefix) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                                     say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: wrong output"
                                     say "guest turn 1 answered in 4.00 s: ok"; say "guest turn done"; exec sleep 600 ;;
-      guest-bash-in-reply-prefix-only) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-bash-in-reply-prefix-only) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                                        say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: answered"
                                        say "guest turn 1 answered in 4.00 s: done"; say "guest turn done"; exec sleep 600 ;;
       guest-bash-result-echoed-in-sent) say "guest turn 1 sent: [topo-debug] guest turn 1 tool result: Bash: ok: topo-42"
-                                        say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                                        say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                                         say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: wrong output"
                                         say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
       guest-error) say "guest turn error: Claude Code did not start"; say "guest turn done"; exec sleep 600 ;;
       guest-opus) say "guest turn 1 model: claude-opus-5, session S1, process 7"; say "guest turn 1 answered in 3.00 s: ok"
                   say "guest turn 2 model: claude-opus-5, session S1, process 7"; say "guest turn 2 answered in 1.00 s: ok"
                   say "guest turn done"; exec sleep 600 ;;
-      guest-one-short) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+      guest-one-short) say "guest turn 1 model: claude-haiku-5-5, session S1, process 7"
                        say "guest turn 1 answered in 3.00 s: ok"; say "guest turn done"; exec sleep 600 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;

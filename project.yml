@@ -463,6 +463,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.uitests
+        # Made by XCTest before any test runs: the monitor that puts the simulator's account
+        # alert away (Tests/ClientUI/AccountAlert.swift).
+        INFOPLIST_KEY_NSPrincipalClass: TopoUITests.AccountAlert
   # The spoken turn end to end: a question looped into the microphone, heard by Parakeet, sent,
   # answered by Claude and read aloud. It needs a real setup token, an iCloud account on the
   # simulator and a loopback lane, which only buddybox has, so it is in its own scheme
