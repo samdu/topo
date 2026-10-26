@@ -44,12 +44,28 @@ final class Voice {
     private(set) var state: State = .cold
     /// Why the voice is not available, when it is not. Cleared by the next `prepare`.
     private(set) var trouble: String?
+    /// Whether the ear is being fetched or compiled. The ear comes first, since the first thing a
+    /// person does is talk and a reply can be text until the voice is in: the voice's files are
+    /// asked for after the ear's (`ModelDownloads.start(_:after:)`), and its compile waits for the
+    /// ear's, because the Neural Engine's compiler working on both makes the ear later. Unset
+    /// (a voice with no ear beside it) waits for nothing; whoever sets it calls `prepare` again
+    /// when the ear stops being busy.
+    var earBusy: (@MainActor () -> Bool)?
+    /// Whether every file is on the phone while the state is still `fetching`: the compile is
+    /// waiting on the ear.
+    private var filesHere = false
 
     /// The manifest entries the voice needs on disk.
     static let models = [ModelManifest.pocket]
 
     /// What `loading` reads as: the step a first load after an install spends its time in.
     static let preparing = "preparing the model for this phone"
+
+    /// What the voice's line says while its files are here and its compile waits on the ear's.
+    static let afterEar = "waiting for the ear"
+
+    /// Whether the compile is waiting on the ear, with every file on the phone.
+    var waitsForEar: Bool { state == .fetching && filesHere }
 
     /// The speaker: one of the pack's stock voices, resolved by the port against the language
     /// pack's `constants_bin/`. The manifest fetches this one only.
@@ -118,14 +134,25 @@ final class Voice {
         #endif
         guard state != .loading, state != .ready else { return }
         let downloads = ModelDownloads.shared
-        downloads.start(Self.models)
-        guard state != .fetching else { return }
+        downloads.start(Self.models, after: Ear.models)
+        guard state != .fetching else {
+            loadIfDue(base: downloads.pocketBase)
+            return
+        }
         state = .fetching
         trouble = nil
+        filesHere = false
         downloads.whenPresent(Self.models) { [weak self] in
             guard let self, self.state == .fetching else { return }
-            self.load(base: downloads.pocketBase)
+            self.filesHere = true
+            self.loadIfDue(base: downloads.pocketBase)
         }
+    }
+
+    /// The compile, once the files are here and the ear is not busy.
+    private func loadIfDue(base: URL) {
+        guard state == .fetching, filesHere, earBusy?() != true else { return }
+        load(base: base)
     }
 
     /// The CoreML compile from the store, once the files are all there. `base` is the directory

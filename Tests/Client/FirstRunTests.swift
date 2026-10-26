@@ -74,6 +74,24 @@ final class FirstRunTests: XCTestCase {
         XCTAssertLessThanOrEqual(try drawn(sign: nil).maxX, MascotSprite.reach.maxX)
     }
 
+    /// Listening first: once the ear is resident on an install and the voice is still coming,
+    /// the line says Topo can hear, and that replies are written meanwhile. Not on a launch, not
+    /// before the ear, and not once the voice is resident or has failed.
+    func testTheLineSaysListeningIsReadyWhileTheVoiceIsStillComing() {
+        for voice in [Voice.State.cold, .fetching, .loading] {
+            XCTAssertTrue(FirstRun.hearsFirst(earReady: true, voice: voice, installing: true), "\(voice)")
+        }
+        XCTAssertFalse(FirstRun.hearsFirst(earReady: false, voice: .fetching, installing: true))
+        XCTAssertFalse(FirstRun.hearsFirst(earReady: true, voice: .fetching, installing: false), "a launch's own loading")
+        XCTAssertFalse(FirstRun.hearsFirst(earReady: true, voice: .ready, installing: true))
+        XCTAssertFalse(FirstRun.hearsFirst(earReady: true, voice: .failed, installing: true))
+        XCTAssertEqual(FirstRunLine.label(denied: false, hearsFirst: true),
+                       "\(FirstRun.question) \(FirstRun.invitation) \(FirstRun.listening)")
+        XCTAssertEqual(FirstRunLine.label(denied: true, hearsFirst: true), "\(FirstRun.question) \(FirstRun.invitation) \(FirstRun.denied)",
+                       "a denied microphone is the thing to say, not that Topo can hear")
+        XCTAssertEqual(FirstRunLine.label(denied: false, hearsFirst: false), "\(FirstRun.question) \(FirstRun.invitation)")
+    }
+
     func testThePlaceholderStandsOnlyOverAnUnreadEmptyPage() {
         XCTAssertTrue(ReadingLog.stands(read: false, drawn: false))
         XCTAssertFalse(ReadingLog.stands(read: false, drawn: true))

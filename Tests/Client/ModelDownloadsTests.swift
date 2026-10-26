@@ -161,13 +161,34 @@ final class ModelWaitersTests: XCTestCase {
         XCTAssertTrue(ModelDownloads.measured([.present, .absent]), "one model on the phone and one to come is partway")
         XCTAssertTrue(ModelDownloads.measured([.present, .downloading(done: 1, total: 4)]))
         for unmeasured in [[Status.present, .present], [.absent, .absent], [.downloading(done: 1, total: 4), .failed("503")],
-                           [.downloading(done: 1, total: 4), .waiting], [.present, .verifying], []] {
+                           [.downloading(done: 1, total: 4), .waiting], [.present, .verifying], [.queued],
+                           [.present, .queued], []] {
             XCTAssertFalse(ModelDownloads.measured(unmeasured), "\(unmeasured)")
         }
         XCTAssertEqual(ModelDownloads.fraction(done: 57, of: 228), 0.25)
         XCTAssertEqual(ModelDownloads.fraction(done: 0, of: 228), 0)
         XCTAssertEqual(ModelDownloads.fraction(done: 300, of: 228), 1)
         XCTAssertNil(ModelDownloads.fraction(done: 0, of: 0))
+    }
+
+    /// The ear before the voice: a model asked for after others is held while any of them is
+    /// wanted, not on the phone and not failed, and only then. One never asked for (a debug
+    /// build's stand-in ear) holds nothing, and a failed one lets it go, so a broken ear never
+    /// costs the voice.
+    func testAModelAskedForAfterOthersIsHeldUntilTheyAreHereOrFailed() {
+        let after = ["voice": ["ear", "spotter"]]
+        let both: Set<String> = ["ear", "spotter", "voice"]
+        XCTAssertTrue(ModelDownloads.held("voice", after: after, wanted: both, present: [], failed: []))
+        XCTAssertTrue(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear"], failed: []),
+                      "one of the two still to come holds it")
+        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear", "spotter"], failed: []))
+        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear"], failed: ["spotter"]),
+                       "a failed one lets it go")
+        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: ["voice"], present: [], failed: []),
+                       "an ear nobody asked for holds nothing")
+        XCTAssertFalse(ModelDownloads.held("ear", after: after, wanted: both, present: [], failed: []),
+                       "a model asked for after nothing is never held")
+        XCTAssertFalse(ModelDownloads.held("voice", after: [:], wanted: both, present: [], failed: []))
     }
 
     /// The bar and the words beside it are one count: a model on the phone counts whole, one

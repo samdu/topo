@@ -134,6 +134,9 @@ struct TopoApp: App {
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
         let speaker = Speaker(audio: audio, voice: spoken)
+        // The ear first: the voice's compile waits while the ear is fetched or compiled, and
+        // `prepare` is asked again when it stops being either (below).
+        spoken.earBusy = { ear.state == .fetching || ear.state == .loading }
         // A reply is not read into an open microphone: one that lands while it is open waits for
         // it to close (`Speaker.speak`).
         speaker.microphoneOpen = { voice.listening }
@@ -256,6 +259,11 @@ struct TopoApp: App {
                     // the person has typed anything.
                     Task { await memory.sync() }
                 }
+            }
+            // The voice's compile, which waited on the ear's, goes once the ear is resident or
+            // failed.
+            .onChange(of: voice.ear.state) { _, state in
+                if state == .ready || state == .failed { speaker.prepare() }
             }
             // A widget's cue waits for the harness's first read of the log, which is when it
             // can tell a cue it already sent; a link's cue arrives as a URL.
