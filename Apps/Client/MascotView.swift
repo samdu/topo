@@ -9,7 +9,8 @@ import UIKit
 /// link, which runs exactly while `conditions.animates` does.
 ///
 /// Drawn on the main thread: the port measured 3.2–4.5 ms a frame there, live at 60 Hz on an
-/// iPhone 15 Pro (experiments `topo-mascot-swift`), and this draws half as often. A debug build
+/// iPhone 15 Pro (experiments `topo-mascot-swift`), and this draws at 24 a second, 12 once he has
+/// rested. A debug build
 /// prints what the frames here cost, every `reportEvery` of them, as `[topo-debug] mascot: …`.
 @MainActor
 final class MascotDriver {
@@ -451,7 +452,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         } else {
             restingSince = nil
         }
-        cadence = restingSince.map { clock - $0 >= restAfter } == true ? restInterval : interval
+        cadence = restingSince.map { clock - $0 >= restAfter } == true ? max(restInterval, interval) : interval
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -527,7 +528,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         onReport(now)
     }
 
-    /// How many reports the debug report carries back: about seven seconds of a glide at 30
+    /// How many reports the debug report carries back: about twelve seconds of a glide at 24
     /// frames a second.
     private static let recentReports = 200
     private var sequence = 0
@@ -577,7 +578,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     }
 
     /// The most one callback moves the clock: two frame intervals, or a tenth of a second where
-    /// that is shorter, so a frame or two dropped at 30 a second is still real time.
+    /// that is shorter, so a frame or two dropped at 24 a second is still real time.
     static func stepCap(interval: Double) -> Double { max(interval * 2, 0.1) }
 
     /// One frame, `dt` seconds on: the roam's clock and the engine moved on together.

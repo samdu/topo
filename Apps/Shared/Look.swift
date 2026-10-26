@@ -715,10 +715,13 @@ struct Look: Equatable, Sendable {
         var roamSettle = 0.6
         /// How long a frame of him is on the screen, in seconds, while he does anything: a
         /// twenty-fourth, which is the slowest his motion reads as motion. The display gives the
-        /// nearest rate it has in reach of it, so a ProMotion screen draws him at 24 exactly.
+        /// nearest rate it has in reach of it: a ProMotion screen draws him at 24 exactly, a 60 Hz
+        /// one, which has no 24, at 20.
         var frameInterval = 1.0 / 24
         /// How long a frame lasts once he has rested, in seconds: a twelfth, half the frames of
-        /// `frameInterval`, for the breathing and the blinking of a Topo with nothing to do.
+        /// `frameInterval`, for the idle cycle of a Topo with nothing to do, his breathing, his
+        /// blinking, his yoga and the corner. Never shorter than `frameInterval`: a rest is not
+        /// faster than work.
         var restInterval = 1.0 / 12
         /// How long he has to have been at rest — idle, standing still, no finger on him —
         /// before his frames come at `restInterval`, in seconds. Anything he does brings
