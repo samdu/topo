@@ -550,9 +550,12 @@ final class ModelDownloads {
 
     /// A pass for the models an arrival or a failure has just let go, if any: one pass, at the
     /// moment the last of what they wait on lands, and one that retries nothing, so a failure
-    /// does not ask for itself again.
+    /// does not ask for itself again. Only with the app in front: iOS starts a transfer created
+    /// in the background at its own discretion, so one let go there waits for the next
+    /// foreground's `start`, which creates it as any other.
     private func releaseHeld() {
-        guard heldBack.contains(where: { !held($0) }) else { return }
+        guard UIApplication.shared.applicationState == .active,
+              heldBack.contains(where: { !held($0) }) else { return }
         heldBack = heldBack.filter(held)
         reconcile()
     }

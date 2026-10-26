@@ -77,6 +77,7 @@ final class FirstRunTests: XCTestCase {
     /// Listening first: once the ear is resident on an install and the voice is still coming,
     /// the line says Topo can hear, and that replies are written meanwhile. Not on a launch, not
     /// before the ear, and not once the voice is resident or has failed.
+    @MainActor
     func testTheLineSaysListeningIsReadyWhileTheVoiceIsStillComing() {
         for voice in [Voice.State.cold, .fetching, .loading] {
             XCTAssertTrue(FirstRun.hearsFirst(earReady: true, voice: voice, installing: true), "\(voice)")

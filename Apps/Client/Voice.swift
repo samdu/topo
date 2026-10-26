@@ -36,20 +36,22 @@ import FluidAudio
 @MainActor
 @Observable
 final class Voice {
-    /// `fetching` is the wait for `ModelDownloads` to have every file; `loading` is the CoreML
-    /// compile from disk, which the first load after an install pays: the Neural Engine
-    /// compiling the model for this phone.
+    /// `fetching` is the wait for `ModelDownloads` to have every file, and then, with every file
+    /// here, for the ear's compile to end (`waitsForEar`); `loading` is the CoreML compile from
+    /// disk, which the first load after an install pays: the Neural Engine compiling the model
+    /// for this phone.
     enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
     /// Why the voice is not available, when it is not. Cleared by the next `prepare`.
     private(set) var trouble: String?
-    /// Whether the ear is being fetched or compiled. The ear comes first, since the first thing a
-    /// person does is talk and a reply can be text until the voice is in: the voice's files are
-    /// asked for after the ear's (`ModelDownloads.start(_:after:)`), and its compile waits for the
-    /// ear's, because the Neural Engine's compiler working on both makes the ear later. Unset
-    /// (a voice with no ear beside it) waits for nothing; whoever sets it calls `prepare` again
-    /// when the ear stops being busy.
+    /// Whether the ear is compiling. The ear comes first, since the first thing a person does is
+    /// talk and a reply can be text until the voice is in: the voice's files are asked for after
+    /// the ear's (`ModelDownloads.start(_:after:)`), and its compile waits while the ear's runs,
+    /// so the two are not compiled at once. Only the compile is waited on: an ear whose download
+    /// failed sits in `fetching` until a later foreground, and a voice waiting on that would be a
+    /// broken ear costing the voice. Unset (a voice with no ear beside it, or a debug stand-in
+    /// ear) waits for nothing; whoever sets it calls `earSettled` when the compile ends.
     var earBusy: (@MainActor () -> Bool)?
     /// Whether every file is on the phone while the state is still `fetching`: the compile is
     /// waiting on the ear.
@@ -62,7 +64,7 @@ final class Voice {
     static let preparing = "preparing the model for this phone"
 
     /// What the voice's line says while its files are here and its compile waits on the ear's.
-    static let afterEar = "waiting for the ear"
+    nonisolated static let afterEar = "waiting for the ear"
 
     /// Whether the compile is waiting on the ear, with every file on the phone.
     var waitsForEar: Bool { state == .fetching && filesHere }
@@ -118,15 +120,15 @@ final class Voice {
     var summary: String {
         switch state {
         case .cold: return "not loaded"
-        case .fetching: return ModelDownloads.shared.describe(Self.models)
+        case .fetching: return waitsForEar ? Self.afterEar : ModelDownloads.shared.describe(Self.models)
         case .loading: return Self.preparing
         case .ready: return "Pocket resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
 
-    /// Asks for the model, downloading whatever this phone lacks, and loads it once every file
-    /// is on disk. Idempotent, and called on every foreground so it is resident by the first
+    /// Asks for the model, downloading whatever this phone lacks after the ear's, and loads it
+    /// once every file is on disk and the ear is not compiling. Idempotent, and called on every foreground so it is resident by the first
     /// reply and a download that failed is tried again.
     func prepare() {
         #if DEBUG
@@ -149,7 +151,13 @@ final class Voice {
         }
     }
 
-    /// The compile, once the files are here and the ear is not busy.
+    /// The ear's compile has ended, resident or failed: the voice's compile goes if its files are
+    /// here. Asks the downloads for nothing, so it adds no pass over the session's tasks.
+    func earSettled() {
+        loadIfDue(base: ModelDownloads.shared.pocketBase)
+    }
+
+    /// The compile, once the files are here and the ear is not compiling.
     private func loadIfDue(base: URL) {
         guard state == .fetching, filesHere, earBusy?() != true else { return }
         load(base: base)

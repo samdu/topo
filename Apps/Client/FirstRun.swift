@@ -17,7 +17,7 @@ enum FirstRun {
     static let denied = "Topo can't hear you without the microphone. You can type instead, or allow it in Settings."
 
     /// What the line says as well while the ear is resident and the voice is still coming.
-    static let listening = "Topo can hear you now. Replies are written until the voice is in."
+    static let listening = "Topo can hear you now. Its voice is still on its way, so replies are text until then."
 
     /// Whether the line says `listening`: the ear resident, the voice neither resident nor
     /// failed, and the setup's meter standing, so it is said on an install and not on a launch.
