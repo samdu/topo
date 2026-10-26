@@ -490,6 +490,9 @@ mkdir -p "$work/apps-empty"
 XCODE_APPS="$work/apps-beside" suite pin-selected topo_unit
 is "pin selected: exits 0" "$status" 0
 is "pin selected: built with the selected Xcode" "$(sort -u "$CALLS.developer")" "selected"
+# The first simctl call, which a CoreSimulator newer than its loaded service refuses once, is
+# the toolchain's own and not a suite's.
+is "pin selected: the first simctl call is the toolchain's" "$(grep -m1 '^xcrun ' "$CALLS")" "xcrun simctl list runtimes"
 # The pinned Xcode beside another selected one: everything the run starts is pointed at it.
 FAKE_XCODE=26.4 XCODE_APPS="$work/apps-beside" suite pin-beside topo_unit
 is "pin beside the selected Xcode: exits 0" "$status" 0

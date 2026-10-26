@@ -148,6 +148,11 @@ pinned_tools() {
     local listed="nothing"
     if [ "${#found[@]}" -gt 0 ]; then listed="$(printf '%s; ' "${found[@]}")"; listed="${listed%; }"; fi
     err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION, and no Xcode*.app under $XCODE_APPS is (found: $listed); install the pinned Xcode there."; status=1
+  else
+    # The first simctl call after an Xcode's first launch has installed a newer CoreSimulator
+    # finds the older version's service still loaded, is refused while it replaces it, and the
+    # call after it reaches the new one. This call is that first one, so no suite's is.
+    xcrun simctl list runtimes >/dev/null 2>&1 || true
   fi
   xcodegen --version 2>/dev/null | grep -qx "Version: $XCODEGEN_VERSION" \
     || { err "xcodegen is '$(xcodegen --version 2>&1 | head -n 1)', not Version: $XCODEGEN_VERSION."; status=1; }
