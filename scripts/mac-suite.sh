@@ -17,8 +17,10 @@
 #              It has two parts, each a suite by its own name with its own line in suites.txt
 #              and its own result bundle: `topo_ui:quiet`, every UI test class but
 #              MicrophonePressTests, with no audio lane, no display hold, no models and nothing
-#              that opens a microphone or speaks (a tripwire reads the tests' source first, `quiet_launches`
-#              below, and no test runs when it names a launch); and `topo_ui:mic`, that class alone behind
+#              that opens a microphone or speaks (a tripwire reads the tests' source first,
+#              `quiet_launches` below, and no test runs when it names a launch; after them the
+#              app's data container on the part's simulator holds no fetched model,
+#              `quiet_models`, or the part fails); and `topo_ui:mic`, that class alone behind
 #              everything `topo_ui` has. One is all but the class and the other the class, so
 #              no test is in neither.
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
@@ -418,33 +420,62 @@ display_held() {
   return 1
 }
 # A tripwire ahead of the quiet part's tests, which reads the UI tests' source and nothing
-# else. In each file but the microphone's it follows every `let <name> = XCUIApplication()`
-# line by line, the last write winning, and names a `<name>.launch()` reached when both
-# `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` are not, by that line, set to "loading" on that
-# name, in a statement that ends its line with that word: never set, set to something else since, removed (`removeValue`), or the dictionary
-# replaced or merged over since. It names a launch on a name the file did not make that way.
-# The quiet part leaves out the microphone's class and this leaves out its file, so it names
-# any other class declared in that file. It is false when it names anything, or finds no
-# launch at all. It does not see what the source does not say on those lines: an environment
-# changed through a helper the application is handed to, a loop, or a key that is not a
-# literal is not caught.
+# else, each line with its comments taken out first (`//` to the line's end and `/* … */`,
+# nested and across lines, outside a string literal on the line). In each file but the
+# microphone's it follows every `let <name> = XCUIApplication()` and `let <name> =
+# TopoLaunch.app()` (which sets neither key) line by line, the last write winning, and names a
+# `<name>.launch()` reached when both `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` are not, by that
+# line, set to "loading" on that name, in a statement that ends its line with that word: never
+# set, set to something else since, removed (`removeValue`), or the dictionary replaced or
+# merged over since. It names a launch on a name the file did not make that way. The quiet part
+# leaves out the microphone's class and this leaves out its file, so it names any other class
+# declared in that file, with its attributes and modifiers ahead of it on its line
+# (`@MainActor final class`). It is false when it names anything, or finds no launch at all. It
+# does not see what the source does not say on those lines: an environment changed through a
+# helper the application is handed to, a loop, or a key that is not a literal is not caught.
+# What the part's tests fetched is `quiet_models`, after them.
 QUIET_TESTS=Tests/ClientUI
+# An awk function both readers start each line with: the line with its comments taken out, a
+# string literal's contents kept, and a block comment's depth carried to the next line.
+SOURCE_CODE_AWK='
+function code(line,   out, i, n, c, two, quoted) {
+  out = ""; n = length(line); quoted = 0
+  for (i = 1; i <= n; i++) {
+    c = substr(line, i, 1); two = substr(line, i, 2)
+    if (depth > 0) {
+      if (two == "/*") { depth++; i++ } else if (two == "*/") { depth--; i++; if (depth == 0) out = out " " }
+      continue
+    }
+    if (quoted) {
+      out = out c
+      if (c == "\\") { out = out substr(line, i + 1, 1); i++ } else if (c == "\"") quoted = 0
+      continue
+    }
+    if (two == "//") break
+    if (two == "/*") { depth = 1; i++; continue }
+    if (c == "\"") quoted = 1
+    out = out c
+  }
+  return out
+}
+{ $0 = code($0) }
+'
 quiet_launches() {
   local file found=0 bad=0 out mic="${MIC_CLASS##*/}"
   for file in "$QUIET_TESTS"/*.swift; do
     [ -f "$file" ] || continue
     case "$file" in
       */"$mic.swift")
-        out="$(awk -v file="$file" -v mic="$mic" '
-          match($0, /^[ \t]*((final|private|fileprivate|public|internal|open)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+        out="$(awk -v file="$file" -v mic="$mic" "$SOURCE_CODE_AWK"'
+          match($0, /^[ \t]*(@[A-Za-z_][A-Za-z0-9_.]*(\([^)]*\))?[ \t]+)*((final|private|fileprivate|public|internal|package|open|nonisolated)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
             name = substr($0, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
             if (name != mic && name != "func" && name != "var" && name != "let") print file ":" NR ": class " name ", which the quiet part runs and this does not read"
           }' "$file")"
         [ -z "$out" ] || { echo "$out"; bad=1; }
         continue ;;
     esac
-    out="$(awk -v file="$file" '
-      match($0, /let [A-Za-z_][A-Za-z0-9_]* = XCUIApplication\(\)/) {
+    out="$(awk -v file="$file" "$SOURCE_CODE_AWK"'
+      match($0, /let [A-Za-z_][A-Za-z0-9_]* = (XCUIApplication|TopoLaunch\.app)\(\)/) {
         name = substr($0, RSTART + 4, RLENGTH - 4); sub(/ = .*/, "", name); made[name] = 1; ear[name] = 0; voice[name] = 0
       }
       {
@@ -471,6 +502,24 @@ quiet_launches() {
   done
   [ "$found" -gt 0 ] || { echo "no launch of the app was found under $QUIET_TESTS"; bad=1; }
   return "$bad"
+}
+# quiet_models <udid> — the proof the quiet part fetched no model: the app's data container on
+# that simulator, read after the part's tests and before the run deletes the simulator, holds no
+# file under the ear's or the voice's homes (`ModelStore`: `Models/` in Application Support, and
+# FluidAudio's own `FluidAudio/Models/` there, the spotter's). Each file found is named; no
+# folder, or folders with no file in them, is nothing fetched. A container that cannot be read
+# is a failure, since nothing was proved.
+quiet_models() {
+  local container home found=""
+  container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
+    || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
+  for home in "Library/Application Support/Models" "Library/Application Support/FluidAudio/Models"; do
+    [ -d "$container/$home" ] || continue
+    found+="$(cd "$container" && find "$home" ! -type d | sed 's/^/  /')"$'\n'
+  done
+  found="$(sed '/^$/d' <<<"$found")"
+  [ -z "$found" ] || { err "topo_ui:quiet fetched models its launches hold loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE); in the app's data container on $1:"; echo "$found" >&2; return 1; }
+  echo "No ear or voice model in the app's data container."
 }
 # suite_topo_ui <whole|quiet|mic>
 suite_topo_ui() {
@@ -572,7 +621,11 @@ suite_topo_ui() {
       "${NO_DIAGNOSE[@]}" \
       "${select[@]}" \
       -resultBundlePath "$RESULTS/$name.xcresult" || ui_status=1
-    [ "$part" != quiet ] || return "$ui_status"
+    if [ "$part" = quiet ]; then
+      say "No ear or voice model fetched (the app's data container)"
+      quiet_models "$udid" || ui_status=1
+      return "$ui_status"
+    fi
 
     say "Audio lane holds after the microphone test"
     scripts/ci-audio-lane.sh check after || ui_status=1

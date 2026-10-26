@@ -20,7 +20,12 @@
 # other; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
 # pid and is running from before its lane starts to after it stops: one that did not start or
 # took no assertion starts no lane, one that ended before the tests runs none, and one that
-# ended under the tests is red.
+# ended under the tests is red; and `topo_ui:quiet` runs no test when the tests' source, read with
+# its comments taken out, names a launch that does not leave the ear and the voice loading or
+# another class (attributes and modifiers ahead of it included) in the microphone's file, runs
+# over the repository's own UI tests, and is red, naming each file, when the app's data
+# container on its simulator, read after its tests and before the simulator is deleted, holds
+# a file under a model's home, or cannot be read.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -120,6 +125,7 @@ fake "$work/bin/xcrun" '
 case "$1 $2" in
   "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-0\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-0\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
+  "simctl get_app_container") [ -z "${FAKE_NO_CONTAINER-}" ] || exit 2; mkdir -p "$CALLS.container"; echo "$CALLS.container" ;;
 esac'
 # The scripts' own tests are not this test's to run again: each is a fake that passes.
 mkdir -p "$tree/scripts/tests"
@@ -215,6 +221,30 @@ is "the quiet part: the target is required of its results" "$(calls "ci-require-
 is "the quiet part: the microphone's class is required out of them" "$(calls "ci-require-tests.sh absent $RESULTS_DIR/Topo-ui-quiet.xcresult TopoUITests/MicrophonePressTests\$")" 1
 is "the quiet part: nothing is required by name" "$(calls 'ci-require-tests.sh named')" 0
 is "the quiet part: its simulator is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
+is "the quiet part: the app's data container is read on its own simulator" "$(grep -c "^xcrun simctl get_app_container UDID-topo-validate-ui-[0-9]* zone.hexagon.topo data$" "$CALLS")" 1
+is "the quiet part: the container is read after the tests and before the simulator goes" \
+  "$(grep -E '^xcrun simctl (get_app_container|shutdown|delete)|^xcodebuild test-without-building' "$CALLS" | cut -d' ' -f1-3 | tr '\n' '|')" \
+  "xcodebuild test-without-building -project|xcrun simctl get_app_container|xcrun simctl shutdown|xcrun simctl delete|"
+# What the quiet part's tests fetched, in that container: a file under either model home is red
+# and named; folders with nothing in them are nothing fetched; a container not read is red.
+models() {  # models <case> <want status:results> <named or ""> [paths under the container, a trailing / a folder]
+  local case="$1" want="$2" named="$3" path; shift 3
+  rm -rf "$work/models-$case.calls.container"
+  for path in "$@"; do
+    case "$path" in */) mkdir -p "$work/models-$case.calls.container/$path" ;; *) mkdir -p "$(dirname "$work/models-$case.calls.container/$path")"; : > "$work/models-$case.calls.container/$path" ;; esac
+  done
+  suite "models-$case" topo_ui:quiet
+  is "the quiet part, $case: $want" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "$want:1"
+  [ -z "$named" ] || case "$(cat "$work/models-$case.log")" in *"$named"*) ok "the quiet part, $case: named" ;; *) fail "the quiet part, $case: not named: $(tail -3 "$work/models-$case.log")" ;; esac
+}
+models an-ears-file "1:topo_ui:quiet=failure " "Library/Application Support/Models/parakeet-tdt-0.6b-v2-coreml/Encoder.mlmodelc/coremldata.bin" \
+  "Library/Application Support/Models/parakeet-tdt-0.6b-v2-coreml/Encoder.mlmodelc/coremldata.bin"
+models a-voices-ledger "1:topo_ui:quiet=failure " "Library/Application Support/Models/pocket-tts/.verified.json" "Library/Application Support/Models/pocket-tts/.verified.json"
+models the-spotters-file "1:topo_ui:quiet=failure " "Library/Application Support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json" \
+  "Library/Application Support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json"
+models empty-homes "0:topo_ui:quiet=success " "" "Library/Application Support/Models/pocket-tts/" "Library/Application Support/FluidAudio/Models/"
+models elsewhere-in-the-container "0:topo_ui:quiet=success " "" "Library/Application Support/notes.json" "Library/Caches/x"
+FAKE_NO_CONTAINER=1 models no-container "1:topo_ui:quiet=failure " "could not be read"
 REQUIRE_RED=absent suite quiet-has-mic topo_ui:quiet
 is "the quiet part with the microphone's class in its results: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
 UI_TEST=1 suite quiet-red topo_ui:quiet
@@ -247,6 +277,33 @@ suite quiet-last-word-stands topo_ui:quiet
 is "the quiet part, a merge ahead of the two and other keys after: runs" "$status:$(results)" "0:topo_ui:quiet=success "
 # The quiet part leaves out the microphone's class and the reading its file: another class there is named.
 MIC_SOURCE='final class OtherTests: XCTestCase {}' loud class-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+MIC_SOURCE='@MainActor final class OtherTests: XCTestCase {}' loud attributed-class-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+MIC_SOURCE='@available(iOS 17, *) @MainActor public final class OtherTests: XCTestCase {}' loud two-attributes-in-the-microphones-file "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+# A comment is not source: a key set in one is not set, and a class in one is no class.
+loud ear-set-in-a-comment "QuietTests.swift:8: clean.launch()" 'let clean = XCUIApplication()' '// clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"' "${both[2]}" 'clean.launch()'
+loud voice-set-in-a-block-comment "QuietTests.swift:10: clean.launch()" "${both[@]:0:2}" '/*' "${both[2]}" '*/' 'clean.launch()'
+MIC_SOURCE=$'/*\nfinal class OtherTests: XCTestCase {}\n*/' ui_source "${both[@]}"
+suite quiet-class-in-a-block-comment topo_ui:quiet
+is "the quiet part, a class in a block comment in the microphone's file: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+MIC_SOURCE=$'/* outer\n/* inner */\nfinal class OtherTests: XCTestCase {}\n*/' ui_source "${both[@]}"
+suite quiet-class-in-a-nested-comment topo_ui:quiet
+is "the quiet part, a class in a nested block comment in the microphone's file: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+MIC_SOURCE=$'/* a note */ final class OtherTests: XCTestCase {}' loud class-after-a-closed-comment "MicrophonePressTests.swift:6: class OtherTests" "${both[@]}"
+# A comment after the word, or comment marks inside a literal, take nothing from the line.
+ui_source 'let clean = XCUIApplication()' 'clean.launchEnvironment["TOPO_DEBUG_URL"] = "topo://open/*"' \
+  'clean.launchEnvironment["TOPO_DEBUG_EAR"] = "loading" // the quiet part' "${both[2]}" 'clean.launch()'
+suite quiet-comment-marks-in-literals topo_ui:quiet
+is "the quiet part, comment marks in a literal and a comment after the word: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+# The launch helper every suite uses makes an application that sets neither key.
+ui_source 'let clean = TopoLaunch.app()' "${both[@]:1:3}"
+suite quiet-through-the-helper topo_ui:quiet
+is "the quiet part, an application from TopoLaunch.app() that sets both: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+loud helper-sets-neither "QuietTests.swift:6: clean.launch()" 'let clean = TopoLaunch.app()' 'clean.launch()'
+# The repository's own UI tests: the tripwire passes them, or the quiet part runs no test at all.
+rm -rf "$tree/Tests/ClientUI"; cp -R "$root/Tests/ClientUI" "$tree/Tests/ClientUI"
+suite quiet-the-repositorys-tests topo_ui:quiet
+is "the quiet part over the repository's own UI tests: runs" "$status:$(results)" "0:topo_ui:quiet=success "
+[ "$status" = 0 ] || sed -n '/does not show every launch/,$p' "$work/quiet-the-repositorys-tests.log" | head -20
 ui_source "${both[@]}"; rm "$tree/Tests/ClientUI/QuietTests.swift"
 suite quiet-no-source topo_ui:quiet
 is "the quiet part with no launch to read: a failure, and no test run" "$status:$(results):$(ui_tests | wc -l | tr -d ' ')" "1:topo_ui:quiet=failure :0"
