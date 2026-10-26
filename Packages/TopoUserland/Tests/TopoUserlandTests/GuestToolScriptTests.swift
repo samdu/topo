@@ -251,6 +251,34 @@ final class GuestToolScriptTests: XCTestCase {
         XCTAssertEqual(exit.output, "status 0\n", "the token is in a file: " + exit.output + exit.errors)
     }
 
+    /// A `topo` killed before its `wget` has opened the FIFO leaves its writer blocked on the open
+    /// until the writer's own bound (110 s), and that writer holds neither the output nor the
+    /// error of its caller: a caller reading them to their end is answered once `topo` and its
+    /// `wget` are gone, not at the writer's bound. The `wget` here never opens the FIFO, says when
+    /// it has started (after the writer has) and is gone a second later. The wait is timed in the
+    /// guest rather than cut short there: a signal can miss a guest task parked in a read.
+    func testATopoKilledBeforeItsWgetLeavesNothingHoldingItsCallersPipes() async throws {
+        let environment = try await startedGitHub(token: "gho_x")
+        let exit = try await shell("""
+        shim="$(mktemp -d)"
+        printf '#!/bin/sh\\ntouch "%s/started"\\nexec sleep 1\\n' "$shim" > "$shim/wget"; chmod +x "$shim/wget"
+        SECONDS=0
+        held=$( {
+            PATH="$shim:$PATH" topo github token & p=$!
+            while [ ! -e "$shim/started" ]; do sleep 0.05; done
+            kill -9 $p; wait $p; echo "topo $?"
+        } 2>&1 )
+        echo "answered in $SECONDS"
+        echo "$held" | tail -1
+        rm -rf "$shim"
+        """, environment)
+        let said = exit.output.split(separator: "\n").map(String.init)
+        XCTAssertEqual(said.last, "topo 137", "the kill did not end topo: " + exit.output + exit.errors)
+        let seconds = said.first.flatMap { Int($0.replacingOccurrences(of: "answered in ", with: "")) }
+        XCTAssertNotNil(seconds, exit.output + exit.errors)
+        XCTAssertLessThan(seconds ?? .max, 30, "a killed topo left something holding its caller's pipes: " + exit.output + exit.errors)
+    }
+
     func testTheGhWrapperHandsTheTokenToGhAlone() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")

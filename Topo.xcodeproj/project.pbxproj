@@ -246,6 +246,7 @@
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */; };
+		781FAAB36CCF9ED9BF2F1102 /* AccountAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9801627AE0B35D7A607D7634 /* AccountAlert.swift */; };
 		788F2C849A097A30DF3EE412 /* SurfaceReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		78BC1C3075EF38B6E9CC6AD9 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
@@ -821,6 +822,7 @@
 		94DA9AB030655FE57E305922 /* TopoCloudKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoCloudKit.swift; sourceTree = "<group>"; };
 		9595FA9BE88E06B2220A262C /* MascotCrossingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotCrossingTests.swift; sourceTree = "<group>"; };
 		97C54B7B9BC536CF0E22E7A6 /* WidgetTaps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTaps.swift; sourceTree = "<group>"; };
+		9801627AE0B35D7A607D7634 /* AccountAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountAlert.swift; sourceTree = "<group>"; };
 		9821C547C8C88D0A2C6D265A /* PerfRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfRun.swift; sourceTree = "<group>"; };
 		98D3BE114E74EF949FD68B7B /* AudioLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLog.swift; sourceTree = "<group>"; };
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1552,6 +1554,7 @@
 		D2C54D123FEACACF63B3F118 /* ClientUI */ = {
 			isa = PBXGroup;
 			children = (
+				9801627AE0B35D7A607D7634 /* AccountAlert.swift */,
 				06CCA9A5FEFF96C67A16956F /* BadgeGestureTests.swift */,
 				AD09EC67E05EAE6A1F06E821 /* BarControlsTests.swift */,
 				D6A401F08D7A75D151418BFA /* ChatReading.swift */,
@@ -2205,6 +2208,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				781FAAB36CCF9ED9BF2F1102 /* AccountAlert.swift in Sources */,
 				D376D05DBF93FC051675810E /* BadgeGestureTests.swift in Sources */,
 				42BE4322536F82A8E48C386A /* BarControlsTests.swift in Sources */,
 				00BBDBC10968078A6D750507 /* ChatReading.swift in Sources */,
@@ -2960,6 +2964,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_KEY_NSPrincipalClass = TopoUITests.AccountAlert;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -2976,6 +2981,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_KEY_NSPrincipalClass = TopoUITests.AccountAlert;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

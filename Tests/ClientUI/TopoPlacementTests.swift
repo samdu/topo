@@ -11,10 +11,14 @@ import XCTest
 final class TopoPlacementTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
-        addTeardownBlock {
-            let app = ChatReading.launch(transcript: "empty", tuning: "")
-            app.terminate()
-        }
+    }
+
+    /// Once, after the class's last test: every test's first launch sets the override itself, so
+    /// only what the class leaves behind it needs clearing.
+    override class func tearDown() {
+        // XCTest calls it on the main thread.
+        MainActor.assumeIsolated { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
+        super.tearDown()
     }
 
     /// On the glass: over an empty chat and a full one the pane is drawn whole (presence 1) and

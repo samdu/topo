@@ -145,10 +145,12 @@ enum ChatReading {
     }
 
     /// A simulator signed into iCloud can ask for the account's password over the app; it is the
-    /// simulator's alert and not Topo's, so it is put away.
-    static func dismissAccountAlert(timeout: TimeInterval = 3) {
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
-        if alert.waitForExistence(timeout: timeout) { alert.buttons["Not Now"].tap() }
+    /// simulator's alert and not Topo's, so it is put away. With no `timeout` it is looked for once,
+    /// without waiting: one that comes later is put away by `AccountAlert`'s monitor at the next
+    /// interaction it stands in the way of, and by `poll` while the chat is read.
+    static func dismissAccountAlert(timeout: TimeInterval = 0) {
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts[AccountAlert.title]
+        if timeout > 0 ? alert.waitForExistence(timeout: timeout) : alert.exists { alert.buttons["Not Now"].tap() }
     }
 
     /// Every permission alert this run has answered, across every class's tests: the runner keeps
@@ -188,7 +190,7 @@ enum ChatReading {
     static func poll(_ app: XCUIApplication, timeout: TimeInterval, seen: inout Chat?,
                      _ wanted: (Chat, Topo) -> Bool) -> (Chat, Topo)? {
         let deadline = Date().addingTimeInterval(timeout)
-        let account = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
+        let account = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts[AccountAlert.title]
         seen = chat(app)
         while !(seen.flatMap { chat in chat.mascot.map { wanted(chat, $0) } } ?? false), Date() < deadline {
             if account.exists { account.buttons["Not Now"].tap() }
@@ -227,7 +229,7 @@ enum ChatReading {
         for _ in 0..<3 where !app.keyboards.element.exists {
             mark.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
-            dismissAccountAlert()
+            dismissAccountAlert(timeout: 3)
         }
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the mark raised no keyboard", file: file, line: line)
     }
