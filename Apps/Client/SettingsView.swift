@@ -215,8 +215,8 @@ struct Takeover {
     }
 }
 
-/// A phone that finds itself a viewer at launch — a reinstall keeps the keychain while the role
-/// record says viewer, and a demotion decided at launch leaves an outbox on disk. What was waiting
+/// A phone that finds itself a viewer at launch — the keychain outlives a delete of the app while
+/// the lease or the role record names another device or says viewer, and a demotion decided at launch leaves an outbox on disk. What was waiting
 /// goes into the log as a limb's turns and the login and the memory go; the surfaces and a
 /// connection's token go whether or not there was a login, since the app group and the keychain
 /// item are their own and outlive one.

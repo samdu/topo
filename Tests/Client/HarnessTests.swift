@@ -553,6 +553,28 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(transport.sent, [["call Helen"]])
     }
 
+    /// #371: a reinstalled phone keeps its name and nothing else, so its harness starts with no
+    /// outbox and a new guest beside a log that already holds its turns. It writes after them.
+    func testAHarnessMadeNewUnderANameWithTurnsInTheLogAppendsAfterThem() async throws {
+        let db = InMemoryRecordDatabase()
+        let before = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Out tonight."))))
+        await before.send("the bins")
+        let earlier = try await log(db)
+        XCTAssertEqual(earlier.count, 2)
+
+        // The app is deleted and installed again: new defaults, so a new guest home and no outbox.
+        let reinstalled = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Calling."))))
+        await reinstalled.send("call Helen")
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["the bins", "Out tonight.", "call Helen", "Calling."])
+        XCTAssertTrue(turns.allSatisfy { $0.ref.device == phone })
+        let sequences = turns.map(\.ref.sequence)
+        XCTAssertEqual(Set(sequences).count, sequences.count, "a sequence number written twice")
+        let latest = try XCTUnwrap(earlier.map(\.ref.sequence).max())
+        XCTAssertTrue(turns.dropFirst(2).allSatisfy { $0.ref.sequence > latest }, "the new turns come after the old")
+    }
+
     func testARelaunchSendsATurnThatNeverReachedTheLog() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
