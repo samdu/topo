@@ -175,9 +175,12 @@ final class MapKitMapsTests: XCTestCase {
         for _ in 0..<200 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
     }
 
-    /// What `call` ended on, or nil if it had not ended a second after it was asked.
+    /// What `call` ended on, or nil if it had not ended ten seconds after it was asked. The ten
+    /// seconds tell a call that ends from one that never does, and are no measure of how soon it
+    /// ends: the 200 ms bound's answer reaches the test through two hops onto the main actor, and
+    /// a loaded Mac running the suite beside others has kept those waiting past a second.
     private func ended<Value: Sendable>(_ call: Task<Value, any Error>) async -> Result<Value, any Error>? {
-        await PhoneTool.within(.seconds(1)) { await call.result }
+        await PhoneTool.within(.seconds(10)) { await call.result }
     }
 
     private func assertCancelled<Value: Sendable>(_ call: Task<Value, any Error>, _ requests: FakeRequests,
@@ -186,7 +189,7 @@ final class MapKitMapsTests: XCTestCase {
         XCTAssertEqual(requests.starts, 1, line: line)
         call.cancel()
         guard let result = await ended(call) else {
-            return XCTFail("a cancelled call was still waiting on its request a second later", line: line)
+            return XCTFail("a cancelled call was still waiting on its request ten seconds later", line: line)
         }
         XCTAssertThrowsError(try result.get(), line: line) { XCTAssertTrue($0 is CancellationError, "\($0)", line: line) }
         XCTAssertEqual(requests.cancels, 1, "the request was not cancelled exactly once", line: line)
@@ -195,7 +198,7 @@ final class MapKitMapsTests: XCTestCase {
     private func assertUnanswered<Value: Sendable>(_ call: Task<Value, any Error>, _ requests: FakeRequests,
                                                    line: UInt = #line) async {
         guard let result = await ended(call) else {
-            return XCTFail("a request that never answers was still waited on a second later", line: line)
+            return XCTFail("a request that never answers was still waited on ten seconds later", line: line)
         }
         XCTAssertThrowsError(try result.get(), line: line) {
             XCTAssertEqual($0 as? MapsFailure, .unanswered(.milliseconds(200)), line: line)
