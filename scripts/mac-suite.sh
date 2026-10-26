@@ -68,8 +68,8 @@ cd "$root" || exit 2
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
 # change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
 # otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
-# selected Xcode other work is pinned to need not change it. Xcode 27.1 runs the 27.0 simulator
-# runtimes, the only ones the validating Macs have. XcodeGen's is the version the committed
+# selected Xcode other work is pinned to need not change it. The simulator runtimes are 27.0's,
+# which Xcode 27.1 runs. XcodeGen's is the version the committed
 # projects are generated with.
 XCODE_VERSION="27.1"
 XCODE_APPS="${TOPO_XCODE_APPS:-/Applications}"
@@ -121,7 +121,7 @@ done
 
 err() { echo "error: $*" >&2; }
 
-# The pinned Xcode and XcodeGen, each an `error:` line when this Mac has neither. The selected
+# The pinned Xcode and XcodeGen, each an `error:` line when this Mac lacks it. The selected
 # Xcode is used when it is the pin; otherwise DEVELOPER_DIR is exported, for everything the run
 # starts, to the first Xcode*.app under XCODE_APPS whose version.plist names the pin and whose
 # xcodebuild says so (a bundle still being copied has the one and not the other).
