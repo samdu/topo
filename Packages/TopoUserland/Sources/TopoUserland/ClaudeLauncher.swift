@@ -66,19 +66,33 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// when there is one. Bypassed because the guest is the sandbox: what the mind can reach is
     /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
     ///
-    /// The system prompt is appended to with what the process is told of its time (`timePrompt`),
-    /// of its memory when `memory` is said, and `note`, what became of the process before it when
-    /// that was cut short (`GuestSession.Cut`).
+    /// The system prompt is appended to with what the process is told of its time (`timePrompt`)
+    /// and of its memory when `memory` is said. `note`, what became of the process before it when
+    /// that was cut short (`GuestSession.Cut`), is not: Claude Code keeps the system prompt a
+    /// conversation began with and sends that on every resume, so an appended note reaches only a
+    /// fresh one. It is told by a SessionStart hook instead (`noteSettings`), whose output Claude
+    /// Code adds to the conversation on a resume as on a start, and which reads the note from the
+    /// environment (`launchEnvironment(note:)`).
     public static func arguments(model: String?, resume: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--include-partial-messages", "--replay-user-messages",
                          "--dangerously-skip-permissions"]
         if let model { arguments += ["--model", model] }
-        let prompt = [timePrompt, memory.map { memoryPrompt(mounted: $0) }, note].compactMap { $0 }
+        let prompt = [timePrompt, memory.map { memoryPrompt(mounted: $0) }].compactMap { $0 }
         arguments += ["--append-system-prompt", prompt.joined(separator: "\n\n")]
+        if note != nil { arguments += ["--settings", noteSettings] }
         if let resume { arguments += ["--resume", resume] }
         return arguments
     }
+
+    /// The variable a launch's note is in (`launchEnvironment(note:)`), for the hook to print.
+    public static let noteVariable = "TOPO_LAST_PROCESS"
+
+    /// The settings a launch with a note is given on top of the home's own, whose hooks still run:
+    /// one SessionStart hook printing the note, which Claude Code adds to the conversation. Only on
+    /// `startup` and `resume`, since a compaction or a clear inside the same process starts a
+    /// session too, and the note told again there would be a second cut that never happened.
+    public static let noteSettings = #"{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"printf '%s' \"$TOPO_LAST_PROCESS\""}]}]}}"#
 
     /// The whole command line: the shell moves into the home and `exec`s Claude Code, so the pid
     /// the app holds is Claude Code's own. `model` is the model every turn is asked of (the
@@ -95,7 +109,7 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// same sandbox (the bypass flag is an argument and is not inherited): the guest runs
     /// everything as root, and Claude Code refuses to bypass permissions as root unless it is told
     /// it is in a sandbox, which it is.
-    public func launchEnvironment(compactAt: Int? = nil) async throws -> [String: String] {
+    public func launchEnvironment(compactAt: Int? = nil, note: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
         environment["HOME"] = home
@@ -107,6 +121,8 @@ public struct ClaudeLauncher: ResidentLauncher {
         // whatever the callback supplied.
         environment[Self.compactWindowVariable] = Self.compactWindow
         environment[Self.compactAtVariable] = compactAt.map(String.init)
+        // The note is the launcher's as well, so one the callback supplied is never told.
+        environment[Self.noteVariable] = note
         return environment
     }
 
@@ -123,6 +139,6 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
     public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
         try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory, note: note),
-                              environment: try await launchEnvironment(compactAt: compactAt))
+                              environment: try await launchEnvironment(compactAt: compactAt, note: note))
     }
 }

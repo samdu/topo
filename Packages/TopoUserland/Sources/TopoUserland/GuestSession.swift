@@ -754,7 +754,9 @@ public actor GuestSession {
                 Perf.mark("turn.guest.init")
                 resident.began = true
                 keep(session, of: resident)
-                // Told, so the next process is not: unless a newer cut has been kept since.
+                // Told, so the next process is not: unless a newer cut has been kept since. The
+                // hook that tells it has run by `init`, and its output goes into the conversation
+                // with the first input this process is given.
                 if let told = resident.told, cuts.load() == told { cuts.clear() }
                 resident.told = nil
             case .backgroundTasks(let count):
