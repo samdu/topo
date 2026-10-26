@@ -7,9 +7,10 @@
 #
 # What it holds: the audio lane is stopped after a `start` that failed and after a signal while
 # `start` was under way, and is left alone when `start` refused because another run's lane is
-# up; a suite whose test run fails is `failure` in suites.txt with the suites after it still
-# run; a toolchain off its pin runs no suite and fails each one asked for; a signal while the
-# lane's start is refusing another run's lane leaves that lane alone; a signal ends the
+# up, and is started with this run's pid as its owner; a suite whose test run fails is
+# `failure` in suites.txt with the suites after it still run; a toolchain off its pin runs no
+# suite and fails each one asked for; a signal while the lane's start is refusing another run's
+# lane leaves that lane alone; a signal ends the
 # command the run is waiting on, a bounded one included; and --check makes, builds and boots
 # nothing, passes a Mac that has what the suites named need, and names each thing one lacks:
 # the pinned Xcode (selected, or found under the search root and run through DEVELOPER_DIR,
@@ -76,7 +77,7 @@ hold='if [ -n "${HOLD-}" ]; then echo $$ > "$HOLD"; while [ -e "$HOLD" ]; do per
 fake "$tree/scripts/ci-audio-lane.sh" '
 held() { kill -0 "$(cat "$CALLS.hold" 2>/dev/null)" 2>/dev/null && echo "display held at $1" >> "$CALLS"; }
 case "$1" in
-  start) held start; [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
+  start) held start; echo "lane owner: ${AUDIO_LANE_OWNER-} run: $(head -n 1 "$RESULTS/mac-suite.pids" 2>/dev/null)" >> "$CALLS"; [ "${HOLD_AT-}" != lane ] || { '"$hold"'; }; exit "${LANE_START:-0}" ;;
   stop) held stop; exit 0 ;;
   check) [ "${FAKE_HOLD-}" != ends ] || [ "$2" != after ] || kill "$(cat "$CALLS.hold")"
     [ "${FAKE_HOLD-}" != ends-before ] || [ "$2" != before ] || kill "$(cat "$CALLS.hold")"; exit 0 ;;
@@ -168,6 +169,9 @@ is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
 is "green: and stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+owner_line="$(grep '^lane owner: ' "$CALLS")"
+is "green: the lane is started as this script's own (AUDIO_LANE_OWNER is the run's pid in mac-suite.pids)" \
+  "$(sed -nE 's/^lane owner: ([0-9]+) run: ([0-9]+)$/\1 \2/p' <<< "$owner_line" | awk '$1 == $2 { print "same" }')" same
 is "green: the display is held on for this script's life, from before the lane starts" \
   "$(grep -E '^(caffeinate|ci-audio-lane.sh start)' "$CALLS" | sed 's/ -w [0-9]*$/ -w <pid>/' | tr '\n' '|')" "caffeinate -d -w <pid>|ci-audio-lane.sh start|"
 is "green: the hold waits on the script's own pid" "$(calls 'hold waits on the script that started it')" 1

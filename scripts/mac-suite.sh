@@ -554,16 +554,18 @@ suite_topo_ui() {
       # Ours to stop from the moment `start` is called, not from its success: one that fails
       # after pinning the devices, or a signal while it is under way, leaves a feeder and the
       # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
-      # found another run's lane, which is not this run's to stop.
+      # found another run's lane, which is not this run's to stop. The lane is recorded as this
+      # run's (AUDIO_LANE_OWNER), so a run that starts one after this has been SIGKILLed stops
+      # it and starts its own rather than refusing.
       # The start and the note of how it ended are one command to this shell, so a signal's trap
       # cannot run between them.
       rm -f "$RESULTS/lane-start.status"
       lane_started=starting
-      (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
+      (AUDIO_LANE_OWNER=$$ scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
       lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
       if [ "$lane_status" = 3 ]; then
         lane_started=no
-        err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
+        err "another audio lane is running on this Mac (a sibling's --talk run, or a validation still going); this one was not started. Run again once it has stopped."
         return 1
       fi
       lane_started=yes
