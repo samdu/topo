@@ -175,6 +175,15 @@ final class Harness {
     var onPass: (@MainActor () async -> Void)?
     /// Set by `wake()`: the loop skips or ends its pause and runs the next pass now.
     private var woken = false
+    /// How long the chat has to have been quiet — no turn in flight, nothing on the line, the log
+    /// as the pass before read it — before the loop backs off, and the pauses it backs off to,
+    /// each as a multiple of the loop's interval, the last held: at five seconds, two quiet
+    /// minutes, then 15, 30 and 60 s. A wake — a push, a touch, the chat coming to the front —
+    /// is the first pause again.
+    static let backoffAfter: Duration = .seconds(120)
+    static let backoffSteps = [3, 6, 12]
+    private var quietFor: Duration = .zero
+    private var backoffStep = 0
     /// The loop's pause in progress, which `wake()` cancels.
     private var sleeping: Task<Void, any Error>?
     /// `wake()` callers waiting for their pass to finish.
@@ -1193,6 +1202,7 @@ final class Harness {
             woken = false
             let served = wakers
             wakers = []
+            let before = turns
             await onPass?()
             let read = await refresh()
             // A line that stopped on a failure goes again from here, on the loop's own time, once
@@ -1205,7 +1215,8 @@ final class Harness {
             await answerPending()
             served.forEach { $0.resume() }
             if woken { continue }
-            let pausing = Task { [pause] in try await pause(interval) }
+            let wait = nextPause(interval, quiet: !busy && !hasWaiting && turns == before)
+            let pausing = Task { [pause] in try await pause(wait) }
             sleeping = pausing
             let slept = await withTaskCancellationHandler { await pausing.result } onCancel: { pausing.cancel() }
             sleeping = nil
@@ -1218,9 +1229,29 @@ final class Harness {
     /// answering to wake.
     func wake() async {
         guard answeringLoop else { return }
+        quietFor = .zero
+        backoffStep = 0
         woken = true
         sleeping?.cancel()
         await withCheckedContinuation { wakers.append($0) }
+    }
+
+    /// The loop's next pause: `interval` while the chat is live, and once it has been quiet for
+    /// `backoffAfter`, `backoffSteps` times that in turn. A pass that was not quiet starts the
+    /// count again.
+    private func nextPause(_ interval: Duration, quiet: Bool) -> Duration {
+        guard quiet else {
+            quietFor = .zero
+            backoffStep = 0
+            return interval
+        }
+        guard quietFor >= Self.backoffAfter else {
+            quietFor += interval
+            return interval
+        }
+        let wait = interval * Self.backoffSteps[min(backoffStep, Self.backoffSteps.count - 1)]
+        backoffStep += 1
+        return wait
     }
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.

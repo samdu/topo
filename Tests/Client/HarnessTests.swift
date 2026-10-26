@@ -1036,6 +1036,54 @@ final class HarnessIntegrationTests: XCTestCase {
 
     /// What a silent push does: a limb writes, and the paused loop answers with no tick of its
     /// pause, through the loop rather than beside it.
+    /// The loop's pause while the chat is quiet: the interval for two minutes of quiet passes,
+    /// then 15, 30 and 60 s, held at 60; a limb's turn answered starts the count again, and a
+    /// wake is the interval again at once.
+    func testAQuietLoopBacksOffAndATurnOrAWakeBringsTheIntervalBack() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("first back")), (200, reply("second back")))
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: transport, pause: { try await beats.pause($0) })
+        try await limb(db, "first")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        let quietPasses = Int(Harness.backoffAfter / .seconds(5))
+        for pass in 2...(quietPasses + 6) {
+            await beats.tick()
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+        }
+        var asked = await beats.intervals
+        let live = [Duration](repeating: .seconds(5), count: quietPasses + 1)
+        XCTAssertEqual(Array(asked.prefix(quietPasses + 1)), live, "the pass that answered and two minutes of quiet are at the interval")
+        XCTAssertEqual(Array(asked.dropFirst(quietPasses + 1)), [.seconds(15), .seconds(30), .seconds(60), .seconds(60), .seconds(60)])
+
+        // A limb's turn landing is answered on the next pass, and the count starts again.
+        try await limb(db, "second")
+        await beats.tick()
+        try await eventually("the pass that answers the limb") { await beats.passes >= quietPasses + 7 }
+        let answered = try await log(db).map(\.text)
+        XCTAssertEqual(answered, ["first", "first back", "second", "second back"])
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "a pass that answered is at the interval")
+
+        // Backed off again, a wake is a pass now and the interval again.
+        for pass in (quietPasses + 8)...(quietPasses * 2 + 10) {
+            await beats.tick()
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+        }
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(60), "two more quiet minutes did not back the loop off")
+        let before = await beats.passes
+        await phone.wake()
+        try await eventually("the woken pass") { await beats.passes >= before + 1 }
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "the woken pass is at the interval")
+
+        open.cancel()
+        await open.value
+    }
+
     func testAWakeRunsTheNextPassWithoutWaitingOutThePause() async throws {
         let db = InMemoryRecordDatabase()
         let transport = ScriptedTransport((200, reply("first back")), (200, reply("second back")))

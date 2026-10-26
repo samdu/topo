@@ -78,9 +78,10 @@ struct ChatView: View {
     @State private var mascotReport: MascotRoam.Report?
     #endif
 
-    /// How long the answering loop waits between passes. Five seconds, except in a debug build
-    /// launched with `TOPO_DEBUG_LOOP_SECONDS`, which is how a device test tells a revision that
-    /// arrived by push from one the loop would have fetched anyway.
+    /// How long the answering loop waits between passes while the chat is live (it backs off
+    /// once the chat has been quiet: `Harness.backoffAfter`). Five seconds, except in a debug
+    /// build launched with `TOPO_DEBUG_LOOP_SECONDS`, which is how a device test tells a revision
+    /// that arrived by push from one the loop would have fetched anyway.
     static var loopInterval: Duration {
         #if DEBUG
         if let seconds = DebugRun.loopSeconds() { return .seconds(seconds) }
@@ -352,6 +353,8 @@ struct ChatView: View {
             // it, so nothing said into it was meant. A reply plays on — that is what the hold is
             // for — and the press that starts the next one is what stops it.
             if phase != .active { voice.cancel(.chat) }
+            // The chat coming to the front is a pass now and the live pause again.
+            if phase == .active { Task { await harness.wake() } }
         }
         .onDisappear { voice.cancel(.chat) }
     }
@@ -625,7 +628,12 @@ struct ChatView: View {
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
-                            focused: { focused = $0 },
+                            focused: {
+                                focused = $0
+                                // A finger in the field is the person here: the loop's pause is
+                                // the live one again.
+                                if $0 { Task { await harness.wake() } }
+                            },
                             room: room)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
@@ -704,6 +712,7 @@ struct ChatView: View {
         voice.cancel(.chat)
         guard row.send(via: harness) != nil else { return }
         Task { await harness.retry() }
+        Task { await harness.wake() }
     }
 
     /// What holding a turn in the transcript offers. Holding one of the person's own puts its
