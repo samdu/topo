@@ -1012,9 +1012,9 @@ extension View {
         }
     }
 }
-#endif
 
 /// `--still-mascot` in the launch arguments: Topo is drawn once, as under Reduce Motion.
 enum MascotStill {
     static let asked = ProcessInfo.processInfo.arguments.contains("--still-mascot")
 }
+#endif
