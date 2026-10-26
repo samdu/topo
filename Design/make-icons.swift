@@ -259,7 +259,26 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath)
     }
 
     NSGraphicsContext.restoreGraphicsState()
+    if case .full = ground { return opaque(rep) }
     guard let png = rep.representation(using: .png, properties: [:]) else { fatalError("no png") }
+    return png
+}
+
+/// The same pixels with no alpha channel. App Store Connect refuses an app icon
+/// that has one, even when every pixel is opaque, and a full-bleed ground is.
+func opaque(_ rep: NSBitmapImageRep) -> Data {
+    guard let image = rep.cgImage,
+          let context = CGContext(data: nil, width: image.width, height: image.height,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+        fatalError("no opaque bitmap")
+    }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    guard let flat = context.makeImage(),
+          let png = NSBitmapImageRep(cgImage: flat).representation(using: .png, properties: [:]) else {
+        fatalError("no opaque png")
+    }
     return png
 }
 
