@@ -428,6 +428,9 @@ extension GuestResident {
     /// proxy's starting `proxy:` and the tool service's `tools:`, and printed in a debug build,
     /// where a simulator run reads them.
     nonisolated static let log: @Sendable (String) -> Void = { line in
+        // A cut the way out kept is a line a device check reads after the fact, so it is kept
+        // on disk as `note`'s are.
+        if line.hasPrefix(GuestSession.cutLine) { return note(line) }
         let line = redacted(line)
         Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
         #if DEBUG

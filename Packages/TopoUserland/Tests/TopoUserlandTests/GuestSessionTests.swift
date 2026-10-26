@@ -21,6 +21,7 @@ final class GuestSessionTests: XCTestCase {
     }
 
     private var store: SessionFile { SessionFile(url: directory.appendingPathComponent(".guest-session")) }
+    private var cutURL: URL { directory.appendingPathComponent(".guest-cut.json") }
 
     private func session() -> GuestSession {
         GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep)
@@ -418,6 +419,99 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(process.turns, ["very long one"])
         XCTAssertEqual(launcher.last?.turns, [], "the abandoned turn was sent again")
         XCTAssertEqual(turn.ends, [.abandoned], "the abandoned turn ended twice")
+    }
+
+    /// #452: a turn cut at the teardown point is told to the next process, once, in its system
+    /// prompt, and the note is gone once that process has begun.
+    func testATurnTheWayOutCutShortIsToldToTheNextProcessOnce() async throws {
+        let times = Times([Date(timeIntervalSince1970: 1_792_684_800), Date(timeIntervalSince1970: 1_792_684_815)])
+        let session = GuestSession(launcher: launcher, store: store, now: times.next, turnBound: bound, sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        let (_, done) = collect(try await session.send("very long one"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        let background = Task { await session.background(budget: .seconds(15)) }
+        await eventually("the teardown waiting on the turn") { await clock.pending == 2 }
+        await clock.advance(by: .seconds(15))
+        _ = await background.value
+        await done.value
+
+        await session.foreground()
+        try await session.ready()
+        let note = try XCTUnwrap(launcher.notesTold.last ?? nil)
+        XCTAssertTrue(note.contains("2026-10-22T16:00:00 UTC"), note)
+        XCTAssertTrue(note.contains("15 seconds later the time Topo had behind another app ended (iOS's allowance ran out, or the person stopped it)"), note)
+        XCTAssertTrue(note.contains("the turn you were answering"), note)
+        XCTAssertFalse(note.contains("background task"), note)
+        XCTAssertEqual(launcher.notesTold.first ?? "none", nil, "the first launch was told of a cut")
+
+        // Told once: once the process has begun, the next launch is told nothing.
+        let second = try XCTUnwrap(launcher.last)
+        second.emit(Lines.`init`("S1"))
+        await eventually("the note cleared") { !FileManager.default.fileExists(atPath: self.cutURL.path) }
+        _ = await session.background(budget: .seconds(15))
+        await session.foreground()
+        try await session.ready()
+        XCTAssertEqual(launcher.notesTold.count, 3)
+        XCTAssertEqual(launcher.notesTold.last ?? "none", nil)
+    }
+
+    /// The more common cut: the reply landed, the app left, and a background task the turn
+    /// started went with the process. A process that never began keeps the note for the next.
+    func testABackgroundTaskEndedWithTheProcessIsToldToTheNextUntilOneBegins() async throws {
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        // The task is started inside a turn, as `run_in_background` starts one; the turn's end
+        // comes after the line, so the line has been read once the turn has ended.
+        let (_, done) = collect(try await session.send("log for ten minutes"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"},{"task_id":"b"}]}"#)
+        process.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}"#)
+        process.emit(Lines.result("started", session: "S1"))
+        await done.value
+        guard case .ended(nil, _) = await session.background(budget: .seconds(15)) else { return XCTFail("not ended") }
+        // The line the app keeps on disk for a device check (`GuestResident.log`) begins with the prefix it routes by.
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix(GuestSession.cutLine) && $0.contains("no turn and 1 background task") },
+                      "\(lines.all)")
+        await session.foreground()
+        try await session.ready()
+        let note = try XCTUnwrap(launcher.notesTold.last ?? nil)
+        XCTAssertTrue(note.contains("a background task you had started"), note)
+        XCTAssertFalse(note.contains("the turn you were answering"), note)
+        XCTAssertTrue(note.contains("once its reply is done and Topo is not on the screen"), note)
+        // This one is ended before it begins: the next is told again.
+        _ = await session.background(budget: .seconds(15))
+        await session.foreground()
+        try await session.ready()
+        XCTAssertEqual(launcher.notesTold.last ?? nil, note)
+    }
+
+    /// An idle process with nothing running leaves no note, and a sign-out takes one away.
+    func testNothingCutIsNoNoteAndASignOutTakesOneAway() async throws {
+        let (session, process) = try await resident()
+        _ = await session.background(budget: .seconds(15))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cutURL.path), "an idle process left a note")
+        await session.foreground()
+        try await session.ready()
+        let next = try XCTUnwrap(launcher.last)
+        XCTAssertNotIdentical(next, process)
+        let (_, done) = collect(try await session.send("start a job"))
+        await eventually("written") { next.turns.count == 1 }
+        next.emit(Lines.`init`("S1"))
+        next.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}"#)
+        next.emit(Lines.result("started", session: "S1"))
+        await done.value
+        _ = await session.background(budget: .seconds(15))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cutURL.path))
+        await session.forgetSession()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cutURL.path), "a sign-out left the note")
     }
 
     func testAnIdleProcessIsEndedAtOnceOnTheWayOut() async throws {
@@ -820,6 +914,16 @@ final class GuestSessionTests: XCTestCase {
         answer(fresh, "hi", session: "NEW")
         await freshDone.value
         XCTAssertEqual(store.load(), "NEW", "the replacement's own session was not kept")
+    }
+}
+
+/// Hands out the dates given, in order, then the last one again.
+private final class Times: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dates: [Date]
+    init(_ dates: [Date]) { self.dates = dates }
+    var next: @Sendable () -> Date {
+        { [self] in lock.withLock { dates.count > 1 ? dates.removeFirst() : dates[0] } }
     }
 }
 
