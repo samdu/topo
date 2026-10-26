@@ -1034,6 +1034,40 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(transport.sent.count, 3)
     }
 
+    /// The phone idle in the chat on 2026-10-25: every pass read the log twice, once for the
+    /// screen and once more in the runner, three hundred milliseconds apart, to find the same
+    /// nothing, two round trips and two fetches by ID every five seconds. A pass whose read shows
+    /// nothing to answer reads once and asks the runner nothing; one that shows a limb's turn
+    /// still answers it.
+    func testAnIdlePassReadsTheLogOnceAndALimbsTurnIsStillAnswered() async throws {
+        let memory = InMemoryRecordDatabase()
+        let db = CountingDatabase(memory)
+        let transport = ScriptedTransport((200, reply("first back")), (200, reply("second back")))
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: transport, pause: { try await beats.pause($0) })
+        try await limb(memory, "first")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        XCTAssertEqual(try await log(memory).map(\.text), ["first", "first back"])
+
+        let before = await db.reads(ofType: Turn.recordType)
+        await beats.tick()
+        try await eventually("an idle pass") { await beats.passes >= 2 }
+        let during = await db.reads(ofType: Turn.recordType) - before
+        XCTAssertEqual(during, 1, "an idle pass reads the log once, for the screen, and the runner is not asked")
+        XCTAssertEqual(transport.sent.count, 1)
+
+        try await limb(memory, "second")
+        await beats.tick()
+        try await eventually("the pass that answers the limb") { await beats.passes >= 3 }
+        XCTAssertEqual(try await log(memory).map(\.text), ["first", "first back", "second", "second back"])
+        XCTAssertEqual(transport.sent.count, 2)
+
+        open.cancel()
+        await open.value
+    }
+
     /// What a silent push does: a limb writes, and the paused loop answers with no tick of its
     /// pause, through the loop rather than beside it.
     func testAWakeRunsTheNextPassWithoutWaitingOutThePause() async throws {
@@ -2004,6 +2038,26 @@ final class RecordingDatabaseTests: XCTestCase {
             XCTFail("the bounded save should have failed")
         } catch {}
         XCTAssertNotNil(recording.lastError, "a bounded request's failure is not on the diagnostics screen")
+    }
+}
+
+/// The in-memory database that counts the reads of each type's change feed, which over CloudKit
+/// are the round trips an idle pass costs.
+private actor CountingDatabase: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    private var feedReads: [String: Int] = [:]
+
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+
+    func reads(ofType type: String) -> Int { feedReads[type] ?? 0 }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
+
+    func records(ofType type: String) async throws -> [Record] {
+        feedReads[type, default: 0] += 1
+        return try await wrapped.records(ofType: type)
     }
 }
 

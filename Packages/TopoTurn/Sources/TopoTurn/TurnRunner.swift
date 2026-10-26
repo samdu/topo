@@ -420,7 +420,7 @@ public actor TurnRunner {
 
     /// True when a head of the transcript is the person's, and not one of `skipping`: words
     /// nobody has answered.
-    static func awaitsReply(_ transcript: Transcript, skipping: Set<TurnRef> = []) -> Bool {
+    public static func awaitsReply(_ transcript: Transcript, skipping: Set<TurnRef> = []) -> Bool {
         transcript.heads.contains { transcript[$0]?.role == .person && !skipping.contains($0) }
     }
 
