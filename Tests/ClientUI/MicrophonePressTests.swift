@@ -249,7 +249,7 @@ final class MicrophonePressTests: XCTestCase {
         case parakeet = "the ear (Parakeet)"
     }
 
-    private func launch(environment: [String: String]) -> XCUIApplication {
+    private func launch(environment: [String: String]) -> TopoApplication {
         let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
@@ -263,12 +263,12 @@ final class MicrophonePressTests: XCTestCase {
     }
 
     /// The button in any of its states. Its label is `VoiceInput`'s state in words.
-    private func microphone(in app: XCUIApplication) -> XCUIElement {
+    private func microphone(in app: TopoApplication) -> XCUIElement {
         app.images.matching(NSPredicate(format: "label == 'Hold to talk' OR label BEGINSWITH 'Listening'")).firstMatch
     }
 
     @discardableResult
-    private func tapHoldAndRelease(_ app: XCUIApplication, branch: Branch, hold: TimeInterval = 1.5) throws -> Report {
+    private func tapHoldAndRelease(_ app: TopoApplication, branch: Branch, hold: TimeInterval = 1.5) throws -> Report {
         let mic = microphone(in: app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
 
@@ -370,7 +370,7 @@ final class MicrophonePressTests: XCTestCase {
     }
 
     /// The report, strictly: a value that is not a whole `Report` throws, and the test fails.
-    private func report(_ app: XCUIApplication) throws -> Report {
+    private func report(_ app: TopoApplication) throws -> Report {
         let raw = microphone(in: app).value as? String ?? ""
         return try Self.decode(raw)
     }
@@ -393,7 +393,7 @@ final class MicrophonePressTests: XCTestCase {
 
     /// Polls the report until `condition` holds; fails the test with the last report if it does not.
     @discardableResult
-    private func waitForReport(_ app: XCUIApplication, timeout: TimeInterval, _ what: String,
+    private func waitForReport(_ app: TopoApplication, timeout: TimeInterval, _ what: String,
                                until condition: (Report) -> Bool) throws -> Report {
         let deadline = Date().addingTimeInterval(timeout)
         var last = try report(app)
@@ -419,7 +419,7 @@ final class MicrophonePressTests: XCTestCase {
 
     /// A press whose release landed inside the tap limit left the microphone open until the
     /// next press; that press closes it.
-    private func closeHandsFree(_ app: XCUIApplication, _ mic: XCUIElement) {
+    private func closeHandsFree(_ app: TopoApplication, _ mic: XCUIElement) {
         guard app.images["Listening; press to send"].waitForExistence(timeout: 3) else { return }
         mic.press(forDuration: 0.1)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived closing the hands-free session")
@@ -446,10 +446,10 @@ final class MicrophonePressTests: XCTestCase {
     /// there is exactly one; on a later test in the same run, none, the grant already given. A
     /// second prompt is a permission Topo asks for and should not.
     private func answerOnePrompt() {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alerts = TopoLaunch.springboardAlerts
         var answered: [String] = []
         for _ in 0..<3 {
-            let alert = springboard.alerts.firstMatch
+            let alert = alerts.firstMatch
             guard alert.waitForExistence(timeout: 5) else { break }
             let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label))
                 .filter { !$0.isEmpty }.joined(separator: " — ")

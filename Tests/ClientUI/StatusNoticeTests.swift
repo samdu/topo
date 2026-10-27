@@ -51,29 +51,14 @@ final class StatusNoticeTests: XCTestCase {
                                  "the notice at \(words.frame) is under the row at \(inFlight.frame)")
     }
 
-    /// Each of the three things the notices say, in the harness's words, in the bar: level with
-    /// the badge, clear of it to its leading side, and above the transcript's frame, where Topo's
-    /// room starts, drawn whole. The failure is wrapped onto a second line rather than cut short.
-    /// With two to say at once the bar says one, the more pressing.
-    func testEachNoticeSaysItsWordsInTheBarBesideTheBadge() throws {
-        for (fixture, said) in Self.fixtures {
-            let app = launch(fixture)
-            let texts = try words(app, fixture)
-            XCTAssertEqual(texts.map(\.label), said, "\(fixture): the notice's words")
-            try holdInTheBar(app, texts, fixture)
-            whole(texts, in: UIFont.preferredFont(forTextStyle: .caption1), fixture)
-            if fixture == "error" {
-                let line = UIFont.preferredFont(forTextStyle: .caption1).lineHeight
-                XCTAssertGreaterThan(texts[0].frame.height, line * 1.5,
-                                     "the failure at \(texts[0].frame) is one line, cut short rather than wrapped")
-            }
-            app.terminate()
-        }
-    }
-
-    /// A look whose notice font is absurdly large still leaves every notice in the bar, beside the
-    /// badge and above the transcript, at no more than two lines of the largest the bar holds.
-    func testAnAbsurdNoticeFontStaysInTheBar() throws {
+    /// The tallest notices the bar is given, held in it in the running app: the failure, which
+    /// takes two lines, and the longest status with its count beside the spinner, each at a look
+    /// whose notice font is absurdly large. Each is in the harness's words, at no more than two
+    /// lines of the largest the bar holds, level with the badge, clear of it to its leading
+    /// side and of the controls to their trailing side, and above the transcript's frame, where
+    /// Topo's room starts, drawn whole. Every fixture's words, and each drawn whole at the
+    /// default look and at this one, are `ChatNoticesRenderTests`, laid out off the bar.
+    func testTheTallestNoticesStayInTheBarAtAnAbsurdFont() throws {
         let look = #"{"transcript": {"noticeFont": {"size": 400}}}"#
         let tallest = 2 * UIFont.systemFont(ofSize: 15).lineHeight + 1
         for (fixture, said) in Self.fixtures {
@@ -180,27 +165,21 @@ final class StatusNoticeTests: XCTestCase {
     /// "Reaching iCloud…" on the way), and no step of the model call has begun.
     private static let heldTurn = "Working…"
 
-    /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
+    /// The two `TOPO_DEBUG_NOTICES` fixtures held in the running bar and the words each has to
+    /// show: the failure, and the longest status the harness sets beside the spinner and a
+    /// two-digit count.
     private static let fixtures: [(String, [String])] = [
-        ("busy", ["Reaching iCloud… · 2 waiting"]),
-        // The longest status the harness sets, beside the spinner and a two-digit count.
-        ("busy-long", ["Checking this device is primary… · 11 waiting"]),
         ("error", ["iCloud refused the read. Check you're signed in on this device."]),
-        ("info", ["Saved. Another device will answer here."]),
-        // A turn left for another primary while the next is on its way: the bar holds one notice,
-        // and the turn in flight is it.
-        ("busy-info", ["Reaching iCloud… · 1 waiting"]),
-        // A failure while a turn is on its way is the one notice.
-        ("error-busy", ["iCloud refused the read. Check you're signed in on this device."]),
+        ("busy-long", ["Checking this device is primary… · 11 waiting"]),
     ]
 
-    private func launch(_ fixture: String, look: String = "{}", setup: String? = nil) -> XCUIApplication {
+    private func launch(_ fixture: String, look: String = "{}", setup: String? = nil) -> TopoApplication {
         var environment = ["TOPO_DEBUG_NOTICES": fixture]
         if let setup { environment["TOPO_DEBUG_SETUP"] = setup }
         return ChatReading.launch(transcript: "full", tuning: "", look: look, environment: environment)
     }
 
-    private func words(_ app: XCUIApplication, _ fixture: String) throws -> [XCUIElement] {
+    private func words(_ app: TopoApplication, _ fixture: String) throws -> [XCUIElement] {
         let notices = app.descendants(matching: .any).matching(identifier: "topo-notices").firstMatch
         XCTAssertTrue(notices.waitForExistence(timeout: 60), "\(fixture): no notice in the bar")
         XCTAssertTrue(notices.staticTexts.firstMatch.waitForExistence(timeout: 10), "\(fixture): the notices hold no words")
@@ -211,7 +190,7 @@ final class StatusNoticeTests: XCTestCase {
     /// Every line of words level with the badge, wholly to its leading side and to the trailing
     /// side of the mute and the model, which are in the bar with it, and above the transcript's
     /// frame as the chat reports it.
-    private func holdInTheBar(_ app: XCUIApplication, _ texts: [XCUIElement], _ fixture: String) throws {
+    private func holdInTheBar(_ app: TopoApplication, _ texts: [XCUIElement], _ fixture: String) throws {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "\(fixture): no badge in the navigation bar")
         let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"]
@@ -237,7 +216,7 @@ final class StatusNoticeTests: XCTestCase {
         }
     }
 
-    private func attach(_ app: XCUIApplication, _ name: String = "notices") {
+    private func attach(_ app: TopoApplication, _ name: String = "notices") {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -246,7 +225,7 @@ final class StatusNoticeTests: XCTestCase {
 
     /// Signed in with a placeholder token, past the first-run question, with nothing on the line
     /// and neither model resident, and the turn held before the model call.
-    private func launch() -> XCUIApplication {
+    private func launch() -> TopoApplication {
         let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"

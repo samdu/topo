@@ -66,6 +66,12 @@ public enum GuestTools {
     #!/bin/bash
     # topo: the phone's own tools, run by the Topo app on its loopback. `topo help` lists them.
     # Written by the app on every start; an edit here lasts until the next one.
+    # Tracing off before anything expands a token: an xtrace the caller's environment turns on
+    # (`SHELLOPTS=xtrace`, a `set -x` in `BASH_ENV`) would print the service's token, and the
+    # answer with GitHub's, on standard error or `BASH_XTRACEFD`. Its own trace goes to
+    # /dev/null, so a `BASH_XTRACEFD=1` puts nothing beside the answer. The writer below turns it
+    # off for itself as well, since a `BASH_ENV` runs again in every bash this one starts.
+    { set +x; } > /dev/null 2>&1
     if [ -z "${TOPO_TOOLS_URL:-}" ] || [ -z "${TOPO_TOOLS_TOKEN:-}" ]; then
         echo "topo: the phone's tool service is not in this environment" >&2
         exit 3
@@ -89,6 +95,7 @@ public enum GuestTools {
     trap 'rm -rf "$fifo_dir"' EXIT
     mkfifo -m 600 "$fifo_dir/request" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
     timeout 110 bash -c '
+        { set +x; } > /dev/null 2>&1
         exec > "$1" || exit 1; shift
         printf "%s\n" "$TOPO_TOOLS_TOKEN"
         for argument in "$@"; do
@@ -138,6 +145,8 @@ public enum GuestTools {
     #!/bin/bash
     # git-credential-topo: GitHub's token from the Topo app, for one git command.
     # Written by the app on every start; an edit here lasts until the next one.
+    # Tracing off: a trace inherited from the caller's environment would print GitHub's token.
+    { set +x; } > /dev/null 2>&1
     if [ "${1:-}" != get ]; then
         cat > /dev/null
         exit 0
@@ -172,6 +181,8 @@ public enum GuestTools {
     #!/bin/bash
     # gh: GitHub's CLI with the token from the Topo app, for this one command.
     # Written by the app on every start; an edit here lasts until the next one.
+    # Tracing off: a trace inherited from the caller's environment would print GitHub's token.
+    { set +x; } > /dev/null 2>&1
     real=/usr/bin/gh
     if [ ! -x "$real" ]; then
         echo "gh is not installed in the guest: apk add github-cli" >&2

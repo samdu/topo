@@ -357,6 +357,69 @@ final class GuestToolScriptTests: XCTestCase {
                        "a terminated topo printed the request: " + exit.output + exit.errors)
     }
 
+    /// A trace the caller's environment turns on reaches none of the three scripts: with
+    /// `SHELLOPTS=xtrace` (on standard error, and with `BASH_XTRACEFD=1` on standard output) or a
+    /// `set -x` in `BASH_ENV` (alone, and with `BASH_XTRACEFD=1`), `topo github token`, the
+    /// credential helper and the `gh` wrapper (in front of a stand-in `gh`) print their answer and
+    /// nothing else, and nothing at all on standard error, where GitHub's token and the service's
+    /// were traced. The calls run under BusyBox `sh`, which reads none of the variables, so every
+    /// line of trace would be one of the scripts'.
+    func testATraceInTheEnvironmentPrintsNoToken() async throws {
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let environment = try await startedGitHub(token: token)
+        let service = try XCTUnwrap(environment[ToolService.tokenVariable])
+        let setup = try await Guest.shared.run("/bin/sh", ["-c", "f=$(mktemp) && echo 'set -x' > \"$f\" && echo \"$f\""])
+        let traced = try XCTUnwrap(setup.output.split(separator: "\n").first.map(String.init), setup.errors)
+        // The gh wrapper, as written, with its `gh` a stand-in in the home rather than
+        // /usr/bin/gh, so the case runs whether or not the rootfs has gh.
+        let real = "real=/usr/bin/gh\n"
+        XCTAssertTrue(GuestTools.gh.contains(real), "the wrapper no longer names /usr/bin/gh; the stand-in would not be run")
+        let wrapper = home.appendingPathComponent("trace-gh/wrapper/gh")
+        let standIn = home.appendingPathComponent("trace-gh/real-gh")
+        try FileManager.default.createDirectory(at: wrapper.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(GuestTools.gh.replacingOccurrences(of: real, with: "real=\(point!)/trace-gh/real-gh\n").utf8).write(to: wrapper)
+        try Data("#!/bin/sh\necho \"token=${GH_TOKEN:-none}\"\n".utf8).write(to: standIn)
+        for url in [wrapper, standIn] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        let calls: [(String, String)] = [
+            ("topo github token", token + "\n"),
+            ("printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get", "username=samdu\npassword=\(token)\n"),
+            ("gh api user", "token=\(token)\n"),
+        ]
+        let traces: [(String, [String: String])] = [
+            ("SHELLOPTS=xtrace", ["SHELLOPTS": "xtrace"]),
+            ("SHELLOPTS=xtrace BASH_XTRACEFD=1", ["SHELLOPTS": "xtrace", "BASH_XTRACEFD": "1"]),
+            ("BASH_ENV with set -x", ["BASH_ENV": traced]),
+            // The one in which only the writer's own guard keeps its trace out of the request:
+            // `topo` has turned its tracing off, the writer's BASH_ENV turns it on again, and
+            // after its `exec > "$1"` the trace would go into the FIFO.
+            ("BASH_ENV with set -x, BASH_XTRACEFD=1", ["BASH_ENV": traced, "BASH_XTRACEFD": "1"]),
+        ]
+        for (name, trace) in traces {
+            // The control: the guest's bash traces under this environment, so a clean call below
+            // is the scripts turning it off and not a trace that never started.
+            var probe = Guest.environment
+            probe.merge(trace) { _, new in new }
+            let armed = try await Guest.shared.run("/bin/bash", ["-c", "probe=1; :"], environment: probe)
+            XCTAssertTrue((armed.output + armed.errors).contains("+ probe=1"), "\(name) traced nothing: " + armed.output + armed.errors)
+            let plain = try await Guest.shared.run("/bin/sh", ["-c", "probe=1; :"], environment: probe)
+            XCTAssertEqual(plain.output + plain.errors, "", "\(name): the guest's sh traces, so a call's trace is not only the scripts'")
+            for (call, answer) in calls {
+                var env = Guest.environment
+                env.merge(environment) { _, new in new }
+                env.merge(trace) { _, new in new }
+                env["PATH"] = "\(point!)/trace-gh/wrapper:\(point!)/.topo/bin:" + (env["PATH"] ?? "")
+                let exit = try await Guest.shared.run("/bin/sh", ["-c", call], environment: env)
+                XCTAssertEqual(exit.output, answer, "\(name), \(call): " + exit.errors + " service: " + lines.text)
+                XCTAssertEqual(exit.errors, "", "\(name), \(call) traced")
+                XCTAssertFalse(exit.errors.contains(token), "\(name), \(call) traced GitHub's token: " + exit.errors)
+                XCTAssertFalse(exit.errors.contains(service), "\(name), \(call) traced the service's token: " + exit.errors)
+            }
+        }
+        _ = try await Guest.shared.run("/bin/rm", ["-f", traced])
+    }
+
     func testTheGhWrapperWithNoGhSaysHowToInstallIt() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has gh")
