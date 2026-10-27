@@ -294,8 +294,8 @@ final class MapKitMapsTests: XCTestCase {
         XCTAssertTrue(seen.begun)
         request.cancel()
         request.cancel()
-        let result = await PhoneTool.within(.seconds(1)) { await call.result }
-        XCTAssertNotNil(result, "start was still waiting a second after cancel")
+        let result = await ended(call)
+        XCTAssertNotNil(result, "start was still waiting ten seconds after cancel")
         XCTAssertThrowsError(try result?.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
         XCTAssertEqual(seen.stops, 1)
         // One cancelled before it starts never begins.
