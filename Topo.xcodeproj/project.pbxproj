@@ -245,6 +245,7 @@
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */; };
+		781FAAB36CCF9ED9BF2F1102 /* AccountAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9801627AE0B35D7A607D7634 /* AccountAlert.swift */; };
 		788F2C849A097A30DF3EE412 /* SurfaceReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		78BC1C3075EF38B6E9CC6AD9 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
@@ -311,6 +312,7 @@
 		92D2EA266F120A32F38C3889 /* ScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69B83668827B1468B16F8E0 /* ScreenStore.swift */; };
 		92D72F78C88069649826EF12 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		933C2ACA157E32F124280DD4 /* systemMedium-light.png in Resources */ = {isa = PBXBuildFile; fileRef = C07F833992D5F5D8B519F030 /* systemMedium-light.png */; };
+		94794B5048B048E8C1EA40DE /* QuietLaneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */; };
 		94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		94E7F21D7F91F1130C440025 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
 		957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
@@ -687,6 +689,7 @@
 		26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceSync.swift; sourceTree = "<group>"; };
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
 		297C1A9489C88545BA87293C /* SurfaceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceProvider.swift; sourceTree = "<group>"; };
+		298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuietLaneTests.swift; sourceTree = "<group>"; };
 		2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoPlacementTests.swift; sourceTree = "<group>"; };
 		2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookDocument.swift; sourceTree = "<group>"; };
 		2BD6F008FEF0A72909C70901 /* VoiceToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceToolTests.swift; sourceTree = "<group>"; };
@@ -819,6 +822,7 @@
 		94DA9AB030655FE57E305922 /* TopoCloudKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoCloudKit.swift; sourceTree = "<group>"; };
 		9595FA9BE88E06B2220A262C /* MascotCrossingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotCrossingTests.swift; sourceTree = "<group>"; };
 		97C54B7B9BC536CF0E22E7A6 /* WidgetTaps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTaps.swift; sourceTree = "<group>"; };
+		9801627AE0B35D7A607D7634 /* AccountAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountAlert.swift; sourceTree = "<group>"; };
 		9821C547C8C88D0A2C6D265A /* PerfRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfRun.swift; sourceTree = "<group>"; };
 		98D3BE114E74EF949FD68B7B /* AudioLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLog.swift; sourceTree = "<group>"; };
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1549,12 +1553,14 @@
 		D2C54D123FEACACF63B3F118 /* ClientUI */ = {
 			isa = PBXGroup;
 			children = (
+				9801627AE0B35D7A607D7634 /* AccountAlert.swift */,
 				06CCA9A5FEFF96C67A16956F /* BadgeGestureTests.swift */,
 				AD09EC67E05EAE6A1F06E821 /* BarControlsTests.swift */,
 				D6A401F08D7A75D151418BFA /* ChatReading.swift */,
 				7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */,
 				3F565D23B2B08962CD323D1E /* FirstRunScreenTests.swift */,
 				91354032F5443E868316550B /* MicrophonePressTests.swift */,
+				298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */,
 				55264DCB2FD2D8A991D906E6 /* ReplyBlocksTests.swift */,
 				117E875DA4060ECD83F0D66E /* ReplyLinkTests.swift */,
 				F5A13FD41A080E7B11883AD6 /* StatusNoticeTests.swift */,
@@ -2202,12 +2208,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				781FAAB36CCF9ED9BF2F1102 /* AccountAlert.swift in Sources */,
 				D376D05DBF93FC051675810E /* BadgeGestureTests.swift in Sources */,
 				42BE4322536F82A8E48C386A /* BarControlsTests.swift in Sources */,
 				00BBDBC10968078A6D750507 /* ChatReading.swift in Sources */,
 				40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */,
 				D79F9341A0CC792569CF5571 /* FirstRunScreenTests.swift in Sources */,
 				A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */,
+				94794B5048B048E8C1EA40DE /* QuietLaneTests.swift in Sources */,
 				BAD07508B0297B2D8F63A5C2 /* ReplyBlocksTests.swift in Sources */,
 				B6628F0EE4CA108FE40D386A /* ReplyLinkTests.swift in Sources */,
 				A7E08831026CDD7367068B3B /* StatusNoticeTests.swift in Sources */,
@@ -2957,6 +2965,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_KEY_NSPrincipalClass = TopoUITests.AccountAlert;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -2973,6 +2982,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_KEY_NSPrincipalClass = TopoUITests.AccountAlert;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

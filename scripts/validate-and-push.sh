@@ -32,7 +32,9 @@
 #      whose `topo_unit` is a sibling's goes on with its next. One suite of a name runs on this
 #      Mac at a time (the audio lane is one per Mac), and with more slots than one two runs
 #      overlap in two different suites. The waits for a slot, for a suite and for a run of the
-#      script as it was are LOCK_WAIT seconds between them (three hours). The wait for a slot
+#      script as it was are LOCK_WAIT seconds between them (three hours), begun again each
+#      time a run ahead leaves the line or a slot changes hands while the run waits for a checkout,
+#      so a run is never sent away from a line that is moving. The wait for a slot
 #      is in the order the runs began: a run that has to wait takes a ticket in
 #      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began (since
 #      this Mac started) and its pid, and only the run whose ticket is first asks for a slot. A
@@ -251,11 +253,34 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
 }
 # One look's wait at something held, against the LOCK_WAIT seconds the run has for all of them;
 # who holds it is said when the wait begins, when what is waited for changes (a suite's name,
-# then a checkout), and every ten minutes after.
+# then a checkout), and every ten minutes after. The line moving is not waiting on something
+# stuck: when, waiting for a checkout, the run finds a ticket that was ahead of it at its last
+# look gone from the line (served, or its run ended) or a slot's holder changed, the allowance
+# begins again, so a run deep in a line that moves keeps its place for as long as it moves, and
+# the allowance runs out only on a line that has stood still for all of it. Which of a run's
+# names reads free is no part of it: every run in the line asks each name's lock at each look,
+# so that flickers on a line that stands still.
 waited=0
 say_at=0
 said_for=""
+line_was=""      # the tickets ahead of this run at its last wait for a checkout
+holders_was=""   # and the slots' holders then
+looked=""
 waiting() {  # waiting <for what> <who holds it> [seconds already waited, in place of the wait]
+  if [ "$1" = "a checkout" ]; then
+    local line_now holders_now
+    line_now="$(LC_ALL=C ls -1 "$queue" 2>/dev/null | LC_ALL=C sort | while IFS= read -r name; do
+      [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
+      [ "$queue/$name" != "$ticket" ] || break
+      echo "$name"
+    done)"
+    holders_now="$(cat "$cache"/slots/*/holder 2>/dev/null || true)"
+    if [ -n "$looked" ] && { [ "$holders_now" != "$holders_was" ] \
+      || [ -n "$(LC_ALL=C comm -23 <(echo "$line_was") <(echo "$line_now") | grep . || true)" ]; }; then
+      waited=0 say_at=0
+    fi
+    line_was="$line_now" holders_was="$holders_now" looked=yes
+  fi
   [ "$waited" -lt "$LOCK_WAIT" ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $1 ($2). Nothing is pushed or posted."
   if [ "$waited" -ge "$say_at" ] || [ "$1" != "$said_for" ]; then
     echo "Waiting for $1 ($2); up to $(((LOCK_WAIT - waited) / 60)) min more."

@@ -68,6 +68,9 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         pid = Self.pids.withLock { $0 += 1; return $0 }
     }
 
+    /// Every line written to it, in order.
+    var written: [String] { lock.withLock { sent } }
+
     /// The turns written to it, as the text of each `user` message.
     var turns: [String] {
         lock.withLock { sent }.compactMap { line in
@@ -77,10 +80,13 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         }
     }
 
-    /// The `uuid` each turn written to it carried, nil for one that carried none.
+    /// The `uuid` each turn written to it carried, nil for one that carried none; a control
+    /// request (the launch's `initialize`) is not a turn.
     var ids: [String?] {
-        lock.withLock { sent }.map { line in
-            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String
+        lock.withLock { sent }.compactMap { line in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  object["type"] as? String == "user" else { return nil }
+            return .some(object["uuid"] as? String)
         }
     }
 
@@ -153,6 +159,7 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     private var asked: [String?] = []
     private var told: [Bool?] = []
     private var thresholds: [Int?] = []
+    private var notes: [String?] = []
     private var holdNext = false
     private var gate: CheckedContinuation<Void, Never>?
 
@@ -164,6 +171,8 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     var memories: [Bool?] { lock.withLock { told } }
     /// What each launch was told to compact at, in order.
     var compactions: [Int?] { lock.withLock { thresholds } }
+    /// What each launch was told of the process before it, in order.
+    var notesTold: [String?] { lock.withLock { notes } }
     var last: ScriptedProcess? { processes.last }
 
     func holdNextLaunch() { lock.withLock { holdNext = true } }
@@ -179,12 +188,13 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
         waiting?.resume()
     }
 
-    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess {
+    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
         let hold = lock.withLock { () -> Bool in
             resumes.append(session)
             asked.append(model)
             told.append(memory)
             thresholds.append(compactAt)
+            notes.append(note)
             return holdNext
         }
         if hold {

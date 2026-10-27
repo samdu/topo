@@ -24,6 +24,8 @@ enum ChatReading {
         /// it, which in a debug build is the pin.
         var model: String?
         var effectiveModel: String?
+        /// The voice's state (`Voice.State`): `loading` for one held loading.
+        var voice: String?
     }
 
     struct Topo: Decodable, CustomStringConvertible {
@@ -97,11 +99,13 @@ enum ChatReading {
     }
 
     struct Mic: Decodable {
+        /// The ear's state (`Ear.State`): `loading` for one held loading, `ready` for a stub.
+        var ear: String?
         var presses: Int
         var releases: Int
     }
 
-    static func chat(_ app: XCUIApplication) -> Chat? {
+    static func chat(_ app: TopoApplication) -> Chat? {
         let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
         return try? JSONDecoder().decode(Chat.self, from: Data(raw.utf8))
     }
@@ -111,7 +115,7 @@ enum ChatReading {
         return try? JSONDecoder().decode(Mic.self, from: Data(raw.utf8))
     }
 
-    static func microphone(_ app: XCUIApplication) -> XCUIElement {
+    static func microphone(_ app: TopoApplication) -> XCUIElement {
         app.images.matching(NSPredicate(format: "label IN %@", labels)).firstMatch
     }
 
@@ -126,7 +130,7 @@ enum ChatReading {
     /// override (`TOPO_DEBUG_TUNING`) set to `tuning` — empty removes it, nil leaves what the last
     /// launch kept — the look `look` in place of the vault's, and anything in `environment` besides.
     static func launch(transcript: String, tuning: String?, look: String = "{}",
-                       softwareKeyboard: Bool = false, environment: [String: String] = [:]) -> XCUIApplication {
+                       softwareKeyboard: Bool = false, environment: [String: String] = [:]) -> TopoApplication {
         let app = TopoLaunch.app()
         app.launchEnvironment.merge(environment) { _, given in given }
         if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
@@ -145,10 +149,12 @@ enum ChatReading {
     }
 
     /// A simulator signed into iCloud can ask for the account's password over the app; it is the
-    /// simulator's alert and not Topo's, so it is put away.
-    static func dismissAccountAlert(timeout: TimeInterval = 3) {
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
-        if alert.waitForExistence(timeout: timeout) { alert.buttons["Not Now"].tap() }
+    /// simulator's alert and not Topo's, so it is put away. With no `timeout` it is looked for once,
+    /// without waiting: one that comes later is put away by `AccountAlert`'s monitor at the next
+    /// interaction it stands in the way of, and by `poll` while the chat is read.
+    static func dismissAccountAlert(timeout: TimeInterval = 0) {
+        let alert = TopoLaunch.springboardAlerts[AccountAlert.title]
+        if timeout > 0 ? alert.waitForExistence(timeout: timeout) : alert.exists { alert.buttons["Not Now"].tap() }
     }
 
     /// Every permission alert this run has answered, across every class's tests: the runner keeps
@@ -159,7 +165,7 @@ enum ChatReading {
     /// A microphone prompt a press raised, in a test that comes before `MicrophonePressTests` or
     /// on a lane run alone, is answered and counted.
     @MainActor static func answerPrompt() {
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        let alert = TopoLaunch.springboardAlerts.firstMatch
         guard alert.waitForExistence(timeout: 2) else { return }
         let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label))
             .filter { !$0.isEmpty }.joined(separator: " — ")
@@ -173,7 +179,7 @@ enum ChatReading {
 
     /// Waits for the chat's report to be as `wanted` says; fails naming what it was instead.
     @discardableResult
-    static func wait(_ app: XCUIApplication, _ what: String, timeout: TimeInterval = 20,
+    static func wait(_ app: TopoApplication, _ what: String, timeout: TimeInterval = 20,
                      file: StaticString = #filePath, line: UInt = #line,
                      _ wanted: (Chat, Topo) -> Bool) throws -> (Chat, Topo) {
         var seen: Chat?
@@ -185,10 +191,10 @@ enum ChatReading {
 
     /// The chat's report once it is as `wanted` says, or nil when `timeout` runs out first, with
     /// the last report read in `seen`.
-    static func poll(_ app: XCUIApplication, timeout: TimeInterval, seen: inout Chat?,
+    static func poll(_ app: TopoApplication, timeout: TimeInterval, seen: inout Chat?,
                      _ wanted: (Chat, Topo) -> Bool) -> (Chat, Topo)? {
         let deadline = Date().addingTimeInterval(timeout)
-        let account = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
+        let account = TopoLaunch.springboardAlerts[AccountAlert.title]
         seen = chat(app)
         while !(seen.flatMap { chat in chat.mascot.map { wanted(chat, $0) } } ?? false), Date() < deadline {
             if account.exists { account.buttons["Not Now"].tap() }
@@ -199,7 +205,7 @@ enum ChatReading {
         return (seen, topo)
     }
 
-    static func poll(_ app: XCUIApplication, timeout: TimeInterval, _ wanted: (Chat, Topo) -> Bool) -> (Chat, Topo)? {
+    static func poll(_ app: TopoApplication, timeout: TimeInterval, _ wanted: (Chat, Topo) -> Bool) -> (Chat, Topo)? {
         var seen: Chat?
         return poll(app, timeout: timeout, seen: &seen, wanted)
     }
@@ -209,50 +215,50 @@ enum ChatReading {
     /// one view in both of the pane's forms, and the system's text view stays in the accessibility
     /// tree whatever is drawn of it, so it exists at rest too: `fieldShown` says whether the pane
     /// is the row it is drawn in.
-    static func field(_ app: XCUIApplication) -> XCUIElement {
+    static func field(_ app: TopoApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == 'What to say'")).firstMatch
     }
 
     /// Whether the pane is the row the field is drawn in: the send beside it is there, and the
     /// way to the keyboard, which the row has no place for, is not.
-    static func fieldShown(_ app: XCUIApplication) -> Bool {
+    static func fieldShown(_ app: TopoApplication) -> Bool {
         field(app).exists && app.buttons["Send"].exists && !app.buttons["Type instead"].exists
     }
 
     /// Raises the keyboard with the mark on the resting pane that raises it, a simulator's late
     /// account alert taking the first tap at most twice.
-    static func raiseKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    static func raiseKeyboard(_ app: TopoApplication, file: StaticString = #filePath, line: UInt = #line) {
         let mark = app.buttons["Type instead"]
         XCTAssertTrue(mark.waitForExistence(timeout: 10), "the way to the keyboard", file: file, line: line)
         for _ in 0..<3 where !app.keyboards.element.exists {
             mark.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
-            dismissAccountAlert()
+            dismissAccountAlert(timeout: 3)
         }
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the mark raised no keyboard", file: file, line: line)
     }
 
     /// A point in the transcript's own empty space: in the margin beside the turns, which no turn
     /// of any transcript is drawn in, a little under the navigation bar.
-    static func emptySpace(_ app: XCUIApplication) -> XCUICoordinate {
+    static func emptySpace(_ app: TopoApplication) -> XCUICoordinate {
         app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 5, dy: 180))
     }
 
     /// Lowers the keyboard as a person does, with a tap on the transcript's empty space.
-    static func lowerKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    static func lowerKeyboard(_ app: TopoApplication, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(app.keyboards.element.exists, "no keyboard to lower", file: file, line: line)
         emptySpace(app).tap()
         XCTAssertTrue(keyboardGone(app), "the keyboard did not go", file: file, line: line)
     }
 
     /// Waits, bounded, for the keyboard to be off the screen.
-    static func keyboardGone(_ app: XCUIApplication, timeout: TimeInterval = 10) -> Bool {
+    static func keyboardGone(_ app: TopoApplication, timeout: TimeInterval = 10) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while app.keyboards.element.exists, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
         return !app.keyboards.element.exists
     }
 
-    static func attach(_ app: XCUIApplication, _ name: String, to test: XCTestCase) {
+    static func attach(_ app: TopoApplication, _ name: String, to test: XCTestCase) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
