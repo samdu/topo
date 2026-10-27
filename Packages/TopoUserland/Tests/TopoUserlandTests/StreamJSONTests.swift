@@ -223,6 +223,13 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.timingVariable, "CLAUDE_CODE_EMIT_STARTUP_TIMING")
     }
 
+    /// Every launch turns the cross-session inbox off, whatever the callback supplied.
+    func testEveryLaunchTurnsTheCrossSessionInboxOff() async throws {
+        let launcher = ClaudeLauncher { [ClaudeLauncher.crossSessionVariable: "1"] }
+        let environment = try await launcher.launchEnvironment()
+        XCTAssertEqual(environment["CLAUDE_CODE_HARBOR_KITE"], "0")
+    }
+
     func testAResultWithNoIsErrorIsAnErrorUnlessItSaysSuccess() {
         guard case .result(let failed)? = StreamJSON.events(in: #"{"type":"result","subtype":"error_max_turns"}"#).first,
               case .result(let fine)? = StreamJSON.events(in: #"{"type":"result","subtype":"success","result":"ok"}"#).first

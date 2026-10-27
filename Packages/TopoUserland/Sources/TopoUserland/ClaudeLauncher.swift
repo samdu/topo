@@ -152,8 +152,15 @@ public struct ClaudeLauncher: ResidentLauncher {
         // A timed run asks Claude Code how each turn's time to its first request was spent; an
         // ordinary launch never does, whatever the callback supplied.
         environment[Self.timingVariable] = Perf.recording ? "1" : nil
+        // No inbox for other sessions: nothing else in the guest is a Claude Code session to
+        // message this one, and opening it (a directory, a socket, a published key) is about half
+        // a second of every start.
+        environment[Self.crossSessionVariable] = "0"
         return environment
     }
+
+    /// Claude Code's cross-session messaging inbox, on unless this says otherwise.
+    public static let crossSessionVariable = "CLAUDE_CODE_HARBOR_KITE"
 
     /// Claude Code puts `time_to_request_ms` and its phases on each result while this is set.
     public static let timingVariable = "CLAUDE_CODE_EMIT_STARTUP_TIMING"
