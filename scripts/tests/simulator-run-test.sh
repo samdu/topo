@@ -3,7 +3,8 @@
 # console per case, and holds that the script exits non-zero on every way a run can fail and zero
 # only on a turn that finished and was answered under this run's id. No simulator, no build, no
 # token, no network: CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails.
-# With --talk and a fake audio lane, it holds that a `start` that refuses is never followed by `stop`.
+# With --talk and a fake audio lane, it holds that a `start` that refuses is never followed by `stop`,
+# and that `start` is given the script's own pid as the lane's owner.
 #
 #   scripts/tests/simulator-run-test.sh
 #   SCRIPT=/path/to/other/simulator-run.sh scripts/tests/simulator-run-test.sh
@@ -365,6 +366,7 @@ for fake in fetch-ear-models.sh fetch-voice-models.sh; do printf '#!/bin/sh\nexi
 cat >"$work/root/scripts/ci-audio-lane.sh" <<EOF
 #!/bin/sh
 echo "\$1" >> "$work/lane-calls"
+[ "\$1" != start ] || echo "\${AUDIO_LANE_OWNER-}:\$PPID" > "$work/lane-owner"
 [ "\$1" != start ] || exit "\$FAKE_LANE_START"
 EOF
 chmod +x "$work/root/scripts/"*.sh
@@ -387,6 +389,15 @@ talk_case() {
 }
 talk_case talk-start-refused-leaves-the-lane 3 "start"
 talk_case talk-start-failed-stops-the-lane   1 "start stop"
+# The lane --talk starts is on record as the run's own, so a later start stops it once the run
+# has ended without stopping it (scripts/tests/ci-audio-lane-test.sh holds that half).
+IFS=: read -r owner parent < "$work/lane-owner"
+if [ -n "$owner" ] && [ "$owner" = "$parent" ]; then
+  echo "ok   talk-lane-has-an-owner: start was given AUDIO_LANE_OWNER=$owner, the script's own pid"
+else
+  echo "FAIL talk-lane-has-an-owner: start was given AUDIO_LANE_OWNER='$owner'; the script's pid was $parent"
+  failures=$((failures + 1))
+fi
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"

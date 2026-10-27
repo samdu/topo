@@ -14,6 +14,9 @@
 #      VOICE_PATHS lists read out of the commit's own .github/workflows/pr-validate.yaml.
 #      --suites and --lane override the choice, for a head whose `test` job names a status this
 #      choice left out (the two read different diffs once main has moved under the branch).
+#      With `topo_ui` chosen it asks whether this shell holds the microphone grant the audio
+#      lane needs, and exits 2 at once when it does not, as a shell started over ssh never
+#      does: such a run is started from buddy's tmux server (docs/simulator.md).
 #   2. Takes a slot for each suite it runs here, which is a checkout: one of
 #      TOPO_VALIDATE_SLOTS directories under ~/Library/Caches/topo-validate/slots, each with a
 #      lock held for that suite alone and a validation worktree of this repository, detached
@@ -33,8 +36,8 @@
 #      Mac at a time (the audio lane is one per Mac), and with more slots than one two runs
 #      overlap in two different suites. The waits for a slot, for a suite and for a run of the
 #      script as it was are LOCK_WAIT seconds between them (three hours), begun again each
-#      time a run ahead leaves the line or a slot changes hands while the run waits for a checkout,
-#      so a run is never sent away from a line that is moving. The wait for a slot
+#      time a run ahead leaves the line or a slot changes hands while the run waits for a checkout
+#      or for a suite's name, so a run is never sent away from a line that is moving. The wait for a slot
 #      is in the order the runs began: a run that has to wait takes a ticket in
 #      ~/Library/Caches/topo-validate/queue, named for the microsecond the run began (since
 #      this Mac started) and its pid, and only the run whose ticket is first asks for a slot. A
@@ -231,6 +234,22 @@ if [ "$hold" = no ]; then
   esac
   [ -z "$lane_arg" ] || lane="$lane_arg"
   [ -z "$suites_arg$lane_arg" ] || echo "asked for: ${chosen[*]:-no suite}; lane $lane"
+
+  # topo_ui's microphone lane runs here whatever else is named, and hears only with the
+  # microphone granted to the process macOS holds responsible for this shell, which over ssh is
+  # sshd-keygen-wrapper and never has it (docs/simulator.md). Asked before any wait, so such a
+  # run takes no place in the line and no slot for a suite that would fail late. Asking never
+  # prompts and changes no grant: 3 is authorized, and 0 to 2 are not.
+  case " ${chosen[*]-} " in
+    *" topo_ui "*)
+      mic="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSBundle.bundleWithPath("/System/Library/Frameworks/AVFoundation.framework").load; ObjC.unwrap($.NSClassFromString("AVCaptureDevice").authorizationStatusForMediaType("soun"))' 2>/dev/null || true)"
+      case "$mic" in
+        3) ;;
+        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run from buddy's tmux server: ssh buddybox tmux new-window -d 'cd <worktree> && scripts/validate-and-push.sh > <log> 2>&1' (docs/simulator.md). Nothing is pushed or posted." ;;
+        *) echo "warning: could not ask whether this shell holds the microphone grant topo_ui's audio lane needs (got '$mic'); going on." >&2 ;;
+      esac
+      ;;
+  esac
 fi
 
 commit_logs="$logs_root/$sha"
@@ -254,8 +273,9 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
 # One look's wait at something held, against the LOCK_WAIT seconds the run has for all of them;
 # who holds it is said when the wait begins, when what is waited for changes (a suite's name,
 # then a checkout), and every ten minutes after. The line moving is not waiting on something
-# stuck: when, waiting for a checkout, the run finds a ticket that was ahead of it at its last
-# look gone from the line (served, or its run ended) or a slot's holder changed, the allowance
+# stuck: when, waiting for a checkout or for a suite's name, the run finds a ticket that was
+# ahead of it at its last look gone from the line (served, or its run ended) or a slot's holder
+# changed (a sibling's suite of the name it waits for ends as its slot is let go), the allowance
 # begins again, so a run deep in a line that moves keeps its place for as long as it moves, and
 # the allowance runs out only on a line that has stood still for all of it. Which of a run's
 # names reads free is no part of it: every run in the line asks each name's lock at each look,
@@ -263,24 +283,22 @@ orphan_in() {  # orphan_in <directory holding a `suite` record>
 waited=0
 say_at=0
 said_for=""
-line_was=""      # the tickets ahead of this run at its last wait for a checkout
+line_was=""      # the tickets ahead of this run at its last wait
 holders_was=""   # and the slots' holders then
 looked=""
 waiting() {  # waiting <for what> <who holds it> [seconds already waited, in place of the wait]
-  if [ "$1" = "a checkout" ]; then
-    local line_now holders_now
-    line_now="$(LC_ALL=C ls -1 "$queue" 2>/dev/null | LC_ALL=C sort | while IFS= read -r name; do
-      [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
-      [ "$queue/$name" != "$ticket" ] || break
-      echo "$name"
-    done)"
-    holders_now="$(cat "$cache"/slots/*/holder 2>/dev/null || true)"
-    if [ -n "$looked" ] && { [ "$holders_now" != "$holders_was" ] \
-      || [ -n "$(LC_ALL=C comm -23 <(echo "$line_was") <(echo "$line_now") | grep . || true)" ]; }; then
-      waited=0 say_at=0
-    fi
-    line_was="$line_now" holders_was="$holders_now" looked=yes
+  local line_now holders_now
+  line_now="$(LC_ALL=C ls -1 "$queue" 2>/dev/null | LC_ALL=C sort | while IFS= read -r name; do
+    [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
+    [ "$queue/$name" != "$ticket" ] || break
+    echo "$name"
+  done)"
+  holders_now="$(cat "$cache"/slots/*/holder 2>/dev/null || true)"
+  if [ -n "$looked" ] && { [ "$holders_now" != "$holders_was" ] \
+    || [ -n "$(LC_ALL=C comm -23 <(echo "$line_was") <(echo "$line_now") | grep . || true)" ]; }; then
+    waited=0 say_at=0
   fi
+  line_was="$line_now" holders_was="$holders_now" looked=yes
   [ "$waited" -lt "$LOCK_WAIT" ] || die "gave up after waiting $((LOCK_WAIT / 60)) min, the last of it for $1 ($2). Nothing is pushed or posted."
   if [ "$waited" -ge "$say_at" ] || [ "$1" != "$said_for" ]; then
     echo "Waiting for $1 ($2); up to $(((LOCK_WAIT - waited) / 60)) min more."
