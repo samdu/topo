@@ -934,7 +934,10 @@ struct MascotLayer: View {
     var pin: ((CGPoint) -> Void)?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    /// Reduce Motion, or a launch asked to hold him (`--still-mascot`): a profiling run measures the
+    /// app with him standing still.
+    private var reduceMotion: Bool { accessibilityReduceMotion || MascotStill.asked }
 
     @State private var port = MascotGlassPort()
     #if DEBUG
@@ -1035,5 +1038,10 @@ extension View {
             }
         }
     }
+}
+
+/// `--still-mascot` in the launch arguments: Topo is drawn once, as under Reduce Motion.
+enum MascotStill {
+    static let asked = ProcessInfo.processInfo.arguments.contains("--still-mascot")
 }
 #endif

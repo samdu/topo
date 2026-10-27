@@ -43,7 +43,11 @@ struct DiagnosticsView: View {
             + [("speech", voice.ear.summary), ("voice", speaker.voice.summary),
                ("memory", memory.summary), ("look", memory.lookReading.summary),
                ("userland", Userland.shared.summary),
-               ("guest token", GuestTokenSummary.of { try KeychainTokenStore.guest.load() })]
+               ("guest token", GuestTokenSummary.of { try KeychainTokenStore.guest.load() }),
+               ("energy", EnergyPulse.shared.last ?? "no pulse yet; the first is a minute after launch"),
+               ("metrickit", EnergyPulse.shared.payloads.newest.map {
+                   "\(EnergyPulse.shared.payloads.count) kept, newest \($0.formatted(date: .abbreviated, time: .shortened))"
+               } ?? "no payload yet; the first arrives a day after install")]
     }
 }
 
