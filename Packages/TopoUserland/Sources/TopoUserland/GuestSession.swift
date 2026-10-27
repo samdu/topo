@@ -680,8 +680,12 @@ public actor GuestSession {
                 Perf.mark("resident.spawned cpu=\(Perf.cpu())")
                 // Written before the process is the session's, so it is the first line Claude Code
                 // reads, ahead of any turn; its answer is the `resident.ready` mark. A write that
-                // fails is a process that has gone, which its reader finds.
-                try? await process.write(StreamJSON.initialize(id: GuestSession.readyRequest))
+                // fails is a process that has gone, which its reader finds; it costs only the mark.
+                do {
+                    try await process.write(StreamJSON.initialize(id: GuestSession.readyRequest))
+                } catch {
+                    self.log("the initialize was not written (\(error)); no resident.ready for this process")
+                }
             } else {
                 Perf.mark("resident.launch.failed")
             }
@@ -749,10 +753,17 @@ public actor GuestSession {
     private func received(_ line: String, from resident: Resident) {
         // A process that is no longer the resident one — ended, or being ended — speaks to nobody.
         guard case .resident(let current) = phase, current === resident else { return }
-        resident.turn?.ticks += 1
-        // The app's own control answers are no turn's first line.
-        if resident.turn?.ticks == 1, !line.contains("\"control_response\"") { Perf.mark("turn.guest.firstLine") }
-        for event in StreamJSON.events(in: line) {
+        let events = StreamJSON.events(in: line)
+        // The app's own control answers are no turn's line: they neither take its first-line mark
+        // nor count as the process speaking while a turn waits.
+        let control = !events.isEmpty && events.allSatisfy {
+            if case .controlResponse = $0 { true } else { false }
+        }
+        if !control {
+            resident.turn?.ticks += 1
+            if resident.turn?.ticks == 1 { Perf.mark("turn.guest.firstLine") }
+        }
+        for event in events {
             // A turn's marks are its own: lines of a turn Claude Code runs of its own, before the
             // input's echo or with no turn in flight, are marked apart.
             let own = resident.turn?.begun == true
@@ -761,7 +772,7 @@ public actor GuestSession {
             case .toolUse where own: Perf.mark("turn.guest.toolUse")
             case .result(let result) where own:
                 Perf.mark("turn.guest.result")
-                if let timing = result.timing { Perf.mark("turn.guest.timing \(timing.words)") }
+                if Perf.recording, let timing = result.timing { Perf.mark("turn.guest.timing \(timing.words)") }
             case .result: Perf.mark("turn.guest.result.other")
             default: break
             }

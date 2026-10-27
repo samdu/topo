@@ -306,7 +306,7 @@ final class Userland {
     }
 
     /// Blocking work — a digest of a whole binary — on a queue of its own.
-    private static func offThePool<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+    nonisolated private static func offThePool<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { continuation.resume(with: Result { try work() }) }
         }
@@ -341,11 +341,18 @@ final class Userland {
             let fakefs = try await self.ready()
             let claude = try await self.claudeCode()
             Perf.mark("guest.downloads.present")
-            // The digest reads only the host's file, so it runs while the guest boots.
-            let checking = Task {
+            // The digest reads only the host's file, so it runs on a queue of its own while the
+            // guest boots, which holds the main actor. A boot that fails waits for it, so nothing of
+            // the check acts on the file after the boot has answered.
+            let checking = Task.detached(priority: .userInitiated) {
                 try await Self.offThePool { try claude.checked() }
             }
-            try Guest.shared.boot(fakefs: fakefs)
+            do {
+                try Guest.shared.boot(fakefs: fakefs)
+            } catch {
+                _ = try? await checking.value
+                throw error
+            }
             Perf.mark("guest.kernel.booted")
             // The forwarder first, so the resolver's first write is already its stub; one that
             // cannot start leaves the resolver writing the phone's own name servers.
