@@ -1236,6 +1236,9 @@ final class Harness {
                 && personHeads.subtracting(unresolvedHeads).isEmpty
             if quiet, await brain.owed() != nil { quiet = false }
             guard self.login == login else { return }
+            // A wake that landed while the brain was asked has no pause to cut short: it is
+            // served by the next pass, now.
+            if woken { continue }
             let wait = nextPause(interval, quiet: quiet)
             let pausing = Task { [pause] in try await pause(wait) }
             sleeping = pausing
