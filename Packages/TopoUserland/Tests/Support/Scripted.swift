@@ -80,10 +80,13 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         }
     }
 
-    /// The `uuid` each turn written to it carried, nil for one that carried none.
+    /// The `uuid` each turn written to it carried, nil for one that carried none; a control
+    /// request (the launch's `initialize`) is not a turn.
     var ids: [String?] {
-        lock.withLock { sent }.map { line in
-            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String
+        lock.withLock { sent }.compactMap { line in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  object["type"] as? String == "user" else { return nil }
+            return .some(object["uuid"] as? String)
         }
     }
 
