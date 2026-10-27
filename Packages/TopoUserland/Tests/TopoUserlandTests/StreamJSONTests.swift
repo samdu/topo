@@ -1,4 +1,5 @@
 import XCTest
+import TopoCore
 @testable import TopoUserland
 
 /// The stream-json parser over what Claude Code 2.1.278 wrote in the guest (recorded, then its
@@ -196,6 +197,30 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(set[ClaudeLauncher.compactWindowVariable], "1000000")
         XCTAssertEqual(ClaudeLauncher.compactAtVariable, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
         XCTAssertEqual(ClaudeLauncher.compactWindowVariable, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    }
+
+    /// A timed run's result says how the turn's time to its first request was spent: numbers and
+    /// phase names, the largest phase first, and nothing else of the line in the mark's words.
+    func testAResultsTimingIsReadAsNumbers() throws {
+        let line = #"{"type":"result","subtype":"success","is_error":false,"result":"the person's words","session_id":"S1","time_to_request_ms":2950,"time_to_request_cpu_ms":2711,"time_to_request_from_spawn_ms":11042,"time_to_request_phases_ms":{"system_prompt":1200,"other":50,"tool_schema_build":1700,"bad name":3}}"#
+        guard case .result(let result)? = StreamJSON.events(in: line).first else { return XCTFail("the result was not read") }
+        let timing = try XCTUnwrap(result.timing)
+        XCTAssertEqual(timing, .init(toRequest: 2950, cpu: 2711, fromSpawn: 11042,
+                                     phases: ["system_prompt": 1200, "other": 50, "tool_schema_build": 1700, "bad name": 3]))
+        XCTAssertEqual(timing.words, "request=2950 cpu=2711 spawn=11042 phases=tool_schema_build:1700,system_prompt:1200,other:50")
+        // An ordinary result carries none.
+        guard case .result(let plain)? = StreamJSON.events(in: #"{"type":"result","subtype":"success","result":"ok"}"#).first else { return XCTFail() }
+        XCTAssertNil(plain.timing)
+        XCTAssertEqual(StreamEvent.TurnResult.Timing(toRequest: 7).words, "request=7")
+    }
+
+    /// Only a timed run asks Claude Code for its timing, and the callback cannot ask for it.
+    func testTimingIsAskedForOnlyInATimedRun() async throws {
+        let launcher = ClaudeLauncher { [ClaudeLauncher.timingVariable: "1"] }
+        XCTAssertFalse(Perf.recording)
+        let environment = try await launcher.launchEnvironment()
+        XCTAssertNil(environment[ClaudeLauncher.timingVariable])
+        XCTAssertEqual(ClaudeLauncher.timingVariable, "CLAUDE_CODE_EMIT_STARTUP_TIMING")
     }
 
     func testAResultWithNoIsErrorIsAnErrorUnlessItSaysSuccess() {

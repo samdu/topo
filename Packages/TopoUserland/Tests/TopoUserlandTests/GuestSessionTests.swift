@@ -1,4 +1,5 @@
 import XCTest
+import TopoCore
 @testable import TopoUserland
 
 /// The resident session against a scripted process and a clock moved by hand: turns one at a time,
@@ -69,6 +70,60 @@ final class GuestSessionTests: XCTestCase {
     }
 
     // MARK: - Turns
+
+    /// A launch writes `initialize` before anything else, so its answer says when the process is
+    /// ready; that answer is the app's own and never one of a turn's events.
+    func testALaunchAsksForInitializeFirstAndItsAnswerIsNoTurns() async throws {
+        let (session, process) = try await resident()
+        let first = try XCTUnwrap(process.written.first)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(first.utf8)) as? [String: Any])
+        XCTAssertEqual(object["type"] as? String, "control_request")
+        XCTAssertEqual(object["request_id"] as? String, GuestSession.readyRequest)
+        XCTAssertEqual((object["request"] as? [String: Any])?["subtype"] as? String, "initialize")
+
+        let (turn, done) = collect(try await session.send("hello"))
+        await eventually("written") { process.turns.count == 1 }
+        XCTAssertEqual(process.written.count, 2, "the turn went before the initialize, or twice")
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{}}}"#)
+        process.emit(Lines.text("hi"))
+        process.emit(Lines.result("hi", session: "S1"))
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        XCTAssertFalse(turn.events.contains { if case .controlResponse = $0 { return true } else { return false } },
+                       "a control response reached the turn")
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response","response":{"request_id":"r1"}}"#), [.controlResponse(id: "r1")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response"}"#), [.other("control_response")])
+    }
+
+    /// On a cold start the turn waits while Claude Code starts, and the answer to `initialize` is
+    /// the first line it writes: that answer takes neither the turn's first-line mark nor its count
+    /// of lines, so the turn's own first line is still marked.
+    func testTheInitializeAnswerIsNotTheFirstLineOfATurnWaitingForIt() async throws {
+        let marks = Marks()
+        try await Perf.$observer.withValue({ marks.add($0) }) {
+            let (session, process) = try await resident()
+            process.echoes = false
+            let (_, done) = collect(try await session.send("hello", id: "t1"))
+            await eventually("written") { process.turns.count == 1 }
+            process.emit(#"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{}}}"#)
+            await eventually("ready marked") { marks.all.contains { $0.hasPrefix("resident.ready") } }
+            XCTAssertFalse(marks.all.contains("turn.guest.firstLine"), "the initialize answer took the turn's first line")
+            process.emit(Lines.`init`("S1"))
+            process.emit(Lines.echo("t1"))
+            process.emit(Lines.text("hi"))
+            process.emit(Lines.result("hi", session: "S1"))
+            await done.value
+        }
+        XCTAssertEqual(marks.all.filter { $0 == "turn.guest.firstLine" }.count, 1, "\(marks.all)")
+    }
+
+    private final class Marks: @unchecked Sendable {
+        private let lock = NSLock()
+        private var names: [String] = []
+        var all: [String] { lock.withLock { names } }
+        func add(_ name: String) { lock.withLock { names.append(name) } }
+    }
 
     func testTwoTurnsGoToOneResidentProcessAndTheSessionIdIsKept() async throws {
         let (session, process) = try await resident()

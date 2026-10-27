@@ -252,6 +252,9 @@ public actor GuestSession {
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
+    /// The id of the `initialize` request each launch writes first, whose answer marks the process
+    /// ready.
+    static let readyRequest = "topo-ready"
     /// How the line a kept cut is logged with begins; the app keeps that line on disk (`GuestResident.log`).
     public static let cutLine = "the way out cut short"
 
@@ -310,6 +313,8 @@ public actor GuestSession {
         var backgroundTasks = 0
         /// The cut it was told of at its launch, cleared from disk once it has begun.
         var told: Cut?
+        /// Whether it has answered the launch's `initialize`.
+        var ready = false
 
         init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, conversation: Int) {
             self.compactAt = compactAt
@@ -671,7 +676,19 @@ public actor GuestSession {
             } catch {
                 result = .failure(error)
             }
-            if case .success = result { Perf.mark("resident.spawned") } else { Perf.mark("resident.launch.failed") }
+            if case .success(let process) = result {
+                Perf.mark("resident.spawned cpu=\(Perf.cpu())")
+                // Written before the process is the session's, so it is the first line Claude Code
+                // reads, ahead of any turn; its answer is the `resident.ready` mark. A write that
+                // fails is a process that has gone, which its reader finds; it costs only the mark.
+                do {
+                    try await process.write(StreamJSON.initialize(id: GuestSession.readyRequest))
+                } catch {
+                    self.log("the initialize was not written (\(error)); no resident.ready for this process")
+                }
+            } else {
+                Perf.mark("resident.launch.failed")
+            }
             await self.launched(result, resume: resume, model: model, memory: memory, compactAt: compactAt, conversation: conversation,
                                 told: cut)
         }
@@ -736,18 +753,36 @@ public actor GuestSession {
     private func received(_ line: String, from resident: Resident) {
         // A process that is no longer the resident one — ended, or being ended — speaks to nobody.
         guard case .resident(let current) = phase, current === resident else { return }
-        resident.turn?.ticks += 1
-        if resident.turn?.ticks == 1 { Perf.mark("turn.guest.firstLine") }
-        for event in StreamJSON.events(in: line) {
+        let events = StreamJSON.events(in: line)
+        // The app's own control answers are no turn's line: they neither take its first-line mark
+        // nor count as the process speaking while a turn waits.
+        let control = !events.isEmpty && events.allSatisfy {
+            if case .controlResponse = $0 { true } else { false }
+        }
+        if !control {
+            resident.turn?.ticks += 1
+            if resident.turn?.ticks == 1 { Perf.mark("turn.guest.firstLine") }
+        }
+        for event in events {
             // A turn's marks are its own: lines of a turn Claude Code runs of its own, before the
             // input's echo or with no turn in flight, are marked apart.
             let own = resident.turn?.begun == true
             switch event {
             case .text where own: Perf.mark("turn.guest.text")
             case .toolUse where own: Perf.mark("turn.guest.toolUse")
-            case .result where own: Perf.mark("turn.guest.result")
+            case .result(let result) where own:
+                Perf.mark("turn.guest.result")
+                if Perf.recording, let timing = result.timing { Perf.mark("turn.guest.timing \(timing.words)") }
             case .result: Perf.mark("turn.guest.result.other")
             default: break
+            }
+            // An answer to a control request is the app's own and no turn's.
+            if case .controlResponse(let id) = event {
+                if id == Self.readyRequest, !resident.ready {
+                    resident.ready = true
+                    Perf.mark("resident.ready \(resident.resumed == nil ? "fresh" : "resume") cpu=\(Perf.cpu())")
+                }
+                continue
             }
             switch event {
             case .started(let session, _):
