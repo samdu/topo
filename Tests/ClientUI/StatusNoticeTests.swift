@@ -173,13 +173,13 @@ final class StatusNoticeTests: XCTestCase {
         ("busy-long", ["Checking this device is primary… · 11 waiting"]),
     ]
 
-    private func launch(_ fixture: String, look: String = "{}", setup: String? = nil) -> XCUIApplication {
+    private func launch(_ fixture: String, look: String = "{}", setup: String? = nil) -> TopoApplication {
         var environment = ["TOPO_DEBUG_NOTICES": fixture]
         if let setup { environment["TOPO_DEBUG_SETUP"] = setup }
         return ChatReading.launch(transcript: "full", tuning: "", look: look, environment: environment)
     }
 
-    private func words(_ app: XCUIApplication, _ fixture: String) throws -> [XCUIElement] {
+    private func words(_ app: TopoApplication, _ fixture: String) throws -> [XCUIElement] {
         let notices = app.descendants(matching: .any).matching(identifier: "topo-notices").firstMatch
         XCTAssertTrue(notices.waitForExistence(timeout: 60), "\(fixture): no notice in the bar")
         XCTAssertTrue(notices.staticTexts.firstMatch.waitForExistence(timeout: 10), "\(fixture): the notices hold no words")
@@ -190,7 +190,7 @@ final class StatusNoticeTests: XCTestCase {
     /// Every line of words level with the badge, wholly to its leading side and to the trailing
     /// side of the mute and the model, which are in the bar with it, and above the transcript's
     /// frame as the chat reports it.
-    private func holdInTheBar(_ app: XCUIApplication, _ texts: [XCUIElement], _ fixture: String) throws {
+    private func holdInTheBar(_ app: TopoApplication, _ texts: [XCUIElement], _ fixture: String) throws {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "\(fixture): no badge in the navigation bar")
         let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"]
@@ -216,7 +216,7 @@ final class StatusNoticeTests: XCTestCase {
         }
     }
 
-    private func attach(_ app: XCUIApplication, _ name: String = "notices") {
+    private func attach(_ app: TopoApplication, _ name: String = "notices") {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -225,7 +225,7 @@ final class StatusNoticeTests: XCTestCase {
 
     /// Signed in with a placeholder token, past the first-run question, with nothing on the line
     /// and neither model resident, and the turn held before the model call.
-    private func launch() -> XCUIApplication {
+    private func launch() -> TopoApplication {
         let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"

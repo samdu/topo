@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import TopoCore
 
 /// How the resident Claude Code is started in the guest: `claude -p` reading turns as stream-json
 /// on stdin and writing its events as stream-json on stdout, in its home — the app's
@@ -148,8 +149,14 @@ public struct ClaudeLauncher: ResidentLauncher {
         // The note is the launcher's as well, so one the callback supplied is never told.
         environment[Self.noteVariable] = note
         environment[Self.noteMarkVariable] = note.map(Self.noteMark)
+        // A timed run asks Claude Code how each turn's time to its first request was spent; an
+        // ordinary launch never does, whatever the callback supplied.
+        environment[Self.timingVariable] = Perf.recording ? "1" : nil
         return environment
     }
+
+    /// Claude Code puts `time_to_request_ms` and its phases on each result while this is set.
+    public static let timingVariable = "CLAUDE_CODE_EMIT_STARTUP_TIMING"
 
     /// The share of its effective window, in whole percent, at which Claude Code compacts.
     public static let compactAtVariable = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"

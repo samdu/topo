@@ -68,6 +68,9 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         pid = Self.pids.withLock { $0 += 1; return $0 }
     }
 
+    /// Every line written to it, in order.
+    var written: [String] { lock.withLock { sent } }
+
     /// The turns written to it, as the text of each `user` message.
     var turns: [String] {
         lock.withLock { sent }.compactMap { line in
@@ -77,10 +80,13 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         }
     }
 
-    /// The `uuid` each turn written to it carried, nil for one that carried none.
+    /// The `uuid` each turn written to it carried, nil for one that carried none; a control
+    /// request (the launch's `initialize`) is not a turn.
     var ids: [String?] {
-        lock.withLock { sent }.map { line in
-            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String
+        lock.withLock { sent }.compactMap { line in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  object["type"] as? String == "user" else { return nil }
+            return .some(object["uuid"] as? String)
         }
     }
 

@@ -233,7 +233,7 @@ final class TopoPlacementTests: XCTestCase {
     /// again, five moves in all. A sample that disagrees fails at once, on any of them, and where
     /// he stands is `placed`'s to hold at the end of every move, so a move that leaves him wrong
     /// fails whether or not its carry was sampled.
-    private func ride(_ app: XCUIApplication, _ what: String, rising: Bool,
+    private func ride(_ app: TopoApplication, _ what: String, rising: Bool,
                       there: (ChatReading.Chat, ChatReading.Topo) -> Bool,
                       back: (ChatReading.Chat, ChatReading.Topo) -> Bool,
                       placed: (ChatReading.Topo, String) throws -> Void) throws -> ChatReading.Topo {
@@ -258,7 +258,7 @@ final class TopoPlacementTests: XCTestCase {
     /// on his arrival, and again on the report judged. Nil for a ride; for no verdict, what the move sampled
     /// (`Carry.sampled`); a run he did not ride fails, and so does his not getting there. A run
     /// not complete within five seconds of his arrival is no verdict.
-    private func move(_ app: XCUIApplication, _ what: String, rising: Bool,
+    private func move(_ app: TopoApplication, _ what: String, rising: Bool,
                       until there: (ChatReading.Chat, ChatReading.Topo) -> Bool,
                       placed: (ChatReading.Topo, String) throws -> Void) throws -> (ChatReading.Topo, String?) {
         let before = try ChatReading.wait(app, "\(what): at rest before the move") { _, now in
