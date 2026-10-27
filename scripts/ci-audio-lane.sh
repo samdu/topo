@@ -24,9 +24,9 @@
 # still asserts the fixture's energy at the tap.
 #
 # AUDIO_LANE_OWNER=<pid> in start's environment names the run the lane is for (scripts/mac-suite.sh
-# passes its own pid), and start records it with when it began. A later start that finds the lane
-# still running stops it and starts its own only when that owner is on record and no longer
-# running, which is a run ended by SIGKILL, whose trap never stopped its lane. A lane with no
+# and scripts/simulator-run.sh --talk pass their own pids), and start records it with when it
+# began. A later start that finds the lane still running stops it and starts its own only when
+# that owner is on record and no longer running, which is a run ended by SIGKILL, whose trap never stopped its lane. A lane with no
 # owner on record, or whose owner still runs, is refused.
 set -euo pipefail
 
