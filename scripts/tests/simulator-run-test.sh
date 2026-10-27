@@ -366,7 +366,7 @@ for fake in fetch-ear-models.sh fetch-voice-models.sh; do printf '#!/bin/sh\nexi
 cat >"$work/root/scripts/ci-audio-lane.sh" <<EOF
 #!/bin/sh
 echo "\$1" >> "$work/lane-calls"
-[ "\$1" != start ] || echo "\${AUDIO_LANE_OWNER-} \$PPID" > "$work/lane-owner"
+[ "\$1" != start ] || echo "\${AUDIO_LANE_OWNER-}:\$PPID" > "$work/lane-owner"
 [ "\$1" != start ] || exit "\$FAKE_LANE_START"
 EOF
 chmod +x "$work/root/scripts/"*.sh
@@ -391,7 +391,7 @@ talk_case talk-start-refused-leaves-the-lane 3 "start"
 talk_case talk-start-failed-stops-the-lane   1 "start stop"
 # The lane --talk starts is on record as the run's own, so a later start stops it once the run
 # has ended without stopping it (scripts/tests/ci-audio-lane-test.sh holds that half).
-read -r owner parent < "$work/lane-owner"
+IFS=: read -r owner parent < "$work/lane-owner"
 if [ -n "$owner" ] && [ "$owner" = "$parent" ]; then
   echo "ok   talk-lane-has-an-owner: start was given AUDIO_LANE_OWNER=$owner, the script's own pid"
 else

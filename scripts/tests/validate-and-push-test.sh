@@ -1145,23 +1145,25 @@ case "$out" in *"Waiting for a checkout (slot 1: one 0000009, "*) ok "the slot c
 [ $((done_at - began_at)) -gt 4 ] && ok "the slot changing hands: it waited longer than the allowance" || fail "the slot changing hands: done in $((done_at - began_at)) s"
 # A run whose one suite left is a sibling's waits for that suite's name, not a slot, and the
 # slot changing hands under the sibling is the line moving there too: topo_ui's name and the
-# slot are held for a little over half the allowance by one run, then by another, then let go.
+# slot are held by one run, then another, then a third, each for a little under the allowance
+# of looks, and then let go, so the whole wait is twice the allowance and more, and no part of
+# it is.
 lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" sh -c "echo \$\$ > '$q/../name-held'; exec sleep 60" &
 name_lock=$!
 until_true reached "$q/../name-held" || fail "a suite's name changing hands: the name was never held"
 echo "one 0000012, pid 12, since 00:00" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
 echo "one 0000012, pid 12, slot 1, since 00:00" > "$TOPO_VALIDATE_CACHE/suite-topo_ui.holder"
 (perl -e 'select(undef,undef,undef,2.5)'; echo "another 0000013, pid 13, since 00:01" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
- echo "another 0000013, pid 13, slot 1, since 00:01" > "$TOPO_VALIDATE_CACHE/suite-topo_ui.holder"
+ perl -e 'select(undef,undef,undef,2.5)'; echo "a third 0000014, pid 14, since 00:02" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
  perl -e 'select(undef,undef,undef,2.5)'; rm -f "$TOPO_VALIDATE_CACHE/slots/1/holder"; kill "$(cat "$q/../name-held")") 2>/dev/null &
 server=$!
 began_at=$SECONDS
-LOCK_WAIT=4 validate --suites topo_ui
+LOCK_WAIT=3 validate --suites topo_ui
 done_at=$SECONDS
 wait "$server" "$name_lock" 2>/dev/null; rm -f "$q/../name-held"
 is "a suite's name changing hands: the run waits it out and exits 0" "$status" 0
 case "$out" in *"Waiting for a suite (topo_ui: one 0000012, "*) ok "a suite's name changing hands: it waited for the name" ;; *) fail "a suite's name changing hands: $out" ;; esac
-[ $((done_at - began_at)) -gt 4 ] && ok "a suite's name changing hands: it waited longer than the allowance" || fail "a suite's name changing hands: done in $((done_at - began_at)) s"
+[ $((done_at - began_at)) -gt 6 ] && ok "a suite's name changing hands: it waited past twice the allowance" || fail "a suite's name changing hands: done in $((done_at - began_at)) s"
 is "a suite's name changing hands: its suite ran" "$(recorded suites)" "topo_ui"
 # And a suite's name held by one run that stands still runs the allowance out on time.
 lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" sh -c "echo \$\$ > '$q/../name-held'; exec sleep 60" &
