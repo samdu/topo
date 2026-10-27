@@ -36,6 +36,8 @@
 # meanwhile; a live run's logs are not pruned; a suite a killed run left going keeps its
 # checkout and its name; and a Mac lent for one runs one.
 #
+# And a shell with no microphone grant is refused a run with topo_ui before it waits for anything.
+#
 # And of the line for a slot: runs that wait have it in the order they began, whichever asks
 # oftener or reached the line first; a run's ticket taken from under it is back under its own name; a ticket of a pid
 # that is gone or another's, or one not whole, is removed and holds nobody, and a file that is
@@ -61,7 +63,7 @@ trap 'rm -rf "$work"' EXIT
 # names what it means. A wait no case bounds is a minute, so a lock left held fails a case
 # and does not hang the test.
 unset TOPO_VALIDATE_SLOTS TOPO_VALIDATE_HOSTS TOPO_VALIDATE_REPO TOPO_VALIDATE_CACHE TOPO_VALIDATE_LOGS POST_RETRY \
-  FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
+  FAKE_MIC FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
 export LOCK_WAIT=60 LOCK_POLL=1
 # A Mac with a way into its login session is not asked for it by a fake suite.
 export TOPO_VALIDATE_SESSION_RUN=
@@ -93,6 +95,10 @@ case "$*" in
 esac
 GH
 chmod +x "$work/bin/gh"
+# osascript, as the script asks it for this shell's microphone grant: FAKE_MIC, authorized (3)
+# unless a case says otherwise.
+printf '#!/bin/sh\necho "${FAKE_MIC:-3}"\n' > "$work/bin/osascript"
+chmod +x "$work/bin/osascript"
 # ssh [-o option]... <host> <command> — the command, in that host's scratch home.
 cat > "$work/bin/ssh" <<'SSH'
 #!/usr/bin/env bash
@@ -247,6 +253,21 @@ sha="$(git -C "$repo" rev-parse HEAD)"
 validate
 is "app, second commit: the suite ran at the new commit" "$(recorded head)" "$sha"
 is "app, second commit: pushed" "$(origin_head)" "$sha"
+
+# A shell with no microphone grant, as one started over ssh: a run with topo_ui exits 2 at
+# once, saying why and where to start it, and waits for nothing, runs nothing and pushes and
+# posts nothing; a run without topo_ui is not asked.
+scratch no-mic Apps/Client/SettingsView.swift
+FAKE_MIC=0 LOCK_WAIT=0 validate
+is "no microphone grant: exits 2" "$status" 2
+case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"docs/simulator.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+is "no microphone grant: no suite ran" "$(recorded suites)" ""
+is "no microphone grant: nothing pushed" "$(origin_head)" ""
+is "no microphone grant: no status" "$(posted)" ""
+is "no microphone grant: no place taken in the line" "$(ls -A "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null)" ""
+FAKE_MIC=0 validate --suites others
+is "no microphone grant, no topo_ui: exits 0" "$status" 0
+is "no microphone grant, no topo_ui: its suite ran" "$(recorded suites)" "others"
 
 # The voice path: the full lane, and the real ear's status beside a green topo_ui.
 scratch voice Apps/Client/Ear.swift

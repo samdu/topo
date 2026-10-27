@@ -14,6 +14,9 @@
 #      VOICE_PATHS lists read out of the commit's own .github/workflows/pr-validate.yaml.
 #      --suites and --lane override the choice, for a head whose `test` job names a status this
 #      choice left out (the two read different diffs once main has moved under the branch).
+#      With `topo_ui` chosen it asks whether this shell holds the microphone grant the audio
+#      lane needs, and exits 2 at once when it does not, as a shell started over ssh never
+#      does: such a run is started from buddy's tmux server (docs/simulator.md).
 #   2. Takes a slot for each suite it runs here, which is a checkout: one of
 #      TOPO_VALIDATE_SLOTS directories under ~/Library/Caches/topo-validate/slots, each with a
 #      lock held for that suite alone and a validation worktree of this repository, detached
@@ -231,6 +234,22 @@ if [ "$hold" = no ]; then
   esac
   [ -z "$lane_arg" ] || lane="$lane_arg"
   [ -z "$suites_arg$lane_arg" ] || echo "asked for: ${chosen[*]:-no suite}; lane $lane"
+
+  # topo_ui's microphone lane runs here whatever else is named, and hears only with the
+  # microphone granted to the process macOS holds responsible for this shell, which over ssh is
+  # sshd-keygen-wrapper and never has it (docs/simulator.md). Asked before any wait, so such a
+  # run takes no place in the line and no slot for a suite that would fail late. Asking never
+  # prompts and changes no grant: 3 is authorized, and 0 to 2 are not.
+  case " ${chosen[*]-} " in
+    *" topo_ui "*)
+      mic="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSBundle.bundleWithPath("/System/Library/Frameworks/AVFoundation.framework").load; ObjC.unwrap($.NSClassFromString("AVCaptureDevice").authorizationStatusForMediaType("soun"))' 2>/dev/null || true)"
+      case "$mic" in
+        3) ;;
+        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run from buddy's tmux server: ssh buddybox tmux new-window -d 'cd <worktree> && scripts/validate-and-push.sh > <log> 2>&1' (docs/simulator.md). Nothing is pushed or posted." ;;
+        *) echo "warning: could not ask whether this shell holds the microphone grant topo_ui's audio lane needs (got '$mic'); going on." >&2 ;;
+      esac
+      ;;
+  esac
 fi
 
 commit_logs="$logs_root/$sha"
