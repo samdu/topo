@@ -504,7 +504,11 @@ public actor GuestSession {
             // It lands stale (`launched`), and is ended there.
             await startTask.value
         }
-        // A continue under way lands first; what it continued is ended below.
+        // A frozen process of the login that went is ended before any continue under way can reach
+        // it: SIGKILL ends it stopped, and the continue then finds nothing to continue.
+        if case .frozen(let resident) = phase, resident.conversation != conversation {
+            return await end(resident, reason: "a forgotten conversation, frozen", restart: false).value
+        }
         if let thawing { await thawing.value }
         switch phase {
         case .resident(let resident) where resident.conversation != conversation:
@@ -875,6 +879,8 @@ public actor GuestSession {
     /// The process let go of stdout: it has exited, or is about to.
     private func closed(_ resident: Resident) async {
         guard owns(resident) else { return }
+        // A process that exits while frozen was not ended by iOS with the app: its cut says so.
+        if case .frozen = phase { unfreezeCut() }
         let errors = resident.process.errors
         let midTurn = resident.turn != nil
         if let turn = resident.turn {
@@ -916,7 +922,10 @@ public actor GuestSession {
         if freezing == stopping { freezing = nil }
         // Back in front meanwhile: the way back continues it, stopped or not.
         guard generation == mine, !inForeground else { return .kept }
-        guard case .frozen(let still) = phase, still === resident else { return .nothingResident }
+        guard case .frozen(let still) = phase, still === resident else {
+            unfreezeCut()
+            return .nothingResident
+        }
         guard stopped else {
             log("the guest did not stop; ending the process rather than freezing it")
             unfreezeCut()
@@ -946,9 +955,9 @@ public actor GuestSession {
         guard case .frozen(let current) = phase, current === resident else { return }
         guard resumed else {
             Perf.mark("resident.thaw.cold")
-            log("the ports a frozen process was told could not be taken back; starting a fresh process")
+            log("the frozen process could not be continued (its token, its ports or the continue itself; the line before says which); starting a fresh process")
             unfreezeCut()
-            _ = end(resident, reason: "a thaw that could not take its ports back", restart: true)
+            _ = end(resident, reason: "a thaw that could not continue it", restart: true)
             return
         }
         phase = .resident(resident)

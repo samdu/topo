@@ -440,8 +440,19 @@ extension Userland {
     /// for every change heard so far made: a frozen guest is continued only after this, so its
     /// lookups have a resolver behind them.
     func reviveForwarder() async {
+        // Started anew rather than asked for its port: one iOS took during the suspension can
+        // still answer with its old port until it hears the loss, and the guest would be continued
+        // toward a stub with no forwarder behind it.
+        await forwarder.stop()
         _ = try? await forwarder.start()
-        await resolver.settle()
+        // The resolver's writes for the stop and the start, waited for at most two seconds: one
+        // that keeps failing is retried behind the thaw rather than holding it.
+        let resolver = self.resolver
+        let (first, done) = AsyncStream<Void>.makeStream()
+        Task { @MainActor in await resolver.settle(); done.yield() }
+        let bound = Task { try? await Task.sleep(for: .seconds(2)); done.yield() }
+        for await _ in first { break }
+        bound.cancel()
     }
 }
 

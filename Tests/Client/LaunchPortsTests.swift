@@ -11,6 +11,27 @@ import XCTest
 /// told the ports they have now.
 @MainActor
 final class LaunchPortsTests: XCTestCase {
+    /// A frozen resident is continued only while the credential hands out the token its launch was
+    /// given: the guest cannot refresh one, so a token refreshed since, or none to be had, is a
+    /// fresh process.
+    func testAFrozenResidentIsContinuedOnlyWhileItsTokenIsStillTheOneHandedOut() async throws {
+        let proxy = try APIProxy(log: { _ in })
+        let tools = try ToolService(tools: [])
+        let ports = LaunchPorts(proxy: proxy, tools: tools)
+        let made = GuestResident.launchEnvironment(ports: ports, note: { _ in }) { port in
+            ["ANTHROPIC_BASE_URL": APIProxy.baseURL(port: port), LaunchPorts.tokenVariable: "token-a"]
+        }
+        _ = try await ClaudeLauncher(environment: made).launchEnvironment()
+        let same = await ports.stillHanded { _ in [LaunchPorts.tokenVariable: "token-a"] }
+        XCTAssertTrue(same)
+        let refreshed = await ports.stillHanded { _ in [LaunchPorts.tokenVariable: "token-b"] }
+        XCTAssertFalse(refreshed, "a process holding a token since refreshed was continued")
+        let none = await ports.stillHanded { _ in throw CancellationError() }
+        XCTAssertFalse(none, "a credential that could not be read was taken as unchanged")
+        await proxy.stop()
+        await tools.stop()
+    }
+
     func testEachLaunchIsToldListenersStartedForItAndSaysWhich() async throws {
         let proxy = try APIProxy(log: { _ in })
         let tools = try ToolService(tools: [])

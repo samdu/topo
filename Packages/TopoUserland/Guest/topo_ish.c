@@ -521,6 +521,59 @@ int topo_ish_unstopped(void) {
     return unstopped;
 }
 
+int topo_ish_continue_all(void) {
+    if (!booted)
+        return _ENODEV;
+    // As Linux does at a SIGCONT, a stop signal still pending is discarded first: iSH's own
+    // SIGCONT only ends the group stop, and a SIGSTOP queued while a task was already parked (each
+    // pass of a stop sends one again) would stop it once more at its next system call.
+    lock(&pids_lock);
+    int live = 0;
+    for (int id = 2; id <= MAX_PID; id++) {
+        struct task *task = pid_get_task_zombie(id);
+        if (task == NULL || task->zombie || task->exiting)
+            continue;
+        live++;
+        if (task->sighand != NULL) {
+            lock(&task->sighand->lock);
+            struct sigqueue *sigqueue, *tmp;
+            list_for_each_entry_safe(&task->queue, sigqueue, tmp, queue) {
+                int sig = sigqueue->info.sig;
+                if (sig == SIGSTOP_ || sig == SIGTSTP_ || sig == SIGTTIN_ || sig == SIGTTOU_) {
+                    list_remove(&sigqueue->queue);
+                    free(sigqueue);
+                }
+            }
+            sigset_del(&task->pending, SIGSTOP_);
+            sigset_del(&task->pending, SIGTSTP_);
+            sigset_del(&task->pending, SIGTTIN_);
+            sigset_del(&task->pending, SIGTTOU_);
+            unlock(&task->sighand->lock);
+        }
+        signal_task(task, SIGCONT_);
+    }
+    unlock(&pids_lock);
+    return live;
+}
+
+int topo_ish_parked(void) {
+    if (!booted)
+        return _ENODEV;
+    lock(&pids_lock);
+    int parked = 0;
+    for (int id = 2; id <= MAX_PID; id++) {
+        struct task *task = pid_get_task_zombie(id);
+        if (task == NULL || task->zombie || task->exiting)
+            continue;
+        lock(&task->waiting_cond_lock);
+        if (task->waiting_cond == &task->group->stopped_cond)
+            parked++;
+        unlock(&task->waiting_cond_lock);
+    }
+    unlock(&pids_lock);
+    return parked;
+}
+
 int topo_ish_running(const int *pids, int count) {
     if (!booted)
         return _ENODEV;

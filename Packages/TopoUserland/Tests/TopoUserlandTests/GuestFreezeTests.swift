@@ -37,7 +37,25 @@ final class ScriptedFreezer: GuestFreezer, @unchecked Sendable {
         if held { await withCheckedContinuation { continuation in lock.withLock { gate = continuation } } }
         return lock.withLock { stopAnswer }
     }
-    func resume() async -> Bool { lock.withLock { resumeCalls += 1; return resumeAnswer } }
+    func resume() async -> Bool {
+        let held = lock.withLock { resumeCalls += 1; return holdingResume }
+        if held { await withCheckedContinuation { continuation in lock.withLock { resumeGate = continuation } } }
+        return lock.withLock { resumeAnswer }
+    }
+
+    private var holdingResume = false
+    private var resumeGate: CheckedContinuation<Void, Never>?
+    /// The next continue waits for `releaseResume` before it answers, as one taking its ports
+    /// back and waiting for the resolver does.
+    func holdResume() { lock.withLock { holdingResume = true } }
+    func releaseResume() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            holdingResume = false
+            defer { resumeGate = nil }
+            return resumeGate
+        }
+        waiting?.resume()
+    }
 }
 
 /// #501: an idle resident is kept across a background, stopped, and continued on the way back
@@ -215,6 +233,25 @@ final class GuestFreezeTests: XCTestCase {
         XCTAssertTrue(process.terminated)
         XCTAssertEqual(freezer.resumes, 0, "a process of a forgotten conversation was continued")
         await session.foreground()
+        try await session.ready()
+        XCTAssertEqual(launcher.processes.count, 2)
+        XCTAssertEqual(launcher.resumed.last ?? "none", nil, "the next process resumed the forgotten conversation")
+    }
+
+    /// A sign-out that lands while a continue is under way ends the frozen process at once, so the
+    /// continue finds it gone rather than waking the login that went.
+    func testASignOutDuringAContinueEndsTheProcessBeforeTheContinue() async throws {
+        let (session, process) = try await resident()
+        let frozen = await session.background(budget: .seconds(15))
+        XCTAssertEqual(frozen, .frozen)
+        freezer.holdResume()
+        await session.foreground()
+        await eventually("the continue under way") { self.freezer.resumes == 1 }
+        let forgetting = Task { await session.forgetSession() }
+        await eventually("the frozen process ended while the continue was held") { process.terminated }
+        freezer.releaseResume()
+        let termination = await forgetting.value
+        XCTAssertEqual(termination?.confirmed, true)
         try await session.ready()
         XCTAssertEqual(launcher.processes.count, 2)
         XCTAssertEqual(launcher.resumed.last ?? "none", nil, "the next process resumed the forgotten conversation")

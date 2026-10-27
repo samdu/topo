@@ -76,6 +76,15 @@ int topo_ish_signal_session(int sid, int sig);
 /// negative guest errno when the kernel is not booted.
 int topo_ish_unstopped(void);
 
+/// Continues every task in the guest but init, discarding first any stop signal still pending on
+/// it (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU), as Linux does at a SIGCONT. Answers how many tasks it
+/// reached, or a negative guest errno when the kernel is not booted.
+int topo_ish_continue_all(void);
+
+/// How many tasks in the guest but init are parked at a group stop: none, once a continue has
+/// landed. A negative guest errno when the kernel is not booted.
+int topo_ish_parked(void);
+
 /// How many of `pids` are still running: a task that exists and is not a zombie. A zombie whose
 /// parent is init — a descendant orphaned when the process above it died — is reaped here, since
 /// init never runs a program and so never reaps one itself. Never pass a pid a `topo_ish_wait`

@@ -229,10 +229,21 @@ public final class GuestProcess: Sendable {
         }
     }
 
-    /// Continues every task in the guest but init (`SIGCONT`); false when the kernel refused.
-    public static func continueAll() async -> Bool {
+    /// Continues every task in the guest but init (`SIGCONT`, with any stop still pending on a task
+    /// discarded first) and answers once none is parked at the stop — or at `bound`, false, with
+    /// one still parked. Blocking work is on a queue of its own.
+    public static func continueAll(within bound: Duration = .seconds(1)) async -> Bool {
         await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async { done.resume(returning: signalAll(TOPO_ISH_SIGCONT) != nil) }
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard topo_ish_continue_all() >= 0 else { return done.resume(returning: false) }
+                // Confirmed, not assumed: the continue has landed once no task is parked.
+                let deadline = ContinuousClock.now + bound
+                while true {
+                    if topo_ish_parked() == 0 { return done.resume(returning: true) }
+                    if ContinuousClock.now >= deadline { return done.resume(returning: false) }
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 import XCTest
+import TopoIsh
 @testable import TopoUserland
 
 /// A guest process the app talks to: stdin a pipe, stdout by line as it arrives, and a deliberate
@@ -189,9 +190,27 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertEqual(later, atStop, "the ticker moved while stopped")
         XCTAssertFalse(ticker.hasExited)
 
-        let continued = await GuestProcess.continueAll()
-        XCTAssertTrue(continued)
-        await eventually("the ticker moved again", within: 10) { (try? await tick()).map { $0 > atStop } ?? false }
+        // Two rounds, each stop given several passes, so a stop sent to a task already parked is
+        // pending at the continue: it is discarded, and the ticker keeps moving a second on.
+        var last = atStop
+        for round in 1...2 {
+            if round == 2 {
+                let stoppedAgain = await GuestProcess.stopAll(within: .seconds(2))
+                XCTAssertTrue(stoppedAgain)
+                last = try await tick()
+            }
+            _ = GuestProcess.signalAll(TOPO_ISH_SIGSTOP)
+            _ = GuestProcess.signalAll(TOPO_ISH_SIGSTOP)
+            let continued = await GuestProcess.continueAll()
+            XCTAssertTrue(continued, "round \(round): a task stayed parked")
+            try await Task.sleep(for: .milliseconds(300))
+            let soon = try await tick()
+            try await Task.sleep(for: .seconds(1))
+            let later = try await tick()
+            XCTAssertGreaterThan(soon, last, "round \(round): the ticker did not move after the continue")
+            XCTAssertGreaterThan(later, soon, "round \(round): the ticker stopped again after the continue")
+            last = later
+        }
 
         let again = await GuestProcess.stopAll(within: .seconds(2))
         XCTAssertTrue(again)
