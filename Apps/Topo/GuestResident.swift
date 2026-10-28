@@ -193,6 +193,7 @@ final class GuestResident {
         }
         return ToolService.environment(port: port, token: await service.token)
             .merging(GuestTools.environment) { own, _ in own }
+            .merging(BuildFacts.current) { own, _ in own }
     }
 
     /// A listener's lines under `name`, to `log`; a loss is told at `notice` as well, since the
@@ -257,8 +258,8 @@ final class LaunchPorts {
 
 extension GuestResident {
     /// What the resident's launcher answers at each launch: the proxy's and the tool service's
-    /// ports from `ports`, the credential `credential` makes for the proxy's, and `topo`'s own
-    /// variables. Says at notice what the launch is told, once the environment is made; a launch
+    /// ports from `ports`, the credential `credential` makes for the proxy's, `topo`'s own
+    /// variables and the app's build (`BuildFacts`). Says at notice what the launch is told, once the environment is made; a launch
     /// that then fails to start says so in the session's own line.
     nonisolated static func launchEnvironment(
         ports: LaunchPorts, note: @escaping @Sendable (String) -> Void = { GuestResident.listenerLog.notice("\($0, privacy: .public)") },
@@ -269,6 +270,7 @@ extension GuestResident {
             let environment = try await credential(now.proxy)
                 .merging(ToolService.environment(port: now.tools, token: ports.tools.token)) { own, _ in own }
                 .merging(GuestTools.environment) { own, _ in own }
+                .merging(BuildFacts.current) { own, _ in own }
             note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")
             return environment
         }

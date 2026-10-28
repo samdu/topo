@@ -132,8 +132,12 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # The commit this build's source is, which the About screen names as the corresponding
-        # source the GPL asks for; `scripts/archive-upload.sh` passes it, and it is empty elsewhere.
+        # source the GPL asks for; `scripts/archive-upload.sh` and the ota experiment's
+        # `publish-topo.sh` pass it, and it is empty in a build from Xcode. The channel is the
+        # pipeline that cut the build (`testflight`, `main`, `dev`), passed by the same two. Both
+        # reach the guest's environment (`BuildFacts`, docs/guest.md).
         TopoSourceCommit: $(TOPO_SOURCE_COMMIT)
+        TopoChannel: $(TOPO_CHANNEL)
         # `topo://open` and `topo://cue?…`, which the widgets open (Apps/Widgets/WidgetIntents.swift).
         # No setting generates this key, so it is here, and `scripts/check-built-plist.sh` reads it.
         CFBundleURLTypes:
@@ -151,6 +155,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
         TOPO_SOURCE_COMMIT: ""
+        TOPO_CHANNEL: ""
         # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
