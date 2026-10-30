@@ -209,6 +209,44 @@ public final class GuestProcess: Sendable {
         }
     }
 
+    /// Stops every task in the guest but init (`SIGSTOP`) and answers once each is parked at the
+    /// stop — or at `bound`, false, with some still on their way to it. A stopped guest runs
+    /// nothing until `continueAll`, whatever iOS does with the app meanwhile. SIGKILL ends a
+    /// stopped task as it ends a running one, so a teardown needs no continue first. Blocking work
+    /// is on a queue of its own.
+    public static func stopAll(within bound: Duration) async -> Bool {
+        await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let deadline = ContinuousClock.now + bound
+                while true {
+                    // Again each pass, so a task started since is stopped too.
+                    guard signalAll(TOPO_ISH_SIGSTOP) != nil else { return done.resume(returning: false) }
+                    if topo_ish_unstopped() == 0 { return done.resume(returning: true) }
+                    if ContinuousClock.now >= deadline { return done.resume(returning: false) }
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
+        }
+    }
+
+    /// Continues every task in the guest but init (`SIGCONT`, with any stop still pending on a task
+    /// discarded first) and answers once none is parked at the stop — or at `bound`, false, with
+    /// one still parked. Blocking work is on a queue of its own.
+    public static func continueAll(within bound: Duration = .seconds(1)) async -> Bool {
+        await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard topo_ish_continue_all() >= 0 else { return done.resume(returning: false) }
+                // Confirmed, not assumed: the continue has landed once no task is parked.
+                let deadline = ContinuousClock.now + bound
+                while true {
+                    if topo_ish_parked() == 0 { return done.resume(returning: true) }
+                    if ContinuousClock.now >= deadline { return done.resume(returning: false) }
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
+        }
+    }
+
     /// One line about `pid` as the kernel sees it now.
     static func describe(_ pid: Int32) -> String {
         var line = [CChar](repeating: 0, count: 256)

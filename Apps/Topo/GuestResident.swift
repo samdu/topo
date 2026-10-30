@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 import TopoAuth
@@ -139,9 +140,10 @@ final class GuestResident {
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(proxy: proxy, tools: tools)
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            let made = Self.launchEnvironment(ports: ports) { port in
+            let handOut: @Sendable (UInt16) async throws -> [String: String] = { port in
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
             }
+            let made = Self.launchEnvironment(ports: ports, credential: handOut)
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
@@ -149,7 +151,8 @@ final class GuestResident {
                 await userland.bringZoneUpToDate()
                 return try await made()
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile,
+                                       freezer: GuestFreeze(ports: ports, userland: userland, credential: handOut), model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
@@ -250,9 +253,94 @@ final class LaunchPorts {
         self.tools = tools
     }
 
+    /// The ports the last launch was told, which a frozen resident still holds in its environment.
+    private(set) var told: (proxy: UInt16, tools: UInt16)?
+    /// A digest of the token the last launch was handed, never the token: the guest cannot refresh
+    /// one, so a frozen resident is continued only while the credential still hands out the same.
+    private var handed: SHA256.Digest?
+
+    /// Notes the token a launch's environment carries.
+    func hand(_ environment: [String: String]) {
+        handed = environment[Self.tokenVariable].map { SHA256.hash(data: Data($0.utf8)) }
+    }
+
+    /// Whether `credential`, asked now for the port the last launch was told, hands out the token
+    /// that launch was given: an access token refreshed or expired since is not, and a frozen
+    /// resident holding it is replaced rather than continued. The read may refresh over the
+    /// network, so it has `bound`; one that runs out is a token not known to be the same.
+    func stillHanded(by credential: @escaping @Sendable (UInt16) async throws -> [String: String],
+                     within bound: Duration = .seconds(3)) async -> Bool {
+        guard let told, let handed else { return false }
+        let (answers, answer) = AsyncStream<String?>.makeStream()
+        let reading = Task { answer.yield(try? await credential(told.proxy)[Self.tokenVariable]) }
+        let timer = Task { try? await Task.sleep(for: bound); answer.yield(nil) }
+        var now: String?
+        for await first in answers { now = first; break }
+        reading.cancel()
+        timer.cancel()
+        guard let now else { return false }
+        return SHA256.hash(data: Data(now.utf8)) == handed
+    }
+
+    nonisolated static let tokenVariable = "CLAUDE_CODE_OAUTH_TOKEN"
+
     /// The ports to tell the next launch: each service's, on a listener started for it.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
-        (try await proxy.relisten(), try await tools.relisten())
+        let now = (try await proxy.relisten(), try await tools.relisten())
+        told = now
+        return now
+    }
+
+    /// Both services listening again on the very ports the last launch was told, for a frozen
+    /// resident on its way back; false when either cannot be taken back (another process bound it
+    /// while the app was away) or no launch was told any.
+    func reclaim() async -> Bool {
+        guard let told else { return false }
+        do {
+            _ = try await proxy.relisten(on: told.proxy)
+            _ = try await tools.relisten(on: told.tools)
+            return true
+        } catch {
+            GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+}
+
+/// The app's freezer: every guest task stopped on the way out, and on the way back the proxy and
+/// the tool service taken back on the ports the resident was told and the DNS forwarder up before
+/// any task is continued, so nothing in the guest runs toward a listener the app does not hold.
+@MainActor
+final class GuestFreeze: GuestFreezer {
+    /// How long the stop may take to be confirmed: well inside the grace.
+    static let stopBound: Duration = .seconds(1)
+
+    let ports: LaunchPorts
+    let userland: Userland
+    let credential: @Sendable (UInt16) async throws -> [String: String]
+
+    init(ports: LaunchPorts, userland: Userland, credential: @escaping @Sendable (UInt16) async throws -> [String: String]) {
+        self.ports = ports
+        self.userland = userland
+        self.credential = credential
+    }
+
+    nonisolated func stop() async -> Bool {
+        await GuestProcess.stopAll(within: Self.stopBound)
+    }
+
+    nonisolated func resume() async -> Bool {
+        guard await ports.stillHanded(by: credential) else {
+            GuestResident.listenerLog.notice("guest: the token the frozen resident holds is no longer the one handed out; starting a fresh process")
+            return false
+        }
+        guard await ports.reclaim() else { return false }
+        await userland.reviveForwarder()
+        guard await GuestProcess.continueAll() else {
+            GuestResident.listenerLog.notice("guest: a task of the frozen resident stayed stopped after the continue; starting a fresh process")
+            return false
+        }
+        return true
     }
 }
 
@@ -267,8 +355,11 @@ extension GuestResident {
     ) -> @Sendable () async throws -> [String: String] {
         { @Sendable in
             let now = try await ports.ports()
-            let environment = try await credential(now.proxy)
-                .merging(ToolService.environment(port: now.tools, token: ports.tools.token)) { own, _ in own }
+            let given = try await credential(now.proxy)
+            await ports.hand(given)
+            let toolsToken = await ports.tools.token
+            let environment = given
+                .merging(ToolService.environment(port: now.tools, token: toolsToken)) { own, _ in own }
                 .merging(GuestTools.environment) { own, _ in own }
                 .merging(BuildFacts.current) { own, _ in own }
             note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")
