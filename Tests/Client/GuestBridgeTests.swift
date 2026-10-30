@@ -589,6 +589,71 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(after.count, turns.count, "a second pass wrote something")
     }
 
+    /// The chat's harness over a scripted guest, with a pause that ends the answering loop after
+    /// one pass, so `answering(every:)` is one pass of the loop.
+    private func harnessOverGuest(_ db: any RecordDatabase, _ script: [ScriptedGuest.Answer]) -> (Harness, GuestBridge, ScriptedGuest) {
+        let guest = ScriptedGuest(home: home, script: script)
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let defaults = UserDefaults(suiteName: name)!
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: defaults, brain: bridge, relay: relay, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        return (harness, bridge, guest)
+    }
+
+    /// The same through the chat's answering loop (`Harness.passHasWork`): the pass reads a log
+    /// whose head is another device's reply with nothing the person's unanswered, and still asks
+    /// the runner, since the brain owes the log a reply. The owed reply lands under its own nonce
+    /// and the guest is not asked again.
+    func testTheLoopWritesAnOwedReplyWhenTheHeadIsAnotherDevicesReply() async throws {
+        let db = RefusingReplies()
+        let (harness, bridge, guest) = harnessOverGuest(db, [.reply("Paris.")])
+        await db.refuse(true)
+        await harness.send("capital of France?")
+        XCTAssertEqual(guest.inputs, ["capital of France?"])
+        let owed = await bridge.current.pending
+        XCTAssertNotNil(owed, "the refused reply is not held for the log")
+        await db.refuse(false)
+        try await write(db, .person, "and Spain?", device: "watch")
+        try await write(db, .assistant, "Madrid.", device: "hub")
+
+        await harness.answering(every: .seconds(5))
+
+        XCTAssertEqual(guest.inputs, ["capital of France?"], "the guest was asked again")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.filter { $0.text == "Paris." }.count, 1, "\(turns.map(\.text))")
+        let paris = try XCTUnwrap(turns.first { $0.text == "Paris." })
+        let question = try XCTUnwrap(turns.first { $0.text == "capital of France?" })
+        XCTAssertEqual(paris.parents, [question.ref])
+        XCTAssertEqual(paris.nonce, TurnRunner.replyNonce(for: [question.ref]))
+        let settled = await bridge.current.pending
+        XCTAssertNil(settled, "the owed reply landed and is still held")
+    }
+
+    /// A turn the guest was cut off answering stands at the log's head, held unresolved: a pass
+    /// of the loop reads the log once, asks the runner nothing, and the guest is not told the
+    /// turn again (`Harness.passHasWork` skips what the brain holds as cut off).
+    func testTheLoopReadsOnceOverACutOffHeadAndTellsTheGuestNothing() async throws {
+        let memory = InMemoryRecordDatabase()
+        let db = CountingDatabase(memory)
+        let (harness, _, guest) = harnessOverGuest(db, [.cutOff, .reply("Fine.")])
+        await harness.send("run the report")
+        XCTAssertEqual(guest.inputs, ["run the report"])
+        let logged = try await log(memory)
+        XCTAssertEqual(logged.map(\.text), ["run the report"], "the cut-off turn was answered")
+
+        let before = await db.reads(ofType: Turn.recordType)
+        await harness.answering(every: .seconds(5))
+        let during = await db.reads(ofType: Turn.recordType) - before
+
+        XCTAssertEqual(during, 1, "a pass over a cut-off head read the log more than once")
+        XCTAssertEqual(guest.inputs, ["run the report"], "the guest was told the cut-off turn again")
+        let after = try await log(memory)
+        XCTAssertEqual(after.map(\.text), ["run the report"])
+    }
+
     /// Two limbs spoke at once: one reply joins both, and the guest hears both.
     func testAnsweringAForkWritesOneReply() async throws {
         let db = InMemoryRecordDatabase()
