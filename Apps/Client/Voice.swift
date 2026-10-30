@@ -36,20 +36,52 @@ import FluidAudio
 @MainActor
 @Observable
 final class Voice {
-    /// `fetching` is the wait for `ModelDownloads` to have every file; `loading` is the CoreML
-    /// compile from disk, which the first load after an install pays: the Neural Engine
-    /// compiling the model for this phone.
+    /// `fetching` is the wait for `ModelDownloads` to have every file, and then, with every file
+    /// here, for the ear's compile to end (`waitsForEar`); `loading` is the CoreML compile from
+    /// disk, which the first load after an install pays: the Neural Engine compiling the model
+    /// for this phone.
     enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
     /// Why the voice is not available, when it is not. Cleared by the next `prepare`.
     private(set) var trouble: String?
+    /// The ear beside the voice, which comes first: the first thing a person does is talk, and a
+    /// reply can be text until the voice is in. The voice's files are asked for after the ear's
+    /// (`ModelDownloads.start(_:after:)`), and its compile waits while the ear is still to be
+    /// fetched or is compiling (`mayLoad`), so the ear's compile is not shared with the voice's,
+    /// even when the voice's files are already here. An ear whose download failed lets the voice
+    /// go, since a broken ear never costs the voice; that is the one way the two can still compile
+    /// at once, when a later foreground's retry brings the ear in while the voice it let go is
+    /// compiling. Nothing holds the ear back for the voice. Unset (a debug stand-in ear) waits for nothing. Whoever
+    /// sets it has the ear call `earSettled` when its compile ends.
+    weak var ear: Ear?
+    /// Whether a wait on the ear's download is registered, so a refusal registers one only.
+    private var awaitingEarFiles = false
+    /// Whether every file is on the phone while the state is still `fetching`: the compile is
+    /// waiting on the ear.
+    private var filesHere = false
 
     /// The manifest entries the voice needs on disk.
     static let models = [ModelManifest.pocket]
 
     /// What `loading` reads as: the step a first load after an install spends its time in.
     static let preparing = "preparing the model for this phone"
+
+    /// What the voice's line says while its files are here and its compile waits on the ear's.
+    nonisolated static let afterEar = "waiting for the ear"
+
+    /// Whether the voice may compile, given the ear: none beside it, or one neither still to be
+    /// fetched nor compiling. An ear being fetched lets the voice go once its download failed.
+    static func mayLoad(ear: Ear.State?, earDownloadFailed: Bool) -> Bool {
+        switch ear {
+        case nil, .cold, .ready, .failed: true
+        case .loading: false
+        case .fetching: earDownloadFailed
+        }
+    }
+
+    /// Whether the compile is waiting on the ear, with every file on the phone.
+    var waitsForEar: Bool { state == .fetching && filesHere }
 
     /// The speaker: one of the pack's stock voices, resolved by the port against the language
     /// pack's `constants_bin/`. The manifest fetches this one only.
@@ -102,15 +134,15 @@ final class Voice {
     var summary: String {
         switch state {
         case .cold: return "not loaded"
-        case .fetching: return ModelDownloads.shared.describe(Self.models)
+        case .fetching: return waitsForEar ? Self.afterEar : ModelDownloads.shared.describe(Self.models)
         case .loading: return Self.preparing
         case .ready: return "Pocket resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
 
-    /// Asks for the model, downloading whatever this phone lacks, and loads it once every file
-    /// is on disk. Idempotent, and called on every foreground so it is resident by the first
+    /// Asks for the model, downloading whatever this phone lacks after the ear's, and loads it
+    /// once every file is on disk and the ear is not compiling. Idempotent, and called on every foreground so it is resident by the first
     /// reply and a download that failed is tried again.
     func prepare() {
         #if DEBUG
@@ -118,14 +150,48 @@ final class Voice {
         #endif
         guard state != .loading, state != .ready else { return }
         let downloads = ModelDownloads.shared
-        downloads.start(Self.models)
-        guard state != .fetching else { return }
+        downloads.start(Self.models, after: Ear.models)
+        guard state != .fetching else {
+            loadIfDue(base: downloads.pocketBase)
+            return
+        }
         state = .fetching
         trouble = nil
+        filesHere = false
         downloads.whenPresent(Self.models) { [weak self] in
             guard let self, self.state == .fetching else { return }
-            self.load(base: downloads.pocketBase)
+            self.filesHere = true
+            self.loadIfDue(base: downloads.pocketBase)
         }
+    }
+
+    /// The ear's compile has ended, resident or failed: the voice's compile goes if its files are
+    /// here. Asks the downloads for nothing, so it adds no pass over the session's tasks.
+    func earSettled() {
+        loadIfDue(base: ModelDownloads.shared.pocketBase)
+    }
+
+    /// The compile, once the files are here and the ear allows it. Refused for an ear still being
+    /// fetched, it waits for the ear's download to settle: a failure lets the voice go, and an
+    /// arrival puts the ear into its compile, whose end calls `earSettled`.
+    private func loadIfDue(base: URL) {
+        guard state == .fetching, filesHere else { return }
+        let downloads = ModelDownloads.shared
+        guard Self.mayLoad(ear: ear?.state, earDownloadFailed: downloads.failed(Ear.models)) else {
+            if ear?.state == .fetching, !awaitingEarFiles {
+                awaitingEarFiles = true
+                downloads.whenSettled(Ear.models) { [weak self] _ in
+                    // A turn later, so the ear's own wait on the same arrival has put it into
+                    // its compile first.
+                    Task { @MainActor in
+                        self?.awaitingEarFiles = false
+                        self?.earSettled()
+                    }
+                }
+            }
+            return
+        }
+        load(base: base)
     }
 
     /// The CoreML compile from the store, once the files are all there. `base` is the directory

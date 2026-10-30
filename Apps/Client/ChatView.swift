@@ -184,7 +184,9 @@ struct ChatView: View {
                         await harness.askAgain()
                     }
                 } else if asking {
-                    FirstRunLine(denied: voice.denied, unheld: topoNowhere)
+                    FirstRunLine(denied: voice.denied, unheld: topoNowhere,
+                                 hearsFirst: FirstRun.hearsFirst(earReady: voice.ear.ready, voice: speaker.voice.state,
+                                                                 installing: !standingSetup.isEmpty))
                 }
             } card: {
                 // Once, and only while the memory is still in this app's own folder and has
