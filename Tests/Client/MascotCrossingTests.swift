@@ -11,7 +11,7 @@ import XCTest
 /// that glide; and a turn that lands on him still, with room above and below it, sends him below.
 final class MascotCrossingTests: XCTestCase {
     /// The default look's roam: a scale of 1, a clearance of 8, 40 points a second and ten times
-    /// that in a hurry, a settle of 0.6 s, a thirtieth of a second a frame.
+    /// that in a hurry, a settle of 0.6 s, a twenty-fourth of a second a frame.
     static let settings = MascotRoam.Settings(Look.Mascot(), reduceMotion: false)
 
     struct Trace: Decodable {

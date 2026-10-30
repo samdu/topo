@@ -366,6 +366,8 @@ enum LookDocument {
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
+        r.frameInterval("restInterval", &value.restInterval)
+        r.seconds("restAfter", &value.restAfter)
         r.placement("placement", &value.placement)
         r.pin("pin", &value.pin)
         r.object("debug") { mascotDebug(&value.debug, $0) }
