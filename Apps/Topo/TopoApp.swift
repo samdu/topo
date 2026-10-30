@@ -134,6 +134,17 @@ struct TopoApp: App {
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
         let speaker = Speaker(audio: audio, voice: spoken)
+        // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
+        // and goes when its compile ends. A debug stand-in ear, which may load for ever, holds
+        // nothing back.
+        var standIn = false
+        #if DEBUG
+        standIn = !(ProcessInfo.processInfo.environment[DebugRun.earVariable] ?? "").isEmpty
+        #endif
+        if !standIn {
+            spoken.ear = ear
+            ear.settled = { [weak spoken] in spoken?.earSettled() }
+        }
         // A reply is not read into an open microphone: one that lands while it is open waits for
         // it to close (`Speaker.speak`).
         speaker.microphoneOpen = { voice.listening }

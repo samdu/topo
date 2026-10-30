@@ -148,6 +148,19 @@ final class SetupTests: XCTestCase {
                         lines(.failed("no room"), .ready, .ready)] {
             XCTAssertTrue(Setup.standing(install, stood: false), "\(install)")
         }
+        // The voice held back for the ear's download is an install's wait; its compile waiting
+        // for the ear's is every launch's, and alone draws nothing.
+        let queued = Setup.Fetch(fraction: nil, words: ModelDownloads.queued)
+        let voiceQueued = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .ready, earFetch: present,
+                                      earLoading: Ear.preparing, voice: .fetching, voiceFetch: queued, voiceLoading: Voice.preparing)
+        XCTAssertEqual(voiceQueued.last?.state, .waiting(ModelDownloads.queued))
+        XCTAssertTrue(Setup.standing(voiceQueued, stood: false))
+        let afterEar = Setup.Fetch(fraction: nil, words: Voice.afterEar)
+        let compileWaits = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .loading, earFetch: present,
+                                       earLoading: Ear.preparing, voice: .fetching, voiceFetch: afterEar, voiceLoading: Voice.preparing)
+        XCTAssertEqual(compileWaits.last?.state, .waiting(Voice.afterEar))
+        XCTAssertFalse(Setup.standing(compileWaits, stood: false), "a launch's voice waiting on its ear drew the meter")
+        XCTAssertTrue(Setup.standing(compileWaits, stood: true), "an install's meter stays through the wait")
         // Once it stands it stays through the preparing, and goes when all three are done.
         XCTAssertTrue(Setup.standing(lines(.ready(.imported), .loading, .cold), stood: true))
         XCTAssertFalse(Setup.standing(lines(.ready(.imported), .ready, .ready), stood: true))
