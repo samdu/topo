@@ -50,6 +50,8 @@ FAKE
   printf '{"result":{"apps":[]}}' > "$record/absent.json"
   printf '{}' > "$record/shapeless.json"
   : > "$record/empty.json"
+  printf '{"result":{"apps":[{}]}}' > "$record/nameless.json"
+  printf '{"result":{"apps":[{"bundleIdentifier":null}]}}' > "$record/null-id.json"
   fresh() { # <want status> <apps> <uninstall> <calls that must appear, |-separated> <calls that must not>
     : > "$record/calls"
     FAKE_APPS="$2" FAKE_UNINSTALL="$3" PATH="$record:$PATH" env -u TOPO_PERF_DEVICE \
@@ -61,9 +63,12 @@ FAKE
     for call in $5; do ! grep -q "$call" "$record/calls" || { echo "FAIL: --fresh with $2/$3 made a '$call' call"; fail=1; }; done
   }
   fresh 1 "$record/installed.json" ok "uninstall|device install app" ""
+  # The delete comes before the install, or it would take away the build just installed.
+  [ "$(grep -n -m1 uninstall "$record/calls" | cut -d: -f1)" -lt "$(grep -n -m1 'device install app' "$record/calls" | cut -d: -f1)" ] \
+    || { echo "FAIL: --fresh installed before it deleted"; fail=1; }
   fresh 1 "$record/installed.json" fail "uninstall" "device install app"
   fresh 1 "$record/absent.json" ok "device install app" "uninstall"
-  for answer in "$record/shapeless.json" "$record/empty.json" fail; do
+  for answer in "$record/shapeless.json" "$record/empty.json" "$record/nameless.json" "$record/null-id.json" fail; do
     fresh 1 "$answer" ok "info apps" "uninstall|device install app"
   done
 else

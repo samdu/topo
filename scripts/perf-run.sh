@@ -76,14 +76,15 @@ if [ "$fresh" = 1 ]; then
     rm -f "$listed"
     echo "--fresh: the phone did not say whether $bundle is installed, so nothing was deleted" >&2; exit 1
   fi
-  # 10: installed; 11: confirmed absent, a list of apps naming no Topo; anything else (an empty
-  # file, JSON that is not that shape) is no answer.
+  # 10: installed; 11: confirmed absent, a list of apps naming no Topo, every one naming its bundle;
+  # anything else (an empty file, JSON that is not that shape, an app with no bundle id) is no answer.
   set +e
   python3 -c '
 import json, sys
 try:
     apps = json.load(open(sys.argv[1]))["result"]["apps"]
-    assert isinstance(apps, list) and all(isinstance(a, dict) for a in apps)
+    assert isinstance(apps, list)
+    assert all(isinstance(a, dict) and isinstance(a.get("bundleIdentifier"), str) and a["bundleIdentifier"] for a in apps)
 except Exception:
     sys.exit(12)
 sys.exit(10 if any(a.get("bundleIdentifier") == sys.argv[2] for a in apps) else 11)' "$listed" "$bundle"
