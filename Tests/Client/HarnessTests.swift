@@ -1034,6 +1034,259 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(transport.sent.count, 3)
     }
 
+    /// The loop's pause while the chat is quiet: the interval for two minutes of quiet passes,
+    /// then 15, 30 and 60 s, held at 60; a limb's turn answered starts the count again, and a
+    /// wake is the interval again at once.
+    func testAQuietLoopBacksOffAndATurnOrAWakeBringsTheIntervalBack() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("first back")), (200, reply("second back")))
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: transport, pause: { try await beats.pause($0) })
+        try await limb(db, "first")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        // Two minutes of quiet at five seconds a pass, written out: the threshold is the contract.
+        let quietPasses = 24
+        try await advance(beats, to: quietPasses + 6)
+        var asked = await beats.intervals
+        let live = [Duration](repeating: .seconds(5), count: quietPasses + 1)
+        XCTAssertEqual(Array(asked.prefix(quietPasses + 1)), live, "the pass that answered and two minutes of quiet are at the interval")
+        XCTAssertEqual(Array(asked.dropFirst(quietPasses + 1)), [.seconds(15), .seconds(30), .seconds(60), .seconds(60), .seconds(60)])
+
+        // A limb's turn landing is answered on the next pass, and the count starts again.
+        try await limb(db, "second")
+        await beats.tick()
+        try await eventually("the pass that answers the limb") { await beats.passes >= quietPasses + 7 }
+        let answered = try await log(db).map(\.text)
+        XCTAssertEqual(answered, ["first", "first back", "second", "second back"])
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "a pass that answered is at the interval")
+
+        // Backed off again, a wake is a pass now and the interval again.
+        try await advance(beats, to: quietPasses * 2 + 10)
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(60), "two more quiet minutes did not back the loop off")
+        let before = await beats.passes
+        await phone.wake()
+        try await eventually("the woken pass") { await beats.passes >= before + 1 }
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "the woken pass is at the interval")
+
+        open.cancel()
+        await open.value
+    }
+
+    /// Ticks the loop's pause until it has begun its `pass`th.
+    private func advance(_ beats: Beats, to pass: Int) async throws {
+        while await beats.passes < pass {
+            let next = await beats.passes + 1
+            await beats.tick()
+            try await eventually("pass \(next)") { await beats.passes >= next }
+        }
+    }
+
+    /// The person's hand ends a backed-off pause: words typed (`touched`) and a send (`retry`)
+    /// are each a pass now and the interval again; and a loop started afresh over a log it has
+    /// seen is at the interval, not where the last loop left off.
+    func testTypingOrASendEndsABackedOffPauseAndALoopStartedAfreshIsLive() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("back"))),
+                            pause: { try await beats.pause($0) })
+        try await limb(db, "first")
+
+        var open = Task { await phone.answering(every: .seconds(5)) }
+        try await advance(beats, to: 30)
+        var asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(60), "two quiet minutes did not back the loop off")
+
+        var before = await beats.passes
+        phone.touched()
+        try await eventually("the pass typing brought") { await beats.passes >= before + 1 }
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "words typed are not a pass now at the interval")
+
+        try await advance(beats, to: before + 30)
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(60))
+        before = await beats.passes
+        await phone.retry()
+        try await eventually("the pass the send brought") { await beats.passes >= before + 1 }
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "a send is not a pass now at the interval")
+
+        // A live pause runs out: typing does not cut it short.
+        before = await beats.passes
+        phone.touched()
+        try? await Task.sleep(for: .milliseconds(100))
+        let stillPaused = await beats.passes
+        XCTAssertEqual(stillPaused, before, "typing cut a live pause short")
+
+        try await advance(beats, to: before + 30)
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(60))
+        open.cancel()
+        await open.value
+
+        open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the new loop's first pass") { await beats.passes >= before + 31 }
+        asked = await beats.intervals
+        XCTAssertEqual(asked.last, .seconds(5), "a loop started afresh began where the last left off")
+        open.cancel()
+        await open.value
+    }
+
+    /// The backed-off pauses are multiples of the interval, so a debug build's shorter interval
+    /// scales with it: at a second a pass, two minutes of quiet and then 3, 6 and 12 s.
+    func testTheBackedOffPausesAreMultiplesOfTheInterval() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("back"))),
+                            pause: { try await beats.pause($0) })
+        try await limb(db, "first")
+        let open = Task { await phone.answering(every: .seconds(1)) }
+        try await advance(beats, to: 125)
+        let asked = await beats.intervals
+        XCTAssertEqual(Array(asked.prefix(121)), [Duration](repeating: .seconds(1), count: 121))
+        XCTAssertEqual(Array(asked.dropFirst(121)), [.seconds(3), .seconds(6), .seconds(12), .seconds(12)])
+        open.cancel()
+        await open.value
+    }
+
+    /// A pass whose own read of the log failed — the chat's read got through, the runner's did
+    /// not — is not quiet: the loop stays at the interval, so iCloud coming back is found within it.
+    func testAPassWhoseOwnReadFailedIsNotQuiet() async throws {
+        let db = EverySecondTurnReadFails(InMemoryRecordDatabase())
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await advance(beats, to: 30)
+        let reads = await db.reads
+        XCTAssertGreaterThanOrEqual(reads, 60, "a pass is two reads of the log, the chat's and the runner's")
+        let intervals = await beats.intervals
+        XCTAssertEqual(intervals, [Duration](repeating: .seconds(5), count: 30), "a pass that failed on its read counted as quiet")
+        XCTAssertEqual(phone.failure?.source, .other, "the read that failed is the runner's, not the chat's")
+        open.cancel()
+        await open.value
+    }
+
+    /// A person's turn at a head of the log that is not the last turn in order — a fork, where
+    /// another device went on from an older turn — is a reply owed, and the loop stays live
+    /// over it while another device holds the lease.
+    func testAPersonsTurnAtAnOlderHeadKeepsTheLoopLive() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("first back"))),
+                            pause: { try await beats.pause($0) })
+        try await limb(db, "first")
+        await phone.answerPending()
+        let answered = try await log(db)
+        XCTAssertEqual(answered.map(\.text), ["first", "first back"])
+        let root = answered[1].ref
+        let log = TurnLog(database: db)
+        let watch = try await log.writer(for: DeviceID("watch"))
+        _ = try await watch.append(.person, "and then?", parents: [root])
+        let hub = try await log.writer(for: DeviceID("hub"))
+        _ = try await hub.append(.assistant, "an aside", parents: [root])
+        let hubLease = try await claim(db, as: "hub")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await advance(beats, to: 30)
+        XCTAssertEqual(phone.turns.last?.role, .assistant, "the last turn in order is the hub's aside")
+        let intervals = await beats.intervals
+        XCTAssertEqual(intervals, [Duration](repeating: .seconds(5), count: 30), "a person's turn at an older head counted as quiet")
+        let count = try await self.log(db).count
+        XCTAssertEqual(count, 4, "nothing was answered while the hub holds the lease")
+        open.cancel()
+        await open.value
+        withExtendedLifetime(hubLease) {}
+    }
+
+    /// A wake that lands while the pass is asking the brain what it owes — after the pass's
+    /// own wake check — is a pass now, not one after a pause: the push a limb's turn sends is
+    /// not lost to the question.
+    func testAWakeWhileTheBrainIsAskedIsAPassNow() async throws {
+        let db = InMemoryRecordDatabase()
+        try await limb(db, "first")
+        let hub = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+        _ = try await hub.append(.assistant, "first back", parents: try await TurnLog(database: db).read().heads)
+        let beats = Beats()
+        let brain = HeldBrain()
+        let phone = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {}, defaults: makeDefaults(),
+                            brain: brain, pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await advance(beats, to: 2)
+        // The runner asks the brain what it owes and then, on a quiet pass, the loop does: the
+        // first pass, which found the log new, asked once, the second twice, and the third pass's
+        // own ask is the fifth. It is held there, after the pass's wake check; a limb writes and
+        // pushes meanwhile.
+        await brain.hold(at: 5)
+        await beats.tick()
+        try await eventually("the pass at the brain's question") { await brain.held }
+        try await limb(db, "second")
+        let woke = Task { await phone.wake() }
+        try? await Task.sleep(for: .milliseconds(50))
+        let pausesBefore = await beats.passes
+        await brain.release()
+        // The next pass reads the limb's turn and asks the brain for its reply, where it is held:
+        // no pause began between the question and that pass.
+        try await eventually("the pass the wake brought") { await brain.answering }
+        XCTAssertEqual(phone.turns.count, 3, "the woken pass did not read the limb's turn")
+        let pausesAfter = await beats.passes
+        XCTAssertEqual(pausesAfter, pausesBefore, "the wake was put behind a pause")
+        await brain.release()
+        await woke.value
+        open.cancel()
+        await open.value
+    }
+
+    /// A person's turn at the head that the brain was cut off on is not a reply owed until the
+    /// person asks again: a chat left there is quiet, and the loop backs off over it.
+    func testAHeadTheBrainWasCutOffOnIsQuiet() async throws {
+        let db = InMemoryRecordDatabase()
+        let question = try await limb(db, "first")
+        let beats = Beats()
+        let brain = CutOffBrain(question.ref)
+        let phone = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {}, defaults: makeDefaults(),
+                            brain: brain, pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await advance(beats, to: 30)
+        XCTAssertEqual(phone.turns.last?.role, .person)
+        XCTAssertEqual(phone.unfinished?.ref, question.ref, "the cut-off turn is the one the control asks again")
+        let intervals = await beats.intervals
+        XCTAssertEqual(Array(intervals.suffix(5)), [.seconds(15), .seconds(30), .seconds(60), .seconds(60), .seconds(60)],
+                       "a head the brain was cut off on kept the loop live")
+        open.cancel()
+        await open.value
+    }
+
+    /// A reply the brain owes the log keeps the loop live while another device holds the lease
+    /// and the pass, turned away at the lease, ran to its end: the log's last turn is not the
+    /// person's and nothing of the guest's is unsaved, so the owed reply is the one thing that
+    /// says the chat is not quiet.
+    func testAReplyTheBrainOwesKeepsTheLoopLive() async throws {
+        let db = InMemoryRecordDatabase()
+        try await limb(db, "first")
+        let hub = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+        let reply = try await hub.append(.assistant, "first back", parents: try await TurnLog(database: db).read().heads)
+        let hubLease = try await claim(db, as: "hub")
+        let beats = Beats()
+        let brain = OwingBrain(OwedReply(parents: [reply.ref], nonce: "answer/owed", text: "late"))
+        let phone = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {}, defaults: makeDefaults(),
+                            brain: brain, pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await advance(beats, to: 30)
+        XCTAssertEqual(phone.turns.last?.role, .assistant)
+        XCTAssertTrue(phone.unsaved.isEmpty)
+        let intervals = await beats.intervals
+        XCTAssertEqual(intervals, [Duration](repeating: .seconds(5), count: 30), "a reply the brain owes counted as quiet")
+        open.cancel()
+        await open.value
+        withExtendedLifetime(hubLease) {}
+    }
+
     /// What a silent push does: a limb writes, and the paused loop answers with no tick of its
     /// pause, through the loop rather than beside it.
     func testAWakeRunsTheNextPassWithoutWaitingOutThePause() async throws {
@@ -2036,6 +2289,76 @@ private actor ReadFailingDatabase: RecordDatabase {
         try check()
         return try await wrapped.records(ofType: type)
     }
+}
+
+/// The log read by the chat and then by the runner, each pass: every second read of the Turn
+/// feed fails, so the chat's gets through and the runner's does not.
+private actor EverySecondTurnReadFails: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    private(set) var reads = 0
+
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
+
+    func records(ofType type: String) async throws -> [Record] {
+        guard type == Turn.recordType else { return try await wrapped.records(ofType: type) }
+        reads += 1
+        if reads.isMultiple(of: 2) { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+        return try await wrapped.records(ofType: type)
+    }
+}
+
+/// A brain that owes the log one reply and answers nothing.
+private struct OwingBrain: Brain {
+    let owing: OwedReply
+    init(_ owing: OwedReply) { self.owing = owing }
+    func answer(_ request: BrainRequest) async throws -> Reply { throw Unexpected() }
+    func owed() async -> OwedReply? { owing }
+    func describe() async -> String { "owing" }
+}
+
+/// A brain that owes nothing and is held at its nth question, for a wake to land meanwhile,
+/// and held again when asked to answer, so the pass that asked can be seen where it stands.
+private actor HeldBrain: Brain {
+    private(set) var asked = 0
+    private(set) var held = false
+    private(set) var answering = false
+    private var holdAt: Int?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func hold(at ask: Int) { holdAt = ask }
+    func release() {
+        holdAt = nil
+        held = false
+        let left = waiters
+        waiters = []
+        left.forEach { $0.resume() }
+    }
+    func answer(_ request: BrainRequest) async throws -> Reply {
+        answering = true
+        await withCheckedContinuation { waiters.append($0) }
+        throw Unexpected()
+    }
+    func owed() async -> OwedReply? {
+        asked += 1
+        if asked == holdAt {
+            held = true
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        return nil
+    }
+    nonisolated func describe() async -> String { "held" }
+}
+
+/// A brain cut off on one turn, which it holds as unresolved until the person asks again.
+private struct CutOffBrain: Brain {
+    let turn: TurnRef
+    init(_ turn: TurnRef) { self.turn = turn }
+    func answer(_ request: BrainRequest) async throws -> Reply { throw Unexpected() }
+    func unresolved() async -> Set<TurnRef> { [turn] }
+    func describe() async -> String { "cut off" }
 }
 
 /// What the reply handler was given, in order.
