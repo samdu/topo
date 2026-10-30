@@ -2,7 +2,7 @@
 # Holds scripts/build-ish.sh's refusals red: a checkout that is not the pin, a patch that does not
 # apply, a populated GPL submodule, and a meson configuration that is not arm64/ish/asbestos each
 # fail, and the same checks pass on the real thing — so a failure here is the check, not a broken
-# fixture.
+# fixture. And holds the inputs digest independent of where the checkout is.
 #
 # The patch and submodule cases need the fork at the pin. The build's own checkout (build/ish/src,
 # or ISH_WORK/src) is copied when it is there; otherwise the pin is fetched, shallow, into the
@@ -84,5 +84,22 @@ PATH="$work/bin:$PATH" FAKE_OPTIONS="$(options x86 ish asbestos)" \
   expect fail "an x86 guest" "guest_arch=x86, not arm64" "$script" verify-options "$work"
 PATH="$work/bin:$PATH" FAKE_OPTIONS="$(options arm64 ish unicorn)" \
   expect fail "the Unicorn engine" "engine=unicorn, not asbestos" "$script" verify-options "$work"
+
+# The digest the stamp holds, from two copies of the inputs at different paths: the same inputs
+# are the same digest wherever the checkout is, so a framework built in one checkout is current in
+# another.
+for copy in "$work/one" "$work/elsewhere/two"; do
+  mkdir -p "$copy/scripts" "$copy/patches" "$copy/Packages/TopoUserland"
+  cp "$script" "$copy/scripts/"
+  cp -R "$root/patches/ish" "$copy/patches/"
+  cp -R "$root/Packages/TopoUserland/Guest" "$copy/Packages/TopoUserland/"
+done
+one="$("$work/one/scripts/build-ish.sh" inputs)"
+two="$("$work/elsewhere/two/scripts/build-ish.sh" inputs)"
+if [ -n "$one" ] && [ "$one" = "$two" ]; then
+  echo "ok   the digest does not depend on the checkout's path"
+else
+  echo "FAIL the digest depends on the checkout's path: $one against $two"; failures=$((failures + 1))
+fi
 
 [ "$failures" = 0 ] && echo "build-ish.sh refuses what it should" || { echo "$failures failure(s)"; exit 1; }

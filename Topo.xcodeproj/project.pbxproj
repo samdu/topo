@@ -312,6 +312,7 @@
 		92D2EA266F120A32F38C3889 /* ScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69B83668827B1468B16F8E0 /* ScreenStore.swift */; };
 		92D72F78C88069649826EF12 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		933C2ACA157E32F124280DD4 /* systemMedium-light.png in Resources */ = {isa = PBXBuildFile; fileRef = C07F833992D5F5D8B519F030 /* systemMedium-light.png */; };
+		94794B5048B048E8C1EA40DE /* QuietLaneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */; };
 		94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		94E7F21D7F91F1130C440025 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
 		957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
@@ -688,6 +689,7 @@
 		26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceSync.swift; sourceTree = "<group>"; };
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
 		297C1A9489C88545BA87293C /* SurfaceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceProvider.swift; sourceTree = "<group>"; };
+		298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuietLaneTests.swift; sourceTree = "<group>"; };
 		2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoPlacementTests.swift; sourceTree = "<group>"; };
 		2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookDocument.swift; sourceTree = "<group>"; };
 		2BD6F008FEF0A72909C70901 /* VoiceToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceToolTests.swift; sourceTree = "<group>"; };
@@ -1558,6 +1560,7 @@
 				7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */,
 				3F565D23B2B08962CD323D1E /* FirstRunScreenTests.swift */,
 				91354032F5443E868316550B /* MicrophonePressTests.swift */,
+				298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */,
 				55264DCB2FD2D8A991D906E6 /* ReplyBlocksTests.swift */,
 				117E875DA4060ECD83F0D66E /* ReplyLinkTests.swift */,
 				F5A13FD41A080E7B11883AD6 /* StatusNoticeTests.swift */,
@@ -2212,6 +2215,7 @@
 				40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */,
 				D79F9341A0CC792569CF5571 /* FirstRunScreenTests.swift in Sources */,
 				A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */,
+				94794B5048B048E8C1EA40DE /* QuietLaneTests.swift in Sources */,
 				BAD07508B0297B2D8F63A5C2 /* ReplyBlocksTests.swift in Sources */,
 				B6628F0EE4CA108FE40D386A /* ReplyLinkTests.swift in Sources */,
 				A7E08831026CDD7367068B3B /* StatusNoticeTests.swift in Sources */,
@@ -2900,6 +2904,7 @@
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				TOPO_CHANNEL = "";
 				TOPO_SOURCE_COMMIT = "";
 			};
 			name = Release;
@@ -3193,6 +3198,7 @@
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				TOPO_CHANNEL = "";
 				TOPO_SOURCE_COMMIT = "";
 			};
 			name = Debug;

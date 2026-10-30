@@ -229,8 +229,10 @@ if [ "$talk" = yes ]; then
   scripts/fetch-ear-models.sh "$models"
   scripts/fetch-voice-models.sh "$voice_models"
   # A start that refuses (exit 3) found another run's lane, which is not this run's to stop.
+  # The lane is this run's (AUDIO_LANE_OWNER), so a later start finds it abandoned once this
+  # run has ended without stopping it, a SIGKILL's, and stops it.
   lane=ours
-  scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav" || {
+  AUDIO_LANE_OWNER=$$ scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav" || {
     status=$?
     [ "$status" = 3 ] && lane=theirs
     exit "$status"
