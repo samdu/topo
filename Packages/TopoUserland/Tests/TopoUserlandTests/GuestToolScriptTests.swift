@@ -193,6 +193,30 @@ final class GuestToolScriptTests: XCTestCase {
                        "no GitHub token rides the environment the resident is given")
     }
 
+    /// Claude Code's `BROWSER` during a sign-in: the URL it is given reaches `topo open-url` whole,
+    /// and the tool's status is the script's, so a refusal is Claude Code's to see.
+    func testTheBrowserScriptHandsItsURLToOpenURL() async throws {
+        struct OpenURL: Tool {
+            let name = "open-url"
+            let summary = "opens"
+            let usage = "topo open-url URL"
+            func run(_ arguments: [String]) async -> ToolReply {
+                arguments == ["https://claude.com/cai/oauth/authorize?a=1&redirect_uri=http%3A%2F%2Flocalhost%3A1%2Fcallback"]
+                    ? .ok("opened\n") : ToolReply(status: ToolReply.refused, text: "\(arguments)\n")
+            }
+        }
+        let lines = lines
+        let service = try ToolService(tools: [OpenURL()], log: { lines.add($0) })
+        self.service = service
+        let environment = ToolService.environment(port: try await service.start(), token: await service.token)
+        let url = "https://claude.com/cai/oauth/authorize?a=1&redirect_uri=http%3A%2F%2Flocalhost%3A1%2Fcallback"
+        let exit = try await shell("[ -x \(point!)/\(GuestTools.browserPath) ] && \(point!)/\(GuestTools.browserPath) '\(url)'", environment)
+        XCTAssertEqual(exit.status, 0, exit.output + exit.errors + " service: " + lines.text)
+        XCTAssertEqual(exit.output, "opened\n")
+        let refused = try await shell("\(point!)/\(GuestTools.browserPath) 'https://example.com/'", environment)
+        XCTAssertEqual(refused.status, ToolReply.refused)
+    }
+
     /// The helper answers github.com over https with what `topo github credential` says, and
     /// nothing for any other host, for another action, or when GitHub is not connected; the token
     /// is in none of the service's log lines.
