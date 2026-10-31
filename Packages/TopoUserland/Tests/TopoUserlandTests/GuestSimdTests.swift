@@ -243,13 +243,15 @@ final class GuestSimdTests: XCTestCase {
         XCTAssertEqual(exit.status, 0)
     }
 
-    /// LD1 and ST1 (single structure) on halfword lanes (`patches/ish/0015-ld1-single-h-lane.patch`):
-    /// every lane, loaded and stored, plain and post-indexed by an immediate and by a register, LD2's
-    /// second register, and the unallocated form with size<0> set still an illegal instruction. An H
-    /// lane is Q:S:size<1>; read from size<0>, lanes 1, 3, 5 and 7 land one element low. Bun's
-    /// BoringSSL gathers with LD1 {Vt.H}[1..3] in ML-KEM's NTT, so with the lane wrong TLS 1.3's
-    /// X25519MLKEM768 share decrypts wrong and Claude Code cannot reach its auth hosts itself.
-    func testLD1AndST1HalfwordLanesMatchTheArchitecture() async throws {
+    /// LD1–LD4 and ST1–ST4 (single structure) on halfword lanes
+    /// (`patches/ish/0015-ld1-single-h-lane.patch`): every lane of LD1 and ST1 plain and post-indexed
+    /// by an immediate and by a register, each post-indexed case going once more through the address
+    /// it wrote back, LD2–LD4 and ST2–ST4 with every register's lane read, and the unallocated form
+    /// with size<0> set still an illegal instruction. An H lane is Q:S:size<1>; read from size<0>,
+    /// lanes 1, 3, 5 and 7 land one element low. Bun's BoringSSL gathers with LD1 {Vt.H}[1..3] in
+    /// ML-KEM's NTT, so with the lane wrong TLS 1.3's X25519MLKEM768 share decrypts wrong and
+    /// Claude Code cannot reach its auth hosts itself.
+    func testSingleStructureHalfwordLanesMatchTheArchitecture() async throws {
         let exit = try await run("lane")
         XCTAssertEqual(exit.output, """
             ld1 h[0] 3412aaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -260,12 +262,28 @@ final class GuestSimdTests: XCTestCase {
             ld1 h[5] aaaaaaaaaaaaaaaaaaaa3412aaaaaaaa
             ld1 h[6] aaaaaaaaaaaaaaaaaaaaaaaa3412aaaa
             ld1 h[7] aaaaaaaaaaaaaaaaaaaaaaaaaaaa3412
-            ld1 h[1] post aaaa3412aaaaaaaaaaaaaaaaaaaaaaaa
-            ld1 h[3] post aaaaaaaaaaaa3412aaaaaaaaaaaaaaaa
-            ld1 h[5] post aaaaaaaaaaaaaaaaaaaa3412aaaaaaaa
-            ld1 h[7] post aaaaaaaaaaaaaaaaaaaaaaaaaaaa3412
-            ld1 h[6] post x aaaaaaaaaaaaaaaaaaaaaaaa3412aaaa
-            ld2 h[5] second aaaaaaaaaaaaaaaaaaaa0180aaaaaaaa
+            ld1 h[0] post 3412aaaaaaaaaaaa0180aaaaaaaaaaaa
+            ld1 h[1] post aaaa3412aaaaaaaaaaaa0180aaaaaaaa
+            ld1 h[2] post aaaaaaaa3412aaaaaaaaaaaa0180aaaa
+            ld1 h[3] post aaaaaaaaaaaa3412aaaaaaaaaaaa0180
+            ld1 h[4] post 0180aaaaaaaaaaaa3412aaaaaaaaaaaa
+            ld1 h[5] post aaaa0180aaaaaaaaaaaa3412aaaaaaaa
+            ld1 h[6] post aaaaaaaa0180aaaaaaaaaaaa3412aaaa
+            ld1 h[7] post aaaaaaaaaaaa0180aaaaaaaaaaaa3412
+            ld1 h[0] post x 3412aaaaaaaaaaaa0180aaaaaaaaaaaa
+            ld1 h[1] post x aaaa3412aaaaaaaaaaaa0180aaaaaaaa
+            ld1 h[2] post x aaaaaaaa3412aaaaaaaaaaaa0180aaaa
+            ld1 h[3] post x aaaaaaaaaaaa3412aaaaaaaaaaaa0180
+            ld1 h[4] post x 0180aaaaaaaaaaaa3412aaaaaaaaaaaa
+            ld1 h[5] post x aaaa0180aaaaaaaaaaaa3412aaaaaaaa
+            ld1 h[6] post x aaaaaaaa0180aaaaaaaaaaaa3412aaaa
+            ld1 h[7] post x aaaaaaaaaaaa0180aaaaaaaaaaaa3412
+            ld2 h[5] 34120180aaaaaaaaaaaaaaaaaaaaaaaa
+            ld3 h[3] 34120180ff7faaaaaaaaaaaaaaaaaaaa
+            ld4 h[7] 34120180ff7f0000aaaaaaaaaaaaaaaa
+            ld2 h[0] 34120180aaaaaaaaaaaaaaaaaaaaaaaa
+            ld3 h[6] 34120180ff7faaaaaaaaaaaaaaaaaaaa
+            ld4 h[1] 34120180ff7f0000aaaaaaaaaaaaaaaa
             st1 h[0] 3412aaaaaaaaaaaaaaaaaaaaaaaaaaaa
             st1 h[1] 0180aaaaaaaaaaaaaaaaaaaaaaaaaaaa
             st1 h[2] ff7faaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -274,8 +292,30 @@ final class GuestSimdTests: XCTestCase {
             st1 h[5] cdabaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             st1 h[6] 1122aaaaaaaaaaaaaaaaaaaaaaaaaaaa
             st1 h[7] 3344aaaaaaaaaaaaaaaaaaaaaaaaaaaa
-            st1 h[3] post 0000aaaaaaaaaaaaaaaaaaaaaaaaaaaa
-            st1 h[6] post 1122aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[0] post 34127856aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[1] post 0180cdabaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[2] post ff7f1122aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[3] post 00003344aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[4] post 78563412aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[5] post cdab0180aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[6] post 1122ff7faaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[7] post 33440000aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[0] post x 34127856aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[1] post x 0180cdabaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[2] post x ff7f1122aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[3] post x 00003344aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[4] post x 78563412aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[5] post x cdab0180aaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[6] post x 1122ff7faaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[7] post x 33440000aaaaaaaaaaaaaaaaaaaaaaaa
+            st2 h[1] 0180ff7faaaaaaaaaaaaaaaaaaaaaaaa
+            st3 h[6] 112233443412aaaaaaaaaaaaaaaaaaaa
+            st4 h[3] 00007856cdab1122aaaaaaaaaaaaaaaa
+            st2 h[4] 7856cdabaaaaaaaaaaaaaaaaaaaaaaaa
+            st3 h[2] ff7f00007856aaaaaaaaaaaaaaaaaaaa
+            st4 h[7] 334434120180ff7faaaaaaaaaaaaaaaa
+            ld4 h[5] post 34120180ff7f00007856aaaaaaaaaaaa
+            st3 h[7] post 3344341201803412aaaaaaaaaaaaaaaa
             ld1 h size 1 SIGILL
             ld1 h size 1 post SIGILL
 
