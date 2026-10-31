@@ -14,17 +14,55 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
         var pastes: [String] { lock.withLock { pasted } }
         var ended: Int { lock.withLock { ends } }
         func paste(_ code: String) async throws { lock.withLock { pasted.append(code) } }
-        func end() async { lock.withLock { ends += 1 } }
+        var login: FakeLogin?
+        func end() async {
+            await login?.endGate?.wait()
+            lock.withLock { ends += 1 }
+            login?.note("end")
+        }
+    }
+
+    /// Holds whatever waits on it until opened.
+    final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var open = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                let now = lock.withLock { () -> Bool in
+                    if open { return true }
+                    waiting.append(continuation)
+                    return false
+                }
+                if now { continuation.resume() }
+            }
+        }
+        func release() {
+            let all = lock.withLock { open = true; defer { waiting = [] }; return waiting }
+            all.forEach { $0.resume() }
+        }
     }
 
     private let lock = NSLock()
     private var made: [Attempt] = []
+    private var begun = 0
+    private var discards = 0
+    /// Every step taken, in order: `begin`, `logout`, `end`.
+    private var steps: [String] = []
+    var beginGate: Gate?
+    var logoutGate: Gate?
+    var endGate: Gate?
+    var beginError: (any Error)?
     private var answer: ClaudeLoginStatus? = ClaudeLoginStatus(loggedIn: false)
     private var logouts = 0
     private var progressLines: [String] = []
     var prepareError: (any Error)?
 
     var attempts: [Attempt] { lock.withLock { made } }
+    var begins: Int { lock.withLock { begun } }
+    var discarded: Int { lock.withLock { discards } }
+    var log: [String] { lock.withLock { steps } }
+    func note(_ step: String) { lock.withLock { steps.append(step) } }
     var loggedOut: Int { lock.withLock { logouts } }
     func answer(_ status: ClaudeLoginStatus?) { lock.withLock { answer = status } }
     func say(_ lines: [String]) { lock.withLock { progressLines = lines } }
@@ -35,9 +73,21 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
     }
 
     func begin(_ heard: @escaping @Sendable (LoginEvent) -> Void) async throws -> any LoginAttempt {
+        lock.withLock { begun += 1 }
+        note("begin")
+        await beginGate?.wait()
+        if let beginError { throw beginError }
         let attempt = Attempt(heard: heard)
+        attempt.login = self
         lock.withLock { made.append(attempt) }
         return attempt
+    }
+
+    func discardCredential() {
+        lock.withLock {
+            discards += 1
+            answer = ClaudeLoginStatus(loggedIn: false)
+        }
     }
 
     func status() async throws -> ClaudeLoginStatus {
@@ -46,6 +96,8 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
     }
 
     func logout() async {
+        note("logout")
+        await logoutGate?.wait()
         lock.withLock {
             logouts += 1
             answer = ClaudeLoginStatus(loggedIn: false)
@@ -60,6 +112,12 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         await Task.yield()
     }
     Issue.record("never: \(what)")
+}
+
+/// Gives anything that should not happen time to: a negative is read after this, not after yields,
+/// which a loaded machine runs before the work it should have let through.
+func settle() async {
+    try? await Task.sleep(for: .milliseconds(200))
 }
 
 @Suite @MainActor struct SignInTests {
@@ -136,7 +194,7 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         await until("a second login") { login.attempts.count == 2 }
     }
 
-    @Test func closingTheLoopbackSheetEndsTheLoginButClosingThePastePageDoesNot() async {
+    @Test func closingASheetEndsNothingAndThePasteFieldIsReachedFromTheLoopbacksError() async {
         let login = FakeLogin()
         let signIn = await ready(login)
         signIn.start()
@@ -145,6 +203,10 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         attempt.heard(.browser(browser))
         attempt.heard(.pastePage(page))
         await until("the sheet") { signIn.sheet?.kind == .approve }
+        // The loopback's sheet stops on its connection error and the person closes it.
+        signIn.sheetClosed(signIn.sheet!)
+        #expect(signIn.sheet == nil)
+        #expect(signIn.phase == .approving(.init(page: page, pasting: false)))
         signIn.openPageAgain()
         let pageSheet = signIn.sheet
         #expect(pageSheet?.url == page)
@@ -155,13 +217,9 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         #expect(signIn.phase == .approving(.init(page: page, pasting: true)))
         await signIn.paste("  code#state \n")
         #expect(attempt.pastes == ["code#state"])
-        #expect(attempt.ended == 0)
-
-        // The loopback's sheet, closed by the person, ends the login.
-        attempt.heard(.browser(browser))
-        await until("the sheet again") { signIn.sheet?.kind == .approve }
-        signIn.sheetClosed(signIn.sheet!)
-        #expect(signIn.phase == .idle)
+        await settle()
+        #expect(attempt.ended == 0, "a closed sheet ended the login")
+        signIn.cancel()
         await until("the login ended") { attempt.ended == 1 }
     }
 
@@ -204,7 +262,7 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         attempt.heard(.browser(browser))
         login.answer(claudeAI)
         attempt.heard(.ended(.succeeded))
-        for _ in 0..<200 { await Task.yield() }
+        await settle()
         #expect(signIn.phase == .idle)
         #expect(signIn.sheet == nil)
     }
@@ -257,8 +315,10 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         #expect(cache.isSignedIn)
     }
 
-    @Test func aRefreshAfterASignOutWaitsForItsLogout() async {
+    @Test func aRefreshWhileASignOutsLogoutIsOwedChangesNothing() async {
         let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.logoutGate = gate
         let cache = cache()
         cache.save(claudeAI)
         login.answer(claudeAI)
@@ -266,6 +326,146 @@ func until(_ what: String, _ condition: @MainActor () -> Bool) async {
         signIn.signOut()
         await signIn.refresh()
         #expect(signIn.phase == .idle, "a status read before the logout signed the phone back in")
+        #expect(!cache.isSignedIn)
+        gate.release()
+        await signIn.loggedOut()
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+    }
+
+    /// The app died between the sign-out and its logout: the next launch takes the credential away
+    /// before anything reads it, and runs the logout.
+    @Test func aSignOutTheAppDiedInIsFinishedAtTheNextLaunch() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.logoutGate = gate
+        let cache = cache()
+        cache.save(claudeAI)
+        login.answer(claudeAI)
+        let first = SignIn(login: login, cache: cache)
+        first.signOut()
+        #expect(cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        // The logout never ran; a second launch over the same defaults and credential.
+        let relaunched = FakeLogin()
+        relaunched.answer(claudeAI)
+        let signIn = SignIn(login: relaunched, cache: cache)
+        #expect(relaunched.discarded == 1, "the credential outlived the launch")
+        #expect(signIn.phase == .preparing(""))
+        await signIn.refresh()
+        #expect(signIn.phase == .preparing(""), "the credential the sign-out owed signed the phone back in")
+        await signIn.loggedOut()
+        #expect(relaunched.loggedOut == 1)
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        let third = FakeLogin()
+        _ = SignIn(login: third, cache: cache)
+        #expect(third.discarded == 0)
+    }
+
+    /// Sign out, then sign in at once: the login begins only once the logout has run.
+    @Test func aSignInAfterASignOutBeginsAfterItsLogout() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.logoutGate = gate
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut()
+        signIn.start()
+        await settle()
+        #expect(login.begins == 0, "a login began beside the logout")
+        gate.release()
+        await until("the login began") { login.attempts.count == 1 }
+        #expect(login.log == ["logout", "begin"])
+    }
+
+    /// Cancel and sign in again while the first login is still beginning: one login runs, and the
+    /// first's end runs before the second begins, never after.
+    @Test func cancelThenSignInWhileBeginningRunsOneLoginAndEndsTheFirstBefore() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.beginGate = gate
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the first begin") { login.begins == 1 }
+        signIn.cancel()
+        signIn.start()
+        await settle()
+        #expect(login.begins == 1, "the second login began beside the first")
+        gate.release()
+        await until("both begun") { login.attempts.count == 2 }
+        await until("the first ended") { login.attempts[0].ended == 1 }
+        await signIn.loggedOut()
+        #expect(login.log == ["begin", "end", "begin"])
+        #expect(login.attempts[1].ended == 0, "the live login was ended")
+    }
+
+    /// Cancel, then sign in again with the first login running: its end comes before the next begin.
+    @Test func cancelThenSignInEndsTheFirstBeforeTheSecondBegins() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.endGate = gate
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        await settle() // kept by the sign-in, so the cancel ends it rather than the queue
+        signIn.cancel()
+        signIn.start()
+        await settle()
+        #expect(login.begins == 1, "the second login began while the first was ending")
+        gate.release()
+        await until("a second login") { login.attempts.count == 2 }
+        #expect(login.log == ["begin", "end", "begin"])
+    }
+
+    /// What an earlier login says reaches nothing while a later one is approving.
+    @Test func anOlderLoginsWordsDoNotReachALaterOne() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let old = login.attempts[0]
+        signIn.cancel()
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+        old.heard(.browser(browser))
+        old.heard(.pastePage(page))
+        old.heard(.ended(.failed("old")))
+        await settle()
+        #expect(signIn.phase == .approving(.init(page: nil, pasting: false)))
+        #expect(signIn.sheet == nil)
+    }
+
+    @Test func aLoginThatCannotBeginIsAFailure() async {
+        let login = FakeLogin()
+        login.beginError = CocoaError(.fileNoSuchFile)
+        let signIn = await ready(login)
+        signIn.start()
+        await until("failed") { if case .failed = signIn.phase { true } else { false } }
+    }
+
+    /// A refresh during a login leaves the login on the screen, whatever the status says.
+    @Test func aRefreshWhileApprovingLeavesTheLoginAlone() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(claudeAI)
+        await signIn.refresh()
+        #expect(signIn.phase == .approving(.init(page: nil, pasting: false)))
+    }
+
+    /// A login that succeeded but was cancelled while its status was read is not a sign-in.
+    @Test func aSuccessCancelledWhileItsStatusIsReadIsNotASignIn() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(claudeAI)
+        login.attempts[0].heard(.ended(.succeeded))
+        signIn.signOut()
+        await signIn.loggedOut()
+        await settle()
+        #expect(signIn.phase == .idle)
         #expect(!cache.isSignedIn)
     }
 

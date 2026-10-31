@@ -14,6 +14,9 @@ public protocol ClaudeLogin: Sendable {
     func status() async throws -> ClaudeLoginStatus
     /// `claude auth logout`, and the credential gone whether or not it could run.
     func logout() async
+    /// Removes the credential where it rests, at once, with nothing run: the start of a launch
+    /// that finds a sign-out owed.
+    func discardCredential()
 }
 
 /// One running `claude auth login`.

@@ -130,6 +130,10 @@ struct GuestLogin: ClaudeLogin {
         Self.removeCredentials()
     }
 
+    func discardCredential() {
+        Self.removeCredentials()
+    }
+
     /// Claude Code's credential in the guest's home, as the host sees it.
     nonisolated static var credentialsFile: URL {
         GuestResident.homeDirectory.appendingPathComponent(".claude/.credentials.json")
