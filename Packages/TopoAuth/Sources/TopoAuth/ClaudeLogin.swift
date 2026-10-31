@@ -113,15 +113,21 @@ public enum LoginMigration {
                                KeychainItem(service: "zone.hexagon.topo.claude", account: "claude-guest")]
     public static let signInAgainKey = "zone.hexagon.topo.sign-in-again"
 
-    /// Deletes the items there are, and answers whether there were any, which is a phone that was
-    /// signed in under the old login: the sign-in screen then says why it is asking again, until
-    /// the next sign-in.
+    /// Deletes the items there are, each whether or not it can be read, and answers whether any
+    /// was deleted, which is a phone that was signed in under the old login: the sign-in screen
+    /// then says why it is asking again, until the next sign-in. It runs at every launch, so an
+    /// item a delete was refused (a keychain not yet unlocked since boot) is tried again at the
+    /// next; `refused` hears each refusal.
     @discardableResult
-    public static func run(items: [KeychainItem] = items, defaults: UserDefaults = .standard) -> Bool {
+    public static func run(items: [KeychainItem] = items, defaults: UserDefaults = .standard,
+                           refused: (KeychainItem, any Error) -> Void = { _, _ in }) -> Bool {
         var found = false
-        for item in items where (try? item.read()) != nil {
-            found = true
-            try? item.delete()
+        for item in items {
+            do {
+                if try item.deleteIfPresent() { found = true }
+            } catch {
+                refused(item, error)
+            }
         }
         if found { defaults.set(true, forKey: signInAgainKey) }
         return found

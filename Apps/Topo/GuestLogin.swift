@@ -88,11 +88,12 @@ struct GuestLogin: ClaudeLogin {
         return url
     }
 
-    /// The process's status once it has been reaped; its pipes close first, so this waits a
-    /// little for the wait to land, and answers nil when it never does.
+    /// The process's status once it has been reaped and stderr has reached its end, so the
+    /// `Login failed` line its reader may still be taking in is in `errors`; waits a little for
+    /// both, and answers what there is when they never land.
     private static func exited(_ process: GuestProcess) async -> Int32? {
         for _ in 0..<100 {
-            if process.hasExited { return process.exitStatus }
+            if process.hasExited && process.pipesClosed { return process.exitStatus }
             try? await Task.sleep(for: .milliseconds(50))
         }
         return process.exitStatus

@@ -153,10 +153,7 @@ final class GuestResident {
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(proxy: proxy, tools: tools)
             await self.booted?()
-            let made = Self.launchEnvironment(ports: ports) { port in
-                guard LoginCache.standard.isSignedIn else { throw GuestBridgeError.notReady("signed out") }
-                return APIProxy.guestEnvironment(port: port).merging(Self.developerEnvironment) { _, new in new }
-            }
+            let made = Self.launchEnvironment(ports: ports) { port in try Self.launchCredential(port: port) }
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
@@ -215,13 +212,26 @@ final class GuestResident {
     /// its Claude.ai credential in it (`.claude/.credentials.json`), and readable from the first
     /// unlock after a restart on, as the keychain item it replaces was. `.claude` is made with the
     /// same protection, so the credential written into it takes the class it is made under.
-    nonisolated static func makeHome(_ home: URL) throws {
+    /// What every launch of the resident is given for its login: refused while the cache says
+    /// signed out, so nothing launches between a sign-out and its logout; otherwise the proxy and,
+    /// in a debug build launched with one, the developer's token.
+    nonisolated static func launchCredential(port: UInt16, cache: LoginCache = .standard) throws -> [String: String] {
+        guard cache.isSignedIn else { throw GuestBridgeError.notReady("signed out") }
+        return APIProxy.guestEnvironment(port: port).merging(developerEnvironment) { _, new in new }
+    }
+
+    /// `set` is how the protection is put on a path: the simulator keeps no protection class, so
+    /// a test reads what was asked for there.
+    nonisolated static func makeHome(
+        _ home: URL,
+        set: ([FileAttributeKey: Any], String) throws -> Void = { try FileManager.default.setAttributes($0, ofItemAtPath: $1) }
+    ) throws {
         let files = FileManager.default
         let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         let claude = home.appendingPathComponent(".claude", isDirectory: true)
         try files.createDirectory(at: claude, withIntermediateDirectories: true, attributes: protection)
-        try files.setAttributes(protection, ofItemAtPath: home.path)
-        try files.setAttributes(protection, ofItemAtPath: claude.path)
+        try set(protection, home.path)
+        try set(protection, claude.path)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var url = home

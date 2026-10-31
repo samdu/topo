@@ -231,15 +231,19 @@ public final class SignIn {
         sheet = Sheet(url: page, kind: .page)
     }
 
-    /// The person pasted what the page showed.
+    /// The person pasted what the page showed. A code that could not be written ends the login,
+    /// through the queue, so the next start begins only after it; a failure of a login cancelled
+    /// or replaced meanwhile reaches nothing.
     public func paste(_ text: String) async {
         let code = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard case .approving = phase, let attempt else { return }
         guard !code.isEmpty else { return }
+        let generation = generation
         do {
             try await attempt.paste(code)
         } catch {
-            guard case .approving = phase else { return }
+            guard self.generation == generation, case .approving = phase else { return }
+            endAttempt()
             phase = .failed("The code did not reach Claude Code: \(error)")
         }
     }

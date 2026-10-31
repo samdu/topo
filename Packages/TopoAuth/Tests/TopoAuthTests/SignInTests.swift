@@ -13,7 +13,13 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
         init(heard: @escaping @Sendable (LoginEvent) -> Void) { self.heard = heard }
         var pastes: [String] { lock.withLock { pasted } }
         var ended: Int { lock.withLock { ends } }
-        func paste(_ code: String) async throws { lock.withLock { pasted.append(code) } }
+        var pasteGate: Gate?
+        var pasteError: (any Error)?
+        func paste(_ code: String) async throws {
+            lock.withLock { pasted.append(code) }
+            await pasteGate?.wait()
+            if let pasteError { throw pasteError }
+        }
         var login: FakeLogin?
         func end() async {
             await login?.endGate?.wait()
@@ -53,6 +59,10 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
     var logoutGate: Gate?
     var endGate: Gate?
     var logoutRefused = false
+    var statusGate: Gate?
+    var prepareGate: Gate?
+    private var statusAsks = 0
+    var statusAsked: Int { lock.withLock { statusAsks } }
     var beginError: (any Error)?
     private var answer: ClaudeLoginStatus? = ClaudeLoginStatus(loggedIn: false)
     private var logouts = 0
@@ -70,6 +80,7 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
 
     func prepare(progress: @escaping @Sendable (String) -> Void) async throws {
         for line in lock.withLock({ progressLines }) { progress(line) }
+        await prepareGate?.wait()
         if let prepareError { throw prepareError }
     }
 
@@ -92,6 +103,8 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
     }
 
     func status() async throws -> ClaudeLoginStatus {
+        lock.withLock { statusAsks += 1 }
+        await statusGate?.wait()
         guard let answer = lock.withLock({ answer }) else { throw CocoaError(.fileReadUnknown) }
         return answer
     }
@@ -141,9 +154,14 @@ func settle() async {
     @Test func waitsForTheGuestSayingWhatItWaitsOnThenOffersTheSignIn() async {
         let login = FakeLogin()
         login.say(["rootfs downloading 40%"])
+        let gate = FakeLogin.Gate()
+        login.prepareGate = gate
         let signIn = SignIn(login: login, cache: cache())
         #expect(signIn.phase == .preparing(""))
-        await signIn.prepare()
+        let preparing = Task { await signIn.prepare() }
+        await until("the download's line") { signIn.phase == .preparing("rootfs downloading 40%") }
+        gate.release()
+        await preparing.value
         #expect(signIn.phase == .idle)
     }
 
@@ -472,6 +490,50 @@ func settle() async {
         #expect(signIn.sheet == nil)
     }
 
+    /// A code that could not be written ends its login before another can start, and the next
+    /// login begins only after that end.
+    @Test func aPasteThatFailsEndsItsLogin() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        await settle()
+        let attempt = login.attempts[0]
+        attempt.pasteError = CocoaError(.fileWriteUnknown)
+        attempt.heard(.pastePage(page))
+        await until("the page") { signIn.phase == .approving(.init(page: page, pasting: false)) }
+        await signIn.paste("code#state")
+        guard case .failed = signIn.phase else { Issue.record("\(signIn.phase)"); return }
+        await until("the failed login ended") { attempt.ended == 1 }
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+        #expect(login.log == ["begin", "end", "begin"])
+    }
+
+    /// A paste of a login cancelled while it was writing fails the login after it in nothing.
+    @Test func aCancelledLoginsPasteFailureDoesNotFailTheNext() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        await settle()
+        let attempt = login.attempts[0]
+        let gate = FakeLogin.Gate()
+        attempt.pasteGate = gate
+        attempt.pasteError = CocoaError(.fileWriteUnknown)
+        attempt.heard(.pastePage(page))
+        await until("the page") { signIn.phase == .approving(.init(page: page, pasting: false)) }
+        let pasting = Task { await signIn.paste("code#state") }
+        await until("the paste written") { attempt.pastes.count == 1 }
+        signIn.cancel()
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+        gate.release()
+        await pasting.value
+        #expect(signIn.phase == .approving(.init(page: nil, pasting: false)), "the old paste failed the new login")
+        #expect(login.attempts[1].ended == 0)
+    }
+
     @Test func aLoginThatCannotBeginIsAFailure() async {
         let login = FakeLogin()
         login.beginError = CocoaError(.fileNoSuchFile)
@@ -498,9 +560,14 @@ func settle() async {
         let signIn = await ready(login, cache: cache)
         signIn.start()
         await until("the login began") { login.attempts.count == 1 }
+        let gate = FakeLogin.Gate()
+        login.statusGate = gate
         login.answer(claudeAI)
         login.attempts[0].heard(.ended(.succeeded))
+        await until("the status asked") { login.statusAsked == 1 }
         signIn.signOut()
+        login.answer(claudeAI) // the logout's answer replaced by a status read before it
+        gate.release()
         await signIn.loggedOut()
         await settle()
         #expect(signIn.phase == .idle)

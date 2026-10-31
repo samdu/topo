@@ -73,7 +73,13 @@ public struct KeychainItem: Sendable {
     }
 
     public func delete() throws {
+        _ = try deleteIfPresent()
+    }
+
+    /// Deletes the item, answering whether there was one.
+    public func deleteIfPresent() throws -> Bool {
         let status = SecItemDelete(try query() as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Error(status: status) }
+        return status == errSecSuccess
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import TopoAuth
+import TopoProxy
 import TopoTools
 import XCTest
 
@@ -84,16 +85,19 @@ final class GuestLoginTests: XCTestCase {
     }
 
     /// The guest's home, where Claude Code keeps its Claude.ai credential, is excluded from
-    /// backup, and it and its `.claude` are made with the protection the keychain item had.
+    /// backup, and it and its `.claude` are given the protection the keychain item had. The
+    /// simulator keeps no protection class, so what is checked is what was asked for.
     func testTheHomeIsExcludedFromBackupAndProtected() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("login-home-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: home) }
-        try GuestResident.makeHome(home)
+        var asked: [String: FileProtectionType] = [:]
+        try GuestResident.makeHome(home) { attributes, path in
+            asked[path] = attributes[.protectionKey] as? FileProtectionType
+            try FileManager.default.setAttributes(attributes, ofItemAtPath: path)
+        }
         XCTAssertEqual(try home.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
-        for url in [home, home.appendingPathComponent(".claude")] {
-            let protection = try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType
-            // The simulator keeps no protection class; a phone answers the one set.
-            if let protection { XCTAssertEqual(protection, .completeUntilFirstUserAuthentication, url.path) }
+        for url in [home, home.appendingPathComponent(".claude", isDirectory: true)] {
+            XCTAssertEqual(asked[url.path], .completeUntilFirstUserAuthentication, url.path)
         }
         // Made again over itself, as every launch does.
         try GuestResident.makeHome(home)
@@ -111,6 +115,17 @@ final class GuestLoginTests: XCTestCase {
         } catch GuestBridgeError.notReady(let why) {
             XCTAssertEqual(why, "signed out")
         }
+    }
+
+    /// The launcher's own guard: every launch of the resident, whatever path started the guest,
+    /// asks for its credential here, and a signed-out cache refuses it.
+    func testTheLauncherRefusesALaunchWhileSignedOut() throws {
+        let cache = LoginCache(defaults: UserDefaults(suiteName: "launch-\(UUID().uuidString)")!)
+        XCTAssertThrowsError(try GuestResident.launchCredential(port: 4000, cache: cache)) { error in
+            guard case GuestBridgeError.notReady("signed out") = error else { return XCTFail("\(error)") }
+        }
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
+        XCTAssertEqual(try GuestResident.launchCredential(port: 4000, cache: cache)["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: 4000))
     }
 
     private final class Heard: @unchecked Sendable {

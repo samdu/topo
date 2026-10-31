@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -29,7 +30,11 @@ struct TopoApp: App {
         Perf.mark("app.init.begin sinceProcessStart=\(Perf.sinceProcessStart() ?? -1)ms")
         // The Claude.ai tokens a build before Claude Code's own login kept in the keychain go
         // before anything asks whether this phone is signed in: it signs in once more.
-        let signInAgain = LoginMigration.run() || UserDefaults.standard.bool(forKey: LoginMigration.signInAgainKey)
+        let migrated = LoginMigration.run { item, error in
+            Logger(subsystem: "zone.hexagon.topo", category: "auth")
+                .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
+        }
+        let signInAgain = migrated || UserDefaults.standard.bool(forKey: LoginMigration.signInAgainKey)
         // A debug build launched with a developer's token in its environment is signed in by it,
         // so the simulator comes up past the sign-in screen.
         #if DEBUG

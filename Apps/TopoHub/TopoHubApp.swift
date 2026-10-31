@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -14,7 +15,10 @@ struct TopoHubApp: App {
     /// The hub runs from launch, not from the first time the menu opens. The Claude.ai tokens an
     /// earlier build kept in the keychain go at the first launch: nothing here signs in now.
     init() {
-        LoginMigration.run()
+        LoginMigration.run { item, error in
+            Logger(subsystem: "zone.hexagon.topo.hub", category: "auth")
+                .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
+        }
         let model = HubModel()
         model.start()
         _hub = State(initialValue: model)
