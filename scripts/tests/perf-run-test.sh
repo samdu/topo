@@ -13,6 +13,68 @@ expect 2 --device none
 expect 2 --device none '' 'hello'
 expect 2 --device none '   '
 expect 2 'hello'
+# A --fresh that cannot put Topo back reaches no phone: xcrun is a stand-in that records every
+# call, and none may be made.
+record="$(mktemp -d "${TMPDIR:-/tmp}/perf-run-record.XXXXXX")"
+printf '#!/bin/bash\necho "$*" >> "%s/calls"\n' "$record" > "$record/xcrun"
+chmod +x "$record/xcrun"
+mkdir -p "$record/Other.app"
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>' > "$record/Other.app/Info.plist"
+for app in /nonexistent/Topo.app "$record" "$record/Other.app"; do
+  PATH="$record:$PATH" expect 2 --device none --fresh --app "$app" 'hello'
+done
+PATH="$record:$PATH" expect 2 --device none --fresh 'hello'
+[ ! -s "$record/calls" ] || { echo "FAIL: a refused --fresh reached the phone: $(cat "$record/calls")"; fail=1; }
+
+# With a Topo bundle, what --fresh does turns on the phone's answer. The stand-in answers the
+# installed-apps query from FAKE_APPS (a file's contents, or a failure for "fail"), fails the
+# delete when FAKE_UNINSTALL=fail, and refuses every launch, so a run ends there.
+if command -v plutil >/dev/null; then
+  mkdir -p "$record/Topo.app"
+  printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>zone.hexagon.topo</string></dict></plist>' > "$record/Topo.app/Info.plist"
+  cat > "$record/xcrun" <<FAKE
+#!/bin/bash
+echo "\$*" >> "$record/calls"
+case "\$*" in
+  *"info apps"*)
+    [ "\$FAKE_APPS" = fail ] && exit 1
+    while [ \$# -gt 0 ]; do [ "\$1" = --json-output ] && out="\$2"; shift; done
+    cat "\$FAKE_APPS" > "\$out" ;;
+  *uninstall*) [ "\$FAKE_UNINSTALL" = fail ] && exit 1 ;;
+  *"process launch"*) echo refused >&2; exit 1 ;;
+esac
+exit 0
+FAKE
+  chmod +x "$record/xcrun"
+  printf '{"result":{"apps":[{"bundleIdentifier":"zone.hexagon.topo"}]}}' > "$record/installed.json"
+  printf '{"result":{"apps":[]}}' > "$record/absent.json"
+  printf '{}' > "$record/shapeless.json"
+  : > "$record/empty.json"
+  printf '{"result":{"apps":[{}]}}' > "$record/nameless.json"
+  printf '{"result":{"apps":[{"bundleIdentifier":null}]}}' > "$record/null-id.json"
+  fresh() { # <want status> <apps> <uninstall> <calls that must appear, |-separated> <calls that must not>
+    : > "$record/calls"
+    FAKE_APPS="$2" FAKE_UNINSTALL="$3" PATH="$record:$PATH" env -u TOPO_PERF_DEVICE \
+      scripts/perf-run.sh --device fake --fresh --app "$record/Topo.app" --timeout 5 'hello' >/dev/null 2>&1
+    local got=$?
+    [ "$got" = "$1" ] || { echo "FAIL: --fresh with $2/$3 exited $got, wanted $1"; fail=1; }
+    local IFS='|'
+    for call in $4; do grep -q "$call" "$record/calls" || { echo "FAIL: --fresh with $2/$3 made no '$call' call"; fail=1; }; done
+    for call in $5; do ! grep -q "$call" "$record/calls" || { echo "FAIL: --fresh with $2/$3 made a '$call' call"; fail=1; }; done
+  }
+  fresh 1 "$record/installed.json" ok "uninstall|device install app" ""
+  # The delete comes before the install, or it would take away the build just installed.
+  [ "$(grep -n -m1 uninstall "$record/calls" | cut -d: -f1)" -lt "$(grep -n -m1 'device install app' "$record/calls" | cut -d: -f1)" ] \
+    || { echo "FAIL: --fresh installed before it deleted"; fail=1; }
+  fresh 1 "$record/installed.json" fail "uninstall" "device install app"
+  fresh 1 "$record/absent.json" ok "device install app" "uninstall"
+  for answer in "$record/shapeless.json" "$record/empty.json" "$record/nameless.json" "$record/null-id.json" fail; do
+    fresh 1 "$answer" ok "info apps" "uninstall|device install app"
+  done
+else
+  echo "perf-run-test: no plutil, so the --fresh cases with a Topo bundle were not run"
+fi
+rm -rf "$record"
 
 # A copy that brings back the last run's finished file is not taken for this run's: the script
 # waits for a file whose first mark is this launch's. xcrun is a stand-in that serves a stale

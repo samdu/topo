@@ -393,3 +393,20 @@ private final class HeldAnswer: @unchecked Sendable {
         return lock.withLock { answers }
     }
 }
+
+@Suite struct BuildFactsTests {
+    @Test func theEnvironmentNamesTheBuildFromItsInfoPlist() {
+        let info: [String: Any] = ["CFBundleVersion": "1234567", "CFBundleShortVersionString": "0.1",
+                                   "TopoSourceCommit": "873f6faf0000", "TopoChannel": "dev", "CFBundleName": "Topo"]
+        #expect(BuildFacts.environment(info: info) == ["TOPO_BUILD": "1234567", "TOPO_VERSION": "0.1",
+                                                       "TOPO_COMMIT": "873f6faf0000", "TOPO_CHANNEL": "dev"])
+    }
+
+    @Test func aBlankOrMissingKeyLeavesItsVariableOut() {
+        let xcode: [String: Any] = ["CFBundleVersion": "1", "CFBundleShortVersionString": "0.1",
+                                    "TopoSourceCommit": "", "TopoChannel": " "]
+        #expect(BuildFacts.environment(info: xcode) == ["TOPO_BUILD": "1", "TOPO_VERSION": "0.1"])
+        #expect(BuildFacts.environment(info: nil).isEmpty)
+        #expect(BuildFacts.environment(info: ["CFBundleVersion": 7]).isEmpty)
+    }
+}

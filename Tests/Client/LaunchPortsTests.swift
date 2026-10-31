@@ -51,6 +51,8 @@ final class LaunchPortsTests: XCTestCase {
         XCTAssertEqual(first[ToolService.urlVariable], "http://127.0.0.1:\(firstTools)")
         let token = await tools.token
         XCTAssertEqual(first[ToolService.tokenVariable], token)
+        let build = try XCTUnwrap(Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
+        XCTAssertEqual(first[BuildFacts.buildVariable], build)
         XCTAssertEqual(said.all, ["guest: the launch is told the proxy at \(firstProxy) and the tools at \(firstTools)"])
 
         // Both listeners gone, as iOS takes them from a suspended app, and the old ports held by

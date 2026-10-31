@@ -16,6 +16,13 @@ enum PerfRun {
     /// `TOPO_PERF_SPOKEN=1`: the questions are sent as spoken turns, so their replies are read
     /// aloud and the voice's marks (`speak.begin`, `speak.firstFrame`) are in the run.
     static let spokenVariable = "TOPO_PERF_SPOKEN"
+    /// `TOPO_PERF_SETUP=1` (`perf-run.sh --fresh`): a first run, timed. Before anything is sent the
+    /// run waits, for up to `setupWait`, until every setup line is done — the workspace, the ear
+    /// and the voice — and marks `perf.setup.done` with how many seconds that took from the run's
+    /// start (the scene's first appearance) and the phone's thermal state; `perf.setup.failed` with the part that failed, at once;
+    /// or `perf.setup.unfinished` with the lines still to come.
+    static let setupVariable = "TOPO_PERF_SETUP"
+    static let setupWait: Duration = .seconds(3000)
 
     /// The questions the launch asks for, in order, blank ones dropped: `TOPO_PERF_SEND` is a
     /// JSON array of strings, so a question may hold any character. Anything else is no run.
@@ -44,16 +51,64 @@ enum PerfRun {
     /// transcript: a turn saved as a limb's is answered by another device, in its own time.
     static let replyWait: Duration = .seconds(60)
 
+    /// Where a timed first run's setup stands: still waiting on the lines named, done, or failed
+    /// at the part named. A failed line is retried only at the next foreground, which a run with
+    /// nobody at the phone never has, so it ends the wait.
+    enum SetupOutcome: Equatable {
+        case waiting([String])
+        case done
+        case failed(String)
+    }
+
+    static func setupOutcome(_ lines: [Setup.Line]) -> SetupOutcome {
+        if let line = lines.first(where: { if case .failed = $0.state { true } else { false } }) {
+            return .failed(line.title)
+        }
+        let left = Setup.pending(lines)
+        return left.isEmpty ? .done : .waiting(left.map(\.title))
+    }
+
+    /// Asks `outcome` every `tick` until it is not waiting, the task is cancelled, or `deadline`
+    /// passes, and answers the last outcome it read.
+    @MainActor
+    static func waitForSetup(until deadline: ContinuousClock.Instant, tick: Duration = .milliseconds(250),
+                             _ outcome: @MainActor () -> SetupOutcome) async -> SetupOutcome {
+        var last = outcome()
+        while case .waiting = last, !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: tick)
+            last = outcome()
+        }
+        return last
+    }
+
+    /// The mark the wait ends with. A failure names its part and not why, since a reason may
+    /// carry a path.
+    static func setupMark(_ outcome: SetupOutcome, seconds: Int64, thermal: Int) -> String {
+        switch outcome {
+        case .done: "perf.setup.done s=\(seconds) thermal=\(thermal)"
+        case .failed(let part): "perf.setup.failed \(part)"
+        case .waiting(let left): "perf.setup.unfinished \(left.joined(separator: ","))"
+        }
+    }
+
     /// Sends the questions one at a time, then marks `perf.run.done answered=<n>/<m>`, which is
     /// what the script waits for and checks. A question goes only after the reply to the one
     /// before it, and the run ends at the first that gets none; nothing is sent at all when the
     /// harness already has words waiting, since a question would only queue behind them.
     @MainActor
-    static func run(with harness: Harness, speaker: Speaker,
+    static func run(with harness: Harness, speaker: Speaker, ear: Ear,
                     environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let questions = questions(environment)
         guard !questions.isEmpty, !began else { return }
         began = true
+        if environment[setupVariable] == "1" {
+            let start = ContinuousClock.now
+            let outcome = await waitForSetup(until: start + setupWait) {
+                setupOutcome(Setup.lines(ear: ear, voice: speaker.voice))
+            }
+            Perf.mark(setupMark(outcome, seconds: (ContinuousClock.now - start).components.seconds,
+                                thermal: ProcessInfo.processInfo.thermalState.rawValue))
+        }
         let spoken = environment[spokenVariable] == "1"
         // A spoken turn needs the voice resident at the send, as a press of the microphone does.
         // A fresh install compiles the voice's model on its first load, which has taken 44 s.

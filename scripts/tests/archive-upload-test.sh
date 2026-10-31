@@ -77,6 +77,8 @@ for call in 'xcodebuild \[key\] archive ' 'xcodebuild \[key\] -exportArchive '; 
     grep "^$call" "$work/with" | grep -q -- '-allowProvisioningUpdates -authenticationKeyPath .*/AuthKey_KEYID12345.p8 -authenticationKeyID KEYID12345 -authenticationKeyIssuerID an-issuer' \
         || fail "no key, id and issuer on: $call"
 done
+grep '^xcodebuild \[key\] archive ' "$work/with" | grep -q -- "TOPO_SOURCE_COMMIT=$(git -C "$tree" rev-parse HEAD) TOPO_CHANNEL=testflight" \
+    || fail "the archive was not told its commit and its channel: $(cat "$work/with")"
 grep -q '^xcrun \[AuthKey_KEYID12345.p8\] altool --upload-app .* --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/with" \
     || fail "altool was not given the key where it looks: $(cat "$work/with")"
 [ -z "$(ls "$work/tmp")" ] || fail "the key outlived the run: $(ls "$work/tmp")"

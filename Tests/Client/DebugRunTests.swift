@@ -6,22 +6,28 @@ import XCTest
 
 /// The debug-only launch hooks. This bundle is itself a debug build, which is why it can see them.
 final class DebugRunTests: XCTestCase {
+    /// A developer's token in the launch environment marks the app signed in, as Claude Code's
+    /// `oauth_token`, and is what every `claude` the app starts is handed; nothing in the cache
+    /// holds the token.
     func testATokenInTheEnvironmentSignsTheAppIn() throws {
-        let store = InMemoryTokenStore()
-        let guest = InMemoryTokenStore()
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        XCTAssertTrue(DebugRun.signIn(store: store, guestStore: guest,
-                                      environment: ["TOPO_CLAUDE_SETUP_TOKEN": "  sk-ant-oat01-test  ",
-                                                    "TOPO_CLAUDE_SETUP_TOKEN_DAYS": "2"],
-                                      now: now))
-        let tokens = try XCTUnwrap(try store.load())
-        XCTAssertEqual(tokens.accessToken, "sk-ant-oat01-test")
-        // A setup token cannot be exchanged, so nothing is kept to exchange it with.
-        XCTAssertTrue(tokens.refreshToken.isEmpty)
-        XCTAssertEqual(tokens.expiresAt, now.addingTimeInterval(2 * 86_400))
-        XCTAssertFalse(tokens.isExpired(at: now))
-        // A setup token is the long-lived kind, so the guest is handed the same one.
-        XCTAssertEqual(try guest.load(), tokens)
+        let cache = LoginCache(defaults: UserDefaults(suiteName: "debug-run-\(UUID().uuidString)")!)
+        let environment = ["TOPO_CLAUDE_SETUP_TOKEN": "  sk-ant-oat01-test  "]
+        XCTAssertTrue(DebugRun.signIn(cache: cache, environment: environment))
+        XCTAssertEqual(cache.status, ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+        XCTAssertEqual(DebugRun.developerToken(environment), "sk-ant-oat01-test")
+        XCTAssertTrue(DebugRun.accepts(environment)(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token")))
+        XCTAssertFalse(DebugRun.accepts([:])(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token")))
+        XCTAssertTrue(DebugRun.accepts([:])(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai")))
+        let data = try XCTUnwrap(cache.defaults.data(forKey: LoginCache.key))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("oat01"))
+    }
+
+    /// The userland run's line about its credential: the developer's token named, never shown.
+    func testTheUserlandHandOverNamesTheCredentialAndNeverItsValue() {
+        let handed = DebugRun.handOver(port: 4242, developer: ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"])
+        XCTAssertEqual(handed.environment, ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"])
+        XCTAssertEqual(handed.lines, ["userland: proxy on http://127.0.0.1:4242, credential: the developer's token"])
+        XCTAssertEqual(DebugRun.handOver(port: 4242, developer: [:]).lines, ["userland: proxy on http://127.0.0.1:4242, credential: none"])
     }
 
     /// A tool result as the guest-turn run prints it for `simulator-run.sh --guest-turn`: the tool,
@@ -55,94 +61,12 @@ final class DebugRunTests: XCTestCase {
         XCTAssertTrue(line.contains("gho_[redacted]"), line)
     }
 
-    /// The device run's evidence of the guest's authorization: its scope and the days its token
-    /// has left, never a value.
-    func testTheMintLineNamesTheScopeAndExpiryAndNeverAValue() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let minted = Tokens(accessToken: "sk-secret", refreshToken: "", expiresAt: now.addingTimeInterval(31_536_000),
-                            scopes: ["user:inference"])
-        let line = DebugRun.mintLine(minted, now: now)
-        XCTAssertEqual(line, "userland: mint scope: user:inference, expires in 365 days")
-        XCTAssertFalse(line.contains("sk-secret"))
-        XCTAssertEqual(DebugRun.mintLine(nil), "userland: mint: none held, the guest runs on the ordinary access token")
-    }
-
-    /// The device run's evidence that the ordinary tokens are refreshable after sign-in: one refresh
-    /// with the refresh token they hold, and the scope string it came back with, or its refusal.
-    func testTheOrdinaryRefreshLineSaysWhatTheRefreshGranted() async throws {
-        let ordinary = Tokens(accessToken: "sk-ordinary", refreshToken: "rt-first", expiresAt: .distantFuture,
-                              scopes: ["user:profile", "user:inference"])
-        func line(answer status: Int, _ json: String, holding tokens: Tokens?) async throws -> (String, InMemoryTokenStore) {
-            RefreshStub.answer = (status, Data(json.utf8))
-            let store = InMemoryTokenStore(tokens)
-            let oauth = ClaudeOAuth(session: RefreshStub.session())
-            return (await DebugRun.ordinaryRefreshLine(try store.load(), provider: StoredTokenProvider(store: store, oauth: oauth)), store)
-        }
-
-        let (intact, store) = try await line(answer: 200, #"{"access_token":"sk-new","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#, holding: ordinary)
-        XCTAssertEqual(intact, "userland: ordinary refresh scope: user:profile user:inference")
-        XCTAssertEqual(try store.load()?.refreshToken, "rt-next", "the rotated refresh token was not written back")
-        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(RefreshStub.lastBody)) as? [String: String])
-        XCTAssertEqual(body["refresh_token"], "rt-first")
-        XCTAssertEqual(body["scope"], "user:profile user:inference")
-
-        let (refused, _) = try await line(answer: 400, #"{"error":"invalid_scope"}"#, holding: ordinary)
-        XCTAssertEqual(refused, "userland: ordinary refresh failed: http(status: 400)")
-
-        var seeded = ordinary
-        seeded.refreshToken = ""
-        let (unchecked, _) = try await line(answer: 200, "{}", holding: seeded)
-        XCTAssertEqual(unchecked, "userland: ordinary refresh: not checked, no refresh token held (a seeded setup token)")
-        let (signedOut, _) = try await line(answer: 200, "{}", holding: nil)
-        XCTAssertEqual(signedOut, "userland: ordinary refresh: not checked, not signed in")
-        for text in [intact, refused] {
-            XCTAssertFalse(text.contains("sk-") || text.contains("rt-"), text)
-        }
-    }
-
-    /// The launch's hand-over as the device run meets it with no long-lived token and the ordinary
-    /// access token in its last minute: the diagnostic refresh and the fallback are one grant, and
-    /// the guest is handed what that grant returned.
-    func testTheLaunchSpendsOneRefreshGrantWhenTheGuestFallsBack() async throws {
-        let scopes = ["user:profile", "user:inference"]
-        func handOver(answer status: Int, _ json: String, guest: Tokens? = nil) async -> (environment: [String: String], lines: [String]) {
-            RefreshStub.answer = (status, Data(json.utf8))
-            RefreshStub.requests = 0
-            let ordinary = InMemoryTokenStore(Tokens(accessToken: "sk-stale", refreshToken: "rt-first",
-                                                     expiresAt: Date().addingTimeInterval(30), scopes: scopes))
-            let provider = StoredTokenProvider(store: ordinary, oauth: ClaudeOAuth(session: RefreshStub.session()))
-            return await DebugRun.handOver(port: 4242, guestStore: InMemoryTokenStore(guest), provider: provider)
-        }
-        let granted = #"{"access_token":"sk-fresh","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#
-
-        let fellBack = await handOver(answer: 200, granted)
-        XCTAssertEqual(RefreshStub.requests, 1, "the launch spent more than one refresh grant")
-        XCTAssertEqual(fellBack.environment["CLAUDE_CODE_OAUTH_TOKEN"], "sk-fresh")
-        XCTAssertEqual(fellBack.lines, ["userland: proxy on http://127.0.0.1:4242, guest token: access token",
-                                        "userland: mint: none held, the guest runs on the ordinary access token",
-                                        "userland: ordinary refresh scope: user:profile user:inference"])
-
-        let refused = await handOver(answer: 400, #"{"error":"invalid_grant"}"#)
-        XCTAssertEqual(RefreshStub.requests, 1, "a refused refresh was asked for again")
-        XCTAssertNil(refused.environment["CLAUDE_CODE_OAUTH_TOKEN"])
-        XCTAssertEqual(refused.lines, ["userland: proxy on http://127.0.0.1:4242, no guest token: http(status: 400)",
-                                       "userland: ordinary refresh failed: http(status: 400)"])
-
-        let longLived = Tokens(accessToken: "sk-long-lived", refreshToken: "", expiresAt: Date().addingTimeInterval(86_400 * 300),
-                               scopes: ["user:inference"])
-        let withGuest = await handOver(answer: 200, granted, guest: longLived)
-        XCTAssertEqual(RefreshStub.requests, 1)
-        XCTAssertEqual(withGuest.environment["CLAUDE_CODE_OAUTH_TOKEN"], "sk-long-lived")
-        XCTAssertEqual(withGuest.lines.first, "userland: proxy on http://127.0.0.1:4242, guest token: long-lived")
-    }
-
-    func testWithoutOneNothingIsTouched() throws {
-        let store = InMemoryTokenStore()
-        let guest = InMemoryTokenStore()
-        XCTAssertFalse(DebugRun.signIn(store: store, guestStore: guest, environment: [:]))
-        XCTAssertFalse(DebugRun.signIn(store: store, guestStore: guest, environment: ["TOPO_CLAUDE_SETUP_TOKEN": "   "]))
-        XCTAssertNil(try store.load())
-        XCTAssertNil(try guest.load())
+    func testWithoutOneNothingIsTouched() {
+        let cache = LoginCache(defaults: UserDefaults(suiteName: "debug-run-\(UUID().uuidString)")!)
+        XCTAssertFalse(DebugRun.signIn(cache: cache, environment: [:]))
+        XCTAssertFalse(DebugRun.signIn(cache: cache, environment: ["TOPO_CLAUDE_SETUP_TOKEN": "   "]))
+        XCTAssertNil(cache.status)
+        XCTAssertNil(DebugRun.developerToken(["TOPO_CLAUDE_SETUP_TOKEN": "   "]))
     }
 
     func testOnlyAnAskedForTurnIsSent() {
@@ -206,40 +130,4 @@ final class DebugRunTests: XCTestCase {
             XCTAssertEqual(json["facing"] as? String, facing.rawValue, raw)
         }
     }
-}
-
-/// The token endpoint for `testTheOrdinaryRefreshLineSaysWhatTheRefreshGranted`: one scripted
-/// answer, and the body it was asked with.
-final class RefreshStub: URLProtocol {
-    nonisolated(unsafe) static var answer: (Int, Data) = (200, Data())
-    nonisolated(unsafe) static var lastBody: Data?
-    /// Every request since it was last set to zero, each one a grant spent.
-    nonisolated(unsafe) static var requests = 0
-
-    static func session() -> URLSession {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [RefreshStub.self]
-        return URLSession(configuration: configuration)
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        Self.requests += 1
-        Self.lastBody = request.httpBody ?? request.httpBodyStream.map { stream in
-            stream.open(); defer { stream.close() }
-            var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
-            while stream.hasBytesAvailable {
-                let n = stream.read(&buffer, maxLength: buffer.count)
-                if n <= 0 { break }
-                data.append(buffer, count: n)
-            }
-            return data
-        }
-        let response = HTTPURLResponse(url: request.url!, statusCode: Self.answer.0, httpVersion: nil, headerFields: nil)!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Self.answer.1)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() {}
 }

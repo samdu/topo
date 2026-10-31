@@ -1,7 +1,6 @@
 import Foundation
 import Network
 import Testing
-import TopoAuth
 @testable import TopoProxy
 
 @Suite struct CredentialTests {
@@ -42,23 +41,10 @@ import TopoAuth
         }
     }
 
-    /// Review focus 4, the launch path's half: the environment the guest is handed carries the
-    /// long-lived token sign-in minted, and the ordinary access token only when there is none.
-    @Test func theGuestsEnvironmentCarriesTheLongLivedToken() async throws {
-        let ordinary = InMemoryTokenStore(Tokens(accessToken: "ordinary", refreshToken: "r", expiresAt: .distantFuture, scopes: []))
-        let guest = InMemoryTokenStore(Tokens(accessToken: "long-lived", refreshToken: "", expiresAt: .distantFuture, scopes: []))
-        let credential = GuestCredential(store: guest, fallback: StoredTokenProvider(store: ordinary))
-        let handed = try await APIProxy.guestEnvironment(port: 4242, credential: credential)
-        #expect(handed.environment == ["ANTHROPIC_BASE_URL": "http://127.0.0.1:4242", "CLAUDE_CODE_OAUTH_TOKEN": "long-lived"])
-        #expect(handed.source == .longLived)
-
-        try guest.clear()
-        let fallback = try await APIProxy.guestEnvironment(port: 4242, credential: credential)
-        #expect(fallback.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "ordinary")
-        #expect(fallback.source == .accessToken)
-
-        try ordinary.clear()
-        await #expect(throws: TokenProviderError.signedOut) { try await APIProxy.guestEnvironment(port: 4242, credential: credential) }
+    /// The launch path's half: the environment the guest is handed points it at the proxy and
+    /// carries no credential, since Claude Code sends its own login's.
+    @Test func theGuestsEnvironmentCarriesNoCredential() {
+        #expect(APIProxy.guestEnvironment(port: 4242) == ["ANTHROPIC_BASE_URL": "http://127.0.0.1:4242"])
     }
 
     /// What belongs to the hop stays on it; everything else, credential included, goes on.
