@@ -10,9 +10,11 @@ import os
 /// app's state, nothing of the person's.
 ///
 /// The pulse is the kernel's counters for this task (`TASK_POWER_INFO`): CPU time and idle
-/// wakeups since the last pulse, against the battery, the charger, the thermal state and Low Power
-/// Mode, with what the app was doing (`state`), and the threads the minute went to by name. It is
-/// what Instruments would read, without the cable. Each line is a `Perf` mark (`energy …`), so it
+/// wakeups since the last pulse, over the time between the two reads by the continuous clock (which
+/// counts the time the phone sleeps and takes no change to the wall clock), against the battery,
+/// the charger, the thermal state and Low Power Mode, with what the app was doing (`state`), and the
+/// threads the minute went to by name, with what threads that ended inside it spent as
+/// `unattributed`. It is what Instruments would read, without the cable. Each line is a `Perf` mark (`energy …`), so it
 /// is in the unified log under `perf` and in a timed run's file; and it is appended to
 /// `tmp/topo-energy.log` in the container, which `devicectl device copy from` reads off a phone
 /// nobody is at. Only this process: the audio server's share is Instruments' alone.
@@ -38,7 +40,7 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     private(set) var payloads: (count: Int, newest: Date?) = (0, nil)
 
     private var timer: DispatchSourceTimer?
-    private var counters: (cpu: Double, idle: UInt64, interrupts: UInt64, at: Date)?
+    private var counters: (cpu: Double, idle: UInt64, interrupts: UInt64, at: ContinuousClock.Instant)?
     private var started = false
     private var file: FileHandle?
     private var written = 0
@@ -51,7 +53,8 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         UIDevice.current.isBatteryMonitoringEnabled = true
         mainThread = pthread_self()
         MXMetricManager.shared.add(self)
-        counters = Self.read().map { ($0.cpu, $0.idle, $0.interrupts, Date()) }
+        counters = Self.read().map { ($0.cpu, $0.idle, $0.interrupts, ContinuousClock.now) }
+        threadLast = Self.threads(main: mainThread).mapValues(\.cpu)
         openFile()
         payloads = Self.kept()
         let t = DispatchSource.makeTimerSource(queue: .main)
@@ -67,11 +70,17 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     // MARK: Pulse
 
     private func pulse() async {
+        // The task and its threads are read back to back, before anything awaits, so the two
+        // marks describe one interval.
         guard let now = Self.read(), let last = counters else { return }
-        let dt = Date().timeIntervalSince(last.at)
+        let at = ContinuousClock.now
+        let threads = Self.threads(main: mainThread)
+        let dt = Self.interval(at - last.at)
         guard dt > 0 else { return }
-        counters = (now.cpu, now.idle, now.interrupts, Date())
+        counters = (now.cpu, now.idle, now.interrupts, at)
         let cpu = now.cpu - last.cpu
+        let split = Self.breakdown(process: cpu, before: threadLast, after: threads)
+        threadLast = threads.mapValues(\.cpu)
         let idle = now.idle &- last.idle
         let ints = now.interrupts &- last.interrupts
         let dev = UIDevice.current
@@ -102,8 +111,7 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
             await state())
         self.last = line
         write(line)
-        let threads = topThreads()
-        if !threads.isEmpty { write("energy threads " + threads) }
+        if !split.isEmpty { write("energy threads " + split) }
     }
 
     /// A write that fails (the disk full) drops the file for the rest of the process; the marks
@@ -143,22 +151,20 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     private var threadLast: [UInt64: Double] = [:]
     private var mainThread: pthread_t?
 
-    /// The threads that spent the most CPU since the last pulse, by name: what a Time Profiler
-    /// would say about a minute, from inside. Unnamed threads are summed as one, and the guest's
-    /// are summed as `guest`: the emulator names a guest process's thread after its command, which
-    /// is the person's.
-    private func topThreads() -> String {
+    /// Every thread of this task now: its CPU seconds since it started, and the name it is
+    /// counted under. Unnamed threads are `unnamed`, and the guest's are `guest`: the emulator names
+    /// a guest process's thread after its command, which is the person's.
+    private static func threads(main: pthread_t?) -> [UInt64: (name: String, cpu: Double)] {
         var list: thread_act_array_t?
         var count: mach_msg_type_number_t = 0
         guard task_threads(mach_task_self_, &list, &count) == KERN_SUCCESS, let list
-        else { return "" }
+        else { return [:] }
         defer {
             for i in 0..<Int(count) { mach_port_deallocate(mach_task_self_, list[i]) }
             vm_deallocate(mach_task_self_, vm_address_t(bitPattern: list),
                           vm_size_t(count) * vm_size_t(MemoryLayout<thread_t>.size))
         }
-        var seen: [UInt64: Double] = [:]
-        var merged: [String: Double] = [:]
+        var out: [UInt64: (name: String, cpu: Double)] = [:]
         for i in 0..<Int(count) {
             let t = list[i]
             var basic = thread_basic_info_data_t()
@@ -181,26 +187,44 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
             guard kr2 == KERN_SUCCESS else { continue }
             let cpu = Double(basic.user_time.seconds + basic.system_time.seconds)
                 + Double(basic.user_time.microseconds + basic.system_time.microseconds) / 1e6
-            seen[ident.thread_id] = cpu
-            let delta = cpu - (threadLast[ident.thread_id] ?? 0)
-            guard delta >= 0.05 else { continue }
             var name = ""
             if let p = pthread_from_mach_thread_np(t) {
-                if let main = mainThread, pthread_equal(p, main) != 0 {
+                if let main, pthread_equal(p, main) != 0 {
                     name = "main"
                 } else {
                     var buf = [CChar](repeating: 0, count: 64)
                     pthread_getname_np(p, &buf, 64)
                     name = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
-                    if Self.isGuestThread(name) { name = "guest" }
+                    if isGuestThread(name) { name = "guest" }
                 }
             }
-            if name.isEmpty { name = "unnamed" }
-            merged[name, default: 0] += delta
+            out[ident.thread_id] = (name.isEmpty ? "unnamed" : name, cpu)
         }
-        threadLast = seen
-        return merged.sorted { $0.value > $1.value }.prefix(8)
-            .map { String(format: "%@ %.2fs", $0.key, $0.value) }.joined(separator: ", ")
+        return out
+    }
+
+    /// The share of a group or of the remainder below which the threads line leaves it out.
+    static let least = 0.05
+
+    /// Where an interval's CPU went, by name, busiest first: each thread's seconds since `before`
+    /// (a thread `before` does not name started inside the interval, so all of its time is), summed
+    /// under its name before anything is left out. What the process spent that the threads alive
+    /// at the end do not account for is `unattributed`: threads that ended inside the interval,
+    /// whose time `task_threads` can no longer name.
+    static func breakdown(process: Double, before: [UInt64: Double],
+                          after: [UInt64: (name: String, cpu: Double)]) -> String {
+        var merged: [String: Double] = [:]
+        var named = 0.0
+        for (id, t) in after {
+            let delta = max(0, t.cpu - (before[id] ?? 0))
+            merged[t.name, default: 0] += delta
+            named += delta
+        }
+        let shown = merged.filter { $0.value >= least }.sorted { $0.value > $1.value }.prefix(8)
+        var parts = shown.map { String(format: "%@ %.2fs", $0.key, $0.value) }
+        let rest = process - named
+        if rest >= least { parts.append(String(format: "unattributed %.2fs", rest)) }
+        return parts.joined(separator: ", ")
     }
 
     // MARK: Counters
@@ -218,6 +242,10 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         guard kr == KERN_SUCCESS else { return nil }
         return (Double(info.total_user + info.total_system) * tick,
                 info.task_platform_idle_wakeups, info.task_interrupt_wakeups)
+    }
+
+    static func interval(_ d: Duration) -> Double {
+        Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
     }
 
     /// `TASK_POWER_INFO` times are Mach absolute-time ticks: ~41.7 ns on Apple silicon.
