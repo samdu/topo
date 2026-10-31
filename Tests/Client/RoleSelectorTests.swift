@@ -84,6 +84,32 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(own.role, .primary)
     }
 
+    /// #371: a reinstalled phone has no role in defaults and its old name from the keychain, so
+    /// the lease that names it is its own, lapsed or fresh. It is primary, and writes no role.
+    func testAReinstallWhoseNameIsTheLapsedLeasesHolderIsPrimary() async throws {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: me)
+        let current = await db.current(Lease.recordID)
+        var record = try XCTUnwrap(current)
+        record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -3600))
+        _ = try await db.save(record)
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .primary)
+        let roles = try await db.records(ofType: DeviceRole.recordType)
+        XCTAssertTrue(roles.isEmpty)
+    }
+
+    func testAReinstallWhoseNameIsTheFreshLeasesHolderIsPrimary() async throws {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: me)
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .primary)
+        let roles = try await db.records(ofType: DeviceRole.recordType)
+        XCTAssertTrue(roles.isEmpty)
+    }
+
     /// #351: a pad whose keychain kept a login from an earlier install, launched beside the phone
     /// that is primary. It was primary too, with no role record written for the phone.
     func testALoginFoundBesideAnotherDevicesLeaseMeansViewer() async throws {
@@ -111,8 +137,9 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(s.role, .viewer)
     }
 
-    /// A phone reinstalled while a hub holds the lease has a new name, and the records cannot
-    /// tell it from a second device carrying an old login: a viewer, like any other.
+    /// A phone reinstalled while a hub holds the lease keeps its name, but the lease names the
+    /// hub, and the records cannot tell it from a second device carrying an old login: a viewer,
+    /// like any other.
     func testALoginBesideAHubsLeaseMeansViewer() async throws {
         let db = InMemoryRecordDatabase()
         try await hub(db)

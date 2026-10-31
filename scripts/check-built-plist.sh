@@ -44,6 +44,9 @@
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
 #
+# The watch app embedded as the phone app's companion is read off the product too, and its copy
+# is read as `--watch` reads one.
+#
 # With `--watch`, it reads the watch app instead: `PlugIns/TopoWatchWidgets.appex` embedded, a
 # WidgetKit extension, since the complications are nothing without it; and `WKBackgroundModes`
 # declaring `remote-notification`, which no setting generates, for the `Surface` push that wakes
@@ -292,6 +295,42 @@ if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     status=1
 fi
 
+# The watch app rides inside the phone app as its companion (`Watch/TopoWatch.app`): without it
+# installing Topo offers nothing in the Watch app. The phone's own id is what makes it a companion,
+# and the watch refuses one whose versions are not the phone app's; it runs on its own as well,
+# since it reads CloudKit itself. The embedded copy is then read as `--watch` reads a watch app.
+watch="$app/Watch/TopoWatch.app"
+if [ ! -f "$watch/Info.plist" ]; then
+    echo "$app does not embed Watch/TopoWatch.app; installing Topo would offer no watch app" >&2
+    status=1
+else
+    host="$(plutil -extract CFBundleIdentifier raw -o - -- "$plist" 2>/dev/null || true)"
+    companion="$(plutil -extract WKCompanionAppBundleIdentifier raw -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+    if [ -z "$host" ] || [ "$companion" != "$host" ]; then
+        echo "$watch/Info.plist names WKCompanionAppBundleIdentifier '${companion:-absent}', not the phone app's '${host:-absent}'" >&2
+        status=1
+    fi
+    only="$(plutil -extract WKWatchOnly raw -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+    if [ "$only" = true ] || [ "$only" = 1 ]; then
+        echo "$watch/Info.plist sets WKWatchOnly; a watch-only app is no companion" >&2
+        status=1
+    fi
+    independent="$(plutil -extract WKRunsIndependentlyOfCompanionApp raw -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+    if [ "$independent" != true ] && [ "$independent" != 1 ]; then
+        echo "$watch/Info.plist does not set WKRunsIndependentlyOfCompanionApp ( ${independent:-absent} ); the watch would wait on the phone" >&2
+        status=1
+    fi
+    for key in CFBundleShortVersionString CFBundleVersion; do
+        mine="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+        theirs="$(plutil -extract "$key" raw -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+        if [ -z "$mine" ] || [ "$theirs" != "$mine" ]; then
+            echo "$watch/Info.plist has $key '${theirs:-absent}', not the phone app's '${mine:-absent}'" >&2
+            status=1
+        fi
+    done
+    "$0" --watch "$watch" >/dev/null || status=1
+fi
+
 if [ -n "$build" ]; then
     got="$(plutil -extract CFBundleVersion raw -o - -- "$plist" 2>/dev/null || true)"
     if [ "$got" != "$build" ]; then
@@ -300,5 +339,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, the turn's continued-processing task, $entitlements, embeds TopoWidgets.appex and TopoShare.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, the turn's continued-processing task, $entitlements, embeds TopoWidgets.appex, TopoShare.appex and TopoWatch.app as its companion, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

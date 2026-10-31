@@ -16,11 +16,11 @@ import TopoCore
 /// could not see.
 ///
 /// A Claude login found at first launch is one the keychain kept across a delete of the app,
-/// and the device's name did not come with it. It makes the device primary where the record
-/// names no other device or cannot be read. Where the record names another device, a phone, a
-/// pad or a hub, this one is a viewer, whose login the viewer screen drops: a login is not
-/// what hands primary over, the viewer's menu is. A reinstalled phone and a second device
-/// carrying an old login look the same in the records, so neither is taken for the primary.
+/// and so is the phone's name (`DeviceIdentity`): a reinstalled phone whose name the lease
+/// names is that lease's holder, and primary. The login makes the device primary where the
+/// record names no other device or cannot be read. Where the record names another device, a
+/// phone, a pad or a hub, this one is a viewer, whose login the viewer screen drops: a login is
+/// not what hands primary over, the viewer's menu is.
 @MainActor
 @Observable
 final class RoleSelector {

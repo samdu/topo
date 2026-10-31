@@ -253,7 +253,7 @@ final class DraftRowTests: XCTestCase {
 
     /// How many things on the screen say `words`, by their label or their value: what is written
     /// is drawn in one place.
-    private func drawings(of words: String, in app: XCUIApplication) -> Int {
+    private func drawings(of words: String, in app: TopoApplication) -> Int {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR value == %@", words, words))
             .allElementsBoundByIndex.filter { $0.elementType == .staticText || $0.elementType == .textView || $0.elementType == .textField }.count
     }
@@ -270,13 +270,13 @@ final class DraftRowTests: XCTestCase {
         XCTFail("\(element.label) was still moving after \(timeout) s")
     }
 
-    private func keyboardMark(in app: XCUIApplication) -> XCUIElement {
+    private func keyboardMark(in app: TopoApplication) -> XCUIElement {
         let mark = app.buttons["Type instead"]
         XCTAssertTrue(mark.waitForExistence(timeout: 60), "the chat screen, with the glass under it")
         return mark
     }
 
-    private func shot(_ app: XCUIApplication, _ name: String) {
+    private func shot(_ app: TopoApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "draft-\(name)"
         attachment.lifetime = .keepAlways
@@ -290,7 +290,7 @@ final class DraftRowTests: XCTestCase {
     /// `owed` is what is on the harness's line at the launch, in place of whatever the last one
     /// left: a turn said and not settled stays on disk, so every test here says what it wants
     /// rather than inheriting the turn the test before it sent and never landed.
-    private func launch(owed: String) -> XCUIApplication {
+    private func launch(owed: String) -> TopoApplication {
         let app = TopoLaunch.app()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = owed
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"

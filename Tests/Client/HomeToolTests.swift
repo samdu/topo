@@ -329,8 +329,11 @@ final class HomeToolTests: XCTestCase {
         fake.changed?(.authorization)
         try await Task.sleep(for: .milliseconds(50))
         call.cancel()
-        let reply = await PhoneTool.within(.seconds(1)) { await call.value }
-        XCTAssertEqual(reply?.status, ToolReply.timedOut, reply?.text ?? "no answer within 1 s")
+        // Ten seconds tell a call that ends from one that never does; they are no measure of how
+        // soon it ends, since the answer reaches the test through hops onto the main actor that
+        // a loaded Mac running the suite beside others has kept waiting past a second.
+        let reply = await PhoneTool.within(.seconds(10)) { await call.value }
+        XCTAssertEqual(reply?.status, ToolReply.timedOut, reply?.text ?? "no answer within 10 s")
         XCTAssertTrue(fake.writes.isEmpty)
     }
 

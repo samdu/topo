@@ -17,7 +17,18 @@ keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescriptio
       NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription
       NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription)
 
-# A product with everything the check reads.
+make_watch() {
+    local watch="$1"
+    mkdir -p "$watch/PlugIns/TopoWatchWidgets.appex"
+    plutil -create xml1 "$watch/Info.plist"
+    plutil -insert WKBackgroundModes -json '["remote-notification"]' "$watch/Info.plist"
+    plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo.watch","CFBundleURLSchemes":["topo"]}]' "$watch/Info.plist"
+    plutil -create xml1 "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
+    plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.widgetkit-extension"}' \
+        "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
+}
+
+# A product with everything the check reads, the watch app embedded as its companion.
 make_app() {
     local app="$1" usage
     mkdir -p "$app"
@@ -27,6 +38,13 @@ make_app() {
     plutil -insert LSSupportsOpeningDocumentsInPlace -bool YES "$app/Info.plist"
     plutil -insert PHPhotoLibraryPreventAutomaticLimitedAccessAlert -bool YES "$app/Info.plist"
     plutil -insert CFBundleVersion -string 7 "$app/Info.plist"
+    plutil -insert CFBundleShortVersionString -string 0.1 "$app/Info.plist"
+    plutil -insert CFBundleIdentifier -string zone.hexagon.topo "$app/Info.plist"
+    make_watch "$app/Watch/TopoWatch.app"
+    plutil -insert CFBundleVersion -string 7 "$app/Watch/TopoWatch.app/Info.plist"
+    plutil -insert CFBundleShortVersionString -string 0.1 "$app/Watch/TopoWatch.app/Info.plist"
+    plutil -insert WKCompanionAppBundleIdentifier -string zone.hexagon.topo "$app/Watch/TopoWatch.app/Info.plist"
+    plutil -insert WKRunsIndependentlyOfCompanionApp -bool YES "$app/Watch/TopoWatch.app/Info.plist"
     for usage in "${keys[@]}"; do
         plutil -insert "$usage" -string "Topo uses this when you ask it to." "$app/Info.plist"
     done
@@ -273,16 +291,6 @@ out="$("$check" "$work/whole/Topo.app" 2>&1)"
 
 # The watch app: whole, it passes; without the widget extension, with one that is not WidgetKit's,
 # or without the push's background mode, it fails.
-make_watch() {
-    local watch="$1"
-    mkdir -p "$watch/PlugIns/TopoWatchWidgets.appex"
-    plutil -create xml1 "$watch/Info.plist"
-    plutil -insert WKBackgroundModes -json '["remote-notification"]' "$watch/Info.plist"
-    plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo.watch","CFBundleURLSchemes":["topo"]}]' "$watch/Info.plist"
-    plutil -create xml1 "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
-    plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.widgetkit-extension"}' \
-        "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
-}
 make_watch "$work/watch-whole/TopoWatch.app"
 "$check" --watch "$work/watch-whole/TopoWatch.app" >/dev/null 2>&1 || fail "a whole watch product was refused"
 make_watch "$work/watch-no-appex/TopoWatch.app"
@@ -312,9 +320,31 @@ elif [[ "$errors" != *"URL scheme"* ]]; then
     fail "the refusal of a watch product without the topo URL scheme does not name it: $errors"
 fi
 
+# The companion: absent, naming another phone app, watch-only, waiting on the phone, at another
+# version than the phone app's, or failing what `--watch` reads.
+wplist="Watch/TopoWatch.app/Info.plist"
+for case in no-watch companion only dependent short version no-mode; do
+    make_app "$work/companion-$case/Topo.app"
+    w="$work/companion-$case/Topo.app/$wplist"
+    case "$case" in
+        no-watch)  rm -rf "$work/companion-$case/Topo.app/Watch"; want="Watch/TopoWatch.app" ;;
+        companion) plutil -replace WKCompanionAppBundleIdentifier -string zone.hexagon.daphne "$w"; want=WKCompanionAppBundleIdentifier ;;
+        only)      plutil -insert WKWatchOnly -bool YES "$w"; want=WKWatchOnly ;;
+        dependent) plutil -remove WKRunsIndependentlyOfCompanionApp "$w"; want=WKRunsIndependentlyOfCompanionApp ;;
+        short)     plutil -replace CFBundleShortVersionString -string 0.2 "$w"; want=CFBundleShortVersionString ;;
+        version)   plutil -replace CFBundleVersion -string 8 "$w"; want=CFBundleVersion ;;
+        no-mode)   plutil -remove WKBackgroundModes "$w"; want=remote-notification ;;
+    esac
+    if errors="$("$check" "$work/companion-$case/Topo.app" 2>&1 >/dev/null)"; then
+        fail "a product whose watch companion is wrong ($case) passed"
+    elif [[ "$errors" != *"$want"* ]]; then
+        fail "the refusal of a wrong watch companion ($case) does not name $want: $errors"
+    fi
+done
+
 if [ "$failures" -gt 0 ]; then
     echo "$failures failure(s)" >&2
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"

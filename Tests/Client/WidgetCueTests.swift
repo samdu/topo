@@ -274,7 +274,7 @@ final class WidgetCueTests: XCTestCase {
 
     private func harness(_ database: any RecordDatabase, defaults: UserDefaults, transport: ScriptedTransport,
                          ensureZone: @escaping @Sendable () async throws -> Void = {}) -> Harness {
-        Harness(database: database, tokens: FixedToken(), device: phone, ensureZone: ensureZone,
+        Harness(database: database, device: phone, ensureZone: ensureZone,
                 defaults: defaults, brain: guestBrain(over: transport), leaseSleep: parked,
                 pause: { _ in throw CancellationError() })
     }
@@ -302,9 +302,6 @@ private func reply(_ text: String) -> String {
     #"{"id":"msg","type":"message","model":"claude-haiku-4-5","content":[{"type":"text","text":"\#(text)"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#
 }
 
-private struct FixedToken: TokenProvider {
-    func accessToken() async throws -> String { "tok" }
-}
 
 private struct Unexpected: Error {}
 

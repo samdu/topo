@@ -20,6 +20,17 @@ public enum GuestTools {
     public static let ghPath = ".topo/bin/gh"
     public static let ghCommand = "/usr/local/bin/gh"
 
+    /// `BROWSER` for Claude Code's login: hands the URL it is given to `topo open-url`. Set in the
+    /// login's environment alone, and not linked onto the path.
+    public static let browserPath = ".topo/bin/topo-browser"
+    public static let browser = """
+    #!/bin/sh
+    # Claude Code's BROWSER during Topo's sign-in: the phone opens the URL in its sign-in sheet.
+    # Written by the app on every start.
+    exec topo open-url "$1"
+
+    """
+
     /// Each script under the home, and where it is linked on the guest's path.
     public static let links: [(script: String, command: String)] = [
         (scriptPath, command),
@@ -47,7 +58,7 @@ public enum GuestTools {
     public static func install(home: URL) throws {
         let files = FileManager.default
         let skill = home.appendingPathComponent(skillPath)
-        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh)]
+        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser)]
         for url in [skill] + scripts.map({ home.appendingPathComponent($0.0) }) {
             try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
