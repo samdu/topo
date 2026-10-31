@@ -15,8 +15,9 @@ import Observation
 ///
 /// Every logout, every login's end and every start runs in one queue, in order: a start begins
 /// only once whatever came before it is done, so no login runs beside a logout or beside the end
-/// of the login before it, which ends every guest task. A sign-out is owed until its logout has
-/// run, in the defaults, so one the app died in is finished at the next launch before anything
+/// of the login before it, which ends every guest task. A sign-out is owed, in the defaults, until
+/// its logout has taken the credential away or a later sign-in has written a new one, so one the
+/// app died in, or whose credential would not go, is finished at the next launch before anything
 /// asks whether the phone is signed in.
 @MainActor
 @Observable
@@ -102,8 +103,8 @@ public final class SignIn {
 
     private func enqueueLogout() {
         enqueue { [login, cache] in
-            await login.logout()
-            cache.defaults.removeObject(forKey: SignIn.signOutOwedKey)
+            // A credential that would not go keeps the sign-out owed, for the next launch.
+            if await login.logout() { cache.defaults.removeObject(forKey: SignIn.signOutOwedKey) }
         }
     }
 
@@ -213,6 +214,8 @@ public final class SignIn {
             return
         }
         cache.save(status)
+        // The new credential is not the one a sign-out owed.
+        cache.defaults.removeObject(forKey: Self.signOutOwedKey)
         signInAgain = false
         cache.defaults.removeObject(forKey: LoginMigration.signInAgainKey)
         phase = .signedIn

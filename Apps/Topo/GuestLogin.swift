@@ -119,7 +119,7 @@ struct GuestLogin: ClaudeLogin {
     /// `claude auth logout` with no resident beside it, when the guest is up in this process; then
     /// the credentials file is removed from the host side whether or not that ran, so a phone whose
     /// guest never came up is signed out all the same.
-    func logout() async {
+    func logout() async -> Bool {
         if let session = await GuestResident.shared.session, let environment = try? await Self.environment(browser: false) {
             _ = await session.withoutResident {
                 let exit = try? await Guest.shared.run("/bin/sh", Self.command(["auth", "logout"]),
@@ -127,7 +127,7 @@ struct GuestLogin: ClaudeLogin {
                 GuestResident.log("login: claude auth logout exited \(exit.map { String($0.status) } ?? "unrun")")
             }
         }
-        Self.removeCredentials()
+        return Self.removeCredentials()
     }
 
     func discardCredential() {
@@ -139,8 +139,17 @@ struct GuestLogin: ClaudeLogin {
         GuestResident.homeDirectory.appendingPathComponent(".claude/.credentials.json")
     }
 
-    static func removeCredentials() {
-        try? FileManager.default.removeItem(at: credentialsFile)
+    /// True when the file is gone, which a removal that threw because there was none also is.
+    @discardableResult
+    static func removeCredentials() -> Bool {
+        do {
+            try FileManager.default.removeItem(at: credentialsFile)
+        } catch {
+            if FileManager.default.fileExists(atPath: credentialsFile.path) {
+                GuestResident.log("login: the credentials file would not go: \(error)")
+            }
+        }
+        return !FileManager.default.fileExists(atPath: credentialsFile.path)
     }
 
     /// `claude <arguments>`, from the home, as the resident is started.

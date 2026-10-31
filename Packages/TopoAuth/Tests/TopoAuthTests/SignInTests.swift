@@ -52,6 +52,7 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
     var beginGate: Gate?
     var logoutGate: Gate?
     var endGate: Gate?
+    var logoutRefused = false
     var beginError: (any Error)?
     private var answer: ClaudeLoginStatus? = ClaudeLoginStatus(loggedIn: false)
     private var logouts = 0
@@ -95,12 +96,14 @@ final class FakeLogin: ClaudeLogin, @unchecked Sendable {
         return answer
     }
 
-    func logout() async {
+    func logout() async -> Bool {
         note("logout")
         await logoutGate?.wait()
-        lock.withLock {
+        return lock.withLock {
             logouts += 1
+            if logoutRefused { return false }
             answer = ClaudeLoginStatus(loggedIn: false)
+            return true
         }
     }
 }
@@ -358,6 +361,41 @@ func settle() async {
         let third = FakeLogin()
         _ = SignIn(login: third, cache: cache)
         #expect(third.discarded == 0)
+    }
+
+    /// A credential that would not go keeps the sign-out owed, so the next launch takes it away
+    /// again; a sign-in after it writes a new one, which nothing then takes away.
+    @Test func aSignOutWhoseCredentialWouldNotGoStaysOwedUntilASignIn() async {
+        let login = FakeLogin()
+        login.logoutRefused = true
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut()
+        await signIn.loggedOut()
+        #expect(cache.defaults.bool(forKey: SignIn.signOutOwedKey), "a refused removal cleared the debt")
+        let relaunched = FakeLogin()
+        let again = SignIn(login: relaunched, cache: cache)
+        #expect(relaunched.discarded == 1)
+        await again.loggedOut()
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+
+        // Owed again, and then a sign-in: the new credential is kept at the next launch.
+        cache.defaults.set(true, forKey: SignIn.signOutOwedKey)
+        let third = FakeLogin()
+        third.logoutRefused = true
+        let signingIn = SignIn(login: third, cache: cache)
+        await signingIn.prepare()
+        await signingIn.loggedOut()
+        signingIn.start()
+        await until("the login began") { third.attempts.count == 1 }
+        third.answer(claudeAI)
+        third.attempts[0].heard(.ended(.succeeded))
+        await until("signed in") { signingIn.phase == .signedIn }
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        let fourth = FakeLogin()
+        _ = SignIn(login: fourth, cache: cache)
+        #expect(fourth.discarded == 0, "the fresh login was discarded at the next launch")
     }
 
     /// Sign out, then sign in at once: the login begins only once the logout has run.
