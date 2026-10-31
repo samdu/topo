@@ -247,8 +247,9 @@ public actor GuestSession {
     private var conversation = 0
     /// The next process starts a fresh session rather than resuming the kept one.
     private var freshNext = false
-    /// Sign-outs under way: while any is, no process starts (`forgetSession(then:)`).
-    private var signingOut = 0
+    /// Sign-outs and logins under way: while any is, no process starts (`forgetSession(then:)`,
+    /// `withoutResident(_:)`).
+    private var holds = 0
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
@@ -455,13 +456,43 @@ public actor GuestSession {
         cuts.clear()
         freshNext = true
         conversation += 1
-        signingOut += 1
+        holds += 1
         log("the conversation is forgotten; nothing starts until the sign-out has taken away what it held")
         let termination = await endForgotten()
         await takeAway()
-        signingOut -= 1
+        holds -= 1
         if !readiness.isEmpty { startResident() }
         return termination
+    }
+
+    /// Runs `body` with no resident process, for Claude Code's own login and logout: they and the
+    /// resident are two `claude` processes over one credentials file, and a resident reads its
+    /// login once, as it starts. The process there is ended — a turn in flight abandoned, a start
+    /// still pending ended as it lands — and none starts until `body` returns, as under a sign-out,
+    /// but the conversation is kept: the next process resumes it. A `ready()` meanwhile waits, and
+    /// its process starts once `body` is done.
+    public func withoutResident<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
+        holds += 1
+        log("the resident is ended; nothing starts until Claude Code's login has finished")
+        await endResident()
+        let value = await body()
+        holds -= 1
+        if !readiness.isEmpty { startResident() }
+        return value
+    }
+
+    /// Ends whatever process there is, with no replacement, and waits for it.
+    private func endResident() async {
+        if let startTask { await startTask.value }
+        switch phase {
+        case .resident(let resident):
+            if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
+            _ = await end(resident, reason: "Claude Code's login", restart: false).value
+        case .stopping:
+            _ = await teardown?.value
+        case .idle, .starting:
+            break
+        }
     }
 
     /// Ends the process holding a forgotten conversation, with no replacement, and waits for it.
@@ -657,7 +688,7 @@ public actor GuestSession {
     }
 
     private func startResident() {
-        guard case .idle = phase, inForeground, signingOut == 0 else { return }
+        guard case .idle = phase, inForeground, holds == 0 else { return }
         if freshNext {
             store.clear()
             freshNext = false

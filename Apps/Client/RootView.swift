@@ -5,8 +5,8 @@ import TopoAuth
 /// phone or pad becomes primary and shows sign-in when nothing is primary yet, and a viewer
 /// otherwise. The watch and TV are always viewers.
 struct RootView: View {
-    @Environment(SignIn.self) private var signIn
     #if os(iOS)
+    @Environment(SignIn.self) private var signIn
     @Environment(Harness.self) private var harness
     @Environment(Memory.self) private var memory
     @Environment(Connections.self) private var connections

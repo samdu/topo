@@ -843,6 +843,45 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(launcher.processes.count, 2)
     }
 
+    /// A login runs with no resident: the process there is ended before the body runs, a
+    /// `ready()` arriving meanwhile waits, nothing starts until the body has returned, and the
+    /// process started then resumes the conversation rather than forgetting it.
+    func testALoginRunsWithNoResidentAndKeepsTheConversation() async throws {
+        store.save("KEPT")
+        let (session, old) = try await resident()
+        let launcher = launcher!
+        let launchesInBody = Launches()
+        let endedBeforeBody = Launches()
+        let login = Task {
+            await session.withoutResident {
+                endedBeforeBody.set(old.terminated ? 1 : 0)
+                for _ in 0..<50 { await Task.yield() }
+                launchesInBody.set(launcher.processes.count)
+                return 7
+            }
+        }
+        await eventually("the body ran") { launchesInBody.value != nil }
+        let waiting = Task { try await session.ready() }
+        for _ in 0..<50 { await Task.yield() }
+        let answer = await login.value
+        XCTAssertEqual(answer, 7)
+        XCTAssertEqual(endedBeforeBody.value, 1, "the login ran beside a resident")
+        XCTAssertEqual(launchesInBody.value, 1, "a process started while the login ran")
+        try await waiting.value
+        XCTAssertEqual(launcher.processes.count, 2)
+        XCTAssertEqual(launcher.resumed, ["KEPT", "KEPT"], "the login forgot the conversation")
+    }
+
+    /// With nobody waiting, a login leaves nothing resident: the next `ready()` starts one.
+    func testALoginWithNobodyWaitingStartsNothing() async throws {
+        let (session, _) = try await resident()
+        await session.withoutResident {}
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(launcher.processes.count, 1, "a login started a process nobody asked for")
+        try await session.ready()
+        XCTAssertEqual(launcher.processes.count, 2)
+    }
+
     private final class Launches: @unchecked Sendable {
         private let lock = NSLock()
         private var count: Int?
