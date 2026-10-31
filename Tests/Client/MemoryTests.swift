@@ -103,7 +103,7 @@ final class MemoryTests: XCTestCase {
 
         let transport = ScriptedTransport()
         let beats = Beats()
-        let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: makeDefaults(), brain: guestBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
@@ -129,7 +129,7 @@ final class MemoryTests: XCTestCase {
         let transport = ScriptedTransport((200, reply("and hello to you")))
         transport.duringRequest = { await order.add("model") }
         let beats = Beats()
-        let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: makeDefaults(), brain: guestBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
@@ -164,7 +164,7 @@ final class MemoryTests: XCTestCase {
         let transport = ScriptedTransport((200, reply("and hello to you")))
         transport.duringRequest = { await order.add("model") }
         let beats = Beats()
-        let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: makeDefaults(), brain: guestBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
@@ -644,9 +644,6 @@ private func reply(_ text: String) -> String {
     #"{"id":"msg","type":"message","model":"claude-haiku-4-5","content":[{"type":"text","text":"\#(text)"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#
 }
 
-private struct FixedToken: TokenProvider {
-    func accessToken() async throws -> String { "tok" }
-}
 
 /// Holds a coordinated write on a folder until it is let go, which is what an editor with the
 /// vault open looks like from here.

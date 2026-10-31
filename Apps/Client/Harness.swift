@@ -155,7 +155,6 @@ final class Harness {
     private let database: RecordingDatabase
     private let log: TurnLog
     private let ensureZone: @Sendable () async throws -> Void
-    private let tokens: TokenProvider
     /// Where the unsettled turns and the model setting are kept.
     private let defaults: UserDefaults
     /// What answers: the runner asks it, and the harness asks it what is unresolved.
@@ -274,7 +273,7 @@ final class Harness {
 
     /// `brain` is what answers, chosen here and nowhere else: never per turn, and never on a
     /// failure. `relay` is where the brain tells what the guest is doing, when it is the guest.
-    init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
+    init(database: any RecordDatabase, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          defaults: UserDefaults = .standard,
          brain: any Brain, relay: GuestRelay = GuestRelay(),
@@ -284,7 +283,6 @@ final class Harness {
          patience: Duration = .seconds(LeaseTiming.standard.patience)) {
         self.patience = patience
         self.database = RecordingDatabase(database)
-        self.tokens = tokens
         self.device = device
         self.ensureZone = ensureZone
         self.defaults = defaults
@@ -311,21 +309,20 @@ final class Harness {
         }
     }
 
-    /// The app's harness: the shared CloudKit log, the keychain's tokens through the one provider
-    /// the app makes for them, and Claude Code in the guest as the brain — the only one the app
+    /// The app's harness: the shared CloudKit log and Claude Code in the guest as the brain, on
+    /// Claude Code's own login — the only one the app
     /// composes. Until the userland is on the phone and the resident process is up, a turn is not
     /// answered: the person's words stand in the log, the chat says why, and the answering loop
     /// answers them once the guest is ready.
     /// `database` and `ensureZone` are the app's store (`AppRecords`) and the suites' seam.
-    static func standard(tokens: StoredTokenProvider,
-                         database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database(),
+    static func standard(database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database(),
                          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) -> Harness {
-        let (bridge, relay) = guestBrain(ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile)
+        let (bridge, relay) = guestBrain(ResidentConversation(), ledger: GuestResident.ledgerFile)
         #if DEBUG
         // A stand-in log has no zone to make, and a run over one makes none in iCloud.
-        if let debug = DebugRun.log() { return Harness(database: debug, tokens: tokens, ensureZone: {}, brain: bridge, relay: relay) }
+        if let debug = DebugRun.log() { return Harness(database: debug, ensureZone: {}, brain: bridge, relay: relay) }
         #endif
-        return Harness(database: database(), tokens: tokens, ensureZone: ensureZone, brain: bridge, relay: relay)
+        return Harness(database: database(), ensureZone: ensureZone, brain: bridge, relay: relay)
     }
 
     /// The guest as the brain, and the relay its activity reaches `onGuest` through.
@@ -997,11 +994,6 @@ final class Harness {
                 failure = Failure(words: Self.describe(error))
                 onTurnFailed?(attempt.nonce)
             }
-        } catch TokenProviderError.signedOut {
-            guard inFlight == generation else { return false }
-            turnOpen = false
-            failure = Failure(words: "Signed out. Sign in again to continue.")
-            onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
             turnOpen = false
@@ -1160,8 +1152,6 @@ final class Harness {
             "Another device took over mid-reply. Your words are in the log."
         case let error as GuestBridgeError:
             error.description
-        case TokenProviderError.signedOut:
-            "Signed out. Sign in again to continue."
         default:
             TranscriptStore.message(for: error)
         }
@@ -1342,19 +1332,10 @@ final class Harness {
         rows.append(("Last CloudKit success", database.lastSuccess.map(Self.clock) ?? "none"))
         rows.append(("Brain", await brain.describe()))
         rows.append(("Unfinished turn", unfinished.map { "\($0.ref): \($0.text)" } ?? "none"))
-        rows.append(("Claude token", await Self.describeToken(tokens)))
+        rows.append(("Claude login", LoginCache(defaults: defaults).status?.summary ?? "signed out"))
         rows.append(("Model", "\(name(of: model)) (\(model.rawValue))"))
         rows.append(("Turns on screen", "\(turns.count)"))
         return Diagnostics(rows: rows)
-    }
-
-    private static func describeToken(_ tokens: TokenProvider) async -> String {
-        guard let stored = tokens as? StoredTokenProvider else { return "test provider" }
-        switch await stored.state() {
-        case .signedOut: return "none: signed out"
-        case .expired(let at): return "expired \(clock(at)); refreshes on the next turn"
-        case .valid(until: let at): return "valid until \(clock(at))"
-        }
     }
 
     private static func clock(_ date: Date) -> String {

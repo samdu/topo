@@ -19,6 +19,7 @@
 		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		05C48F859FA1C2DDAAB4C44D /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */; };
 		05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		062B25BAB00BD7F43261A69E /* GuestLoginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416572A886CAD45C1FBF35D4 /* GuestLoginTests.swift */; };
 		062DCBE16220AA2952E85920 /* MascotDebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */; };
 		07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */; };
 		07DD7564A112D8FE2FF4224F /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
@@ -418,6 +419,7 @@
 		BEA87040D78A2A27FF876C41 /* SurfaceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297C1A9489C88545BA87293C /* SurfaceProvider.swift */; };
 		C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B099B495226BFD2823184CC1 /* ControlRequest.swift */; };
 		C04D304A9508C2A2C35EAE55 /* ScreenSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E23900C549F79062FA7DB56B /* ScreenSampler.swift */; };
+		C086A28B8AECEDAB61C9DE29 /* OpenURLTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EF8D46AAAD5C1D655276034 /* OpenURLTool.swift */; };
 		C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402EB6E7D75092F33B78F15B /* GuestBridge.swift */; };
 		C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB40574A451BCD56247E1E50 /* HomeTool.swift */; };
 		C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
@@ -447,6 +449,7 @@
 		CC49A0C7A2E6F3B755DD2ABB /* GuestResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460C5C5620D24E4F80E9E415 /* GuestResolver.swift */; };
 		CC57D44CB7EB39BF75BEF57D /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		CD76275343AF00BA07281C3E /* ScreenWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996EA9E8F3A45CAAB86EE482 /* ScreenWatch.swift */; };
+		CE8948AD6DA6EF7A49507A0F /* GuestLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843BF0B5E0DF46CC89209EEF /* GuestLogin.swift */; };
 		CE9B9F042A2ACA8F8F2DCC65 /* OnePasswordInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04D099F38FADE29E35DE3E1 /* OnePasswordInstallerTests.swift */; };
 		CEDE0DECFBB5BCF16F65601D /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		CFF0361D936128D236BEE661 /* TopoTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */; };
@@ -672,6 +675,7 @@
 		0E7E379AAFA416610DDB0D94 /* DebugRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRun.swift; sourceTree = "<group>"; };
 		0EE26BC3B71DBCF5F73F6B15 /* ComposerGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerGeometryTests.swift; sourceTree = "<group>"; };
 		0EF1677D8D77561257325F30 /* VaultMountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMountTests.swift; sourceTree = "<group>"; };
+		0EF8D46AAAD5C1D655276034 /* OpenURLTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenURLTool.swift; sourceTree = "<group>"; };
 		0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareStore.swift; sourceTree = "<group>"; };
 		0F9A6E61220725887C726B26 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		10C7E3FD777A713DA6298113 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
@@ -739,6 +743,7 @@
 		402EB6E7D75092F33B78F15B /* GuestBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestBridge.swift; sourceTree = "<group>"; };
 		40819CF6083939579F503702 /* ShareIntake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareIntake.swift; sourceTree = "<group>"; };
 		40B37AD5D7C8EE55A947EE6E /* systemMedium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = systemMedium.json; sourceTree = "<group>"; };
+		416572A886CAD45C1FBF35D4 /* GuestLoginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestLoginTests.swift; sourceTree = "<group>"; };
 		4194F7FA1505EC3F8CCC30FE /* WidgetActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetActionTests.swift; sourceTree = "<group>"; };
 		41AECABE45D12B711410A2ED /* Memory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Memory.swift; sourceTree = "<group>"; };
 		42501D49784FE49024ED6C10 /* MarkdownRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderTests.swift; sourceTree = "<group>"; };
@@ -820,6 +825,7 @@
 		82E8447D928AACA5D0B36ABD /* VaultHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultHome.swift; sourceTree = "<group>"; };
 		834457A014E7809E1A052937 /* LicenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenceTests.swift; sourceTree = "<group>"; };
 		843B7316243F6B0BFD30D130 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		843BF0B5E0DF46CC89209EEF /* GuestLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestLogin.swift; sourceTree = "<group>"; };
 		84E8FFDC241EE10C721569CE /* LocationTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationTool.swift; sourceTree = "<group>"; };
 		8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHousekeeping.swift; sourceTree = "<group>"; };
 		8809A0CAEB64B3D22525D3DD /* HubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModel.swift; sourceTree = "<group>"; };
@@ -1124,6 +1130,7 @@
 				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
 				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
 				CF58534E47D3EBCB68EFD2FA /* GuestImages.swift */,
+				843BF0B5E0DF46CC89209EEF /* GuestLogin.swift */,
 				0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */,
 				460C5C5620D24E4F80E9E415 /* GuestResolver.swift */,
 				1DABB17BCD6602885282D24F /* Info.plist */,
@@ -1401,6 +1408,7 @@
 				0A7664872F28702F6C903A44 /* MapsLink.swift */,
 				CF31113B87FCBEE95414EAD2 /* MapsTool.swift */,
 				5AEBDE5DBDF558DA07A77435 /* NotifyTool.swift */,
+				0EF8D46AAAD5C1D655276034 /* OpenURLTool.swift */,
 				570E29C16DA2E655E25483F5 /* PhoneTool.swift */,
 				12F58195D812623D0E6E9353 /* PhotosTool.swift */,
 				A69D3F0D29AF2F1F3DF4686E /* ScreenTool.swift */,
@@ -1449,6 +1457,7 @@
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
 				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
 				7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */,
+				416572A886CAD45C1FBF35D4 /* GuestLoginTests.swift */,
 				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
@@ -2526,6 +2535,7 @@
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
 				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
 				8EA97D2374B9441BEDDBF412 /* GuestImageStoreTests.swift in Sources */,
+				062B25BAB00BD7F43261A69E /* GuestLoginTests.swift in Sources */,
 				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
@@ -2666,6 +2676,7 @@
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
 				B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */,
 				D615BDA21A8233CB73577A95 /* GuestImages.swift in Sources */,
+				CE8948AD6DA6EF7A49507A0F /* GuestLogin.swift in Sources */,
 				DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */,
 				CC49A0C7A2E6F3B755DD2ABB /* GuestResolver.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
@@ -2693,6 +2704,7 @@
 				813D801D420DE7D86179932D /* NotifyTool.swift in Sources */,
 				885E163C66AC4D7A380BB634 /* OctopusMark.swift in Sources */,
 				571D43A8EC3AE36CAF726E6F /* OnePassword.swift in Sources */,
+				C086A28B8AECEDAB61C9DE29 /* OpenURLTool.swift in Sources */,
 				C66ECBF53D8F849FA6442A18 /* PerfRun.swift in Sources */,
 				9294C1318A365C25A2DD50C4 /* PhoneTool.swift in Sources */,
 				DC666B236B6D9E0AAB52CF9F /* PhotosTool.swift in Sources */,
