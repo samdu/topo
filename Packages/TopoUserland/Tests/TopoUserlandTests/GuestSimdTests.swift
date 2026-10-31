@@ -242,4 +242,46 @@ final class GuestSimdTests: XCTestCase {
             """)
         XCTAssertEqual(exit.status, 0)
     }
+
+    /// LD1 and ST1 (single structure) on halfword lanes (`patches/ish/0015-ld1-single-h-lane.patch`):
+    /// every lane, loaded and stored, plain and post-indexed by an immediate and by a register, LD2's
+    /// second register, and the unallocated form with size<0> set still an illegal instruction. An H
+    /// lane is Q:S:size<1>; read from size<0>, lanes 1, 3, 5 and 7 land one element low. Bun's
+    /// BoringSSL gathers with LD1 {Vt.H}[1..3] in ML-KEM's NTT, so with the lane wrong TLS 1.3's
+    /// X25519MLKEM768 share decrypts wrong and Claude Code cannot reach its auth hosts itself.
+    func testLD1AndST1HalfwordLanesMatchTheArchitecture() async throws {
+        let exit = try await run("lane")
+        XCTAssertEqual(exit.output, """
+            ld1 h[0] 3412aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            ld1 h[1] aaaa3412aaaaaaaaaaaaaaaaaaaaaaaa
+            ld1 h[2] aaaaaaaa3412aaaaaaaaaaaaaaaaaaaa
+            ld1 h[3] aaaaaaaaaaaa3412aaaaaaaaaaaaaaaa
+            ld1 h[4] aaaaaaaaaaaaaaaa3412aaaaaaaaaaaa
+            ld1 h[5] aaaaaaaaaaaaaaaaaaaa3412aaaaaaaa
+            ld1 h[6] aaaaaaaaaaaaaaaaaaaaaaaa3412aaaa
+            ld1 h[7] aaaaaaaaaaaaaaaaaaaaaaaaaaaa3412
+            ld1 h[1] post aaaa3412aaaaaaaaaaaaaaaaaaaaaaaa
+            ld1 h[3] post aaaaaaaaaaaa3412aaaaaaaaaaaaaaaa
+            ld1 h[5] post aaaaaaaaaaaaaaaaaaaa3412aaaaaaaa
+            ld1 h[7] post aaaaaaaaaaaaaaaaaaaaaaaaaaaa3412
+            ld1 h[6] post x aaaaaaaaaaaaaaaaaaaaaaaa3412aaaa
+            ld2 h[5] second aaaaaaaaaaaaaaaaaaaa0180aaaaaaaa
+            st1 h[0] 3412aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[1] 0180aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[2] ff7faaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[3] 0000aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[4] 7856aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[5] cdabaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[6] 1122aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[7] 3344aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[3] post 0000aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            st1 h[6] post 1122aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            ld1 h size 1 SIGILL
+            ld1 h size 1 post SIGILL
+
+            """)
+        // Both loads with size<0> set killed a child with SIGILL (the last lines), and the last
+        // instruction is the store with it set, unallocated too: 128 + SIGILL.
+        XCTAssertEqual(exit.status, 132, "the unallocated store did not trap")
+    }
 }
