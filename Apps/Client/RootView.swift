@@ -21,10 +21,10 @@ struct RootView: View {
         case nil:
             DecidingView(trouble: roleSelector.trouble) { await roleSelector.decide() }
         case .viewer:
-            // A viewer holds no login and keeps nothing waiting. One found here (a reinstall
-            // keeps the keychain while the role record says viewer; a demotion decided at
-            // launch leaves an outbox on disk) puts what was waiting into the log as a limb's
-            // turns and drops the login.
+            // A viewer holds no login and keeps nothing waiting. One found here (the keychain
+            // outlives a delete of the app while the lease or the role record names another
+            // device or says viewer; a demotion decided at launch leaves an outbox on disk)
+            // puts what was waiting into the log as a limb's turns and drops the login.
             ViewerRootView().task {
                 await ViewerArrival(forgetShares: { ShareStore.shared()?.close() },
                                     holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
