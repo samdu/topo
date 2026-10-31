@@ -20,6 +20,17 @@ public enum GuestTools {
     public static let ghPath = ".topo/bin/gh"
     public static let ghCommand = "/usr/local/bin/gh"
 
+    /// `BROWSER` for Claude Code's login: hands the URL it is given to `topo open-url`. Set in the
+    /// login's environment alone, and not linked onto the path.
+    public static let browserPath = ".topo/bin/topo-browser"
+    public static let browser = """
+    #!/bin/sh
+    # Claude Code's BROWSER during Topo's sign-in: the phone opens the URL in its sign-in sheet.
+    # Written by the app on every start.
+    exec topo open-url "$1"
+
+    """
+
     /// Each script under the home, and where it is linked on the guest's path.
     public static let links: [(script: String, command: String)] = [
         (scriptPath, command),
@@ -47,7 +58,7 @@ public enum GuestTools {
     public static func install(home: URL) throws {
         let files = FileManager.default
         let skill = home.appendingPathComponent(skillPath)
-        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh)]
+        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser)]
         for url in [skill] + scripts.map({ home.appendingPathComponent($0.0) }) {
             try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
@@ -66,6 +77,12 @@ public enum GuestTools {
     #!/bin/bash
     # topo: the phone's own tools, run by the Topo app on its loopback. `topo help` lists them.
     # Written by the app on every start; an edit here lasts until the next one.
+    # Tracing off before anything expands a token: an xtrace the caller's environment turns on
+    # (`SHELLOPTS=xtrace`, a `set -x` in `BASH_ENV`) would print the service's token, and the
+    # answer with GitHub's, on standard error or `BASH_XTRACEFD`. Its own trace goes to
+    # /dev/null, so a `BASH_XTRACEFD=1` puts nothing beside the answer. The writer below turns it
+    # off for itself as well, since a `BASH_ENV` runs again in every bash this one starts.
+    { set +x; } > /dev/null 2>&1
     if [ -z "${TOPO_TOOLS_URL:-}" ] || [ -z "${TOPO_TOOLS_TOKEN:-}" ]; then
         echo "topo: the phone's tool service is not in this environment" >&2
         exit 3
@@ -78,21 +95,25 @@ public enum GuestTools {
     # disk, so neither the token nor an argument is ever written down, and the answer comes back
     # on wget's standard output. The writer is bounded, so one whose reader never came (a wget
     # that failed first, a `topo` killed) is gone within the call's own bound, and it writes
-    # nothing unless it opened the FIFO: a `topo` ended before then has removed the directory,
-    # and a writer that carried on would print the token on the standard output it inherited. `wget -q` says
+    # nothing unless it opened the FIFO: a `topo` ended by a signal it traps has removed the
+    # directory by then (a SIGKILL skips the trap and leaves the empty FIFO behind). Its standard
+    # input, output and error are /dev/null, so one left blocked on the open after its `topo` was
+    # killed holds neither the output nor the error its caller reads to the end, and one that
+    # carried on past a failed open would print the token nowhere. `wget -q` says
     # nothing on success, so its standard error joins the answer only when it failed; the
     # trailing `.` keeps the answer's last newlines, which a command substitution would strip.
     fifo_dir="$(mktemp -d)" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
     trap 'rm -rf "$fifo_dir"' EXIT
     mkfifo -m 600 "$fifo_dir/request" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
     timeout 110 bash -c '
+        { set +x; } > /dev/null 2>&1
         exec > "$1" || exit 1; shift
         printf "%s\n" "$TOPO_TOOLS_TOKEN"
         for argument in "$@"; do
             printf "%s" "$argument" | base64 | tr -d "\n"
             printf "\n"
         done
-    ' topo-request "$fifo_dir/request" "$@" &
+    ' topo-request "$fifo_dir/request" "$@" < /dev/null > /dev/null 2>&1 &
     writer=$!
     answer="$(
         wget -q -T 100 -O - --header "Content-Type: text/plain" \
@@ -135,6 +156,8 @@ public enum GuestTools {
     #!/bin/bash
     # git-credential-topo: GitHub's token from the Topo app, for one git command.
     # Written by the app on every start; an edit here lasts until the next one.
+    # Tracing off: a trace inherited from the caller's environment would print GitHub's token.
+    { set +x; } > /dev/null 2>&1
     if [ "${1:-}" != get ]; then
         cat > /dev/null
         exit 0
@@ -169,6 +192,8 @@ public enum GuestTools {
     #!/bin/bash
     # gh: GitHub's CLI with the token from the Topo app, for this one command.
     # Written by the app on every start; an edit here lasts until the next one.
+    # Tracing off: a trace inherited from the caller's environment would print GitHub's token.
+    { set +x; } > /dev/null 2>&1
     real=/usr/bin/gh
     if [ ! -x "$real" ]; then
         echo "gh is not installed in the guest: apk add github-cli" >&2

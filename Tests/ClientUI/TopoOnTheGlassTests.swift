@@ -26,6 +26,14 @@ final class TopoOnTheGlassTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Once, after the class's last test: two tests keep an override (`TOPO_DEBUG_TUNING`) and
+    /// every launch here sets its own, so only what the class leaves behind it needs clearing.
+    override class func tearDown() {
+        // XCTest calls it on the main thread.
+        MainActor.assumeIsolated { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
+        super.tearDown()
+    }
+
     /// A full transcript and an empty one, each with him where it puts him, photographed as he
     /// stands, then pressed.
     func testAPressOnTheWellReachesTheMicrophoneWhereverHeStands() throws {
@@ -53,7 +61,7 @@ final class TopoOnTheGlassTests: XCTestCase {
                 XCTAssertEqual(after.presses, before.presses + 1,
                                "\(transcript): a press on \(point) did not reach the microphone: \(after.raw)")
                 // A prompt the press raised, run alone on a cleared lane, is allowed.
-                let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+                let alert = TopoLaunch.springboardAlerts.firstMatch
                 if alert.waitForExistence(timeout: 2) {
                     alert.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch.tap()
                 }
@@ -84,7 +92,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         for _ in 0..<3 where !app.keyboards.element.exists {
             flank.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
-            dismissAccountAlert()
+            ChatReading.dismissAccountAlert(timeout: 3)
         }
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the flank raised no keyboard")
         let deadline = Date().addingTimeInterval(10)
@@ -121,7 +129,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         XCTAssertEqual(after.presses, before.presses + 1,
                        "a press at the short well's edge did not reach the microphone: \(after.raw)")
         XCTAssertEqual(mic.frame.width, short.width, accuracy: 1, "the press was not on the short well")
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        let alert = TopoLaunch.springboardAlerts.firstMatch
         if alert.waitForExistence(timeout: 2) {
             alert.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch.tap()
         }
@@ -146,7 +154,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         for _ in 0..<3 where !app.keyboards.element.exists {
             flank.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
-            dismissAccountAlert()
+            ChatReading.dismissAccountAlert(timeout: 3)
         }
         let keyboard = app.keyboards.element
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the flank raised no keyboard")
@@ -216,9 +224,8 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// over it, a tap and a hold long enough to have been a drag each reach `VoiceInput` — the press
     /// and its release both counted — and no drag began. The pin over the well is worked out from
     /// where the chat reports the well, a fraction of the transcript's frame carried to the pane's
-    /// foot, and kept as a drag would keep it (`TOPO_DEBUG_TUNING`), which the test clears after.
+    /// foot, and kept as a drag would keep it (`TOPO_DEBUG_TUNING`), which the class clears after.
     func testThroughAPlacedTopoThePressIsTheMicrophones() throws {
-        addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
         let beside = ChatReading.launch(transcript: "empty", tuning: #"{"mascot": {"placement": "glass"}}"#)
         XCTAssertTrue(ChatReading.microphone(beside).waitForExistence(timeout: 60), "the chat screen")
         let (_, glass) = try ChatReading.wait(beside, "on the glass beside the well") { _, topo in
@@ -250,7 +257,6 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// cleared after): the chat's report says he is drawn, his frame inside the screen and off the
     /// glass, the decision cleared no place and he stands at his roost.
     func testWithNoPlaceClearOfTheWordsHeIsDrawnOverThemAndTheWellKeepsItsPress() throws {
-        addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
         let app = ChatReading.launch(transcript: "full", tuning: Self.noClearPlace)
         let mic = ChatReading.microphone(app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen")
@@ -281,7 +287,7 @@ final class TopoOnTheGlassTests: XCTestCase {
 
     /// A tap on the well's middle and a hold there past the time that picks him up, each counted as
     /// a press and a release by the microphone, with no drag begun.
-    private func pressThrough(_ app: XCUIApplication, _ label: String) throws {
+    private func pressThrough(_ app: TopoApplication, _ label: String) throws {
         let mic = ChatReading.microphone(app)
         for (press, duration) in [("a tap", 0.1), ("a hold", 1.5)] {
             let before = try XCTUnwrap(ChatReading.mic(mic), "\(label): no report on the microphone")
@@ -326,7 +332,7 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// simulator starts with the Mac's keyboard connected, under which nothing rises and the
     /// glass, which goes short on the keyboard's own safe area, stays as it is. `transcript` is the
     /// fixture the chat draws (`TOPO_DEBUG_TRANSCRIPT`).
-    private func launch(look: String, transcript: String, softwareKeyboard: Bool = false) -> XCUIApplication {
+    private func launch(look: String, transcript: String, softwareKeyboard: Bool = false) -> TopoApplication {
         let app = TopoLaunch.app()
         if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
@@ -340,19 +346,11 @@ final class TopoOnTheGlassTests: XCTestCase {
         app.launchEnvironment["TOPO_DEBUG_TUNING"] = ""
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
-        dismissAccountAlert()
+        ChatReading.dismissAccountAlert()
         return app
     }
 
-    /// A simulator signed into iCloud can ask for the account's password over the app, which puts
-    /// the scene out of the foreground and stops him; it is the simulator's alert and not Topo's,
-    /// so it is put away.
-    private func dismissAccountAlert() {
-        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
-        if alert.waitForExistence(timeout: 3) { alert.buttons["Not Now"].tap() }
-    }
-
-    private func attach(_ app: XCUIApplication, _ name: String) {
+    private func attach(_ app: TopoApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
@@ -390,26 +388,26 @@ final class TopoOnTheGlassTests: XCTestCase {
     }
     private struct TopoNotThere: Error { var message: String }
 
-    private func topo(in app: XCUIApplication) -> Topo? {
+    private func topo(in app: TopoApplication) -> Topo? {
         let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
         return (try? JSONDecoder().decode(ChatReport.self, from: Data(raw.utf8)))?.mascot
     }
 
     /// Which way the chat's debug report says he faces.
-    private func facing(in app: XCUIApplication) -> String? {
+    private func facing(in app: TopoApplication) -> String? {
         let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
         return (try? JSONDecoder().decode(ChatReport.self, from: Data(raw.utf8)))?.facing
     }
 
     /// Waits for him to be as `wanted` says, and fails the test, naming what he was instead, when
     /// he is not by the deadline.
-    private func waitForTopo(in app: XCUIApplication, _ what: String, timeout: TimeInterval = 20,
+    private func waitForTopo(in app: TopoApplication, _ what: String, timeout: TimeInterval = 20,
                              _ wanted: (Topo) -> Bool) throws -> Topo {
         let deadline = Date().addingTimeInterval(timeout)
         var seen = topo(in: app)
         // The simulator's account alert can arrive at any point of a run and puts the scene out
         // of the foreground, which stops him; it is put away whenever it is up.
-        let accountAlert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
+        let accountAlert = TopoLaunch.springboardAlerts[AccountAlert.title]
         while seen.map(wanted) != true, Date() < deadline {
             if accountAlert.exists { accountAlert.buttons["Not Now"].tap() }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))

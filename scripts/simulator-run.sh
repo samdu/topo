@@ -30,8 +30,8 @@
 # The token comes from the environment (CLAUDE_SETUP_TOKEN, which is what the vault item
 # `long-lived-claude-auth-token` reaches this machine as) or, failing that, straight from the
 # vault with `op-item`. It is handed to the app as SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN and
-# reaches no file, no scheme, no build setting and no artifact; the app writes it to that
-# simulator's keychain, which --erase is how you clear.
+# reaches no file, no scheme, no build setting and no artifact; the app hands it to every
+# `claude` it starts in the guest for that launch and keeps nothing of it.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
 # ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
@@ -130,7 +130,7 @@ if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   xcrun simctl erase "$udid"
-  echo "==> erased; the token is no longer in that simulator's keychain"
+  echo "==> erased; the simulator's iCloud account and the app's data are gone"
   exit 0
 fi
 
@@ -229,8 +229,10 @@ if [ "$talk" = yes ]; then
   scripts/fetch-ear-models.sh "$models"
   scripts/fetch-voice-models.sh "$voice_models"
   # A start that refuses (exit 3) found another run's lane, which is not this run's to stop.
+  # The lane is this run's (AUDIO_LANE_OWNER), so a later start finds it abandoned once this
+  # run has ended without stopping it, a SIGKILL's, and stops it.
   lane=ours
-  scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav" || {
+  AUDIO_LANE_OWNER=$$ scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav" || {
     status=$?
     [ "$status" = 3 ] && lane=theirs
     exit "$status"
@@ -271,8 +273,8 @@ app="$derived/Build/Products/Debug-iphonesimulator/Topo.app"
 
 if [ "$pressmic" = yes ]; then
   # The XCUITest that taps, holds and releases the microphone (Tests/ClientUI), on this device.
-  # It launches the app signed in with a placeholder token, which the launch below replaces with
-  # the real one; docs/simulator.md says what the press reaches and what it cannot.
+  # It launches the app signed in with a placeholder token; the launch below carries the real
+  # one. docs/simulator.md says what the press reaches and what it cannot.
   echo "==> pressing the microphone"
   # The test counts the permission prompts the run raises, so the app's grants go first, and the
   # flag says the reset happened: the count is exact only on a simulator that has answered nothing.

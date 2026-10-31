@@ -117,7 +117,7 @@ final class TuningSliderTests: XCTestCase {
 
     /// Closes the settings with Done once it can be hit, and waits for the sheet to be gone, so
     /// what is read next is the chat and not the sheet over it.
-    private func done(_ app: XCUIApplication) {
+    private func done(_ app: TopoApplication) {
         let settings = app.navigationBars["Settings"]
         let done = settings.buttons["Done"]
         XCTAssertTrue(becomes(done, "hittable == true"), "Done cannot be hit")
@@ -131,7 +131,7 @@ final class TuningSliderTests: XCTestCase {
         var presence: Double?
     }
 
-    private func wait(in app: XCUIApplication, _ wanted: (Placed) -> Bool) -> Bool {
+    private func wait(in app: TopoApplication, _ wanted: (Placed) -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
             let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
@@ -143,7 +143,7 @@ final class TuningSliderTests: XCTestCase {
 
     /// Opens the settings on the Topo section, which is the first in the sheet: where he sits, his
     /// pin and Reset are there to be hit with nothing scrolled.
-    private func openSettings(_ app: XCUIApplication, badge: XCUIElement) {
+    private func openSettings(_ app: TopoApplication, badge: XCUIElement) {
         badge.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the tap did not open the settings")
         XCTAssertTrue(becomes(app.buttons["tuning-placement"], "hittable == true"), "the settings do not open on where Topo sits")
@@ -155,7 +155,7 @@ final class TuningSliderTests: XCTestCase {
     /// to a starved app can arrive as a touch too short to move the list, so the list is dragged
     /// until it gets there, a bounded number of times, from the leading margin, where no row's
     /// control is to be picked up by it.
-    private func openTuning(_ app: XCUIApplication, badge: XCUIElement) throws -> XCUIElement {
+    private func openTuning(_ app: TopoApplication, badge: XCUIElement) throws -> XCUIElement {
         openSettings(app, badge: badge)
         let slider = app.sliders["tuning-clearance"]
         let form = app.collectionViews.firstMatch
@@ -167,13 +167,13 @@ final class TuningSliderTests: XCTestCase {
         return slider
     }
 
-    private func clearance(in app: XCUIApplication) -> Double? {
+    private func clearance(in app: TopoApplication) -> Double? {
         struct Report: Decodable { var clearance: Double? }
         let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
         return (try? JSONDecoder().decode(Report.self, from: Data(raw.utf8)))?.clearance
     }
 
-    private func wait(for wanted: Double, in app: XCUIApplication) -> Bool {
+    private func wait(for wanted: Double, in app: TopoApplication) -> Bool {
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
             if let now = clearance(in: app), abs(now - wanted) < 0.001 { return true }

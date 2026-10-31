@@ -1,4 +1,5 @@
 import XCTest
+import TopoCore
 @testable import TopoUserland
 
 /// The resident session against a scripted process and a clock moved by hand: turns one at a time,
@@ -21,6 +22,7 @@ final class GuestSessionTests: XCTestCase {
     }
 
     private var store: SessionFile { SessionFile(url: directory.appendingPathComponent(".guest-session")) }
+    private var cutURL: URL { directory.appendingPathComponent(".guest-cut.json") }
 
     private func session() -> GuestSession {
         GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep)
@@ -68,6 +70,60 @@ final class GuestSessionTests: XCTestCase {
     }
 
     // MARK: - Turns
+
+    /// A launch writes `initialize` before anything else, so its answer says when the process is
+    /// ready; that answer is the app's own and never one of a turn's events.
+    func testALaunchAsksForInitializeFirstAndItsAnswerIsNoTurns() async throws {
+        let (session, process) = try await resident()
+        let first = try XCTUnwrap(process.written.first)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(first.utf8)) as? [String: Any])
+        XCTAssertEqual(object["type"] as? String, "control_request")
+        XCTAssertEqual(object["request_id"] as? String, GuestSession.readyRequest)
+        XCTAssertEqual((object["request"] as? [String: Any])?["subtype"] as? String, "initialize")
+
+        let (turn, done) = collect(try await session.send("hello"))
+        await eventually("written") { process.turns.count == 1 }
+        XCTAssertEqual(process.written.count, 2, "the turn went before the initialize, or twice")
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{}}}"#)
+        process.emit(Lines.text("hi"))
+        process.emit(Lines.result("hi", session: "S1"))
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        XCTAssertFalse(turn.events.contains { if case .controlResponse = $0 { return true } else { return false } },
+                       "a control response reached the turn")
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response","response":{"request_id":"r1"}}"#), [.controlResponse(id: "r1")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response"}"#), [.other("control_response")])
+    }
+
+    /// On a cold start the turn waits while Claude Code starts, and the answer to `initialize` is
+    /// the first line it writes: that answer takes neither the turn's first-line mark nor its count
+    /// of lines, so the turn's own first line is still marked.
+    func testTheInitializeAnswerIsNotTheFirstLineOfATurnWaitingForIt() async throws {
+        let marks = Marks()
+        try await Perf.$observer.withValue({ marks.add($0) }) {
+            let (session, process) = try await resident()
+            process.echoes = false
+            let (_, done) = collect(try await session.send("hello", id: "t1"))
+            await eventually("written") { process.turns.count == 1 }
+            process.emit(#"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{}}}"#)
+            await eventually("ready marked") { marks.all.contains { $0.hasPrefix("resident.ready") } }
+            XCTAssertFalse(marks.all.contains("turn.guest.firstLine"), "the initialize answer took the turn's first line")
+            process.emit(Lines.`init`("S1"))
+            process.emit(Lines.echo("t1"))
+            process.emit(Lines.text("hi"))
+            process.emit(Lines.result("hi", session: "S1"))
+            await done.value
+        }
+        XCTAssertEqual(marks.all.filter { $0 == "turn.guest.firstLine" }.count, 1, "\(marks.all)")
+    }
+
+    private final class Marks: @unchecked Sendable {
+        private let lock = NSLock()
+        private var names: [String] = []
+        var all: [String] { lock.withLock { names } }
+        func add(_ name: String) { lock.withLock { names.append(name) } }
+    }
 
     func testTwoTurnsGoToOneResidentProcessAndTheSessionIdIsKept() async throws {
         let (session, process) = try await resident()
@@ -420,6 +476,99 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(turn.ends, [.abandoned], "the abandoned turn ended twice")
     }
 
+    /// #452: a turn cut at the teardown point is told to the next process, once, in its system
+    /// prompt, and the note is gone once that process has begun.
+    func testATurnTheWayOutCutShortIsToldToTheNextProcessOnce() async throws {
+        let times = Times([Date(timeIntervalSince1970: 1_792_684_800), Date(timeIntervalSince1970: 1_792_684_815)])
+        let session = GuestSession(launcher: launcher, store: store, now: times.next, turnBound: bound, sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        let (_, done) = collect(try await session.send("very long one"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        let background = Task { await session.background(budget: .seconds(15)) }
+        await eventually("the teardown waiting on the turn") { await clock.pending == 2 }
+        await clock.advance(by: .seconds(15))
+        _ = await background.value
+        await done.value
+
+        await session.foreground()
+        try await session.ready()
+        let note = try XCTUnwrap(launcher.notesTold.last ?? nil)
+        XCTAssertTrue(note.contains("2026-10-22T16:00:00 UTC"), note)
+        XCTAssertTrue(note.contains("15 seconds later the time Topo had behind another app ended (iOS's allowance ran out, or the person stopped it)"), note)
+        XCTAssertTrue(note.contains("the turn you were answering"), note)
+        XCTAssertFalse(note.contains("background task"), note)
+        XCTAssertEqual(launcher.notesTold.first ?? "none", nil, "the first launch was told of a cut")
+
+        // Told once: once the process has begun, the next launch is told nothing.
+        let second = try XCTUnwrap(launcher.last)
+        second.emit(Lines.`init`("S1"))
+        await eventually("the note cleared") { !FileManager.default.fileExists(atPath: self.cutURL.path) }
+        _ = await session.background(budget: .seconds(15))
+        await session.foreground()
+        try await session.ready()
+        XCTAssertEqual(launcher.notesTold.count, 3)
+        XCTAssertEqual(launcher.notesTold.last ?? "none", nil)
+    }
+
+    /// The more common cut: the reply landed, the app left, and a background task the turn
+    /// started went with the process. A process that never began keeps the note for the next.
+    func testABackgroundTaskEndedWithTheProcessIsToldToTheNextUntilOneBegins() async throws {
+        let lines = Logged()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   log: { lines.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        // The task is started inside a turn, as `run_in_background` starts one; the turn's end
+        // comes after the line, so the line has been read once the turn has ended.
+        let (_, done) = collect(try await session.send("log for ten minutes"))
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"},{"task_id":"b"}]}"#)
+        process.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}"#)
+        process.emit(Lines.result("started", session: "S1"))
+        await done.value
+        guard case .ended(nil, _) = await session.background(budget: .seconds(15)) else { return XCTFail("not ended") }
+        // The line the app keeps on disk for a device check (`GuestResident.log`) begins with the prefix it routes by.
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix(GuestSession.cutLine) && $0.contains("no turn and 1 background task") },
+                      "\(lines.all)")
+        await session.foreground()
+        try await session.ready()
+        let note = try XCTUnwrap(launcher.notesTold.last ?? nil)
+        XCTAssertTrue(note.contains("a background task you had started"), note)
+        XCTAssertFalse(note.contains("the turn you were answering"), note)
+        XCTAssertTrue(note.contains("once its reply is done and Topo is not on the screen"), note)
+        // This one is ended before it begins: the next is told again.
+        _ = await session.background(budget: .seconds(15))
+        await session.foreground()
+        try await session.ready()
+        XCTAssertEqual(launcher.notesTold.last ?? nil, note)
+    }
+
+    /// An idle process with nothing running leaves no note, and a sign-out takes one away.
+    func testNothingCutIsNoNoteAndASignOutTakesOneAway() async throws {
+        let (session, process) = try await resident()
+        _ = await session.background(budget: .seconds(15))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cutURL.path), "an idle process left a note")
+        await session.foreground()
+        try await session.ready()
+        let next = try XCTUnwrap(launcher.last)
+        XCTAssertNotIdentical(next, process)
+        let (_, done) = collect(try await session.send("start a job"))
+        await eventually("written") { next.turns.count == 1 }
+        next.emit(Lines.`init`("S1"))
+        next.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}"#)
+        next.emit(Lines.result("started", session: "S1"))
+        await done.value
+        _ = await session.background(budget: .seconds(15))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cutURL.path))
+        await session.forgetSession()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cutURL.path), "a sign-out left the note")
+    }
+
     func testAnIdleProcessIsEndedAtOnceOnTheWayOut() async throws {
         let (session, process) = try await resident()
         let outcome = await session.background(budget: .seconds(15))
@@ -694,6 +843,49 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(launcher.processes.count, 2)
     }
 
+    /// A login runs with no resident: the process there is ended before the body runs, a
+    /// `ready()` arriving meanwhile waits, nothing starts until the body has returned, and the
+    /// process started then resumes the conversation rather than forgetting it.
+    func testALoginRunsWithNoResidentAndKeepsTheConversation() async throws {
+        store.save("KEPT")
+        let (session, old) = try await resident()
+        let launcher = launcher!
+        let endedBeforeBody = Launches()
+        let launchesInBody = Launches()
+        let release = Launches()
+        let login = Task {
+            await session.withoutResident {
+                endedBeforeBody.set(old.terminated ? 1 : 0)
+                // Held here until the test has asked for a process, so that ask lands under the hold.
+                while release.value == nil { await Task.yield() }
+                for _ in 0..<50 { await Task.yield() }
+                launchesInBody.set(launcher.processes.count)
+                return 7
+            }
+        }
+        await eventually("the body ran") { endedBeforeBody.value != nil }
+        let waiting = Task { try await session.ready() }
+        for _ in 0..<50 { await Task.yield() }
+        release.set(1)
+        let answer = await login.value
+        XCTAssertEqual(answer, 7)
+        XCTAssertEqual(endedBeforeBody.value, 1, "the login ran beside a resident")
+        XCTAssertEqual(launchesInBody.value, 1, "a process started while the login ran")
+        try await waiting.value
+        XCTAssertEqual(launcher.processes.count, 2, "the ready() that waited through the login got no process")
+        XCTAssertEqual(launcher.resumed, ["KEPT", "KEPT"], "the login forgot the conversation")
+    }
+
+    /// With nobody waiting, a login leaves nothing resident: the next `ready()` starts one.
+    func testALoginWithNobodyWaitingStartsNothing() async throws {
+        let (session, _) = try await resident()
+        await session.withoutResident {}
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(launcher.processes.count, 1, "a login started a process nobody asked for")
+        try await session.ready()
+        XCTAssertEqual(launcher.processes.count, 2)
+    }
+
     private final class Launches: @unchecked Sendable {
         private let lock = NSLock()
         private var count: Int?
@@ -820,6 +1012,16 @@ final class GuestSessionTests: XCTestCase {
         answer(fresh, "hi", session: "NEW")
         await freshDone.value
         XCTAssertEqual(store.load(), "NEW", "the replacement's own session was not kept")
+    }
+}
+
+/// Hands out the dates given, in order, then the last one again.
+private final class Times: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dates: [Date]
+    init(_ dates: [Date]) { self.dates = dates }
+    var next: @Sendable () -> Date {
+        { [self] in lock.withLock { dates.count > 1 ? dates.removeFirst() : dates[0] } }
     }
 }
 

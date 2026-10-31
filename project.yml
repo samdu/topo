@@ -99,6 +99,13 @@ targets:
       # The screen share's broadcast extension, embedded in the app.
       - target: TopoBroadcast
       - target: TopoShare
+      # The watch app rides inside the phone's (`Topo.app/Watch/`), so every build of the phone
+      # app carries it and installing Topo on the phone offers it in the Watch app.
+      - target: TopoWatch
+        embed: true
+        copyFiles:
+          destination: productsDirectory
+          subpath: $(CONTENTS_FOLDER_PATH)/Watch
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -132,8 +139,12 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # The commit this build's source is, which the About screen names as the corresponding
-        # source the GPL asks for; `scripts/archive-upload.sh` passes it, and it is empty elsewhere.
+        # source the GPL asks for; `scripts/archive-upload.sh` and the ota experiment's
+        # `publish-topo.sh` pass it, and it is empty in a build from Xcode. The channel is the
+        # pipeline that cut the build (`testflight`, `main`, `dev`), passed by the same two. Both
+        # reach the guest's environment (`BuildFacts`, docs/guest.md).
         TopoSourceCommit: $(TOPO_SOURCE_COMMIT)
+        TopoChannel: $(TOPO_CHANNEL)
         # `topo://open` and `topo://cue?…`, which the widgets open (Apps/Widgets/WidgetIntents.swift).
         # No setting generates this key, so it is here, and `scripts/check-built-plist.sh` reads it.
         CFBundleURLTypes:
@@ -151,6 +162,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
         TOPO_SOURCE_COMMIT: ""
+        TOPO_CHANNEL: ""
         # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
@@ -309,6 +321,14 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: zone.hexagon.topo.watch
             CFBundleURLSchemes: [topo]
+        # The phone app this one is the companion of, which is what installs it from the phone;
+        # it still runs on its own, since it reads CloudKit itself and never asks the phone.
+        # Neither key is one Xcode generates from a setting, and `scripts/check-built-plist.sh`
+        # reads both off the phone's product.
+        WKCompanionAppBundleIdentifier: zone.hexagon.topo
+        WKRunsIndependentlyOfCompanionApp: true
+        # The name under the icon on the watch and in the Watch app, not the target's.
+        CFBundleDisplayName: Topo
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch
@@ -316,8 +336,10 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # The container, the watch's own app group (app groups do not cross devices) and the push.
         CODE_SIGN_ENTITLEMENTS: Apps/TopoWatch.entitlements
-        INFOPLIST_KEY_WKWatchOnly: true
         INFOPLIST_KEY_WKApplication: true
+        # Embedded content: the archive carries it inside Topo.app, never beside it as a second
+        # product.
+        SKIP_INSTALL: YES
   # The watch's complications and Smart Stack cards (docs/widgets.md, The watch): the phone's
   # reader and view built for watchOS, drawing the watch's group and fetching nothing, with no
   # CloudKit entitlement at all. Topo is drawn as the mark, since the pixel engine is iOS only.
@@ -463,6 +485,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.uitests
+        # Made by XCTest before any test runs: the monitor that puts the simulator's account
+        # alert away (Tests/ClientUI/AccountAlert.swift).
+        INFOPLIST_KEY_NSPrincipalClass: TopoUITests.AccountAlert
   # The spoken turn end to end: a question looped into the microphone, heard by Parakeet, sent,
   # answered by Claude and read aloud. It needs a real setup token, an iCloud account on the
   # simulator and a loopback lane, which only buddybox has, so it is in its own scheme

@@ -131,7 +131,7 @@ final class ControlCueTests: XCTestCase {
         let defaults = defaults()
         defaults.follow(from: .idle, to: .idle)
         XCTAssertNil(store.readControl(slot: "button-1"), "a default was written signed out")
-        defaults.follow(from: .exchanging, to: .signedIn)
+        defaults.follow(from: .approving(.init(page: nil, pasting: false)), to: .signedIn)
         for slot in ControlSlot.all {
             let document = try XCTUnwrap(store.readControl(slot: slot)?.document, slot)
             XCTAssertTrue(document.isDefault, slot)
@@ -189,7 +189,7 @@ final class ControlCueTests: XCTestCase {
         defaults().follow(from: .idle, to: .signedIn)
         let written = try store.writeControl(ControlDocument.read(#"{"title": "Lamp", "action": {"kind": "run", "topo": ["notify", "Lamp"]}}"#, slot: "button-2").document,
                                              slot: "button-2")
-        defaults().follow(from: .approvingGuest(opening: URL(string: "https://claude.com/cai/oauth/authorize")!, pasteHint: false), to: .signedIn)
+        defaults().follow(from: .approving(.init(page: URL(string: "https://claude.com/cai/oauth/authorize"), pasting: true)), to: .signedIn)
         let document = try XCTUnwrap(store.readControl(slot: "button-2")?.document)
         XCTAssertTrue(document.isDefault, "an earlier login's slot outlived a new login")
         XCTAssertGreaterThan(document.revision, written)
@@ -267,7 +267,7 @@ final class ControlCueTests: XCTestCase {
 
     private func harness(_ database: any RecordDatabase, defaults: UserDefaults, transport: ScriptedTransport,
                          ensureZone: @escaping @Sendable () async throws -> Void = {}) -> Harness {
-        Harness(database: database, tokens: FixedToken(), device: phone, ensureZone: ensureZone,
+        Harness(database: database, device: phone, ensureZone: ensureZone,
                 defaults: defaults, brain: guestBrain(over: transport), leaseSleep: parked,
                 pause: { _ in throw CancellationError() })
     }
@@ -293,9 +293,6 @@ private final class ScriptedTransport: Transport, @unchecked Sendable {
     }
 }
 
-private struct FixedToken: TokenProvider {
-    func accessToken() async throws -> String { "tok" }
-}
 
 private struct Unexpected: Error {}
 

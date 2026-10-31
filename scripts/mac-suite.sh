@@ -17,8 +17,11 @@
 #              It has two parts, each a suite by its own name with its own line in suites.txt
 #              and its own result bundle: `topo_ui:quiet`, every UI test class but
 #              MicrophonePressTests, with no audio lane, no display hold, no models and nothing
-#              that opens a microphone or speaks (a tripwire reads the tests' source first, `quiet_launches`
-#              below, and no test runs when it names a launch); and `topo_ui:mic`, that class alone behind
+#              that opens a microphone or speaks (every launch holds the ear and the voice
+#              loading under TEST_RUNNER_TOPO_QUIET_LANE, `TopoApplication`; `quiet_launches`
+#              below refuses a route round it before any test runs; after them the app's data
+#              container on the part's simulator holds no fetched model, `quiet_models`, or the
+#              part fails); and `topo_ui:mic`, that class alone behind
 #              everything `topo_ui` has. One is all but the class and the other the class, so
 #              no test is in neither.
 #   others     the scripts' own tests, the committed manifest, the Swift packages, Womble, the
@@ -50,7 +53,8 @@
 # validate-and-push.sh runs one suite a call, each under that suite's lock.
 #
 # --check runs nothing: it says whether a Mac other than buddybox can run the suites named, and exits 1 with an
-# `error:` line for each thing it lacks: the pinned Xcode and XcodeGen, jq, a simulator of each
+# `error:` line for each thing it lacks: the pinned Xcode (selected, or installed under
+# TOPO_XCODE_APPS) and XcodeGen, jq, a simulator of each
 # pinned runtime the suites boot, the tools scripts/build-ish.sh builds the guest's framework
 # with unless the one here is current, MIN_FREE_GB of disk under --cache (available as Finder
 # counts it, purgeable space included), a lid that is open and, for `topo_unit` on a Mac
@@ -65,9 +69,13 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root" || exit 2
 
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
-# change what it is compiled and run with. XcodeGen's is the version the committed projects are
-# generated with.
-XCODE_VERSION="27.0"
+# change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
+# otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
+# selected Xcode other work is pinned to need not change it. The simulator runtimes are 27.0's,
+# which Xcode 27.1 runs. XcodeGen's is the version the committed
+# projects are generated with.
+XCODE_VERSION="27.1"
+XCODE_APPS="${TOPO_XCODE_APPS:-/Applications}"
 IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 XCODEGEN_VERSION="2.46.0"
@@ -116,11 +124,39 @@ done
 
 err() { echo "error: $*" >&2; }
 
-# The pinned Xcode and XcodeGen, each an `error:` line when this Mac's is another.
+# The pinned Xcode and XcodeGen, each an `error:` line when this Mac lacks it. The selected
+# Xcode is used when it is the pin; otherwise DEVELOPER_DIR is exported, for everything the run
+# starts, to the first Xcode*.app under XCODE_APPS whose version.plist names the pin and whose
+# xcodebuild says so (a bundle still being copied has the one and not the other).
 pinned_tools() {
-  local xcode status=0
+  local xcode app version found=() status=0
   xcode="$(xcodebuild -version 2>/dev/null | head -n 1)"
-  [ "$xcode" = "Xcode $XCODE_VERSION" ] || { err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION; pick the Xcode it has on purpose."; status=1; }
+  if [ "$xcode" != "Xcode $XCODE_VERSION" ]; then
+    for app in "$XCODE_APPS"/Xcode*.app; do
+      [ -d "$app" ] || continue
+      version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/version.plist" 2>/dev/null)"
+      if [ "$version" = "$XCODE_VERSION" ] \
+        && [ "$(DEVELOPER_DIR="$app/Contents/Developer" xcodebuild -version 2>/dev/null | head -n 1)" != "Xcode $XCODE_VERSION" ]; then
+        found+=("$(basename "$app") $version, whose xcodebuild does not say so")
+        continue
+      fi
+      found+=("$(basename "$app") ${version:-with no version}")
+      [ "$version" = "$XCODE_VERSION" ] || continue
+      export DEVELOPER_DIR="$app/Contents/Developer"
+      xcode="Xcode $XCODE_VERSION"
+      break
+    done
+  fi
+  if [ "$xcode" != "Xcode $XCODE_VERSION" ]; then
+    local listed="nothing"
+    if [ "${#found[@]}" -gt 0 ]; then listed="$(printf '%s; ' "${found[@]}")"; listed="${listed%; }"; fi
+    err "this Mac's selected Xcode is '$xcode', not Xcode $XCODE_VERSION, and no Xcode*.app under $XCODE_APPS is (found: $listed); install the pinned Xcode there."; status=1
+  else
+    # The first simctl call after an Xcode's first launch has installed a newer CoreSimulator
+    # finds the older version's service still loaded, is refused while it replaces it, and the
+    # call after it reaches the new one. This call is that first one, so no suite's is.
+    xcrun simctl list runtimes >/dev/null 2>&1 || true
+  fi
   xcodegen --version 2>/dev/null | grep -qx "Version: $XCODEGEN_VERSION" \
     || { err "xcodegen is '$(xcodegen --version 2>&1 | head -n 1)', not Version: $XCODEGEN_VERSION."; status=1; }
   return "$status"
@@ -311,6 +347,7 @@ prepare() {
   say "Toolchain"
   [ "$(uname -m)" = arm64 ] || { err "this Mac is $(uname -m), not arm64."; return 1; }
   pinned_tools || return 1
+  echo "DEVELOPER_DIR=${DEVELOPER_DIR:-(the selected Xcode)}"
   sw_vers
   xcodebuild -version
   swift --version
@@ -363,17 +400,13 @@ suite_topo_unit() {
     for service in calendar reminders contacts photos; do
       xcrun simctl privacy "$udid" grant "$service" zone.hexagon.topo || return 1
     done
-    # simctl writes the photos grant at the first version of the permission, which iOS 26 reads
-    # as leave to add only, so a read of the library would put the prompt up. The row is marked
-    # full access where the simulator keeps it, with the simulator down so nothing holds the old
-    # row.
+    # The photos grant is full access only at the permission's second version: a row at the
+    # first reads as leave to add only, and a read of the library would put the prompt up.
+    # simctl of the pinned Xcode writes the second, so the simulator is booted once; the row is
+    # read where the simulator keeps it, and one at any other version fails here by name.
     local tcc="$HOME/Library/Developer/CoreSimulator/Devices/$udid/data/Library/TCC/TCC.db"
-    xcrun simctl shutdown "$udid" || return 1
-    sqlite3 "$tcc" "update access set auth_version=2 where client='zone.hexagon.topo' and service='kTCCServicePhotos'" || return 1
     [ "$(sqlite3 "$tcc" "select auth_value, auth_version from access where client='zone.hexagon.topo' and service='kTCCServicePhotos'")" = "2|2" ] \
-      || { echo "the simulator's photos grant is not full access" >&2; return 1; }
-    xcrun simctl boot "$udid" || return 1
-    xcrun simctl bootstatus "$udid" -b >/dev/null || return 1
+      || { err "the simulator's photos grant is not full access (auth_value|auth_version 2|2 in $tcc)."; return 1; }
 
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather
@@ -421,60 +454,79 @@ display_held() {
   done
   return 1
 }
-# A tripwire ahead of the quiet part's tests, which reads the UI tests' source and nothing
-# else. In each file but the microphone's it follows every `let <name> = XCUIApplication()`
-# line by line, the last write winning, and names a `<name>.launch()` reached when both
-# `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` are not, by that line, set to "loading" on that
-# name, in a statement that ends its line with that word: never set, set to something else since, removed (`removeValue`), or the dictionary
-# replaced or merged over since. It names a launch on a name the file did not make that way.
-# The quiet part leaves out the microphone's class and this leaves out its file, so it names
-# any other class declared in that file. It is false when it names anything, or finds no
-# launch at all. It does not see what the source does not say on those lines: an environment
-# changed through a helper the application is handed to, a loop, or a key that is not a
-# literal is not caught.
+# The quiet part's hold is at run time: the runner's environment carries
+# `TEST_RUNNER_TOPO_QUIET_LANE=1` (XCTest hands the runner `TOPO_QUIET_LANE=1`), and
+# `TopoApplication` (Tests/ClientUI/TopoLaunch.swift), the one application the UI suites launch,
+# then sets `TOPO_DEBUG_EAR` and `TOPO_DEBUG_VOICE` to `loading` at every `launch()` and
+# `activate()`, whatever a suite set before it; `QuietLaneTests` reads that back from the app.
+# `quiet_launches` is the fast refusal of a route round it, ahead of the part's tests: the
+# token `XCUIApplication` anywhere under the UI tests but TopoLaunch.swift (a suite making an
+# application that is not `TopoApplication`), or TopoLaunch.swift not naming `TOPO_QUIET_LANE`.
+# It parses nothing: the token in a comment or a string is refused too, and a word is changed.
+# What the part's tests fetched is `quiet_models`, after them, which is the proof.
 QUIET_TESTS=Tests/ClientUI
+QUIET_LAUNCH="$QUIET_TESTS/TopoLaunch.swift"
 quiet_launches() {
-  local file found=0 bad=0 out mic="${MIC_CLASS##*/}"
-  for file in "$QUIET_TESTS"/*.swift; do
-    [ -f "$file" ] || continue
-    case "$file" in
-      */"$mic.swift")
-        out="$(awk -v file="$file" -v mic="$mic" '
-          match($0, /^[ \t]*((final|private|fileprivate|public|internal|open)[ \t]+)*class[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
-            name = substr($0, RSTART, RLENGTH); sub(/.*class[ \t]+/, "", name)
-            if (name != mic && name != "func" && name != "var" && name != "let") print file ":" NR ": class " name ", which the quiet part runs and this does not read"
-          }' "$file")"
-        [ -z "$out" ] || { echo "$out"; bad=1; }
-        continue ;;
-    esac
-    out="$(awk -v file="$file" '
-      match($0, /let [A-Za-z_][A-Za-z0-9_]* = XCUIApplication\(\)/) {
-        name = substr($0, RSTART + 4, RLENGTH - 4); sub(/ = .*/, "", name); made[name] = 1; ear[name] = 0; voice[name] = 0
-      }
-      {
-        line = $0
-        while (match(line, /[A-Za-z_][A-Za-z0-9_]*\.launchEnvironment/)) {
-          name = substr(line, RSTART, RLENGTH); sub(/\..*/, "", name); rest = substr(line, RSTART + RLENGTH); line = rest
-          if (match(rest, /^\["TOPO_DEBUG_EAR"\] = /)) ear[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
-          else if (match(rest, /^\["TOPO_DEBUG_VOICE"\] = /)) voice[name] = (substr(rest, RLENGTH + 1) ~ /^"loading"[ \t]*$/)
-          else if (rest ~ /^\["[A-Za-z0-9_]*"\] = /) continue
-          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_EAR"\)/) ear[name] = 0
-          else if (rest ~ /^\.removeValue\(forKey: "TOPO_DEBUG_VOICE"\)/) voice[name] = 0
-          else if (rest ~ /^\.removeValue\(forKey: "[A-Za-z0-9_]*"\)/) continue
-          else { ear[name] = 0; voice[name] = 0 }
-        }
-      }
-      match($0, /[A-Za-z_][A-Za-z0-9_]*\.launch\(\)/) {
-        name = substr($0, RSTART, RLENGTH); sub(/\..*/, "", name); n++
-        if (!made[name] || !ear[name] || !voice[name]) print file ":" NR ": " name ".launch()"
-      }
-      END { print "launches " n + 0 }' "$file")"
-    found=$((found + $(sed -n 's/^launches //p' <<<"$out")))
-    out="$(grep -v '^launches ' <<<"$out")"
-    [ -z "$out" ] || { echo "$out"; bad=1; }
-  done
-  [ "$found" -gt 0 ] || { echo "no launch of the app was found under $QUIET_TESTS"; bad=1; }
+  local bad=0 found
+  grep -q TOPO_QUIET_LANE "$QUIET_LAUNCH" 2>/dev/null \
+    || { echo "$QUIET_LAUNCH: does not name TOPO_QUIET_LANE, so nothing holds the quiet part's launches"; bad=1; }
+  found="$(grep -rn --include='*.swift' XCUIApplication "$QUIET_TESTS" | grep -v "^$QUIET_LAUNCH:")"
+  [ -z "$found" ] || { echo "$found"; bad=1; }
   return "$bad"
+}
+# quiet_models <udid> — the proof the quiet part fetched no model: the app's data container on
+# that simulator, read after the part's tests and before the run deletes the simulator, holds no
+# file under the ear's or the voice's homes (`ModelStore.directory(for:)`, in Application
+# Support: `Models/parakeet-tdt-0.6b-v2`, the voice's `Models/pocket-tts`, FluidAudio's own
+# `FluidAudio/Models` where the spotter lives, and `Models/pocket-tts-coreml` and
+# `Models/parakeet-ctc-110m-coreml`, where a set made before its home sits until `rehome`
+# moves it). The rest of `Models/` is the guest's (its rootfs, bash, Claude Code), which the
+# quiet part fetches. Each file found is named; no folder, or folders with no file in them,
+# is nothing fetched. A container, a folder on the way to a home or a folder in one that cannot
+# be read is a failure, named, since nothing was proved there. The device's own download
+# staging is listed after, and judges nothing.
+quiet_models() {
+  local container home at part parts files found="" unread="" status=0
+  container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
+    || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
+  for home in Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Models/pocket-tts Models/pocket-tts-coreml FluidAudio/Models; do
+    # Down to the home a folder at a time: a folder that cannot be listed or entered is unread,
+    # and only a name missing from one that can be is no home.
+    IFS=/ read -ra parts <<<"Library/Application Support/$home"
+    at="$container"
+    for part in "${parts[@]}"; do
+      [ -r "$at" ] && [ -x "$at" ] || { unread+="  ${at#"$container/"}: cannot be listed or entered"$'\n'; at=""; break; }
+      [ -e "$at/$part" ] || [ -L "$at/$part" ] || { at=""; break; }
+      at="$at/$part"
+    done
+    [ -n "$at" ] || continue
+    if files="$(cd "$container" && find "${at#"$container/"}" ! -type d 2>"$RESULTS/quiet-models.err")"; then
+      [ -z "$files" ] || found+="$(sed 's/^/  /' <<<"$files")"$'\n'
+    else
+      unread+="$(sed 's/^/  /' "$RESULTS/quiet-models.err")"$'\n'
+      [ -z "$files" ] || found+="$(sed 's/^/  /' <<<"$files")"$'\n'
+    fi
+  done
+  rm -f "$RESULTS/quiet-models.err"
+  # The background session's transfers in flight are staged at the device's root, not in the
+  # container, under anonymous names, and the guest's downloads share the session: what is
+  # there is said for the record and judges nothing.
+  local root staging
+  root="$(xcrun simctl list devices --json 2>/dev/null | jq -r --arg u "$1" '[.devices[][] | select(.udid == $u)][0].dataPath // empty' 2>/dev/null)"
+  staging="$root/Library/Caches/com.apple.nsurlsessiond/Downloads/zone.hexagon.topo"
+  if [ -z "$root" ]; then echo "The simulator's data root was not found; its download staging is not listed."
+  elif [ -d "$staging" ]; then echo "In the device's download staging for the app (for the record):"; find "$staging" ! -type d | sed 's/^/  /'
+  else echo "No download staging for the app on the device."; fi
+  if [ -n "$found" ]; then
+    err "topo_ui:quiet fetched models its launches hold loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE); in the app's data container on $1:"
+    printf '%s' "$found" >&2; status=1
+  fi
+  if [ -n "$unread" ]; then
+    err "topo_ui:quiet: part of the app's data container on $1 could not be read, so nothing shows the part fetched no model there:"
+    printf '%s' "$unread" >&2; status=1
+  fi
+  [ "$status" = 1 ] || echo "No ear or voice model in the app's data container."
+  return "$status"
 }
 # suite_topo_ui <whole|quiet|mic>
 suite_topo_ui() {
@@ -485,7 +537,7 @@ suite_topo_ui() {
     echo "Lane: $lane"
     if [ "$part" = quiet ]; then
       local loud
-      loud="$(quiet_launches)" || { err "the UI tests' source does not show every launch outside ${MIC_CLASS##*/} leaving the ear and the voice loading (TOPO_DEBUG_EAR, TOPO_DEBUG_VOICE), and the quiet part has no lane for the real ones. No test was run."; echo "$loud" >&2; return 1; }
+      loud="$(quiet_launches)" || { err "the UI tests name XCUIApplication outside TopoLaunch.swift, a route round TopoApplication, which holds the ear and the voice loading on the quiet part (TOPO_QUIET_LANE), or TopoLaunch.swift does not name that marker; the quiet part has no lane for the real ones. No test was run."; echo "$loud" >&2; return 1; }
     fi
     if [ "$part" != quiet ]; then
       # BlackHole as this Mac's default input and output, and the fixture looping into it from
@@ -502,16 +554,18 @@ suite_topo_ui() {
       # Ours to stop from the moment `start` is called, not from its success: one that fails
       # after pinning the devices, or a signal while it is under way, leaves a feeder and the
       # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
-      # found another run's lane, which is not this run's to stop.
+      # found another run's lane, which is not this run's to stop. The lane is recorded as this
+      # run's (AUDIO_LANE_OWNER), so a run that starts one after this has been SIGKILLed stops
+      # it and starts its own rather than refusing.
       # The start and the note of how it ended are one command to this shell, so a signal's trap
       # cannot run between them.
       rm -f "$RESULTS/lane-start.status"
       lane_started=starting
-      (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
+      (AUDIO_LANE_OWNER=$$ scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
       lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
       if [ "$lane_status" = 3 ]; then
         lane_started=no
-        err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
+        err "another audio lane is running on this Mac (a sibling's --talk run, or a validation still going); this one was not started. Run again once it has stopped."
         return 1
       fi
       lane_started=yes
@@ -567,7 +621,8 @@ suite_topo_ui() {
     # The lane and the reset are declared to the test runner, which then fails a hold refused
     # for want of an input and holds the prompt count exact.
     # The quiet part declares neither: nothing in it holds the microphone or counts a prompt.
-    local runner=()
+    # It declares itself, and every launch holds the ear and the voice loading (`TopoApplication`).
+    local runner=(TEST_RUNNER_TOPO_QUIET_LANE=1)
     [ "$part" = quiet ] || runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
     [ -z "$models" ] || runner+=("TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$models")
     run "$RESULTS/$name.log" bounded 3600 env ${runner[@]+"${runner[@]}"} xcodebuild test-without-building \
@@ -576,7 +631,11 @@ suite_topo_ui() {
       "${NO_DIAGNOSE[@]}" \
       "${select[@]}" \
       -resultBundlePath "$RESULTS/$name.xcresult" || ui_status=1
-    [ "$part" != quiet ] || return "$ui_status"
+    if [ "$part" = quiet ]; then
+      say "No ear or voice model fetched (the app's data container)"
+      quiet_models "$udid" || ui_status=1
+      return "$ui_status"
+    fi
 
     say "Audio lane holds after the microphone test"
     scripts/ci-audio-lane.sh check after || ui_status=1

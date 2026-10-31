@@ -1,5 +1,4 @@
 import SwiftUI
-import TopoAuth
 import TopoCore
 import WatchKit
 
@@ -7,7 +6,6 @@ import WatchKit
 struct TopoWatchApp: App {
     @WKApplicationDelegateAdaptor(TopoWatchDelegate.self) private var delegate
     @Environment(\.scenePhase) private var phase
-    @State private var signIn = SignIn(store: InMemoryTokenStore())
     @State private var transcript: TranscriptStore
     @State private var cues: WatchCues
 
@@ -23,7 +21,7 @@ struct TopoWatchApp: App {
 
     var body: some Scene {
         WindowGroup {
-            WatchRootView(store: transcript).environment(signIn)
+            WatchRootView(store: transcript)
                 .onOpenURL { url in Task { await cues.open(url) } }
         }
         .onChange(of: phase) { _, phase in

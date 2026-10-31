@@ -3,7 +3,7 @@ import Foundation
 import Security
 import Testing
 
-/// A file-based keychain of the test's own, in a temporary directory, for `KeychainTokenStoreTests`.
+/// A file-based keychain of the test's own, in a temporary directory, for `KeychainItemTests`.
 /// It is never added to the search list or made the default, so nothing outside the test sees it.
 /// The legacy keychain calls are deprecated; they are the only way to make a keychain that is not the
 /// user's, and they are used only here.
