@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -22,27 +23,37 @@ struct TopoApp: App {
     @State private var shares: ShareInbox
     @State private var defaultSurface: DefaultSurface
     @State private var controlDefaults = ControlDefaults()
-    private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         PerfRun.begin()
         Perf.mark("app.init.begin sinceProcessStart=\(Perf.sinceProcessStart() ?? -1)ms")
-        // Before anything reads the store: a debug build launched with a setup token in its
-        // environment is signed in by it, so the simulator comes up past the sign-in screen.
+        // The Claude.ai tokens a build before Claude Code's own login kept in the keychain go
+        // before anything asks whether this phone is signed in: it signs in once more.
+        let migrated = LoginMigration.run { item, error in
+            Logger(subsystem: "zone.hexagon.topo", category: "auth")
+                .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
+        }
+        let signInAgain = migrated || UserDefaults.standard.bool(forKey: LoginMigration.signInAgainKey)
+        // A debug build launched with a developer's token in its environment is signed in by it,
+        // so the simulator comes up past the sign-in screen.
         #if DEBUG
         DebugRun.signIn()
         // And before the harness reads its line: a debug build asked for a turn owed gets one,
         // so a launch can be the relaunch that comes back to a row it never finished sending.
         DebugRun.seedOutbox()
         #endif
-        // The phone runs the guest, so its sign-in mints the guest's long-lived token too.
-        _signIn = State(initialValue: SignIn(guestStore: KeychainTokenStore.guest, back: URL(string: "topo://open")))
-        // The one provider over the ordinary tokens, shared by the chat and the guest's hand-over
-        // so a refresh is in flight once for the process: a refresh token is single-use.
-        let tokens = StoredTokenProvider(store: KeychainTokenStore())
-        self.tokens = tokens
-        let harness = Harness.standard(tokens: tokens, database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
+        // The sign-in is Claude Code's own, in the guest; each boot of the guest asks it again
+        // whether it is still signed in, before any process starts.
+        #if DEBUG
+        let accept = DebugRun.accepts()
+        #else
+        let accept: @Sendable (ClaudeLoginStatus) -> Bool = { $0.isClaudeAI }
+        #endif
+        let signIn = SignIn(login: GuestLogin(), signInAgain: signInAgain, accept: accept)
+        _signIn = State(initialValue: signIn)
+        GuestResident.shared.booted = { await signIn.refresh() }
+        let harness = Harness.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
         let mascot = Mascot()
         // The guest answering the chat moves Topo as it works: each turn's events set his pose.
         mascot.follow(harness)
@@ -91,6 +102,7 @@ struct TopoApp: App {
                         leftBehind: connections.leftBehind),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
+            OpenURLTool(),
             ContextTool(facts: { [weak harness] in
                 ContextTool.Facts(context: harness?.context, window: harness?.window, setting: harness?.compaction ?? .auto,
                                   compacting: harness?.compacting ?? false, last: harness?.lastCompaction)
@@ -116,7 +128,7 @@ struct TopoApp: App {
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
         _roleSelector = State(initialValue: RoleSelector(database: AppRecords.database(),
-                                                         isSignedIn: { (try? KeychainTokenStore().load()) != nil },
+                                                         isSignedIn: { LoginCache.standard.isSignedIn },
                                                          ensureZone: AppRecords.ensureZone))
         let audio = AudioSession()
         if ProcessInfo.processInfo.arguments.contains("--stay-awake") {
@@ -183,7 +195,7 @@ struct TopoApp: App {
     /// app that boots the guest. Nothing at all in a release one.
     private func debugUserland() async {
         #if DEBUG
-        await DebugRun.userland(tokens: tokens)
+        await DebugRun.userland()
         #endif
     }
 
@@ -191,7 +203,7 @@ struct TopoApp: App {
     /// the guest, carried through the app's lifecycle. Nothing at all in a release one.
     private func debugGuestTurn() async {
         #if DEBUG
-        await DebugRun.guestTurn(tokens: tokens, mascot: mascot)
+        await DebugRun.guestTurn(mascot: mascot)
         #endif
     }
 

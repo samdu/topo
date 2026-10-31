@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -5,15 +6,19 @@ import TopoLink
 
 /// The menu-bar hub: the only target that runs resident code. It holds the
 /// primary lease, answers probes for it, shows a pairing code and the
-/// devices on the Apple ID, and carries the Claude login for the mind. The
-/// CLI and channel servers it will bundle are not here yet.
+/// devices on the Apple ID. The Claude CLI and channel servers it will bundle
+/// are not here yet, and with them its sign-in, which is Claude Code's own.
 @main
 struct TopoHubApp: App {
-    @State private var signIn = SignIn()
     @State private var hub: HubModel
 
-    /// The hub runs from launch, not from the first time the menu opens.
+    /// The hub runs from launch, not from the first time the menu opens. The Claude.ai tokens an
+    /// earlier build kept in the keychain go at the first launch: nothing here signs in now.
     init() {
+        LoginMigration.run { item, error in
+            Logger(subsystem: "zone.hexagon.topo.hub", category: "auth")
+                .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
+        }
         let model = HubModel()
         model.start()
         _hub = State(initialValue: model)
@@ -22,7 +27,6 @@ struct TopoHubApp: App {
     var body: some Scene {
         MenuBarExtra("Topo", systemImage: "circle.hexagongrid.fill") {
             HubMenu()
-                .environment(signIn)
                 .environment(hub)
         }
         .menuBarExtraStyle(.window)
@@ -30,7 +34,6 @@ struct TopoHubApp: App {
 }
 
 struct HubMenu: View {
-    @Environment(SignIn.self) private var signIn
     @Environment(HubModel.self) private var hub
     @State private var showingCode = false
 
@@ -52,8 +55,6 @@ struct HubMenu: View {
             DisclosureGroup("Pair a device", isExpanded: $showingCode) {
                 PairingPane()
             }
-            Divider()
-            SignInSection()
             Divider()
             HStack {
                 if hub.store == .memory {
@@ -261,41 +262,6 @@ struct PairingPane: View {
             }
         }
         .padding(.top, 4)
-    }
-}
-
-struct SignInSection: View {
-    @Environment(SignIn.self) private var signIn
-    @State private var webAuth = WebAuth()
-    @State private var pasted = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            switch signIn.phase {
-            case .signedIn:
-                Label("Signed in with Claude", systemImage: "checkmark.circle.fill")
-                Button("Sign out") { signIn.signOut() }
-            case .idle:
-                Button("Sign in with Claude") { webAuth.open(signIn.start()) { signIn.loginSheetClosed() } }
-            case .waiting(let pasteHint):
-                if pasteHint {
-                    TextField("Paste the code", text: $pasted)
-                    Button("Continue") { Task { await signIn.finish(pasted: pasted) } }
-                } else {
-                    ProgressView("Waiting for Claude…")
-                }
-                Button("Cancel") { webAuth.close(); signIn.cancel() }
-            case .exchanging, .approvingGuest:
-                // The hub runs no guest, so its sign-in never asks for the guest's authorization.
-                ProgressView("Signing in…")
-            case .failed(let message):
-                Text(message).foregroundStyle(.secondary)
-                Button("Try again") { webAuth.open(signIn.start()) { signIn.loginSheetClosed() } }
-            }
-        }
-        .onChange(of: signIn.phase) { _, phase in
-            if phase == .signedIn || { if case .failed = phase { true } else { false } }() { webAuth.close() }
-        }
     }
 }
 

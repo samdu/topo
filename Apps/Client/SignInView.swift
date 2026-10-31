@@ -1,15 +1,15 @@
-#if os(iOS) || os(macOS)
+#if os(iOS)
 import SwiftUI
 import TopoAuth
 
-/// The first screen on a primary: one button. The "advanced" link is where an API key, another
-/// provider or a custom endpoint will go.
+/// The first screen on a primary: once the guest is up, one button. The sign-in is Claude Code's
+/// own, in the guest (`SignIn`, `GuestLogin`): this screen opens the page it hands out in a sheet
+/// and, where that page cannot come back, the paste page, whose code goes in the field. The
+/// "advanced" link is where an API key, another provider or a custom endpoint will go.
 struct SignInView: View {
     @Environment(SignIn.self) private var signIn
     @State private var webAuth = WebAuth()
     @State private var pasted = ""
-    /// The guest's authorization this screen has opened, so it is opened once.
-    @State private var opened: URL?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -18,21 +18,31 @@ struct SignInView: View {
             Text("Topo")
                 .font(.system(.largeTitle, design: .rounded).weight(.semibold))
             Spacer()
-            switch signIn.phase {
-            case .idle, .signedIn:
-                signInButton
-            case .waiting(let pasteHint):
-                if pasteHint { pasteField } else { ProgressView("Waiting for Claude…") }
-                Button("Cancel") { webAuth.close(); signIn.cancel() }
-            case .exchanging:
-                ProgressView("Signing in…")
-            case .approvingGuest(let url, let pasteHint):
-                Text("Approve once more, for Claude Code on this phone.")
+            if signIn.signInAgain, signIn.phase == .idle {
+                Text("Sign in again: Topo now signs in through Claude Code, which brings your claude.ai connectors.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                if pasteHint { pasteField } else { ProgressView() }
-                Button("Open the page again") { webAuth.open(url) { signIn.guestSheetClosed(url) } }
-                Button("Skip") { webAuth.close(); signIn.cancel() }
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+            switch signIn.phase {
+            case .preparing(let line):
+                ProgressView("Getting Topo ready…")
+                if !line.isEmpty {
+                    Text(line)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                }
+            case .idle, .signedIn:
+                signInButton
+            case .approving(let approval):
+                if approval.pasting { pasteField } else { ProgressView("Waiting for Claude…") }
+                if approval.page != nil {
+                    Button("Open the page again") { pasted = ""; signIn.openPageAgain() }
+                }
+                Button("Cancel") { signIn.cancel() }
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 signInButton
@@ -44,14 +54,11 @@ struct SignInView: View {
             Spacer().frame(height: 24)
         }
         .padding()
-        .onChange(of: signIn.phase, initial: true) { _, phase in
-            if phase == .signedIn || { if case .failed = phase { true } else { false } }() { webAuth.close() }
-            // The guest's authorization, in a sheet of its own in place of the login's, once.
-            if case .approvingGuest(let url, _) = phase, opened != url {
-                opened = url
-                pasted = ""
-                webAuth.open(url) { signIn.guestSheetClosed(url) }
-            }
+        .task { await signIn.prepare() }
+        // The sheet follows the sign-in's: a new one opens over the last, none closes it.
+        .onChange(of: signIn.sheet, initial: true) { _, sheet in
+            guard let sheet else { webAuth.close(); return }
+            webAuth.open(sheet.url) { signIn.sheetClosed(sheet) }
         }
         // Signed in, this screen is gone before it hears of it: the sheet goes with it.
         .onDisappear { webAuth.close() }
@@ -59,8 +66,7 @@ struct SignInView: View {
 
     private var signInButton: some View {
         Button {
-            let url = signIn.start()
-            webAuth.open(url) { signIn.loginSheetClosed() }
+            signIn.start()
         } label: {
             Text("Sign in with Claude")
                 .font(.headline)
@@ -79,7 +85,7 @@ struct SignInView: View {
             TextField("Code", text: $pasted)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 320)
-            Button("Continue") { Task { await signIn.finish(pasted: pasted) } }
+            Button("Continue") { Task { await signIn.paste(pasted) } }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.teal)
                 .disabled(pasted.trimmingCharacters(in: .whitespaces).isEmpty)
