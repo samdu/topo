@@ -1,0 +1,356 @@
+import Foundation
+import MetricKit
+import TopoCore
+import UIKit
+import os
+
+/// The phone's own account of what this process costs: a line a minute while the process runs,
+/// and MetricKit's daily payloads as they land. Nothing is sent off the phone: like every
+/// `Perf` mark a line reaches the guest through `topo log`, and it carries counters and the
+/// app's state, nothing of the person's.
+///
+/// The pulse is the kernel's counters for this task (`TASK_POWER_INFO`): CPU time and idle
+/// wakeups since the last pulse, over the time between the two reads by the continuous clock (which
+/// counts the time the phone sleeps and takes no change to the wall clock), against the battery,
+/// the charger, the thermal state and Low Power Mode, with what the app was doing (`state`), and the
+/// threads the minute went to by name, with what threads that ended inside it spent as
+/// `unattributed`. It is what Instruments would read, without the cable. Each line is a `Perf` mark (`energy …`), so it
+/// is in the unified log under `perf` and in a timed run's file; and it is appended to
+/// `tmp/topo-energy.log` in the container, which `devicectl device copy from` reads off a phone
+/// nobody is at. Only this process: the audio server's share is Instruments' alone.
+///
+/// MetricKit adds the system's view, once a day: per-process CPU, display and network energy, time
+/// in the foreground and the background. Each payload is kept in Application Support/metrickit, the
+/// newest fourteen, for the diagnostics screen and a person asked to send one.
+///
+/// Phone target only. Main actor, except where said.
+@MainActor
+final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
+    static let shared = EnergyPulse()
+
+    static let every: TimeInterval = 60
+    /// The container file is started afresh past this size: a log, not an archive.
+    private static let fileCap = 512 * 1024
+
+    /// What the app says about itself on each pulse. Set by `TopoApp`.
+    var state: @MainActor () async -> String = { "" }
+    /// The last pulse's line, for the diagnostics screen.
+    private(set) var last: String?
+    /// How many MetricKit payloads are kept, and when the newest arrived.
+    private(set) var payloads: (count: Int, newest: Date?) = (0, nil)
+
+    private var timer: DispatchSourceTimer?
+    private var counters: (cpu: Double, idle: UInt64, interrupts: UInt64, at: ContinuousClock.Instant)?
+    private var started = false
+    private var file: FileHandle?
+    private var written = 0
+
+    private override init() {}
+
+    func start() {
+        guard !started else { return }
+        started = true
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        mainThread = pthread_self()
+        MXMetricManager.shared.add(self)
+        counters = Self.read().map { ($0.cpu, $0.idle, $0.interrupts, ContinuousClock.now) }
+        threadLast = Self.threads(main: mainThread).mapValues(\.cpu)
+        openFile()
+        payloads = Self.kept()
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + Self.every, repeating: Self.every, leeway: .seconds(5))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in await self.pulse() }
+        }
+        t.resume()
+        timer = t
+    }
+
+    // MARK: Pulse
+
+    private func pulse() async {
+        // The task and its threads are read back to back, before anything awaits, so the two
+        // marks describe one interval.
+        guard let now = Self.read(), let last = counters else { return }
+        let at = ContinuousClock.now
+        let threads = Self.threads(main: mainThread)
+        let dt = Self.interval(at - last.at)
+        guard dt > 0 else { return }
+        counters = (now.cpu, now.idle, now.interrupts, at)
+        let cpu = now.cpu - last.cpu
+        let split = Self.breakdown(process: cpu, before: threadLast, after: threads)
+        threadLast = threads.mapValues(\.cpu)
+        let idle = now.idle &- last.idle
+        let ints = now.interrupts &- last.interrupts
+        let dev = UIDevice.current
+        let charging: String
+        switch dev.batteryState {
+        case .charging: charging = "charging"
+        case .full: charging = "full"
+        case .unplugged: charging = "unplugged"
+        default: charging = "battery unknown"
+        }
+        let p = ProcessInfo.processInfo
+        let thermal: String
+        switch p.thermalState {
+        case .nominal: thermal = "nominal"
+        case .fair: thermal = "fair"
+        case .serious: thermal = "serious"
+        case .critical: thermal = "critical"
+        @unknown default: thermal = "thermal ?"
+        }
+        let app = UIApplication.shared.applicationState
+        let line = String(
+            format: "energy cpu %.1f%% of a core (%.2fs in %.0fs), wakeups %.0f/s idle %.0f/s interrupt, "
+                + "battery %.0f%% %@, thermal %@, lpm %@, %@, %@",
+            cpu / dt * 100, cpu, dt, Double(idle) / dt, Double(ints) / dt,
+            dev.batteryLevel * 100, charging, thermal,
+            p.isLowPowerModeEnabled ? "on" : "off",
+            app == .active ? "fg" : app == .background ? "bg" : "inactive",
+            await state())
+        self.last = line
+        write(line)
+        if !split.isEmpty { write("energy threads " + split) }
+    }
+
+    /// A write that fails (the disk full) drops the file for the rest of the process; the marks
+    /// still go to the log. The throwing `FileHandle` calls are used: the older ones raise an
+    /// exception Swift cannot catch.
+    private func write(_ line: String) {
+        Perf.mark(line)
+        guard let file else { return }
+        let stamped = Data("\(Int64(Date().timeIntervalSince1970)) \(line)\n".utf8)
+        do {
+            if written > Self.fileCap {
+                try file.truncate(atOffset: 0)
+                written = 0
+            }
+            try file.write(contentsOf: stamped)
+            written += stamped.count
+        } catch {
+            self.file = nil
+        }
+    }
+
+    /// `tmp/topo-energy.log`, appended to; started afresh when it has grown past the cap.
+    private func openFile() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("topo-energy.log")
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        if size > Self.fileCap || size == 0 {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url),
+              let end = try? handle.seekToEnd() else { return }
+        written = Int(end)
+        file = handle
+    }
+
+    // MARK: Threads
+
+    private var threadLast: [UInt64: Double] = [:]
+    private var mainThread: pthread_t?
+
+    /// Every thread of this task now: its CPU seconds since it started, and the name it is
+    /// counted under. Unnamed threads are `unnamed`, and the guest's are `guest`: the emulator names
+    /// a guest process's thread after its command, which is the person's.
+    private static func threads(main: pthread_t?) -> [UInt64: (name: String, cpu: Double)] {
+        var list: thread_act_array_t?
+        var count: mach_msg_type_number_t = 0
+        guard task_threads(mach_task_self_, &list, &count) == KERN_SUCCESS, let list
+        else { return [:] }
+        defer {
+            for i in 0..<Int(count) { mach_port_deallocate(mach_task_self_, list[i]) }
+            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: list),
+                          vm_size_t(count) * vm_size_t(MemoryLayout<thread_t>.size))
+        }
+        var out: [UInt64: (name: String, cpu: Double)] = [:]
+        for i in 0..<Int(count) {
+            let t = list[i]
+            var basic = thread_basic_info_data_t()
+            var n = mach_msg_type_number_t(
+                MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+            let kr = withUnsafeMutablePointer(to: &basic) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) {
+                    thread_info(t, thread_flavor_t(THREAD_BASIC_INFO), $0, &n)
+                }
+            }
+            guard kr == KERN_SUCCESS else { continue }
+            var ident = thread_identifier_info_data_t()
+            var m = mach_msg_type_number_t(
+                MemoryLayout<thread_identifier_info_data_t>.size / MemoryLayout<integer_t>.size)
+            let kr2 = withUnsafeMutablePointer(to: &ident) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(m)) {
+                    thread_info(t, thread_flavor_t(THREAD_IDENTIFIER_INFO), $0, &m)
+                }
+            }
+            guard kr2 == KERN_SUCCESS else { continue }
+            let cpu = Double(basic.user_time.seconds + basic.system_time.seconds)
+                + Double(basic.user_time.microseconds + basic.system_time.microseconds) / 1e6
+            var name = ""
+            if let p = pthread_from_mach_thread_np(t) {
+                if let main, pthread_equal(p, main) != 0 {
+                    name = "main"
+                } else {
+                    var buf = [CChar](repeating: 0, count: 64)
+                    pthread_getname_np(p, &buf, 64)
+                    name = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+                    if isGuestThread(name) { name = "guest" }
+                }
+            }
+            out[ident.thread_id] = (name.isEmpty ? "unnamed" : name, cpu)
+        }
+        return out
+    }
+
+    /// The share of a group or of the remainder below which the threads line leaves it out.
+    static let least = 0.05
+
+    /// Where an interval's CPU went, by name, busiest first: each thread's seconds since `before`
+    /// (a thread `before` does not name started inside the interval, so all of its time is), summed
+    /// under its name before anything is left out. What the process spent that the threads alive
+    /// at the end do not account for is `unattributed`: threads that ended inside the interval,
+    /// whose time `task_threads` can no longer name.
+    static func breakdown(process: Double, before: [UInt64: Double],
+                          after: [UInt64: (name: String, cpu: Double)]) -> String {
+        var merged: [String: Double] = [:]
+        var named = 0.0
+        for (id, t) in after {
+            let delta = max(0, t.cpu - (before[id] ?? 0))
+            merged[t.name, default: 0] += delta
+            named += delta
+        }
+        let shown = merged.filter { $0.value >= least }.sorted { $0.value > $1.value }.prefix(8)
+        var parts = shown.map { String(format: "%@ %.2fs", $0.key, $0.value) }
+        let rest = process - named
+        if rest >= least { parts.append(String(format: "unattributed %.2fs", rest)) }
+        return parts.joined(separator: ", ")
+    }
+
+    // MARK: Counters
+
+    /// This task's CPU seconds and wakeups since it started.
+    private static func read() -> (cpu: Double, idle: UInt64, interrupts: UInt64)? {
+        var info = task_power_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_power_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_POWER_INFO), $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return nil }
+        return (Double(info.total_user + info.total_system) * tick,
+                info.task_platform_idle_wakeups, info.task_interrupt_wakeups)
+    }
+
+    static func interval(_ d: Duration) -> Double {
+        Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+    }
+
+    /// `TASK_POWER_INFO` times are Mach absolute-time ticks: ~41.7 ns on Apple silicon.
+    private static let tick: Double = {
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        return Double(tb.numer) / Double(tb.denom) / 1e9
+    }()
+
+    // MARK: MetricKit
+
+    private static let keep = 14
+
+    nonisolated func didReceive(_ payloads: [MXMetricPayload]) {
+        let kept = payloads.map { ($0.jsonRepresentation(), $0.timeStampEnd, Self.headline($0)) }
+        Task { @MainActor in
+            for (json, at, headline) in kept {
+                Self.save(json, at: at, prefix: "metrics")
+                self.write("energy metrickit \(headline)")
+            }
+            self.payloads = Self.kept()
+        }
+    }
+
+    nonisolated func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        let kept = payloads.map { ($0.jsonRepresentation(), $0.timeStampEnd) }
+        Task { @MainActor in
+            for (json, at) in kept { Self.save(json, at: at, prefix: "diagnostics") }
+            self.payloads = Self.kept()
+        }
+    }
+
+    /// The payload's day in one line: the CPU it charged this process, the time in front and
+    /// behind, and the cellular share of its network.
+    private nonisolated static func headline(_ p: MXMetricPayload) -> String {
+        var parts: [String] = []
+        let f = ISO8601DateFormatter()
+        parts.append("\(f.string(from: p.timeStampBegin))..\(f.string(from: p.timeStampEnd))")
+        if let cpu = p.cpuMetrics {
+            parts.append("cpu \(Int(cpu.cumulativeCPUTime.converted(to: .seconds).value))s")
+        }
+        if let time = p.applicationTimeMetrics {
+            parts.append("fg \(Int(time.cumulativeForegroundTime.converted(to: .minutes).value))m")
+            parts.append("bg \(Int(time.cumulativeBackgroundTime.converted(to: .minutes).value))m")
+            parts.append("audio \(Int(time.cumulativeBackgroundAudioTime.converted(to: .minutes).value))m")
+        }
+        if let net = p.networkTransferMetrics {
+            let cell = net.cumulativeCellularDownload.converted(to: .megabytes).value
+                + net.cumulativeCellularUpload.converted(to: .megabytes).value
+            let wifi = net.cumulativeWifiDownload.converted(to: .megabytes).value
+                + net.cumulativeWifiUpload.converted(to: .megabytes).value
+            parts.append(String(format: "net cell %.1fMB wifi %.1fMB", cell, wifi))
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// A guest process's host thread: the emulator names it `<command>-<pid>`.
+    static func isGuestThread(_ name: String) -> Bool {
+        guard let dash = name.lastIndex(of: "-"), dash != name.startIndex else { return false }
+        let pid = name[name.index(after: dash)...]
+        return !pid.isEmpty && pid.allSatisfy(\.isNumber)
+    }
+
+    /// Application Support/metrickit, kept out of the backup.
+    private static var dir: URL? {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return nil }
+        var d = base.appendingPathComponent("metrickit", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? d.setResourceValues(values)
+        return d
+    }
+
+    private static func save(_ json: Data, at: Date, prefix: String) {
+        guard let dir else { return }
+        let name = "\(prefix)-\(Int64(at.timeIntervalSince1970)).json"
+        try? json.write(to: dir.appendingPathComponent(name), options: .atomic)
+        prune(dir, prefix: prefix, keep: keep)
+    }
+
+    /// The newest `keep` payloads of a kind stay, by the time in the name; the other kind is
+    /// not touched.
+    static func prune(_ dir: URL, prefix: String, keep: Int) {
+        let same = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasPrefix(prefix + "-") }
+            .sorted { (seconds(in: $0) ?? 0) < (seconds(in: $1) ?? 0) }
+        for old in same.dropLast(keep) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(old)) }
+    }
+
+    /// The seconds in a payload's name (`<prefix>-<seconds>.json`), read rather than the file's
+    /// date: a file's timestamp is an API the privacy manifest would have to give a reason for,
+    /// and the name already says it.
+    private static func seconds(in name: String) -> Int64? {
+        guard let dash = name.lastIndex(of: "-"), let dot = name.lastIndex(of: "."), dash < dot
+        else { return nil }
+        return Int64(name[name.index(after: dash)..<dot])
+    }
+
+    /// The payloads on disk, of both kinds, and the newest's time.
+    private static func kept() -> (count: Int, newest: Date?) {
+        guard let dir, let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
+        else { return (0, nil) }
+        let newest = files.compactMap(seconds(in:)).max().map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        return (files.count, newest)
+    }
+}
