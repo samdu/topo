@@ -2,270 +2,680 @@ import Foundation
 import Testing
 @testable import TopoAuth
 
-extension Stubbed {
-    @Suite @MainActor struct SignInTests {
-        let store = InMemoryTokenStore()
-
-        func make() -> SignIn {
-            SignIn(oauth: ClaudeOAuth(configuration: .claude, session: StubURLProtocol.session()), store: store)
+/// A `claude` that answers as the test scripts it: each `begin` is an attempt the test drives,
+/// `status` answers what the test set, and every paste, end and logout is counted.
+final class FakeLogin: ClaudeLogin, @unchecked Sendable {
+    final class Attempt: LoginAttempt, @unchecked Sendable {
+        let heard: @Sendable (LoginEvent) -> Void
+        private let lock = NSLock()
+        private var pasted: [String] = []
+        private var ends = 0
+        init(heard: @escaping @Sendable (LoginEvent) -> Void) { self.heard = heard }
+        var pastes: [String] { lock.withLock { pasted } }
+        var ended: Int { lock.withLock { ends } }
+        var pasteGate: Gate?
+        var pasteError: (any Error)?
+        func paste(_ code: String) async throws {
+            lock.withLock { pasted.append(code) }
+            await pasteGate?.wait()
+            if let pasteError { throw pasteError }
         }
-
-        @Test func startsIdleWithNoTokenAndSignedInWithOne() throws {
-            #expect(make().phase == .idle)
-            try store.save(Tokens(accessToken: "a", refreshToken: "r", expiresAt: .distantFuture, scopes: []))
-            #expect(make().phase == .signedIn)
-        }
-
-        @Test func startOpensALoopbackAttemptAndTheCallbackSignsIn() async throws {
-            let signIn = make()
-            let url = signIn.start()
-            #expect(signIn.phase == .waiting(pasteHint: false))
-            let redirect = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "redirect_uri" }?.value)
-            let state = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "state" }?.value)
-            #expect(redirect.hasPrefix("http://localhost:"))
-            StubURLProtocol.respond(status: 200, json: #"{"access_token":"at","refresh_token":"rt","expires_in":3600}"#)
-            // The browser hits the listener.
-            _ = try await URLSession.shared.data(from: URL(string: "\(redirect)?code=abc&state=\(state)")!)
-            for _ in 0..<50 where signIn.phase != .signedIn { try await Task.sleep(for: .milliseconds(20)) }
-            #expect(signIn.phase == .signedIn)
-            let saved = try store.load()
-            #expect(saved?.accessToken == "at", "saved=\(String(describing: saved)) phase=\(signIn.phase)")
-        }
-
-        @Test func aPastedCodeSignsInAndAWrongStateFails() async throws {
-            let signIn = make()
-            _ = signIn.start()
-            StubURLProtocol.respond(status: 200, json: #"{"access_token":"at","refresh_token":"rt","expires_in":3600}"#)
-            await signIn.finish(pasted: "abc#not-this-attempt")
-            #expect({ if case .failed = signIn.phase { true } else { false } }())
-            _ = signIn.start()
-            await signIn.finish(pasted: "abc")
-            #expect(signIn.phase == .signedIn)
-        }
-
-        @Test func cancelReturnsToIdleAndSignOutClearsTheStore() async throws {
-            let signIn = make()
-            _ = signIn.start()
-            signIn.cancel()
-            #expect(signIn.phase == .idle)
-            try store.save(Tokens(accessToken: "a", refreshToken: "r", expiresAt: .distantFuture, scopes: []))
-            let again = make()
-            again.signOut()
-            #expect(again.phase == .idle)
-            #expect(try store.load() == nil)
-        }
-
-        /// What the rest of a sign-out could not do is said on the sign-in screen, and the login
-        /// goes all the same.
-        @Test func aSignOutThatLeftSomethingBehindSaysSo() async throws {
-            try store.save(Tokens(accessToken: "a", refreshToken: "r", expiresAt: .distantFuture, scopes: []))
-            let signIn = make()
-            signIn.signOut(unfinished: "the GitHub token could not be removed")
-            #expect(signIn.phase == .failed("Signed out, but the GitHub token could not be removed"))
-            #expect(try store.load() == nil)
+        var login: FakeLogin?
+        func end() async {
+            await login?.endGate?.wait()
+            lock.withLock { ends += 1 }
+            login?.note("end")
         }
     }
-}
 
-/// A round trip through a real keychain with the store's own queries. On macOS that keychain is not
-/// the user's: `TemporaryKeychain` creates a file-based one in a temporary directory with a random
-/// password, unlocked with no timeout, and the store is pointed at it with `keychainPath`, which adds
-/// the keychain to search (`kSecMatchSearchList`) and, on an add, to write to (`kSecUseKeychain`) and
-/// changes nothing else. So the test needs no login session or unlocked login keychain, and leaves the
-/// login keychain and the search list alone. A keychain that cannot be created, set or unlocked fails
-/// the test at a `#require`; nothing here skips.
-@Suite struct KeychainTokenStoreTests {
-    @Test func roundTripsThroughTheKeychain() throws {
-        var store = KeychainTokenStore(service: "zone.hexagon.topo.tests", account: UUID().uuidString)
-        #if os(macOS)
-        let keychain = try TemporaryKeychain()
-        defer { keychain.delete() }
-        store.keychainPath = keychain.path
-        #endif
-        defer { try? store.clear() }
-        #expect(try store.load() == nil)
-        let t = Tokens(accessToken: "a", refreshToken: "r", expiresAt: Date(timeIntervalSince1970: 1), scopes: ["x"])
-        try store.save(t)
-        #if os(macOS)
-        #expect(keychain.holdsItem(service: store.service, account: store.account), "the store wrote outside the keychain it was pointed at")
-        #endif
-        #expect(try store.load() == t)
-        var t2 = t; t2.accessToken = "b"
-        try store.save(t2)
-        #expect(try store.load() == t2)
-        try store.clear()
-        #expect(try store.load() == nil)
-    }
-}
-
-extension Stubbed {
-    @Suite struct StoredTokenProviderTests {
-        @Test func handsOutAFreshTokenAndRefreshesAStaleOne() async throws {
-            let store = InMemoryTokenStore(Tokens(accessToken: "fresh", refreshToken: "r", expiresAt: Date().addingTimeInterval(3600), scopes: []))
-            let provider = StoredTokenProvider(store: store, oauth: ClaudeOAuth(session: StubURLProtocol.session()))
-            #expect(try await provider.accessToken() == "fresh")
-
-            try store.save(Tokens(accessToken: "stale", refreshToken: "r", expiresAt: Date(), scopes: []))
-            StubURLProtocol.respond(status: 200, json: #"{"access_token":"new","refresh_token":"r2","expires_in":3600}"#)
-            #expect(try await provider.accessToken() == "new")
-            #expect(try store.load()?.refreshToken == "r2")
-        }
-
-        @Test func aRefreshFinishingAfterSignOutIsDropped() async throws {
-            let store = InMemoryTokenStore(Tokens(accessToken: "stale", refreshToken: "r", expiresAt: Date(), scopes: []))
-            let oauth = ClaudeOAuth(session: StubURLProtocol.session())
-            let provider = StoredTokenProvider(store: store, oauth: oauth)
-            StubURLProtocol.respond(status: 200, json: #"{"access_token":"new","refresh_token":"r2","expires_in":3600}"#)
-            StubURLProtocol.beforeResponse = { try? store.clear() }
-            defer { StubURLProtocol.beforeResponse = nil }
-            await #expect(throws: TokenProviderError.signedOut) { try await provider.accessToken() }
-            #expect(try store.load() == nil)
-        }
-
-        @Test func signedOutIsAnError() async throws {
-            let provider = StoredTokenProvider(store: InMemoryTokenStore(), oauth: ClaudeOAuth(session: StubURLProtocol.session()))
-            await #expect(throws: TokenProviderError.signedOut) { try await provider.accessToken() }
-        }
-
-        // MARK: One refresh in flight
-
-        /// A store that counts its loads, and signals once a given number has been reached: every
-        /// caller loads the set exactly once before it asks for a refresh or joins the one in
-        /// flight, so the count says how many callers are waiting.
-        final class CountingStore: TokenStore, @unchecked Sendable {
-            let inner: InMemoryTokenStore
-            private let lock = NSLock()
-            private var loads = 0
-            private let target: Int
-            let reached = DispatchSemaphore(value: 0)
-
-            init(_ tokens: Tokens?, signalAfter target: Int) {
-                inner = InMemoryTokenStore(tokens)
-                self.target = target
-            }
-
-            func load() throws -> Tokens? {
-                let count = lock.withLock { loads += 1; return loads }
-                if count == target { reached.signal() }
-                return try inner.load()
-            }
-            func save(_ tokens: Tokens) throws { try inner.save(tokens) }
-            func clear() throws { try inner.clear() }
-        }
-
-        static let stale = Tokens(accessToken: "stale", refreshToken: "r1", expiresAt: Date(), scopes: ["user:inference"])
-
-        /// The token endpoint as the device run met it: a refresh token is single-use, so the first
-        /// grant on `r1` rotates it and every later one on `r1` is refused.
-        static func rotatingEndpoint(first: (status: Int, json: String)) -> @Sendable ([String: Any]) -> (status: Int, json: String) {
-            let spent = NSLock()
-            nonisolated(unsafe) var used: Set<String> = []
-            return { body in
-                let token = body["refresh_token"] as? String ?? ""
-                let fresh = spent.withLock { used.insert(token).inserted }
-                return fresh ? first : (400, #"{"error":"invalid_grant"}"#)
-            }
-        }
-
-        /// Holds the first grant open until `store` has been loaded `callers` times, so every
-        /// caller has arrived before any refresh lands. Bounded, so a provider that never lets the
-        /// callers arrive fails on its counts rather than hanging.
-        static func holdFirstGrant(until store: CountingStore) {
-            let once = NSLock()
-            nonisolated(unsafe) var held = false
-            StubURLProtocol.beforeResponse = {
-                let first = once.withLock { defer { held = true }; return !held }
-                if first { _ = store.reached.wait(timeout: .now() + 5) }
-            }
-        }
-
-        static func grants() -> Int {
-            StubURLProtocol.bodies.filter {
-                (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["grant_type"] as? String == "refresh_token"
-            }.count
-        }
-
-        @Test func overlappingCallsOnAnExpiredSetSpendOneGrant() async throws {
-            StubURLProtocol.reset()
-            defer { StubURLProtocol.reset() }
-            let callers = 6
-            let store = CountingStore(Self.stale, signalAfter: callers)
-            let provider = StoredTokenProvider(store: store, oauth: ClaudeOAuth(session: StubURLProtocol.session()))
-            StubURLProtocol.responder = Self.rotatingEndpoint(first: (200, #"{"access_token":"new","refresh_token":"r2","expires_in":3600,"scope":"user:inference"}"#))
-            Self.holdFirstGrant(until: store)
-
-            // Five ask for an access token and one for a refresh, all at once.
-            let tokens = await withTaskGroup(of: Result<String, any Error>.self) { group in
-                for index in 0..<callers {
-                    group.addTask {
-                        await Self.outcome { index == 0 ? try await provider.refresh().accessToken : try await provider.accessToken() }
-                    }
+    /// Holds whatever waits on it until opened.
+    final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var open = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                let now = lock.withLock { () -> Bool in
+                    if open { return true }
+                    waiting.append(continuation)
+                    return false
                 }
-                return await group.reduce(into: []) { $0.append($1) }
+                if now { continuation.resume() }
             }
-            #expect(Self.grants() == 1, "overlapping callers spent \(Self.grants()) refresh grants")
-            #expect(tokens.map { try? $0.get() } == Array(repeating: "new", count: callers))
-            #expect(try store.load()?.refreshToken == "r2")
-
-            // A caller after the refresh wrote its tokens reads them and makes no grant.
-            #expect(try await provider.accessToken() == "new")
-            #expect(Self.grants() == 1)
         }
-
-        @Test func aFailedRefreshReachesEveryWaiterAndIsNotKept() async throws {
-            StubURLProtocol.reset()
-            defer { StubURLProtocol.reset() }
-            let callers = 4
-            let store = CountingStore(Self.stale, signalAfter: callers)
-            let provider = StoredTokenProvider(store: store, oauth: ClaudeOAuth(session: StubURLProtocol.session()))
-            StubURLProtocol.responder = { _ in (503, "{}") }
-            Self.holdFirstGrant(until: store)
-
-            let results = await withTaskGroup(of: Result<String, any Error>.self) { group in
-                for _ in 0..<callers { group.addTask { await Self.outcome { try await provider.accessToken() } } }
-                return await group.reduce(into: []) { $0.append($1) }
-            }
-            #expect(Self.grants() == 1, "waiters on one failing refresh spent \(Self.grants()) grants")
-            for result in results {
-                #expect(throws: ClaudeOAuth.Error.http(status: 503)) { try result.get() }
-            }
-            #expect(try store.load() == Self.stale)
-
-            // The next call makes a fresh attempt rather than meeting the failure again.
-            StubURLProtocol.beforeResponse = nil
-            StubURLProtocol.responder = { _ in (200, #"{"access_token":"new","refresh_token":"r2","expires_in":3600}"#) }
-            #expect(try await provider.accessToken() == "new")
-            #expect(Self.grants() == 2)
+        func release() {
+            let all = lock.withLock { open = true; defer { waiting = [] }; return waiting }
+            all.forEach { $0.resume() }
         }
+    }
 
-        @Test func callersWaitingOnARefreshThatFinishesAfterSignOutWriteNothing() async throws {
-            StubURLProtocol.reset()
-            defer { StubURLProtocol.reset() }
-            let callers = 3
-            let store = CountingStore(Self.stale, signalAfter: callers)
-            let provider = StoredTokenProvider(store: store, oauth: ClaudeOAuth(session: StubURLProtocol.session()))
-            StubURLProtocol.responder = Self.rotatingEndpoint(first: (200, #"{"access_token":"new","refresh_token":"r2","expires_in":3600}"#))
-            let once = NSLock()
-            nonisolated(unsafe) var held = false
-            StubURLProtocol.beforeResponse = {
-                let first = once.withLock { defer { held = true }; return !held }
-                if first { _ = store.reached.wait(timeout: .now() + 5) }
-                try? store.clear()
-            }
+    private let lock = NSLock()
+    private var made: [Attempt] = []
+    private var begun = 0
+    private var discards = 0
+    /// Every step taken, in order: `begin`, `logout`, `end`.
+    private var steps: [String] = []
+    var beginGate: Gate?
+    var logoutGate: Gate?
+    var endGate: Gate?
+    var logoutRefused = false
+    var statusGate: Gate?
+    var prepareGate: Gate?
+    private var statusAsks = 0
+    var statusAsked: Int { lock.withLock { statusAsks } }
+    var beginError: (any Error)?
+    private var answer: ClaudeLoginStatus? = ClaudeLoginStatus(loggedIn: false)
+    private var logouts = 0
+    private var progressLines: [String] = []
+    var prepareError: (any Error)?
 
-            let results = await withTaskGroup(of: Result<String, any Error>.self) { group in
-                for _ in 0..<callers { group.addTask { await Self.outcome { try await provider.accessToken() } } }
-                return await group.reduce(into: []) { $0.append($1) }
-            }
-            #expect(Self.grants() == 1)
-            for result in results {
-                #expect(throws: TokenProviderError.signedOut) { try result.get() }
-            }
-            #expect(try store.inner.load() == nil)
+    var attempts: [Attempt] { lock.withLock { made } }
+    var begins: Int { lock.withLock { begun } }
+    var discarded: Int { lock.withLock { discards } }
+    var log: [String] { lock.withLock { steps } }
+    func note(_ step: String) { lock.withLock { steps.append(step) } }
+    var loggedOut: Int { lock.withLock { logouts } }
+    func answer(_ status: ClaudeLoginStatus?) { lock.withLock { answer = status } }
+    func say(_ lines: [String]) { lock.withLock { progressLines = lines } }
+
+    func prepare(progress: @escaping @Sendable (String) -> Void) async throws {
+        for line in lock.withLock({ progressLines }) { progress(line) }
+        await prepareGate?.wait()
+        if let prepareError { throw prepareError }
+    }
+
+    func begin(_ heard: @escaping @Sendable (LoginEvent) -> Void) async throws -> any LoginAttempt {
+        lock.withLock { begun += 1 }
+        note("begin")
+        await beginGate?.wait()
+        if let beginError { throw beginError }
+        let attempt = Attempt(heard: heard)
+        attempt.login = self
+        lock.withLock { made.append(attempt) }
+        return attempt
+    }
+
+    func discardCredential() {
+        lock.withLock {
+            discards += 1
+            answer = ClaudeLoginStatus(loggedIn: false)
         }
+    }
 
-        static func outcome(_ body: () async throws -> String) async -> Result<String, any Error> {
-            do { return .success(try await body()) } catch { return .failure(error) }
+    func status() async throws -> ClaudeLoginStatus {
+        lock.withLock { statusAsks += 1 }
+        await statusGate?.wait()
+        guard let answer = lock.withLock({ answer }) else { throw CocoaError(.fileReadUnknown) }
+        return answer
+    }
+
+    func logout() async -> Bool {
+        note("logout")
+        await logoutGate?.wait()
+        return lock.withLock {
+            logouts += 1
+            if logoutRefused { return false }
+            answer = ClaudeLoginStatus(loggedIn: false)
+            return true
         }
+    }
+}
+
+@MainActor
+func until(_ what: String, _ condition: @MainActor () -> Bool) async {
+    for _ in 0..<2000 {
+        if condition() { return }
+        await Task.yield()
+    }
+    Issue.record("never: \(what)")
+}
+
+/// Gives anything that should not happen time to: a negative is read after this, not after yields,
+/// which a loaded machine runs before the work it should have let through.
+func settle() async {
+    try? await Task.sleep(for: .milliseconds(200))
+}
+
+@Suite @MainActor struct SignInTests {
+    let browser = URL(string: "https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1234%2Fcallback")!
+    let page = URL(string: "https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback")!
+    let claudeAI = ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai", subscriptionType: "max")
+
+    func cache() -> LoginCache {
+        LoginCache(defaults: UserDefaults(suiteName: "topo-signin-\(UUID().uuidString)")!)
+    }
+
+    func ready(_ login: FakeLogin, cache: LoginCache? = nil) async -> SignIn {
+        let signIn = SignIn(login: login, cache: cache ?? self.cache())
+        await signIn.prepare()
+        return signIn
+    }
+
+    @Test func waitsForTheGuestSayingWhatItWaitsOnThenOffersTheSignIn() async {
+        let login = FakeLogin()
+        login.say(["rootfs downloading 40%"])
+        let gate = FakeLogin.Gate()
+        login.prepareGate = gate
+        let signIn = SignIn(login: login, cache: cache())
+        #expect(signIn.phase == .preparing(""))
+        let preparing = Task { await signIn.prepare() }
+        await until("the download's line") { signIn.phase == .preparing("rootfs downloading 40%") }
+        gate.release()
+        await preparing.value
+        #expect(signIn.phase == .idle)
+    }
+
+    @Test func aGuestThatCannotStartIsAFailureOnTheScreen() async {
+        let login = FakeLogin()
+        login.prepareError = CocoaError(.fileNoSuchFile)
+        let signIn = await ready(login)
+        guard case .failed = signIn.phase else { Issue.record("\(signIn.phase)"); return }
+    }
+
+    @Test func theBrowserURLOpensTheSheetAndExit0WithClaudeAIIsSignedIn() async throws {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let attempt = login.attempts[0]
+        attempt.heard(.browser(browser))
+        attempt.heard(.pastePage(page))
+        await until("the sheet") { signIn.sheet?.url == browser }
+        #expect(signIn.sheet?.kind == .approve)
+        await until("the page kept") { signIn.phase == .approving(.init(page: page, pasting: false)) }
+        login.answer(claudeAI)
+        attempt.heard(.ended(.succeeded))
+        await until("signed in") { signIn.phase == .signedIn }
+        #expect(signIn.sheet == nil)
+        #expect(cache.status == claudeAI)
+        #expect(cache.isSignedIn)
+    }
+
+    @Test func exit0WithoutClaudeAIIsAFailureNotASignIn() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+        login.attempts[0].heard(.ended(.succeeded))
+        await until("failed") { if case .failed = signIn.phase { true } else { false } }
+        #expect(!cache.isSignedIn)
+    }
+
+    @Test func loginFailedIsWhatTheScreenSays() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.attempts[0].heard(.ended(.failed("Login failed: Invalid state parameter")))
+        await until("failed") { signIn.phase == .failed("Login failed: Invalid state parameter") }
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+    }
+
+    @Test func closingASheetEndsNothingAndThePasteFieldIsReachedFromTheLoopbacksError() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let attempt = login.attempts[0]
+        attempt.heard(.browser(browser))
+        attempt.heard(.pastePage(page))
+        await until("the sheet") { signIn.sheet?.kind == .approve }
+        // The loopback's sheet stops on its connection error and the person closes it.
+        signIn.sheetClosed(signIn.sheet!)
+        #expect(signIn.sheet == nil)
+        #expect(signIn.phase == .approving(.init(page: page, pasting: false)))
+        signIn.openPageAgain()
+        let pageSheet = signIn.sheet
+        #expect(pageSheet?.url == page)
+        #expect(pageSheet?.kind == .page)
+        #expect(signIn.phase == .approving(.init(page: page, pasting: true)))
+        signIn.sheetClosed(pageSheet!)
+        #expect(signIn.sheet == nil)
+        #expect(signIn.phase == .approving(.init(page: page, pasting: true)))
+        await signIn.paste("  code#state \n")
+        #expect(attempt.pastes == ["code#state"])
+        await settle()
+        #expect(attempt.ended == 0, "a closed sheet ended the login")
+        signIn.cancel()
+        await until("the login ended") { attempt.ended == 1 }
+    }
+
+    @Test func aSheetReplacedBeforeItWasClosedIsNotTheOneClosed() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let attempt = login.attempts[0]
+        attempt.heard(.browser(browser))
+        attempt.heard(.pastePage(page))
+        await until("the sheet") { signIn.sheet?.kind == .approve }
+        let first = signIn.sheet!
+        signIn.openPageAgain()
+        signIn.sheetClosed(first)
+        if case .approving = signIn.phase {} else { Issue.record("a replaced sheet's close ended the login") }
+        #expect(attempt.ended == 0)
+    }
+
+    @Test func openThePageAgainWithNoLoginRunningStartsAFreshOne() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.attempts[0].heard(.ended(.stopped))
+        await until("failed") { if case .failed = signIn.phase { true } else { false } }
+        signIn.openPageAgain()
+        await until("a fresh login") { login.attempts.count == 2 }
+    }
+
+    @Test func whatACancelledLoginSaysAfterReachesNothing() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let attempt = login.attempts[0]
+        signIn.cancel()
+        #expect(signIn.phase == .idle)
+        await until("ended") { attempt.ended == 1 }
+        attempt.heard(.browser(browser))
+        login.answer(claudeAI)
+        attempt.heard(.ended(.succeeded))
+        await settle()
+        #expect(signIn.phase == .idle)
+        #expect(signIn.sheet == nil)
+    }
+
+    @Test func signOutClearsTheCacheAtOnceAndLogsOutAfter() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(claudeAI)
+        login.answer(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        #expect(signIn.phase == .signedIn)
+        signIn.signOut()
+        #expect(!cache.isSignedIn, "the cache still said signed in when the sign-out returned")
+        #expect(signIn.phase == .idle)
+        await signIn.loggedOut()
+        #expect(login.loggedOut == 1)
+    }
+
+    @Test func signOutWithSomethingLeftSaysIt() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut(unfinished: "GitHub's token is still in the keychain")
+        #expect(signIn.phase == .failed("Signed out, but GitHub's token is still in the keychain"))
+    }
+
+    @Test func aRefreshAtBootSignsOutALoginThatHasGoneAndKeepsOneThatHasNot() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        login.answer(claudeAI)
+        await signIn.refresh()
+        #expect(signIn.phase == .signedIn)
+        login.answer(ClaudeLoginStatus(loggedIn: false))
+        await signIn.refresh()
+        #expect(signIn.phase == .idle)
+        #expect(!cache.isSignedIn)
+    }
+
+    @Test func aStatusThatCannotBeReadChangesNothing() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        login.answer(nil)
+        await signIn.refresh()
+        #expect(signIn.phase == .signedIn)
+        #expect(cache.isSignedIn)
+    }
+
+    @Test func aRefreshWhileASignOutsLogoutIsOwedChangesNothing() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.logoutGate = gate
+        let cache = cache()
+        cache.save(claudeAI)
+        login.answer(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut()
+        await signIn.refresh()
+        #expect(signIn.phase == .idle, "a status read before the logout signed the phone back in")
+        #expect(!cache.isSignedIn)
+        gate.release()
+        await signIn.loggedOut()
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+    }
+
+    /// The app died between the sign-out and its logout: the next launch takes the credential away
+    /// before anything reads it, and runs the logout.
+    @Test func aSignOutTheAppDiedInIsFinishedAtTheNextLaunch() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.logoutGate = gate
+        let cache = cache()
+        cache.save(claudeAI)
+        login.answer(claudeAI)
+        let first = SignIn(login: login, cache: cache)
+        first.signOut()
+        #expect(cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        // The logout never ran; a second launch over the same defaults and credential.
+        let relaunched = FakeLogin()
+        relaunched.answer(claudeAI)
+        let signIn = SignIn(login: relaunched, cache: cache)
+        #expect(relaunched.discarded == 1, "the credential outlived the launch")
+        #expect(signIn.phase == .preparing(""))
+        await signIn.refresh()
+        #expect(signIn.phase == .preparing(""), "the credential the sign-out owed signed the phone back in")
+        await signIn.loggedOut()
+        #expect(relaunched.loggedOut == 1)
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        let third = FakeLogin()
+        _ = SignIn(login: third, cache: cache)
+        #expect(third.discarded == 0)
+    }
+
+    /// A credential that would not go keeps the sign-out owed, so the next launch takes it away
+    /// again; a sign-in after it writes a new one, which nothing then takes away.
+    @Test func aSignOutWhoseCredentialWouldNotGoStaysOwedUntilASignIn() async {
+        let login = FakeLogin()
+        login.logoutRefused = true
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut()
+        await signIn.loggedOut()
+        #expect(cache.defaults.bool(forKey: SignIn.signOutOwedKey), "a refused removal cleared the debt")
+        let relaunched = FakeLogin()
+        let again = SignIn(login: relaunched, cache: cache)
+        #expect(relaunched.discarded == 1)
+        await again.loggedOut()
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+
+        // Owed again, and then a sign-in: the new credential is kept at the next launch.
+        cache.defaults.set(true, forKey: SignIn.signOutOwedKey)
+        let third = FakeLogin()
+        third.logoutRefused = true
+        let signingIn = SignIn(login: third, cache: cache)
+        await signingIn.prepare()
+        await signingIn.loggedOut()
+        signingIn.start()
+        await until("the login began") { third.attempts.count == 1 }
+        third.answer(claudeAI)
+        third.attempts[0].heard(.ended(.succeeded))
+        await until("signed in") { signingIn.phase == .signedIn }
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        let fourth = FakeLogin()
+        _ = SignIn(login: fourth, cache: cache)
+        #expect(fourth.discarded == 0, "the fresh login was discarded at the next launch")
+    }
+
+    /// Sign out, then sign in at once: the login begins only once the logout has run.
+    @Test func aSignInAfterASignOutBeginsAfterItsLogout() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.logoutGate = gate
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut()
+        signIn.start()
+        await settle()
+        #expect(login.begins == 0, "a login began beside the logout")
+        gate.release()
+        await until("the login began") { login.attempts.count == 1 }
+        #expect(login.log == ["logout", "begin"])
+    }
+
+    /// Cancel and sign in again while the first login is still beginning: one login runs, and the
+    /// first's end runs before the second begins, never after.
+    @Test func cancelThenSignInWhileBeginningRunsOneLoginAndEndsTheFirstBefore() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.beginGate = gate
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the first begin") { login.begins == 1 }
+        signIn.cancel()
+        signIn.start()
+        await settle()
+        #expect(login.begins == 1, "the second login began beside the first")
+        gate.release()
+        await until("both begun") { login.attempts.count == 2 }
+        await until("the first ended") { login.attempts[0].ended == 1 }
+        await signIn.loggedOut()
+        #expect(login.log == ["begin", "end", "begin"])
+        #expect(login.attempts[1].ended == 0, "the live login was ended")
+    }
+
+    /// Cancel, then sign in again with the first login running: its end comes before the next begin.
+    @Test func cancelThenSignInEndsTheFirstBeforeTheSecondBegins() async {
+        let login = FakeLogin()
+        let gate = FakeLogin.Gate()
+        login.endGate = gate
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        await settle() // kept by the sign-in, so the cancel ends it rather than the queue
+        signIn.cancel()
+        signIn.start()
+        await settle()
+        #expect(login.begins == 1, "the second login began while the first was ending")
+        gate.release()
+        await until("a second login") { login.attempts.count == 2 }
+        #expect(login.log == ["begin", "end", "begin"])
+    }
+
+    /// What an earlier login says reaches nothing while a later one is approving.
+    @Test func anOlderLoginsWordsDoNotReachALaterOne() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let old = login.attempts[0]
+        signIn.cancel()
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+        old.heard(.browser(browser))
+        old.heard(.pastePage(page))
+        old.heard(.ended(.failed("old")))
+        await settle()
+        #expect(signIn.phase == .approving(.init(page: nil, pasting: false)))
+        #expect(signIn.sheet == nil)
+    }
+
+    /// A code that could not be written ends its login before another can start, and the next
+    /// login begins only after that end.
+    @Test func aPasteThatFailsEndsItsLogin() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        await settle()
+        let attempt = login.attempts[0]
+        attempt.pasteError = CocoaError(.fileWriteUnknown)
+        attempt.heard(.pastePage(page))
+        await until("the page") { signIn.phase == .approving(.init(page: page, pasting: false)) }
+        await signIn.paste("code#state")
+        guard case .failed = signIn.phase else { Issue.record("\(signIn.phase)"); return }
+        await until("the failed login ended") { attempt.ended == 1 }
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+        #expect(login.log == ["begin", "end", "begin"])
+    }
+
+    /// A paste of a login cancelled while it was writing fails the login after it in nothing.
+    @Test func aCancelledLoginsPasteFailureDoesNotFailTheNext() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        await settle()
+        let attempt = login.attempts[0]
+        let gate = FakeLogin.Gate()
+        attempt.pasteGate = gate
+        attempt.pasteError = CocoaError(.fileWriteUnknown)
+        attempt.heard(.pastePage(page))
+        await until("the page") { signIn.phase == .approving(.init(page: page, pasting: false)) }
+        let pasting = Task { await signIn.paste("code#state") }
+        await until("the paste written") { attempt.pastes.count == 1 }
+        signIn.cancel()
+        signIn.start()
+        await until("a second login") { login.attempts.count == 2 }
+        gate.release()
+        await pasting.value
+        #expect(signIn.phase == .approving(.init(page: nil, pasting: false)), "the old paste failed the new login")
+        #expect(login.attempts[1].ended == 0)
+    }
+
+    @Test func aLoginThatCannotBeginIsAFailure() async {
+        let login = FakeLogin()
+        login.beginError = CocoaError(.fileNoSuchFile)
+        let signIn = await ready(login)
+        signIn.start()
+        await until("failed") { if case .failed = signIn.phase { true } else { false } }
+    }
+
+    /// A refresh during a login leaves the login on the screen, whatever the status says.
+    @Test func aRefreshWhileApprovingLeavesTheLoginAlone() async {
+        let login = FakeLogin()
+        let signIn = await ready(login)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(claudeAI)
+        await signIn.refresh()
+        #expect(signIn.phase == .approving(.init(page: nil, pasting: false)))
+    }
+
+    /// A login that succeeded but was cancelled while its status was read is not a sign-in.
+    @Test func aSuccessCancelledWhileItsStatusIsReadIsNotASignIn() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        let gate = FakeLogin.Gate()
+        login.statusGate = gate
+        login.answer(claudeAI)
+        login.attempts[0].heard(.ended(.succeeded))
+        await until("the status asked") { login.statusAsked == 1 }
+        signIn.signOut()
+        login.answer(claudeAI) // the logout's answer replaced by a status read before it
+        gate.release()
+        await signIn.loggedOut()
+        await settle()
+        #expect(signIn.phase == .idle)
+        #expect(!cache.isSignedIn)
+    }
+
+    @Test func aDeveloperTokenIsAcceptedWhereTheBuildSaysSo() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+        login.answer(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+        let signIn = SignIn(login: login, cache: cache, accept: { $0.loggedIn })
+        await signIn.refresh()
+        #expect(signIn.phase == .signedIn)
+    }
+}
+
+@Suite struct ClaudeLoginStatusTests {
+    @Test func readsTheJSONClaudeCodePrints() {
+        let output = """
+        {
+          "loggedIn": true,
+          "authMethod": "claude.ai",
+          "apiProvider": "firstParty",
+          "email": "someone@example.com",
+          "subscriptionType": "max"
+        }
+        """
+        let status = ClaudeLoginStatus.parse(output)
+        #expect(status == ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai", subscriptionType: "max"))
+        #expect(status?.isClaudeAI == true)
+        #expect(status?.summary == "claude.ai, max")
+    }
+
+    @Test func aTokenFromTheEnvironmentIsNotClaudeAI() {
+        let status = ClaudeLoginStatus.parse(#"{"loggedIn": true, "authMethod": "oauth_token"}"#)
+        #expect(status?.isClaudeAI == false)
+    }
+
+    @Test func noJSONIsNoStatus() {
+        #expect(ClaudeLoginStatus.parse("Not logged in") == nil)
+        #expect(ClaudeLoginStatus.parse("") == nil)
+        #expect(ClaudeLoginStatus.parse(#"{"loggedIn": false}"#)?.summary == "signed out")
+    }
+}
+
+/// The item round trip, and the migration's deletes, against a keychain of the test's own on the
+/// Mac (`TemporaryKeychain`), so neither needs an unlocked login keychain nor writes to it. A
+/// keychain that cannot be created, set or unlocked fails the test at a `#require`.
+@Suite struct KeychainItemTests {
+    func item(_ account: String = UUID().uuidString, in keychain: Any?) -> KeychainItem {
+        var item = KeychainItem(service: "zone.hexagon.topo.tests", account: account)
+        #if os(macOS)
+        item.keychainPath = (keychain as? TemporaryKeychain)?.path
+        #endif
+        return item
+    }
+
+    func keychain() throws -> Any? {
+        #if os(macOS)
+        return try TemporaryKeychain()
+        #else
+        return nil
+        #endif
+    }
+
+    func delete(_ keychain: Any?) {
+        #if os(macOS)
+        (keychain as? TemporaryKeychain)?.delete()
+        #endif
+    }
+
+    @Test func roundTripsThroughTheKeychain() throws {
+        let keychain = try keychain()
+        defer { delete(keychain) }
+        let item = item(in: keychain)
+        defer { try? item.delete() }
+        #expect(try item.read() == nil)
+        try item.write(Data("a".utf8))
+        #if os(macOS)
+        #expect((keychain as! TemporaryKeychain).holdsItem(service: item.service, account: item.account),
+                "the item was written outside the keychain it was pointed at")
+        #endif
+        #expect(try item.read() == Data("a".utf8))
+        try item.write(Data("b".utf8))
+        #expect(try item.read() == Data("b".utf8))
+        try item.delete()
+        #expect(try item.read() == nil)
+    }
+
+    @Test func theMigrationDeletesTheOldItemsAndSaysSo() throws {
+        let keychain = try keychain()
+        defer { delete(keychain) }
+        let ordinary = item("claude", in: keychain), guest = item("claude-guest", in: keychain)
+        defer { try? ordinary.delete(); try? guest.delete() }
+        let defaults = UserDefaults(suiteName: "topo-migration-\(UUID().uuidString)")!
+        #expect(!LoginMigration.run(items: [ordinary, guest], defaults: defaults))
+        #expect(!defaults.bool(forKey: LoginMigration.signInAgainKey))
+        try ordinary.write(Data("tokens".utf8))
+        try guest.write(Data("guest".utf8))
+        #expect(LoginMigration.run(items: [ordinary, guest], defaults: defaults))
+        #expect(try ordinary.read() == nil)
+        #expect(try guest.read() == nil)
+        #expect(defaults.bool(forKey: LoginMigration.signInAgainKey))
+    }
+
+    @Test func theMigrationNamesTheItemsTheOldBuildKept() {
+        #expect(LoginMigration.items.map(\.service) == ["zone.hexagon.topo.claude", "zone.hexagon.topo.claude"])
+        #expect(LoginMigration.items.map(\.account) == ["claude", "claude-guest"])
     }
 }

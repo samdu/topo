@@ -17,7 +17,6 @@ import UIKit
 /// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`; nothing writes it down.
 enum DebugRun {
     static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
-    static let lifetimeVariable = "TOPO_CLAUDE_SETUP_TOKEN_DAYS"
     static let sendVariable = "TOPO_DEBUG_SEND"
     static let earVariable = "TOPO_DEBUG_EAR"
     static let voiceVariable = "TOPO_DEBUG_VOICE"
@@ -261,46 +260,35 @@ enum DebugRun {
         try? await Task.sleep(for: .seconds(seconds))
     }
 
-    /// Where the guest's long-lived token lives on this platform: the phone runs a guest, and
-    /// nothing else here does.
-    static var defaultGuestStore: TokenStore? {
-        #if os(iOS)
-        KeychainTokenStore.guest
-        #else
-        nil
-        #endif
+    /// A developer's Claude Code token from the launch environment, or nil. Every `claude` the app
+    /// starts in the guest gets it as `CLAUDE_CODE_OAUTH_TOKEN` in place of a login
+    /// (`GuestResident.developerEnvironment`), so a simulator and CI run with no browser and no
+    /// paste. It reaches no connector: those need Claude Code's own login.
+    static func developerToken(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
     }
 
-    /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
-    /// the app comes up past the sign-in screen. Does nothing when the variable is absent, which is
-    /// every ordinary debug build: an engineer's own sign-in is left exactly as it was.
-    ///
-    /// A setup token has no refresh token — it is minted for a year and cannot be exchanged — so it
-    /// is written with a life short enough to be obviously wrong if it is still there next month and
-    /// long enough that no run tries to refresh it. A refresh would fail loudly rather than quietly:
-    /// the empty refresh token is rejected and the turn reports it.
+    /// Marks the launch signed in when it carries a developer's token, so the app comes up past
+    /// the sign-in screen; a status read later counts that token as signed in (`accepts`). Does
+    /// nothing when the variable is absent, which is every ordinary debug build: an engineer's own
+    /// sign-in is left exactly as it was.
     @discardableResult
-    static func signIn(store: TokenStore = KeychainTokenStore(),
-                       guestStore: TokenStore? = defaultGuestStore,
-                       environment: [String: String] = ProcessInfo.processInfo.environment,
-                       now: Date = Date()) -> Bool {
-        let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { return false }
-        let days = environment[lifetimeVariable].flatMap(Double.init) ?? 30
-        let tokens = Tokens(accessToken: token,
-                            refreshToken: "",
-                            expiresAt: now.addingTimeInterval(days * 86_400),
-                            scopes: ClaudeOAuth.Configuration.claude.scopes)
-        do {
-            try store.save(tokens)
-            // A setup token is the long-lived kind the guest runs on, so it is the guest's too.
-            try guestStore?.save(tokens)
-            say("signed in from \(tokenVariable) for \(Int(days)) days")
-            return true
-        } catch {
-            say("could not write the token to the keychain: \(error)")
-            return false
+    static func signIn(cache: LoginCache = .standard,
+                       environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        guard developerToken(environment) != nil else { return false }
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+        say("signed in from \(tokenVariable)")
+        return true
+    }
+
+    /// What counts as signed in: Claude Code's own login, or, in a launch carrying a developer's
+    /// token, that token.
+    static func accepts(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> @Sendable (ClaudeLoginStatus) -> Bool {
+        if developerToken(environment) == nil {
+            return { status in status.isClaudeAI }
         }
+        return { status in status.loggedIn }
     }
 
     /// What `TOPO_DEBUG_SEND` asks to be said, or nil.
