@@ -249,10 +249,14 @@ started+=("$owner")
 AUDIO_LANE_OWNER="$owner" run start "$work/fixture.wav" > "$work/owner-dies.out" 2>&1 & held=$!
 for _ in $(seq 100); do [ -e "$work/arrived" ] && break; sleep 0.1; done
 hold "owner dies during start: the start is held inside start" [ -e "$work/arrived" ]
-before="$(ls -lT "$state"; cat "$state"/owner.* 2>/dev/null)"
+# The orphaned lane from the lost-pid-file case still writes heartbeat every half second, and
+# ls -lT shows its mtime to the second; no start writes it, so it is left out of what a refused
+# start must leave as it was.
+untouched() { ls -lT "$state" | grep -v ' heartbeat$'; cat "$state"/owner.* 2>/dev/null; }
+before="$(untouched)"
 AUDIO_LANE_OWNER=999999 run start "$work/fixture.wav" > "$work/owner-dead-held.out" 2>&1; status=$?
 hold "an owner that is not running, while a start is held: exits 2 (got $status)" [ "$status" = 2 ]
-hold "an owner that is not running, while a start is held: changes nothing" [ "$(ls -lT "$state"; cat "$state"/owner.* 2>/dev/null)" = "$before" ]
+hold "an owner that is not running, while a start is held: changes nothing" [ "$(untouched)" = "$before" ]
 hold "an owner that is not running, while a start is held: no supervisor is recorded" [ ! -e "$state/supervisor.pid" ]
 kill -KILL "$owner"; wait "$owner" 2>/dev/null
 rm "$work/hold"
