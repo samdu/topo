@@ -54,7 +54,7 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         mainThread = pthread_self()
         MXMetricManager.shared.add(self)
         counters = Self.read().map { ($0.cpu, $0.idle, $0.interrupts, ContinuousClock.now) }
-        threadLast = Self.threads(main: mainThread).mapValues(\.cpu)
+        threadLast = Self.advance(process: 0, before: nil, sample: Self.threads(main: mainThread)).next
         openFile()
         payloads = Self.kept()
         let t = DispatchSource.makeTimerSource(queue: .main)
@@ -79,8 +79,8 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         guard dt > 0 else { return }
         counters = (now.cpu, now.idle, now.interrupts, at)
         let cpu = now.cpu - last.cpu
-        let split = Self.breakdown(process: cpu, before: threadLast, after: threads)
-        threadLast = threads.mapValues(\.cpu)
+        let split = Self.advance(process: cpu, before: threadLast, sample: threads)
+        threadLast = split.next
         let idle = now.idle &- last.idle
         let ints = now.interrupts &- last.interrupts
         let dev = UIDevice.current
@@ -111,7 +111,11 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
             await state())
         self.last = line
         write(line)
-        if !split.isEmpty { write("energy threads " + split) }
+        if let line = split.line {
+            if !line.isEmpty { write("energy threads " + line) }
+        } else {
+            write("energy threads not read this interval")
+        }
     }
 
     /// A write that fails (the disk full) drops the file for the rest of the process; the marks
@@ -148,34 +152,35 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
 
     // MARK: Threads
 
-    private var threadLast: [UInt64: Double] = [:]
+    /// Each thread's CPU seconds at the last pulse; nil when the last sample could not be read, so
+    /// the next one is a baseline and not a breakdown.
+    private var threadLast: [UInt64: Double]?
     private var mainThread: pthread_t?
 
-    /// Every thread of this task now: its CPU seconds since it started, and the name it is
-    /// counted under. Unnamed threads are `unnamed`, and the guest's are `guest`: the emulator names
-    /// a guest process's thread after its command, which is the person's.
-    private static func threads(main: pthread_t?) -> [UInt64: (name: String, cpu: Double)] {
+    /// One reading of this task's threads: each one's CPU seconds since it started and the name
+    /// it is counted under, and the threads that answered with an id and no times (`unread`).
+    struct ThreadSample {
+        var threads: [UInt64: (name: String, cpu: Double)]
+        var unread: Set<UInt64> = []
+    }
+
+    /// Every thread of this task now, or nil when the kernel would not list them. Unnamed threads
+    /// are `unnamed`, and the guest's are `guest`: the emulator names a guest process's thread
+    /// after its command, which is the person's. A thread whose id cannot be read has ended since
+    /// the list was taken, and is left to `unattributed` like any thread that ended.
+    private static func threads(main: pthread_t?) -> ThreadSample? {
         var list: thread_act_array_t?
         var count: mach_msg_type_number_t = 0
         guard task_threads(mach_task_self_, &list, &count) == KERN_SUCCESS, let list
-        else { return [:] }
+        else { return nil }
         defer {
             for i in 0..<Int(count) { mach_port_deallocate(mach_task_self_, list[i]) }
             vm_deallocate(mach_task_self_, vm_address_t(bitPattern: list),
                           vm_size_t(count) * vm_size_t(MemoryLayout<thread_t>.size))
         }
-        var out: [UInt64: (name: String, cpu: Double)] = [:]
+        var out = ThreadSample(threads: [:])
         for i in 0..<Int(count) {
             let t = list[i]
-            var basic = thread_basic_info_data_t()
-            var n = mach_msg_type_number_t(
-                MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
-            let kr = withUnsafeMutablePointer(to: &basic) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) {
-                    thread_info(t, thread_flavor_t(THREAD_BASIC_INFO), $0, &n)
-                }
-            }
-            guard kr == KERN_SUCCESS else { continue }
             var ident = thread_identifier_info_data_t()
             var m = mach_msg_type_number_t(
                 MemoryLayout<thread_identifier_info_data_t>.size / MemoryLayout<integer_t>.size)
@@ -185,6 +190,18 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
                 }
             }
             guard kr2 == KERN_SUCCESS else { continue }
+            var basic = thread_basic_info_data_t()
+            var n = mach_msg_type_number_t(
+                MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+            let kr = withUnsafeMutablePointer(to: &basic) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) {
+                    thread_info(t, thread_flavor_t(THREAD_BASIC_INFO), $0, &n)
+                }
+            }
+            guard kr == KERN_SUCCESS else {
+                out.unread.insert(ident.thread_id)
+                continue
+            }
             let cpu = Double(basic.user_time.seconds + basic.system_time.seconds)
                 + Double(basic.user_time.microseconds + basic.system_time.microseconds) / 1e6
             var name = ""
@@ -198,31 +215,53 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
                     if isGuestThread(name) { name = "guest" }
                 }
             }
-            out[ident.thread_id] = (name.isEmpty ? "unnamed" : name, cpu)
+            out.threads[ident.thread_id] = (name.isEmpty ? "unnamed" : name, cpu)
         }
         return out
     }
 
     /// The share of a group or of the remainder below which the threads line leaves it out.
     static let least = 0.05
+    /// The groups the threads line names; the rest are summed as `other`.
+    static let groups = 8
+
+    /// A pulse's threads line and the baseline the next pulse reads against. With no sample there
+    /// is no line and no baseline, so the next sample is taken as a baseline rather than every
+    /// thread's lifetime counted as one interval's; with no baseline the sample is one and there is
+    /// no line. A thread that gave no times keeps its last baseline, and its interval's time is
+    /// `unattributed`; one that has none makes the sample no baseline, for the same reason.
+    static func advance(process: Double, before: [UInt64: Double]?,
+                        sample: ThreadSample?) -> (line: String?, next: [UInt64: Double]?) {
+        guard let sample else { return (nil, nil) }
+        var next = sample.threads.mapValues(\.cpu)
+        for id in sample.unread {
+            guard let was = before?[id] else { return (nil, nil) }
+            next[id] = was
+        }
+        guard let before else { return (nil, next) }
+        return (breakdown(process: process, before: before, after: sample.threads), next)
+    }
 
     /// Where an interval's CPU went, by name, busiest first: each thread's seconds since `before`
     /// (a thread `before` does not name started inside the interval, so all of its time is), summed
-    /// under its name before anything is left out. What the process spent that the threads alive
+    /// under its name before anything is left out; past the busiest eight, and below the floor,
+    /// groups are summed as `other`. What the process spent that the threads alive
     /// at the end do not account for is `unattributed`: threads that ended inside the interval,
     /// whose time `task_threads` can no longer name.
     static func breakdown(process: Double, before: [UInt64: Double],
                           after: [UInt64: (name: String, cpu: Double)]) -> String {
         var merged: [String: Double] = [:]
-        var named = 0.0
+        var counted = 0.0
         for (id, t) in after {
             let delta = max(0, t.cpu - (before[id] ?? 0))
             merged[t.name, default: 0] += delta
-            named += delta
+            counted += delta
         }
-        let shown = merged.filter { $0.value >= least }.sorted { $0.value > $1.value }.prefix(8)
-        var parts = shown.map { String(format: "%@ %.2fs", $0.key, $0.value) }
-        let rest = process - named
+        let ranked = merged.filter { $0.value >= least }.sorted { $0.value > $1.value }
+        var parts = ranked.prefix(groups).map { String(format: "%@ %.2fs", $0.key, $0.value) }
+        let other = counted - ranked.prefix(groups).reduce(0) { $0 + $1.value }
+        if other >= least { parts.append(String(format: "other %.2fs", other)) }
+        let rest = process - counted
         if rest >= least { parts.append(String(format: "unattributed %.2fs", rest)) }
         return parts.joined(separator: ", ")
     }
