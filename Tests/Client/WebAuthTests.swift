@@ -176,17 +176,4 @@ final class WebAuthTests: XCTestCase {
         XCTAssertEqual(stage.sheets.count, 4)
         XCTAssertEqual(stage.dismissed, [])
     }
-
-    /// The guest token's row in Diagnostics says whether it is held and for how long, never it.
-    func testTheGuestTokensRowSaysWhetherItIsHeld() {
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        func tokens(expiring: TimeInterval) -> Tokens {
-            Tokens(accessToken: "sk-ant-oat01-secret", refreshToken: "", expiresAt: now.addingTimeInterval(expiring), scopes: ["user:inference"])
-        }
-        XCTAssertEqual(GuestTokenSummary.of(now: now) { nil }, "none held; Claude Code runs on the ordinary token")
-        XCTAssertEqual(GuestTokenSummary.of(now: now) { tokens(expiring: 364.5 * 86_400) }, "held, 364 days left")
-        XCTAssertEqual(GuestTokenSummary.of(now: now) { tokens(expiring: -1) }, "held, expired")
-        XCTAssertTrue(GuestTokenSummary.of(now: now) { throw CocoaError(.fileReadNoPermission) }.hasPrefix("unreadable: "))
-        XCTAssertFalse(GuestTokenSummary.of(now: now) { tokens(expiring: 86_400) }.contains("secret"))
-    }
 }

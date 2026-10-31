@@ -120,6 +120,9 @@ public final class GuestProcess: Sendable {
     /// Whether the process has been reaped (or its wait failed).
     public var hasExited: Bool { state.status != nil }
 
+    /// Whether stdout and stderr have both reached their end, so `errors` holds all of stderr.
+    public var pipesClosed: Bool { state.pipesClosed }
+
     /// Writes `line` and a newline to stdin, whole, on the process's own queue.
     public func write(_ line: String) async throws {
         let data = Array((line + "\n").utf8)

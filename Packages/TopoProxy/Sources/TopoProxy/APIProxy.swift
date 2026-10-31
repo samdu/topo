@@ -1,7 +1,6 @@
 import Foundation
 import Network
 import os
-import TopoAuth
 import TopoCore
 
 /// The loopback relay Claude Code in the guest reaches the API through: plain HTTP/1.1 in on
@@ -110,15 +109,10 @@ public actor APIProxy {
     /// The URL the guest's `ANTHROPIC_BASE_URL` is set to.
     public static func baseURL(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
 
-    /// What the guest's environment gains so Claude Code talks through the proxy on `port`, with
-    /// the token `credential` hands out: the long-lived one when sign-in minted it, otherwise the
-    /// ordinary access token. The token is handed over here and nowhere else — only in the
-    /// environment of the process the app starts. Throws `TokenProviderError.signedOut` with no
-    /// login.
-    public static func guestEnvironment(port: UInt16, credential: GuestCredential) async throws
-        -> (environment: [String: String], source: GuestCredential.Source) {
-        let (token, source) = try await credential.token()
-        return (["ANTHROPIC_BASE_URL": baseURL(port: port), "CLAUDE_CODE_OAUTH_TOKEN": token], source)
+    /// What the guest's environment gains so Claude Code talks through the proxy on `port`. No
+    /// credential: Claude Code sends its own login's, which the proxy carries unchanged.
+    public static func guestEnvironment(port: UInt16) -> [String: String] {
+        ["ANTHROPIC_BASE_URL": baseURL(port: port)]
     }
 
     private func stateChanged(_ state: NWListener.State, generation current: Int) async {

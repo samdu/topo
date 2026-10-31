@@ -1,51 +1,6 @@
 import Foundation
 import Security
 
-/// Where the Claude tokens live. Only the primary or the hub ever holds one; viewers hold nothing
-/// that reaches the account.
-public protocol TokenStore: Sendable {
-    func load() throws -> Tokens?
-    func save(_ tokens: Tokens) throws
-    func clear() throws
-}
-
-/// The device keychain: one generic-password item, JSON-encoded, never synced to iCloud.
-public struct KeychainTokenStore: TokenStore {
-    public var item: KeychainItem
-    public var service: String { item.service }
-    public var account: String { item.account }
-
-    #if os(macOS)
-    /// A file-based keychain to hold the item in, instead of the default search list
-    /// (`KeychainItem.keychainPath`).
-    public var keychainPath: String? {
-        get { item.keychainPath }
-        set { item.keychainPath = newValue }
-    }
-    #endif
-
-    public init(service: String = "zone.hexagon.topo.claude", account: String = "claude") {
-        item = KeychainItem(service: service, account: account)
-    }
-
-    public typealias Error = KeychainItem.Error
-
-    /// The guest's long-lived token, its own item beside the ordinary tokens in the same service.
-    public static let guest = KeychainTokenStore(account: "claude-guest")
-
-    public func load() throws -> Tokens? {
-        try item.read().map { try JSONDecoder().decode(Tokens.self, from: $0) }
-    }
-
-    public func save(_ tokens: Tokens) throws {
-        try item.write(JSONEncoder().encode(tokens))
-    }
-
-    public func clear() throws {
-        try item.delete()
-    }
-}
-
 /// One generic-password item in the device keychain, as bytes: this device only
 /// (`AfterFirstUnlockThisDeviceOnly`), so never synced to iCloud or restored to another phone.
 public struct KeychainItem: Sendable {
@@ -118,19 +73,13 @@ public struct KeychainItem: Sendable {
     }
 
     public func delete() throws {
+        _ = try deleteIfPresent()
+    }
+
+    /// Deletes the item, answering whether there was one.
+    public func deleteIfPresent() throws -> Bool {
         let status = SecItemDelete(try query() as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Error(status: status) }
+        return status == errSecSuccess
     }
-}
-
-/// For tests and previews.
-public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
-    private let lock = NSLock()
-    private var tokens: Tokens?
-
-    public init(_ tokens: Tokens? = nil) { self.tokens = tokens }
-
-    public func load() throws -> Tokens? { lock.withLock { tokens } }
-    public func save(_ tokens: Tokens) throws { lock.withLock { self.tokens = tokens } }
-    public func clear() throws { lock.withLock { tokens = nil } }
 }

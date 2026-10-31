@@ -74,7 +74,7 @@ final class ReplyLinkTests: XCTestCase {
     }
 
     /// The reply whose words are `label`, once it is on the screen.
-    private func reply(_ app: XCUIApplication, _ label: String) throws -> XCUIElement {
+    private func reply(_ app: TopoApplication, _ label: String) throws -> XCUIElement {
         let words = app.staticTexts.matching(NSPredicate(format: "label == %@", label)).firstMatch
         if !words.waitForExistence(timeout: 60) {
             let tree = XCTAttachment(string: app.debugDescription)
@@ -88,7 +88,7 @@ final class ReplyLinkTests: XCTestCase {
     }
 
     /// What the chat was asked to open, once it has been asked `count` times.
-    private func opened(_ app: XCUIApplication, count: Int) throws -> [String] {
+    private func opened(_ app: TopoApplication, count: Int) throws -> [String] {
         let deadline = Date().addingTimeInterval(10)
         var seen: [String]?
         repeat {
@@ -101,7 +101,7 @@ final class ReplyLinkTests: XCTestCase {
 
     /// What the chat was asked to open after long enough for a tap that opened something to
     /// have said so.
-    private func settled(_ app: XCUIApplication) throws -> [String] {
+    private func settled(_ app: TopoApplication) throws -> [String] {
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         return try XCTUnwrap(ChatReading.chat(app)?.opened, "the chat reports no opened links")
     }

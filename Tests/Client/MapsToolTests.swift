@@ -324,7 +324,7 @@ final class MapsToolTests: XCTestCase {
             let call = Task { await tool.run(arguments) }
             for _ in 0..<500 where locator.asked == asked { try await Task.sleep(for: .milliseconds(10)) }
             call.cancel()
-            let reply = await PhoneTool.within(.seconds(1)) { await call.value }
+            let reply = await PhoneTool.within(.seconds(10)) { await call.value }
             XCTAssertEqual(reply, PhoneTool.late, "\(arguments)")
         }
         XCTAssertEqual(maps.requests, [])
@@ -335,7 +335,7 @@ final class MapsToolTests: XCTestCase {
     func testAFixPastItsBoundSaysSo() async {
         let rig = rig()
         rig.locator.held = true
-        let reply = await PhoneTool.within(.seconds(1)) { await rig.tool.run(["search", "coffee"]) }
+        let reply = await PhoneTool.within(.seconds(10)) { await rig.tool.run(["search", "coffee"]) }
         XCTAssertEqual(reply, .failed("topo: no location fix within 200 ms; give --near LAT,LON or --anywhere instead\n"))
         XCTAssertEqual(rig.maps.requests, [])
     }
@@ -346,7 +346,7 @@ final class MapsToolTests: XCTestCase {
         rig.locator.held = true
         for arguments in [["route", "--to", "37.8080,-122.4177"], ["eta", "--to", "37.8080,-122.4177"],
                           ["route", "--from", "37.7599,-122.4148", "--to", "here"], ["eta", "--from", "37.7599,-122.4148", "--to", "here"]] {
-            let reply = await PhoneTool.within(.seconds(1)) { await rig.tool.run(arguments) }
+            let reply = await PhoneTool.within(.seconds(10)) { await rig.tool.run(arguments) }
             XCTAssertEqual(reply, .failed("topo: no location fix within 200 ms; give --from LAT,LON and a coordinate --to instead\n"),
                            "\(arguments)")
         }

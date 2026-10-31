@@ -13,13 +13,12 @@ let package = Package(
         .library(name: "TopoTools", targets: ["TopoTools"]),
     ],
     dependencies: [
-        .package(path: "../TopoAuth"),
         .package(path: "../TopoCore"),
     ],
     targets: [
-        .target(name: "TopoProxy", dependencies: ["TopoAuth", .product(name: "TopoCore", package: "TopoCore")]),
+        .target(name: "TopoProxy", dependencies: [.product(name: "TopoCore", package: "TopoCore")]),
         .target(name: "TopoTools", dependencies: ["TopoProxy"]),
-        .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy", "TopoAuth"]),
+        .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy"]),
         .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy"]),
     ]
 )

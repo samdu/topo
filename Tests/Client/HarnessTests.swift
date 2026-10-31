@@ -77,7 +77,7 @@ final class HarnessIntegrationTests: XCTestCase {
                              ensureZone: @escaping @Sendable () async throws -> Void = {},
                              pause: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() },
                              now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) -> Harness {
-        Harness(database: database, tokens: FixedToken(), device: device ?? phone, ensureZone: ensureZone,
+        Harness(database: database, device: device ?? phone, ensureZone: ensureZone,
                 defaults: defaults, brain: brain(transport, device: device ?? phone, defaults: defaults),
                 leaseSleep: parked, pause: pause, now: now)
     }
@@ -551,6 +551,28 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(relaunched.waiting.isEmpty)
         XCTAssertNil(defaults.data(forKey: "topo.harness.outbox"))
         XCTAssertEqual(transport.sent, [["call Helen"]])
+    }
+
+    /// #371: a reinstalled phone keeps its name and nothing else, so its harness starts with no
+    /// outbox and a new guest beside a log that already holds its turns. It writes after them.
+    func testAHarnessMadeNewUnderANameWithTurnsInTheLogAppendsAfterThem() async throws {
+        let db = InMemoryRecordDatabase()
+        let before = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Out tonight."))))
+        await before.send("the bins")
+        let earlier = try await log(db)
+        XCTAssertEqual(earlier.count, 2)
+
+        // The app is deleted and installed again: new defaults, so a new guest home and no outbox.
+        let reinstalled = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Calling."))))
+        await reinstalled.send("call Helen")
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["the bins", "Out tonight.", "call Helen", "Calling."])
+        XCTAssertTrue(turns.allSatisfy { $0.ref.device == phone })
+        let sequences = turns.map(\.ref.sequence)
+        XCTAssertEqual(Set(sequences).count, sequences.count, "a sequence number written twice")
+        let latest = try XCTUnwrap(earlier.map(\.ref.sequence).max())
+        XCTAssertTrue(turns.dropFirst(2).allSatisfy { $0.ref.sequence > latest }, "the new turns come after the old")
     }
 
     func testARelaunchSendsATurnThatNeverReachedTheLog() async throws {
@@ -2110,9 +2132,6 @@ private func reply(_ text: String) -> String {
     #"{"id":"msg","type":"message","model":"claude-haiku-4-5","content":[{"type":"text","text":"\#(text)"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#
 }
 
-private struct FixedToken: TokenProvider {
-    func accessToken() async throws -> String { "tok" }
-}
 
 private struct Unexpected: Error {}
 

@@ -163,7 +163,7 @@ final class GuestBridgeTests: XCTestCase {
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let defaults = UserDefaults(suiteName: name)!
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: defaults, brain: bridge, relay: relay, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
         XCTAssertEqual(harness.compaction, .auto)
@@ -211,7 +211,7 @@ final class GuestBridgeTests: XCTestCase {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: InMemoryRecordDatabase(), tokens: InMemoryTokenStore(nil).provider, device: phone,
+        let harness = Harness(database: InMemoryRecordDatabase(), device: phone,
                               ensureZone: {}, defaults: UserDefaults(suiteName: name)!, brain: bridge, relay: relay,
                               leaseSleep: parked, pause: { _ in throw CancellationError() })
         XCTAssertTrue(harness.compact())
@@ -1011,8 +1011,7 @@ final class GuestBridgeTests: XCTestCase {
 
     /// The app composes the guest and nothing else.
     func testTheAppComposesTheGuestAsItsOnlyBrain() {
-        let harness = Harness.standard(tokens: StoredTokenProvider(store: InMemoryTokenStore(nil)),
-                                       database: InMemoryRecordDatabase())
+        let harness = Harness.standard(database: InMemoryRecordDatabase())
         XCTAssertNotNil(harness.guest, "the brain is the guest")
     }
 
@@ -1025,7 +1024,7 @@ final class GuestBridgeTests: XCTestCase {
         let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
 
@@ -1055,7 +1054,7 @@ final class GuestBridgeTests: XCTestCase {
         let guest = ScriptedGuest(home: home, script: [.reply("Noted."), .cutOff])
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!,
                               brain: GuestBridge(conversation: guest, ledger: ledgerFile), leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
@@ -1103,7 +1102,7 @@ final class GuestBridgeTests: XCTestCase {
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!, brain: bridge, relay: relay,
                               leaseSleep: parked, pause: { _ in throw CancellationError() })
         let mascot = Mascot(model: "claude-sonnet-5")
@@ -1161,7 +1160,7 @@ final class GuestBridgeTests: XCTestCase {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
         await harness.send("the word is marmalade")
@@ -1198,7 +1197,7 @@ final class GuestBridgeTests: XCTestCase {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
         await harness.send("the word is marmalade")
@@ -1233,7 +1232,7 @@ final class GuestBridgeTests: XCTestCase {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
         await harness.send("the word is marmalade")
@@ -1260,7 +1259,7 @@ final class GuestBridgeTests: XCTestCase {
         let guest = ScriptedGuest(home: home, script: [.reply("Noted.")])
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!,
                               brain: GuestBridge(conversation: guest, ledger: ledgerFile), leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
@@ -1285,7 +1284,7 @@ final class GuestBridgeTests: XCTestCase {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!,
                               brain: bridge, relay: relay, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
@@ -1403,7 +1402,7 @@ final class GuestBridgeTests: XCTestCase {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        return Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        return Harness(database: db, device: phone, ensureZone: {},
                        defaults: UserDefaults(suiteName: name)!,
                        brain: bridge, relay: relay, leaseSleep: parked,
                        pause: { _ in throw CancellationError() })
@@ -1498,7 +1497,7 @@ final class GuestBridgeTests: XCTestCase {
         let zone = Gate()
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone,
+        let harness = Harness(database: db, device: phone,
                               ensureZone: { await zone.pass() }, defaults: UserDefaults(suiteName: name)!,
                               brain: GuestBridge(conversation: guest, ledger: ledgerFile), leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
@@ -1521,7 +1520,7 @@ final class GuestBridgeTests: XCTestCase {
         let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
 
@@ -1548,7 +1547,7 @@ extension GuestBridgeTests {
     private func harness(_ db: any RecordDatabase, _ guest: ScriptedGuest, defaults: UserDefaults? = nil,
                          patience: Duration = .seconds(3600)) -> (Harness, GuestBridge) {
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: defaults ?? makeDefaults(),
                               brain: bridge, relay: relay, leaseSleep: parked,
                               pause: { _ in throw CancellationError() }, patience: patience)
@@ -2476,10 +2475,6 @@ private func steadyLease(_ database: any RecordDatabase, _ device: DeviceID) -> 
     let epoch = Date(timeIntervalSince1970: 1_800_000_000)
     return PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(),
                         now: { epoch }, monotonic: { 0 }, sleep: parked)
-}
-
-private extension InMemoryTokenStore {
-    var provider: StoredTokenProvider { StoredTokenProvider(store: self) }
 }
 
 @MainActor
@@ -3578,7 +3573,7 @@ extension GuestBridgeTests {
     private func r6Harness(_ db: any RecordDatabase, _ guest: ScriptedGuest, defaults: UserDefaults,
                            zone: Gate? = nil) -> (Harness, GuestBridge, GuestRelay) {
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone,
+        let harness = Harness(database: db, device: phone,
                               ensureZone: { await zone?.pass() }, defaults: defaults,
                               brain: bridge, relay: relay, leaseSleep: parked,
                               pause: { _ in throw CancellationError() }, patience: .seconds(3600))
