@@ -123,6 +123,9 @@ final class Ear {
     /// The CoreML compile from the store's directories, then the vocabulary over it. The ear is
     /// ready once the models are; the session is built after, through `rebuild`, whose failure
     /// is `summary`'s to report and not the ear's to fall on.
+    /// Called when a compile ends, resident or failed: the voice's compile waits on it.
+    var settled: (@MainActor () -> Void)?
+
     func load(parakeet: URL, ctc: URL) {
         state = .loading
         Perf.mark("ear.load.begin")
@@ -140,6 +143,7 @@ final class Ear {
                 trouble = error.localizedDescription
                 progress = ""
             }
+            settled?()
         }
     }
 

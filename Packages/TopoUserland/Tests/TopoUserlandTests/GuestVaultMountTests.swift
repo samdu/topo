@@ -518,7 +518,7 @@ private final class HoldingLauncher: ResidentLauncher, @unchecked Sendable {
 
     var count: Int { lock.withLock { launches } }
 
-    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?) async throws -> any ResidentProcess {
+    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
         let n = lock.withLock { () -> Int in launches += 1; return launches }
         return try await Guest.shared.spawn("/bin/sh", ["-c", "exec 3<\(point)/note.md; : > \(point)/holding-\(n); exec sleep 300"])
     }

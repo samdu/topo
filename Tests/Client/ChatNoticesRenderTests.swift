@@ -69,7 +69,7 @@ final class ChatNoticesRenderTests: XCTestCase {
             Harness.describe(RecordDatabaseError.unavailable(underlying: CocoaError(.fileReadNoPermission))),
             Harness.describe(TurnLogError.sequenceContended(DeviceID("phone-1A2B3C4D"))),
             Harness.describe(TurnRunnerError.displaced),
-            Harness.describe(TokenProviderError.signedOut),
+            Harness.describe(GuestBridgeError.notReady("signed out")),
             Harness.describe(GuestBridgeError.unresolved),
             "Saving what you said…", "Reaching iCloud…",
         ]

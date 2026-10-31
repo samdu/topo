@@ -50,7 +50,20 @@ final class GuestResident {
     /// The tools the service answers with: the app's own, set before the first start
     /// (`TopoApp`). A start before they are set answers `topo help` with none.
     var toolTable: [any Tool] = []
+    /// Asked once the guest is up and before any process starts: the sign-in's `refresh`.
+    var booted: (@MainActor () async -> Void)?
     private var observers: [NSObjectProtocol] = []
+
+    /// What a debug build launched with a developer's token (`TOPO_CLAUDE_SETUP_TOKEN`, which CI
+    /// and the simulator runs use) gives every `claude` it starts in place of a login: the token as
+    /// `CLAUDE_CODE_OAUTH_TOKEN`. Empty in a release build, and in a debug build launched without one.
+    nonisolated static var developerEnvironment: [String: String] {
+        #if DEBUG
+        DebugRun.developerToken().map { ["CLAUDE_CODE_OAUTH_TOKEN": $0] } ?? [:]
+        #else
+        [:]
+        #endif
+    }
 
     /// The app's `Documents/home`, mounted at `ClaudeLauncher.home`.
     nonisolated static var homeDirectory: URL {
@@ -120,10 +133,11 @@ final class GuestResident {
     /// Brings the guest and the session up, once per process, and starts following the app's
     /// lifecycle from the foreground it is in now. A start that fails is not kept: the next call
     /// tries again from the step that failed (the kernel's own boot is once per process, and its
-    /// answer is `Userland.bootGuest`'s to keep). `tokens` is the app's one provider over the
-    /// ordinary tokens; `log` hears the session's and the proxy's lines, and each way out's outcome.
-    func start(tokens: StoredTokenProvider, userland: Userland = .shared,
-               log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
+    /// answer is `Userland.bootGuest`'s to keep). Once the guest is up, and before any process
+    /// starts, `booted` asks Claude Code whether it is still signed in (`SignIn.refresh`); a launch
+    /// while it is not is refused. `log` hears the session's and the proxy's lines, and each way
+    /// out's outcome.
+    func start(userland: Userland = .shared, log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
         try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
             _ = try await self.prepareTools(log: log)
@@ -138,10 +152,8 @@ final class GuestResident {
             _ = try await proxy.start()
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(proxy: proxy, tools: tools)
-            let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            let made = Self.launchEnvironment(ports: ports) { port in
-                try await APIProxy.guestEnvironment(port: port, credential: credential).environment
-            }
+            await self.booted?()
+            let made = Self.launchEnvironment(ports: ports) { port in try Self.launchCredential(port: port) }
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
@@ -171,7 +183,7 @@ final class GuestResident {
     func prepareTools(log: @escaping @Sendable (String) -> Void) async throws -> [String: String] {
         let home = Self.homeDirectory
         if !homeMounted {
-            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            try Self.makeHome(home)
             try Guest.shared.mount(home, at: ClaudeLauncher.home)
             homeMounted = true
             GuestImages.changed(home: true)
@@ -193,6 +205,37 @@ final class GuestResident {
         }
         return ToolService.environment(port: port, token: await service.token)
             .merging(GuestTools.environment) { own, _ in own }
+            .merging(BuildFacts.current) { own, _ in own }
+    }
+
+    /// The guest's home, made if it is not there: excluded from backup, since Claude Code keeps
+    /// its Claude.ai credential in it (`.claude/.credentials.json`), and readable from the first
+    /// unlock after a restart on, as the keychain item it replaces was. `.claude` is made with the
+    /// same protection, so the credential written into it takes the class it is made under.
+    /// What every launch of the resident is given for its login: refused while the cache says
+    /// signed out, so nothing launches between a sign-out and its logout; otherwise the proxy and,
+    /// in a debug build launched with one, the developer's token.
+    nonisolated static func launchCredential(port: UInt16, cache: LoginCache = .standard) throws -> [String: String] {
+        guard cache.isSignedIn else { throw GuestBridgeError.notReady("signed out") }
+        return APIProxy.guestEnvironment(port: port).merging(developerEnvironment) { _, new in new }
+    }
+
+    /// `set` is how the protection is put on a path: the simulator keeps no protection class, so
+    /// a test reads what was asked for there.
+    nonisolated static func makeHome(
+        _ home: URL,
+        set: ([FileAttributeKey: Any], String) throws -> Void = { try FileManager.default.setAttributes($0, ofItemAtPath: $1) }
+    ) throws {
+        let files = FileManager.default
+        let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        let claude = home.appendingPathComponent(".claude", isDirectory: true)
+        try files.createDirectory(at: claude, withIntermediateDirectories: true, attributes: protection)
+        try set(protection, home.path)
+        try set(protection, claude.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var url = home
+        try url.setResourceValues(values)
     }
 
     /// A listener's lines under `name`, to `log`; a loss is told at `notice` as well, since the
@@ -257,8 +300,8 @@ final class LaunchPorts {
 
 extension GuestResident {
     /// What the resident's launcher answers at each launch: the proxy's and the tool service's
-    /// ports from `ports`, the credential `credential` makes for the proxy's, and `topo`'s own
-    /// variables. Says at notice what the launch is told, once the environment is made; a launch
+    /// ports from `ports`, the credential `credential` makes for the proxy's, `topo`'s own
+    /// variables and the app's build (`BuildFacts`). Says at notice what the launch is told, once the environment is made; a launch
     /// that then fails to start says so in the session's own line.
     nonisolated static func launchEnvironment(
         ports: LaunchPorts, note: @escaping @Sendable (String) -> Void = { GuestResident.listenerLog.notice("\($0, privacy: .public)") },
@@ -269,6 +312,7 @@ extension GuestResident {
             let environment = try await credential(now.proxy)
                 .merging(ToolService.environment(port: now.tools, token: ports.tools.token)) { own, _ in own }
                 .merging(GuestTools.environment) { own, _ in own }
+                .merging(BuildFacts.current) { own, _ in own }
             note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")
             return environment
         }
@@ -299,21 +343,20 @@ final class StartOnce<Value: Sendable> {
 /// Until the rootfs and Claude Code are both fetched nothing is started and a turn is refused with
 /// the userland's own status line, which is what the chat shows.
 struct ResidentConversation: GuestConversation {
-    let tokens: StoredTokenProvider
-
     var home: URL { GuestResident.homeDirectory }
 
     /// The session, started if it was not: refused, as not ready, while the userland is still on
     /// its way or the guest could not start.
     @MainActor
     private func session() async throws -> GuestSession {
+        guard LoginCache.standard.isSignedIn else { throw GuestBridgeError.notReady("signed out") }
         let userland = Userland.shared
         guard userland.isReady else {
             userland.prepare()
             throw GuestBridgeError.notReady(userland.summary)
         }
         do {
-            return try await GuestResident.shared.start(tokens: tokens, log: GuestResident.log)
+            return try await GuestResident.shared.start(log: GuestResident.log)
         } catch {
             throw GuestBridgeError.notReady("the guest did not start: \(error)")
         }
@@ -428,6 +471,9 @@ extension GuestResident {
     /// proxy's starting `proxy:` and the tool service's `tools:`, and printed in a debug build,
     /// where a simulator run reads them.
     nonisolated static let log: @Sendable (String) -> Void = { line in
+        // A cut the way out kept is a line a device check reads after the fact, so it is kept
+        // on disk as `note`'s are.
+        if line.hasPrefix(GuestSession.cutLine) { return note(line) }
         let line = redacted(line)
         Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
         #if DEBUG
@@ -494,7 +540,7 @@ extension DebugRun {
     /// variable is absent; refused beside `TOPO_DEBUG_USERLAND`, since the resident's end ends
     /// every guest task.
     @MainActor
-    static func guestTurn(tokens: StoredTokenProvider, mascot: Mascot,
+    static func guestTurn(mascot: Mascot,
                           environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let turns = guestTurns(environment)
         guard !turns.isEmpty else { return }
@@ -506,7 +552,7 @@ extension DebugRun {
         }
         say("guest: \(Userland.shared.summary)")
         do {
-            let session = try await GuestResident.shared.start(tokens: tokens) { line in say("guest: \(line)") }
+            let session = try await GuestResident.shared.start { line in say("guest: \(line)") }
             for (index, text) in turns.enumerated() {
                 let number = index + 1
                 var updates: AsyncStream<GuestSession.TurnUpdate>?

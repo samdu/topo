@@ -375,7 +375,9 @@ final class Userland {
         // The digests read five megabytes and the import writes a few thousand files: blocking
         // work, so a queue of its own rather than the cooperative pool.
         DispatchQueue.global(qos: .utility).async {
+            Perf.mark("guest.import.begin")
             let result = Result { try installer.install(rootfs: rootfs, packages: packages) }
+            Perf.mark((try? result.get()) == nil ? "guest.import.failed" : "guest.import.end")
             Task { @MainActor in self.finish(result) }
         }
     }
@@ -449,67 +451,12 @@ extension DebugRun {
     /// `stopped`: the guest command runs with the DNS forwarder stopped once the guest is booted.
     static let dnsVariable = "TOPO_DEBUG_DNS"
 
-    /// What the guest's authorization was granted, for the device run: the scope string and the
-    /// days left on the long-lived token (never a value), or that none is held and the guest runs
-    /// on the ordinary access token.
-    static func mintLine(_ guest: Tokens?, now: Date = Date()) -> String {
-        guard let guest else { return "userland: mint: none held, the guest runs on the ordinary access token" }
-        let scope = guest.scopes.isEmpty ? "(none returned)" : guest.scopes.joined(separator: " ")
-        let days = Int((guest.expiresAt.timeIntervalSince(now) / 86_400).rounded())
-        return "userland: mint scope: \(scope), expires in \(days) days"
-    }
-
-    /// Whether the ordinary tokens are still refreshable after sign-in, for the device run: one
-    /// refresh with the refresh token they hold, asking for their own scopes, and the scope string
-    /// it granted (never a value) or why it was refused. The refreshed tokens are written back, so
-    /// a refresh token the server rotates is not lost.
-    static func ordinaryRefreshLine(_ ordinary: Tokens?, provider: StoredTokenProvider) async -> String {
-        await ordinaryRefresh(ordinary, provider: provider).line
-    }
-
-    /// The refresh behind `ordinaryRefreshLine`, with its refusal when it was refused.
-    private static func ordinaryRefresh(_ ordinary: Tokens?, provider: StoredTokenProvider) async -> (line: String, refusal: (any Error)?) {
-        guard let ordinary else { return ("userland: ordinary refresh: not checked, not signed in", nil) }
-        guard !ordinary.refreshToken.isEmpty else {
-            return ("userland: ordinary refresh: not checked, no refresh token held (a seeded setup token)", nil)
-        }
-        do {
-            let refreshed = try await provider.refresh()
-            return ("userland: ordinary refresh scope: \(refreshed.scopes.isEmpty ? "(none returned)" : refreshed.scopes.joined(separator: " "))", nil)
-        } catch {
-            return ("userland: ordinary refresh failed: \(error)", error)
-        }
-    }
-
-    /// A fallback that answers with the refusal the launch's own refresh already met, so the
-    /// guest's hand-over does not spend a second grant on the same refresh token.
-    private struct Refused: TokenProvider {
-        let error: any Error
-        func accessToken() async throws -> String { throw error }
-    }
-
-    /// The guest's token and the launch's three lines about it, with one refresh grant at most:
-    /// the ordinary tokens are refreshed once for the diagnostic line first, so the fallback
-    /// hands over the access token that refresh wrote back rather than refreshing again, and a
-    /// refused refresh is the fallback's answer too. The lines are printed in the order the device
-    /// run reads them: the hand-over, the guest's token, the ordinary refresh. `provider` is the
-    /// app's one provider over the ordinary tokens, the chat's too, so a refresh the chat has in
-    /// flight is the one this joins.
-    static func handOver(port: UInt16, guestStore: TokenStore,
-                         provider: StoredTokenProvider) async -> (environment: [String: String], lines: [String]) {
-        let refresh = await ordinaryRefresh(try? provider.store.load(), provider: provider)
-        let fallback: TokenProvider = refresh.refusal.map { Refused(error: $0) } ?? provider
-        let credential = GuestCredential(store: guestStore, fallback: fallback)
-        do {
-            let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
-            return (handed.environment, [
-                "userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")",
-                mintLine(try? guestStore.load()),
-                refresh.line,
-            ])
-        } catch {
-            return ([:], ["userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)", refresh.line])
-        }
+    /// What the guest's command is handed beside the base URL, and the launch's line about it:
+    /// the developer's token as `CLAUDE_CODE_OAUTH_TOKEN` when the launch carried one, otherwise
+    /// nothing, and the command runs on whatever Claude Code's own login in the home holds.
+    static func handOver(port: UInt16, developer: [String: String]) -> (environment: [String: String], lines: [String]) {
+        let credential = developer.isEmpty ? "none" : "the developer's token"
+        return (developer, ["userland: proxy on \(APIProxy.baseURL(port: port)), credential: \(credential)"])
     }
 
     /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs and Claude Code, boot
@@ -517,13 +464,11 @@ extension DebugRun {
     /// loopback, start the tool service with `topo` in the home the resident gets (mounted, as the
     /// resident's is), run the command under `/bin/sh -c` in `Guest.environment` (the environment every
     /// launch path hands the guest, Claude Code's updater off in it) with `ANTHROPIC_BASE_URL`
-    /// pointing at the proxy, `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token and the tool
-    /// service's two variables, and print what
-    /// it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh --userland` to
-    /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
-    /// runs, with the base URL and no token. The only path in the app that boots the guest.
-    /// Nothing at all when the variable is absent. `tokens` is the app's one provider over the
-    /// ordinary tokens.
+    /// pointing at the proxy, the developer's token as `CLAUDE_CODE_OAUTH_TOKEN` when the launch
+    /// carried one (`handOver`) and the tool service's two variables, and print
+    /// what it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh
+    /// --userland` to assert on. The proxy's own lines are printed as `proxy:`. With no token the
+    /// command runs with the base URL and no credential. Nothing at all when the variable is absent.
     /// What the guest's command wrote and how it exited, as the userland run prints them, every
     /// credential redacted: `env` there prints the guest's token and the tool service's.
     static func guestLines(output: String, errors: String, status: Int32) -> [String] {
@@ -536,7 +481,7 @@ extension DebugRun {
     }
 
     @MainActor
-    static func userland(_ userland: Userland = .shared, tokens: StoredTokenProvider,
+    static func userland(_ userland: Userland = .shared,
                          environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let command = environment[userlandVariable], !command.isEmpty else { return }
         say("userland: \(userland.summary)")
@@ -570,7 +515,7 @@ extension DebugRun {
             // The tool service and `topo`, as the resident has them, so a command can call a tool.
             guestEnvironment.merge(try await GuestResident.shared.prepareTools { line in say(line) }) { _, new in new }
             say("userland: tools on \(guestEnvironment[ToolService.urlVariable] ?? "nothing"), topo at \(GuestTools.command)")
-            let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, provider: tokens)
+            let handed = handOver(port: port, developer: GuestResident.developerEnvironment)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
             // A debug command can be a whole `claude -p` turn under the emulator, and the script

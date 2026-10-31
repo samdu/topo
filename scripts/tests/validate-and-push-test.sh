@@ -36,10 +36,16 @@
 # meanwhile; a live run's logs are not pruned; a suite a killed run left going keeps its
 # checkout and its name; and a Mac lent for one runs one.
 #
+# And a shell with no microphone grant is refused a run with topo_ui before it waits for anything.
+#
 # And of the line for a slot: runs that wait have it in the order they began, whichever asks
 # oftener or reached the line first; a run's ticket taken from under it is back under its own name; a ticket of a pid
 # that is gone or another's, or one not whole, is removed and holds nobody, and a file that is
-# no ticket is left; a run signalled in the line leaves no ticket; a run trying a busy Mac
+# no ticket is left; a run or a hold in a line that moves, or behind a slot that changes hands,
+# waits past the allowance, keeping its place, as does a run waiting for a suite's name whose
+# holder's slot changes hands, and one behind a line that stands still while its names flicker,
+# or behind a suite's name that stands still, gives up on time;
+# a run signalled in the line leaves no ticket; a run trying a busy Mac
 # keeps its place, and is out of the line while its suite runs there. And of --hold: the
 # command runs with the slot held and its own status, in any tree, a validation waiting
 # meanwhile; nothing is pushed or posted; what it leaves behind holds nothing; a signal ends
@@ -57,7 +63,7 @@ trap 'rm -rf "$work"' EXIT
 # names what it means. A wait no case bounds is a minute, so a lock left held fails a case
 # and does not hang the test.
 unset TOPO_VALIDATE_SLOTS TOPO_VALIDATE_HOSTS TOPO_VALIDATE_REPO TOPO_VALIDATE_CACHE TOPO_VALIDATE_LOGS POST_RETRY \
-  FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
+  FAKE_MIC FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
 export LOCK_WAIT=60 LOCK_POLL=1
 # A Mac with a way into its login session is not asked for it by a fake suite.
 export TOPO_VALIDATE_SESSION_RUN=
@@ -89,6 +95,10 @@ case "$*" in
 esac
 GH
 chmod +x "$work/bin/gh"
+# osascript, as the script asks it for this shell's microphone grant: FAKE_MIC, authorized (3)
+# unless a case says otherwise.
+printf '#!/bin/sh\necho "${FAKE_MIC:-3}"\n' > "$work/bin/osascript"
+chmod +x "$work/bin/osascript"
 # ssh [-o option]... <host> <command> — the command, in that host's scratch home.
 cat > "$work/bin/ssh" <<'SSH'
 #!/usr/bin/env bash
@@ -243,6 +253,21 @@ sha="$(git -C "$repo" rev-parse HEAD)"
 validate
 is "app, second commit: the suite ran at the new commit" "$(recorded head)" "$sha"
 is "app, second commit: pushed" "$(origin_head)" "$sha"
+
+# A shell with no microphone grant, as one started over ssh: a run with topo_ui exits 2 at
+# once, saying why and where to start it, and waits for nothing, runs nothing and pushes and
+# posts nothing; a run without topo_ui is not asked.
+scratch no-mic Apps/Client/SettingsView.swift
+FAKE_MIC=0 LOCK_WAIT=0 validate
+is "no microphone grant: exits 2" "$status" 2
+case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"docs/simulator.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+is "no microphone grant: no suite ran" "$(recorded suites)" ""
+is "no microphone grant: nothing pushed" "$(origin_head)" ""
+is "no microphone grant: no status" "$(posted)" ""
+is "no microphone grant: no place taken in the line" "$(ls -A "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null)" ""
+FAKE_MIC=0 validate --suites others
+is "no microphone grant, no topo_ui: exits 0" "$status" 0
+is "no microphone grant, no topo_ui: its suite ran" "$(recorded suites)" "others"
 
 # The voice path: the full lane, and the real ear's status beside a green topo_ui.
 scratch voice Apps/Client/Ear.swift
@@ -1070,6 +1095,107 @@ kill "$alive"; wait "$alive" 2>/dev/null
 LOCK_WAIT=0 validate
 is "the process ahead ended: the run waits for nothing" "$status" 0
 is "the process ahead ended: its ticket is removed" "$(tickets)" ""
+# A line that moves: two runs ahead, each served in a little over half the allowance, so the
+# whole wait is longer than the allowance and no part of it is. The run keeps its place and
+# has the checkout, where a run sent away at the allowance would come back behind every run
+# that began since. Its own end is what is timed, not the end of what served the line.
+two_ahead() {
+  sleep 30 & first_ahead=$!
+  sleep 30 & second_ahead=$!
+  printf '%s\n%s\n%s\n' "$first_ahead" "$(began "$first_ahead")" "ahead 0000007" > "$q/0000000000000007-0000007"
+  printf '%s\n%s\n%s\n' "$second_ahead" "$(began "$second_ahead")" "ahead 0000008" > "$q/0000000000000008-0000008"
+  (perl -e 'select(undef,undef,undef,2.5)'; kill "$first_ahead"; perl -e 'select(undef,undef,undef,2.5)'; kill "$second_ahead") 2>/dev/null &
+  server=$!
+}
+two_ahead
+began_at=$SECONDS
+LOCK_WAIT=4 validate
+done_at=$SECONDS
+wait "$server" "$first_ahead" "$second_ahead" 2>/dev/null
+is "a line that moves: the run waits it out and exits 0" "$status" 0
+case "$out" in *"Waiting for a checkout (2 ahead in the line, the first ahead 0000007, "*"Waiting for a checkout (1 ahead in the line, the first ahead 0000008, "*) ok "a line that moves: it waited behind each in turn" ;; *) fail "a line that moves: $out" ;; esac
+[ $((done_at - began_at)) -gt 4 ] && ok "a line that moves: it waited longer than the allowance" || fail "a line that moves: done in $((done_at - began_at)) s, within the allowance"
+is "a line that moves: its suite ran" "$(recorded suites)" "topo_unit topo_ui others"
+# A hold through a line that moves keeps its place the same way.
+two_ahead
+began_at=$SECONDS
+held_out="$(cd "$work" && PATH="$work/bin:$PATH" LOCK_WAIT=4 "$repo/scripts/validate-and-push.sh" --hold -- sh -c 'echo held' 2>&1)" && status=0 || status=$?
+done_at=$SECONDS
+wait "$server" "$first_ahead" "$second_ahead" 2>/dev/null
+out="$held_out"
+is "a hold through a line that moves: exits 0" "$status" 0
+case "$held_out" in *held) ok "a hold through a line that moves: its command ran" ;; *) fail "a hold through a line that moves: $held_out" ;; esac
+[ $((done_at - began_at)) -gt 4 ] && ok "a hold through a line that moves: it waited longer than the allowance" || fail "a hold through a line that moves: done in $((done_at - began_at)) s"
+# The slot changing hands is the line moving, with nobody ahead in it: the slot is held for a
+# little over half the allowance, then by another, then let go.
+mkdir -p "$TOPO_VALIDATE_CACHE/slots/1"
+lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" sh -c "echo \$\$ > '$q/../slot-held'; exec sleep 60" &
+slot_lock=$!
+until_true reached "$q/../slot-held" || fail "the slot changing hands: the slot was never held"
+echo "one 0000009, pid 9, since 00:00" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+(perl -e 'select(undef,undef,undef,2.5)'; echo "another 0000010, pid 10, since 00:01" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+ perl -e 'select(undef,undef,undef,2.5)'; rm -f "$TOPO_VALIDATE_CACHE/slots/1/holder"; kill "$(cat "$q/../slot-held")") 2>/dev/null &
+server=$!
+began_at=$SECONDS
+LOCK_WAIT=4 validate
+done_at=$SECONDS
+wait "$server" "$slot_lock" 2>/dev/null; rm -f "$q/../slot-held"
+is "the slot changing hands: the run waits it out and exits 0" "$status" 0
+case "$out" in *"Waiting for a checkout (slot 1: one 0000009, "*) ok "the slot changing hands: it waited for the slot, nobody ahead" ;; *) fail "the slot changing hands: $out" ;; esac
+[ $((done_at - began_at)) -gt 4 ] && ok "the slot changing hands: it waited longer than the allowance" || fail "the slot changing hands: done in $((done_at - began_at)) s"
+# A run whose one suite left is a sibling's waits for that suite's name, not a slot, and the
+# slot changing hands under the sibling is the line moving there too: topo_ui's name and the
+# slot are held by one run, then another, then a third, each for a little under the allowance
+# of looks, and then let go, so the whole wait is twice the allowance and more, and no part of
+# it is.
+lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" sh -c "echo \$\$ > '$q/../name-held'; exec sleep 60" &
+name_lock=$!
+until_true reached "$q/../name-held" || fail "a suite's name changing hands: the name was never held"
+echo "one 0000012, pid 12, since 00:00" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+echo "one 0000012, pid 12, slot 1, since 00:00" > "$TOPO_VALIDATE_CACHE/suite-topo_ui.holder"
+(perl -e 'select(undef,undef,undef,2.5)'; echo "another 0000013, pid 13, since 00:01" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+ perl -e 'select(undef,undef,undef,2.5)'; echo "a third 0000014, pid 14, since 00:02" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+ perl -e 'select(undef,undef,undef,2.5)'; rm -f "$TOPO_VALIDATE_CACHE/slots/1/holder"; kill "$(cat "$q/../name-held")") 2>/dev/null &
+server=$!
+began_at=$SECONDS
+LOCK_WAIT=3 validate --suites topo_ui
+done_at=$SECONDS
+wait "$server" "$name_lock" 2>/dev/null; rm -f "$q/../name-held"
+is "a suite's name changing hands: the run waits it out and exits 0" "$status" 0
+case "$out" in *"Waiting for a suite (topo_ui: one 0000012, "*) ok "a suite's name changing hands: it waited for the name" ;; *) fail "a suite's name changing hands: $out" ;; esac
+[ $((done_at - began_at)) -gt 6 ] && ok "a suite's name changing hands: it waited past twice the allowance" || fail "a suite's name changing hands: done in $((done_at - began_at)) s"
+is "a suite's name changing hands: its suite ran" "$(recorded suites)" "topo_ui"
+# And a suite's name held by one run that stands still runs the allowance out on time.
+lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" sh -c "echo \$\$ > '$q/../name-held'; exec sleep 60" &
+name_lock=$!
+until_true reached "$q/../name-held" || fail "a suite's name standing still: the name was never held"
+echo "one 0000012, pid 12, since 00:00" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
+began_at=$SECONDS
+LOCK_WAIT=3 validate --suites topo_ui
+done_at=$SECONDS
+kill "$(cat "$q/../name-held")" 2>/dev/null; wait "$name_lock" 2>/dev/null; rm -f "$q/../name-held" "$TOPO_VALIDATE_CACHE/slots/1/holder"
+is "a suite's name standing still: exits 2" "$status" 2
+[ $((done_at - began_at)) -le 5 ] && ok "a suite's name standing still: gave up within the allowance" || fail "a suite's name standing still: gave up after $((done_at - began_at)) s"
+is "a suite's name standing still: no suite ran" "$(recorded suites)" ""
+# A line that stands still while which of a ticket's names reads free flickers, as it does
+# when every run in the line asks those locks at each look: the same ticket ahead, the same
+# slot, and the allowance runs out on time.
+sleep 30 & still=$!
+printf '%s\n%s\n%s\n%s\n' "$still" "$(began "$still")" "still 0000011" "topo_unit others" > "$q/0000000000000011-0000011"
+(for _ in 1 2 3 4 5 6 7 8; do
+   lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_unit.lock" perl -e 'select(undef,undef,undef,0.7)'
+   lockf -k "$TOPO_VALIDATE_CACHE/suite-others.lock" perl -e 'select(undef,undef,undef,0.7)'
+ done) 2>/dev/null &
+flicker=$!
+began_at=$SECONDS
+LOCK_WAIT=3 validate
+done_at=$SECONDS
+kill "$flicker" "$still" 2>/dev/null; wait "$flicker" "$still" 2>/dev/null
+is "a flickering line that stands still: exits 2" "$status" 2
+case "$out" in *"the first still 0000011, pid $still, for "*) ok "a flickering line that stands still: it waited behind the one ahead" ;; *) fail "a flickering line that stands still: $out" ;; esac
+[ $((done_at - began_at)) -le 5 ] && ok "a flickering line that stands still: gave up within the allowance" || fail "a flickering line that stands still: gave up after $((done_at - began_at)) s"
+is "a flickering line that stands still: no suite ran" "$(recorded suites)" ""
+rm -f "$q/0000000000000011-0000011"
 
 # With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
 # out of the line for each asking and back under its own name, so a run that came later does

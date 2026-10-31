@@ -676,7 +676,7 @@ final class ShareTests: XCTestCase {
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         func launched() -> Harness {
-            Harness(database: InMemoryRecordDatabase(), tokens: FixedToken(), device: DeviceID("phone"),
+            Harness(database: InMemoryRecordDatabase(), device: DeviceID("phone"),
                     ensureZone: { throw Unexpected() }, defaults: defaults, brain: guestBrain(over: ScriptedTransport()),
                     leaseSleep: parked, pause: { _ in throw CancellationError() })
         }
@@ -930,7 +930,7 @@ final class ShareTests: XCTestCase {
         try FileManager.default.createDirectory(at: store.folder.appendingPathComponent(late.nonce), withIntermediateDirectories: true)
         try JSONEncoder().encode(late).write(to: store.folder.appendingPathComponent(late.nonce).appendingPathComponent(ShareStore.record))
         XCTAssertEqual(store.shares(), [late])
-        inbox.follow(from: .exchanging, to: .signedIn, guestIsHere: true)
+        inbox.follow(from: .approving(.init(page: nil, pasting: false)), to: .signedIn, guestIsHere: true)
         XCTAssertEqual(store.shares(), [])
         XCTAssertEqual(store.door()?.files, true)
         XCTAssertNotEqual(store.door()?.login, login, "the next login has the last one's name")
@@ -947,9 +947,6 @@ private final class ScriptedTransport: Transport, @unchecked Sendable {
     }
 }
 
-private struct FixedToken: TokenProvider {
-    func accessToken() async throws -> String { "tok" }
-}
 
 private struct Unexpected: Error {}
 
