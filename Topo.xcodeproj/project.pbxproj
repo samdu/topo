@@ -19,6 +19,7 @@
 		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		05C48F859FA1C2DDAAB4C44D /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */; };
 		05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		062B25BAB00BD7F43261A69E /* GuestLoginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416572A886CAD45C1FBF35D4 /* GuestLoginTests.swift */; };
 		062DCBE16220AA2952E85920 /* MascotDebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */; };
 		07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */; };
 		07DD7564A112D8FE2FF4224F /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
@@ -723,6 +724,7 @@
 		402EB6E7D75092F33B78F15B /* GuestBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestBridge.swift; sourceTree = "<group>"; };
 		40819CF6083939579F503702 /* ShareIntake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareIntake.swift; sourceTree = "<group>"; };
 		40B37AD5D7C8EE55A947EE6E /* systemMedium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = systemMedium.json; sourceTree = "<group>"; };
+		416572A886CAD45C1FBF35D4 /* GuestLoginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestLoginTests.swift; sourceTree = "<group>"; };
 		4194F7FA1505EC3F8CCC30FE /* WidgetActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetActionTests.swift; sourceTree = "<group>"; };
 		41AECABE45D12B711410A2ED /* Memory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Memory.swift; sourceTree = "<group>"; };
 		42501D49784FE49024ED6C10 /* MarkdownRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderTests.swift; sourceTree = "<group>"; };
@@ -1436,6 +1438,7 @@
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
 				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
 				7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */,
+				416572A886CAD45C1FBF35D4 /* GuestLoginTests.swift */,
 				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
@@ -2511,6 +2514,7 @@
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
 				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
 				8EA97D2374B9441BEDDBF412 /* GuestImageStoreTests.swift in Sources */,
+				062B25BAB00BD7F43261A69E /* GuestLoginTests.swift in Sources */,
 				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,

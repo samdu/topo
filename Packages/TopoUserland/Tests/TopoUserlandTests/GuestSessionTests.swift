@@ -850,25 +850,29 @@ final class GuestSessionTests: XCTestCase {
         store.save("KEPT")
         let (session, old) = try await resident()
         let launcher = launcher!
-        let launchesInBody = Launches()
         let endedBeforeBody = Launches()
+        let launchesInBody = Launches()
+        let release = Launches()
         let login = Task {
             await session.withoutResident {
                 endedBeforeBody.set(old.terminated ? 1 : 0)
+                // Held here until the test has asked for a process, so that ask lands under the hold.
+                while release.value == nil { await Task.yield() }
                 for _ in 0..<50 { await Task.yield() }
                 launchesInBody.set(launcher.processes.count)
                 return 7
             }
         }
-        await eventually("the body ran") { launchesInBody.value != nil }
+        await eventually("the body ran") { endedBeforeBody.value != nil }
         let waiting = Task { try await session.ready() }
         for _ in 0..<50 { await Task.yield() }
+        release.set(1)
         let answer = await login.value
         XCTAssertEqual(answer, 7)
         XCTAssertEqual(endedBeforeBody.value, 1, "the login ran beside a resident")
         XCTAssertEqual(launchesInBody.value, 1, "a process started while the login ran")
         try await waiting.value
-        XCTAssertEqual(launcher.processes.count, 2)
+        XCTAssertEqual(launcher.processes.count, 2, "the ready() that waited through the login got no process")
         XCTAssertEqual(launcher.resumed, ["KEPT", "KEPT"], "the login forgot the conversation")
     }
 

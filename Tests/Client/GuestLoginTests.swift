@@ -31,12 +31,15 @@ final class GuestLoginTests: XCTestCase {
             let reply = await tool.run([url])
             XCTAssertEqual(reply.status, ToolReply.refused, url)
         }
-        XCTAssertEqual(await tool.run([]).status, ToolReply.usage)
-        XCTAssertEqual(await tool.run([authorize, "more"]).status, ToolReply.usage)
+        let none = await tool.run([])
+        XCTAssertEqual(none.status, ToolReply.usage)
+        let two = await tool.run([authorize, "more"])
+        XCTAssertEqual(two.status, ToolReply.usage)
         XCTAssertEqual(heard.urls.count, 1, "a refused URL reached the sheet")
 
         browser.close(id)
-        XCTAssertEqual(await tool.run([authorize]).status, ToolReply.refused, "a URL opened after the sign-in let go")
+        let after = await tool.run([authorize])
+        XCTAssertEqual(after.status, ToolReply.refused, "a URL opened after the sign-in let go")
     }
 
     /// A second login's registration replaces the first, and the first's close does not undo it.
