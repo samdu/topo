@@ -40,9 +40,17 @@ final class ScriptedFreezer: GuestFreezer, @unchecked Sendable {
     /// How many continues were sent: the one thing that wakes the guest.
     var continues: Int { lock.withLock { continueCalls } }
 
+    /// Waits while `step` is held. The check and the gate are one step under the lock, so a
+    /// release landing between them cannot be missed.
     private func pass(_ step: Step) async {
-        let held = lock.withLock { holds.contains(step) }
-        if held { await withCheckedContinuation { continuation in lock.withLock { gates[step] = continuation } } }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let held = lock.withLock { () -> Bool in
+                guard holds.contains(step) else { return false }
+                gates[step] = continuation
+                return true
+            }
+            if !held { continuation.resume() }
+        }
     }
 
     func stop() async -> Bool {
@@ -116,10 +124,9 @@ final class GuestFreezeTests: XCTestCase {
 
     private func turn(_ session: GuestSession, _ process: ScriptedProcess, _ text: String) async throws {
         let updates = try await session.send(text)
-        let count = process.turns.count
+        await eventually("written") { process.turns.last == text }
         answer(process, "ok")
         for await _ in updates {}
-        XCTAssertGreaterThanOrEqual(process.turns.count, count)
     }
 
     func testAnIdleProcessIsFrozenAndTheWayBackContinuesTheSameOne() async throws {
@@ -185,6 +192,65 @@ final class GuestFreezeTests: XCTestCase {
         XCTAssertTrue(process.terminated)
         XCTAssertEqual(launcher.processes.count, 2)
         XCTAssertEqual(launcher.resumed, [nil, "S1"])
+    }
+
+    /// A continue sent and not confirmed — a task still parked at the stop — is a cold start: the
+    /// process ended and a fresh one resumes the conversation.
+    func testAContinueNotConfirmedEndsTheProcessAndStartsAnother() async throws {
+        let (session, process) = try await resident()
+        try await turn(session, process, "first")
+        let frozen = await session.background(budget: .seconds(15))
+        XCTAssertEqual(frozen, .frozen)
+        freezer.answer(confirm: false)
+        await session.foreground()
+        try await session.ready()
+        XCTAssertEqual(freezer.continues, 1)
+        XCTAssertTrue(process.terminated)
+        XCTAssertEqual(launcher.processes.count, 2)
+        XCTAssertEqual(launcher.resumed, [nil, "S1"])
+    }
+
+    /// Claude Code's login ending a frozen process with background tasks leaves the next process,
+    /// which resumes the conversation, told it was ended rather than that iOS ended the app.
+    func testALoginEndingAFrozenProcessRewritesItsCut() async throws {
+        let (session, process) = try await resident()
+        let updates = try await session.send("log for ten minutes")
+        await eventually("written") { process.turns.count == 1 }
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a"}]}"#)
+        process.emit(Lines.result("started", session: "S1"))
+        for await _ in updates {}
+        let frozen = await session.background(budget: .seconds(15))
+        XCTAssertEqual(frozen, .frozen)
+        XCTAssertEqual(CutFile(url: cutURL).load()?.frozen, true)
+        await session.withoutResident { }
+        XCTAssertTrue(process.terminated)
+        let kept = try XCTUnwrap(CutFile(url: cutURL).load())
+        XCTAssertNotEqual(kept.frozen, true, "the next process would be told iOS ended the app")
+    }
+
+    /// Claude Code's login waits for a stop still sending SIGSTOP before it runs its own `claude`.
+    func testALoginWaitsForAStopStillUnderWay() async throws {
+        let (session, process) = try await resident()
+        freezer.hold(.stop)
+        let outcome = Task { await session.background(budget: .seconds(15)) }
+        await eventually("the stop under way") { self.freezer.stops == 1 }
+        let ran = Flag()
+        let login = Task { await session.withoutResident { ran.set() } }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(ran.isSet, "the login ran while the stop was still under way")
+        freezer.release(.stop)
+        await login.value
+        _ = await outcome.value
+        XCTAssertTrue(ran.isSet)
+        XCTAssertTrue(process.terminated)
+    }
+
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var on = false
+        var isSet: Bool { lock.withLock { on } }
+        func set() { lock.withLock { on = true } }
     }
 
     /// A stop that is not confirmed may leave a task to take one more step on the way back, so the

@@ -513,6 +513,8 @@ public actor GuestSession {
         holds += 1
         log("the conversation is forgotten; nothing starts until the sign-out has taken away what it held")
         let termination = await endForgotten()
+        // A stop still sending SIGSTOP would stop whatever the sign-out runs in the guest next.
+        if let freezing { _ = await freezing.value }
         await takeAway()
         holds -= 1
         if !readiness.isEmpty { startResident() }
@@ -529,6 +531,8 @@ public actor GuestSession {
         holds += 1
         log("the resident is ended; nothing starts until Claude Code's login has finished")
         await endResident()
+        // A stop still sending SIGSTOP would stop the login's own `claude`, which nothing continues.
+        if let freezing { _ = await freezing.value }
         let value = await body()
         holds -= 1
         if !readiness.isEmpty { startResident() }
@@ -541,6 +545,7 @@ public actor GuestSession {
         // A frozen process is ended stopped unless its continue was sent before this began; the
         // gate then reads the phase and sends none.
         if case .frozen(let resident) = phase, continuedThaw !== resident {
+            unfreezeCut()
             _ = await end(resident, reason: "Claude Code's login, frozen", restart: false).value
             return
         }
@@ -550,6 +555,7 @@ public actor GuestSession {
             if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
             _ = await end(resident, reason: "Claude Code's login", restart: false).value
         case .frozen(let resident):
+            unfreezeCut()
             _ = await end(resident, reason: "Claude Code's login, frozen", restart: false).value
         case .stopping:
             _ = await teardown?.value
@@ -1045,6 +1051,9 @@ public actor GuestSession {
             if let stopping, await stopping.value == false {
                 return await self.thawed(resident, resumed: false, why: "its stop was not confirmed")
             }
+            // A process ended while its stop landed takes nothing back: the next launch is
+            // binding the listeners afresh.
+            guard await self.owns(resident) else { return await self.thawed(resident, resumed: false, why: "it was ended meanwhile") }
             guard await freezer.prepare() else {
                 return await self.thawed(resident, resumed: false, why: "a port it was told could not be taken back")
             }

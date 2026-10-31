@@ -241,9 +241,10 @@ public final class GuestProcess: Sendable {
     }
 
     /// Sends the continue (`SIGCONT`, any pending stop discarded first) to every task but init and
-    /// returns at once: it takes `pids_lock` and each task's `sighand->lock`, which every guest
-    /// path holds only over memory, never across a wait, so it is safe on an actor that has to
-    /// send it inside a judgement of its own. False when it could not be sent.
+    /// returns at once: it takes `pids_lock`, and for each task its `sighand->lock` and its group's
+    /// `lock` — the locks a teardown's SIGKILL takes — which the guest holds over memory and
+    /// waits for no I/O under, so it runs on an actor that has to send it inside a judgement of
+    /// its own. False when it could not be sent.
     public static func continueNow() -> Bool {
         topo_ish_continue_all() >= 0
     }
