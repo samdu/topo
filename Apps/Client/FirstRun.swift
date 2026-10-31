@@ -16,6 +16,15 @@ enum FirstRun {
     /// models is a wait, not something to go and allow.
     static let denied = "Topo can't hear you without the microphone. You can type instead, or allow it in Settings."
 
+    /// What the line says as well while the ear is resident and the voice is still coming.
+    static let listening = "Topo can hear you now. Its voice is still on its way, so replies are text until then."
+
+    /// Whether the line says `listening`: the ear resident, the voice neither resident nor
+    /// failed, and the setup's meter standing, so it is said on an install and not on a launch.
+    static func hearsFirst(earReady: Bool, voice: Voice.State, installing: Bool) -> Bool {
+        earReady && installing && voice != .ready && voice != .failed
+    }
+
     /// True only over a log that has been read and holds no turns, with nothing on the line or
     /// in flight, and the question not answered on this device. A debug build's fixture
     /// transcript is never asked over.
@@ -55,13 +64,15 @@ struct FirstRunLine: View {
     var denied: Bool
     /// Topo stands nowhere, so nothing holds the question up.
     var unheld = false
+    /// The ear is resident and the voice is still coming (`FirstRun.hearsFirst`).
+    var hearsFirst = false
     @Environment(\.look) private var look
 
     var body: some View {
         VStack(spacing: look.reading.spacing) {
             if unheld { Text(FirstRun.question) }
             Text(FirstRun.invitation)
-            if denied { Text(FirstRun.denied) }
+            if denied { Text(FirstRun.denied) } else if hearsFirst { Text(FirstRun.listening) }
         }
         .font(look.reading.font)
         .foregroundStyle(look.reading.ink)
@@ -69,8 +80,14 @@ struct FirstRunLine: View {
         .padding(.bottom, look.reading.spacing)
         .mascotObstacle()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([FirstRun.question, FirstRun.invitation] + (denied ? [FirstRun.denied] : [])).joined(separator: " "))
+        .accessibilityLabel(Self.label(denied: denied, hearsFirst: hearsFirst))
         .accessibilityIdentifier("first-run")
+    }
+
+    /// The question and every line drawn under it, for accessibility.
+    static func label(denied: Bool, hearsFirst: Bool) -> String {
+        let more = denied ? [FirstRun.denied] : hearsFirst ? [FirstRun.listening] : []
+        return ([FirstRun.question, FirstRun.invitation] + more).joined(separator: " ")
     }
 }
 

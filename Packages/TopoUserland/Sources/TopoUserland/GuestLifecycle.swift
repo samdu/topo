@@ -226,13 +226,15 @@ public final class GuestLifecycle {
         generation += 1
         let mine = generation
         let session = session
+        // The moment the app left, for a cut's note: the way out below is called a tick later.
+        let left = session.now()
         if continued != nil, !spent {
             // The continued task holds the app up, so no grace is begun: the turn is waited for
             // with no deadline, and the task is completed once the process is ended. Its expiry
             // begins the grace, which has the turn only once it is read (`continuedExpired`).
             carrying = mine
             Task { [weak self] in
-                let outcome = await session.background(budget: nil, generation: mine)
+                let outcome = await session.background(budget: nil, generation: mine, left: left)
                 guard let self else { return }
                 self.report(outcome)
                 self.endTask(mine)
@@ -263,7 +265,7 @@ public final class GuestLifecycle {
                 return
             }
             let budget = GraceBudget.teardownDelay(remaining: self.time.remaining)
-            let outcome = await session.background(budget: budget, generation: mine)
+            let outcome = await session.background(budget: budget, generation: mine, left: left)
             self.report(outcome)
             self.endTask(mine)
         }

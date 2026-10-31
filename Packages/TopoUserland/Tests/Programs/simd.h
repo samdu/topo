@@ -1,4 +1,4 @@
-// What the SIMD programs beside this share (qshl.c, cvtf.c, udot.c, fneg.c):
+// What the SIMD programs beside this share (qshl.c, cvtf.c, udot.c, fneg.c, lane.c):
 // a line of output per instruction for GuestSimdTests, and a child to run an
 // unallocated encoding in. Each program defines `report`, which prints its
 // lines, and `traps`, which runs its unallocated encodings.

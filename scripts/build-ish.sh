@@ -45,12 +45,14 @@ meson_options=(-Dguest_arch=arm64 -Dkernel=ish -Dengine=asbestos)
 
 fail() { echo "build-ish: $*" >&2; exit 1; }
 
+# Keyed on contents and repository-relative names only, so the same inputs give the same digest
+# in every checkout and a framework built in one is current in another.
 inputs_digest() {
   {
     echo "$pin"
     printf '%s\n' "${meson_options[@]}"
     cat "${BASH_SOURCE[0]}"
-    for f in "$patches_dir"/*.patch; do echo "$f"; cat "$f"; done
+    for f in "$patches_dir"/*.patch; do echo "${f#"$root"/}"; cat "$f"; done
     (cd "$glue" && find . -type f | LC_ALL=C sort | while read -r f; do echo "$f"; cat "$f"; done)
   } | shasum -a 256 | cut -d' ' -f1
 }

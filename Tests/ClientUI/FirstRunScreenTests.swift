@@ -19,7 +19,7 @@ final class FirstRunScreenTests: XCTestCase {
     func testAnEmptyLogAsksTheQuestionAndItsAnswerIsDrawnOnItsWay() {
         // The answer stays on the line, which is on disk: the next suite's launch is not left it.
         addTeardownBlock { @MainActor in
-            let app = XCUIApplication()
+            let app = TopoApplication()
             app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
             app.launchEnvironment["TOPO_DEBUG_LOG"] = "unread"
             app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
@@ -60,8 +60,8 @@ final class FirstRunScreenTests: XCTestCase {
         attach(app, "reading-log")
     }
 
-    private func launch(log: String) -> XCUIApplication {
-        let app = XCUIApplication()
+    private func launch(log: String) -> TopoApplication {
+        let app = TopoApplication()
         app.launchEnvironment["TOPO_DEBUG_LOG"] = log
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
@@ -74,7 +74,7 @@ final class FirstRunScreenTests: XCTestCase {
         return app
     }
 
-    private func attach(_ app: XCUIApplication, _ name: String) {
+    private func attach(_ app: TopoApplication, _ name: String) {
         ChatReading.attach(app, name, to: self)
     }
 }

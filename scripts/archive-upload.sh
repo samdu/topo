@@ -89,7 +89,8 @@ xcodebuild archive \
   -archivePath "$archive" \
   -allowProvisioningUpdates ${auth[@]+"${auth[@]}"} \
   CURRENT_PROJECT_VERSION="$build" \
-  TOPO_SOURCE_COMMIT="$commit"
+  TOPO_SOURCE_COMMIT="$commit" \
+  TOPO_CHANNEL=testflight
 
 xcodebuild -exportArchive \
   -archivePath "$archive" \
