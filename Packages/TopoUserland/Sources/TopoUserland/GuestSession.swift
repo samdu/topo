@@ -37,9 +37,17 @@ public protocol GuestFreezer: Sendable {
     /// Stops the guest; true once every task is parked at the stop. A false is a guest that may
     /// still run one more step on the way back, which is never continued: the session ends it.
     func stop() async -> Bool
-    /// Takes back the ports the resident was launched toward and only then continues the guest;
-    /// false, having continued nothing, when a port could not be taken back.
-    func resume() async -> Bool
+    /// Takes back the ports the resident was launched toward and brings the forwarder up, sending
+    /// nothing to the guest; false when a port could not be taken back.
+    func prepare() async -> Bool
+    /// Sends the continue to every guest task, and does not wait for it to land. The session calls
+    /// it on its own actor inside the gate that judges the process still wanted, so a sign-out or a
+    /// login never begins between that judgement and the continue: it takes the kernel's task and
+    /// signal locks, which no guest path holds across a wait, and nothing more. False when it could
+    /// not be sent.
+    func continueNow() -> Bool
+    /// True once no guest task is parked at the stop; false at its bound with one still parked.
+    func confirm() async -> Bool
 }
 
 /// The one session id kept on disk: the id of the conversation the next process resumes. A file of
@@ -267,6 +275,11 @@ public actor GuestSession {
     private var thawing: Task<Void, Never>?
     /// The cut kept as the process was frozen, cleared if it is continued.
     private var frozenCut: Cut?
+    /// The frozen process whose continue has been sent and is not yet confirmed: it runs, so a way
+    /// out, a sign-out or a login waits for the thaw and ends it as the running process it is.
+    private var continuedThaw: Resident?
+    /// Whether Claude Code's login is still there: a frozen process is continued only while it is.
+    private let signedIn: @Sendable () -> Bool
     private let store: SessionFile
     private let cuts: CutFile
     /// The session's clock, which the lifecycle reads for the moment the app left.
@@ -393,9 +406,11 @@ public actor GuestSession {
                 compactAt: Int? = nil, now: @escaping @Sendable () -> Date = Date.init,
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
+                signedIn: @escaping @Sendable () -> Bool = { true },
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.launcher = launcher
         self.freezer = freezer
+        self.signedIn = signedIn
         self.store = store
         self.cuts = cuts ?? CutFile(url: store.url.deletingLastPathComponent().appendingPathComponent(".guest-cut.json"))
         self.now = now
@@ -523,10 +538,19 @@ public actor GuestSession {
     /// Ends whatever process there is, with no replacement, and waits for it.
     private func endResident() async {
         if let startTask { await startTask.value }
+        // A frozen process is ended stopped unless its continue was sent before this began; the
+        // gate then reads the phase and sends none.
+        if case .frozen(let resident) = phase, continuedThaw !== resident {
+            _ = await end(resident, reason: "Claude Code's login, frozen", restart: false).value
+            return
+        }
+        if let thawing { await thawing.value }
         switch phase {
         case .resident(let resident):
             if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
             _ = await end(resident, reason: "Claude Code's login", restart: false).value
+        case .frozen(let resident):
+            _ = await end(resident, reason: "Claude Code's login, frozen", restart: false).value
         case .stopping:
             _ = await teardown?.value
         case .idle, .starting:
@@ -540,9 +564,10 @@ public actor GuestSession {
             // It lands stale (`launched`), and is ended there.
             await startTask.value
         }
-        // A frozen process of the login that went is ended before any continue under way can reach
-        // it: SIGKILL ends it stopped, and the continue then finds nothing to continue.
-        if case .frozen(let resident) = phase, resident.conversation != conversation {
+        // A frozen process of the login that went is ended stopped, unless its continue was sent
+        // before the sign-out began: the end makes the phase stopping at once, and the gate that
+        // sends a continue reads the phase on this actor, so none is sent after.
+        if case .frozen(let resident) = phase, resident.conversation != conversation, continuedThaw !== resident {
             return await end(resident, reason: "a forgotten conversation, frozen", restart: false).value
         }
         if let thawing { await thawing.value }
@@ -758,7 +783,12 @@ public actor GuestSession {
         Perf.mark(resume == nil ? "resident.launch.begin fresh" : "resident.launch.begin resume")
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
         let launcher = launcher, model = model, memory = memory, compactAt = compactAt, conversation = conversation
+        // A stop still sending SIGSTOP to every guest task would stop this process too: it is
+        // waited out first. It is the only one, since a way out waits for the thaw, which waits
+        // for the stop, before it freezes again; and it is bounded (`GuestFreezer.stop`).
+        let stopping = freezing
         startTask = Task {
+            if let stopping { _ = await stopping.value }
             let result: Result<any ResidentProcess, Error>
             do {
                 result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt,
@@ -1002,26 +1032,51 @@ public actor GuestSession {
         return .frozen
     }
 
-    /// Continues a frozen `resident` on the way back, once its stop has landed: its ports taken
-    /// back and then the guest continued, or, when a port could not be, the process ended and a
-    /// fresh one started, which is the cold start a jetsam would have left.
+    /// Continues a frozen `resident` on the way back, once its stop has landed and was confirmed:
+    /// its ports taken back, then the gate (`continueIfStill`) on this actor, then the continue
+    /// confirmed. Any refusal ends the process and starts a fresh one, the cold start a jetsam
+    /// would have left.
     private func thaw(_ resident: Resident) {
         guard thawing == nil, let freezer else { return }
         let stopping = freezing
         Perf.mark("resident.thaw.begin")
         thawing = Task {
-            if let stopping { _ = await stopping.value }
-            let resumed = await freezer.resume()
-            await self.thawed(resident, resumed: resumed)
+            // A stop not confirmed may have a task still taking a step: it is never continued.
+            if let stopping, await stopping.value == false {
+                return await self.thawed(resident, resumed: false, why: "its stop was not confirmed")
+            }
+            guard await freezer.prepare() else {
+                return await self.thawed(resident, resumed: false, why: "a port it was told could not be taken back")
+            }
+            if let refused = await self.continueIfStill(resident, with: freezer) {
+                return await self.thawed(resident, resumed: false, why: refused)
+            }
+            let confirmed = await freezer.confirm()
+            await self.thawed(resident, resumed: confirmed, why: "a task stayed stopped after the continue")
         }
     }
 
-    private func thawed(_ resident: Resident, resumed: Bool) {
+    /// The gate a continue passes, and the continue itself, in one step on this actor: the process
+    /// is still the session's frozen one, its conversation is not forgotten (no sign-out since the
+    /// freeze), no sign-out or login is under way, and Claude Code is still signed in. Nil once
+    /// the continue is sent; otherwise why not, with nothing sent.
+    private func continueIfStill(_ resident: Resident, with freezer: any GuestFreezer) -> String? {
+        guard case .frozen(let current) = phase, current === resident else { return "it was ended meanwhile" }
+        guard resident.conversation == conversation else { return "its conversation was forgotten" }
+        guard holds == 0 else { return "a sign-out or a login is under way" }
+        guard signedIn() else { return "Claude Code is signed out" }
+        guard freezer.continueNow() else { return "the continue could not be sent" }
+        continuedThaw = resident
+        return nil
+    }
+
+    private func thawed(_ resident: Resident, resumed: Bool, why: String) {
         thawing = nil
+        if continuedThaw === resident { continuedThaw = nil }
         guard case .frozen(let current) = phase, current === resident else { return }
         guard resumed else {
             Perf.mark("resident.thaw.cold")
-            log("the frozen process could not be continued (its token, its ports or the continue itself; the line before says which); starting a fresh process")
+            log("the frozen process could not be continued (\(why)); starting a fresh process")
             unfreezeCut()
             _ = end(resident, reason: "a thaw that could not continue it", restart: true)
             return

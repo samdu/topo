@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import OSLog
 import TopoAuth
@@ -154,8 +153,7 @@ final class GuestResident {
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(proxy: proxy, tools: tools)
             await self.booted?()
-            let handOut: @Sendable (UInt16) async throws -> [String: String] = { port in try Self.launchCredential(port: port) }
-            let made = Self.launchEnvironment(ports: ports, credential: handOut)
+            let made = Self.launchEnvironment(ports: ports) { port in try Self.launchCredential(port: port) }
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
@@ -164,8 +162,9 @@ final class GuestResident {
                 return try await made()
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile,
-                                       freezer: GuestFreeze(ports: ports, userland: userland, credential: handOut), model: Self.model,
-                                       memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
+                                       freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
+                                       memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
+                                       signedIn: { LoginCache.standard.isSignedIn }, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
@@ -297,34 +296,6 @@ final class LaunchPorts {
 
     /// The ports the last launch was told, which a frozen resident still holds in its environment.
     private(set) var told: (proxy: UInt16, tools: UInt16)?
-    /// A digest of the token the last launch was handed, never the token: the guest cannot refresh
-    /// one, so a frozen resident is continued only while the credential still hands out the same.
-    private var handed: SHA256.Digest?
-
-    /// Notes the token a launch's environment carries.
-    func hand(_ environment: [String: String]) {
-        handed = environment[Self.tokenVariable].map { SHA256.hash(data: Data($0.utf8)) }
-    }
-
-    /// Whether `credential`, asked now for the port the last launch was told, hands out the token
-    /// that launch was given: an access token refreshed or expired since is not, and a frozen
-    /// resident holding it is replaced rather than continued. The read may refresh over the
-    /// network, so it has `bound`; one that runs out is a token not known to be the same.
-    func stillHanded(by credential: @escaping @Sendable (UInt16) async throws -> [String: String],
-                     within bound: Duration = .seconds(3)) async -> Bool {
-        guard let told, let handed else { return false }
-        let (answers, answer) = AsyncStream<String?>.makeStream()
-        let reading = Task { answer.yield(try? await credential(told.proxy)[Self.tokenVariable]) }
-        let timer = Task { try? await Task.sleep(for: bound); answer.yield(nil) }
-        var now: String?
-        for await first in answers { now = first; break }
-        reading.cancel()
-        timer.cancel()
-        guard let now else { return false }
-        return SHA256.hash(data: Data(now.utf8)) == handed
-    }
-
-    nonisolated static let tokenVariable = "CLAUDE_CODE_OAUTH_TOKEN"
 
     /// The ports to tell the next launch: each service's, on a listener started for it.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
@@ -359,26 +330,28 @@ final class GuestFreeze: GuestFreezer {
 
     let ports: LaunchPorts
     let userland: Userland
-    let credential: @Sendable (UInt16) async throws -> [String: String]
 
-    init(ports: LaunchPorts, userland: Userland, credential: @escaping @Sendable (UInt16) async throws -> [String: String]) {
+    init(ports: LaunchPorts, userland: Userland) {
         self.ports = ports
         self.userland = userland
-        self.credential = credential
     }
 
     nonisolated func stop() async -> Bool {
         await GuestProcess.stopAll(within: Self.stopBound)
     }
 
-    nonisolated func resume() async -> Bool {
-        guard await ports.stillHanded(by: credential) else {
-            GuestResident.listenerLog.notice("guest: the token the frozen resident holds is no longer the one handed out; starting a fresh process")
-            return false
-        }
+    nonisolated func prepare() async -> Bool {
         guard await ports.reclaim() else { return false }
         await userland.reviveForwarder()
-        guard await GuestProcess.continueAll() else {
+        return true
+    }
+
+    nonisolated func continueNow() -> Bool {
+        GuestProcess.continueNow()
+    }
+
+    nonisolated func confirm() async -> Bool {
+        guard await GuestProcess.confirmContinued() else {
             GuestResident.listenerLog.notice("guest: a task of the frozen resident stayed stopped after the continue; starting a fresh process")
             return false
         }
@@ -397,11 +370,8 @@ extension GuestResident {
     ) -> @Sendable () async throws -> [String: String] {
         { @Sendable in
             let now = try await ports.ports()
-            let given = try await credential(now.proxy)
-            await ports.hand(given)
-            let toolsToken = await ports.tools.token
-            let environment = given
-                .merging(ToolService.environment(port: now.tools, token: toolsToken)) { own, _ in own }
+            let environment = try await credential(now.proxy)
+                .merging(ToolService.environment(port: now.tools, token: ports.tools.token)) { own, _ in own }
                 .merging(GuestTools.environment) { own, _ in own }
                 .merging(BuildFacts.current) { own, _ in own }
             note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")

@@ -236,9 +236,22 @@ public final class GuestProcess: Sendable {
     /// discarded first) and answers once none is parked at the stop — or at `bound`, false, with
     /// one still parked. Blocking work is on a queue of its own.
     public static func continueAll(within bound: Duration = .seconds(1)) async -> Bool {
+        guard continueNow() else { return false }
+        return await confirmContinued(within: bound)
+    }
+
+    /// Sends the continue (`SIGCONT`, any pending stop discarded first) to every task but init and
+    /// returns at once: it takes `pids_lock` and each task's `sighand->lock`, which every guest
+    /// path holds only over memory, never across a wait, so it is safe on an actor that has to
+    /// send it inside a judgement of its own. False when it could not be sent.
+    public static func continueNow() -> Bool {
+        topo_ish_continue_all() >= 0
+    }
+
+    /// True once no task is parked at the stop, polled on a queue of its own; false at `bound`.
+    public static func confirmContinued(within bound: Duration = .seconds(1)) async -> Bool {
         await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard topo_ish_continue_all() >= 0 else { return done.resume(returning: false) }
                 // Confirmed, not assumed: the continue has landed once no task is parked.
                 let deadline = ContinuousClock.now + bound
                 while true {
