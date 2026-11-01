@@ -106,14 +106,15 @@ final class GuestLoginTests: XCTestCase {
     /// The guest's files are out of `Documents`, which Finder's file sharing shows: the standard
     /// place is Application Support.
     func testTheGuestsFilesAreOutOfDocuments() {
-        for url in [GuestResident.homeDirectory, GuestResident.ledgerFile] {
+        for url in [GuestResident.homeDirectory, GuestResident.sessionFile.url, GuestResident.cutFile.url, GuestResident.ledgerFile] {
             XCTAssertFalse(url.path.hasPrefix(URL.documentsDirectory.path), url.path)
             XCTAssertTrue(url.path.hasPrefix(URL.applicationSupportDirectory.path), url.path)
         }
     }
 
     /// An install from before has its login in `Documents/home`: it is moved, whole, to the new
-    /// place, and nothing stays behind for file sharing to show. Nothing anywhere is the new place.
+    /// place, and nothing stays behind for file sharing to show. A file in neither place is
+    /// answered with the new one.
     func testAHomeInDocumentsIsMovedWithItsLogin() throws {
         let (files, root) = try placedFiles()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -122,12 +123,12 @@ final class GuestLoginTests: XCTestCase {
         try Data("login".utf8).write(to: credential)
         try Data("session".utf8).write(to: files.old.appendingPathComponent(".guest-session"))
 
-        let home = files.place("home")
-        XCTAssertEqual(home, files.new.appendingPathComponent("home"))
+        let home = files.place("home", isDirectory: true)
+        XCTAssertEqual(home.path, files.new.appendingPathComponent("home").path)
         XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent(".claude/.credentials.json")), Data("login".utf8))
-        XCTAssertEqual(files.place(".guest-session"), files.new.appendingPathComponent(".guest-session"))
+        XCTAssertEqual(files.place(".guest-session").path, files.new.appendingPathComponent(".guest-session").path)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: files.old.path), [])
-        XCTAssertEqual(files.place(".guest-bridge.json"), files.new.appendingPathComponent(".guest-bridge.json"))
+        XCTAssertEqual(files.place(".guest-bridge.json").path, files.new.appendingPathComponent(".guest-bridge.json").path)
         XCTAssertFalse(FileManager.default.fileExists(atPath: files.new.appendingPathComponent(".guest-bridge.json").path))
     }
 
@@ -155,7 +156,7 @@ final class GuestLoginTests: XCTestCase {
         try FileManager.default.createDirectory(at: credential.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("login".utf8).write(to: credential)
 
-        XCTAssertEqual(files.place("home"), files.old.appendingPathComponent("home"))
+        XCTAssertEqual(files.place("home", isDirectory: true).path, files.old.appendingPathComponent("home").path)
         XCTAssertEqual(try Data(contentsOf: credential), Data("login".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: files.new.appendingPathComponent("home").path))
     }

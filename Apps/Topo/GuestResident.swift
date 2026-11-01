@@ -30,8 +30,8 @@ final class ApplicationBackgroundTime: BackgroundTime {
 /// `topo` command and its skill written into the home, and the one `GuestSession`,
 /// carried through the app's lifecycle by a `GuestLifecycle` — started on the foreground, ended on
 /// the way out once the grace is spent. The session id the next process resumes is kept in
-/// `.guest-session`, beside the home, and the bridge's ledger in `.guest-bridge.json` beside that.
-/// None of the three is under `Documents`, which Finder's file sharing shows (`GuestFiles`). The chat's harness brings it up
+/// `.guest-session`, beside the home, a cut kept for it in `.guest-cut.json`, and the bridge's
+/// ledger in `.guest-bridge.json` beside those, all in Application Support (`GuestFiles`). The chat's harness brings it up
 /// (`ResidentConversation`), once the userland is on the phone; so does a debug launch
 /// (`DebugRun.guestTurn`).
 @MainActor
@@ -67,10 +67,14 @@ final class GuestResident {
 
     /// The app's `Library/Application Support/home`, mounted at `ClaudeLauncher.home`.
     nonisolated static var homeDirectory: URL { home }
-    private nonisolated static let home = GuestFiles.standard.place("home")
+    private nonisolated static let home = GuestFiles.standard.place("home", isDirectory: true)
 
     nonisolated static var sessionFile: SessionFile { SessionFile(url: session) }
     private nonisolated static let session = GuestFiles.standard.place(".guest-session")
+
+    /// Where a cut is kept for the next process.
+    nonisolated static var cutFile: CutFile { CutFile(url: cut) }
+    private nonisolated static let cut = GuestFiles.standard.place(".guest-cut.json")
 
     /// The bridge's ledger: what the guest has seen of the log, and the input outstanding.
     nonisolated static var ledgerFile: URL { ledger }
@@ -158,7 +162,7 @@ final class GuestResident {
                 await userland.bringZoneUpToDate()
                 return try await made()
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile,
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile, cuts: Self.cutFile,
                                        freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
                                        signedIn: { LoginCache.standard.isSignedIn }, log: log)
@@ -398,8 +402,8 @@ extension GuestResident {
 /// Where the guest's files rest: Application Support, which Finder's file sharing does not show.
 /// The app sets `UIFileSharingEnabled` for the memory's folder in `Documents`, so anything kept
 /// there — the home holds Claude Code's login and its transcripts — can be copied off a phone
-/// plugged into a trusted Mac. An install from before kept them in `Documents`; `place` moves
-/// each across the first time it is asked for, by rename, before anything reads it.
+/// plugged into a trusted Mac. An install of a build that keeps them in `Documents` has each moved
+/// across by `place` the first time it is asked for, by rename, before anything reads it.
 struct GuestFiles {
     /// Where they were kept, and where they are.
     let old: URL
@@ -415,12 +419,16 @@ struct GuestFiles {
     /// a move that fails answers the old place, with nothing removed, so a launch that cannot move
     /// it (before the first unlock, say) reads the login where it is rather than an empty home that
     /// would sign the phone out, and the next launch tries again.
-    func place(_ name: String) -> URL {
-        let from = old.appendingPathComponent(name)
-        let to = new.appendingPathComponent(name)
+    func place(_ name: String, isDirectory: Bool = false) -> URL {
+        let from = old.appendingPathComponent(name, isDirectory: isDirectory)
+        let to = new.appendingPathComponent(name, isDirectory: isDirectory)
         guard files.fileExists(atPath: from.path) else { return to }
         if files.fileExists(atPath: to.path) {
-            try? files.removeItem(at: from)
+            do {
+                try files.removeItem(at: from)
+            } catch {
+                Self.log.error("guest files: \(name, privacy: .public) left in Documents, not removed: \(error, privacy: .public)")
+            }
             return to
         }
         do {
@@ -428,7 +436,7 @@ struct GuestFiles {
             try files.moveItem(at: from, to: to)
             return to
         } catch {
-            Self.log.error(" \(name, privacy: .public) stays in Documents: \(error, privacy: .public)")
+            Self.log.error("guest files: \(name, privacy: .public) stays in Documents until the next launch: \(error, privacy: .public)")
             return from
         }
     }
