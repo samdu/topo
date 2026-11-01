@@ -2305,6 +2305,7 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/scripts/strip-luxtts.sh",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle",
 			);
 			name = "Strip FluidAudio's LuxTTS lexicon";
 			outputFileListPaths = (

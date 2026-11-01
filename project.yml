@@ -114,8 +114,13 @@ targets:
     postBuildScripts:
       - name: Strip FluidAudio's LuxTTS lexicon
         basedOnDependencyAnalysis: false
+        # The bundle is an input so the phase runs after the task that copies it into the app: as
+        # the last phase alone it can run before an incremental build's copy of the bundle, which
+        # puts the lexicon back. Nothing is declared as output, since the phase edits the bundle in
+        # place.
         inputFiles:
           - $(SRCROOT)/scripts/strip-luxtts.sh
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle
         script: |
           set -e
           "$SRCROOT/scripts/strip-luxtts.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_FluidAudio.bundle"
