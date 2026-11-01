@@ -56,7 +56,7 @@ final class AcknowledgementsTests: XCTestCase {
         let acknowledgements = try XCTUnwrap(Acknowledgements.bundled(in: Bundle(for: Self.self)))
         func entry(_ name: String) throws -> [String: String] {
             let entry = try XCTUnwrap(acknowledgements.entries.first { $0.name == name }, "\(name) is missing")
-            return Dictionary(uniqueKeysWithValues: entry.fields.map { ($0.key, $0.value) })
+            return Dictionary(entry.fields.map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
         }
         func keys(_ name: String) -> [String] {
             acknowledgements.entries.first { $0.name == name }?.fields.map(\.key) ?? []

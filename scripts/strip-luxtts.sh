@@ -22,14 +22,17 @@ if [ ! -d "$bundle" ]; then
     exit 1
 fi
 
-removed=0
-for f in "$bundle"/luxtts_*; do
-    [ -e "$f" ] || continue
-    rm -f "$f"
-    removed=1
-done
+# At any depth, links included (-name matches a dangling link as well as a file).
+find "$bundle" -name 'luxtts_*' -exec rm -rf {} +
+if [ -n "$(find "$bundle" -name 'luxtts_*' -print -quit)" ]; then
+    echo "error: $bundle still carries a luxtts_ file" >&2
+    exit 1
+fi
 
-if [ "$removed" = 1 ] && [ -d "$bundle/_CodeSignature" ] && [ "${CODE_SIGNING_ALLOWED:-YES}" != NO ]; then
+# Judged by the seal and not by what this run removed: a re-sign that failed on an earlier
+# build leaves a broken seal and nothing left to remove.
+if [ -d "$bundle/_CodeSignature" ] && [ "${CODE_SIGNING_ALLOWED:-YES}" != NO ] \
+    && ! codesign --verify --strict "$bundle" 2>/dev/null; then
     codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --timestamp=none "$bundle"
 fi
 echo "strip-luxtts: $bundle carries no luxtts_ file"
