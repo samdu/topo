@@ -31,10 +31,6 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>WKBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>zone.hexagon.topo</string>
 	<key>WKRunsIndependentlyOfCompanionApp</key>

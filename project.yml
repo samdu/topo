@@ -133,8 +133,8 @@ targets:
     # the process running while the play queue renders, which its keeper makes true from the
     # release of the press (Apps/Client/Speaker.swift). Both modes and the push entitlement
     # (`aps-environment`, in this target's own entitlements) are here for the answering loop and the
-    # voice: the watch and the TV never answer and never speak. The watch carries
-    # `remote-notification` and `aps-environment` for its own `Surface` push (below).
+    # voice: the watch and the TV never answer and never speak. The watch carries `aps-environment`
+    # alone for its own `Surface` push (below): watchOS delivers a background push with no mode declared.
     info:
       path: Apps/Topo/Info.plist
       properties:
@@ -329,11 +329,11 @@ targets:
       # The complications and the Smart Stack's cards, embedded in the watch app.
       - target: TopoWatchWidgets
     # The rest is generated from the INFOPLIST_KEY settings below. The `Surface` push wakes the
-    # watch in the background to fetch the slots, which is a background mode no setting generates.
+    # watch with no background mode declared: `WKBackgroundModes` has no value for a push, and App
+    # Store Connect refuses an archive whose watch names `remote-notification` there (90362).
     info:
       path: Apps/TopoWatch/Info.plist
       properties:
-        WKBackgroundModes: [remote-notification]
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # `topo://open` and `topo://cue?…`, which a whole watch widget's `tap` opens; no setting
