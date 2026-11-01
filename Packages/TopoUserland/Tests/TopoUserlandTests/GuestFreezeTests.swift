@@ -415,15 +415,16 @@ final class GuestFreezeTests: XCTestCase {
     }
 
     /// P1: a stop still sending SIGSTOP when the process exits is waited out before the next
-    /// process launches, so it cannot stop that one.
+    /// process launches, so it cannot stop that one. The exit lands while the app is away, so the
+    /// foreground finds nothing frozen and starts no thaw: the launch's own wait is all there is.
     func testAStopStillUnderWayIsWaitedOutBeforeTheNextLaunch() async throws {
         let (session, process) = try await resident()
         freezer.hold(.stop)
         let outcome = Task { await session.background(budget: .seconds(15)) }
         await eventually("the stop under way") { self.freezer.stops == 1 }
-        await session.foreground()
         process.close()
         await eventually("the exited process ended") { process.terminated }
+        await session.foreground()
         let ready = Task { try await session.ready() }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(launcher.processes.count, 1, "a process launched while the old stop was still under way")
