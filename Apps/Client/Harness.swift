@@ -19,6 +19,10 @@ final class Harness {
     /// log's rather than the empty page before the first read. A read that threw is not one, so a
     /// launch with no connection keeps this false until a read gets through.
     private(set) var hasRead = false
+    /// The log as the last read that got through returned it, for the answering loop to judge a
+    /// pass by; nil while there is no log yet, after a read that failed, and whenever `hasRead`
+    /// is taken down.
+    private var lastRead: Transcript?
     private(set) var notice: String?
     private(set) var busy = false
     /// The last failure, in words: what the chat's notice says.
@@ -412,6 +416,7 @@ final class Harness {
         info = nil
         turns = []
         hasRead = false
+        lastRead = nil
         notice = nil
         failure = nil
         status = nil
@@ -564,9 +569,11 @@ final class Harness {
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
             hasRead = true
+            lastRead = transcript
             clearReadFailure()
             return true
         } catch {
+            lastRead = nil
             guard !TopoCloudKit.meansNoLogYet(error) else {
                 turns = []
                 hasRead = true
@@ -1185,6 +1192,10 @@ final class Harness {
             wakers = []
             await onPass?()
             let read = await refresh()
+            // The log as this pass read it, which is what the runner is asked by; a stopped line
+            // sent below moves the log past it, so a pass with one waiting goes by nothing, and
+            // a pass with a turn in flight goes by nothing either, so the brain is left alone.
+            let justRead = read && !busy && !hasWaiting ? lastRead : nil
             // A line that stopped on a failure goes again from here, on the loop's own time, once
             // the log can be read at all.
             if read { await retryStoppedLine(every: interval) }
@@ -1192,7 +1203,11 @@ final class Harness {
             // The guest is warmed as the chat runs, so it is up by the time the words are; this
             // waits for nothing.
             if let guest { Task { await guest.warm() } }
-            await answerPending()
+            if await passHasWork(by: justRead) {
+                await answerPending()
+            } else {
+                await refreshUnfinished()
+            }
             served.forEach { $0.resume() }
             if woken { continue }
             let pausing = Task { [pause] in try await pause(interval) }
@@ -1201,6 +1216,19 @@ final class Harness {
             sleeping = nil
             if case .failure = slept, !woken { return }
         }
+    }
+
+    /// Whether the runner has anything to do, by the log as this pass read it: a head the
+    /// person's that the brain does not hold as cut off, or a reply the brain owes. The runner's
+    /// first act is to read the log again, a round trip and a fetch by ID, so a pass whose own
+    /// read was whole and showed neither does not ask it, and a turn landing between that read
+    /// and the next pass is answered then, or on a push's wake, as one landing just after the
+    /// runner's read would be. With no read to go by, or before a runner is made, which is the
+    /// first thing a launch asks of iCloud, the runner is asked.
+    private func passHasWork(by read: Transcript?) async -> Bool {
+        guard runner != nil, let read, read.isComplete else { return true }
+        if TurnRunner.awaitsReply(read, skipping: await brain.unresolved()) { return true }
+        return await brain.owed() != nil
     }
 
     /// Asks the answering loop for a pass now, and returns once that pass has run: a silent push
@@ -1287,6 +1315,7 @@ final class Harness {
         // device answered meanwhile. The transcript stays drawn; whether the log is empty is not
         // decided again until it has been read again.
         hasRead = false
+        lastRead = nil
     }
 
     private func makeRunner() async throws -> TurnRunner {

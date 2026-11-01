@@ -131,6 +131,9 @@ struct TopoApp: App {
                                                          isSignedIn: { LoginCache.standard.isSignedIn },
                                                          ensureZone: AppRecords.ensureZone))
         let audio = AudioSession()
+        if ProcessInfo.processInfo.arguments.contains("--stay-awake") {
+            audio.wantScreenAwake(true, for: .profiling)
+        }
         Perf.mark("app.housekeeping.begin")
         _audio = State(initialValue: audio)
         // The compile cache a new install leaves behind is cleared before the ear and the voice
@@ -163,6 +166,17 @@ struct TopoApp: App {
         MicrophoneWatch.start(voice, speaker)
         _voice = State(initialValue: voice)
         _speaker = State(initialValue: speaker)
+        // What the process costs, a line a minute, with what it was doing.
+        EnergyPulse.shared.state = { [weak harness, weak voice, weak speaker, weak audio] in
+            let guest = await GuestResident.shared.session?.residentPID
+            var parts = [guest == nil ? "guest none" : "guest resident"]
+            if harness?.busy == true { parts.append("turn in flight") }
+            if voice?.listening == true { parts.append("mic open") }
+            if speaker?.speaking == true { parts.append("speaking") }
+            if audio?.holding == true { parts.append("hold standing") }
+            return parts.joined(separator: ", ")
+        }
+        EnergyPulse.shared.start()
         // What says, on a device run with no debugger attached, when iOS suspended the process.
         #if DEBUG
         AudioLog.startHeartbeat()

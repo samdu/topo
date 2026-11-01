@@ -9,7 +9,8 @@ import UIKit
 /// link, which runs exactly while `conditions.animates` does.
 ///
 /// Drawn on the main thread: the port measured 3.2–4.5 ms a frame there, live at 60 Hz on an
-/// iPhone 15 Pro (experiments `topo-mascot-swift`), and this draws half as often. A debug build
+/// iPhone 15 Pro (experiments `topo-mascot-swift`), and this draws at 24 a second, 12 once he has
+/// rested. A debug build
 /// prints what the frames here cost, every `reportEvery` of them, as `[topo-debug] mascot: …`.
 @MainActor
 final class MascotDriver {
@@ -191,7 +192,17 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     private let sprite = CALayer()
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
-    private var interval = 1.0 / 30
+    /// What a frame lasts while he does anything, and once he has rested `restAfter` seconds
+    /// (`Look.Mascot.frameInterval`, `restInterval`, `restAfter`).
+    private var interval = Look.Mascot().frameInterval
+    private var restInterval = Look.Mascot().restInterval
+    private var restAfter = Look.Mascot().restAfter
+    /// The clock's reading when his rest began — idle, not gliding, no finger on him — and nil
+    /// while he does anything. The clock stops with the link, so a rest goes on across his being
+    /// hidden and he is not woken to the look's rate by coming back.
+    private var restingSince: Double?
+    /// What a frame lasts now: `restInterval` once he has rested `restAfter`, `interval` otherwise.
+    private(set) var cadence = Look.Mascot().frameInterval
     /// What he stands for, before the walk is put on him for a glide.
     private var input = TopoInput()
     /// What decides whether he is drawn, as SwiftUI tells it: the roam says whether he stands anywhere.
@@ -268,9 +279,12 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// and whether he is covered is judged against it before anything is drawn.
     /// `ready` is whether the transcript has been read once: until then he is not drawn.
     func apply(input: TopoInput, field: MascotField?, settings: MascotRoam.Settings, interval: Double,
+               restInterval: Double = Look.Mascot().restInterval, restAfter: Double = Look.Mascot().restAfter,
                ready: Bool = true, conditions: MascotDriver.Conditions) {
         self.input = input
         self.interval = interval
+        self.restInterval = restInterval
+        self.restAfter = restAfter
         told = conditions
         var roam = roam ?? MascotRoam(settings, frame: interval)
         roam.use(settings)
@@ -430,6 +444,15 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
             driver.input = worn
         }
         driver.conditions = conditions
+        // His rest is the idle pose with no finger on him: a turn, a sign and a glide (the walk)
+        // are each something else. Rested `restAfter` by the clock, his frames come at the rest's
+        // rate; anything else brings the look's back on the frame it is seen.
+        if worn.activity == "idle", !roam.dragging {
+            restingSince = restingSince ?? clock
+        } else {
+            restingSince = nil
+        }
+        cadence = restingSince.map { clock - $0 >= restAfter } == true ? max(restInterval, interval) : interval
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -505,7 +528,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         onReport(now)
     }
 
-    /// How many reports the debug report carries back: about seven seconds of a glide at 30
+    /// How many reports the debug report carries back: about twelve seconds of a glide at 24
     /// frames a second.
     private static let recentReports = 200
     private var sequence = 0
@@ -520,10 +543,11 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
 
     /// The link runs while he animates, or while his roam has a glide or a decision waiting on the
     /// clock, and not a frame longer: a Topo standing nowhere with nothing to decide asks for nothing.
+    /// It asks for `cadence`, and the display gives the nearest rate it has in reach of it.
     private func reschedule() {
         let wanted = driver.conditions.animates || (driver.conditions.present && (roam?.needsTime ?? false))
         if wanted {
-            let fps = Float(1 / interval)
+            let fps = Float(1 / cadence)
             if let link {
                 link.preferredFrameRateRange = CAFrameRateRange(minimum: fps / 2, maximum: fps, preferred: fps)
                 return
@@ -548,13 +572,13 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// him on by at most that much rather than by the whole of it; and the first callback after
     /// the link is made, which has no last timestamp, moves him one frame.
     func fire(at timestamp: CFTimeInterval) {
-        let dt = last == 0 ? interval : min(max(timestamp - last, 0), Self.stepCap(interval: interval))
+        let dt = last == 0 ? cadence : min(max(timestamp - last, 0), Self.stepCap(interval: cadence))
         last = timestamp
         step(dt)
     }
 
     /// The most one callback moves the clock: two frame intervals, or a tenth of a second where
-    /// that is shorter, so a frame or two dropped at 30 a second is still real time.
+    /// that is shorter, so a frame or two dropped at 24 a second is still real time.
     static func stepCap(interval: Double) -> Double { max(interval * 2, 0.1) }
 
     /// One frame, `dt` seconds on: the roam's clock and the engine moved on together.
@@ -842,6 +866,8 @@ struct MascotOverChat: UIViewRepresentable {
     var field: MascotField?
     var settings: MascotRoam.Settings
     var interval: Double
+    var restInterval: Double
+    var restAfter: Double
     var ready = true
     var conditions: MascotDriver.Conditions
     var report: ((MascotRoam.Report) -> Void)?
@@ -858,8 +884,8 @@ struct MascotOverChat: UIViewRepresentable {
         canvas.fieldShown = fieldShown
         canvas.onFace = face
         canvas.onPin = pin
-        canvas.apply(input: input, field: field, settings: settings, interval: interval, ready: ready,
-                     conditions: conditions)
+        canvas.apply(input: input, field: field, settings: settings, interval: interval,
+                     restInterval: restInterval, restAfter: restAfter, ready: ready, conditions: conditions)
     }
 
     static func dismantleUIView(_ canvas: MascotCanvas, coordinator: ()) {
@@ -908,7 +934,10 @@ struct MascotLayer: View {
     var pin: ((CGPoint) -> Void)?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    /// Reduce Motion, or a launch asked to hold him (`--still-mascot`): a profiling run measures the
+    /// app with him standing still.
+    private var reduceMotion: Bool { accessibilityReduceMotion || MascotStill.asked }
 
     @State private var port = MascotGlassPort()
     #if DEBUG
@@ -950,7 +979,8 @@ struct MascotLayer: View {
                                                under: field, swim: look.mascot.swimSpeed)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,
-                               interval: look.mascot.frameInterval, ready: ready,
+                               interval: look.mascot.frameInterval, restInterval: look.mascot.restInterval,
+                               restAfter: look.mascot.restAfter, ready: ready,
                                conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                                  reduceMotion: reduceMotion),
                                report: reported, face: face, pin: pin, glass: port, fieldShown: fieldShown)
@@ -1008,5 +1038,10 @@ extension View {
             }
         }
     }
+}
+
+/// `--still-mascot` in the launch arguments: Topo is drawn once, as under Reduce Motion.
+enum MascotStill {
+    static let asked = ProcessInfo.processInfo.arguments.contains("--still-mascot")
 }
 #endif

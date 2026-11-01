@@ -120,6 +120,52 @@ final class TuningTests: XCTestCase {
         XCTAssertEqual(back.mascot.pin, CGPoint(x: 0.1, y: 0.2))
     }
 
+    // MARK: His frame rate
+
+    /// The sheet's frame rate is worn as the look's `frameInterval` and nothing else moves, the
+    /// rest's interval included; a release build, which wears no slider, wears it, since it is read
+    /// beside the placement and not as a knob; Reset gives the vault's back.
+    func testTheFrameRateIsWornInEveryBuildAndResetGivesTheVaultsBack() throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        tuning.set(frameRate: 20)
+        XCTAssertEqual(tuning.frameRate, 20)
+        let worn = tuning.worn(over: vault)
+        XCTAssertEqual(worn.mascot.frameInterval, 1.0 / 20)
+        XCTAssertEqual(worn.mascot.restInterval, vault.mascot.restInterval, "the rest's rate is not the sheet's")
+        XCTAssertEqual(try LookCensus.different(worn, vault), ["mascot.frameInterval"])
+        let release = Tuning(defaults: store, knobs: false)
+        XCTAssertEqual(release.frameRate, 20, "a release build left the rate unworn")
+        XCTAssertEqual(release.worn(over: vault).mascot.frameInterval, 1.0 / 20)
+        for rate in [Tuning.frameRates.lowerBound, 24, Tuning.frameRates.upperBound] {
+            tuning.set(frameRate: rate)
+            XCTAssertEqual(Tuning(defaults: store).frameRate, rate, "\(rate) came back a hair off")
+            XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, 1 / rate)
+        }
+        tuning.reset()
+        XCTAssertNil(tuning.frameRate)
+        XCTAssertNil(store.string(forKey: Tuning.key))
+        XCTAssertEqual(try LookCensus.different(Tuning(defaults: store).worn(over: vault), vault), [])
+    }
+
+    /// The mind setting `mascot.frameInterval` drops the sheet's rate, the sheet drops the mind's,
+    /// and taking the field back leaves the vault's.
+    func testTheFrameRateAndTheMindsIntervalAreOneField() throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        tuning.set(frameRate: 30)
+        let set = tuning.set(["mascot", "frameInterval"], to: 1.0 / 25, over: vault)
+        XCTAssertEqual(set.kept, ["mascot.frameInterval"])
+        XCTAssertNil(tuning.frameRate, "the mind's interval left the sheet's rate standing")
+        XCTAssertEqual(tuning.worn(over: vault).mascot.frameInterval, 1.0 / 25)
+        tuning.set(frameRate: 22)
+        XCTAssertNil(store.string(forKey: Tuning.mindKey), "the sheet's rate left the mind's interval kept")
+        XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, 1.0 / 22, "the mind's interval outranked the sheet's")
+        XCTAssertEqual(tuning.reset([["mascot", "frameInterval"]]), [.reset])
+        XCTAssertNil(tuning.frameRate)
+        XCTAssertEqual(try LookCensus.different(Tuning(defaults: store).worn(over: vault), vault), [])
+    }
+
     /// The settings sheet's placement is kept on its own, and choosing `pinned` there keeps
     /// whatever pin there is — the one a drag left, or the look's.
     func testThePlacementChosenKeepsThePin() {
@@ -147,17 +193,54 @@ final class TuningTests: XCTestCase {
         XCTAssertEqual(worn.mascot.pin, vault.mascot.pin)
     }
 
-    /// A release build has no sliders, so it wears none of their values: slider values a debug
-    /// install left in the defaults are read as nothing, the placement and the pin beside them are
-    /// worn, and the next write keeps only what the release build shows.
-    func testAReleaseBuildWearsOnlyThePlacementAndThePin() throws {
+    /// A kept `frameInterval` that is not a number — `true`, which bridges to 1 through `as?
+    /// Double`, a word — is read as nothing: the vault's interval is worn, the sheet shows no
+    /// rate of its own, and the placement beside it stands.
+    func testAKeptFrameIntervalThatIsNotANumberIsNothing() throws {
+        for planted in ["true", "false", #""fast""#] {
+            let store = defaults()
+            store.set(#"{"mascot": {"frameInterval": \#(planted), "placement": "glass"}}"#, forKey: Tuning.key)
+            let tuning = Tuning(defaults: store)
+            XCTAssertNil(tuning.frameInterval, "\(planted) was read as a number")
+            XCTAssertNil(tuning.frameRate)
+            let worn = tuning.worn(over: vault)
+            XCTAssertEqual(worn.mascot.frameInterval, vault.mascot.frameInterval, "\(planted) reached the look")
+            XCTAssertEqual(worn.mascot.placement, .glass, "\(planted) took the placement down")
+            tuning.place(.roam)
+            XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, vault.mascot.frameInterval,
+                           "\(planted) was written back as a number")
+        }
+    }
+
+    /// A kept `frameInterval` out of its field's range — a planted one, since the sheet writes
+    /// only its own stops — is refused where it is worn, costs that field alone, and is written
+    /// back as it was rather than as a rate it does not come to.
+    func testAKeptFrameIntervalOutOfRangeIsRefusedWhereItIsWorn() throws {
+        for planted in ["3", "1.5", "0", "-0.05"] {
+            let store = defaults()
+            store.set(#"{"mascot": {"frameInterval": \#(planted), "placement": "glass"}}"#, forKey: Tuning.key)
+            let tuning = Tuning(defaults: store)
+            let worn = tuning.worn(over: vault)
+            XCTAssertEqual(worn.mascot.frameInterval, vault.mascot.frameInterval, "\(planted) reached the look")
+            XCTAssertEqual(worn.mascot.placement, .glass, "\(planted) took the placement down")
+            tuning.place(.roam)
+            XCTAssertEqual(Tuning(defaults: store).frameInterval, Double(planted), "\(planted) was rewritten")
+            XCTAssertEqual(Tuning(defaults: store).worn(over: vault).mascot.frameInterval, vault.mascot.frameInterval)
+        }
+    }
+
+    /// A release build has no Tuning sliders, so it wears none of their values: slider values a
+    /// debug install left in the defaults are read as nothing, the placement, the pin and the
+    /// frame rate beside them are worn, and the next write keeps only what the release build shows.
+    func testAReleaseBuildWearsOnlyThePlacementThePinAndTheFrameRate() throws {
         let store = defaults()
-        store.set(#"{"mascot": {"clearance": 40, "scale": 2, "placement": "pinned", "pin": {"x": 0.2, "y": 0.4}}, "transcript": {"replyTrailingInset": 90}}"#,
+        store.set(#"{"mascot": {"clearance": 40, "scale": 2, "placement": "pinned", "pin": {"x": 0.2, "y": 0.4}, "frameInterval": 0.05}, "transcript": {"replyTrailingInset": 90}}"#,
                   forKey: Tuning.key)
         let release = Tuning(defaults: store, knobs: false)
         XCTAssertEqual(release.values, [:])
+        XCTAssertEqual(release.frameRate, 20)
         let worn = release.worn(over: vault)
-        XCTAssertEqual(Set(try LookCensus.different(worn, vault)), ["mascot.placement", "mascot.pin.x", "mascot.pin.y"])
+        XCTAssertEqual(Set(try LookCensus.different(worn, vault)), ["mascot.placement", "mascot.pin.x", "mascot.pin.y", "mascot.frameInterval"])
         release.place(.glass)
         XCTAssertEqual(Tuning(defaults: store, knobs: true).values, [:], "the release build kept slider values it does not show")
         XCTAssertEqual(Tuning(defaults: store, knobs: true).placement, .glass)
