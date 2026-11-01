@@ -2,7 +2,7 @@
 
 Everything that can be ready is in the repository: the privacy manifests, the usage strings, the export options, and `scripts/archive-upload.sh`, which archives Topo for the App Store and can upload it. What is left needs Sam, because it needs an Apple account, and this is the list with what to click.
 
-Of the steps below, 1 to 4 are done: the App IDs and profiles exist, the app record exists (Apple ID 6826966978), and the schema (4) is deployed for `iCloud.zone.hexagon.topo`. The archive, the export and App Store Connect's validation have been run on buddybox and pass. No build has been uploaded; the upload is the one command in *5. Upload*.
+Of the steps below, 1 to 4 are done: the App IDs and profiles exist, the app record exists (Apple ID 6826966978), and the schema (4) is deployed for `iCloud.zone.hexagon.topo`. Builds are uploaded from buddybox with the one command in *5. Upload*; the first, 439141 from 411ad441, is on TestFlight and installed on Sam's phone, and *6. Testers* says who can install one.
 
 ## What is already handled
 
@@ -107,11 +107,16 @@ scripts/archive-upload.sh --validate --upload
 
 It refuses a tree with uncommitted changes and a commit on no remote branch, since the About screen names the commit as its source. The schema is judged at that commit first (4, *Proving it*): a commit whose diff since the last check adds a record type, a field, a query or a subscription predicate needs its deploy before the build goes out.
 
-Processing takes a few minutes. The build then appears under **TestFlight** in the app record. Sam installs it on his phone first, signed out of any debug build and with the app deleted (4), and the testers are added once it runs.
+App Store Connect's validation reads the whole archive, the watch app included, so a key it refuses in any bundle (90362, an Info.plist value) is found here and nowhere earlier: `scripts/check-built-plist.sh` reads what the product must carry, not what the store refuses. Processing takes a few minutes (the first build was `VALID` within a minute of its delivery), and the build then appears under **TestFlight** in the app record and in every internal group that has access to all builds. A debug build on the phone is signed out and deleted before the TestFlight build is installed (4).
+
+The App Store Connect API answers the rest with the same key (`appstoreconnect-v1` JWT, ES256, from the keychain's three items): the build's `processingState`, the groups, the testers, and a build's beta review submission.
 
 ## 6. Testers
 
-TestFlight → **Internal Testing** → a group → add people from Users and Access. Internal testers need no review and get the build as soon as it finishes processing. External testers do need a review, which is a day or so, and are not needed for a house.
+Two groups exist on the app record.
+
+- **House**, internal, with access to every build: each upload reaches it as soon as it is processed, with no review. An internal tester is a user of the team (Users and Access), and the invitation goes to that user's email; TestFlight on the phone has to be signed in as that Apple ID (Settings → the account → Media & Purchases) and the invitation accepted once from the email, after which every build appears in the app by itself. The API refuses an email with a `+` in it both as a team invitation and as a tester ("Email format not valid"), so an Apple ID of that shape cannot be an internal tester; Sam's phone is signed into TestFlight as `samdurose@mac.com` for this reason.
+- **Household**, external, with a public link (https://testflight.apple.com/join/UkUJk59k, ten seats): anyone with the link, any Apple ID. It offers a build only once Beta App Review has passed it, a day or so for the first, and tapping the link before that is an error rather than a waiting list. The submission (`betaAppReviewSubmissions`) wants the review contact (`betaAppReviewDetail`: name, email, phone) and the test information (`betaAppLocalizations`, set: what to test, feedback address `samdurose@mac.com`), and the build's own what-to-test line.
 
 ## What the script does not do
 
