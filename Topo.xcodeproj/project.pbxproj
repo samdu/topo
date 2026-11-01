@@ -149,6 +149,7 @@
 		425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */; };
 		4284B708B9BC30F3EF1F3A7D /* ControlRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56E758F45E3E653043D416F /* ControlRequestTests.swift */; };
 		42BE4322536F82A8E48C386A /* BarControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD09EC67E05EAE6A1F06E821 /* BarControlsTests.swift */; };
+		433A7B39E21360AC032FE035 /* EnergyPulse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3287B514D4D8C746B5C3FD9B /* EnergyPulse.swift */; };
 		442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D946D8851F96D23296B16179 /* RoleSelectorTests.swift */; };
 		443639D8481C026336CB1598 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		447E5988846796C166E2407C /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
@@ -386,6 +387,7 @@
 		B00ABBD6436E3FC4EBE99846 /* PhoneToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD4F34ACF1BC2A1F5010F79 /* PhoneToolsTests.swift */; };
 		B0670989F3CF8988A0109163 /* Connections.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C76AE9F6DF2889FA1D7CD5 /* Connections.swift */; };
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
+		B106BEB8C12E88B983DCB512 /* EnergyPulseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 893F3E3722F73D5670BE74E7 /* EnergyPulseTests.swift */; };
 		B12BFB923BAD7447CF7FB88F /* WatchCueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7FF54A6D05E5954E13EE7E2 /* WatchCueTests.swift */; };
 		B15EA92763AE1DC3A0B80DA0 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
@@ -724,6 +726,7 @@
 		2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */ = {isa = PBXFileReference; path = "THIRD-PARTY"; sourceTree = "<group>"; };
 		3103735350B8C5C4A6CE6F11 /* StreamJSONTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamJSONTests.swift; sourceTree = "<group>"; };
 		327323DA10D8649D7ED7A137 /* ComposerRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerRenderTests.swift; sourceTree = "<group>"; };
+		3287B514D4D8C746B5C3FD9B /* EnergyPulse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnergyPulse.swift; sourceTree = "<group>"; };
 		333D38923B458890391C4F4C /* MascotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotView.swift; sourceTree = "<group>"; };
 		34907CBDA60D55F46C514383 /* systemSmall-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemSmall-light.png"; sourceTree = "<group>"; };
 		34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
@@ -833,6 +836,7 @@
 		8809A0CAEB64B3D22525D3DD /* HubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModel.swift; sourceTree = "<group>"; };
 		88366A5528950D08825392C7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		88A745D155637B885D24CB95 /* WatchRelevance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRelevance.swift; sourceTree = "<group>"; };
+		893F3E3722F73D5670BE74E7 /* EnergyPulseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnergyPulseTests.swift; sourceTree = "<group>"; };
 		89F367954EC9F9ACB3431014 /* TopoLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoLaunch.swift; sourceTree = "<group>"; };
 		8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestBridgeTests.swift; sourceTree = "<group>"; };
 		8A748EFA767D96A544B2291F /* ModelHousekeepingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHousekeepingTests.swift; sourceTree = "<group>"; };
@@ -1130,6 +1134,7 @@
 				C7BD599AC4315251579CE778 /* ControlDefaults.swift */,
 				B099B495226BFD2823184CC1 /* ControlRequest.swift */,
 				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
+				3287B514D4D8C746B5C3FD9B /* EnergyPulse.swift */,
 				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
 				CF58534E47D3EBCB68EFD2FA /* GuestImages.swift */,
 				843BF0B5E0DF46CC89209EEF /* GuestLogin.swift */,
@@ -1454,6 +1459,7 @@
 				4768AAF3DF2F75692350C8E5 /* DictationTests.swift */,
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
+				893F3E3722F73D5670BE74E7 /* EnergyPulseTests.swift */,
 				F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */,
 				3B0DC42A89357598D9F05F49 /* FirstRunTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
@@ -2533,6 +2539,7 @@
 				A9A69DD1D01C6C803CF034C8 /* DictationTests.swift in Sources */,
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
+				B106BEB8C12E88B983DCB512 /* EnergyPulseTests.swift in Sources */,
 				77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */,
 				A7570D161D96D686BCF9154D /* FirstRunTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
@@ -2673,6 +2680,7 @@
 				05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */,
 				957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */,
 				366808E32D484A6F8AB966CE /* Ear.swift in Sources */,
+				433A7B39E21360AC032FE035 /* EnergyPulse.swift in Sources */,
 				39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */,
 				3E623C9ECC3D2014C7EAB9A9 /* FilesTool.swift in Sources */,
 				F1658B67DBE624653FE6611D /* FirstRun.swift in Sources */,
