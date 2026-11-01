@@ -6,7 +6,7 @@ import TopoUserland
 /// Claude Code's login, in the guest's own unmodified `claude`. `claude auth login --claudeai`
 /// runs with no resident beside it (`GuestSession.withoutResident`), since the two are `claude`
 /// processes over one credentials file, `~/.claude/.credentials.json` in the guest's home, which
-/// is the app's `Documents/home`. Its `BROWSER` is `topo-browser`, which hands the loopback URL to
+/// is the app's `Library/Application Support/home`. Its `BROWSER` is `topo-browser`, which hands the loopback URL to
 /// the sign-in's sheet through `topo open-url`; the paste-page URL it prints is kept for the
 /// fallback, and a pasted `code#state` is written to its stdin. Topo holds no Claude.ai token.
 struct GuestLogin: ClaudeLogin {

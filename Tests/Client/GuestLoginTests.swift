@@ -103,6 +103,70 @@ final class GuestLoginTests: XCTestCase {
         try GuestResident.makeHome(home)
     }
 
+    /// The guest's files are out of `Documents`, which Finder's file sharing shows: the standard
+    /// place is Application Support.
+    func testTheGuestsFilesAreOutOfDocuments() {
+        for url in [GuestResident.homeDirectory, GuestResident.ledgerFile] {
+            XCTAssertFalse(url.path.hasPrefix(URL.documentsDirectory.path), url.path)
+            XCTAssertTrue(url.path.hasPrefix(URL.applicationSupportDirectory.path), url.path)
+        }
+    }
+
+    /// An install from before has its login in `Documents/home`: it is moved, whole, to the new
+    /// place, and nothing stays behind for file sharing to show. Nothing anywhere is the new place.
+    func testAHomeInDocumentsIsMovedWithItsLogin() throws {
+        let (files, root) = try placedFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let credential = files.old.appendingPathComponent("home/.claude/.credentials.json")
+        try FileManager.default.createDirectory(at: credential.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("login".utf8).write(to: credential)
+        try Data("session".utf8).write(to: files.old.appendingPathComponent(".guest-session"))
+
+        let home = files.place("home")
+        XCTAssertEqual(home, files.new.appendingPathComponent("home"))
+        XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent(".claude/.credentials.json")), Data("login".utf8))
+        XCTAssertEqual(files.place(".guest-session"), files.new.appendingPathComponent(".guest-session"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: files.old.path), [])
+        XCTAssertEqual(files.place(".guest-bridge.json"), files.new.appendingPathComponent(".guest-bridge.json"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files.new.appendingPathComponent(".guest-bridge.json").path))
+    }
+
+    /// One in the new place is the one; a copy left in `Documents` is stale and is taken away.
+    func testTheNewPlaceWinsAndTheOldCopyGoes() throws {
+        let (files, root) = try placedFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("old".utf8).write(to: files.old.appendingPathComponent(".guest-session"))
+        try FileManager.default.createDirectory(at: files.new, withIntermediateDirectories: true)
+        try Data("new".utf8).write(to: files.new.appendingPathComponent(".guest-session"))
+
+        let session = files.place(".guest-session")
+        XCTAssertEqual(try Data(contentsOf: session), Data("new".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files.old.appendingPathComponent(".guest-session").path))
+    }
+
+    /// A move that fails leaves the login where it is and answers that place, so the launch reads
+    /// it there rather than an empty home that would sign the phone out.
+    func testAFailedMoveKeepsTheOldPlace() throws {
+        let (placed, root) = try placedFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var files = placed
+        files.files = RefusingMoves()
+        let credential = files.old.appendingPathComponent("home/.claude/.credentials.json")
+        try FileManager.default.createDirectory(at: credential.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("login".utf8).write(to: credential)
+
+        XCTAssertEqual(files.place("home"), files.old.appendingPathComponent("home"))
+        XCTAssertEqual(try Data(contentsOf: credential), Data("login".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files.new.appendingPathComponent("home").path))
+    }
+
+    private func placedFiles() throws -> (GuestFiles, URL) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("guest-files-\(UUID().uuidString)", isDirectory: true)
+        let old = root.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        return (GuestFiles(old: old, new: root.appendingPathComponent("Library/Application Support", isDirectory: true)), root)
+    }
+
     /// A launch with no login is refused before Claude Code is started, and the refusal says so.
     func testTheResidentIsNotLaunchedSignedOut() async throws {
         let cache = LoginCache.standard
@@ -133,5 +197,12 @@ final class GuestLoginTests: XCTestCase {
         private var all: [URL] = []
         func add(_ url: URL) { lock.withLock { all.append(url) } }
         var urls: [URL] { lock.withLock { all } }
+    }
+}
+
+/// A file manager whose every move fails, as one before the first unlock might.
+private final class RefusingMoves: FileManager, @unchecked Sendable {
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        throw CocoaError(.fileWriteNoPermission)
     }
 }
