@@ -38,7 +38,8 @@ public protocol GuestFreezer: Sendable {
     /// still run one more step on the way back, which is never continued: the session ends it.
     func stop() async -> Bool
     /// Takes back the ports the resident was launched toward and brings the forwarder up, sending
-    /// nothing to the guest; false when a port could not be taken back.
+    /// nothing to the guest; false when a port could not be taken back or the phone has changed
+    /// time zone since the launch.
     func prepare() async -> Bool
     /// Sends the continue to every guest task, and does not wait for it to land. The session calls
     /// it on its own actor inside the gate that judges the process still wanted, so a sign-out or a
@@ -793,8 +794,12 @@ public actor GuestSession {
         // waited out first. It is the only one, since a way out waits for the thaw, which waits
         // for the stop, before it freezes again; and it is bounded (`GuestFreezer.stop`).
         let stopping = freezing
+        // So is a thaw of a process ended meanwhile, which may be taking back the ports this
+        // launch is about to be told.
+        let obsolete = thawing
         startTask = Task {
             if let stopping { _ = await stopping.value }
+            if let obsolete { await obsolete.value }
             let result: Result<any ResidentProcess, Error>
             do {
                 result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt,
@@ -1055,7 +1060,7 @@ public actor GuestSession {
             // binding the listeners afresh.
             guard await self.owns(resident) else { return await self.thawed(resident, resumed: false, why: "it was ended meanwhile") }
             guard await freezer.prepare() else {
-                return await self.thawed(resident, resumed: false, why: "a port it was told could not be taken back")
+                return await self.thawed(resident, resumed: false, why: "it could not be prepared: a port it was told, or the zone it started in")
             }
             if let refused = await self.continueIfStill(resident, with: freezer) {
                 return await self.thawed(resident, resumed: false, why: refused)

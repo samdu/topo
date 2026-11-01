@@ -288,20 +288,34 @@ final class GuestResident {
 final class LaunchPorts {
     let proxy: APIProxy
     let tools: ToolService
+    private let zone: @Sendable () -> String
 
-    init(proxy: APIProxy, tools: ToolService) {
+    init(proxy: APIProxy, tools: ToolService,
+         zone: @escaping @Sendable () -> String = { NSTimeZone.resetSystemTimeZone(); return TimeZone.current.identifier }) {
         self.proxy = proxy
         self.tools = tools
+        self.zone = zone
     }
 
     /// The ports the last launch was told, which a frozen resident still holds in its environment.
     private(set) var told: (proxy: UInt16, tools: UInt16)?
+    /// The phone's zone when the last launch was told its ports, after the guest's was brought up
+    /// to date: the zone its runtime read once and keeps for its life.
+    private(set) var toldZone: String?
 
     /// The ports to tell the next launch: each service's, on a listener started for it.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
         let now = (try await proxy.relisten(), try await tools.relisten())
         told = now
+        toldZone = zone()
         return now
+    }
+
+    /// Whether the phone is still in the zone the last launch started in; false when no launch was
+    /// told one. A frozen resident from another zone is started afresh rather than continued.
+    func sameZone() -> Bool {
+        guard let toldZone else { return false }
+        return zone() == toldZone
     }
 
     /// Both services listening again on the very ports the last launch was told, for a frozen
@@ -341,6 +355,10 @@ final class GuestFreeze: GuestFreezer {
     }
 
     nonisolated func prepare() async -> Bool {
+        guard await ports.sameZone() else {
+            GuestResident.listenerLog.notice("guest: the phone changed time zone since the frozen resident started; starting a fresh process")
+            return false
+        }
         guard await ports.reclaim() else { return false }
         await userland.reviveForwarder()
         return true

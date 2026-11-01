@@ -434,6 +434,26 @@ final class GuestFreezeTests: XCTestCase {
         XCTAssertEqual(freezer.continues, 0)
     }
 
+    /// A thaw still taking back ports for a process a sign-out ended meanwhile is waited out
+    /// before the next process launches, so it cannot rebind the listeners that launch is told.
+    func testAThawOfAnEndedProcessIsWaitedOutBeforeTheNextLaunch() async throws {
+        let (session, process) = try await resident()
+        let frozen = await session.background(budget: .seconds(15))
+        XCTAssertEqual(frozen, .frozen)
+        freezer.hold(.prepare)
+        await session.foreground()
+        await eventually("the thaw taking its ports back") { self.freezer.prepares == 1 }
+        _ = await session.forgetSession()
+        XCTAssertTrue(process.terminated)
+        let ready = Task { try await session.ready() }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(launcher.processes.count, 1, "a process launched while an obsolete thaw was taking its ports back")
+        freezer.release(.prepare)
+        try await ready.value
+        XCTAssertEqual(launcher.processes.count, 2)
+        XCTAssertEqual(freezer.continues, 0)
+    }
+
     /// A sign-out's taking away waits for a stop still sending SIGSTOP, which would otherwise stop
     /// what the sign-out runs in the guest next; the frozen process is ended at once.
     func testASignOutWaitsForAStopStillUnderWay() async throws {

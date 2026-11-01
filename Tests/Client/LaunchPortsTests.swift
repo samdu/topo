@@ -55,6 +55,32 @@ final class LaunchPortsTests: XCTestCase {
         await tools.stop()
     }
 
+    /// A frozen resident is continued only in the zone it was launched in: its runtime keeps the
+    /// zone it first read.
+    func testTheZoneALaunchStartedInIsKeptAndAChangeIsSeen() async throws {
+        let zone = Zone("Europe/London")
+        let ports = LaunchPorts(proxy: try APIProxy(log: { _ in }), tools: try ToolService(tools: []), zone: { zone.value })
+        XCTAssertFalse(ports.sameZone(), "no launch was told a zone")
+        _ = try await ports.ports()
+        XCTAssertTrue(ports.sameZone())
+        zone.value = "America/Los_Angeles"
+        XCTAssertFalse(ports.sameZone(), "a zone change was not seen")
+        _ = try await ports.ports()
+        XCTAssertTrue(ports.sameZone())
+        await ports.proxy.stop()
+        await ports.tools.stop()
+    }
+
+    private final class Zone: @unchecked Sendable {
+        private let lock = NSLock()
+        private var identifier: String
+        init(_ identifier: String) { self.identifier = identifier }
+        var value: String {
+            get { lock.withLock { identifier } }
+            set { lock.withLock { identifier = newValue } }
+        }
+    }
+
     /// A socket listening on `127.0.0.1` at `port` once the listener there has let it go; nil when
     /// it could not be bound in five seconds.
     private static func squat(_ port: UInt16) throws -> Int32? {
