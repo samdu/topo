@@ -72,9 +72,9 @@ cd "$root" || exit 2
 # change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
 # otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
 # selected Xcode other work is pinned to need not change it. The simulator runtimes are 27.0's,
-# which Xcode 27.1 runs. XcodeGen's is the version the committed
+# which Xcode 27.2 runs. XcodeGen's is the version the committed
 # projects are generated with.
-XCODE_VERSION="27.1"
+XCODE_VERSION="27.2"
 XCODE_APPS="${TOPO_XCODE_APPS:-/Applications}"
 IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
