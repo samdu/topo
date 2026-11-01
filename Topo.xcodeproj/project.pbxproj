@@ -50,6 +50,7 @@
 		15379415C6F4FC595ACDA7E2 /* womble.js in Resources */ = {isa = PBXBuildFile; fileRef = 5FA3798B7F6069020E5A4DA0 /* womble.js */; };
 		162741ABD9C3D296289EF1A0 /* SetupMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C253887A3CC531320A7911 /* SetupMeter.swift */; };
 		16918B8B33C4D5EC925A1862 /* capital-of-france.wav in Resources */ = {isa = PBXBuildFile; fileRef = 8D9560A4BB990698B0D1E786 /* capital-of-france.wav */; };
+		16A6CB3B7DFA5DDDB54521C0 /* CountingDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB691F4A53012C9EAB76FB7B /* CountingDatabase.swift */; };
 		16E1B685E2863F728F88EA3C /* WidgetNodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9F578527FAA2BB3C84ACEA5 /* WidgetNodeView.swift */; };
 		19A62A893D0B7D987CE76127 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		19FE7B41489AD4F9301A5FB3 /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333D38923B458890391C4F4C /* MascotView.swift */; };
@@ -924,6 +925,7 @@
 		C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSimdTests.swift; sourceTree = "<group>"; };
 		CA6630E76EBC7CE89C1289F2 /* TopoUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedGuest.swift; sourceTree = "<group>"; };
+		CB691F4A53012C9EAB76FB7B /* CountingDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountingDatabase.swift; sourceTree = "<group>"; };
 		CCC0910114D0F4D264253EC5 /* VaultMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMigration.swift; sourceTree = "<group>"; };
 		CCDC74A1818899420B9F821E /* DeviceIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityTests.swift; sourceTree = "<group>"; };
 		CD7A7985993EF4E2E3C9EE78 /* TopoShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TopoShare.entitlements; sourceTree = "<group>"; };
@@ -1454,6 +1456,7 @@
 				0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */,
 				D56E758F45E3E653043D416F /* ControlRequestTests.swift */,
 				D431E5424FB548AF6DBE3713 /* ControlToolTests.swift */,
+				CB691F4A53012C9EAB76FB7B /* CountingDatabase.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
 				CCDC74A1818899420B9F821E /* DeviceIdentityTests.swift */,
 				4768AAF3DF2F75692350C8E5 /* DictationTests.swift */,
@@ -2534,6 +2537,7 @@
 				8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */,
 				4284B708B9BC30F3EF1F3A7D /* ControlRequestTests.swift in Sources */,
 				E24A9C95DA4BA49B0D069F99 /* ControlToolTests.swift in Sources */,
+				16A6CB3B7DFA5DDDB54521C0 /* CountingDatabase.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
 				A10FFE217C7B37F36B501F07 /* DeviceIdentityTests.swift in Sources */,
 				A9A69DD1D01C6C803CF034C8 /* DictationTests.swift in Sources */,
