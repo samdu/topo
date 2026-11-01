@@ -106,6 +106,22 @@ targets:
         copyFiles:
           destination: productsDirectory
           subpath: $(CONTENTS_FOLDER_PATH)/Watch
+    # FluidAudio's LuxTTS lexicon is espeak-ng's output (GPL-3.0, no App Store waiver) and nothing
+    # in Topo reads it, so it leaves the product here (THIRD-PARTY, FluidAudio; docs/testflight.md).
+    postBuildScripts:
+      - name: Strip FluidAudio's LuxTTS lexicon
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/scripts/strip-luxtts.sh
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle
+        # The bundle is changed in place, which the build system takes only beside an output of
+        # the phase's own: the stamp.
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle
+          - $(DERIVED_FILE_DIR)/strip-luxtts.stamp
+        script: |
+          "$SRCROOT/scripts/strip-luxtts.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_FluidAudio.bundle"
+          touch "$DERIVED_FILE_DIR/strip-luxtts.stamp"
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built

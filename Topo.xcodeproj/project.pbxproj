@@ -1806,6 +1806,7 @@
 				F8F2AEBA7E51C11C56FCB364 /* Frameworks */,
 				F31DA864BB9B3C7DF35A0278 /* Embed Foundation Extensions */,
 				9D53D5E16C958F60B7475412 /* Embed Watch Content */,
+				C7E8C98880761A6701508B4A /* Strip FluidAudio's LuxTTS lexicon */,
 			);
 			buildRules = (
 			);
@@ -2218,6 +2219,32 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		C7E8C98880761A6701508B4A /* Strip FluidAudio's LuxTTS lexicon */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip-luxtts.sh",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle",
+			);
+			name = "Strip FluidAudio's LuxTTS lexicon";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle",
+				"$(DERIVED_FILE_DIR)/strip-luxtts.stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/scripts/strip-luxtts.sh\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_FluidAudio.bundle\"\ntouch \"$DERIVED_FILE_DIR/strip-luxtts.stamp\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1F423B71351671A127AEB24E /* Sources */ = {

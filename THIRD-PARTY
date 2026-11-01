@@ -19,12 +19,12 @@ Where: samdu/experiments, `topo-mascot-swift/Sources/TopoMascot` at 0a7718e (and
 Use: `Packages/TopoMascot`, unchanged from the experiment: the engine that draws Topo the octopus on the composer's glass in pixels from the model, the context and what the turn is doing, facing the side of the screen he stands on. Its golden frames are digests the JavaScript engine rendered (`oracle/golden.mjs` in the same experiment).
 
 ## FluidAudio
-Licence: Apache-2.0 (text at the end of this file), © FluidInference. Its own bundled pieces, each listed in its `ThirdPartyLicenses/`: fastcluster (BSD-2-Clause, its own entry below), vbx (Apache-2.0), the NemoTextProcessing xcframework (its own entry below), and in its Kokoro, enhancement, diarizer and Chatterbox code, which is compiled into the library though Topo calls none of it: the Japanese text frontend, a port of Misaki's `cutlet.py` (hexgrad/misaki, Apache-2.0, itself from polm/cutlet, MIT) and `num2kana.py` (Greatdane/Convert-Numbers-to-Japanese, MIT); the Kokoro generator's native source stage, after mattmireles/kokoro-coreml (Apache-2.0; FluidAudio's `ThirdPartyLicenses/KokoroANE-v3/NOTICE`: "This toolkit's optional adapted generator uses the optimized Core ML graph from mattmireles/kokoro-coreml (Apache License 2.0)"); and ports of localai-org/LocalVQE (Apache-2.0), of NVIDIA NeMo's Sortformer streaming update (Apache-2.0) and of Chatterbox's alignment analyzer (resemble-ai/chatterbox, MIT). The dictionaries and lexicons those frontends read are downloads Topo never asks for. Two LuxTTS resources are in the package and so in the app's bundle, unread by Topo: `luxtts_en_us_g2p_aux.json` and the English lexicon `luxtts_en_us_lexicon.tsv.zz`, pronunciations FluidInference harvested by running espeak-ng (GPL-3.0), whose code and dictionary sources are not in it
+Licence: Apache-2.0 (text at the end of this file), © FluidInference. Its own bundled pieces, each listed in its `ThirdPartyLicenses/`: fastcluster (BSD-2-Clause, its own entry below), vbx (Apache-2.0), the NemoTextProcessing xcframework (its own entry below), and in its Kokoro, enhancement, diarizer and Chatterbox code, which is compiled into the library though Topo calls none of it: the Japanese text frontend, a port of Misaki's `cutlet.py` (hexgrad/misaki, Apache-2.0, itself from polm/cutlet, MIT) and `num2kana.py` (Greatdane/Convert-Numbers-to-Japanese, MIT); the Kokoro generator's native source and STFT stage, after mattmireles/kokoro-coreml (Apache-2.0, its text at the end of this file; FluidAudio's `ThirdPartyLicenses/KokoroANE-v3/NOTICE`, kept whole in its own entry below); and ports of localai-org/LocalVQE (Apache-2.0), of NVIDIA NeMo's Sortformer streaming update (Apache-2.0) and of Chatterbox's alignment analyzer (resemble-ai/chatterbox, MIT). The dictionaries and lexicons those frontends read are downloads Topo never asks for. The package's own resources are two LuxTTS files, `luxtts_en_us_g2p_aux.json` and the English lexicon `luxtts_en_us_lexicon.tsv.zz`, pronunciations FluidInference harvested by running espeak-ng (GPL-3.0), which has no App Store waiver; Topo never reads them, and the iOS target's last build phase (`scripts/strip-luxtts.sh`) takes them out of the app's copy of `FluidAudio_FluidAudio.bundle`, so they are not in the bundle, and `scripts/check-built-plist.sh` fails a product that carries either
 Where: https://github.com/FluidInference/FluidAudio, pinned to 0.17.7 (503b4bd1bbf7220882de39fe8ae6716aae4132da)
 Use: Runs Parakeet and Pocket TTS on the phone. For `Apps/Client/Ear.swift`: loads the CoreML models Topo has downloaded, decodes an utterance, and rescores the transcript against the vocabulary with its CTC keyword spotter. For `Apps/Client/Voice.swift`: loads the Pocket language pack Topo has downloaded and synthesises a sentence as a stream of 80 ms frames, every stage placed off the GPU. Linked into the iOS app only.
 
 ## NemoTextProcessing (text-processing-rs)
-Licence: Apache-2.0, © FluidInference; its compiled grammars are from NVIDIA NeMo Text Processing (Apache-2.0, © NVIDIA Corporation & Affiliates). Its statically linked Rust crates are each MIT or Apache-2.0 or both, and Topo takes them under Apache-2.0 where it has the choice: rustfst (© Alexandre Caulier and the rustfst contributors), flate2, miniz_oxide, adler2, crc32fast, anyhow, bimap, bitflags, itertools, either, num-traits, rand, rand_chacha, rand_core, ppv-lite86, getrandom, zerocopy, typenum, lazy_static, serde, once_cell, cfg-if, libc, memchr and minimal-lexical. Four are MIT alone, and their notices are at the end of this file: simd-adler32 (© 2021 Marvin Countryman), nom (© 2014-2019 Geoffroy Couprie), ordered-float (© 2015 Jonathan Reem) and generic-array (© 2015 Bartłomiej Kamiński)
+Licence: Apache-2.0, © FluidInference; its compiled grammars are from NVIDIA NeMo Text Processing (Apache-2.0, © NVIDIA Corporation & Affiliates). Its statically linked Rust crates, the iOS targets' dependency graph of the `fst-engine` feature in that tag's `Cargo.lock` less the build-time proc-macro and build-script crates and those for other targets (UEFI, WASI), are each under the licences crates.io records for their version, and Topo takes Apache-2.0 wherever it is one of them: rustfst (© Alexandre Caulier and the rustfst contributors), flate2, miniz_oxide, adler2, crc32fast, anyhow, bimap, bitflags, itertools, either, num-traits, rand, rand_chacha, rand_core, ppv-lite86, getrandom, zerocopy, typenum, lazy_static, serde, serde_core, cfg-if, libc and minimal-lexical, each with Apache-2.0 among its choices, and superslice, Apache-2.0 alone. memchr is the Unlicense or MIT, and is taken under the Unlicense, which asks for no notice. Four are MIT alone, and their notices are at the end of this file: simd-adler32 (© 2021 Marvin Countryman), nom (© 2014-2019 Geoffroy Couprie), ordered-float (© 2015 Jonathan Reem) and generic-array (© 2015 Bartłomiej Kamiński)
 Where: https://github.com/FluidInference/text-processing-rs v0.3.1, the prebuilt `NemoTextProcessing.xcframework` FluidAudio's `Package.swift` pins by checksum, built with its `fst-engine` feature; the crates at the versions in that tag's `Cargo.lock`
 Use: FluidAudio's text normaliser, linked into the iOS app with it. Topo calls none of it.
 
@@ -46,11 +46,11 @@ Use: The text-to-speech model the voice runs (350 MB: the four bundles of the En
 ## iSH (the OpenMinis/ish-arm64 fork)
 Licence: GPL-3.0 (the text is `LICENSE`, shown on the About screen), © the iSH developers and the ish-arm64 contributors (contributions after iSH commit 0e3a414 are also GPL-2.0, per the fork's `LICENSE.md`), with the additional terms of iSH's `LICENSE.IOS`, which the fork carries unchanged, quoted here in full: "The iSH developers are aware that the terms of service that apply to apps distributed via Apple's App Store services may conflict with rights granted under the iSH license, the GNU General Public License, version 2 or 3. The copyright holders of the iSH app do not wish this conflict to prevent the otherwise-compliant distribution of derived apps via the App Store. Therefore, we have committed not to pursue any license violation that results solely from the conflict between the GNU GPLv2 or v3 and the Apple App Store terms of service. In other words, as long as you comply with the GPL in all other respects, including its requirements to provide users with source code and the text of the license, we will not object to your distribution of the iSH app through the App Store."
 Where: https://github.com/samdu/ish-arm64 (a fork of https://github.com/OpenMinis/ish-arm64) at e1d579480fba88e8f0428e3cf23811bcdd05421f, tagged topo-pin-e1d5794, built by `scripts/build-ish.sh` with the patches in `patches/ish/`. The source of the build is the fork at that commit, with the pin, the patches and the script in https://github.com/samdu/topo at the commit the About screen names
-Modified: Topo modifies the fork, from 2026-09-22 to 2026-10-17, by the twelve patches in `patches/ish/`, each dated by the commit that added it: 0001 the memory brake's refresh hook (`kernel/mm.h`, `kernel/mmap.c`); 0002 the `offsets` source in `meson.build`; 0003 `pidfd_open` on an unreaped child (`kernel/pidfd.c`); 0004 the guest's own `mount` refused for the host's filesystem (`fs/mount.c`); 0005 the vector forms of SQABS and SQNEG, 0009 SMOV and 0010 the NEON decode gaps (`asbestos/guest-arm64`); 0006 the DNS stub's sentinel address (`fs/sock.c`, `fs/sock.h`); 0007 the block chaining's test of a free jump slot (`asbestos/asbestos.c`); 0008 a guest tmpfs unmounted rather than the app ended (`fs/tmp.c`); 0011 the mount lookup's cache read under its lock (`fs/mount.c`); 0012 a code store after a TLB miss (`asbestos/guest-arm64/gadgets-aarch64/entry.S`, `emu/tlb.c`, `emu/tlb.h`, `kernel/memory.c`, `kernel/memory.h`)
+Modified: Topo modifies the fork by the fourteen patches in `patches/ish/`, each dated by the commits that added and changed it in https://github.com/samdu/topo: 0001 the memory brake's refresh hook (`kernel/mm.h`, `kernel/mmap.c`), 2026-09-22; 0002 the `offsets` source in `meson.build`, 2026-09-22; 0003 `pidfd_open` on an unreaped child (`kernel/pidfd.c`), 2026-09-22; 0004 the guest's own `mount` refused for the host's filesystem (`fs/mount.c`), 2026-09-26; 0005 the vector forms of SQABS and SQNEG (`asbestos/guest-arm64/gadgets-aarch64/math.S`, `asbestos/guest-arm64/gen.c`), 2026-09-28; 0006 the DNS stub's sentinel address (`fs/sock.c`, `fs/sock.h`), 2026-10-01; 0007 the block chaining's test of a free jump slot (`asbestos/asbestos.c`), 2026-10-07; 0008 a guest tmpfs unmounted rather than the app ended (`fs/tmp.c`), 2026-10-07; 0009 SMOV and 0010 the NEON decode gaps (`asbestos/guest-arm64/gadgets-aarch64/math.S`, `asbestos/guest-arm64/gen.c`), 2026-10-07; 0011 the mount lookup's cache read under its lock (`fs/mount.c`), 2026-10-17; 0012 a code store after a TLB miss (`asbestos/guest-arm64/gadgets-aarch64/entry.S`, `emu/tlb.c`, `emu/tlb.h`, `kernel/memory.c`, `kernel/memory.h`), 2026-10-17, changed 2026-10-22; 0014 a guest tmpfs's `utime` (`fs/tmp.c`), 2026-10-23; 0015 the LD1 and ST1 halfword lanes (`asbestos/guest-arm64/gen.c`), 2026-10-30
 Use: The guest's kernel: an arm64 Linux userland run in the app's own process, its system calls answered by iSH's kernel and its code run by the Asbestos engine. Linked into the iOS app through `Packages/TopoUserland`; nothing boots it outside a debug launch and the tests. `Packages/TopoUserland/Guest/topo_ish.c` follows the fork's `app/AppDelegate.m` and `app/ISHShellExecutor.m` for the boot sequence, the anonymous-memory cap and the process launch, and is under the same terms. `Packages/TopoUserland/Guest/topo_vaultfs.m` follows the fork's `app/iOSFS.m` for the file coordination around realfs, and is under the same terms. The fork's `deps/linux` and `deps/libapps` are GPL code the waiver does not cover, and the build refuses a checkout that has either.
 
 ## libarchive
-Licence: BSD-2-Clause, © Tim Kientzle and the libarchive contributors (Michihiro Nakajima, Joerg Sonnenberger, Martin Matuska, Andres Mejia, Sebastian Freundt, Kai Wang, Sean Purcell, Grzegorz Antoniak, Okhotnikov Kirill, Marek Kubica, Konrad Kleine, Ondrej Holy, Nokia Corporation, Andreas Henriksson, Anselm Strauss, Rudolf Marek, Miklos Vajna, Yann Collet, The NetBSD Foundation and others, as each file's own statement names); `archive_read_support_filter_compress.c` and `archive_write_add_filter_compress.c` are also under the University of California's 3-clause licence; `archive_getdate.c` is public domain, and the BLAKE2 files are taken under CC0 1.0. The texts are at the end of this file
+Licence: BSD-2-Clause, © Tim Kientzle and the libarchive contributors, and in the files that say so © the University of California's Regents (BSD-3-Clause), The NetBSD Foundation, Thomas Moestl and Yann Collet (xxHash), under the BSD wordings whose texts, with every copyright line of every file the build compiles, are at the end of this file; the PPMd codecs (Igor Pavlov, after Dmitry Shkarin) and `archive_getdate.c` are public domain, and the BLAKE2 files (© 2012 Samuel Neves) are taken under CC0 1.0. `archive_random.c`'s copy of OpenBSD's arc4random is not compiled, since the fork's config has the system's `arc4random_buf`
 Where: https://github.com/libarchive/libarchive at fc6563f5130d8a7ee1fc27c0e55baef35119f26c, the iSH fork's `deps/libarchive` submodule
 Use: Reads the rootfs tarball and the Alpine packages, and writes the one archive they are combined into (`topo_ish_combine`), for the fork's fakefs importer (`tools/fakefs.c`). Built by `scripts/build-ish.sh` with no crypto library and no XML reader, and linked into the iOS app with the fork.
 
@@ -78,11 +78,6 @@ Use: The guest's `op` (41 MB), which the app runs with the person's service-acco
 Licence: MIT, © Yonas Kolb
 Where: https://github.com/yonaskolb/XcodeGen
 Use: Generates `Topo.xcodeproj` and `Womble/Womble.xcodeproj` from `project.yml`. A build tool: it runs on the Mac that builds Topo and none of it ships in a bundle.
-
-## The Claude Code CLI's OAuth client
-Licence: Anthropic's, used as its client rather than copied
-Where: https://claude.com/product/claude-code
-Use: Sign in with Claude is the OAuth client the Claude Code CLI is — its client id, its scopes, its authorize and token endpoints, and its identity line as the first system block of a turn. That is what a Claude subscription is reachable as. No code of Anthropic's is in this repository.
 
 ## Licence text: Apache License 2.0
 Licence: Apache-2.0, for FluidAudio, NemoTextProcessing and the pieces in them under it, and OpenSSL
@@ -256,53 +251,199 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Licence text: libarchive
-Licence: BSD-2-Clause and the University of California's 3-clause licence
-Text: Copyright (c) 2003-2018 <author(s)>
+Licence: BSD-2-Clause, in the six wordings below, and the University of California's 3-clause licence, each with the copyright lines of the libarchive files `scripts/build-ish.sh` compiles under it, taken from those files at the pin
+Text: Copyright (c) 2003-2007 Tim Kientzle
+Copyright (c) 2003-2008 Tim Kientzle
+Copyright (c) 2003-2008 Tim Kientzle and Miklos Vajna
+Copyright (c) 2003-2009 Tim Kientzle
+Copyright (c) 2003-2010 Tim Kientzle
+Copyright (c) 2003-2011 Tim Kientzle
+Copyright (c) 2003-2012 Tim Kientzle
+Copyright (c) 2003-2015 Tim Kientzle
+Copyright (c) 2004-2013 Tim Kientzle
+Copyright (c) 2006 Rudolf Marek SYSGO s.r.o.
+Copyright (c) 2007 Joerg Sonnenberger
+Copyright (c) 2008 Anselm Strauss
+Copyright (c) 2008 Joerg Sonnenberger
+Copyright (c) 2008-2014 Michihiro NAKAJIMA
+Copyright (c) 2009 Andreas Henriksson <andreas@fatal.se>
+Copyright (c) 2009 Joerg Sonnenberger
+Copyright (c) 2009 Michihiro NAKAJIMA
+Copyright (c) 2009-2011 Michihiro NAKAJIMA
+Copyright (c) 2009-2011 Sean Purcell
+Copyright (c) 2009-2012 Michihiro NAKAJIMA
+Copyright (c) 2009-2012,2014 Michihiro NAKAJIMA
+Copyright (c) 2010 Nokia Corporation and/or its subsidiary(-ies).
+Copyright (c) 2010-2011 Michihiro NAKAJIMA
+Copyright (c) 2010-2012 Michihiro NAKAJIMA
+Copyright (c) 2011 Andres Mejia
+Copyright (c) 2011 Michihiro NAKAJIMA
+Copyright (c) 2011 Tim Kientzle
+Copyright (c) 2011-2012 Michihiro NAKAJIMA
+Copyright (c) 2011-2012,2014 Michihiro NAKAJIMA
+Copyright (c) 2012 Michihiro NAKAJIMA
+Copyright (c) 2012 Ondrej Holy
+Copyright (c) 2013 Konrad Kleine
+Copyright (c) 2013 Marek Kubica
+Copyright (c) 2014 Michihiro NAKAJIMA
+Copyright (c) 2014 Sebastian Freundt
+Copyright (c) 2015 Okhotnikov Kirill
+Copyright (c) 2016 Martin Matuska
+Copyright (c) 2017 Martin Matuska
+Copyright (c) 2017 Sean Purcell
+Copyright (c) 2018 Grzegorz Antoniak (http://antoniak.org)
+Copyright (c) 2020 Martin Matuska
 All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
-1. Redistributions of source code must retain the above copyright
-   notice, this list of conditions and the following disclaimer
-   in this position and unchanged.
-2. Redistributions in binary form must reproduce the above copyright
-   notice, this list of conditions and the following disclaimer in the
-   documentation and/or other materials provided with the distribution.
-THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
-IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
-INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
-THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-Regents: Copyright (c) 1985, 1986, 1992, 1993
-	The Regents of the University of California.  All rights reserved.
-This code is derived from software contributed to Berkeley by
-Diomidis Spinellis and James A. Woods, derived from original
-work by Spencer Thomas and Joseph Orost.
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer. 2. Redistributions in
+binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other
+materials provided with the distribution. THIS SOFTWARE IS PROVIDED BY THE
+AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT
+NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+In this position: Copyright (c) 2003-2007 Tim Kientzle
+Copyright (c) 2003-2009 Tim Kientzle
+Copyright (c) 2003-2010 Tim Kientzle
+Copyright (c) 2007 Kai Wang
+Copyright (c) 2007 Tim Kientzle
+Copyright (c) 2010-2012 Michihiro NAKAJIMA
+Copyright (c) 2012 Michihiro NAKAJIMA
+All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
-1. Redistributions of source code must retain the above copyright
-   notice, this list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright
-   notice, this list of conditions and the following disclaimer in the
-   documentation and/or other materials provided with the distribution.
-4. Neither the name of the University nor the names of its contributors
-   may be used to endorse or promote products derived from this software
-   without specific prior written permission.
-THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer in this position and
+unchanged. 2. Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer in
+the documentation and/or other materials provided with the distribution.
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+NetBSD: Copyright (c) 1998, 2001 The NetBSD Foundation, Inc.
+Copyright (c) 2001 The NetBSD Foundation, Inc.
+All rights reserved.
+This code is derived from software contributed to The NetBSD Foundation by
+Charles M. Hannum (archive_pack_dev.c) and by Matt Thomas
+<matt@3am-software.com> (archive_rb.c).
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer. 2. Redistributions in
+binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other
+materials provided with the distribution. THIS SOFTWARE IS PROVIDED BY THE
+NETBSD FOUNDATION, INC. AND CONTRIBUTORS ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+EVENT SHALL THE FOUNDATION OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+FreeBSD: Copyright (c) 2002 Thomas Moestl <tmm@FreeBSD.org>
+All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer. 2. Redistributions in
+binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other
+materials provided with the distribution. THIS SOFTWARE IS PROVIDED BY THE
+AUTHOR AND CONTRIBUTORS ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+AUTHOR OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Unicode tables: Copyright (c) 2011-2012 libarchive Project
+All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer. 2. Redistributions in
+binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other
+materials provided with the distribution. THIS SOFTWARE IS PROVIDED BY THE
+AUTHOR(S) AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE
 FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
-OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
 LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-SUCH DAMAGE.
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+xxHash: Copyright (C) 2012-2014, Yann Collet.
+BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer. Redistributions in binary
+form must reproduce the above copyright notice, this list of conditions and
+the following disclaimer in the documentation and/or other materials
+provided with the distribution. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Regents: Copyright (c) 1985, 1986, 1992, 1993 The Regents of the University of California.
+Copyright (c) 1993 The Regents of the University of California.
+All rights reserved.
+This code is derived from software contributed to Berkeley by Diomidis
+Spinellis and James A. Woods, derived from original work by Spencer Thomas
+and Joseph Orost (the 1985 to 1993 notice, of
+archive_read_support_filter_compress.c and
+archive_write_add_filter_compress.c).
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer. 2. Redistributions in
+binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other
+materials provided with the distribution. 4. Neither the name of the
+University nor the names of its contributors may be used to endorse or
+promote products derived from this software without specific prior written
+permission. THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS
+IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
 
 ## Licence text: fastcluster
 Licence: BSD-2-Clause
@@ -314,3 +455,24 @@ Redistribution and use in source and binary forms, with or without modification,
   * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
   * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Licence text: KokoroANE-v3 NOTICE
+Licence: Apache-2.0, the NOTICE FluidAudio's `ThirdPartyLicenses/KokoroANE-v3/` asks distributors to keep, here whole, for the Kokoro generator's native source and STFT stage compiled into FluidAudio; its `mattmireles-LICENSE` is the Apache-2.0 text above
+Text: This toolkit's optional adapted generator uses the optimized Core ML graph
+from mattmireles/kokoro-coreml (Apache License 2.0). Source: https://github.com/mattmireles/kokoro-coreml Source revision:
+a3f1ff27b1d8683efa9976704b46cb1d96da1a4b Model: https://huggingface.co/mattmireles/kokoro-coreml Model revision:
+9183566f294ca3f31a63fd2767cf5848bfebfd50
+Modifications by FluidInference: verify convolution and linear parameters
+against our checkpoint export, replace differing folded style-projection
+biases and inverse-STFT kernels, add provenance metadata, and integrate with
+our existing front end, masked decoder, and deterministic native source DSP.
+For the Mandarin variant, transfer all convolution/linear parameters, Snake
+activation scales and folded reciprocals from the separate v1.1-zh
+checkpoint. See generator-provenance.json beside generated models for every
+changed constant.
+fast_pipeline.py and the native source/STFT stage also draw architectural
+inspiration from the same project. The source excitation retains this
+toolkit's deterministic CoreMLSineGenV2 semantics.
+Retain this notice and mattmireles-LICENSE when distributing adapted
+artifacts. Underlying Kokoro weights: hexgrad/Kokoro-82M and
+hexgrad/Kokoro-82M-v1.1-zh, Apache License 2.0.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key; so does one without the topo URL scheme, the turn's continued-processing identifier, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, the broadcast extension as one that takes sample buffers and has a program and a principal class, or the share extension with its program, its principal class and its rule of four things, one of each; nor one whose share extension is signed without the app group. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme, the turn's continued-processing identifier, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, the broadcast extension as one that takes sample buffers and has a program and a principal class, or the share extension with its program, its principal class and its rule of four things, one of each; nor one whose share extension is signed without the app group, nor one carrying FluidAudio's LuxTTS lexicon in any bundle. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -342,9 +342,20 @@ for case in no-watch companion only dependent short version no-mode; do
     fi
 done
 
+for place in FluidAudio_FluidAudio.bundle FluidAudio_Renamed.bundle; do
+    make_app "$work/luxtts-$place/Topo.app"
+    mkdir -p "$work/luxtts-$place/Topo.app/$place"
+    printf x > "$work/luxtts-$place/Topo.app/$place/luxtts_en_us_lexicon.tsv.zz"
+    if errors="$("$check" "$work/luxtts-$place/Topo.app" 2>&1 >/dev/null)"; then
+        fail "a product carrying the LuxTTS lexicon in $place passed"
+    elif [[ "$errors" != *"luxtts_en_us_lexicon.tsv.zz"* ]]; then
+        fail "the refusal of a product carrying the LuxTTS lexicon does not name the file: $errors"
+    fi
+done
+
 if [ "$failures" -gt 0 ]; then
     echo "$failures failure(s)" >&2
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"
