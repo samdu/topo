@@ -26,12 +26,12 @@ final class ApplicationBackgroundTime: BackgroundTime {
 }
 
 /// The resident Claude Code on this phone: the guest booted once per process, the app's
-/// `Documents/home` mounted as its home, the API proxy and the tool service on loopback with the
+/// `Library/Application Support/home` mounted as its home, the API proxy and the tool service on loopback with the
 /// `topo` command and its skill written into the home, and the one `GuestSession`,
 /// carried through the app's lifecycle by a `GuestLifecycle` — started on the foreground, ended on
 /// the way out once the grace is spent. The session id the next process resumes is kept in
-/// `Documents/.guest-session`, beside the home, and the bridge's ledger in
-/// `Documents/.guest-bridge.json` beside that. The chat's harness brings it up
+/// `.guest-session`, beside the home, a cut kept for it in `.guest-cut.json`, and the bridge's
+/// ledger in `.guest-bridge.json` beside those, all in Application Support (`GuestFiles`). The chat's harness brings it up
 /// (`ResidentConversation`), once the userland is on the phone; so does a debug launch
 /// (`DebugRun.guestTurn`).
 @MainActor
@@ -65,19 +65,20 @@ final class GuestResident {
         #endif
     }
 
-    /// The app's `Documents/home`, mounted at `ClaudeLauncher.home`.
-    nonisolated static var homeDirectory: URL {
-        URL.documentsDirectory.appendingPathComponent("home", isDirectory: true)
-    }
+    /// The app's `Library/Application Support/home`, mounted at `ClaudeLauncher.home`.
+    nonisolated static var homeDirectory: URL { home }
+    private nonisolated static let home = GuestFiles.standard.place("home", isDirectory: true)
 
-    nonisolated static var sessionFile: SessionFile {
-        SessionFile(url: URL.documentsDirectory.appendingPathComponent(".guest-session"))
-    }
+    nonisolated static var sessionFile: SessionFile { SessionFile(url: session) }
+    private nonisolated static let session = GuestFiles.standard.place(".guest-session")
+
+    /// Where a cut is kept for the next process.
+    nonisolated static var cutFile: CutFile { CutFile(url: cut) }
+    private nonisolated static let cut = GuestFiles.standard.place(".guest-cut.json")
 
     /// The bridge's ledger: what the guest has seen of the log, and the input outstanding.
-    nonisolated static var ledgerFile: URL {
-        URL.documentsDirectory.appendingPathComponent(".guest-bridge.json")
-    }
+    nonisolated static var ledgerFile: URL { ledger }
+    private nonisolated static let ledger = GuestFiles.standard.place(".guest-bridge.json")
 
     /// The session once `start` has made it, nil before.
     private(set) var session: GuestSession?
@@ -161,7 +162,7 @@ final class GuestResident {
                 await userland.bringZoneUpToDate()
                 return try await made()
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile,
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile, cuts: Self.cutFile,
                                        freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
                                        signedIn: { LoginCache.standard.isSignedIn }, log: log)
@@ -210,10 +211,6 @@ final class GuestResident {
             .merging(BuildFacts.current) { own, _ in own }
     }
 
-    /// The guest's home, made if it is not there: excluded from backup, since Claude Code keeps
-    /// its Claude.ai credential in it (`.claude/.credentials.json`), and readable from the first
-    /// unlock after a restart on, as the keychain item it replaces was. `.claude` is made with the
-    /// same protection, so the credential written into it takes the class it is made under.
     /// What every launch of the resident is given for its login: refused while the cache says
     /// signed out, so nothing launches between a sign-out and its logout; otherwise the proxy and,
     /// in a debug build launched with one, the developer's token.
@@ -222,6 +219,10 @@ final class GuestResident {
         return APIProxy.guestEnvironment(port: port).merging(developerEnvironment) { _, new in new }
     }
 
+    /// The guest's home, made if it is not there: excluded from backup, since Claude Code keeps
+    /// its Claude.ai credential in it (`.claude/.credentials.json`), and readable from the first
+    /// unlock after a restart on, as the keychain item it replaces was. `.claude` is made with the
+    /// same protection, so the credential written into it takes the class it is made under.
     /// `set` is how the protection is put on a path: the simulator keeps no protection class, so
     /// a test reads what was asked for there.
     nonisolated static func makeHome(
@@ -394,6 +395,49 @@ extension GuestResident {
                 .merging(BuildFacts.current) { own, _ in own }
             note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")
             return environment
+        }
+    }
+}
+
+/// Where the guest's files rest: Application Support, which Finder's file sharing does not show.
+/// The app sets `UIFileSharingEnabled` for the memory's folder in `Documents`, so anything kept
+/// there — the home holds Claude Code's login and its transcripts — can be copied off a phone
+/// plugged into a trusted Mac. An install of a build that keeps them in `Documents` has each moved
+/// across by `place` the first time it is asked for, by rename, before anything reads it.
+struct GuestFiles {
+    /// Where they were kept, and where they are.
+    let old: URL
+    let new: URL
+    var files: FileManager = .default
+
+    private static let log = Logger(subsystem: "zone.hexagon.topo", category: "resident")
+
+    static var standard: GuestFiles { GuestFiles(old: .documentsDirectory, new: .applicationSupportDirectory) }
+
+    /// Where `name` is for this process. One in the new place is the one: a copy left in the old
+    /// is taken away, since it is stale and may hold a login. One only in the old place is moved;
+    /// a move that fails answers the old place, with nothing removed, so a launch that cannot move
+    /// it (before the first unlock, say) reads the login where it is rather than an empty home that
+    /// would sign the phone out, and the next launch tries again.
+    func place(_ name: String, isDirectory: Bool = false) -> URL {
+        let from = old.appendingPathComponent(name, isDirectory: isDirectory)
+        let to = new.appendingPathComponent(name, isDirectory: isDirectory)
+        guard files.fileExists(atPath: from.path) else { return to }
+        if files.fileExists(atPath: to.path) {
+            do {
+                try files.removeItem(at: from)
+            } catch {
+                Self.log.error("guest files: \(name, privacy: .public) left in Documents, not removed: \(error, privacy: .public)")
+            }
+            return to
+        }
+        do {
+            try files.createDirectory(at: new, withIntermediateDirectories: true)
+            try files.moveItem(at: from, to: to)
+            return to
+        } catch {
+            Self.log.error("guest files: \(name, privacy: .public) stays in Documents until the next launch: \(error, privacy: .public)")
+            return from
         }
     }
 }

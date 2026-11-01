@@ -4,13 +4,13 @@ import TopoCore
 
 /// How the resident Claude Code is started in the guest: `claude -p` reading turns as stream-json
 /// on stdin and writing its events as stream-json on stdout, in its home — the app's
-/// `Documents/home`, bind-mounted at `home` — which is also its working directory, so every
+/// `Library/Application Support/home`, bind-mounted at `home` — which is also its working directory, so every
 /// process finds the transcripts the one before it wrote. The environment is `Guest.environment`
 /// with whatever `environment` answers at each launch on top (the proxy's base URL and the guest's
 /// token, read fresh each time), and then the launcher's own keys, which nothing supplied
 /// overrides: `HOME` at the mount and `IS_SANDBOX=1`.
 public struct ClaudeLauncher: ResidentLauncher {
-    /// Where the app mounts `Documents/home` in the guest.
+    /// Where the app mounts `Library/Application Support/home` in the guest.
     public static let home = "/home/topo"
 
     /// Where the memory's folder is mounted in the guest: beside the home rather than inside it,
