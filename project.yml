@@ -108,20 +108,17 @@ targets:
           subpath: $(CONTENTS_FOLDER_PATH)/Watch
     # FluidAudio's LuxTTS lexicon is espeak-ng's output (GPL-3.0, no App Store waiver) and nothing
     # in Topo reads it, so it leaves the product here (THIRD-PARTY, FluidAudio; docs/testflight.md).
+    # The phase changes the product's copy of the bundle in place, which the user-script sandbox
+    # cannot grant (it writes a declared output's own path, not the files in a folder), so this
+    # target runs its scripts unsandboxed (ENABLE_USER_SCRIPT_SANDBOXING below); this is its only one.
     postBuildScripts:
       - name: Strip FluidAudio's LuxTTS lexicon
         basedOnDependencyAnalysis: false
         inputFiles:
           - $(SRCROOT)/scripts/strip-luxtts.sh
-          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle
-        # The bundle is changed in place, which the build system takes only beside an output of
-        # the phase's own: the stamp.
-        outputFiles:
-          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle
-          - $(DERIVED_FILE_DIR)/strip-luxtts.stamp
         script: |
+          set -e
           "$SRCROOT/scripts/strip-luxtts.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_FluidAudio.bundle"
-          touch "$DERIVED_FILE_DIR/strip-luxtts.stamp"
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -177,6 +174,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        # The LuxTTS strip edits the product's FluidAudio bundle in place (postBuildScripts above).
+        ENABLE_USER_SCRIPT_SANDBOXING: false
         TOPO_SOURCE_COMMIT: ""
         TOPO_CHANNEL: ""
         # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
