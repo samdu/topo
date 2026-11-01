@@ -414,16 +414,16 @@ final class GuestFreezeTests: XCTestCase {
         XCTAssertEqual(launcher.processes.count, 2)
     }
 
-    /// P1: a stop still sending SIGSTOP when a sign-out ends the process is waited out before the
-    /// next process launches, so it cannot stop that one.
+    /// P1: a stop still sending SIGSTOP when the process exits is waited out before the next
+    /// process launches, so it cannot stop that one.
     func testAStopStillUnderWayIsWaitedOutBeforeTheNextLaunch() async throws {
         let (session, process) = try await resident()
         freezer.hold(.stop)
         let outcome = Task { await session.background(budget: .seconds(15)) }
         await eventually("the stop under way") { self.freezer.stops == 1 }
         await session.foreground()
-        _ = await session.forgetSession()
-        XCTAssertTrue(process.terminated)
+        process.close()
+        await eventually("the exited process ended") { process.terminated }
         let ready = Task { try await session.ready() }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(launcher.processes.count, 1, "a process launched while the old stop was still under way")
@@ -431,6 +431,25 @@ final class GuestFreezeTests: XCTestCase {
         try await ready.value
         _ = await outcome.value
         XCTAssertEqual(launcher.processes.count, 2)
+        XCTAssertEqual(freezer.continues, 0)
+    }
+
+    /// A sign-out's taking away waits for a stop still sending SIGSTOP, which would otherwise stop
+    /// what the sign-out runs in the guest next; the frozen process is ended at once.
+    func testASignOutWaitsForAStopStillUnderWay() async throws {
+        let (session, process) = try await resident()
+        freezer.hold(.stop)
+        let outcome = Task { await session.background(budget: .seconds(15)) }
+        await eventually("the stop under way") { self.freezer.stops == 1 }
+        let tookAway = Flag()
+        let forgotten = Task { await session.forgetSession { tookAway.set() } }
+        await eventually("the frozen process ended") { process.terminated }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(tookAway.isSet, "the sign-out took away while the stop was still under way")
+        freezer.release(.stop)
+        _ = await forgotten.value
+        _ = await outcome.value
+        XCTAssertTrue(tookAway.isSet)
         XCTAssertEqual(freezer.continues, 0)
     }
 
