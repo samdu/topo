@@ -429,6 +429,7 @@
 		C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
 		C17B5E21DA727774B32167C1 /* AppRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47094841EAC83FE03AD69D6 /* AppRecords.swift */; };
 		C1901D08A64A897C972B76E2 /* ConnectionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53EE28CCE270949153C3E0BE /* ConnectionsTests.swift */; };
+		C39FDCAFC59E783BE751F0C0 /* GuestFreezeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4510D4DDF14428B3573BFB10 /* GuestFreezeTests.swift */; };
 		C3B19170CE0BE99580978B92 /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
 		C421E16AC39E1034CFC654E8 /* LookStage.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFC4DEFA1DE3ED504C31746F /* LookStage.swift */; };
 		C46683AB0F3051385E66FCE9 /* SurfaceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297C1A9489C88545BA87293C /* SurfaceProvider.swift */; };
@@ -755,6 +756,7 @@
 		42501D49784FE49024ED6C10 /* MarkdownRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderTests.swift; sourceTree = "<group>"; };
 		43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacesModel.swift; sourceTree = "<group>"; };
 		4449A2BC546425D8D0480134 /* UserlandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserlandTests.swift; sourceTree = "<group>"; };
+		4510D4DDF14428B3573BFB10 /* GuestFreezeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestFreezeTests.swift; sourceTree = "<group>"; };
 		45A790C5DC880D6BBF044F6A /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		460C5C5620D24E4F80E9E415 /* GuestResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResolver.swift; sourceTree = "<group>"; };
 		46425616D224D5EDABBDE93E /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
@@ -1219,6 +1221,7 @@
 				5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */,
 				DE4006DA9780D0A37EBCACB7 /* GuestDNSTests.swift */,
 				5078886E3789563E2D54815C /* GuestFileReadTests.swift */,
+				4510D4DDF14428B3573BFB10 /* GuestFreezeTests.swift */,
 				BD6A5FA002CAE78588A94E39 /* GuestLifecycleTests.swift */,
 				9E76FB1A1AE01CF01D39D057 /* GuestMountTests.swift */,
 				7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */,
@@ -2411,6 +2414,7 @@
 				AE9F04E40A3D14A888B3CD36 /* GuestConcurrencyTests.swift in Sources */,
 				0FEE95E130EFDE926BB8CB0F /* GuestDNSTests.swift in Sources */,
 				2C9569286A2B3882A6FDCCE9 /* GuestFileReadTests.swift in Sources */,
+				C39FDCAFC59E783BE751F0C0 /* GuestFreezeTests.swift in Sources */,
 				8010C73B33C821825010A793 /* GuestLifecycleTests.swift in Sources */,
 				8969FA455CA20EEC9FDE4171 /* GuestMountTests.swift in Sources */,
 				563AB75B91F1FE43E9036ABE /* GuestPidfdTests.swift in Sources */,

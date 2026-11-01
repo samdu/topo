@@ -161,8 +161,10 @@ final class GuestResident {
                 await userland.bringZoneUpToDate()
                 return try await made()
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
-                                       memory: self.memoryAtStart(log: log), compactAt: Self.compactAt, log: log)
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile,
+                                       freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
+                                       memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
+                                       signedIn: { LoginCache.standard.isSignedIn }, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
@@ -286,15 +288,92 @@ final class GuestResident {
 final class LaunchPorts {
     let proxy: APIProxy
     let tools: ToolService
+    private let zone: @Sendable () -> String
 
-    init(proxy: APIProxy, tools: ToolService) {
+    init(proxy: APIProxy, tools: ToolService,
+         zone: @escaping @Sendable () -> String = { NSTimeZone.resetSystemTimeZone(); return TimeZone.current.identifier }) {
         self.proxy = proxy
         self.tools = tools
+        self.zone = zone
     }
+
+    /// The ports the last launch was told, which a frozen resident still holds in its environment.
+    private(set) var told: (proxy: UInt16, tools: UInt16)?
+    /// The phone's zone when the last launch was told its ports, after the guest's was brought up
+    /// to date: the zone its runtime read once and keeps for its life.
+    private(set) var toldZone: String?
 
     /// The ports to tell the next launch: each service's, on a listener started for it.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
-        (try await proxy.relisten(), try await tools.relisten())
+        let now = (try await proxy.relisten(), try await tools.relisten())
+        told = now
+        toldZone = zone()
+        return now
+    }
+
+    /// Whether the phone is still in the zone the last launch started in; false when no launch was
+    /// told one. A frozen resident from another zone is started afresh rather than continued.
+    func sameZone() -> Bool {
+        guard let toldZone else { return false }
+        return zone() == toldZone
+    }
+
+    /// Both services listening again on the very ports the last launch was told, for a frozen
+    /// resident on its way back; false when either cannot be taken back (another process bound it
+    /// while the app was away) or no launch was told any.
+    func reclaim() async -> Bool {
+        guard let told else { return false }
+        do {
+            _ = try await proxy.relisten(on: told.proxy)
+            _ = try await tools.relisten(on: told.tools)
+            return true
+        } catch {
+            GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+}
+
+/// The app's freezer: every guest task stopped on the way out, and on the way back the proxy and
+/// the tool service taken back on the ports the resident was told and the DNS forwarder up before
+/// any task is continued, so nothing in the guest runs toward a listener the app does not hold.
+@MainActor
+final class GuestFreeze: GuestFreezer {
+    /// How long the stop may take to be confirmed: well inside the grace.
+    static let stopBound: Duration = .seconds(1)
+
+    let ports: LaunchPorts
+    let userland: Userland
+
+    init(ports: LaunchPorts, userland: Userland) {
+        self.ports = ports
+        self.userland = userland
+    }
+
+    nonisolated func stop() async -> Bool {
+        await GuestProcess.stopAll(within: Self.stopBound)
+    }
+
+    nonisolated func prepare() async -> Bool {
+        guard await ports.sameZone() else {
+            GuestResident.listenerLog.notice("guest: the phone changed time zone since the frozen resident started; starting a fresh process")
+            return false
+        }
+        guard await ports.reclaim() else { return false }
+        await userland.reviveForwarder()
+        return true
+    }
+
+    nonisolated func continueNow() -> Bool {
+        GuestProcess.continueNow()
+    }
+
+    nonisolated func confirm() async -> Bool {
+        guard await GuestProcess.confirmContinued() else {
+            GuestResident.listenerLog.notice("guest: a task of the frozen resident stayed stopped after the continue; starting a fresh process")
+            return false
+        }
+        return true
     }
 }
 

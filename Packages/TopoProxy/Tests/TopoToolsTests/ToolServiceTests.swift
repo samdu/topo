@@ -275,6 +275,31 @@ import TopoProxy
         #expect(tool.calls == [["x"]], "the call reached a listener other than the service's")
     }
 
+    /// `relisten(on:)` takes the same port back, with the same token, and refuses one another
+    /// listener holds.
+    @Test func relistenOnTakesTheSamePortBackAndNeverAnotherListeners() async throws {
+        let tool = ScriptedTool()
+        let (service, first, _) = try await startedService([tool])
+        defer { Task { await service.stop() } }
+        let token = await service.token
+        await service.set(hearsLoss: false)
+        await service.listener?.cancel()
+        #expect(try await service.relisten(on: first) == first)
+        #expect(await service.token == token)
+        let (head, body) = call(port: first, token: token, ["echo", "x"])
+        #expect(try await exchange(port: first, head, body: body).status == 200)
+        #expect(tool.calls == [["x"]])
+
+        await service.listener?.cancel()
+        for _ in 0..<500 where await LoopbackProbe.answers(port: first, within: .milliseconds(200)) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let squatter = try await squat(first)
+        defer { squatter.cancel() }
+        await #expect(throws: (any Error).self) { _ = try await service.relisten(on: first) }
+        #expect(await service.port == nil)
+    }
+
     /// A port that cannot be bound fails the start rather than leaving it waiting.
     @Test func aPortThatCannotBeBoundFailsTheStart() async throws {
         let (holder, taken, _) = try await startedService([])

@@ -1,4 +1,5 @@
 import XCTest
+import TopoIsh
 @testable import TopoUserland
 
 /// A guest process the app talks to: stdin a pipe, stdout by line as it arrives, and a deliberate
@@ -150,6 +151,73 @@ final class GuestProcessTests: XCTestCase {
         let left = Self.guestTasks().subtracting(before)
         XCTAssertEqual(left, [], "\(left.map(GuestProcess.describe)); \(termination)")
         XCTAssertTrue(termination.confirmed, "\(termination)")
+    }
+
+    /// A frozen guest: every task stopped and confirmed so, nothing it runs moving until it is
+    /// continued, and a stopped tree still ended by a terminate, which is the way out of a freeze.
+    func testAStoppedGuestStaysStillUntilContinuedAndAStoppedTreeStillEnds() async throws {
+        _ = try SharedGuest.booted()
+        let ticker = try await Guest.shared.spawn("/bin/sh", ["-c", """
+            echo started
+            i=0; while :; do i=$((i+1)); echo $i > /tmp/topo-freeze-tick; sleep 0.05; done
+            """])
+        var lines = ticker.lines.makeAsyncIterator()
+        _ = await lines.next()
+        // Read by a fresh process, which a stopped guest still runs; bounded, so a reader that
+        // parks fails the test rather than holding the suite.
+        let tick = { () async throws -> Int in
+            let cat = try await Guest.shared.spawn("/bin/cat", ["/tmp/topo-freeze-tick"])
+            let read = Task { () -> String? in
+                var out = cat.lines.makeAsyncIterator()
+                let line = await out.next()
+                while await out.next() != nil {}
+                return line
+            }
+            let bound = Task { try await Task.sleep(for: .seconds(5)); read.cancel(); _ = await cat.terminate(within: .seconds(2)) }
+            let line = await read.value
+            bound.cancel()
+            await eventually("the reader exited") { cat.hasExited }
+            XCTAssertEqual(cat.exitStatus, 0, "the reader did not finish")
+            return Int(line ?? "") ?? -1
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        let stopped = await GuestProcess.stopAll(within: .seconds(2))
+        XCTAssertTrue(stopped, "the stop was not confirmed")
+        let atStop = try await tick()
+        try await Task.sleep(for: .milliseconds(400))
+        let later = try await tick()
+        XCTAssertEqual(later, atStop, "the ticker moved while stopped")
+        XCTAssertFalse(ticker.hasExited)
+
+        // Two rounds, each stop given several passes, so a stop sent to a task already parked is
+        // pending at the continue: it is discarded, and the ticker keeps moving a second on.
+        var last = atStop
+        for round in 1...2 {
+            if round == 2 {
+                let stoppedAgain = await GuestProcess.stopAll(within: .seconds(2))
+                XCTAssertTrue(stoppedAgain)
+                last = try await tick()
+            }
+            _ = GuestProcess.signalAll(TOPO_ISH_SIGSTOP)
+            _ = GuestProcess.signalAll(TOPO_ISH_SIGSTOP)
+            let continued = await GuestProcess.continueAll()
+            XCTAssertTrue(continued, "round \(round): a task stayed parked")
+            try await Task.sleep(for: .milliseconds(300))
+            let soon = try await tick()
+            try await Task.sleep(for: .seconds(1))
+            let later = try await tick()
+            XCTAssertGreaterThan(soon, last, "round \(round): the ticker did not move after the continue")
+            XCTAssertGreaterThan(later, soon, "round \(round): the ticker stopped again after the continue")
+            last = later
+        }
+
+        let again = await GuestProcess.stopAll(within: .seconds(2))
+        XCTAssertTrue(again)
+        let termination = await ticker.terminate(within: .seconds(5))
+        XCTAssertTrue(termination.confirmed, "a stopped tree did not end: \(termination)")
+        let left = await GuestProcess.guestTasks()
+        XCTAssertEqual(left, [], "\(left.map(GuestProcess.describe))")
     }
 
     /// Every guest task but init that is not a zombie, read pid by pid.

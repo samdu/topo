@@ -30,6 +30,27 @@ public protocol ResidentLauncher: Sendable {
     func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess
 }
 
+/// How an idle resident is kept across a background rather than ended: every guest task stopped
+/// on the way out, and on the way back the listeners it was launched toward taken back on the very
+/// ports it was told, then every task continued. The app's (`GuestResident`); a test's double.
+public protocol GuestFreezer: Sendable {
+    /// Stops the guest; true once every task is parked at the stop. A false is a guest that may
+    /// still run one more step on the way back, which is never continued: the session ends it.
+    func stop() async -> Bool
+    /// Takes back the ports the resident was launched toward and brings the forwarder up, sending
+    /// nothing to the guest; false when a port could not be taken back or the phone has changed
+    /// time zone since the launch.
+    func prepare() async -> Bool
+    /// Sends the continue to every guest task, and does not wait for it to land. The session calls
+    /// it on its own actor inside the gate that judges the process still wanted, so a sign-out or a
+    /// login never begins between that judgement and the continue: it takes the kernel's task and
+    /// signal locks, which no guest path holds across a wait, and nothing more. False when it could
+    /// not be sent.
+    func continueNow() -> Bool
+    /// True once no guest task is parked at the stop; false at its bound with one still parked.
+    func confirm() async -> Bool
+}
+
 /// The one session id kept on disk: the id of the conversation the next process resumes. A file of
 /// its own beside the guest's home, so it survives the app being ended in the background.
 public struct SessionFile: Sendable {
@@ -159,6 +180,8 @@ public actor GuestSession {
         /// The process was ended. `turn` is what became of a turn in flight when the app left:
         /// finished in the background, or abandoned at the teardown point; nil when none was.
         case ended(turn: TurnFate?, termination: GuestProcess.Termination)
+        /// The idle process was frozen rather than ended, to be continued on the way back.
+        case frozen
         /// iOS's background time ran out before the teardown answered; the background task was
         /// ended with it still running (`GuestLifecycle`, never the session).
         case outOfTime
@@ -187,12 +210,16 @@ public actor GuestSession {
         public let turn: Bool
         /// How many background tasks Claude Code said it had running.
         public let backgroundTasks: Int
+        /// Whether the process was frozen at `ended` rather than ended: a cut kept then is read
+        /// only when iOS ended the app while it was away, since the way back clears it.
+        public let frozen: Bool?
 
-        public init(left: Date, ended: Date, turn: Bool, backgroundTasks: Int) {
+        public init(left: Date, ended: Date, turn: Bool, backgroundTasks: Int, frozen: Bool? = nil) {
             self.left = left
             self.ended = ended
             self.turn = turn
             self.backgroundTasks = backgroundTasks
+            self.frozen = frozen
         }
 
         /// What the next process is told: when, how long after the app left, and what went.
@@ -210,6 +237,13 @@ public actor GuestSession {
             // and the person stopping it from the pill both are, and nothing here tells them apart;
             // with none in flight the process was ended as every one is once its reply is done and
             // Topo is off the screen.
+            if frozen == true {
+                let tasks = backgroundTasks == 1 ? "a background task you had started" : "\(backgroundTasks) background tasks you had started"
+                return "Your last process was cut short. Topo went behind another app at \(at) UTC, \(after) seconds later "
+                    + "your process was frozen with \(tasks) still running, and iOS ended the app while it was away. "
+                    + "Whatever those were doing did not finish; check before relying on anything they were to write, "
+                    + "and tell the person what did not get done."
+            }
             let why = turn ? "the time Topo had behind another app ended (iOS's allowance ran out, or the person stopped it) and the process was ended"
                            : "the process was ended, as every one is once its reply is done and Topo is not on the screen"
             return "Your last process was cut short. Topo went behind another app at \(at) UTC, and \(after) seconds "
@@ -224,6 +258,8 @@ public actor GuestSession {
         case idle
         case starting
         case resident
+        /// Kept across a background, stopped: no turn goes to it until it is continued.
+        case frozen
         case stopping
     }
 
@@ -232,6 +268,19 @@ public actor GuestSession {
     public static let defaultTurnBound: Duration = .seconds(180)
 
     private let launcher: any ResidentLauncher
+    /// Keeps an idle process across a background; nil ends it there instead.
+    private let freezer: (any GuestFreezer)?
+    /// The stop under way, which a continue waits out.
+    private var freezing: Task<Bool, Never>?
+    /// The continue under way, which a way out waits out.
+    private var thawing: Task<Void, Never>?
+    /// The cut kept as the process was frozen, cleared if it is continued.
+    private var frozenCut: Cut?
+    /// The frozen process whose continue has been sent and is not yet confirmed: it runs, so a way
+    /// out, a sign-out or a login waits for the thaw and ends it as the running process it is.
+    private var continuedThaw: Resident?
+    /// Whether Claude Code's login is still there: a frozen process is continued only while it is.
+    private let signedIn: @Sendable () -> Bool
     private let store: SessionFile
     private let cuts: CutFile
     /// The session's clock, which the lifecycle reads for the moment the app left.
@@ -283,6 +332,7 @@ public actor GuestSession {
         case idle
         case starting
         case resident(Resident)
+        case frozen(Resident)
         case stopping
     }
 
@@ -352,12 +402,16 @@ public actor GuestSession {
     }
 
     /// `cuts` is where a cut is kept for the next process, beside `store` unless given.
-    public init(launcher: any ResidentLauncher, store: SessionFile, cuts: CutFile? = nil, model: String? = nil, memory: Bool? = nil,
+    public init(launcher: any ResidentLauncher, store: SessionFile, cuts: CutFile? = nil, freezer: (any GuestFreezer)? = nil,
+                model: String? = nil, memory: Bool? = nil,
                 compactAt: Int? = nil, now: @escaping @Sendable () -> Date = Date.init,
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
+                signedIn: @escaping @Sendable () -> Bool = { true },
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.launcher = launcher
+        self.freezer = freezer
+        self.signedIn = signedIn
         self.store = store
         self.cuts = cuts ?? CutFile(url: store.url.deletingLastPathComponent().appendingPathComponent(".guest-cut.json"))
         self.now = now
@@ -376,6 +430,7 @@ public actor GuestSession {
         case .idle: .idle
         case .starting: .starting
         case .resident: .resident
+        case .frozen: .frozen
         case .stopping: .stopping
         }
     }
@@ -459,6 +514,8 @@ public actor GuestSession {
         holds += 1
         log("the conversation is forgotten; nothing starts until the sign-out has taken away what it held")
         let termination = await endForgotten()
+        // A stop still sending SIGSTOP would stop whatever the sign-out runs in the guest next.
+        if let freezing { _ = await freezing.value }
         await takeAway()
         holds -= 1
         if !readiness.isEmpty { startResident() }
@@ -475,6 +532,8 @@ public actor GuestSession {
         holds += 1
         log("the resident is ended; nothing starts until Claude Code's login has finished")
         await endResident()
+        // A stop still sending SIGSTOP would stop the login's own `claude`, which nothing continues.
+        if let freezing { _ = await freezing.value }
         let value = await body()
         holds -= 1
         if !readiness.isEmpty { startResident() }
@@ -484,10 +543,21 @@ public actor GuestSession {
     /// Ends whatever process there is, with no replacement, and waits for it.
     private func endResident() async {
         if let startTask { await startTask.value }
+        // A frozen process is ended stopped unless its continue was sent before this began; the
+        // gate then reads the phase and sends none.
+        if case .frozen(let resident) = phase, continuedThaw !== resident {
+            unfreezeCut()
+            _ = await end(resident, reason: "Claude Code's login, frozen", restart: false).value
+            return
+        }
+        if let thawing { await thawing.value }
         switch phase {
         case .resident(let resident):
             if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
             _ = await end(resident, reason: "Claude Code's login", restart: false).value
+        case .frozen(let resident):
+            unfreezeCut()
+            _ = await end(resident, reason: "Claude Code's login, frozen", restart: false).value
         case .stopping:
             _ = await teardown?.value
         case .idle, .starting:
@@ -501,13 +571,24 @@ public actor GuestSession {
             // It lands stale (`launched`), and is ended there.
             await startTask.value
         }
+        // A frozen process of the login that went is ended stopped, unless its continue was sent
+        // before the sign-out began: the end makes the phase stopping at once, and the gate that
+        // sends a continue reads the phase on this actor, so none is sent after.
+        if case .frozen(let resident) = phase, resident.conversation != conversation, continuedThaw !== resident {
+            return await end(resident, reason: "a forgotten conversation, frozen", restart: false).value
+        }
+        if let thawing { await thawing.value }
         switch phase {
         case .resident(let resident) where resident.conversation != conversation:
             if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
             return await end(resident, reason: "a forgotten conversation", restart: false).value
+        case .frozen(let resident) where resident.conversation != conversation:
+            // A stopped process holds the login that went as a running one does; SIGKILL ends it
+            // stopped, so it is never continued first.
+            return await end(resident, reason: "a forgotten conversation, frozen", restart: false).value
         case .stopping:
             return await teardown?.value
-        case .idle, .starting, .resident:
+        case .idle, .starting, .resident, .frozen:
             return nil
         }
     }
@@ -522,7 +603,11 @@ public actor GuestSession {
         inForeground = true
         expired = false
         wakeBackground(.foreground)
-        if case .idle = phase { startResident() }
+        switch phase {
+        case .idle: startResident()
+        case .frozen(let resident): thaw(resident)
+        default: break
+        }
     }
 
     /// The app went to the background with `budget` of grace to spend: a turn in flight is given
@@ -542,8 +627,10 @@ public actor GuestSession {
         // A start still pending ends what it made as it lands; a teardown already under way (a
         // restart, a process that died) is waited out, so nothing is resident when this answers.
         if let startTask { await startTask.value }
+        if let thawing { await thawing.value }
         if let teardown { _ = await teardown.value }
         guard generation == mine, !inForeground else { return .kept }
+        if case .frozen = phase { return .frozen }
         guard case .resident(let resident) = phase else { return .nothingResident }
         var fate: TurnFate?
         if resident.turn != nil {
@@ -561,8 +648,11 @@ public actor GuestSession {
             fate = .abandoned
             finish(turn, of: still, with: .abandoned)
         }
-        // The note is kept before the teardown, which is where iOS is likeliest to suspend the app.
         let running = still.backgroundTasks
+        if fate == nil || fate == .finished, let freezer {
+            return await freeze(still, with: freezer, left: left, running: running, turn: fate, generation: mine)
+        }
+        // The note is kept before the teardown, which is where iOS is likeliest to suspend the app.
         if fate == .abandoned || running > 0 {
             let cut = Cut(left: left, ended: now(), turn: fate == .abandoned, backgroundTasks: running)
             // A process of a forgotten conversation leaves nothing for the next login's.
@@ -607,7 +697,7 @@ public actor GuestSession {
         case .idle:
             guard inForeground else { throw Refusal.notResident }
             startResident()
-        case .starting, .stopping:
+        case .starting, .stopping, .frozen:
             guard inForeground else { throw Refusal.notResident }
         }
         try await withCheckedThrowingContinuation { readiness.append($0) }
@@ -671,7 +761,8 @@ public actor GuestSession {
                 renewIfStale()
             case .idle:
                 throw Refusal.notResident
-            case .starting, .stopping:
+            case .starting, .stopping, .frozen:
+                // A frozen process takes nothing until it is continued, which only the foreground does.
                 guard inForeground else { throw Refusal.notResident }
             }
             try await withCheckedThrowingContinuation { readiness.append($0) }
@@ -699,7 +790,16 @@ public actor GuestSession {
         Perf.mark(resume == nil ? "resident.launch.begin fresh" : "resident.launch.begin resume")
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
         let launcher = launcher, model = model, memory = memory, compactAt = compactAt, conversation = conversation
+        // A stop still sending SIGSTOP to every guest task would stop this process too: it is
+        // waited out first. It is the only one, since a way out waits for the thaw, which waits
+        // for the stop, before it freezes again; and it is bounded (`GuestFreezer.stop`).
+        let stopping = freezing
+        // So is a thaw of a process ended meanwhile, which may be taking back the ports this
+        // launch is about to be told.
+        let obsolete = thawing
         startTask = Task {
+            if let stopping { _ = await stopping.value }
+            if let obsolete { await obsolete.value }
             let result: Result<any ResidentProcess, Error>
             do {
                 result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt,
@@ -783,7 +883,8 @@ public actor GuestSession {
 
     private func received(_ line: String, from resident: Resident) {
         // A process that is no longer the resident one — ended, or being ended — speaks to nobody.
-        guard case .resident(let current) = phase, current === resident else { return }
+        // One frozen is still the resident: what it wrote before it stopped is read.
+        guard owns(resident) else { return }
         let events = StreamJSON.events(in: line)
         // The app's own control answers are no turn's line: they neither take its first-line mark
         // nor count as the process speaking while a turn waits.
@@ -874,9 +975,19 @@ public actor GuestSession {
         if store.load() != session { store.save(session) }
     }
 
+    /// Whether `resident` is the session's process, running or frozen.
+    private func owns(_ resident: Resident) -> Bool {
+        switch phase {
+        case .resident(let current), .frozen(let current): current === resident
+        default: false
+        }
+    }
+
     /// The process let go of stdout: it has exited, or is about to.
     private func closed(_ resident: Resident) async {
-        guard case .resident(let current) = phase, current === resident else { return }
+        guard owns(resident) else { return }
+        // A process that exits while frozen was not ended by iOS with the app: its cut says so.
+        if case .frozen = phase { unfreezeCut() }
         let errors = resident.process.errors
         let midTurn = resident.turn != nil
         if let turn = resident.turn {
@@ -897,6 +1008,109 @@ public actor GuestSession {
         // process to go to; one that died idle is not started again unless something is waiting
         // for it, so a process that dies at every start does not loop — the next `ready` starts it.
         _ = end(resident, reason: midTurn ? "an exit mid-turn" : "an exit", restart: midTurn)
+    }
+
+    /// Freezes the idle `resident` for the way out: the cut kept first when it has tasks running in
+    /// the background, since iOS may end the app while it is away and nothing else tells the next
+    /// process; then every guest task stopped. A stop not confirmed ends it, as the way out did
+    /// before, because a task that has not parked may take one more step on the way back.
+    private func freeze(_ resident: Resident, with freezer: any GuestFreezer, left: Date, running: Int,
+                        turn fate: TurnFate?, generation mine: Int) async -> BackgroundOutcome {
+        if running > 0, resident.conversation == conversation {
+            let cut = Cut(left: left, ended: now(), turn: false, backgroundTasks: running, frozen: true)
+            cuts.save(cut)
+            frozenCut = cut
+        }
+        phase = .frozen(resident)
+        Perf.mark("resident.freeze.begin")
+        let stopping = Task { await freezer.stop() }
+        freezing = stopping
+        let stopped = await stopping.value
+        if freezing == stopping { freezing = nil }
+        // Back in front meanwhile: the way back continues it, stopped or not.
+        guard generation == mine, !inForeground else { return .kept }
+        guard case .frozen(let still) = phase, still === resident else {
+            unfreezeCut()
+            return .nothingResident
+        }
+        guard stopped else {
+            log("the guest did not stop; ending the process rather than freezing it")
+            unfreezeCut()
+            return .ended(turn: fate, termination: await end(resident, reason: "a freeze that did not stop", restart: true).value)
+        }
+        Perf.mark("resident.frozen")
+        log("frozen: the idle process is kept, stopped, for the way back")
+        return .frozen
+    }
+
+    /// Continues a frozen `resident` on the way back, once its stop has landed and was confirmed:
+    /// its ports taken back, then the gate (`continueIfStill`) on this actor, then the continue
+    /// confirmed. Any refusal ends the process and starts a fresh one, the cold start a jetsam
+    /// would have left.
+    private func thaw(_ resident: Resident) {
+        guard thawing == nil, let freezer else { return }
+        let stopping = freezing
+        Perf.mark("resident.thaw.begin")
+        thawing = Task {
+            // A stop not confirmed may have a task still taking a step: it is never continued.
+            if let stopping, await stopping.value == false {
+                return await self.thawed(resident, resumed: false, why: "its stop was not confirmed")
+            }
+            // A process ended while its stop landed takes nothing back: the next launch is
+            // binding the listeners afresh.
+            guard await self.owns(resident) else { return await self.thawed(resident, resumed: false, why: "it was ended meanwhile") }
+            guard await freezer.prepare() else {
+                return await self.thawed(resident, resumed: false, why: "it could not be prepared: a port it was told, or the zone it started in")
+            }
+            if let refused = await self.continueIfStill(resident, with: freezer) {
+                return await self.thawed(resident, resumed: false, why: refused)
+            }
+            let confirmed = await freezer.confirm()
+            await self.thawed(resident, resumed: confirmed, why: "a task stayed stopped after the continue")
+        }
+    }
+
+    /// The gate a continue passes, and the continue itself, in one step on this actor: the process
+    /// is still the session's frozen one, its conversation is not forgotten (no sign-out since the
+    /// freeze), no sign-out or login is under way, and Claude Code is still signed in. Nil once
+    /// the continue is sent; otherwise why not, with nothing sent.
+    private func continueIfStill(_ resident: Resident, with freezer: any GuestFreezer) -> String? {
+        guard case .frozen(let current) = phase, current === resident else { return "it was ended meanwhile" }
+        guard resident.conversation == conversation else { return "its conversation was forgotten" }
+        guard holds == 0 else { return "a sign-out or a login is under way" }
+        guard signedIn() else { return "Claude Code is signed out" }
+        guard freezer.continueNow() else { return "the continue could not be sent" }
+        continuedThaw = resident
+        return nil
+    }
+
+    private func thawed(_ resident: Resident, resumed: Bool, why: String) {
+        thawing = nil
+        if continuedThaw === resident { continuedThaw = nil }
+        guard case .frozen(let current) = phase, current === resident else { return }
+        guard resumed else {
+            Perf.mark("resident.thaw.cold")
+            log("the frozen process could not be continued (\(why)); starting a fresh process")
+            unfreezeCut()
+            _ = end(resident, reason: "a thaw that could not continue it", restart: true)
+            return
+        }
+        phase = .resident(resident)
+        Perf.mark("resident.thaw.continued")
+        if let cut = frozenCut, cuts.load() == cut { cuts.clear() }
+        frozenCut = nil
+        log("continued: the frozen process is resident again")
+        settleReadiness(.success(()))
+        renewIfStale()
+    }
+
+    /// A frozen process is being ended after all: the cut kept for it says so rather than that iOS
+    /// ended the app.
+    private func unfreezeCut() {
+        if let cut = frozenCut, cuts.load() == cut {
+            cuts.save(Cut(left: cut.left, ended: now(), turn: false, backgroundTasks: cut.backgroundTasks))
+        }
+        frozenCut = nil
     }
 
     /// Ends `resident` and starts a replacement if the app is in the foreground.
@@ -1003,6 +1217,7 @@ extension GuestSession.BackgroundOutcome: CustomStringConvertible {
         switch self {
         case .nothingResident: return "nothing resident"
         case .kept: return "kept: the app came back before the teardown"
+        case .frozen: return "frozen: the idle process is kept, stopped, for the way back"
         case .ended(let turn, let termination):
             let fate = switch turn {
             case .finished: "the turn in flight finished in the background"
