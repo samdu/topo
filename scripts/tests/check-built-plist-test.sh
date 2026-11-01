@@ -21,7 +21,6 @@ make_watch() {
     local watch="$1"
     mkdir -p "$watch/PlugIns/TopoWatchWidgets.appex"
     plutil -create xml1 "$watch/Info.plist"
-    plutil -insert WKBackgroundModes -json '["remote-notification"]' "$watch/Info.plist"
     plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo.watch","CFBundleURLSchemes":["topo"]}]' "$watch/Info.plist"
     plutil -create xml1 "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
     plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.widgetkit-extension"}' \
@@ -304,13 +303,16 @@ make_watch "$work/watch-not-widgets/TopoWatch.app"
 plutil -replace NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.intents-service"}' \
     "$work/watch-not-widgets/TopoWatch.app/PlugIns/TopoWatchWidgets.appex/Info.plist"
 "$check" --watch "$work/watch-not-widgets/TopoWatch.app" >/dev/null 2>&1 && fail "a watch product whose extension is not WidgetKit's passed"
-make_watch "$work/watch-no-mode/TopoWatch.app"
-plutil -remove WKBackgroundModes "$work/watch-no-mode/TopoWatch.app/Info.plist"
-if errors="$("$check" --watch "$work/watch-no-mode/TopoWatch.app" 2>&1 >/dev/null)"; then
-    fail "a watch product without the remote-notification background mode passed"
+make_watch "$work/watch-mode/TopoWatch.app"
+plutil -insert WKBackgroundModes -json '["remote-notification"]' "$work/watch-mode/TopoWatch.app/Info.plist"
+if errors="$("$check" --watch "$work/watch-mode/TopoWatch.app" 2>&1 >/dev/null)"; then
+    fail "a watch product declaring the remote-notification background mode passed"
 elif [[ "$errors" != *remote-notification* ]]; then
-    fail "the refusal of a watch product without its background mode does not name it: $errors"
+    fail "the refusal of a watch product declaring remote-notification does not name it: $errors"
 fi
+make_watch "$work/watch-workout/TopoWatch.app"
+plutil -insert WKBackgroundModes -json '["workout-processing"]' "$work/watch-workout/TopoWatch.app/Info.plist"
+"$check" --watch "$work/watch-workout/TopoWatch.app" >/dev/null 2>&1 || fail "a watch product declaring a mode watchOS takes failed"
 
 make_watch "$work/watch-no-scheme/TopoWatch.app"
 plutil -remove CFBundleURLTypes "$work/watch-no-scheme/TopoWatch.app/Info.plist"
@@ -323,7 +325,7 @@ fi
 # The companion: absent, naming another phone app, watch-only, waiting on the phone, at another
 # version than the phone app's, or failing what `--watch` reads.
 wplist="Watch/TopoWatch.app/Info.plist"
-for case in no-watch companion only dependent short version no-mode; do
+for case in no-watch companion only dependent short version mode; do
     make_app "$work/companion-$case/Topo.app"
     w="$work/companion-$case/Topo.app/$wplist"
     case "$case" in
@@ -333,7 +335,7 @@ for case in no-watch companion only dependent short version no-mode; do
         dependent) plutil -remove WKRunsIndependentlyOfCompanionApp "$w"; want=WKRunsIndependentlyOfCompanionApp ;;
         short)     plutil -replace CFBundleShortVersionString -string 0.2 "$w"; want=CFBundleShortVersionString ;;
         version)   plutil -replace CFBundleVersion -string 8 "$w"; want=CFBundleVersion ;;
-        no-mode)   plutil -remove WKBackgroundModes "$w"; want=remote-notification ;;
+        mode)      plutil -insert WKBackgroundModes -json '["remote-notification"]' "$w"; want=remote-notification ;;
     esac
     if errors="$("$check" "$work/companion-$case/Topo.app" 2>&1 >/dev/null)"; then
         fail "a product whose watch companion is wrong ($case) passed"
@@ -358,4 +360,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension or the topo URL scheme, or declaring the remote-notification background mode, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"

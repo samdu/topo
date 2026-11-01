@@ -50,9 +50,10 @@
 # is read as `--watch` reads one.
 #
 # With `--watch`, it reads the watch app instead: `PlugIns/TopoWatchWidgets.appex` embedded, a
-# WidgetKit extension, since the complications are nothing without it; and `WKBackgroundModes`
-# declaring `remote-notification`, which no setting generates, for the `Surface` push that wakes
-# the watch to fetch the slots; and the topo URL scheme, which a whole watch widget's tap opens.
+# WidgetKit extension, since the complications are nothing without it; that `WKBackgroundModes`
+# does not name `remote-notification`, which is iOS's value and not one watchOS takes (the
+# `Surface` push wakes the watch with no mode declared, and App Store Connect refuses an archive
+# whose watch declares it, 90362); and the topo URL scheme, which a whole watch widget's tap opens.
 #
 #   scripts/check-built-plist.sh <path to Topo.app> [expected CFBundleVersion]
 #   scripts/check-built-plist.sh --watch <path to TopoWatch.app>
@@ -69,9 +70,8 @@ if [ "${1:-}" = --watch ]; then
     fi
     modes="$(plutil -extract WKBackgroundModes json -o - -- "$watch/Info.plist" 2>/dev/null || true)"
     case "$modes" in
-        *'"remote-notification"'*) ;;
-        *)
-            echo "$watch/Info.plist does not declare the 'remote-notification' background mode (WKBackgroundModes: ${modes:-absent})" >&2
+        *'"remote-notification"'*)
+            echo "$watch/Info.plist declares the 'remote-notification' background mode (WKBackgroundModes: $modes), which watchOS does not take; App Store Connect refuses the archive (90362)" >&2
             status=1
             ;;
     esac
@@ -83,7 +83,7 @@ if [ "${1:-}" = --watch ]; then
             status=1
             ;;
     esac
-    [ "$status" -eq 0 ] && echo "$watch embeds TopoWatchWidgets.appex, declares WKBackgroundModes $modes and the topo URL scheme"
+    [ "$status" -eq 0 ] && echo "$watch embeds TopoWatchWidgets.appex, declares no remote-notification background mode${modes:+ (WKBackgroundModes $modes)} and the topo URL scheme"
     exit "$status"
 fi
 
