@@ -3,14 +3,14 @@ import Observation
 import SwiftUI
 
 /// This device's own hand on the look: where Topo sits — the placement, and the pin a drag on him
-/// writes — in a debug build a few of Topo's and the transcript's lengths played with from the
-/// settings sheet's Tuning section, and any field of the look the mind in the guest set through
-/// `topo look set` (`LookTool`). It is kept in this device's defaults and worn over the look the
-/// vault gives, so a pin survives a relaunch and a `look.json` from the vault does not undo it. It
-/// is a `look.json` of the same shape, decoded onto that look by `LookDocument` like any other, so
-/// every value it carries is read in the range its field is read in and one out of range falls back
-/// for that field alone; a field the mind sets is judged by that same reader before it is kept at
-/// all. Reset removes it.
+/// writes — the rate his frames come at while he does anything, in a debug build a few of Topo's
+/// and the transcript's lengths played with from the settings sheet's Tuning section, and any
+/// field of the look the mind in the guest set through `topo look set` (`LookTool`). It is kept in
+/// this device's defaults and worn over the look the vault gives, so a pin survives a relaunch and
+/// a `look.json` from the vault does not undo it. It is a `look.json` of the same shape, decoded
+/// onto that look by `LookDocument` like any other, so every value it carries is read in the range
+/// its field is read in and one out of range falls back for that field alone; a field the mind
+/// sets is judged by that same reader before it is kept at all. Reset removes it.
 @MainActor
 @Observable
 final class Tuning {
@@ -92,14 +92,24 @@ final class Tuning {
     /// Where a drag left him, as fractions of the transcript's frame carried to the
     /// pane's foot; nil is the vault's pin.
     private(set) var pin: CGPoint?
+    /// How long a frame of his is on the screen while he does anything, as the settings sheet
+    /// set it, kept as the look's `frameInterval` it is worn as; nil is the vault's. Worn in every
+    /// build, as the placement is: it is a person's choice and not a developer's slider. Kept as
+    /// written and judged where it is worn, so one out of the field's range costs that field alone.
+    private(set) var frameInterval: Double?
+    /// The sheet's rate, in whole frames a second: nil is the vault's.
+    var frameRate: Double? { frameInterval.flatMap { $0 > 0 ? (1 / $0).rounded() : nil } }
+    /// The rates the settings sheet offers, a frame a second apart: 20, which is what a 60 Hz
+    /// screen draws a 24 as, to 30. The rest's rate is not the sheet's to set.
+    static let frameRates: ClosedRange<Double> = 20...30
     /// The fields the mind set (`set(_:to:over:)`), as a `look.json`-shaped object: worn in every
     /// build, since it is the mind's own hand on the look and not a developer's slider. A field is
     /// kept here or as a slider's value, never both, so what is worn is the one set last.
     private(set) var mind: [String: Any] = [:]
 
     /// Whether the sliders' values are worn: in a debug build, which has the sliders. A release
-    /// build has only the placement and the pin to show, so it reads only those, and slider values
-    /// a debug install left in the defaults are neither worn nor kept.
+    /// build has only the placement, the pin and the frame rate to show, so it reads only those,
+    /// and slider values a debug install left in the defaults are neither worn nor kept.
     #if DEBUG
     static let knobsWorn = true
     #else
@@ -108,13 +118,13 @@ final class Tuning {
 
     init(defaults: UserDefaults = .standard, knobs: Bool = Tuning.knobsWorn) {
         self.defaults = defaults
-        (values, placement, pin) = Self.read(defaults.string(forKey: Self.key), knobs: knobs)
+        (values, placement, pin, frameInterval) = Self.read(defaults.string(forKey: Self.key), knobs: knobs)
         mind = defaults.string(forKey: Self.mindKey).flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
     }
 
     /// Nothing is set: the look is the vault's.
-    var isEmpty: Bool { values.isEmpty && placement == nil && pin == nil && mind.isEmpty }
+    var isEmpty: Bool { values.isEmpty && placement == nil && pin == nil && frameInterval == nil && mind.isEmpty }
 
     /// The override as a `look.json`: nil when nothing is set.
     var document: String? {
@@ -122,12 +132,13 @@ final class Tuning {
         return Self.text(slid, deep: mind)
     }
 
-    /// What the sliders, the placement and the pin say, by part.
+    /// What the sliders, the placement, the pin and the frame rate say, by part.
     private var slid: [String: Any] {
         var parts: [String: [String: Any]] = [:]
         for (knob, value) in values { parts[knob.part, default: [:]][knob.rawValue] = value }
         if let placement { parts["mascot", default: [:]]["placement"] = placement.rawValue }
         if let pin { parts["mascot", default: [:]]["pin"] = ["x": Double(pin.x), "y": Double(pin.y)] }
+        if let frameInterval { parts["mascot", default: [:]]["frameInterval"] = frameInterval }
         return parts
     }
 
@@ -254,10 +265,11 @@ final class Tuning {
         return path.last.map { here[$0] != nil } ?? false
     }
 
-    /// A slider's value, the placement or the pin at `path`, or under it, dropped.
+    /// A slider's value, the placement, the pin or the frame rate at `path`, or under it, dropped.
     private func clearSlid(_ path: [String]) {
         for knob in Knob.allCases where [knob.part, knob.rawValue].starts(with: path) { values[knob] = nil }
         if ["mascot", "placement"].starts(with: path) { placement = nil }
+        if ["mascot", "frameInterval"].starts(with: path) { frameInterval = nil }
         if ["mascot", "pin"].starts(with: path) || path.starts(with: ["mascot", "pin"]) { pin = nil }
     }
 
@@ -305,11 +317,21 @@ final class Tuning {
         save()
     }
 
+    /// The rate his frames come at while he does anything, chosen in the settings sheet, in
+    /// frames a second, one of `frameRates`: worn as the look's `frameInterval`, so it is read in
+    /// that field's range.
+    func set(frameRate rate: Double) {
+        frameInterval = 1 / rate
+        mind = Self.removing(["mascot", "frameInterval"], from: mind)
+        save()
+    }
+
     /// The override gone: the look is the vault's again.
     func reset() {
         values = [:]
         placement = nil
         pin = nil
+        frameInterval = nil
         mind = [:]
         defaults.removeObject(forKey: Self.key)
         defaults.removeObject(forKey: Self.mindKey)
@@ -323,10 +345,10 @@ final class Tuning {
     /// What a kept override says, read back as loosely as it was written: anything that is not one
     /// of these is left out here, and anything out of its range is refused where it is worn.
     private static func read(_ document: String?, knobs: Bool)
-        -> (values: [Knob: Double], placement: Look.Mascot.Placement?, pin: CGPoint?) {
+        -> (values: [Knob: Double], placement: Look.Mascot.Placement?, pin: CGPoint?, frameInterval: Double?) {
         guard let data = document?.data(using: .utf8),
               let parts = (try? JSONSerialization.jsonObject(with: data)) as? [String: [String: Any]]
-        else { return ([:], nil, nil) }
+        else { return ([:], nil, nil, nil) }
         var values: [Knob: Double] = [:]
         for knob in Knob.allCases where knobs {
             if let value = parts[knob.part]?[knob.rawValue] as? Double { values[knob] = value }
@@ -337,16 +359,26 @@ final class Tuning {
         if let point = mascot["pin"] as? [String: Double], let x = point["x"], let y = point["y"] {
             pin = CGPoint(x: x, y: y)
         }
-        return (values, placement, pin)
+        // JSON's `true` bridges to a number, 1, through `as? Double`, and a document written back
+        // from that would carry a second a frame the reader took; a boolean is not a value here.
+        let frameInterval = mascot["frameInterval"].flatMap { kept -> Double? in
+            guard CFGetTypeID(kept as CFTypeRef) != CFBooleanGetTypeID() else { return nil }
+            return kept as? Double
+        }
+        return (values, placement, pin, frameInterval)
     }
 }
 
-/// The settings sheet's Topo section, its first: where Topo sits, with the pin a drag left, and
-/// the Reset for everything this device wears over the vault's look. What it shows is read off
-/// the look in the environment, which is the tuned one, so what it says is what is drawn.
+/// The settings sheet's Topo section, its first: where Topo sits, with the pin a drag left, the
+/// rate his frames come at, and the Reset for everything this device wears over the vault's look.
+/// What it shows is read off the look in the environment, which is the tuned one, so what it says
+/// is what is drawn.
 struct PlacementSection: View {
     @Environment(\.look) private var look
     var tuning = Tuning.shared
+
+    /// The rate the look's `frameInterval` comes to, in whole frames a second.
+    private var frameRate: Double { (1 / look.mascot.frameInterval).rounded() }
 
     var body: some View {
         Section {
@@ -359,10 +391,16 @@ struct PlacementSection: View {
                                                           look.mascot.pin.x * 100, look.mascot.pin.y * 100))
                     .accessibilityIdentifier("tuning-pin")
             }
+            VStack(alignment: .leading) {
+                LabeledContent("Topo's frame rate", value: String(format: "%.0f fps", frameRate))
+                Slider(value: Binding(get: { frameRate }, set: { tuning.set(frameRate: $0) }),
+                       in: Tuning.frameRates, step: 1)
+                    .accessibilityIdentifier("tuning-frame-rate")
+            }
             Button("Reset", role: .destructive) { tuning.reset() }
                 .disabled(tuning.isEmpty)
         } footer: {
-            Text("Drag Topo to pin him. Worn over the vault's look on this device until reset.")
+            Text("Drag Topo to pin him. The frame rate is his while he does anything; rested, he is drawn slower. Worn over the vault's look on this device until reset.")
         }
     }
 }
