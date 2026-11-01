@@ -140,17 +140,29 @@ struct GuestLogin: ClaudeLogin {
         GuestResident.homeDirectory.appendingPathComponent(".claude/.credentials.json")
     }
 
-    /// True when the file is gone, which a removal that threw because there was none also is.
+    /// Every place a credential may rest: the home's, and the one in `Documents/home` that an
+    /// earlier build left and `GuestFiles` could not move or remove, which file sharing shows.
+    nonisolated static var credentialsFiles: [URL] {
+        let left = GuestFiles.standard.old.appendingPathComponent("home/.claude/.credentials.json")
+        return left.standardizedFileURL.path == credentialsFile.standardizedFileURL.path ? [credentialsFile] : [credentialsFile, left]
+    }
+
+    /// True when every one of `files` is gone, which a removal that threw because there was none
+    /// also is.
     @discardableResult
-    static func removeCredentials() -> Bool {
-        do {
-            try FileManager.default.removeItem(at: credentialsFile)
-        } catch {
-            if FileManager.default.fileExists(atPath: credentialsFile.path) {
-                GuestResident.log("login: the credentials file would not go: \(error)")
+    static func removeCredentials(_ files: [URL] = credentialsFiles) -> Bool {
+        var gone = true
+        for file in files {
+            do {
+                try FileManager.default.removeItem(at: file)
+            } catch {
+                if FileManager.default.fileExists(atPath: file.path) {
+                    GuestResident.log("login: the credentials file would not go: \(error)")
+                }
             }
+            if FileManager.default.fileExists(atPath: file.path) { gone = false }
         }
-        return !FileManager.default.fileExists(atPath: credentialsFile.path)
+        return gone
     }
 
     /// `claude <arguments>`, from the home, as the resident is started.

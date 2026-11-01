@@ -112,24 +112,69 @@ final class GuestLoginTests: XCTestCase {
         }
     }
 
-    /// An install from before has its login in `Documents/home`: it is moved, whole, to the new
-    /// place, and nothing stays behind for file sharing to show. A file in neither place is
-    /// answered with the new one.
-    func testAHomeInDocumentsIsMovedWithItsLogin() throws {
+    /// An install from before keeps the home (with a login and a transcript), the session, the cut
+    /// and the ledger in `Documents`: each is moved, its bytes with it, and nothing stays behind for
+    /// file sharing to show. A file in neither place is answered with the new one.
+    func testEverythingInDocumentsIsMovedWithItsBytes() throws {
         let (files, root) = try placedFiles()
         defer { try? FileManager.default.removeItem(at: root) }
-        let credential = files.old.appendingPathComponent("home/.claude/.credentials.json")
-        try FileManager.default.createDirectory(at: credential.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("login".utf8).write(to: credential)
-        try Data("session".utf8).write(to: files.old.appendingPathComponent(".guest-session"))
+        let kept = ["home/.claude/.credentials.json": "login", "home/.claude/projects/p/s.jsonl": "transcript",
+                    ".guest-session": "session", ".guest-cut.json": "cut", ".guest-bridge.json": "ledger"]
+        for (path, bytes) in kept { try write(bytes, to: files.old.appendingPathComponent(path)) }
 
         let home = files.place("home", isDirectory: true)
         XCTAssertEqual(home.path, files.new.appendingPathComponent("home").path)
-        XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent(".claude/.credentials.json")), Data("login".utf8))
-        XCTAssertEqual(files.place(".guest-session").path, files.new.appendingPathComponent(".guest-session").path)
+        let placed = [".guest-session", ".guest-cut.json", ".guest-bridge.json"].map { files.place($0) }
+        XCTAssertEqual(placed.map(\.path), [".guest-session", ".guest-cut.json", ".guest-bridge.json"].map { files.new.appendingPathComponent($0).path })
+        for (path, bytes) in kept {
+            XCTAssertEqual(try Data(contentsOf: files.new.appendingPathComponent(path)), Data(bytes.utf8), path)
+        }
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: files.old.path), [])
-        XCTAssertEqual(files.place(".guest-bridge.json").path, files.new.appendingPathComponent(".guest-bridge.json").path)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: files.new.appendingPathComponent(".guest-bridge.json").path))
+        XCTAssertEqual(files.place(".nothing").path, files.new.appendingPathComponent(".nothing").path)
+    }
+
+    /// Each file is placed on its own: a session whose move is refused stays in `Documents` with
+    /// its bytes, and the cut, moved, is read where it went, since the session is handed it by
+    /// path (`GuestResident.cutFile`) rather than finding it beside the session file.
+    func testARefusedSessionMoveLeavesTheCutWhereItWent() throws {
+        let (placed, root) = try placedFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var files = placed
+        files.files = RefusingMoves(refusing: ".guest-session")
+        try write("session", to: files.old.appendingPathComponent(".guest-session"))
+        try write("cut", to: files.old.appendingPathComponent(".guest-cut.json"))
+
+        let session = files.place(".guest-session")
+        let cut = files.place(".guest-cut.json")
+        XCTAssertEqual(session.path, files.old.appendingPathComponent(".guest-session").path)
+        XCTAssertEqual(try Data(contentsOf: session), Data("session".utf8))
+        XCTAssertEqual(cut.path, files.new.appendingPathComponent(".guest-cut.json").path)
+        XCTAssertEqual(try Data(contentsOf: cut), Data("cut".utf8))
+    }
+
+    /// A sign-out takes away the credential wherever it rests, a copy left in `Documents`
+    /// included, and does not say it is gone while either stands.
+    func testSignOutRemovesEveryCopyOfTheCredential() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("credentials-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appendingPathComponent("old/.claude").path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let new = root.appendingPathComponent("new/.claude/.credentials.json")
+        let old = root.appendingPathComponent("old/.claude/.credentials.json")
+        try write("login", to: new)
+        try write("login", to: old)
+        XCTAssertTrue(GuestLogin.removeCredentials([new, old]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: new.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+
+        try write("login", to: new)
+        try write("login", to: old)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: old.deletingLastPathComponent().path)
+        XCTAssertFalse(GuestLogin.removeCredentials([new, old]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: new.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertEqual(GuestLogin.credentialsFiles.first, GuestLogin.credentialsFile)
     }
 
     /// One in the new place is the one; a copy left in `Documents` is stale and is taken away.
@@ -159,6 +204,11 @@ final class GuestLoginTests: XCTestCase {
         XCTAssertEqual(files.place("home", isDirectory: true).path, files.old.appendingPathComponent("home").path)
         XCTAssertEqual(try Data(contentsOf: credential), Data("login".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: files.new.appendingPathComponent("home").path))
+    }
+
+    private func write(_ text: String, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
     }
 
     private func placedFiles() throws -> (GuestFiles, URL) {
@@ -201,9 +251,20 @@ final class GuestLoginTests: XCTestCase {
     }
 }
 
-/// A file manager whose every move fails, as one before the first unlock might.
+/// A file manager whose moves fail, as one before the first unlock might: every move, or only
+/// the move of the one name given.
 private final class RefusingMoves: FileManager, @unchecked Sendable {
+    let refusing: String?
+
+    init(refusing: String? = nil) {
+        self.refusing = refusing
+        super.init()
+    }
+
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        guard refusing == nil || srcURL.lastPathComponent == refusing else {
+            return try super.moveItem(at: srcURL, to: dstURL)
+        }
         throw CocoaError(.fileWriteNoPermission)
     }
 }
