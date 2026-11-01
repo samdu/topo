@@ -437,6 +437,9 @@ targets:
       - Tests/Client
       - path: THIRD-PARTY
         buildPhase: resources
+      # The licence texts THIRD-PARTY's entries are compared with, copied from their sources.
+      - path: Tests/Fixtures/licences
+        buildPhase: resources
     # TopoCoreTesting comes from the host: the app links it, and a second link here makes it a
     # framework of its own carrying a second TopoCore, whose types the app's do not match.
     dependencies:
