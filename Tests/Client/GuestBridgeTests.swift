@@ -597,7 +597,7 @@ final class GuestBridgeTests: XCTestCase {
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let defaults = UserDefaults(suiteName: name)!
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+        let harness = Harness(database: db, device: phone, ensureZone: {},
                               defaults: defaults, brain: bridge, relay: relay, leaseSleep: parked,
                               pause: { _ in throw CancellationError() })
         return (harness, bridge, guest)
