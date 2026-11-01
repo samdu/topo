@@ -688,7 +688,7 @@ suite_scripts() {
     names=()
     started=()
     for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
-                suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
+                suite-gate ci-require-tests check-built-plist strip-luxtts maps-opens-nothing build-ish \
                 model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
       if [ ! -x "scripts/tests/$test-test.sh" ]; then
         say "scripts/tests/$test-test.sh"

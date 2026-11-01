@@ -43,6 +43,8 @@
 #
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
+# FluidAudio's LuxTTS lexicon is read the same way: the build phase that strips it is not proof
+# that it is gone.
 #
 # The watch app embedded as the phone app's companion is read off the product too, and its copy
 # is read as `--watch` reads one.
@@ -292,6 +294,15 @@ fi
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2
+    status=1
+fi
+
+# FluidAudio's LuxTTS lexicon is espeak-ng's output, GPL-3.0 with no App Store waiver, and
+# scripts/strip-luxtts.sh takes it out of the product; anywhere in the app is a failure, so a
+# bundle FluidAudio renames is caught as well as the one the script strips.
+luxtts="$(find "$app" -name 'luxtts_*' -print 2>/dev/null | head -3)"
+if [ -n "$luxtts" ]; then
+    echo "$app carries FluidAudio's LuxTTS lexicon ($(echo "$luxtts" | tr '\n' ' ')); scripts/strip-luxtts.sh did not run on it" >&2
     status=1
 fi
 
