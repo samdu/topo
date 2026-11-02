@@ -46,8 +46,9 @@ protocol ActivityHost: AnyObject {
     var enabled: Bool { get }
     func running() -> [ActivityRecord]
     func start(_ attributes: TopoActivityAttributes, _ notice: ActivityNotice) throws -> String
-    func update(_ id: String, _ notice: ActivityNotice) async
-    func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async
+    /// False when the system has no such activity any more.
+    @discardableResult func update(_ id: String, _ notice: ActivityNotice) async -> Bool
+    @discardableResult func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool
 }
 
 /// ActivityKit itself.
@@ -72,6 +73,9 @@ final class ActivityKitHost: ActivityHost {
             case .visibility: throw ActivityRefusal.notOnScreen
             case .globalMaximumExceeded, .targetMaximumExceeded: throw ActivityRefusal.tooMany
             case .attributesTooLarge: throw ActivityRefusal.tooLarge
+            case .unsupported, .unsupportedTarget: throw ActivityRefusal.other("this device does not show Live Activities")
+            case .unentitled: throw ActivityRefusal.other("this build of Topo does not declare Live Activities")
+            case .persistenceFailure: throw ActivityRefusal.other("the system could not keep the activity; ask again")
             default: throw ActivityRefusal.other(error.localizedDescription)
             }
         } catch {
@@ -81,19 +85,29 @@ final class ActivityKitHost: ActivityHost {
 
     // An `Activity` is not Sendable, so each is found and spoken to inside one task of its own
     // rather than carried across from the main actor.
-    func update(_ id: String, _ notice: ActivityNotice) async {
+    func update(_ id: String, _ notice: ActivityNotice) async -> Bool {
         let content = Self.content(notice)
-        await Task.detached { await Self.activity(id)?.update(content) }.value
+        return await Task.detached {
+            guard let activity = Self.activity(id) else { return false }
+            await activity.update(content)
+            return true
+        }.value
     }
 
-    func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async {
+    /// Ends the activity, or, ended already and still on the lock screen, sets how it is dismissed:
+    /// `.now` takes it off, which is how `endAll` clears what a default dismissal left shown.
+    func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool {
         let policy: ActivityUIDismissalPolicy = switch dismissal {
         case .now: .immediate
         case .standard: .default
         case .at(let date): .after(date)
         }
         let content = state.map { ActivityContent(state: $0, staleDate: nil) }
-        await Task.detached { await Self.activity(id)?.end(content, dismissalPolicy: policy) }.value
+        return await Task.detached {
+            guard let activity = Self.activity(id) else { return false }
+            await activity.end(content, dismissalPolicy: policy)
+            return true
+        }.value
     }
 
     nonisolated private static func activity(_ id: String) -> Activity<TopoActivityAttributes>? {
@@ -200,6 +214,12 @@ final class ActivityKeeper {
     let now: @Sendable () -> Date
     private var polls: [String: Task<Void, Never>] = [:]
     private var ends: [String: Task<Void, Never>] = [:]
+    /// Slots a start holds while it fetches its tracker, so two starts of one slot make one activity.
+    private var reserved: Set<String> = []
+    /// Counts the logins' ends: a call that read the activities before an await compares it after,
+    /// since `endAll` may have run in between and nothing from before it may start or keep anything.
+    private(set) var generation = 0
+    private var resuming = false
     private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
 
     init(host: ActivityHost, fetcher: TrackerFetcher = URLTrackerFetcher(),
@@ -222,9 +242,20 @@ final class ActivityKeeper {
         ActivityNotice(state: state, stale: staleDate(until: state.until, polled: polled), relevance: state.relevance)
     }
 
+    /// The tasks standing: what a suite counts after `endAll`.
+    var tasks: Int { polls.count + ends.count }
+
+    /// A slot held for a start that is still fetching; false when it is held already.
+    func reserve(_ slot: String) -> Bool { reserved.insert(slot).inserted }
+    func release(_ slot: String) { reserved.remove(slot) }
+    func isReserved(_ slot: String) -> Bool { reserved.contains(slot) }
+
     /// At launch and on every return to the screen: ends what is past its `until`, and keeps the
-    /// rest, since a process that was ended kept nothing.
+    /// rest, since a process that was ended kept nothing. Two returns at once resume once.
     func resume() async {
+        guard !resuming else { return }
+        resuming = true
+        defer { resuming = false }
         for record in host.running() where !record.ended {
             if let until = record.state.until, until <= now() {
                 await host.end(record.id, nil, dismissal: .now)
@@ -253,6 +284,11 @@ final class ActivityKeeper {
                     try? await sleep(.seconds(until.timeIntervalSince(now())))
                     guard !Task.isCancelled else { return }
                 }
+                // Read again: the person may have ended it while the task slept.
+                guard let current = host.running().first(where: { $0.id == id }), !current.ended else {
+                    forget(id)
+                    return
+                }
                 await host.end(id, nil, dismissal: .now)
                 forget(id)
                 log.info("activity \(id, privacy: .public) ended at its until")
@@ -268,9 +304,13 @@ final class ActivityKeeper {
         ends[id] = nil
     }
 
-    /// A sign-out, a takeover or a viewer's arrival: the activities are the login's.
+    /// A sign-out, a takeover or a viewer's arrival: the activities are the login's, the ones
+    /// ended and still on the lock screen included, since a default dismissal leaves one shown
+    /// for hours. A start or an update in flight finds the generation moved and does nothing.
     func endAll() async {
-        for record in host.running() where !record.ended {
+        generation += 1
+        reserved = []
+        for record in host.running() {
             forget(record.id)
             await host.end(record.id, nil, dismissal: .now)
         }
@@ -281,11 +321,19 @@ final class ActivityKeeper {
         while !Task.isCancelled {
             try? await sleep(Self.interval)
             guard !Task.isCancelled else { return }
-            guard let record = host.running().first(where: { $0.id == id }), !record.ended else {
+            guard host.running().contains(where: { $0.id == id && !$0.ended }) else {
                 forget(id)
                 return
             }
-            guard let data = await fetcher.fetch(url), let tracker = ProgressTracker.read(data, now: now()).tracker else {
+            let generation = generation
+            let fetched = await fetcher.fetch(url)
+            // Read again after the wait: the activity may be ended, updated, or the login's gone.
+            guard !Task.isCancelled, generation == self.generation,
+                  let record = host.running().first(where: { $0.id == id }), !record.ended else {
+                forget(id)
+                return
+            }
+            guard let data = fetched, let tracker = ProgressTracker.read(data, now: now()).tracker else {
                 log.info("activity \(id, privacy: .public) poll gave no tracker")
                 continue
             }
@@ -296,7 +344,8 @@ final class ActivityKeeper {
                 continue
             }
             if tracker.isRunning {
-                guard fitted.card != record.state.card else { continue }
+                // Every fetch that answers moves the stale date, whether or not the card moved:
+                // a step longer than a minute is not a tracker gone quiet.
                 await host.update(id, notice(fitted, polled: true))
             } else {
                 forget(id)

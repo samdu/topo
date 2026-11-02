@@ -100,8 +100,14 @@ final class ActivityDocumentTests: XCTestCase {
         XCTAssertEqual(merged.card, first.card)
         XCTAssertEqual(merged.until, first.until)
         XCTAssertEqual(merged.relevance, 10)
-        XCTAssertNotEqual(merged.layout, first.layout, "the layout was replaced")
-        XCTAssertNil(ActivityLayout.read(try XCTUnwrap(merged.layout)).tint, "a layout that names no tint has none")
+        XCTAssertNotEqual(merged.layout, first.layout, "the regions were replaced")
+        XCTAssertEqual(ActivityLayout.read(try XCTUnwrap(merged.layout)).tint, .token(.primary), "and the tint stands")
+        // A tint alone leaves the regions.
+        let third = read(#"{"tint": "secondary"}"#, update: true).document
+        let tinted = ActivityState(third, tracker: nil, over: merged)
+        let layout = ActivityLayout.read(try XCTUnwrap(tinted.layout))
+        XCTAssertEqual(layout.regions.keys.sorted { $0.rawValue < $1.rawValue }, [.islandMinimal])
+        XCTAssertEqual(layout.tint, .token(.secondary))
     }
 
     // MARK: Review Focus 2 and 9

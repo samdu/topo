@@ -2,9 +2,10 @@ import XCTest
 
 @testable import Topo
 
-/// Review Focus 6: the keeper's decisions against a fake host and a clock it moves — a changed
-/// tracker is an update, an unchanged one nothing, an ended one ends the activity once, a failed
-/// fetch changes nothing, `until` ends it, and a resume ends what is past its until.
+/// Review Focus 6: the keeper's decisions against a fake host and a clock it moves — every
+/// answered fetch an update that moves the stale date, an ended tracker ending the activity once,
+/// a failed fetch changing nothing, `until` ending it, a resume ending what is past its until,
+/// and what lands during a fetch (an end, an update, a sign-out) read again after it.
 @MainActor
 final class ActivityKeeperTests: XCTestCase {
     private var host: FakeActivityHost!
@@ -15,7 +16,7 @@ final class ActivityKeeperTests: XCTestCase {
         clock = FakeClock()
     }
 
-    private func keeper(_ fetcher: FakeTrackerFetcher) -> ActivityKeeper {
+    private func keeper(_ fetcher: TrackerFetcher) -> ActivityKeeper {
         ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
     }
 
@@ -36,24 +37,94 @@ final class ActivityKeeperTests: XCTestCase {
         await settle()
     }
 
-    func testAChangedTrackerIsAnUpdateAndAnUnchangedOneNothing() async throws {
+    func testEveryAnsweredFetchMovesTheStaleDateAndAChangedTrackerTheCard() async throws {
         let moved = TrackerFixtures.wiki.replacingOccurrences(of: #""label": "Download", "state": "running""#, with: #""label": "Download", "state": "done""#)
         let fetcher = FakeTrackerFetcher([TrackerFixtures.wiki, moved, moved])
         let keeper = keeper(fetcher)
         let id = try start()
+        let before = host.records[0].state.card
         keeper.keep(id)
         await tick()
-        XCTAssertEqual(host.updates, 0, "the same card is no update")
+        XCTAssertEqual(host.updates, 1, "the same card still moves the stale date: a long step is not a tracker gone quiet")
+        guard case .update(_, let same, let stale1) = host.calls.last else { return XCTFail("\(host.calls)") }
+        XCTAssertEqual(same.card, before)
+        XCTAssertEqual(stale1, clock.date.addingTimeInterval(ActivityKeeper.staleAfter))
         await tick()
-        XCTAssertEqual(host.updates, 1)
+        XCTAssertEqual(host.updates, 2)
         guard case .update(let updated, let state, let stale) = host.calls.last else { return XCTFail("\(host.calls)") }
         XCTAssertEqual(updated, id)
         XCTAssertEqual(state.card?.steps[1].state, .done)
         XCTAssertEqual(stale, clock.date.addingTimeInterval(ActivityKeeper.staleAfter))
         await tick()
-        XCTAssertEqual(host.updates, 1, "unchanged again")
+        XCTAssertEqual(host.updates, 3)
         XCTAssertEqual(fetcher.fetched.count, 3)
         keeper.forget(id)
+    }
+
+    func testAPollDoesNotEndWhatThePersonEndedDuringTheFetch() async throws {
+        let fetcher = GatedTrackerFetcher()
+        let keeper = keeper(fetcher)
+        let id = try start()
+        keeper.keep(id)
+        await tick()
+        XCTAssertEqual(fetcher.pending, 1)
+        await host.end(id, nil, dismissal: .now)
+        fetcher.release(TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true))
+        await settle()
+        XCTAssertEqual(host.ends.count, 1, "the person's end, and no second from the poll")
+        XCTAssertEqual(keeper.tasks, 0)
+    }
+
+    func testAPollDoesNotRevertAnUpdateLandedDuringTheFetch() async throws {
+        let fetcher = GatedTrackerFetcher()
+        let keeper = keeper(fetcher)
+        let id = try start()
+        keeper.keep(id)
+        await tick()
+        XCTAssertEqual(fetcher.pending, 1)
+        // The tool's update lands while the fetch is out: a layout, a later until, a relevance.
+        var updated = host.records[0].state
+        updated.layout = ActivityLayout(regions: [.islandMinimal: .divider], tint: nil).text
+        updated.until = clock.date.addingTimeInterval(600)
+        updated.relevance = 90
+        await host.update(id, ActivityNotice(state: updated, stale: nil, relevance: 90))
+        keeper.keep(id)
+        let moved = TrackerFixtures.wiki.replacingOccurrences(of: #""label": "Download", "state": "running""#, with: #""label": "Download", "state": "done""#)
+        fetcher.release(moved)
+        await settle()
+        guard case .update(_, let state, _) = host.calls.last else { return XCTFail("\(host.calls)") }
+        XCTAssertEqual(state.layout, updated.layout, "the layout the update set stands")
+        XCTAssertEqual(state.until, updated.until)
+        XCTAssertEqual(state.relevance, 90)
+        XCTAssertEqual(state.card?.steps[1].state, .done, "with the card the poll fetched")
+        keeper.forget(id)
+    }
+
+    func testASignOutDuringTheFetchUpdatesNothingAndLeavesNoTask() async throws {
+        let fetcher = GatedTrackerFetcher()
+        let keeper = keeper(fetcher)
+        let id = try start(until: clock.date.addingTimeInterval(600))
+        keeper.keep(id)
+        await tick()
+        XCTAssertEqual(fetcher.pending, 1)
+        await keeper.endAll()
+        fetcher.release(TrackerFixtures.wiki)
+        await settle()
+        XCTAssertEqual(host.updates, 0)
+        XCTAssertEqual(host.ends.count, 1)
+        XCTAssertEqual(keeper.tasks, 0)
+        await tick(600)
+        XCTAssertEqual(host.ends.count, 1, "nothing ends it a second time at its until")
+    }
+
+    func testUntilDoesNotEndWhatThePersonEnded() async throws {
+        let keeper = keeper(FakeTrackerFetcher([]))
+        let id = try start(poll: false, until: clock.date.addingTimeInterval(120))
+        keeper.keep(id)
+        await host.end(id, nil, dismissal: .standard)
+        await tick(120)
+        XCTAssertEqual(host.ends.count, 1, "the person's end alone")
+        XCTAssertEqual(keeper.tasks, 0)
     }
 
     func testEndedTrackerEndsOnce() async throws {
@@ -130,18 +201,22 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(live)
     }
 
-    func testEndAllEndsEveryRunningActivityNow() async throws {
+    func testEndAllTakesEveryActivityOffTheLockScreenNow() async throws {
         let keeper = keeper(FakeTrackerFetcher([]))
         let a = try start()
         host.records[0].attributes = TopoActivityAttributes(slot: "a", poll: nil, started: clock.date)
         let b = try start(until: clock.date.addingTimeInterval(60))
         keeper.keep(a)
         keeper.keep(b)
+        await settle()
+        XCTAssertEqual(keeper.tasks, 2)
         await host.end(a, nil, dismissal: .standard)
         await keeper.endAll()
-        XCTAssertEqual(host.ends.count, 2, "the one already ended is not ended again")
-        guard case .end(b, nil, .now) = host.ends[1] else { return XCTFail("\(host.ends)") }
-        XCTAssertEqual(clock.sleepers, 0, "no task survives")
+        XCTAssertEqual(host.ends.count, 3, "the one ended with the default dismissal is still on the lock screen, and is taken off")
+        guard case .end(a, nil, .now) = host.ends[1], case .end(b, nil, .now) = host.ends[2] else { return XCTFail("\(host.ends)") }
+        XCTAssertEqual(keeper.tasks, 0, "no task survives")
+        await tick(600)
+        XCTAssertEqual(host.calls.count, 5, "and nothing acts after")
     }
 
     func testStaleDate() {

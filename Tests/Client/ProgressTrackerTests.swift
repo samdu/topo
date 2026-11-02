@@ -9,6 +9,20 @@ final class ProgressTrackerTests: XCTestCase {
         ProgressTracker.read(Data(json.utf8))
     }
 
+    func testWhatIsCutOrDroppedSaysSo() throws {
+        let long = String(repeating: "s", count: 70)
+        let reading = read(#"{"title": "Two\nlines", "steps": [{"label": "A\nB", "state": "done"}], "owner": {"session": "\#(long)", "address": 3}}"#)
+        let tracker = try XCTUnwrap(reading.tracker)
+        XCTAssertEqual(tracker.title, "Two")
+        XCTAssertEqual(tracker.steps[0].label, "A")
+        XCTAssertEqual(tracker.owner.session.count, ProgressTracker.sessionLimit)
+        XCTAssertEqual(tracker.owner.address, "")
+        for prefix in ["tracker.title is more than one line", "tracker.steps[0].label is more than one line",
+                       "tracker.owner.session is 70 characters", "tracker.owner.address is not text"] {
+            XCTAssertTrue(reading.notes.contains { $0.hasPrefix(prefix) }, "no note \(prefix): \(reading.notes)")
+        }
+    }
+
     func testReadsTheWikiExampleWhole() throws {
         let reading = read(TrackerFixtures.wiki)
         XCTAssertEqual(reading.notes, [])

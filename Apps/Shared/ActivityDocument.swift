@@ -254,7 +254,11 @@ struct ActivityState: Codable, Hashable, Sendable {
     /// stands.
     init(_ document: ActivityDocument, tracker: ProgressTracker?, over previous: ActivityState? = nil) {
         card = tracker.map(TrackerCard.init) ?? previous?.card
-        layout = document.layout.isEmpty ? previous?.layout : document.layout.text
+        // The regions and the tint are two fields: a document that carries one leaves the other.
+        var merged = previous?.layout.map(ActivityLayout.read) ?? ActivityLayout()
+        if !document.regions.isEmpty { merged.regions = document.regions }
+        if let tint = document.tint { merged.tint = tint }
+        layout = merged.isEmpty ? nil : merged.text
         until = document.until ?? previous?.until
         relevance = document.relevance ?? previous?.relevance
     }

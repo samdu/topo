@@ -31,22 +31,55 @@ final class FakeActivityHost: ActivityHost {
         return id
     }
 
-    func update(_ id: String, _ notice: ActivityNotice) async {
+    func update(_ id: String, _ notice: ActivityNotice) async -> Bool {
         calls.append(.update(id: id, state: notice.state, stale: notice.stale))
-        if let index = records.firstIndex(where: { $0.id == id }) { records[index].state = notice.state }
+        guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
+        records[index].state = notice.state
+        return true
     }
 
-    func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async {
+    func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool {
         calls.append(.end(id: id, state: state, dismissal: dismissal))
-        if let index = records.firstIndex(where: { $0.id == id }) {
-            records[index].ended = true
-            if let state { records[index].state = state }
-        }
+        guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
+        records[index].ended = true
+        if let state { records[index].state = state }
+        return true
     }
 
     var starts: Int { calls.filter { if case .start = $0 { true } else { false } }.count }
     var updates: Int { calls.filter { if case .update = $0 { true } else { false } }.count }
     var ends: [Call] { calls.filter { if case .end = $0 { true } else { false } } }
+}
+
+/// A fetch that waits until the test lets it go: how a sign-out, an end or an update lands while
+/// a fetch is in flight.
+final class GatedTrackerFetcher: TrackerFetcher, @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Data?, Never>] = []
+    private var answers: [Data?] = []
+    private(set) var fetched: [URL] = []
+
+    /// Fetches in flight, waiting to be released.
+    var pending: Int { lock.withLock { waiting.count } }
+
+    func fetch(_ url: URL) async -> Data? {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                fetched.append(url)
+                if !answers.isEmpty { continuation.resume(returning: answers.removeFirst()) } else { waiting.append(continuation) }
+            }
+        }
+    }
+
+    /// Lets the oldest fetch in flight return `answer`; with none in flight, the next fetch gets it.
+    func release(_ answer: String?) {
+        let data = answer.map { Data($0.utf8) }
+        let next: CheckedContinuation<Data?, Never>? = lock.withLock {
+            if waiting.isEmpty { answers.append(data); return nil }
+            return waiting.removeFirst()
+        }
+        next?.resume(returning: data)
+    }
 }
 
 /// A tracker's JSON handed back in turn, one answer a fetch; nil is a fetch that failed.
@@ -78,6 +111,8 @@ final class FakeClock: @unchecked Sendable {
     var date: Date { Date(timeIntervalSince1970: 1_793_580_000 + lock.withLock { now }) }
 
     func sleep(_ duration: Duration) async throws {
+        // As `Task.sleep` does: a task already cancelled does not wait.
+        try Task.checkCancellation()
         let seconds = Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
         let id = lock.withLock { nextSleep += 1; return nextSleep }
         try await withTaskCancellationHandler {

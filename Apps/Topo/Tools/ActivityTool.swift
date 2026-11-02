@@ -17,8 +17,8 @@ struct ActivityTool: Tool {
     var usage: String {
         """
         topo activity                            every activity running: id, slot, started, until, what it draws
-        topo activity start SLOT JSON            start one (prints its id; status 6 with the notes when part of the
-                                                 document was refused and the rest kept, 2 when none of it could be read)
+        topo activity start SLOT JSON            start one (prints its id; status 6 when part or all of the document was
+                                                 refused, the output saying what was kept; 2 when none of it could be read)
         topo activity update ID JSON             new content: what the document carries replaces, the rest stands
         topo activity end ID [--dismiss now|default|DATE] [JSON]
                                                  end one, with a last document if given; default leaves it on the
@@ -100,6 +100,12 @@ struct ActivityTool: Tool {
         if let running = host().running().first(where: { $0.attributes.slot == slot && !$0.ended }) {
             return .failed("topo: slot \(slot) is running as \(running.id); update or end it\n")
         }
+        let keeper = keeper()
+        // Held from here until the reply: a second start of the slot while this one fetches is refused.
+        guard keeper.reserve(slot) else {
+            return .failed("topo: slot \(slot) is starting; wait for it\n")
+        }
+        defer { keeper.release(slot) }
         let reading = ActivityDocument.read(json, now: now())
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
@@ -108,7 +114,12 @@ struct ActivityTool: Tool {
         let document = reading.document
         var tracker = document.tracker
         if tracker == nil, let poll = document.poll {
-            guard let data = await fetcher.fetch(poll) else {
+            let generation = keeper.generation
+            let data = await fetcher.fetch(poll)
+            guard keeper.generation == generation else {
+                return .failed("topo: the login ended while the tracker was fetched; nothing started\n")
+            }
+            guard let data else {
                 return .failed("topo: poll gave no tracker: no 2xx within \(Int(URLTrackerFetcher.deadline.components.seconds)) s and \(URLTrackerFetcher.cap / 1024) KB, redirects not followed\n")
             }
             let fetched = ProgressTracker.read(data, now: now())
@@ -122,10 +133,9 @@ struct ActivityTool: Tool {
         let asked = ActivityState(document, tracker: tracker)
         let fitted = ActivityPayload.fit(asked, with: attributes)
         guard let state = fitted.state else {
-            return .usage("topo: the document " + (fitted.note ?? "is over the payload budget") + "\n" + Self.notes(notes))
+            return Self.overBudget(fitted.note, notes, "nothing started")
         }
         if let note = fitted.note { notes.append(note) }
-        let keeper = keeper()
         let notice = keeper.notice(state, polled: attributes.poll != nil)
         let started = Result { try host().start(attributes, notice) }
         switch started {
@@ -150,15 +160,19 @@ struct ActivityTool: Tool {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
         }
         var notes = reading.notes
+        if reading.document.poll != nil { notes.append(Self.pollStands) }
         let asked = ActivityState(reading.document, tracker: reading.document.tracker, over: record.state)
         let fitted = ActivityPayload.fit(asked, with: record.attributes)
         guard let state = fitted.state else {
-            return .usage("topo: the document " + (fitted.note ?? "is over the payload budget") + "\n" + Self.notes(notes))
+            return Self.overBudget(fitted.note, notes, "nothing changed")
         }
         if let note = fitted.note { notes.append(note) }
         let keeper = keeper()
-        await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
-        keeper.keep(id)
+        let generation = keeper.generation
+        let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
+        guard updated else { return .failed("topo: no activity \(id) running\n") }
+        // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
+        if keeper.generation == generation { keeper.keep(id) }
         let text = "updated \(id)\n" + Self.notes(notes)
         return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
     }
@@ -196,16 +210,17 @@ struct ActivityTool: Tool {
                 return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
             }
             notes = reading.notes
+            if reading.document.poll != nil { notes.append(Self.pollStands) }
             let asked = ActivityState(reading.document, tracker: reading.document.tracker, over: record.state)
             let fitted = ActivityPayload.fit(asked, with: record.attributes)
             guard let fit = fitted.state else {
-                return .usage("topo: the document " + (fitted.note ?? "is over the payload budget") + "\n" + Self.notes(notes))
+                return Self.overBudget(fitted.note, notes, "nothing ended")
             }
             if let note = fitted.note { notes.append(note) }
             state = fit
         }
         keeper().forget(id)
-        await host().end(id, state, dismissal: dismissal)
+        guard await host().end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
         let text = "ended \(id)\n" + Self.notes(notes)
         return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
     }
@@ -213,6 +228,12 @@ struct ActivityTool: Tool {
     // MARK: Words
 
     static let disabled = "topo: Live Activities are off for Topo; they are turned on in Settings › Topo › Live Activities\n"
+    static let pollStands = "poll is set at the start and stands; it was ignored"
+
+    /// Status 6: the whole document refused, since nothing of it fits beside the attributes.
+    static func overBudget(_ note: String?, _ notes: [String], _ outcome: String) -> ToolReply {
+        ToolReply(status: ToolReply.refused, text: "topo: the document " + (note ?? "is over the payload budget") + "; \(outcome)\n" + Self.notes(notes))
+    }
 
     static func refused(_ error: Error) -> ToolReply {
         switch error as? ActivityRefusal {

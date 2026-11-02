@@ -40,6 +40,7 @@ struct ProgressTracker: Codable, Hashable, Sendable {
     static let labelLimit = 40
     static let noteLimit = 80
     static let idLimit = 64
+    static let sessionLimit = 64
 
     var id: String
     var title: String
@@ -127,9 +128,14 @@ struct ProgressTracker: Codable, Hashable, Sendable {
                 continue
             }
             var step = Step(label: label)
-            if label.count > labelLimit {
-                note(path + ".label", "is \(label.count) characters, and a label holds \(labelLimit), so it was cut")
-                step.label = String(label.prefix(labelLimit))
+            let line = label.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            if line.count != label.count {
+                note(path + ".label", "is more than one line, and only the first was kept")
+                step.label = line
+            }
+            if step.label.count > labelLimit {
+                note(path + ".label", "is \(step.label.count) characters, and a label holds \(labelLimit), so it was cut")
+                step.label = String(step.label.prefix(labelLimit))
             }
             if let state = object["state"] {
                 if let name = state as? String, let known = Step.State(rawValue: name) { step.state = known }
@@ -168,6 +174,7 @@ struct ProgressTracker: Codable, Hashable, Sendable {
         if let raw = root["title"] {
             if let text = raw as? String {
                 let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+                if line.count != text.count { note("title", "is more than one line, and only the first was kept") }
                 if line.count > titleLimit {
                     note("title", "is \(line.count) characters, and a title holds \(titleLimit), so it was cut")
                     title = String(line.prefix(titleLimit))
@@ -211,9 +218,19 @@ struct ProgressTracker: Codable, Hashable, Sendable {
         var owner = Owner()
         if let raw = root["owner"] {
             if let object = raw as? [String: Any] {
-                owner.session = (object["session"] as? String) ?? ""
-                owner.address = (object["address"] as? String) ?? ""
-                owner.link = (object["link"] as? String) ?? ""
+                for key in ["session", "address", "link"] {
+                    guard let raw = object[key], !(raw is NSNull) else { continue }
+                    guard let text = raw as? String else { note("owner.\(key)", "is not text"); continue }
+                    switch key {
+                    case "session":
+                        if text.count > sessionLimit {
+                            note("owner.session", "is \(text.count) characters, and a session name holds \(sessionLimit), so it was cut")
+                        }
+                        owner.session = String(text.prefix(sessionLimit))
+                    case "address": owner.address = text
+                    default: owner.link = text
+                    }
+                }
             } else {
                 note("owner", "is not an object")
             }

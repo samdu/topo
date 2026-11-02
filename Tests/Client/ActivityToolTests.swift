@@ -10,7 +10,7 @@ final class ActivityToolTests: XCTestCase {
     private var host: FakeActivityHost!
     private var clock: FakeClock!
     private var keeper: ActivityKeeper!
-    private var fetcher: FakeTrackerFetcher!
+    private var fetcher: TrackerFetcher!
 
     private var tool: ActivityTool {
         ActivityTool(host: { [host] in host! }, keeper: { [keeper] in keeper! }, fetcher: fetcher, now: { [clock] in clock!.date })
@@ -98,13 +98,85 @@ final class ActivityToolTests: XCTestCase {
         fetcher = FakeTrackerFetcher([TrackerFixtures.wiki])
         let reply = await tool.run(["start", "job", #"{"poll": "https://pane.example.ts.net/decisions/progress/b36e250e"}"#])
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
-        XCTAssertEqual(fetcher.fetched.map(\.absoluteString), ["https://pane.example.ts.net/decisions/progress/b36e250e"])
+        XCTAssertEqual((fetcher as? FakeTrackerFetcher)?.fetched.map(\.absoluteString), ["https://pane.example.ts.net/decisions/progress/b36e250e"])
         guard case .start(_, let poll, let state, let stale) = host.calls[0] else { return XCTFail() }
         XCTAssertEqual(poll?.host, "pane.example.ts.net")
         XCTAssertEqual(state.card?.title, "macOS update on buddybox")
         XCTAssertEqual(stale, clock.date.addingTimeInterval(ActivityKeeper.staleAfter), "a polled activity goes stale a minute past its update")
         let reply5 = await tool.run([])
         XCTAssertTrue(reply5.text.contains("polled from pane.example.ts.net"))
+    }
+
+    private func settle() async {
+        for _ in 0..<20 { await Task.yield() }
+    }
+
+    func testASignOutDuringTheStartsFetchStartsNothing() async throws {
+        let gate = GatedTrackerFetcher()
+        fetcher = gate
+        let tool = self.tool
+        let started = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        await settle()
+        XCTAssertEqual(gate.pending, 1)
+        await keeper.endAll()
+        gate.release(TrackerFixtures.wiki)
+        let reply = await started.value
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertTrue(reply.text.contains("login ended"), reply.text)
+        XCTAssertEqual(host.starts, 0)
+        XCTAssertEqual(keeper.tasks, 0)
+        XCTAssertFalse(keeper.isReserved("job"), "the slot is free again")
+    }
+
+    func testTwoStartsOfOneSlotMakeOneActivity() async throws {
+        let gate = GatedTrackerFetcher()
+        fetcher = gate
+        let tool = self.tool
+        let first = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        await settle()
+        XCTAssertEqual(gate.pending, 1)
+        let second = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
+        XCTAssertEqual(second.status, ToolReply.failed, second.text)
+        XCTAssertTrue(second.text.contains("is starting"), second.text)
+        gate.release(TrackerFixtures.wiki)
+        let reply = await first.value
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertEqual(host.starts, 1)
+        XCTAssertEqual(gate.fetched.count, 1, "the refused start fetched nothing")
+        XCTAssertFalse(keeper.isReserved("job"))
+        keeper.forget("A1")
+    }
+
+    func testAnUpdateDuringASignOutKeepsNothing() async throws {
+        _ = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "until": "2026-11-02T06:00:00Z"}"#])
+        await keeper.endAll()
+        let reply = await tool.run(["update", "A1", #"{"relevance": 5}"#])
+        XCTAssertEqual(reply.status, ToolReply.failed, "ended is not running")
+        XCTAssertEqual(keeper.tasks, 0)
+    }
+
+    func testOverBudgetDocumentIsRefusedWhole() async throws {
+        let children = (0..<60).map { _ in #"{"kind": "text", "text": "\#(String(repeating: "w", count: 58))"}"# }.joined(separator: ",")
+        let big = #"{"families": {"lockScreen": {"kind": "vstack", "children": [\#(children)]}}}"#
+        let reply = await tool.run(["start", "job", big])
+        XCTAssertEqual(reply.status, ToolReply.refused, reply.text)
+        XCTAssertTrue(reply.text.contains("nothing started"), reply.text)
+        XCTAssertEqual(host.starts, 0)
+        XCTAssertFalse(keeper.isReserved("job"))
+        _ = await tool.run(["start", "job", timer])
+        let update = await tool.run(["update", "A1", big])
+        XCTAssertEqual(update.status, ToolReply.refused, update.text)
+        XCTAssertTrue(update.text.contains("nothing changed"), update.text)
+        XCTAssertEqual(host.updates, 0)
+    }
+
+    func testAPollOnAnUpdateIsNotedAndStands() async throws {
+        _ = await tool.run(["start", "job", timer])
+        let reply = await tool.run(["update", "A1", #"{"poll": "https://h/progress/x", "relevance": 5}"#])
+        XCTAssertEqual(reply.status, ToolReply.refused, reply.text)
+        XCTAssertTrue(reply.text.contains("poll is set at the start"), reply.text)
+        XCTAssertEqual(host.updates, 1)
+        XCTAssertNil(host.records[0].attributes.poll)
     }
 
     func testPollThatGivesNoTrackerStartsNothing() async {
