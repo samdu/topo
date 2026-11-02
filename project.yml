@@ -54,14 +54,15 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.18.2"
-    # The package's default traits, named: Xcode keeps the trait set of the version it last
-    # resolved in a DerivedData, so a pin moved without them builds the new version with the
-    # old version's set (0.17.7 declared NemoTextProcessing alone, and 0.18.2 built from its
-    # checkout had no TTS: `cannot find type 'PocketTtsManager'`). Named, the set is the
-    # project's whichever version the DerivedData last saw. It is the default set at this pin,
-    # read again at every bump: a default trait a later version adds stays off until it is
-    # named here. TTS is the voice; Diarizer is nothing Topo calls, kept so the build is the
-    # package as released.
+    # The package's default traits, named, so the set the voice is built with is the project's
+    # and not the package's default of the day. It is the default set at this pin, read again at
+    # every bump: a default trait a later version adds stays off until it is named here. TTS is
+    # the voice; Diarizer is nothing Topo calls, kept so the build is the package as released.
+    # Naming them does not cure a package state that last resolved another version: Xcode 27.2
+    # carries that resolution's trait set into the next and refuses a named trait the old
+    # version did not declare, which is why the validation keeps its package state per pin
+    # (scripts/mac-suite.sh, build/packages) and why a build elsewhere that moves this pin under
+    # a kept DerivedData wants its SourcePackages/workspace-state.json removed first.
     traits: [NemoTextProcessing, TTS, Diarizer]
 targets:
   Topo:
