@@ -500,6 +500,9 @@ final class ModelDownloads {
             defer { self?.ticking = false }
             while let self, self.watchdog.active, UIApplication.shared.applicationState == .active {
                 try? await self.clock.sleep(for: DownloadWatchdog.tick)
+                // The app may have resigned in the sleep: a tick after that would judge what
+                // was sampled before, which the probe on return is for.
+                guard UIApplication.shared.applicationState == .active else { break }
                 self.tick()
             }
         }
@@ -560,6 +563,7 @@ final class ModelDownloads {
               !present.contains(model.id) else { return }
         let (task, fromResume) = makeTask(model, file)
         Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: fromResume))
+        watchdog.restarted(key, resumed: fromResume)
         live.insert(key)
         task.resume()
     }
@@ -733,9 +737,11 @@ final class ModelDownloads {
             // A task made from resume data the server no longer honours (the Hub's signed URLs
             // expire): the data is gone with it, and the file is fetched from its URL afresh.
             live.remove(key)
+            watchdog.forget(key)
             guard let (model, file) = parse(key), !present.contains(model.id) else { break }
             let (task, _) = makeTask(model, file)
             Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: false))
+            watchdog.restarted(key, resumed: false)
             inFlight[key] = 0
             live.insert(key)
             task.resume()
@@ -973,11 +979,13 @@ final class SessionRelay: NSObject, URLSessionDownloadDelegate, @unchecked Senda
             return restarting.remove(task.taskIdentifier) != nil
         }
         guard let error, let (key, model, file) = lookup(task) else { return }
-        if cancelledForRestart { return }
-        // What the server lets the next task pick up from, kept for the next `start`.
+        // What the server lets the next task pick up from, kept for the next task: the cancel's
+        // own handler writes it too, but an error that landed inside the cancel's window
+        // carries it here alone.
         if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
             write(data, for: file, in: model)
         }
+        if cancelledForRestart { return }
         report(.failed(key, error.localizedDescription))
     }
 

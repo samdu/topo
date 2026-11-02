@@ -199,8 +199,18 @@ final class ModelDownloadsTests: XCTestCase {
         guard case .failed(let failedKey, _)? = events.all.first else { return XCTFail("a cancel of the system's own is a failure") }
         XCTAssertEqual(failedKey, key)
 
-        // The relay keys by the task, not the key: a's identifier gone does not shield d.
-        XCTAssertFalse(relay.isRestarting(d))
+        // The relay keys by the task, not the key: a restart in flight for one task under the
+        // key does not shield another task's failure under it.
+        events.clear()
+        let e = task()
+        let f = task()
+        relay.cancelForRestart(e, key: key)
+        relay.urlSession(session, task: f, didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
+        guard case .failed(let otherKey, _)? = events.all.first else { return XCTFail("another task's failure under the key is a failure") }
+        XCTAssertEqual(otherKey, key)
+        XCTAssertEqual(events.all.count, 1)
+        XCTAssertTrue(relay.isRestarting(e), "the task cancelled for a restart still is")
+        XCTAssertFalse(relay.isRestarting(f))
     }
 
     private final class Handlers: @unchecked Sendable {

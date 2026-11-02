@@ -17,16 +17,18 @@ final class DownloadWatchdogTests: XCTestCase {
         for s in from...to { dog.observe(key, bytes: start + rate * Int64(s - from), at: at(Double(s))) }
     }
 
-    func testAStalledTaskIsCancelledOnceAWindowOfSamplesExistsAndNotBefore() {
+    func testAStalledTaskIsCancelledOnceAWindowOfSamplesExistsAndNotBefore() throws {
         let dog = DownloadWatchdog()
         flow(dog, "m|f", rate: 36 * KB, from: 0, to: 19)
         XCTAssertEqual(dog.decisions(at: at(19)), [], "19 s of samples is less than a window")
         XCTAssertTrue(dog.active)
+        dog.observe("m|f", bytes: 36 * KB * 20, at: at(20))
         let cancels = dog.decisions(at: at(20))
         XCTAssertEqual(cancels.count, 1)
-        XCTAssertEqual(cancels[0].key, "m|f")
-        XCTAssertEqual(cancels[0].attempt, 1)
-        XCTAssertLessThanOrEqual(abs(cancels[0].rate - 36 * KB), KB)
+        let cancel = try XCTUnwrap(cancels.first)
+        XCTAssertEqual(cancel.key, "m|f")
+        XCTAssertEqual(cancel.attempt, 1)
+        XCTAssertLessThanOrEqual(abs(cancel.rate - 36 * KB), KB)
         XCTAssertTrue(dog.restarting("m|f"), "between its cancel and its replacement the key is restarting")
         XCTAssertEqual(dog.decisions(at: at(25)), [], "a cancel is recorded as it is decided, not when the relay answers")
     }
@@ -35,14 +37,45 @@ final class DownloadWatchdogTests: XCTestCase {
         let dog = DownloadWatchdog()
         flow(dog, "m|fast", rate: 2 * MB, from: 0, to: 60)
         XCTAssertEqual(dog.decisions(at: at(60)), [])
-        XCTAssertEqual(dog.decisions(at: at(60)), [], "a task with no samples is not judged")
-        XCTAssertFalse(dog.restarting("m|none"))
+        XCTAssertEqual(dog.kept("m|none"), 0, "a task with no first byte has no samples, and is not judged")
     }
 
     func testSilenceAfterAFirstByteIsSlow() {
         let dog = DownloadWatchdog()
         dog.observe("m|f", bytes: 5 * MB, at: at(0))
         XCTAssertEqual(dog.decisions(at: at(20)).map(\.rate), [0], "no bytes since the anchor is a rate of zero")
+        // Bytes that went down (a count read off a task made from nothing) are a rate of zero,
+        // not a negative one.
+        let down = DownloadWatchdog()
+        down.observe("m|g", bytes: 5 * MB, at: at(0))
+        down.observe("m|g", bytes: 1 * MB, at: at(20))
+        XCTAssertEqual(down.decisions(at: at(20)).map(\.rate), [0])
+    }
+
+    func testASiblingWithSamplesButNoWindowYetDefersTheJudgement() {
+        // The encoder's task has been crawling for a window when the voice's starts beside it:
+        // the voice's rate is the comparison, and it is a few ticks away.
+        let dog = DownloadWatchdog()
+        flow(dog, "m|a", rate: 36 * KB, from: 0, to: 20)
+        flow(dog, "m|b", rate: 2 * MB, from: 15, to: 20)
+        XCTAssertEqual(dog.decisions(at: at(20)), [], "a sibling with samples and no window yet holds the judgement")
+        flow(dog, "m|a", rate: 36 * KB, from: 21, to: 35, start: 36 * KB * 21)
+        flow(dog, "m|b", rate: 2 * MB, from: 21, to: 35, start: 2 * MB * 6)
+        XCTAssertEqual(dog.decisions(at: at(35)).map(\.key), ["m|a"], "once the sibling has a window, the crawl is judged against it")
+    }
+
+    func testAKeyWhoseReplacementHadNoResumeDataIsNotCancelledAgain() {
+        let dog = DownloadWatchdog()
+        dog.restarted("m|f", resumed: false)
+        flow(dog, "m|f", rate: 36 * KB, from: 0, to: 20)
+        XCTAssertEqual(dog.decisions(at: at(20)), [], "a second start from nothing is a loss, not a retry")
+        dog.forget("m|f")
+        flow(dog, "m|f", rate: 36 * KB, from: 30, to: 50)
+        XCTAssertEqual(dog.decisions(at: at(50)).map(\.key), ["m|f"], "forgotten, the key starts clean")
+        let resumed = DownloadWatchdog()
+        resumed.restarted("m|g", resumed: true)
+        flow(resumed, "m|g", rate: 36 * KB, from: 0, to: 20)
+        XCTAssertEqual(resumed.decisions(at: at(20)).map(\.key), ["m|g"], "a replacement with resume data is judged as any task")
     }
 
     func testSlowIsUnderTheFloorAndUnderATenthOfTheFastestSibling() {
@@ -83,6 +116,7 @@ final class DownloadWatchdogTests: XCTestCase {
             let delay = delays[attempt - 1]
             if delay > 0 {
                 XCTAssertEqual(dog.restartsDue(at: at(Double(now + delay - 1))), [], "attempt \(attempt): not yet")
+                XCTAssertTrue(dog.restarting("m|f"), "owed a replacement, the key is still restarting")
             }
             XCTAssertEqual(dog.restartsDue(at: at(Double(now + delay))), ["m|f"], "attempt \(attempt): \(delay) s after its cancel")
             XCTAssertEqual(dog.restartsDue(at: at(Double(now + delay))), [], "made once")
@@ -97,8 +131,7 @@ final class DownloadWatchdogTests: XCTestCase {
         flow(dog, "m|f", rate: 36 * KB, from: later, to: later + 20, start: bytes)
         XCTAssertEqual(dog.decisions(at: at(Double(later + 20))).map(\.attempt), [5], "after the cooldown, once more")
         dog.cancelled("m|f", at: at(Double(later + 20)))
-        XCTAssertEqual(dog.restartsDue(at: at(Double(later + 20 + 59))), [])
-        XCTAssertEqual(dog.restartsDue(at: at(Double(later + 20 + 60))), ["m|f"], "the last backoff holds past the fourth")
+        XCTAssertEqual(dog.restartsDue(at: at(Double(later + 20))), ["m|f"], "past the four the cooldown spaces the cancels, and the replacement is made at once")
     }
 
     func testAForgottenKeyIsGoneAndTheWatchdogSleeps() {
@@ -149,14 +182,45 @@ final class DownloadWatchdogTests: XCTestCase {
         flow(dog, "m|crawl", rate: 36 * KB, from: 29, to: 40)
         dog.resigned(at: at(40))
         XCTAssertEqual(dog.probe([:], at: at(100)), [], "a task the session no longer holds is not in the probe")
-        // A restart owed at resign is the next foreground start()'s, not the probe's.
+    }
+
+    func testACancelInFlightAndAReplacementOwedAreKeptAcrossTheTimeAway() {
+        let dog = DownloadWatchdog()
+        // Cancelled at 20, resigned before the relay answers: the answer still counts, and the
+        // replacement it owes (the second's, after 15 s) is due on the first tick after the return.
+        flow(dog, "m|f", rate: 36 * KB, from: 0, to: 20)
+        XCTAssertEqual(dog.decisions(at: at(20)).count, 1)
+        dog.resigned(at: at(21))
+        XCTAssertTrue(dog.restarting("m|f"), "a cancel in flight is kept across the resign")
+        XCTAssertEqual(dog.probe([:], at: at(100)), [], "a key not in the probe is gone, or restarting")
+        XCTAssertTrue(dog.cancelled("m|f", at: at(100)), "the relay's answer after the return is still the cancel's")
+        XCTAssertEqual(dog.restartsDue(at: at(100)), ["m|f"], "the first replacement is made at once")
+        // A replacement owed at resign is made on return, not dropped.
         flow(dog, "m|g", rate: 36 * KB, from: 100, to: 120)
-        XCTAssertEqual(dog.decisions(at: at(120)).count, 1)
+        XCTAssertEqual(dog.decisions(at: at(120)).map(\.attempt), [1])
         dog.cancelled("m|g", at: at(120))
-        dog.resigned(at: at(121))
-        XCTAssertFalse(dog.restarting("m|g"))
+        XCTAssertEqual(dog.restartsDue(at: at(120)), ["m|g"])
+        flow(dog, "m|g", rate: 36 * KB, from: 120, to: 140, start: 36 * KB * 20)
+        XCTAssertEqual(dog.decisions(at: at(140)).map(\.attempt), [2])
+        dog.cancelled("m|g", at: at(140))
+        dog.resigned(at: at(141))
+        XCTAssertTrue(dog.restarting("m|g"))
+        XCTAssertEqual(dog.restartsDue(at: at(160)), [], "due at 155, but nothing is made while the app is away")
         XCTAssertEqual(dog.probe([:], at: at(200)), [])
-        XCTAssertEqual(dog.restartsDue(at: at(300)), [])
+        XCTAssertEqual(dog.restartsDue(at: at(200)), ["m|g"], "owed at the resign, made on the first tick after the return")
+    }
+
+    func testNothingIsSampledOrJudgedWhileTheAppIsAway() {
+        let dog = DownloadWatchdog()
+        flow(dog, "m|f", rate: 36 * KB, from: 0, to: 10)
+        dog.resigned(at: at(10))
+        dog.observe("m|f", bytes: 36 * KB * 15, at: at(15))
+        XCTAssertEqual(dog.kept("m|f"), 0, "a sample after the resign is refused until the probe")
+        XCTAssertEqual(dog.decisions(at: at(40)), [], "no judgement while away, whatever a late tick asks")
+        XCTAssertEqual(dog.probe(["m|f": 36 * KB * 10 + 36 * KB * 30], at: at(40)).map(\.key), ["m|f"])
+        dog.forget("m|f")
+        dog.observe("m|g", bytes: 0, at: at(41))
+        XCTAssertEqual(dog.kept("m|g"), 1, "after the probe, samples are taken again")
     }
 
     func testTheMarksNameTheModelThePathBytesAndACountAndNothingElse() {

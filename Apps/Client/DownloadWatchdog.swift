@@ -7,7 +7,9 @@ import Foundation
 /// megabytes (brief-perf-first-run: 5 of 28 fresh ranges from buddybox, one held at 36 KB/s for
 /// 24 minutes), and the same bytes asked for again come fast, though not always at once. So a
 /// task that is slow for a `window` of samples is cancelled with its resume data and made again
-/// from it: at once, then after each of `backoff`, and past those at most once a `cooldown`.
+/// from it: at once, then after each of `backoff`, and past those at once again but at most once
+/// a `cooldown`, the task left running between. A key whose last replacement had no resume data
+/// to carry on from is not cancelled again: a second start from nothing is a loss, not a retry.
 ///
 /// Slow is under `floor` and, where another task is flowing beside it, under a `share` of the
 /// fastest of them: six connections on one thin link are all slow by the floor and none by each
@@ -19,9 +21,9 @@ import Foundation
 /// and acts on what it answers. A background session carries on while the app is suspended and
 /// no progress reaches the process meanwhile, so the watchdog is told the bytes each task was at
 /// when the app resigned (`resigned`) and the bytes each is at on return (`probe`), judges that
-/// span as one window, and drops everything else: nothing more is judged until a window of
-/// foreground samples exists, and a restart whose backoff ran out while the app was away is the
-/// next foreground `start()`'s, which makes a task from the `.resume` file on disk.
+/// span as one window, and drops every sample from before: nothing more is judged until a window
+/// of foreground samples exists. A cancel in flight and a replacement owed are kept across the
+/// time away, and made on the first tick after the return.
 ///
 /// Slowness is never a failure: a file is only ever cancelled to be made again.
 @MainActor
@@ -41,6 +43,9 @@ final class DownloadWatchdog {
     nonisolated static let backoff: [Duration] = [.zero, .seconds(15), .seconds(30), .seconds(60)]
     /// Past `backoff.count` attempts, a file is cancelled again no sooner than this after the last.
     nonisolated static let cooldown: Duration = .seconds(300)
+
+    /// Past `backoff`, a replacement is made at once; the cooldown spaces the cancels.
+    nonisolated static let laterBackoff: Duration = .zero
 
     /// A task to cancel: its key, the rate it was judged at, and which attempt this is (1-based).
     struct Cancel: Equatable, Sendable {
@@ -62,8 +67,11 @@ final class DownloadWatchdog {
     private var cancelling: Set<String> = []
     /// Keys whose `.restarting` has arrived, by when their replacement is due.
     private var pending: [String: Instant] = [:]
-    /// The bytes each key was at when the app resigned, and when.
+    /// The bytes each key was at when the app resigned, and when; set while the app is away, when
+    /// no sample is taken.
     private var resignedAt: (at: Instant, bytes: [String: Int64])?
+    /// Keys whose last replacement carried no resume data: cancelled no more.
+    private var unresumable: Set<String> = []
 
     /// Whether there is anything to tick for: a key with samples, or a restart owed.
     var active: Bool { !samples.isEmpty || !pending.isEmpty }
@@ -92,9 +100,9 @@ final class DownloadWatchdog {
     }
 
     /// `didWriteData` for a task: the bytes written so far, at `now`. Ignored for a key that is
-    /// restarting.
+    /// restarting, and while the app is away.
     func observe(_ key: String, bytes: Int64, at now: Instant) {
-        guard !restarting(key) else { return }
+        guard !restarting(key), resignedAt == nil else { return }
         var kept = samples[key] ?? []
         kept.append(Sample(at: now, bytes: bytes))
         samples[key] = Self.pruned(kept, at: now)
@@ -105,9 +113,17 @@ final class DownloadWatchdog {
         samples[key] = nil
         cancelling.remove(key)
         pending[key] = nil
+        unresumable.remove(key)
     }
 
-    /// The app is leaving the foreground: the bytes each flowing task is at, for `probe`.
+    /// The replacement for `key` is made, with or without resume data: without, the key is not
+    /// cancelled again.
+    func restarted(_ key: String, resumed: Bool) {
+        if !resumed { unresumable.insert(key) }
+    }
+
+    /// The app is leaving the foreground: the bytes each flowing task is at, for `probe`. No
+    /// sample is taken until `probe`; a cancel in flight and a replacement owed are kept.
     func resigned(at now: Instant) {
         var bytes: [String: Int64] = [:]
         for (key, kept) in samples {
@@ -115,44 +131,45 @@ final class DownloadWatchdog {
         }
         resignedAt = (now, bytes)
         samples = [:]
-        cancelling = []
-        pending = [:]
     }
 
     /// The app is in front again, with the bytes the session says each task is at now: the span
     /// since `resigned` is judged as one window where it is at least a window long, and the
-    /// crawls in it are cancelled at once. Everything sampled before is dropped; a key not in
+    /// crawls in it are cancelled at once. Every sample from before is dropped; a key not in
     /// `received` is gone (finished, or the session no longer holds it).
     func probe(_ received: [String: Int64], at now: Instant) -> [Cancel] {
         defer { resignedAt = nil }
         samples = [:]
-        cancelling = []
-        pending = [:]
         guard let resignedAt, now - resignedAt.at >= Self.window else { return [] }
         let elapsed = Self.seconds(now - resignedAt.at)
         var rates: [String: Int64] = [:]
         for (key, bytes) in received {
-            guard let before = resignedAt.bytes[key] else { continue }
-            rates[key] = Int64((Double(bytes - before) / elapsed).rounded(.down))
+            guard let before = resignedAt.bytes[key], !restarting(key) else { continue }
+            rates[key] = max(0, Int64((Double(bytes - before) / elapsed).rounded(.down)))
         }
         return cancels(rates, at: now)
     }
 
     /// The keys slow at `now`, each marked as cancelling and its samples dropped, so the
-    /// replacement is judged on its own.
+    /// replacement is judged on its own. Nothing while the app is away, and nothing while a task
+    /// flowing beside the others has samples but no window yet: its rate is the comparison the
+    /// others are judged against, and it is a tick or so away.
     func decisions(at now: Instant) -> [Cancel] {
+        guard resignedAt == nil else { return [] }
         var rates: [String: Int64] = [:]
         for (key, kept) in samples where !restarting(key) {
-            if let rate = Self.rate(kept, at: now) { rates[key] = rate }
+            guard let rate = Self.rate(kept, at: now) else { return [] }
+            rates[key] = rate
         }
         return cancels(rates, at: now)
     }
 
     /// The cancels among keys with a rate: under the floor, under a share of the fastest other
-    /// rate where there is another, and past the bound not within the cooldown of the last.
+    /// rate where there is another, not within the cooldown of the last past the bound, and not
+    /// a key whose last replacement had nothing to carry on from.
     private func cancels(_ rates: [String: Int64], at now: Instant) -> [Cancel] {
         var cancels: [Cancel] = []
-        for key in rates.keys.sorted() {
+        for key in rates.keys.sorted() where !unresumable.contains(key) {
             let rate = rates[key]!
             guard Self.slow(rate, among: rates.filter { $0.key != key }.values) else { continue }
             if let made = attempts[key], made.count >= Self.backoff.count, now - made.last < Self.cooldown { continue }
@@ -180,12 +197,13 @@ final class DownloadWatchdog {
     func cancelled(_ key: String, at now: Instant) -> Bool {
         guard cancelling.remove(key) != nil else { return false }
         let attempt = attempts(key)
-        pending[key] = now + Self.backoff[min(max(attempt, 1), Self.backoff.count) - 1]
+        pending[key] = now + (attempt <= Self.backoff.count ? Self.backoff[max(attempt, 1) - 1] : Self.laterBackoff)
         return true
     }
 
     /// The keys whose replacement is due at `now`, taken: each is made once.
     func restartsDue(at now: Instant) -> [String] {
+        guard resignedAt == nil else { return [] }
         let due = pending.filter { $0.value <= now }.keys.sorted()
         for key in due { pending[key] = nil }
         return due
@@ -207,7 +225,7 @@ final class DownloadWatchdog {
         guard let anchor = samples.last(where: { $0.at <= edge }), let newest = samples.last else { return nil }
         let elapsed = seconds(now - anchor.at)
         guard elapsed > 0 else { return nil }
-        return Int64((Double(newest.bytes - anchor.bytes) / elapsed).rounded(.down))
+        return max(0, Int64((Double(newest.bytes - anchor.bytes) / elapsed).rounded(.down)))
     }
 
     nonisolated private static func seconds(_ duration: Duration) -> Double {
