@@ -148,7 +148,10 @@ struct TopoApp: App {
         #endif
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
-        let speaker = Speaker(audio: audio, voice: spoken)
+        // The keeper's sounds follow the guest beside Topo, after him, and the speaker plays the bed.
+        let sounds = KeeperSounds(audio: audio)
+        sounds.follow(harness)
+        let speaker = Speaker(audio: audio, voice: spoken, sounds: sounds)
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
         // and goes when its compile ends. A debug stand-in ear, which may load for ever, holds
         // nothing back.

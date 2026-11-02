@@ -39,6 +39,7 @@ Struck through: shipped, then removed, with the reason.
 - Push to talk with Parakeet on the device and the person's own vocabulary (#48, #51, #57, #85); replies in Pocket TTS behind the lock (#55, #86, #89); recovery from a media services reset (#78)
 - Speakable text and code blocks cued by number (#207, #212); the voice from a reply's first sentence as it streams (#297)
 - FluidAudio pinned at 0.17.7, which keeps a sentence whole up to Pocket's 512-position cache (#397); `marius` as the voice, at his own pace (#400); the voice's temperature as a setting, 0.5 unless changed (#411); Topo's own voice pack (#415); noise suppression through Apple's voice processing (#385)
+- The keeper is real audio: tool-class receipts (Daphne's bloops) and, under Sounds, a working bed from the release to the reply's first frame, beside the silence that holds the process; a setting of off, receipts or sounds, and `topo voice working`; a typed turn holds nothing and sounds nothing. The hand-back that lets another app's playback resume is the call's (part A of the same plan)
 - ~~Kokoro's `bm_buddy` blend as the voice~~ (#49; replaced in #55 by Pocket TTS on the device)
 - ~~Apple speech as the ear's and the voice's fallback~~ (#48, #49; removed in #85, #86: one ear and one voice, both FluidAudio on the device, no fallback)
 - ~~Pocket's `eponine` as the voice~~ (#55; `marius` in #400)
@@ -89,7 +90,6 @@ Struck through: shipped, then removed, with the reason.
 3. **A reply on the screen, round two.** A code block or a table opens full screen on a tap (#179), a copy button on code (#217); a list item whose first block is a quote keeps its bullet (#183); an image re-read after a vault change does not wait behind the read in flight (#325).
 4. **The mind keeps working behind another app.**
     - A spoken back-and-forth is a CallKit call: the app runs with the mic for the call's length, and hanging up ends it. For voice turns it replaces the silent keeper's 120 s ceiling (`Speaker.ceiling`).
-    - The keeper is real audio: spoken progress receipts and, if chosen, ambient "working" sounds, in place of `PlayQueue`'s looping silence. A setting chooses off, receipts only or sounds; a typed session holds no audio, and the session mixes with others so other playback ducks rather than stops.
 5. **Topo's ears and mouth take Daphne's gains.**
     - The ear is Parakeet Ultra (`AsrModelVersion.ultra`, a pinned entry in `models.json`) in place of v2, the spotter and `Vocabulary` unchanged. On Sam's 22 bench recordings through Daphne's path it measured WER 0.027 against v2's 0.059 (samdu/daphne-assistant#205). The encoder is ~595 MB against 442 MB; first load and resident memory on a phone are unmeasured.
     - Pocket's Mimi encoder pinned `.cpuOnly` beside the decoder (`PocketTtsComputeUnits.mimiEncoder`), closing the last stage whose default can reach the GPU.

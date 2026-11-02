@@ -112,9 +112,11 @@ final class Speaker {
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          ceiling: Duration = .seconds(120),
          now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime,
-         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) {
+         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
+         sounds: KeeperSounds? = nil) {
         self.audio = audio
         self.voice = voice
+        self.sounds = sounds
         self.ceiling = ceiling
         self.now = now
         queue = PlayQueue(makeEngine: makeEngine, center: center, heard: heard)
@@ -189,6 +191,8 @@ final class Speaker {
         // what it owed is owed still. Anything owed or dead is rebuilt from nothing if need be.
         if queue.needsRebuild { queue.rebuild() }
         if audio.holding, !queue.keeping { hold(true) }
+        // The interruption stopped the bed too, and nothing else puts it back.
+        sounds?.resume()
     }
 
     /// Everything the notification carries, since what iOS calls an interruption at the lock
@@ -237,6 +241,7 @@ final class Speaker {
             guard !Task.isCancelled else { return }
             self.capped(nonce)
         }
+        sounds?.working(true)
         return Wait(spoken: true, held: true)
     }
 
@@ -270,6 +275,8 @@ final class Speaker {
         guard let counting = waits.removeValue(forKey: nonce) else { return }
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
+        // Before the hold drops, so the bed's fade-out is held through where this was the last.
+        if waits.isEmpty { sounds?.working(false) }
         audio.wantAlive(false, for: .awaitingReply(nonce))
     }
 
@@ -356,6 +363,7 @@ final class Speaker {
     /// `reading` reads `text` from here; without it the caller queues the sentences itself.
     private func begin(_ text: String, answering nonce: String?, reply: TurnRef?, reading: Bool) -> Bool {
         cancel()
+        replyBegan = false
         guard voice.ready else {
             #if DEBUG
             DebugRun.say("speak: not spoken — \(voice.summary)")
@@ -433,6 +441,14 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
+    /// The keeper's sounds (`KeeperSounds`): the bed from the release to the reply's first frame,
+    /// dipped while a microphone is open, and back after an interruption where the engine is. The
+    /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
+    let sounds: KeeperSounds?
+    /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
+    /// and not at every sentence's first frame.
+    private var replyBegan = false
+
     /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
     /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
     /// with `VoiceInput.listening`.
@@ -461,6 +477,7 @@ final class Speaker {
     /// reply that waited is read if no microphone is open.
     func microphoneOpened() {
         opening = false
+        sounds?.duck(microphoneBusy)
         microphoneClosed()
     }
 
@@ -477,6 +494,7 @@ final class Speaker {
         deferred = waiting
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         opening = true
+        sounds?.duck(true)
     }
 
     /// The press that opened a microphone has done what it was going to, or a microphone closed:
@@ -485,6 +503,7 @@ final class Speaker {
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
     func microphoneClosed() {
+        sounds?.duck(microphoneBusy)
         guard let waiting = deferred, !microphoneBusy else { return }
         deferred = nil
         AudioLog.say("the microphone closed; reading the reply that waited for it")
@@ -607,6 +626,11 @@ final class Speaker {
                 guard !frame.samples.isEmpty else { continue }
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
+                if !replyBegan {
+                    // The reply's first frame: the bed gives way to the voice.
+                    replyBegan = true
+                    sounds?.working(false)
+                }
                 if first == nil {
                     first = now() - started
                     Perf.mark("speak.firstFrame")

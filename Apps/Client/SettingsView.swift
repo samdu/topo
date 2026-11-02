@@ -17,10 +17,12 @@ struct SettingsView: View {
     @State private var showConnections = false
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+    @AppStorage(WorkingSounds.key) private var workingSounds = WorkingSounds.standard.rawValue
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
+    static let workingSounds = "settings-working-sounds"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
 
@@ -44,6 +46,16 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
                     Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
+                }
+                Section {
+                    // The mode as the sounds read it, so one kept that is not a mode shows as the standard.
+                    Picker("While Topo works", selection: Binding(get: { WorkingSounds.Mode(rawValue: workingSounds) ?? WorkingSounds.standard },
+                                                                 set: { workingSounds = $0.rawValue })) {
+                        ForEach(WorkingSounds.Mode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .accessibilityIdentifier(SettingsView.workingSounds)
+                } footer: {
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo reads, acts or writes, and under Sounds a soft bed until the reply begins. Nothing for a typed turn. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the
