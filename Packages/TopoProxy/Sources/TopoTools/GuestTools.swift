@@ -20,6 +20,14 @@ public enum GuestTools {
     public static let ghPath = ".topo/bin/gh"
     public static let ghCommand = "/usr/local/bin/gh"
 
+    /// `apple-doc`: a developer.apple.com page as Markdown, from Apple's own JSON, under the home
+    /// and on the path. The converter it runs is beside it, not on the path.
+    public static let appleDocPath = ".topo/bin/apple-doc"
+    public static let appleDocCommand = "/usr/local/bin/apple-doc"
+    public static let doccToMarkdownPath = ".topo/docc2md.jq"
+    /// The skill that says when to read Apple's documentation, and how.
+    public static let appleDocsSkillPath = ".claude/skills/apple-docs/SKILL.md"
+
     /// `BROWSER` for Claude Code's login: hands the URL it is given to `topo open-url`. Set in the
     /// login's environment alone, and not linked onto the path.
     public static let browserPath = ".topo/bin/topo-browser"
@@ -36,6 +44,7 @@ public enum GuestTools {
         (scriptPath, command),
         (credentialHelperPath, credentialHelperCommand),
         (ghPath, ghCommand),
+        (appleDocPath, appleDocCommand),
     ]
 
     /// What the guest's environment gains beside the service's URL and token: git told to ask
@@ -53,21 +62,23 @@ public enum GuestTools {
         "GIT_CONFIG_VALUE_1": "topo",
     ]
 
-    /// Writes the scripts (executable: the guest sees the host's mode bits) and the skill under
-    /// `home`, replacing whatever is there.
+    /// Writes the scripts (executable: the guest sees the host's mode bits), the converter and the
+    /// skills under `home`, replacing whatever is there.
     public static func install(home: URL) throws {
         let files = FileManager.default
-        let skill = home.appendingPathComponent(skillPath)
-        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser)]
-        for url in [skill] + scripts.map({ home.appendingPathComponent($0.0) }) {
-            try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser), (appleDocPath, appleDoc)]
+        let plain = [(skillPath, skill), (appleDocsSkillPath, appleDocsSkill), (doccToMarkdownPath, doccToMarkdown)]
+        for (path, _) in scripts + plain {
+            try files.createDirectory(at: home.appendingPathComponent(path).deletingLastPathComponent(), withIntermediateDirectories: true)
         }
         for (path, text) in scripts {
             let url = home.appendingPathComponent(path)
             try Data(text.utf8).write(to: url, options: .atomic)
             try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         }
-        try Data(self.skill.utf8).write(to: skill, options: .atomic)
+        for (path, text) in plain {
+            try Data(text.utf8).write(to: home.appendingPathComponent(path), options: .atomic)
+        }
     }
 
     /// `topo`: carries its arguments to the app and prints what the app says, with its status. No
@@ -250,5 +261,235 @@ public enum GuestTools {
     - `topo voice temperature` says how much chance your voice on this phone is drawn with (0.50 unless changed), and `topo voice temperature 0.3` sets it, anything from 0 to 1, from the next reply read aloud: lower is steadier and flatter, higher livelier and less even. Change it when they ask you to sound different or to try a value; they have the same slider in Settings.
     - `topo context` says how full your own context is, the model's window and the tokens at which it is compacted by itself. `topo context threshold <auto|25–100>` sets that on this phone, from the end of the turn you set it in; `topo context compact` compacts it now, once the turn you ask in has ended, and `topo context` afterwards says what that did. When the person asks you to compact, or to compact sooner or later, do it here and say what you set.
     - `topo look` shows the look this phone is wearing: each field you can tune, its value, its range and where the value came from. `topo look set <part.field> <value>` changes it on this phone at once, and the person can undo it from Settings › Reset; `topo look reset` undoes it yourself. After a change, say in a few words what you changed.
+    """
+
+    /// `apple-doc`: a developer.apple.com page as Markdown. Every page on that site has a JSON
+    /// twin at `developer.apple.com/tutorials/data/documentation/<path>.json` (the site itself is a
+    /// JavaScript shell that gives a plain fetch only its title); the script fetches it with the
+    /// rootfs' BusyBox `wget` and renders it with `doccToMarkdown` under `jq`, which is the one
+    /// thing the guest adds (`apk add jq`; without it, status 127 and the command to run, as `gh`
+    /// says). No third party is on the path: the page is Apple's, rendered here.
+    public static let appleDoc = #"""
+    #!/bin/bash
+    # apple-doc: a developer.apple.com page as Markdown, from Apple's own JSON.
+    # Written by the app on every start; an edit here lasts until the next one.
+    #   apple-doc backgroundtasks
+    #   apple-doc appintents/appschema/messagesintent
+    #   apple-doc https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities
+    #   apple-doc ios-ipados-release-notes/ios-ipados-27_2-release-notes
+    # Exit: 0 printed; 1 the page was not there or could not be fetched; 2 usage; 127 no jq.
+    if [ $# -ne 1 ] || [ -z "$1" ]; then
+        sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2
+        exit 2
+    fi
+    if ! command -v jq > /dev/null 2>&1; then
+        echo "jq is not installed in the guest: apk add jq" >&2
+        exit 127
+    fi
+    # The page's path, from a path or a URL: the host, `documentation/`, a slash either end and a
+    # `.json` are all taken off, so the same page is reached however it was named.
+    p=$1
+    p=${p#https://}; p=${p#http://}; p=${p#developer.apple.com}
+    p=${p#/}; p=${p#documentation/}; p=${p#/}; p=${p%/}; p=${p%.json}
+    url="https://developer.apple.com/tutorials/data/documentation/$p.json"
+    # The converter is beside this script's own file, wherever the command is linked from.
+    converter="$(dirname "$(readlink -f "$0")")/../docc2md.jq"
+    tmp="$(mktemp)" || exit 1
+    trap 'rm -f "$tmp"' EXIT
+    # BusyBox wget: a page that is not there is `server returned error: HTTP/1.1 404 Not Found` on
+    # standard error and status 1, so that line is the whole of what the caller sees.
+    if ! wget -q -T 30 -O "$tmp" "$url" 2> "$tmp.err"; then
+        echo "apple-doc: $(sed 's/^wget: //' "$tmp.err" | head -1): $url" >&2
+        rm -f "$tmp.err"
+        exit 1
+    fi
+    rm -f "$tmp.err"
+    if ! jq -e '.schemaVersion' "$tmp" > /dev/null 2>&1; then
+        echo "apple-doc: not a documentation page: $url" >&2
+        exit 1
+    fi
+    jq -r -f "$converter" "$tmp"
+    """#
+
+    /// The converter `apple-doc` runs: DocC's render JSON — a tree of blocks (paragraph, heading,
+    /// lists, code listing, aside, table, term list, image) over inline runs (text, code voice,
+    /// emphasis, references into the page's own reference table) — written out as Markdown, with
+    /// the page's title, role, breadcrumb, availability and declaration first, then its content,
+    /// parameters and return value, then Topics, Relationships and See Also with each entry linked
+    /// to its absolute page and carrying its one-line abstract. Written beside the scripts and
+    /// not linked onto the path; `apple-doc` finds it by its own resolved location.
+    public static let doccToMarkdown = #"""
+    # docc2md.jq — Apple DocC render JSON → Markdown.
+    # usage: jq -r -f docc2md.jq page.json
+    # The input is what developer.apple.com/tutorials/data/documentation/<path>.json answers.
+
+    def base: "https://developer.apple.com";
+
+    # A reference id → its record from the page's reference table.
+    . as $page | .references as $refs |
+    def ref($id): ($refs[$id] // {});
+
+    def href($r):
+      ($r.url // "") as $u
+      | if ($u | startswith("/")) then base + $u else $u end;
+
+    # Inline content → one string.
+    def inl:
+      if type == "array" then map(inl) | join("")
+      elif type == "string" then .
+      elif type != "object" then ""
+      else
+        .type as $t
+        | if   $t == "text"        then .text
+          elif $t == "codeVoice"   then "`" + .code + "`"
+          elif $t == "emphasis"    then "*" + (.inlineContent | inl) + "*"
+          elif $t == "strong"      then "**" + (.inlineContent | inl) + "**"
+          elif $t == "newTerm"     then "*" + (.inlineContent | inl) + "*"
+          elif $t == "inlineHead"  then "**" + (.inlineContent | inl) + "**"
+          elif $t == "strikethrough" then "~~" + (.inlineContent | inl) + "~~"
+          elif $t == "subscript" or $t == "superscript" then (.inlineContent | inl)
+          elif $t == "reference"   then
+                 ref(.identifier) as $r
+                 | (.overridingTitle // $r.title // (.identifier | sub(".*/";""))) as $title
+                 | if ($r.url // "") == "" then "`" + $title + "`"
+                   elif ($r.role // "") == "symbol" or ($r.kind // "") == "symbol"
+                   then "[`" + $title + "`](" + href($r) + ")"
+                   else "[" + $title + "](" + href($r) + ")" end
+          elif $t == "link"        then "[" + ((.title // .destination) | if type=="array" then inl else . end) + "](" + .destination + ")"
+          elif $t == "image"       then ref(.identifier) as $r | "![" + ($r.alt // "image") + "](" + (($r.variants[0].url // "") | if startswith("/") then base + . else . end) + ")"
+          elif has("inlineContent") then (.inlineContent | inl)
+          else "" end
+      end;
+
+    # Block content → markdown lines (array of strings). $d is the list depth.
+    def blk($d):
+      ("  " * $d) as $pad
+      | if type == "array" then map(blk($d)) | add // []
+        elif type != "object" then []
+        else
+          .type as $t
+          | if   $t == "paragraph"   then [ (.inlineContent | inl) ]
+            elif $t == "heading"     then [ ("#" * (.level // 2)) + " " + (.text // (.inlineContent | inl)) ]
+            elif $t == "codeListing" then [ "```" + (.syntax // "") ] + (.code // []) + [ "```" ]
+            elif $t == "aside"       then
+                   [ "> **" + (.name // (.style // "Note") | ascii_upcase[0:1] + .[1:]) + "**" ]
+                   + ((.content // []) | blk(0) | map(select(. != "")) | map("> " + .))
+            elif $t == "unorderedList" then
+                   [ (.items // [])[] | (.content | blk($d + 1)) | (.[0] |= ($pad + "- " + .)) | .[1:] |= map(if . == "" then . else "  " + . end) | .[] ]
+            elif $t == "orderedList" then
+                   [ (.items // []) | to_entries[] | .key as $i | (.value.content | blk($d + 1)) | (.[0] |= ($pad + (($i + 1) | tostring) + ". " + .)) | .[1:] |= map(if . == "" then . else "   " + . end) | .[] ]
+            elif $t == "termList"    then
+                   [ (.items // [])[] | "- **" + (.term.inlineContent | inl) + "**: " + ((.definition.content // []) | blk(0) | join(" ")) ]
+            elif $t == "table"       then
+                   (.rows // []) as $rows
+                   | if ($rows | length) == 0 then []
+                     else
+                       ($rows | map(map(blk(0) | join(" ") | gsub("\\|"; "\\|")))) as $cells
+                       | [ "| " + ($cells[0] | join(" | ")) + " |",
+                           "|" + ($cells[0] | map("---") | join("|")) + "|" ]
+                         + ($cells[1:] | map("| " + join(" | ") + " |"))
+                     end
+            elif $t == "image"       then [ ({type:"image", identifier:.identifier} | inl) ]
+            elif $t == "video"       then [ "(video: " + (ref(.identifier).alt // .identifier) + ")" ]
+            elif $t == "links"       then [ (.items // [])[] | ref(.) as $r | "- [" + ($r.title // .) + "](" + href($r) + ")" + (if ($r.abstract // []) | length > 0 then ": " + ($r.abstract | inl) else "" end) ]
+            elif $t == "row"         then [ (.columns // [])[] | .content | blk($d) | .[] ]
+            elif $t == "tabNavigator" then [ (.tabs // [])[] | ("**" + .title + "**"), (.content | blk($d) | .[]) ]
+            elif $t == "small"       then [ (.inlineContent | inl) ]
+            elif $t == "dictionaryExample" then [ (.summary // [] | blk($d) | .[]), "```json", (.example.code // [] | .[]), "```" ]
+            elif has("content")      then (.content | blk($d))
+            elif has("inlineContent") then [ (.inlineContent | inl) ]
+            else [] end
+          | . + [ "" ]
+        end;
+
+    # A list of identifiers → bullet lines with title, link and abstract.
+    def idlist($ids):
+      [ ($ids // [])[] | ref(.) as $r
+        | select($r != {})
+        | "- " + (if ($r.role // $r.kind // "") == "symbol" then "[`" + $r.title + "`]" else "[" + $r.title + "]" end)
+              + "(" + href($r) + ")"
+              + (if ($r.deprecated // false) then " *(deprecated)*" else "" end)
+              + (if (($r.abstract // []) | length) > 0 then ": " + ($r.abstract | inl) else "" end) ];
+
+    def platforms:
+      [ (.metadata.platforms // [])[]
+        | .name + (if .introducedAt then " " + .introducedAt else "" end)
+               + (if .beta then " beta" else "" end)
+               + (if .deprecatedAt then ", deprecated " + .deprecatedAt else "" end) ]
+      | if length > 0 then "Availability: " + join(" · ") else empty end;
+
+    def declarations:
+      [ .primaryContentSections[]? | select(.kind == "declarations") | .declarations[]?
+        | "```" + ((.languages // ["swift"])[0]) , (.tokens | map(.text) | join("")), "```", "" ] ;
+
+    def named_section($kind; $title):
+      [ .primaryContentSections[]? | select(.kind == $kind) ] as $s
+      | if ($s | length) == 0 then []
+        else [ "## " + $title, "" ]
+          + ( $s[0]
+              | if $kind == "parameters" then
+                  [ .parameters[] | "- **" + .name + "**: " + ((.content // []) | blk(0) | map(select(. != "")) | join(" ")) ] + [""]
+                elif $kind == "possibleValues" then
+                  [ .values[] | "- `" + .name + "`" + (if (.content // []) | length > 0 then ": " + (.content | blk(0) | map(select(. != "")) | join(" ")) else "" end) ] + [""]
+                else ((.content // []) | blk(0)) end )
+        end;
+
+    def content_section:
+      [ .primaryContentSections[]? | select(.kind == "content") | .content | blk(0) | .[] ];
+
+    def id_sections($secs; $heading):
+      [ ($secs // [])[] | select((.identifiers // []) | length > 0) ] as $kept
+      | if ($kept | length) == 0 then []
+        else [ "## " + $heading, "" ]
+          + [ $kept[] | ("### " + .title), "", (idlist(.identifiers) | .[]), "" ]
+        end;
+
+    def breadcrumb:
+      [ (.hierarchy.paths[0] // [])[] | ref(.) | select(. != {}) | .title ] | if length > 0 then join(" › ") else empty end;
+
+    .
+    | [
+        "# " + (.metadata.title // "Untitled"),
+        (if .metadata.roleHeading then "*" + .metadata.roleHeading + "*" else empty end),
+        (breadcrumb),
+        (platforms),
+        "Source: " + base + ($page.variants[0].paths[0] // ($page.identifier.url // "" | sub("^doc://[^/]*/"; "") | ascii_downcase)),
+        "",
+        (if (.abstract // []) | length > 0 then (.abstract | inl), "" else empty end)
+      ]
+      + declarations
+      + content_section
+      + named_section("parameters"; "Parameters")
+      + named_section("returnValue"; "Return Value")
+      + named_section("possibleValues"; "Possible Values")
+      + named_section("discussion"; "Discussion")
+      + id_sections(.topicSections; "Topics")
+      + id_sections(.relationshipsSections; "Relationships")
+      + id_sections(.seeAlsoSections; "See Also")
+    | map(select(. != null))
+    | join("\n")
+    | gsub("\n{3,}"; "\n\n")
+    """#
+
+    /// The skill for `apple-doc`: its description names the questions Apple's documentation
+    /// answers, so a turn pays for the rest only when one is asked; its body says how to name a
+    /// page, which framework sits behind each `topo` tool, and the settled answers that keep being
+    /// asked for, each with the page to cite.
+    public static let appleDocsSkill = """
+    ---
+    name: apple-docs
+    description: Apple's own developer documentation, read as Markdown with the `apple-doc` command in Bash. Use it before answering what iOS, iPadOS, watchOS or macOS lets an app do or forbids — background time, widgets and their timelines, Live Activities, App Intents and Siri, notifications, HomeKit, EventKit, Contacts, Photos, Core Location, MapKit, ActivityKit, WidgetKit, BackgroundTasks, UserNotifications — what a release added (release notes), what a framework, class, method or entitlement does, or whether a route into the person's data (their messages, mail, Siri's context) exists at all. Read the page rather than answering from memory or from a search result that paraphrases it.
+    ---
+
+    # apple-docs
+
+    `apple-doc <path-or-url>` prints a developer.apple.com page as Markdown: title, availability by platform, declaration, the body, parameters, then its Topics, Relationships and See Also, each entry linked with its one-line summary. It is Apple's own page, from the JSON behind it, rendered in the guest; no third party is involved. It needs `jq` (`apk add jq` once).
+
+    - Name the page as its path or its URL: `apple-doc backgroundtasks`, `apple-doc widgetkit/widgetfamily`, `apple-doc https://developer.apple.com/documentation/activitykit`. Symbol pages take the symbol's path: `backgroundtasks/bgtaskscheduler/submit(_:)` (quote it for the shell).
+    - Release notes: `apple-doc ios-ipados-release-notes/ios-ipados-27_2-release-notes`; the same shape for `xcode-release-notes`, `watchos-release-notes`, `macos-release-notes`.
+    - Start at a framework's page and follow its Topics links; the paths in the output are what to pass next. A page that is not there is status 1 with Apple's own 404, so a wrong guess costs one call.
+    - The frameworks behind `topo`: reminders and calendar are EventKit; contacts, Contacts; home, HomeKit; photos, PhotoKit (`photokit`); location, Core Location (`corelocation`); maps, MapKit; notify, UserNotifications; widget, WidgetKit; control, WidgetKit's controls (`widgetkit/controls-and-the-action-button`); the share sheet, UIKit's activity view; Shortcuts, App Intents (`appintents`); the pill and background time, BackgroundTasks (`backgroundtasks`) and UIKit's `beginBackgroundTask`.
+    - Settled answers, each with the page to cite rather than argue: no app reads the person's iMessages or Mail on iOS (there is no framework for either; `appintents/appschema/messagesintent` is for apps that are messaging apps, exposing their own messages to Siri, not a query API). Siri's personal context is read by Siri, never offered to apps. `BGAppRefreshTask` is about 30 seconds, when iOS chooses, never on a timer; `BGProcessingTask` runs for minutes, mostly on charge. A widget has a timeline the system walks (`widgetkit/keeping-a-widget-up-to-date`); a Live Activity has none, is updated by the app while it runs or by a push (`activitykit/displaying-live-data-with-live-activities`), and its extension has no network. A Shortcuts automation can run an App Intent in the background without opening the app.
+    - WWDC sessions are not documentation pages and `apple-doc` does not read them; link them instead (`developer.apple.com/videos/play/wwdc2026/NNN/`).
     """
 }
