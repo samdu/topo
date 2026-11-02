@@ -625,7 +625,7 @@ final class EarconsTests: XCTestCase {
     /// The cue's hold is bounded: a player whose finish never comes is let go of at `Earcons.bound`,
     /// so no hold outlives its cue. A finish after that moves nothing.
     func testTheBoundLetsGoOfAHoldWhosePlayerNeverFinishes() async {
-        let clock = ManualSleep()
+        let clock = CueSleep()
         let rig = await rig(sleep: { try await clock.sleep($0) })
         // The wait the cue follows, ended under it as the harness ends one.
         _ = rig.speaker.awaitReply("turn", readAloud: true)
@@ -738,7 +738,7 @@ private final class Prompt {
 }
 
 /// A sleep the test fires, so a bound is a moment the test chooses.
-final class ManualSleep: @unchecked Sendable {
+final class CueSleep: @unchecked Sendable {
     private let lock = NSLock()
     private var waiting: [CheckedContinuation<Void, any Error>] = []
     private var _asked: [Duration] = []
