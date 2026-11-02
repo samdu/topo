@@ -32,7 +32,7 @@ A session opens its own worktree's project (`XcodeOpenWorkspace` with the absolu
 ```sh
 old="$(scripts/agent-simulator.sh take)" &&    # exit 3: a session's, and nothing below runs
   xcrun simctl delete "$old" &&
-  xcrun simctl create "Topo Agent" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-27-0 &&
+  xcrun simctl create "Topo Agent" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-27-2 &&
   scripts/agent-simulator.sh release
 ```
 
