@@ -75,9 +75,12 @@ cat > "$work/bin/meson" <<'EOF'
 echo "$FAKE_OPTIONS"
 EOF
 chmod +x "$work/bin/meson"
-options() { printf '[{"name":"guest_arch","value":"%s"},{"name":"kernel","value":"%s"},{"name":"engine","value":"%s"}]' "$@"; }
+# jit is a boolean, as meson's introspection gives it; the fourth argument, false unless named.
+options() { printf '[{"name":"guest_arch","value":"%s"},{"name":"kernel","value":"%s"},{"name":"engine","value":"%s"},{"name":"jit","value":%s}]' "$1" "$2" "$3" "${4:-false}"; }
 PATH="$work/bin:$PATH" FAKE_OPTIONS="$(options arm64 ish asbestos)" \
-  expect pass "arm64, ish, asbestos" "arm64, ish, asbestos" "$script" verify-options "$work"
+  expect pass "arm64, ish, asbestos, no JIT" "arm64, ish, asbestos, no JIT" "$script" verify-options "$work"
+PATH="$work/bin:$PATH" FAKE_OPTIONS="$(options arm64 ish asbestos true)" \
+  expect fail "the native JIT" "jit=True, not False" "$script" verify-options "$work"
 PATH="$work/bin:$PATH" FAKE_OPTIONS="$(options arm64 linux asbestos)" \
   expect fail "the Linux kernel" "kernel=linux, not ish" "$script" verify-options "$work"
 PATH="$work/bin:$PATH" FAKE_OPTIONS="$(options x86 ish asbestos)" \
