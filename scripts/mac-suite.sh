@@ -71,13 +71,12 @@ cd "$root" || exit 2
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
 # change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
 # otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
-# selected Xcode other work is pinned to need not change it. The simulator runtimes are 27.0's,
-# which Xcode 27.2 runs. XcodeGen's is the version the committed
-# projects are generated with.
+# selected Xcode other work is pinned to need not change it. The simulator runtimes are 27.2's.
+# XcodeGen's is the version the committed projects are generated with.
 XCODE_VERSION="27.2"
 XCODE_APPS="${TOPO_XCODE_APPS:-/Applications}"
-IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
+IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-2"
+WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-2"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
