@@ -604,11 +604,13 @@ struct ChatView: View {
                                holdsTopo: look.mascot.placement == .glass)
     }
 
-    /// What the composer's `+` offers: a file and a photo where the app made the attachments,
-    /// and nothing where it did not.
+    /// What the composer's `+` offers: a file and a photo where the app made the attachments, the
+    /// camera where the phone has one, and nothing where the app made none.
     private var composerMenu: ComposerMenu {
         guard let attachments else { return ComposerMenu() }
-        return ComposerMenu(attachFile: { attachments.pick(.file) }, choosePhoto: { attachments.pick(.photo) })
+        var menu = ComposerMenu(attachFile: { attachments.pick(.file) }, choosePhoto: { attachments.pick(.photo) })
+        if attachments.hasCamera { menu.takePhoto = { attachments.pick(.camera) } }
+        return menu
     }
 
     /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.

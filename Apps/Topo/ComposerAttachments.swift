@@ -22,6 +22,8 @@ final class ComposerAttachments {
         case file
         /// The photo library's picker, one image.
         case photo
+        /// The camera, one capture.
+        case camera
         var id: String { rawValue }
     }
 
@@ -30,18 +32,28 @@ final class ComposerAttachments {
     /// The share sheet over what was picked, or its refusal, while it is up.
     private(set) var sheet: ShareSheetModel?
 
+    /// Whether this phone has a camera to offer, asked as the menu is built and again at the
+    /// press: none on a simulator, so the item is not there, and one a restriction has taken
+    /// since the menu was built puts nothing up, since a picker over a source the phone lacks is
+    /// an exception rather than a refusal.
+    let cameraAvailable: @MainActor () -> Bool
+    var hasCamera: Bool { cameraAvailable() }
+
     let store: @MainActor () -> ShareStore?
     private let drain: @MainActor () async -> Void
 
     init(store: @escaping @MainActor () -> ShareStore? = { ShareStore.shared() },
-         drain: @escaping @MainActor () async -> Void) {
+         drain: @escaping @MainActor () async -> Void,
+         cameraAvailable: @escaping @MainActor () -> Bool = { UIImagePickerController.isSourceTypeAvailable(.camera) }) {
         self.store = store
         self.drain = drain
+        self.cameraAvailable = cameraAvailable
     }
 
     /// What is over the chat for this: a picker, or the sheet. One at a time; the photo picker
     /// and the sheet are one presentation of the chat's, which the sheet follows the picker in,
-    /// and the file picker is `fileImporter`'s own.
+    /// the file picker is `fileImporter`'s own and the camera is a cover of its own, so a
+    /// `.picker` of either of those is up as something other than the sheet's presentation.
     enum Up: Identifiable, Equatable {
         case picker(Source)
         case sheet
@@ -60,9 +72,9 @@ final class ComposerAttachments {
     }
 
     /// The `+`'s item pressed: the door judged first, then the picker up. A second press while
-    /// one is up does nothing.
+    /// one is up does nothing, and nor does the camera where there is none.
     func pick(_ source: Source) {
-        guard picking == nil, sheet == nil else { return }
+        guard picking == nil, sheet == nil, source != .camera || hasCamera else { return }
         guard let store = store(), let door = store.door() else { return refuse(.signedOut) }
         guard door.files else { return refuse(.anotherPhone) }
         picking = source
@@ -102,6 +114,21 @@ final class ComposerAttachments {
         Task { await model.read([provider]) }
     }
 
+    /// The camera's capture, or nothing: the cover goes down and the sheet goes up, reading,
+    /// while the capture is drawn and written off the main actor (`capture`).
+    func chose(camera image: UIImage?) {
+        guard picking == .camera else { return }
+        picking = nil
+        guard let image, let store = store() else { return }
+        let model = ShareSheetModel(store: store, via: .composer)
+        sheet = model
+        let time = Date()
+        Task.detached(priority: .userInitiated) {
+            let outcome = ComposerAttachments.capture(image, at: time, into: store)
+            await MainActor.run { model.took(outcome) }
+        }
+    }
+
     /// The sheet's Cancel: the thing goes with it, and a read or a copy still landing keeps nothing.
     func cancel() {
         sheet?.discard()
@@ -126,6 +153,45 @@ final class ComposerAttachments {
     enum Picked {
         case taken(ShareIntake.Item, scratch: URL)
         case refused(ShareRefusal, scratch: URL?)
+    }
+
+    /// The longest side a capture is kept at, the line `topo photos export` draws.
+    nonisolated static let captureSide: CGFloat = 2048
+    /// The quality a capture's JPEG is written at.
+    nonisolated static let captureQuality: CGFloat = 0.9
+
+    /// What the camera took, as a JPEG in a fresh scratch folder of the store's: drawn upright at
+    /// no more than `captureSide` on its long side, so the file is the picture as the person saw
+    /// it whichever way the phone was held and small enough to read, and named for the moment.
+    /// It is written nowhere else: not the photo library, which `topo photos save` alone adds to.
+    nonisolated static func capture(_ image: UIImage, at time: Date, into store: ShareStore) -> Picked {
+        let longest = max(image.size.width, image.size.height)
+        let scale = longest > captureSide ? captureSide / longest : 1
+        let size = CGSize(width: (image.size.width * scale).rounded(.down), height: (image.size.height * scale).rounded(.down))
+        guard size.width >= 1, size.height >= 1 else { return .refused(.nothing, scratch: nil) }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let upright = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        guard let data = upright.jpegData(compressionQuality: captureQuality) else { return .refused(.failed, scratch: nil) }
+        guard data.count <= Share.fileLimit else { return .refused(.tooLarge, scratch: nil) }
+        guard store.door() != nil else { return .refused(.signedOut, scratch: nil) }
+        guard let scratch = try? store.scratch() else { return .refused(.failed, scratch: nil) }
+        let copy = scratch.appendingPathComponent(Share.name(captureName(at: time)))
+        do {
+            try data.write(to: copy, options: .withoutOverwriting)
+        } catch {
+            return .refused(.failed, scratch: scratch)
+        }
+        return .taken(ShareIntake.Item(kind: .image, file: copy, bytes: data.count), scratch: scratch)
+    }
+
+    /// `Photo 2026-11-01 21-55-03.jpg`, in the phone's own time zone: no colon, which the
+    /// store's name rules drop.
+    nonisolated static func captureName(at time: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
+        return "Photo \(formatter.string(from: time)).jpg"
     }
 
     /// A copy of the file at `url` in a fresh scratch folder of the store's, under the name the
@@ -157,10 +223,11 @@ final class ComposerAttachments {
 /// back what it holds. The file picker is SwiftUI's own (`fileImporter`, one file of any kind,
 /// opened under its grant and copied by `ComposerAttachments.copy`), the photo picker the
 /// system's over the library in its compatible representation, so a HEIC arrives as a JPEG the
-/// mind can read; one image, chosen with no permission asked. The photo picker and the sheet
-/// are one presentation (`Up`), so the sheet follows the picker as SwiftUI sequences the two,
-/// and neither is swiped away: the picker's Cancel and the sheet's are the ways down, so every
-/// change of what is up is the model's own.
+/// mind can read; one image, chosen with no permission asked; and the camera the system's over
+/// the whole screen (`CameraPicker`, a cover of its own, which hands back what it took or
+/// nothing). The photo picker and the sheet are one presentation (`Up`), so the sheet follows
+/// the picker as SwiftUI sequences the two, and neither is swiped away: the picker's Cancel and
+/// the sheet's are the ways down, so every change of what is up is the model's own.
 struct ComposerPickers: ViewModifier {
     @Bindable var attachments: ComposerAttachments
     var marks: ShareSheet.Marks
@@ -177,8 +244,9 @@ struct ComposerPickers: ViewModifier {
                     PhotoPicker { provider in attachments.chose(photo: provider) }
                         .ignoresSafeArea()
                         .interactiveDismissDisabled()
-                case .picker(.file):
-                    // The file picker is `fileImporter`'s, not a sheet of this one's.
+                case .picker(.file), .picker(.camera):
+                    // The file picker is `fileImporter`'s and the camera the cover's, not a
+                    // sheet of this one's.
                     EmptyView()
                 case .sheet:
                     if let model = attachments.sheet {
@@ -187,6 +255,16 @@ struct ComposerPickers: ViewModifier {
                     }
                 }
             }
+            // The camera takes the whole screen, as the system's does.
+            .fullScreenCover(isPresented: cameraUp) {
+                CameraPicker { image in attachments.chose(camera: image) }
+                    .ignoresSafeArea()
+            }
+    }
+
+    private var cameraUp: Binding<Bool> {
+        Binding(get: { attachments.picking == .camera },
+                set: { up in if !up { attachments.dismissed(.camera) } })
     }
 
     private var fileUp: Binding<Bool> {
@@ -198,7 +276,7 @@ struct ComposerPickers: ViewModifier {
     /// system writes as one presentation gives way to the next is not a cancel, and neither
     /// can be swiped away.
     private var up: Binding<ComposerAttachments.Up?> {
-        Binding(get: { attachments.picking == .file ? nil : attachments.up }, set: { _ in })
+        Binding(get: { attachments.picking == .file || attachments.picking == .camera ? nil : attachments.up }, set: { _ in })
     }
 }
 
@@ -246,6 +324,46 @@ struct PhotoPicker: UIViewControllerRepresentable {
             answered = true
             let provider = results.first?.itemProvider
             MainActor.assumeIsolated { chosen(provider) }
+        }
+    }
+}
+
+/// `UIImagePickerController` on the camera: one capture, handed back as the image it took, and
+/// nothing saved anywhere by the picker.
+struct CameraPicker: UIViewControllerRepresentable {
+    let took: @MainActor (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(took: took) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let took: @MainActor (UIImage?) -> Void
+        private var answered = false
+
+        init(took: @escaping @MainActor (UIImage?) -> Void) {
+            self.took = took
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            guard !answered else { return }
+            answered = true
+            let image = info[.originalImage] as? UIImage
+            MainActor.assumeIsolated { took(image) }
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            guard !answered else { return }
+            answered = true
+            MainActor.assumeIsolated { took(nil) }
         }
     }
 }
