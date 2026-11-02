@@ -296,6 +296,7 @@ final class Speaker {
         #endif
         stop()
         queue.reset()
+        sounds?.mediaServicesWereReset()
     }
 
     /// Loads the voice's model, downloading it on the first run. Called on the foreground so it

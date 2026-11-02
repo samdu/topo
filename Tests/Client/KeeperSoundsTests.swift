@@ -117,7 +117,7 @@ final class KeeperSoundsTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { isActive })
         let players = WorkingRecorder()
         let clock = PausedSleep()
-        let sounds = KeeperSounds(audio: audio, center: center, defaults: defaults, bundle: Bundle(for: KeeperSounds.self),
+        let sounds = KeeperSounds(audio: audio, defaults: defaults, bundle: Bundle(for: KeeperSounds.self),
                                   makePlayer: { players.make($0) }, sleep: { try await clock.sleep($0) })
         let voice = Voice(engine: ScriptedVoice())
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
@@ -154,6 +154,7 @@ final class KeeperSoundsTests: XCTestCase {
     func testEachToolClassSoundsItsToneWhileAWaitStands() async {
         let rig = await rig()
         _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.speaker.keeping, "the wait's keeper is not running, so the session is not live")
         XCTAssertTrue(rig.audio.holding)
 
         rig.sounds.follow(toolUse("WebSearch"))
@@ -272,19 +273,29 @@ final class KeeperSoundsTests: XCTestCase {
         await settle("the receipt's hold to go") { !rig.audio.holding }
     }
 
-    /// A receipt on a session that will not activate is refused: no player, no hold, nothing played.
-    func testAReceiptOnAnInvalidSessionIsRefusedNotPlayed() async {
-        let rig = await rig()
+    /// A sound on a session that is not live is refused and configures nothing to get one: no
+    /// player, no hold, nothing played. Behind the lock that is the lock screen's interruption
+    /// with a claim change deferred under the wait's hold, which a sound must not apply from the
+    /// background; a sound on a session nothing has activated yet is refused the same way.
+    func testASoundOnASessionThatIsNotLiveIsRefusedAndConfiguresNothing() async {
+        let rig = await rig(mode: .sounds, isActive: false)
+        XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil), "a receipt played on a session nothing had activated")
+        rig.audio.wantRecord(true, for: .warm)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.seams.activationError = Seams.Refused()
-        rig.audio.invalidate()
+        rig.audio.wantRecord(false, for: .warm)
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        await drain()
+        rig.players.bed?.interrupted()
         rig.seams.forget()
+
         XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil))
         XCTAssertEqual(rig.sounds.played, [])
-        XCTAssertTrue(rig.players.players.isEmpty, "a player was made on a session that did not activate")
-        XCTAssertEqual(rig.seams.lines, ["activate failed"])
-        rig.sounds.working(true)
-        XCTAssertNil(rig.players.bed, "the bed was made on a session that did not activate")
+        XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile], "a player was made on a session that is not live")
+        rig.sounds.resume()
+        XCTAssertEqual(rig.players.bed?.plays, 1, "the bed was played again on a session that is not live")
+        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session")
+        XCTAssertEqual(rig.seams.records, [], "a sound applied a claim change from the background")
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 

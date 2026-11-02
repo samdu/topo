@@ -143,14 +143,12 @@ final class KeeperSounds {
     private var holding = false
     private var letting: Task<Void, Never>?
     private var holdSerial = 0
-    private var resetObserver: NSObjectProtocol?
     #if DEBUG
     /// Every receipt played, in order, for a test.
     private(set) var played: [Tone] = []
     #endif
 
-    init(audio: AudioSession, center: NotificationCenter = .default, defaults: UserDefaults = .standard,
-         bundle: Bundle = .main,
+    init(audio: AudioSession, defaults: UserDefaults = .standard, bundle: Bundle = .main,
          makePlayer: @escaping @MainActor (URL) throws -> any WorkingPlayer = { try WorkingAudioPlayer(url: $0) },
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.audio = audio
@@ -158,16 +156,14 @@ final class KeeperSounds {
         self.bundle = bundle
         self.makePlayer = makePlayer
         self.sleep = sleep
-        resetObserver = center.addObserver(
-            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.mediaServicesWereReset() }
-        }
     }
 
-    /// iOS reset the media server: the players were handles into it and are dropped, the bed is
-    /// off and whatever held the process lets go. Nothing is built here; the next sound makes its own.
-    private func mediaServicesWereReset() {
+    /// iOS reset the media server, and the speaker has dropped its queue: the players were
+    /// handles into it and are dropped, the bed is off and whatever held the process lets go.
+    /// Nothing is built here; the next sound makes its own. Told by `Speaker` rather than
+    /// observed, so the sound's hold goes after the speaker's own have, never into a keeper
+    /// restarted on the engine the reset killed.
+    func mediaServicesWereReset() {
         players = [:]
         bed = nil
         bedOn = false
@@ -255,12 +251,15 @@ final class KeeperSounds {
         }
     }
 
+    /// A sound is a moment: it plays on a live session and configures nothing to get one, so
+    /// after an interruption behind the lock it is refused rather than the session reactivated
+    /// from the background. The speaker's own resume brings the bed back once the session is.
     private func activate(for what: String) -> Bool {
         do {
-            try audio.ensureActive()
+            try audio.ensureLive()
             return true
         } catch {
-            AudioLog.say("\(what) refused: the session did not activate: \(error)")
+            AudioLog.say("\(what) refused: \(error)")
             return false
         }
     }
