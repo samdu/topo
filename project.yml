@@ -77,8 +77,8 @@ targets:
       # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
       - path: Apps/Topo/Resources/models.json
         buildPhase: resources
-      # The sounds played beside the voice; XcodeGen lands each at the bundle's root, which is
-      # where they are looked for.
+      # The sounds played beside the voice (the keeper's, and the spoken exchange's cues, UI SFX's
+      # Zen sounds); XcodeGen lands each at the bundle's root, which is where they are looked for.
       - path: Apps/Topo/Resources/sounds
         buildPhase: resources
       # The mark itself, read at launch rather than copied into Swift.

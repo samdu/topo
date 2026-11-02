@@ -46,7 +46,7 @@ final class Speaker {
     let voice: Voice
     private let audio: AudioSession
     private let queue: PlayQueue
-    /// True while the process is being held open for a reply, by either owner.
+    /// True while the process is being held open for a reply, by any owner.
     var holding: Bool { audio.holding }
     #if DEBUG
     /// Whether the keeper's silence is rendering, and every transition it has made, for a test
@@ -100,6 +100,11 @@ final class Speaker {
     /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
     /// each reply cuts off the one before it anyway.
     private var deferred: (text: String, nonce: String?, reply: TurnRef?)?
+    /// The spoken turns whose failure has been cued, so one the harness tells of twice — at the
+    /// guest's end and at the turn's — sounds once. Cleared as the wait ends.
+    private var failedCued: Set<String> = []
+    /// Whether the reply being read is a failed turn's: it ends with `failed` in place of `done`.
+    private var readingFailed = false
     #if DEBUG
     /// What the last reply was and whether it was heard to the end, for the UI test.
     private(set) var report = Report()
@@ -123,10 +128,12 @@ final class Speaker {
          ceiling: Duration = .seconds(120),
          now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime,
          heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
-         sounds: KeeperSounds? = nil) {
+         sounds: KeeperSounds? = nil,
+         earcons: Earcons? = nil) {
         self.audio = audio
         self.voice = voice
         self.sounds = sounds
+        self.earcons = earcons
         self.ceiling = ceiling
         self.now = now
         queue = PlayQueue(makeEngine: makeEngine, center: center, heard: heard)
@@ -143,6 +150,9 @@ final class Speaker {
             self.onHold?(held)
         }
         sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
+        // A cue is never played into an open microphone, and whether one is open or opening is
+        // this object's answer.
+        self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -377,12 +387,28 @@ final class Speaker {
     /// Lets go of one turn's wait. Free when that turn holds none.
     func endAwaiting(_ nonce: String, _ why: String) {
         refusals[nonce] = nil
+        failedCued.remove(nonce)
         guard let counting = waits.removeValue(forKey: nonce) else { return }
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
         // Before the hold drops, so the bed's fade-out is held through where this was the last.
         if waits.isEmpty { sounds?.working(false) }
         audio.wantAlive(false, for: .awaitingReply(nonce))
+    }
+
+    /// A spoken turn failed for the person (`Harness.onTurnFailure`, through `SpokenReply.follow`):
+    /// a wait standing for it sounds `failed`, once, before the wait ends, so the cue's hold is
+    /// taken under the wait's; and a reply of it being read as it was written ends with `failed`
+    /// in place of `done`, since what was heard was cut short. A turn no wait stands for and
+    /// nobody is reading — a typed one — sounds nothing.
+    func turnFailed(_ nonce: String) {
+        if written?.nonce == nonce {
+            readingFailed = true
+            return
+        }
+        guard waits[nonce] != nil, !failedCued.contains(nonce) else { return }
+        failedCued.insert(nonce)
+        earcons?.play(.failed)
     }
 
     /// Lets go of every wait: the chat has stopped answering, or something ended things.
@@ -392,13 +418,13 @@ final class Speaker {
 
     /// iOS reset the media server: the sounds' players go first, so that nothing below finds a
     /// bed to fade; the reply stops and the holds go with it; the play queue's nodes go too,
-    /// since an engine that was running when the server went down will not start again; and
-    /// last the sounds' own hold. Nothing is built or started here: a hold change under the
-    /// handler re-notifies `hold(true)` while another hold still stands, and `resetting` keeps
-    /// that from starting the keeper on the dead engine. The next `speak` activates the session
-    /// and the first frame builds the queue, which is how Say it again works after a reset with
-    /// no press before it. A turn that was still awaited is answered on the next pass the app
-    /// runs, on the foreground.
+    /// since an engine that was running when the server went down will not start again; then
+    /// the cues' players and the cue's hold; and last the sounds' own hold. Nothing is built or
+    /// started here: a hold change under the handler re-notifies `hold(true)` while another hold
+    /// still stands, and `resetting` keeps that from starting the keeper on the dead engine. The
+    /// next `speak` activates the session and the first frame builds the queue, which is how Say
+    /// it again works after a reset with no press before it. A turn that was still awaited is
+    /// answered on the next pass the app runs, on the foreground.
     private func mediaServicesWereReset() {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
@@ -408,6 +434,7 @@ final class Speaker {
         sounds?.dropPlayers()
         stop()
         queue.reset()
+        earcons?.mediaServicesWereReset()
         sounds?.letGo("the media server was reset")
     }
 
@@ -483,6 +510,7 @@ final class Speaker {
     private func begin(_ text: String, answering nonce: String?, reply: TurnRef?, reading: Bool) -> Bool {
         cancel()
         replyBegan = false
+        readingFailed = false
         guard voice.ready else {
             #if DEBUG
             DebugRun.say("speak: not spoken — \(voice.summary)")
@@ -555,7 +583,7 @@ final class Speaker {
     }
 
     /// Ends things: a press, the Stop item, a sign-out, a reset, a reply that stopped making
-    /// progress. Both holds go, since whatever was being waited for is not going to be heard now
+    /// progress. The holds go, since whatever was being waited for is not going to be heard now
     /// either.
     func stop() {
         cancel()
@@ -569,6 +597,10 @@ final class Speaker {
     /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
     /// and not at every sentence's first frame.
     private var replyBegan = false
+    /// The cues a spoken exchange sounds (`Earcons`), on this speaker's session: the chat's press
+    /// plays the microphone's and the release's, this object plays `done` as a reply ends, or `failed` for one its turn's failure cut short. The
+    /// app's to give; a speaker given none sounds nothing, which is every suite's but the cues' own.
+    let earcons: Earcons?
 
     /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
     /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
@@ -587,6 +619,9 @@ final class Speaker {
 
     /// A reply is waiting for the microphone to close.
     var waitingForMicrophone: Bool { deferred != nil }
+
+    /// Whether a wait stands for the spoken turn `nonce`.
+    func isAwaiting(_ nonce: String) -> Bool { waits[nonce] != nil }
 
     #if DEBUG
     /// The spoken turns a wait is standing for, for a test.
@@ -839,11 +874,19 @@ final class Speaker {
         }
     }
 
-    /// The reply came to its end, rather than being stopped.
+    /// The reply came to its end, rather than being stopped. The cue first: its hold is taken
+    /// while the reply's still stands, so behind the lock the process is not let go of between
+    /// the two and nothing retakes a hold on a session the last one's going left to wait. A reply
+    /// cut short by its turn's failure (`turnFailed`) ends with `failed`, not `done`.
     private func finished() {
+        // The queue's drained lands on main a hop after the audio thread saw it: one landing
+        // after a stop, or after the end `made` or `writingEnded` already saw, ends nothing twice.
+        guard speaking else { return }
         #if DEBUG
         report.finished = report.started
         #endif
+        earcons?.play(readingFailed ? .failed : .done)
+        readingFailed = false
         done()
     }
 
