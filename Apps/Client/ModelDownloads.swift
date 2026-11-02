@@ -279,7 +279,7 @@ final class ModelDownloads {
     /// Nil when the bundle has no readable manifest, in which case every model is `failed`.
     let manifest: ModelManifest?
     private let trouble: String?
-    private let session: URLSession
+    let session: URLSession
     private let relay: SessionRelay
     /// The models on disk in full.
     private(set) var present: Set<String> = []
@@ -307,6 +307,14 @@ final class ModelDownloads {
     /// What iOS gave `handleEventsForBackgroundURLSession`, called once the session has
     /// delivered the events it woke the app for.
     var completion: (() -> Void)?
+    /// Judges each task's rate and says which to cancel and when to make its replacement
+    /// (`DownloadWatchdog`). Fed from `.progress`, ticked while it is active and the app is.
+    let watchdog = DownloadWatchdog()
+    private let clock = ContinuousClock()
+    private var ticking = false
+    /// The keys whose task this process made and has not seen the end of: a `reconcile` whose
+    /// snapshot of the session's tasks was taken before one was made leaves it alone.
+    private(set) var live: Set<String> = []
 
     /// The session's configuration: background, so the transfer outlives the process; nothing
     /// expensive or constrained, so the person's data settings decide; waiting for connectivity
@@ -321,7 +329,13 @@ final class ModelDownloads {
         return configuration
     }
 
-    private init(store: ModelStore = .standard(), manifest: Result<ModelManifest, Error> = Result { try ModelManifest.bundled() }) {
+    private convenience init() {
+        self.init(store: .standard(), manifest: Result { try ModelManifest.bundled() }, configuration: Self.configuration())
+    }
+
+    /// The app's is `shared`, over the background session; a test's is over an ephemeral one
+    /// whose protocol never answers, so nothing it makes reaches the network or completes.
+    init(store: ModelStore, manifest: Result<ModelManifest, Error>, configuration: URLSessionConfiguration) {
         self.store = store
         switch manifest {
         case .success(let m):
@@ -332,8 +346,16 @@ final class ModelDownloads {
             trouble = error.localizedDescription
         }
         relay = SessionRelay(store: store, manifest: self.manifest)
-        session = URLSession(configuration: Self.configuration(), delegate: relay, delegateQueue: nil)
+        session = URLSession(configuration: configuration, delegate: relay, delegateQueue: nil)
         relay.events = { [weak self] event in Task { @MainActor in self?.handle(event) } }
+        // A background session carries on while the app is suspended and no progress reaches
+        // the process meanwhile, so what was sampled before is no evidence now.
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resigned() }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.becameActive() }
+        }
         for model in self.manifest?.models ?? [] {
             done[model.id] = store.verifiedBytes(model)
             if store.isPresent(model) { present.insert(model.id) }
@@ -417,7 +439,7 @@ final class ModelDownloads {
         Self.held(id, after: after, wanted: wanted, present: present, failed: Set(failures.keys))
     }
 
-    private func enqueue(_ manifest: ModelManifest, excluding running: Set<String>, retry: Bool) {
+    func enqueue(_ manifest: ModelManifest, excluding running: Set<String>, retry: Bool) {
         let plan = Self.plan(manifest.models.map(\.id), after: after, wanted: wanted, present: present,
                              failed: Set(failures.keys), retry: retry)
         heldBack = plan.holding
@@ -440,22 +462,124 @@ final class ModelDownloads {
                     carried += 1
                     continue
                 }
-                guard !verifying.contains(key) else { continue }
-                let task: URLSessionDownloadTask
-                let resume = store.resumeData(for: file, in: model)
-                if let data = try? Data(contentsOf: resume) {
-                    task = session.downloadTask(withResumeData: data)
-                    try? FileManager.default.removeItem(at: resume)
-                    resumed += 1
-                } else {
-                    task = session.downloadTask(with: model.url(for: file))
-                }
-                task.taskDescription = key
+                // A key between the watchdog's cancel and its replacement: the session reads
+                // the cancelling task as neither running nor suspended, and a second task for
+                // the file would fetch it twice.
+                guard !verifying.contains(key), !watchdog.restarting(key), !live.contains(key) else { continue }
+                let (task, fromResume) = makeTask(model, file)
+                if fromResume { resumed += 1 }
                 inFlight[key] = inFlight[key] ?? 0
+                live.insert(key)
                 made += 1
                 task.resume()
             }
         }
+    }
+
+    /// One task for a file, under its key: from the file's resume data where the last task left
+    /// any, consumed, and from its URL otherwise. Not resumed.
+    private func makeTask(_ model: ModelManifest.Model, _ file: ModelManifest.File) -> (URLSessionDownloadTask, fromResume: Bool) {
+        let task: URLSessionDownloadTask
+        let resume = store.resumeData(for: file, in: model)
+        let fromResume: Bool
+        if let data = try? Data(contentsOf: resume) {
+            task = session.downloadTask(withResumeData: data)
+            try? FileManager.default.removeItem(at: resume)
+            relay.madeFromResume(task)
+            fromResume = true
+        } else {
+            task = session.downloadTask(with: model.url(for: file))
+            fromResume = false
+        }
+        task.taskDescription = Self.key(model, file)
+        return (task, fromResume)
+    }
+
+    /// The watchdog's loop: every `DownloadWatchdog.tick` while it has something to judge and the
+    /// app is in front, the slow tasks are cancelled and the replacements due are made. One loop
+    /// at a time; it ends when either condition does, and the next `.progress` or foreground
+    /// starts it again.
+    private func startTicking() {
+        guard !ticking, UIApplication.shared.applicationState == .active, watchdog.active else { return }
+        ticking = true
+        Task { @MainActor [weak self] in
+            defer { self?.ticking = false }
+            while let self, self.watchdog.active, UIApplication.shared.applicationState == .active {
+                try? await self.clock.sleep(for: DownloadWatchdog.tick)
+                // The app may have resigned in the sleep: a tick after that would judge what
+                // was sampled before, which the probe on return is for.
+                guard UIApplication.shared.applicationState == .active else { break }
+                self.tick()
+            }
+        }
+    }
+
+    private func tick() {
+        let now = clock.now
+        for cancel in watchdog.decisions(at: now) { self.cancel(cancel) }
+        for key in watchdog.restartsDue(at: now) { restart(key) }
+    }
+
+    /// The app is leaving the foreground: the watchdog keeps the bytes each task is at, to judge
+    /// the time away as one span on return.
+    private func resigned() {
+        watchdog.resigned(at: clock.now)
+    }
+
+    /// The app is in front again: the bytes the session says each task is at now, against those
+    /// kept at resign, and a crawl that ran the whole time away is cancelled at once rather than
+    /// a window from now. A key the session no longer has a task for is not in the probe.
+    private func becameActive() {
+        session.getAllTasks { [weak self] tasks in
+            var bytes: [String: Int64] = [:]
+            for task in tasks {
+                if let key = task.taskDescription, task.state == .running || task.state == .suspended {
+                    bytes[key] = task.countOfBytesReceived
+                }
+            }
+            let received = bytes
+            Task { @MainActor in
+                guard let self else { return }
+                for cancel in self.watchdog.probe(received, at: self.clock.now) { self.cancel(cancel) }
+                self.startTicking()
+            }
+        }
+    }
+
+    /// Cancels a slow task with its resume data, through the relay so its completion is a
+    /// restart and not a failure. A task the session no longer holds is forgotten instead.
+    private func cancel(_ cancel: DownloadWatchdog.Cancel) {
+        guard let (model, file) = parse(cancel.key) else { return }
+        let key = cancel.key
+        session.getAllTasks { [relay] tasks in
+            if let task = tasks.first(where: { $0.taskDescription == key }) as? URLSessionDownloadTask {
+                // Marked once the task is in hand, so every `download.slow` has its restart.
+                Perf.mark(DownloadWatchdog.slowMark(id: model.id, path: file.path, rate: cancel.rate, attempt: cancel.attempt))
+                relay.cancelForRestart(task, key: key)
+            } else {
+                Task { @MainActor in self.watchdog.forget(key) }
+            }
+        }
+    }
+
+    /// The replacement for a cancelled task, from the resume data its cancel wrote, under the same
+    /// key, with the bytes it was at when cancelled. Nothing for a file since verified or
+    /// forgotten.
+    private func restart(_ key: String) {
+        guard let (model, file) = parse(key), inFlight[key] != nil, !verifying.contains(key),
+              !present.contains(model.id) else { return }
+        let (task, fromResume) = makeTask(model, file)
+        Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: fromResume))
+        watchdog.restarted(key, resumed: fromResume)
+        live.insert(key)
+        task.resume()
+    }
+
+    /// The model and the file a key names, or nil for one the manifest does not.
+    private func parse(_ key: String) -> (ModelManifest.Model, ModelManifest.File)? {
+        guard let bar = key.firstIndex(of: "|"), let model = manifest?.model(String(key[..<bar])),
+              let file = model.files.first(where: { $0.path == String(key[key.index(after: bar)...]) }) else { return nil }
+        return (model, file)
     }
 
     func status(for id: String) -> Status {
@@ -594,7 +718,7 @@ final class ModelDownloads {
         "\(model.id)|\(file.path)"
     }
 
-    private func handle(_ event: SessionRelay.Event) {
+    func handle(_ event: SessionRelay.Event) {
         switch event {
         case .waiting(let key):
             waiting.insert(key)
@@ -603,12 +727,44 @@ final class ModelDownloads {
             inFlight[key] = bytes
             let id = String(key.prefix(while: { $0 != "|" }))
             if flowed.insert(id).inserted { Perf.mark("download.firstByte \(id)") }
+            watchdog.observe(key, bytes: bytes, at: clock.now)
+            startTicking()
+        case .restarting(let key):
+            // The watchdog's cancel is complete and its resume data, if any, is on disk: the
+            // key stays in flight, with its bytes as last reported, until the replacement is
+            // made on a tick after this attempt's backoff. Not a failure anywhere. A task that
+            // finished as it was cancelled is verifying or verified, and gets no replacement.
+            live.remove(key)
+            guard !verifying.contains(key), inFlight[key] != nil else { watchdog.forget(key); break }
+            watchdog.cancelled(key, at: clock.now)
+            startTicking()
+        case .resumed(let key, let offset):
+            if let (model, file) = parse(key) { Perf.mark(DownloadWatchdog.resumedMark(id: model.id, path: file.path, from: offset)) }
+            // A server that answers the resume with the whole file (200, the range ignored)
+            // gives an offset of 0: the task carries on from nothing, and nothing cancels it
+            // again, since its next replacement would start from nothing too.
+            if offset == 0 { watchdog.restarted(key, resumed: false) }
+        case .staleResume(let key):
+            // A task made from resume data the server no longer honours (the Hub's signed URLs
+            // expire): the data is gone with it, and the file is fetched from its URL afresh.
+            live.remove(key)
+            watchdog.forget(key)
+            guard let (model, file) = parse(key), !present.contains(model.id) else { break }
+            let (task, fromResume) = makeTask(model, file)
+            Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: 0, resumed: fromResume))
+            watchdog.restarted(key, resumed: fromResume)
+            inFlight[key] = 0
+            live.insert(key)
+            task.resume()
         case .verifying(let key):
             waiting.remove(key)
             inFlight[key] = nil
             verifying.insert(key)
+            live.remove(key)
+            watchdog.forget(key)
         case .verified(let id, let path, let size):
             verifying.remove("\(id)|\(path)")
+            watchdog.forget("\(id)|\(path)")
             done[id, default: 0] += size
             if let model = manifest?.model(id), store.isPresent(model) {
                 Perf.mark("download.present \(id)")
@@ -621,6 +777,8 @@ final class ModelDownloads {
             verifying.remove(key)
             waiting.remove(key)
             inFlight[key] = nil
+            live.remove(key)
+            watchdog.forget(key)
             let id = String(key.prefix(while: { $0 != "|" }))
             failures[id] = why
             Perf.mark("download.failed \(id)")
@@ -676,28 +834,59 @@ struct ModelWaiters {
 /// The session's delegate, off the main actor: the callbacks arrive on the session's own queue,
 /// and the one that hands over a finished file has to deal with it before returning. It verifies
 /// and admits the file there and then, and reports everything else to `ModelDownloads` as events.
-private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    enum Event: Sendable {
+/// Internal rather than private for one test: the branch of `didCompleteWithError` that decides
+/// between a failure and a restart.
+final class SessionRelay: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    enum Event: Sendable, Equatable {
         case waiting(String)
         case progress(String, Int64)
         case verifying(String)
         case verified(id: String, path: String, size: Int64)
         case failed(String, String)
+        /// The watchdog's cancel of this key is complete and its resume data, if any, is on disk.
+        case restarting(String)
+        /// A task made from resume data picked up at this offset.
+        case resumed(String, Int64)
+        /// A task made from resume data answered with a status that says the data is stale.
+        case staleResume(String)
         case finished
     }
+
+    /// How a task is cancelled for a restart: `cancel(byProducingResumeData:)`, or a test's stand-in
+    /// that drives the handler itself.
+    typealias Cancel = @Sendable (URLSessionDownloadTask, @escaping @Sendable (Data?) -> Void) -> Void
 
     private let store: ModelStore
     private let manifest: ModelManifest?
     private let lock = NSLock()
     private var sink: (@Sendable (Event) -> Void)?
+    /// The tasks the watchdog has cancelled whose completion has not come, by the session's own
+    /// identifier: that completion is a restart, not a failure. A task that finished as it was
+    /// cancelled completes with no error and is taken out here as well.
+    private var restarting: Set<Int> = []
+    /// The tasks made from resume data: a status from one that says the data is stale (the
+    /// server will not serve the range) is a fresh fetch, not a failure.
+    private var resumed: Set<Int> = []
+    private let cancel: Cancel
     /// Events from before the sink was set: the session can deliver a relaunch's events the
     /// moment it exists, and the one that calls the system's completion handler must not be
     /// lost to that gap.
     private var pending: [Event] = []
 
-    init(store: ModelStore, manifest: ModelManifest?) {
+    init(store: ModelStore, manifest: ModelManifest?,
+         cancel: @escaping Cancel = { task, handler in task.cancel(byProducingResumeData: handler) }) {
         self.store = store
         self.manifest = manifest
+        self.cancel = cancel
+    }
+
+    /// The statuses a resumed task gets when its resume data is no longer honoured: forbidden
+    /// (a signed URL expired), precondition failed and range not satisfiable.
+    nonisolated static let staleResumeStatuses: Set<Int> = [403, 412, 416]
+
+    /// Made from resume data, so a stale status from it is a fresh fetch (`staleResumeStatuses`).
+    func madeFromResume(_ task: URLSessionDownloadTask) {
+        lock.withLock { _ = resumed.insert(task.taskIdentifier) }
     }
 
     var events: (@Sendable (Event) -> Void)? {
@@ -729,13 +918,22 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        // Finished, cancelled or not: its completion is nobody's restart now.
+        let wasResumed: Bool = lock.withLock {
+            restarting.remove(downloadTask.taskIdentifier)
+            return resumed.remove(downloadTask.taskIdentifier) != nil
+        }
         guard let (key, model, file) = lookup(downloadTask) else {
             try? FileManager.default.removeItem(at: location)
             return
         }
         if let status = (downloadTask.response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
             try? FileManager.default.removeItem(at: location)
-            report(.failed(key, ModelStoreError.badStatus(file.path, status).localizedDescription))
+            if wasResumed, Self.staleResumeStatuses.contains(status) {
+                report(.staleResume(key))
+            } else {
+                report(.failed(key, ModelStoreError.badStatus(file.path, status).localizedDescription))
+            }
             return
         }
         report(.verifying(key))
@@ -758,14 +956,47 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
         report(.progress(key, totalBytesWritten))
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let error, let (key, model, file) = lookup(task) else { return }
-        // What the server lets the next task pick up from, kept for the next `start`.
-        if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-            let resume = store.resumeData(for: file, in: model)
-            try? FileManager.default.createDirectory(at: resume.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: resume, options: .atomic)
+    /// Cancels a slow task for the watchdog, with whatever resume data the server lets the next
+    /// task pick up from. The key is marked first, so the completion the cancel brings is not a
+    /// failure; the cancel's own handler then writes the data and reports `.restarting`, in
+    /// whichever order the two callbacks come.
+    func cancelForRestart(_ task: URLSessionDownloadTask, key: String) {
+        lock.withLock { _ = restarting.insert(task.taskIdentifier) }
+        let found = lookup(task)
+        cancel(task) { [self] data in
+            if let data, let (_, model, file) = found { write(data, for: file, in: model) }
+            report(.restarting(key))
         }
+    }
+
+    /// Whether this task's completion is owed to a restart. For the test of that branch.
+    func isRestarting(_ task: URLSessionTask) -> Bool { lock.withLock { restarting.contains(task.taskIdentifier) } }
+
+    private func write(_ data: Data, for file: ModelManifest.File, in model: ModelManifest.Model) {
+        let resume = store.resumeData(for: file, in: model)
+        try? FileManager.default.createDirectory(at: resume.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: resume, options: .atomic)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didResumeAtOffset fileOffset: Int64, expectedTotalBytes: Int64) {
+        guard let key = downloadTask.taskDescription else { return }
+        report(.resumed(key, fileOffset))
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        // The watchdog's own cancel: its handler says `.restarting` once the data is written.
+        let cancelledForRestart: Bool = lock.withLock {
+            resumed.remove(task.taskIdentifier)
+            return restarting.remove(task.taskIdentifier) != nil
+        }
+        guard let error, let (key, model, file) = lookup(task) else { return }
+        // What the server lets the next task pick up from, kept for the next task: the cancel's
+        // own handler writes it too, but an error that landed inside the cancel's window
+        // carries it here alone.
+        if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            write(data, for: file, in: model)
+        }
+        if cancelledForRestart { return }
         report(.failed(key, error.localizedDescription))
     }
 

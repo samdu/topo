@@ -137,6 +137,103 @@ final class ModelDownloadsTests: XCTestCase {
         XCTAssertFalse(store.isPresent(model))
     }
 
+    /// The branch that decides between a failure and a restart: a task the watchdog cancelled
+    /// completes as a restart, in either order of the cancel's handler and the completion, and
+    /// never as a failure; one it did not cancel completes as a failure; one that finished as it
+    /// was cancelled completes with no error and is owed nothing.
+    func testACancelForARestartIsNeverAFailureWhicheverCallbackComesFirst() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("topo-relay-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ModelManifest.Model(id: "example", repo: "example/example", revision: String(repeating: "0", count: 40), files: [
+            .init(path: "weight.bin", size: 3, sha256: digest(Data("abc".utf8))),
+        ])
+        let key = "example|weight.bin"
+        let handlers = Handlers()
+        let relay = SessionRelay(store: ModelStore(root: root), manifest: ModelManifest(models: [model])) { _, handler in
+            handlers.keep(handler)
+        }
+        let events = Events()
+        relay.events = { events.add($0) }
+        let session = URLSession.shared
+        func task() -> URLSessionDownloadTask {
+            let task = session.downloadTask(with: URL(string: "https://example.invalid/weight.bin")!)
+            task.taskDescription = key
+            return task
+        }
+        let cancelled = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+
+        // Completion first, then the handler with resume data.
+        let a = task()
+        relay.cancelForRestart(a, key: key)
+        XCTAssertTrue(relay.isRestarting(a))
+        relay.urlSession(session, task: a, didCompleteWithError: cancelled)
+        XCTAssertFalse(relay.isRestarting(a))
+        XCTAssertEqual(events.all, [], "the completion of a cancel for a restart says nothing")
+        try handlers.take()(Data("resume".utf8))
+        XCTAssertEqual(events.all, [.restarting(key)])
+        let resume = ModelStore(root: root).resumeData(for: model.files[0], in: model)
+        XCTAssertEqual(try Data(contentsOf: resume), Data("resume".utf8), "the handler wrote the resume data before saying so")
+
+        // Handler first (no resume data), then the completion.
+        events.clear()
+        let b = task()
+        relay.cancelForRestart(b, key: key)
+        try handlers.take()(nil)
+        XCTAssertEqual(events.all, [.restarting(key)])
+        relay.urlSession(session, task: b, didCompleteWithError: cancelled)
+        XCTAssertEqual(events.all, [.restarting(key)], "one restart, no failure")
+        XCTAssertFalse(relay.isRestarting(b))
+
+        // Finished as it was cancelled: no error, nothing owed, the set clean.
+        events.clear()
+        let c = task()
+        relay.cancelForRestart(c, key: key)
+        relay.urlSession(session, task: c, didCompleteWithError: nil)
+        XCTAssertFalse(relay.isRestarting(c))
+        XCTAssertEqual(events.all, [])
+
+        // Not the watchdog's cancel: a failure, as before.
+        let d = task()
+        relay.urlSession(session, task: d, didCompleteWithError: cancelled)
+        XCTAssertEqual(events.all.count, 1)
+        guard case .failed(let failedKey, _)? = events.all.first else { return XCTFail("a cancel of the system's own is a failure") }
+        XCTAssertEqual(failedKey, key)
+
+        // The relay keys by the task, not the key: a restart in flight for one task under the
+        // key does not shield another task's failure under it.
+        events.clear()
+        let e = task()
+        let f = task()
+        relay.cancelForRestart(e, key: key)
+        relay.urlSession(session, task: f, didCompleteWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
+        guard case .failed(let otherKey, _)? = events.all.first else { return XCTFail("another task's failure under the key is a failure") }
+        XCTAssertEqual(otherKey, key)
+        XCTAssertEqual(events.all.count, 1)
+        XCTAssertTrue(relay.isRestarting(e), "the task cancelled for a restart still is")
+        XCTAssertFalse(relay.isRestarting(f))
+    }
+
+    private final class Handlers: @unchecked Sendable {
+        private let lock = NSLock()
+        private var kept: [@Sendable (Data?) -> Void] = []
+        func keep(_ handler: @escaping @Sendable (Data?) -> Void) { lock.withLock { kept.append(handler) } }
+        func take() throws -> @Sendable (Data?) -> Void {
+            try lock.withLock {
+                guard !kept.isEmpty else { throw Missing() }
+                return kept.removeFirst()
+            }
+        }
+        struct Missing: Error {}
+    }
+
+    private final class Events: @unchecked Sendable {
+        private let lock = NSLock()
+        private var events: [SessionRelay.Event] = []
+        var all: [SessionRelay.Event] { lock.withLock { events } }
+        func add(_ event: SessionRelay.Event) { lock.withLock { events.append(event) } }
+        func clear() { lock.withLock { events = [] } }
+    }
+
     private func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -256,5 +353,115 @@ final class ModelWaitersTests: XCTestCase {
         waiters.present(["rootfs"]).forEach { $0(.success(())) }
         XCTAssertEqual(told, 2)
         XCTAssertEqual(waiters.count, 1)
+    }
+}
+
+/// `ModelDownloads` over an ephemeral session whose protocol never answers: what the glue between
+/// the watchdog, the relay and the session's state does with the events the other suites prove
+/// are produced. Nothing here reaches the network.
+/// A protocol that takes every request and answers none, so a task made under it stays running.
+private final class HangingProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {}
+    override func stopLoading() {}
+}
+
+@MainActor
+final class ModelDownloadsGlueTests: XCTestCase {
+    /// A store of this test's own, removed with the test.
+    private func scratch() -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("topo-glue-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
+    }
+
+    private func manifest() -> ModelManifest {
+        let revision = String(repeating: "0", count: 40)
+        let digest = SHA256.hash(data: Data("abc".utf8)).map { String(format: "%02x", $0) }.joined()
+        return ModelManifest(models: [
+            .init(id: "ear", repo: "example/ear", revision: revision, files: [.init(path: "encoder.bin", size: 3, sha256: digest)]),
+            .init(id: "voice", repo: "example/voice", revision: revision, files: [.init(path: "weight.bin", size: 3, sha256: digest)]),
+        ])
+    }
+
+    private func downloads(_ manifest: ModelManifest) -> ModelDownloads {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HangingProtocol.self]
+        return ModelDownloads(store: ModelStore(root: scratch()), manifest: .success(manifest), configuration: configuration)
+    }
+
+    /// The watchdog's cancel of `key`, decided: 20 s of samples at 36 KB/s.
+    private func crawl(_ downloads: ModelDownloads, _ key: String) {
+        let t0 = ContinuousClock.Instant.now
+        for s in 0...20 { downloads.watchdog.observe(key, bytes: Int64(s) * 36 * 1024, at: t0 + .seconds(s)) }
+        XCTAssertEqual(downloads.watchdog.decisions(at: t0 + .seconds(20)).map(\.key), [key])
+    }
+
+    private func tasks(of downloads: ModelDownloads) async -> [String] {
+        await withCheckedContinuation { continuation in
+            downloads.session.getAllTasks { continuation.resume(returning: $0.compactMap(\.taskDescription).sorted()) }
+        }
+    }
+
+    func testAPassMakesNoTaskForAKeyBetweenItsCancelAndItsReplacementOrOneThisProcessMade() async {
+        let manifest = manifest()
+        let downloads = downloads(manifest)
+        let key = "ear|encoder.bin"
+        downloads.start(["ear"])
+        // The first pass: one task, the key live. (`start`'s own pass lands at the first await,
+        // and is one more pass that makes no second task.)
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        XCTAssertEqual(downloads.live, [key])
+        var made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key])
+        // A second pass whose snapshot of the session missed that task (`excluding: []`) makes
+        // no second one: the key is live.
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key], "a pass makes no task for a key this process made")
+        // The watchdog cancels it: between the cancel and the relay's word, and between that
+        // word and the replacement's tick, the key is restarting and no pass makes a task.
+        crawl(downloads, key)
+        downloads.handle(.restarting(key))
+        XCTAssertEqual(downloads.live, [], "the cancelled task is not live")
+        XCTAssertTrue(downloads.watchdog.restarting(key))
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key], "a pass makes no task for a key between its cancel and its replacement")
+        XCTAssertEqual(downloads.live, [])
+        // Forgotten (verified, failed), a pass makes one again.
+        downloads.watchdog.forget(key)
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key, key], "a key no longer restarting or live is enqueued as any other")
+    }
+
+    func testARestartIsNotAFailureAnywhere() {
+        let manifest = manifest()
+        let downloads = downloads(manifest)
+        let key = "ear|encoder.bin"
+        downloads.start(["ear"])
+        downloads.start(["voice"], after: ["ear"])
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        downloads.handle(.progress(key, 1))
+        XCTAssertEqual(downloads.status(for: "ear"), .downloading(done: 1, total: 3))
+        XCTAssertEqual(downloads.status(for: "voice"), .queued, "held behind the ear")
+        var settled: [Result<Void, ModelDownloadFailure>] = []
+        downloads.whenSettled(["ear"]) { settled.append($0) }
+        crawl(downloads, key)
+
+        downloads.handle(.restarting(key))
+
+        XCTAssertFalse(downloads.failed(["ear"]), "a restart sets no failure")
+        XCTAssertEqual(downloads.status(for: "ear"), .downloading(done: 1, total: 3), "the key stays in flight at the bytes last reported")
+        XCTAssertTrue(settled.isEmpty, "a waiter on the model is not told anything")
+        XCTAssertEqual(downloads.status(for: "voice"), .queued, "the model held behind it is still held")
+        XCTAssertTrue(downloads.watchdog.restarting(key), "the replacement is owed")
+        // A restart for a key no longer in flight (verified or failed meanwhile) owes nothing.
+        downloads.handle(.verifying(key))
+        downloads.handle(.restarting(key))
+        XCTAssertFalse(downloads.watchdog.restarting(key))
+        XCTAssertEqual(downloads.status(for: "ear"), .verifying)
     }
 }
