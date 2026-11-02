@@ -1,0 +1,42 @@
+diff --git a/fs/path.c b/fs/path.c
+index 1a057a0b..09016086 100644
+--- a/fs/path.c
++++ b/fs/path.c
+@@ -131,6 +131,13 @@ static void path_cache_set(const char *full_path, int flags, const char *normali
+     unlock(&path_cache_lock);
+ }
+ 
++// Set by a walk that followed a symlink on procfs. What such a link says is the
++// process's own (/proc/self, /proc/<pid>/fd/N, cwd, exe, and /dev/fd through
++// them) and changes with no namespace mutation, so a walk through one is not
++// put in the cache every process shares: a second process would be handed the
++// first one's pid or file.
++static __thread bool path_walk_per_process;
++
+ static int __path_normalize(const char *at_path, const char *path, char *out, int flags, int levels) {
+     // you must choose one
+     if (flags & N_SYMLINK_FOLLOW)
+@@ -226,6 +233,8 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
+             if (mount->fs->readlink)
+                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
+             if (res >= 0) {
++                if (mount->fs == &procfs)
++                    path_walk_per_process = true;
+                 mount_release(mount);
+                 if (levels >= 5)
+                     return _ELOOP;
+@@ -305,10 +314,12 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
+     if (path_cache_get(full_input, flags, out, gen) == 0)
+         return 0;
+ 
++    path_walk_per_process = false;
+     int result = __path_normalize(at != NULL ? at_path : NULL, path, out, flags, 0);
+ 
+-    // Only successful results are cached; an error must be re-derived.
+-    if (result == 0)
++    // Only successful results are cached; an error must be re-derived, and a
++    // walk through a procfs link is the process's own.
++    if (result == 0 && !path_walk_per_process)
+         path_cache_set(full_input, flags, out, gen);
+ 
+     return result;
