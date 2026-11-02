@@ -18,11 +18,13 @@ struct SettingsView: View {
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
     @AppStorage(SpokenCallSetting.key) private var spokenCall = true
+    @AppStorage(WorkingSounds.key) private var workingSounds = WorkingSounds.standard.rawValue
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
     static let spokenCall = "settings-spoken-call"
+    static let workingSounds = "settings-working-sounds"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
 
@@ -52,6 +54,16 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.spokenCall)
                 } footer: {
                     Text("When you lock the phone or leave Topo with a spoken answer on its way, the wait and the answer are a call: a card on the Lock Screen, or the green pill in another app, until Topo has finished speaking, and hanging up stops it. Off, Topo keeps the phone awake for two minutes at most; an answer slower than that is read when you come back. Kept on this device.")
+                }
+                Section {
+                    // The mode as the sounds read it, so one kept that is not a mode shows as the standard.
+                    Picker("While Topo works", selection: Binding(get: { WorkingSounds.Mode(rawValue: workingSounds) ?? WorkingSounds.standard },
+                                                                 set: { workingSounds = $0.rawValue })) {
+                        ForEach(WorkingSounds.Mode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .accessibilityIdentifier(SettingsView.workingSounds)
+                } footer: {
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed until the reply begins. Only while a spoken turn is waited for. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the

@@ -122,9 +122,11 @@ final class Speaker {
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          ceiling: Duration = .seconds(120),
          now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime,
-         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) {
+         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
+         sounds: KeeperSounds? = nil) {
         self.audio = audio
         self.voice = voice
+        self.sounds = sounds
         self.ceiling = ceiling
         self.now = now
         queue = PlayQueue(makeEngine: makeEngine, center: center, heard: heard)
@@ -140,6 +142,7 @@ final class Speaker {
             self.hold(held)
             self.onHold?(held)
         }
+        sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -242,6 +245,9 @@ final class Speaker {
     @discardableResult
     private func hold(_ held: Bool) -> Bool {
         guard held else { return queue.hold(false) }
+        // Under the reset handler the engine is dead and the queue about to be dropped: a hold
+        // change there (a wait ending while another hold stands) starts nothing.
+        guard !resetting else { return false }
         do {
             try audio.ensureActive()
         } catch {
@@ -277,6 +283,8 @@ final class Speaker {
         // what it owed is owed still. Anything owed or dead is rebuilt from nothing if need be.
         if queue.needsRebuild { queue.rebuild() }
         if audio.holding, !queue.keeping { hold(true) }
+        // The interruption stopped the bed too, and nothing else puts it back.
+        sounds?.resume()
     }
 
     /// Everything the notification carries, since what iOS calls an interruption at the lock
@@ -321,6 +329,7 @@ final class Speaker {
             return Wait(spoken: true, held: false)
         }
         waits[nonce] = ceilingWait(nonce)
+        sounds?.working(true)
         return Wait(spoken: true, held: true)
     }
 
@@ -371,6 +380,8 @@ final class Speaker {
         guard let counting = waits.removeValue(forKey: nonce) else { return }
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
+        // Before the hold drops, so the bed's fade-out is held through where this was the last.
+        if waits.isEmpty { sounds?.working(false) }
         audio.wantAlive(false, for: .awaitingReply(nonce))
     }
 
@@ -379,18 +390,30 @@ final class Speaker {
         waits.keys.forEach { endAwaiting($0, why) }
     }
 
-    /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
-    /// nodes go too, since an engine that was running when the server went down will not start
-    /// again. Nothing is built here; the next `speak` activates the session and the first frame
-    /// builds the queue, which is how Say it again works after a reset with no press before it.
-    /// A turn that was still awaited is answered on the next pass the app runs, on the foreground.
+    /// iOS reset the media server: the sounds' players go first, so that nothing below finds a
+    /// bed to fade; the reply stops and the holds go with it; the play queue's nodes go too,
+    /// since an engine that was running when the server went down will not start again; and
+    /// last the sounds' own hold. Nothing is built or started here: a hold change under the
+    /// handler re-notifies `hold(true)` while another hold still stands, and `resetting` keeps
+    /// that from starting the keeper on the dead engine. The next `speak` activates the session
+    /// and the first frame builds the queue, which is how Say it again works after a reset with
+    /// no press before it. A turn that was still awaited is answered on the next pass the app
+    /// runs, on the foreground.
     private func mediaServicesWereReset() {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
         #endif
+        resetting = true
+        defer { resetting = false }
+        sounds?.dropPlayers()
         stop()
         queue.reset()
+        sounds?.letGo("the media server was reset")
     }
+
+    /// True while the media-services-reset handler runs: no hold change under it may touch the
+    /// engine the reset killed.
+    private var resetting = false
 
     /// Loads the voice's model, downloading it on the first run. Called on the foreground so it
     /// is resident by the first reply; idempotent.
@@ -459,6 +482,7 @@ final class Speaker {
     /// `reading` reads `text` from here; without it the caller queues the sentences itself.
     private func begin(_ text: String, answering nonce: String?, reply: TurnRef?, reading: Bool) -> Bool {
         cancel()
+        replyBegan = false
         guard voice.ready else {
             #if DEBUG
             DebugRun.say("speak: not spoken — \(voice.summary)")
@@ -538,6 +562,14 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
+    /// The keeper's sounds (`KeeperSounds`): the bed from the release to the reply's first frame,
+    /// dipped while a microphone is open, and back at an interruption's end (`resumeAudio`). The
+    /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
+    let sounds: KeeperSounds?
+    /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
+    /// and not at every sentence's first frame.
+    private var replyBegan = false
+
     /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
     /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
     /// with `VoiceInput.listening`.
@@ -566,6 +598,7 @@ final class Speaker {
     /// reply that waited is read if no microphone is open.
     func microphoneOpened() {
         opening = false
+        sounds?.duck(microphoneBusy)
         microphoneClosed()
     }
 
@@ -588,6 +621,7 @@ final class Speaker {
         deferred = waiting
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         opening = true
+        sounds?.duck(true)
     }
 
     /// The press that opened a microphone has done what it was going to, or a microphone closed:
@@ -595,7 +629,10 @@ final class Speaker {
     /// becomes Stop. Free while a microphone is still open or nothing is waiting. A reply the
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
-    func microphoneClosed() { readWhatWaited() }
+    func microphoneClosed() {
+        sounds?.duck(microphoneBusy)
+        readWhatWaited()
+    }
 
     /// Reads the reply that waited for the microphone or for the call's session, if nothing
     /// holds it back now. One the session refuses here keeps waiting, its turn still marked.
@@ -722,6 +759,11 @@ final class Speaker {
                 guard !frame.samples.isEmpty else { continue }
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
+                if !replyBegan {
+                    // The reply's first frame: the bed gives way to the voice.
+                    replyBegan = true
+                    sounds?.working(false)
+                }
                 if first == nil {
                     first = now() - started
                     Perf.mark("speak.firstFrame")
