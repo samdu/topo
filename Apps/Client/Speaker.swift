@@ -165,7 +165,7 @@ final class Speaker {
     private func hold(_ held: Bool) -> Bool {
         guard held else { return queue.hold(false) }
         // Under the reset handler the engine is dead and the queue about to be dropped: a hold
-        // change there (a wait ending, a sound's hold going) starts nothing.
+        // change there (a wait ending while another hold stands) starts nothing.
         guard !resetting else { return false }
         do {
             try audio.ensureActive()
