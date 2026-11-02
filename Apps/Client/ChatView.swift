@@ -625,6 +625,7 @@ struct ChatView: View {
                                     dictation = going
                                 }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
+                                                 dictating: !going.sends,
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
@@ -1019,9 +1020,12 @@ final class MicPress {
     /// The gesture's own call, as the finger lands or lifts, with the state the composer drew
     /// the button in: the press is what the person saw, not what the speaker says by the time
     /// the callback runs. Answers the task carrying the press to `VoiceInput`, and nil for a stop
-    /// and its release, which reach nothing. What a release heard is handed to `send`.
+    /// and its release, which reach nothing. What a release heard is handed to `send`; with
+    /// `dictating`, `send` writes it into the row rather than sending it, so the release sounds
+    /// no cue — nothing went — and only the microphone's own `listening` is heard.
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
+                 dictating: Bool = false,
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
@@ -1034,7 +1038,7 @@ final class MicPress {
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
                 guard let heard else { return }
-                speaker.earcons?.play(.sending(heard))
+                if !dictating { speaker.earcons?.play(.sending(heard)) }
                 await send(heard)
             }
         }
@@ -1054,13 +1058,13 @@ final class MicPress {
             speaker.microphoneOpened()
             guard let heard else {
                 // Nil is a session begun or a press refused, and only the microphone listening
-                // for the chat tells the two apart. The cue follows `VoiceInput`'s decision and
-                // never makes it.
-                if voice.listening, voice.owner == .chat { speaker.earcons?.play(.listening) }
+                // for the chat, on a press that found it closed, tells the two apart. The cue
+                // follows `VoiceInput`'s decision and never makes it.
+                if !drawn.open, voice.listening, voice.owner == .chat { speaker.earcons?.play(.listening) }
                 return
             }
             // The press on the open microphone's waveform, which sends what it heard.
-            speaker.earcons?.play(.sending(heard))
+            if !dictating { speaker.earcons?.play(.sending(heard)) }
             await send(heard)
         }
     }

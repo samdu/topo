@@ -134,8 +134,9 @@ final class EarconsTests: XCTestCase {
     }
 
     /// The thumb on the microphone, through the chat's own routing.
-    private func press(_ rig: Rig, _ down: Bool, _ sent: Sent) async {
-        await rig.press.gesture(down, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice) { sent.add($0) }?.value
+    private func press(_ rig: Rig, _ down: Bool, _ sent: Sent, dictating: Bool = false) async {
+        await rig.press.gesture(down, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+                                dictating: dictating) { sent.add($0) }?.value
     }
 
     /// A second and a half of tone at the ear's rate, as the tap would have delivered it.
@@ -201,6 +202,21 @@ final class EarconsTests: XCTestCase {
         XCTAssertFalse(rig.voice.listening)
         XCTAssertEqual(rig.earcons.played, [.listening, .failed])
         XCTAssertEqual(rig.cues.files, ["earcon_listening", "earcon_failed"])
+    }
+
+    /// A release whose words are written into the row rather than sent (`Dictation`) sounds
+    /// nothing: nothing went. The microphone's own `listening` is heard as at any press.
+    func testAReleaseWrittenIntoTheRowSoundsNothingButListening() async {
+        let rig = await rig(hears: "purple elephants")
+        let sent = Sent()
+        defer { rig.voice.cancel() }
+        await press(rig, true, sent, dictating: true)
+        XCTAssertEqual(rig.earcons.played, [.listening])
+        utterance(into: rig.voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press(rig, false, sent, dictating: true)
+        XCTAssertEqual(sent.texts, ["purple elephants"], "the words were not handed to the row")
+        XCTAssertEqual(rig.earcons.played, [.listening], "a release into the row sounded")
     }
 
     /// A tap opens the microphone hands free and its release sounds nothing, since nothing went;
@@ -312,8 +328,11 @@ final class EarconsTests: XCTestCase {
     /// behind a finished reply) sound nothing.
     func testASpokenTurnThatFailsSoundsFailedOnceAndOtherEndsSoundNothing() async {
         let rig = await rig()
+        // No lease loop runs under the test: its sleep is parked and its pause throws.
         let harness = Harness(database: InMemoryRecordDatabase(), device: DeviceID("phone"), ensureZone: {},
-                              defaults: makeDefaults(), brain: NoBrain())
+                              defaults: makeDefaults(), brain: NoBrain(),
+                              leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
+                              pause: { _ in throw CancellationError() })
         SpokenReply.follow(harness, speaker: rig.speaker) { true }
         let ask = rig.speaker.awaitReply("spoken", readAloud: true)
         XCTAssertTrue(ask.spoken)
