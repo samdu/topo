@@ -32,8 +32,17 @@ final class BadgeGestureTests: XCTestCase {
         // A sheet put up again is a new view, with nothing of the last one's own state: what its
         // slider shows is the value kept, so a move that was only drawn is the standard value here.
         let temperature = app.sliders["settings-voice-temperature"]
+        // The slider sits below the sheet's foot on a phone, under the audio sections, and the
+        // form builds a row as it nears the screen: from the top, down until it can be hit.
+        func scrollToTheSlider() {
+            // Whole on the screen, clear of the sheet's edges, where a drag on it is the slider's.
+            let onScreen = { temperature.exists && app.frame.insetBy(dx: 0, dy: 80).contains(temperature.frame) }
+            for _ in 0..<4 where !app.descendants(matching: .any)["Topo sits"].exists { app.swipeDown() }
+            for _ in 0..<5 where !onScreen() { app.swipeUp() }
+            XCTAssertTrue(onScreen(), "the slider is not on the screen: \(temperature.exists ? "\(temperature.frame)" : "not built") in \(app.frame)")
+        }
         for end in ["100%", "0%"] {
-            for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
+            scrollToTheSlider()
             temperature.adjust(toNormalizedSliderPosition: end == "100%" ? 1 : 0)
             XCTAssertEqual(temperature.value as? String, end, "the slider did not move to \(end)")
             app.navigationBars["Settings"].buttons["Done"].tap()
@@ -42,7 +51,7 @@ final class BadgeGestureTests: XCTestCase {
             badge(in: app).tap()
             XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
                           "the settings did not open again")
-            for _ in 0..<3 where !temperature.exists { app.swipeUp() }
+            scrollToTheSlider()
             XCTAssertEqual(temperature.value as? String, end,
                            "the settings opened again do not have the \(end) the slider was moved to")
         }
