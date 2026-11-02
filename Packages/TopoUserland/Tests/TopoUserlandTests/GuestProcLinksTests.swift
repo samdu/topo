@@ -16,10 +16,12 @@ final class GuestProcLinksTests: XCTestCase {
     }
 
     func testProcSelfIsTheProcessThatAsks() async throws {
-        // The shell opens the redirection itself, so /proc/self there is the shell's own pid, $$.
+        // `exec` keeps the shell's pid, so the pid /proc/self/stat names is the $$ printed before it.
         let run = try await sh("""
             for i in $(seq 20); do
-              sh -c 'read pid rest < /proc/self/stat && [ "$pid" = "$$" ] && echo ok || echo "other $pid $$"'
+              out=$(sh -c 'echo $$; exec cut -d" " -f1 /proc/self/stat')
+              set -- $out
+              [ $# = 2 ] && [ "$1" = "$2" ] && echo ok || echo "other: $out"
             done
             """)
         XCTAssertEqual(run.output, String(repeating: "ok\n", count: 20), run.errors)
