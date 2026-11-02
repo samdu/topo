@@ -185,19 +185,30 @@ is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(
 is "green: four test actions, each without xcodebuild's diagnostics" \
   "$(grep -cE '^xcodebuild test(-without-building)? ' "$CALLS"):$(grep -cE '^xcodebuild test(-without-building)? .* -collect-test-diagnostics never ' "$CALLS")" "4:4"
 
-# The device build's directory is kept for the pins it was built from, and no others.
+# Every build that resolves the packages keeps their state in build/packages, which is kept for
+# the pins it was resolved from and made afresh for any other, since Xcode 27.2 carries the trait
+# set of the last resolution into the next.
+is "green: every build and test of the project resolves its packages into build/packages" \
+  "$(grep -cE '^xcodebuild (build|build-for-testing|test) -project Topo.xcodeproj ' "$CALLS"):$(grep -cE '^xcodebuild (build|build-for-testing|test) -project Topo.xcodeproj .*-clonedSourcePackagesDirPath build/packages( |$)' "$CALLS")" "7:7"
+
+# The device build's directory and the package state are kept for the pins they were built
+# from, and no others.
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 mkdir -p "$(dirname "$pins")" && echo "pins: one" > "$pins"
-rm -rf "$tree/build/device"
+rm -rf "$tree/build/device" "$tree/build/packages"
 suite device-first others
 is "a first device build: exits 0" "$status" 0
 is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "pins: one"
+is "a first device build: the package state names the pins it was resolved from" "$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "pins: one"
+: > "$tree/build/packages/workspace-state.json"
 suite device-same others
 is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
+is "the same pins: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
 echo "pins: two" > "$pins"
 suite device-moved others
 is "pins that moved: exits 0" "$status" 0
 is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
+is "pins that moved: the package state is made afresh" "$([ -e "$tree/build/packages/workspace-state.json" ] || echo afresh):$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "afresh:pins: two"
 is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
 rm -f "$tree/build/device/Package.resolved"
 suite device-unknown others
@@ -205,7 +216,7 @@ is "a directory that says no pins: made afresh" "$(calls 'device-build over what
 rm -f "$pins"
 suite device-no-pins others
 is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
-is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
+is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -clonedSourcePackagesDirPath build/packages -configuration Release')" 1
 echo "pins: one" > "$pins"
 
 # The quiet part of topo_ui: every UI class but the microphone's, with no lane, no hold, no

@@ -103,6 +103,21 @@ check=no
 lane=fast
 RESULTS="$root/build/validate"
 PACKAGE_PINS=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+# Every build that resolves the project's packages keeps their checkouts and state in one place
+# of this checkout's own, build/packages, rather than in whichever derived data the build
+# writes: Xcode 27.2 keeps the set of package traits it enabled at the last resolution and
+# applies it to the next, whatever version the pin now names, so a package state that last saw
+# one version builds another with the wrong set (FluidAudio 0.18.2 after 0.17.7 compiled with no
+# TTS and no `PocketTtsManager`, and with the traits named on the package reference refused the
+# resolution outright, on every retry). So the state is kept for the pins it was resolved from,
+# a copy of which is in it, and made afresh for any other, which is `fresh_packages` at the
+# start of every suite that builds.
+PACKAGES=(-clonedSourcePackagesDirPath build/packages)
+fresh_packages() {
+  cmp -s "$PACKAGE_PINS" build/packages/Package.resolved || rm -rf build/packages
+  mkdir -p build/packages
+  cp "$PACKAGE_PINS" build/packages/Package.resolved 2>/dev/null || true
+}
 cache="$HOME/Library/Caches/topo-validate"
 asked=()
 while [ $# -gt 0 ]; do
@@ -379,6 +394,7 @@ prepare() {
 suite_topo_unit() {
   local status=0 udid rootfs shell claude
   unit_steps() {
+    fresh_packages
     say "The rootfs, bash and Claude Code for the userland suites"
     rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$cache/rootfs")" || return 1
     shell="$(scripts/fetch-pinned.sh alpine-bash "$cache/alpine-bash")" || return 1
@@ -387,7 +403,7 @@ suite_topo_unit() {
 
     say "xcodebuild build-for-testing (Topo)"
     run "$RESULTS/Topo-unit-build.log" xcodebuild build-for-testing \
-      -project Topo.xcodeproj -scheme Topo \
+      -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" || return 1
 
     # PhoneToolsTests and PhotosToolTests run the phone tools against the simulator's own
@@ -534,6 +550,7 @@ suite_topo_ui() {
   local label=""
   [ "$part" = whole ] || { name="Topo-ui-$part"; label=", $part"; }
   ui_steps() {
+    fresh_packages
     echo "Lane: $lane"
     if [ "$part" = quiet ]; then
       local loud
@@ -585,7 +602,7 @@ suite_topo_ui() {
 
     say "xcodebuild build-for-testing (Topo)"
     run "$RESULTS/$name-build.log" xcodebuild build-for-testing \
-      -project Topo.xcodeproj -scheme Topo \
+      -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" || return 1
 
     # The microphone test counts the permission prompts the run raises, and holds that there
@@ -767,12 +784,13 @@ suite_others() {
   # own simulators here. The watch at its deployment target, watchOS 10.0: every path above it
   # is behind an availability check, and this is where one left out fails.
   say "xcodebuild build (TopoWatch, TopoTV)"
-  run "$RESULTS/TopoWatch-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoWatch \
+  fresh_packages
+  run "$RESULTS/TopoWatch-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoWatch "${PACKAGES[@]}" \
     -destination 'generic/platform=watchOS Simulator' -derivedDataPath build/watch || status=1
   # The complications are an extension embedded in the product, and the push a background mode
   # no setting generates: both read off the built app.
   scripts/check-built-plist.sh --watch build/watch/Build/Products/Debug-watchsimulator/TopoWatch.app || status=1
-  run "$RESULTS/TopoTV-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoTV \
+  run "$RESULTS/TopoTV-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoTV "${PACKAGES[@]}" \
     -destination 'generic/platform=tvOS Simulator' || status=1
 
   # The watch's own suite (TopoWatchTests), hosted by the watch app on a watch simulator from
@@ -783,7 +801,7 @@ suite_others() {
   say "xcodebuild test (TopoWatch)"
   rm -rf "$RESULTS/TopoWatch.xcresult"
   if new_simulator watch "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" && xcrun simctl bootstatus "$udid" -b >/dev/null; then
-    run "$RESULTS/TopoWatch-test.log" bounded 900 xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
+    run "$RESULTS/TopoWatch-test.log" bounded 900 xcodebuild test -project Topo.xcodeproj -scheme TopoWatch "${PACKAGES[@]}" \
       -destination "platform=watchOS Simulator,id=$udid" \
       "${NO_DIAGNOSE[@]}" \
       -derivedDataPath build/watch \
@@ -808,7 +826,7 @@ suite_others() {
   cmp -s "$PACKAGE_PINS" build/device/Package.resolved || rm -rf build/device
   mkdir -p build/device
   cp "$PACKAGE_PINS" build/device/Package.resolved 2>/dev/null || true
-  run "$RESULTS/Topo-iOS-Release-build.log" xcodebuild build -project Topo.xcodeproj -scheme Topo \
+  run "$RESULTS/Topo-iOS-Release-build.log" xcodebuild build -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
     -configuration Release -destination 'generic/platform=iOS' \
     -derivedDataPath build/device \
     CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=999 \
@@ -819,7 +837,7 @@ suite_others() {
   # build above is given 999, the way archive-upload.sh gives it a real one.
   scripts/check-built-plist.sh build/device/Build/Products/Release-iphoneos/Topo.app 999 \
     || { err "the built app's Info.plist is wrong."; status=1; }
-  run "$RESULTS/TopoHub-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoHub \
+  run "$RESULTS/TopoHub-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoHub "${PACKAGES[@]}" \
     -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
     || { err "TopoHub failed to build."; status=1; }
   return "$status"
