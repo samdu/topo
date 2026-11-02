@@ -95,7 +95,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// held it holds nothing. The
 /// players are handles into mediaserverd: a media services reset drops them and builds nothing,
 /// and the next sound makes its own. An interruption stops the bed under a wait that still wants
-/// it, so the speaker asks for it again where it rebuilds its own engine (`resume`).
+/// it, so the speaker asks for it again at the interruption's end (`Speaker.resumeAudio`, `resume`).
 ///
 /// Lifted from Daphne's `Keeper` and `WaitSounds`, per `THIRD-PARTY`. Main only.
 @MainActor

@@ -315,10 +315,33 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the turn failed")
         XCTAssertEqual(rig.players.bed?.fades.last?.to, 0)
         XCTAssertFalse(rig.audio.holding, "the fade held on a session that is not live")
-        rig.sounds.resume()
-        XCTAssertEqual(rig.players.bed?.plays, 1, "the bed was played again on a session that is not live")
         XCTAssertEqual(rig.seams.lines, [], "a sound configured the session")
         XCTAssertEqual(rig.seams.records, [], "a sound applied a claim change from the background")
+    }
+
+    /// The interruption stopped the bed under a wait that still wants it, and the speaker asks
+    /// for it back before the session is live again (a rebuild the session refused): the bed is
+    /// not played again, since `AVAudioPlayer.play()` would activate the session itself, from
+    /// the background, and nothing is configured.
+    func testTheBedIsNotPlayedAgainOnASessionThatIsNotLive() async throws {
+        let rig = await rig(mode: .sounds, isActive: false)
+        rig.audio.wantRecord(true, for: .warm)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertEqual(bed.plays, 1)
+        rig.audio.wantRecord(false, for: .warm)
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        await drain()
+        bed.interrupted()
+        rig.seams.forget()
+
+        rig.sounds.resume()
+        XCTAssertEqual(bed.plays, 1, "the bed was played again on a session that is not live")
+        XCTAssertFalse(bed.isPlaying)
+        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session")
+        XCTAssertEqual(rig.seams.records, [], "a sound applied a claim change from the background")
+        rig.speaker.endAwaiting("turn", "the test is done")
     }
 
     // MARK: - The bed

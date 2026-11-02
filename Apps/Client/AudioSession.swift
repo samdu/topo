@@ -26,8 +26,8 @@ final class AudioSession {
     enum Hold: Hashable {
         case awaitingReply(String)
         case speaking
-        /// A sound played beside the voice being heard out — an earcon, a receipt, the bed's
-        /// fade — taken only while another hold stands and bounded by its player's own bound.
+        /// A sound played beside the voice being heard out — a cue, a receipt, the bed's fade —
+        /// taken only while another hold stands and bounded by the sound's own bound.
         case cue
     }
 

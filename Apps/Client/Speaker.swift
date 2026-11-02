@@ -158,7 +158,7 @@ final class Speaker {
     private func hold(_ held: Bool) -> Bool {
         guard held else { return queue.hold(false) }
         // Under the reset handler the engine is dead and the queue about to be dropped: a hold
-        // change there (a wait ending, a sound's hold going) starts nothing.
+        // change there (a wait ending while another hold stands) starts nothing.
         guard !resetting else { return false }
         do {
             try audio.ensureActive()
@@ -458,7 +458,7 @@ final class Speaker {
     }
 
     /// The keeper's sounds (`KeeperSounds`): the bed from the release to the reply's first frame,
-    /// dipped while a microphone is open, and back after an interruption where the engine is. The
+    /// dipped while a microphone is open, and back at an interruption's end (`resumeAudio`). The
     /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
     let sounds: KeeperSounds?
     /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
