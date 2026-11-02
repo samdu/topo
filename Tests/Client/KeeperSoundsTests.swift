@@ -265,9 +265,11 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertTrue(rig.speaker.awaiting.isEmpty)
         XCTAssertTrue(rig.audio.holding, "the receipt's hold went with the wait's")
         XCTAssertFalse(rig.audio.heldForATurn)
+        // The press opened nothing (a refusal, say): the microphone is closed again, and a tool
+        // reached for now meets only the receipt's own hold.
+        rig.speaker.microphoneOpened()
         rig.sounds.follow(toolUse("Bash"))
         XCTAssertEqual(rig.sounds.played, [.act], "a receipt sounded under nothing but a receipt's hold")
-        rig.speaker.microphoneOpened()
         await settle("the hold's length to be asked for") { rig.clock.asked.contains(KeeperSounds.toneLength) }
         rig.clock.fire()
         await settle("the receipt's hold to go") { !rig.audio.holding }
@@ -334,6 +336,23 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(bed.currentTime, 3.2, "the bed was started from the top")
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
         rig.speaker.stop()
+    }
+
+    /// With a second turn's wait standing, the first's reply does not end the bed at its landing
+    /// — the wait it ends is not the last — but at its first frame, so the bed is not under the
+    /// voice. It is not brought back for the second wait once the reply is read.
+    func testTheBedGivesWayAtTheFirstFrameUnderASecondWait() async throws {
+        let rig = await rig(mode: .sounds, heard: .dataRendered)
+        _ = rig.speaker.awaitReply("first", readAloud: true)
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertTrue(rig.speaker.speak("Paris.", answering: "first"))
+        XCTAssertEqual(rig.speaker.awaiting, ["second"])
+        XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.bedVolume], "the bed faded at the reply's landing, under a wait still standing")
+        await settle("the reply to start") { rig.speaker.report.started }
+        try await renderUntil(rig, "the reply to be made") { rig.speaker.report.finished }
+        XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.bedVolume, 0], "the bed played on under the voice")
+        rig.speaker.endAwaiting("second", "the test is done")
     }
 
     /// Under `receipts` there is no bed; a mode changed to `off` mid-wait stops the bed under
@@ -430,6 +449,33 @@ final class KeeperSoundsTests: XCTestCase {
         rig.clock.fire()
         await settle("the hold to go") { !rig.audio.holding }
         XCTAssertFalse(rig.speaker.running, "the engine ran on with nothing held")
+    }
+
+    /// The fade's hold is taken before the wait's drops: behind the lock with a claim change
+    /// deferred under the wait, the keeper does not stop and the claim does not apply between
+    /// the two holds, only once the fade's hold has gone.
+    func testTheFadesHoldIsTakenBeforeTheWaitsDrops() async throws {
+        let rig = await rig(mode: .sounds, isActive: false)
+        rig.audio.wantRecord(true, for: .warm)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.speaker.keeping)
+        rig.audio.wantRecord(false, for: .warm)
+        rig.seams.forget()
+        let bed = try XCTUnwrap(rig.players.bed)
+
+        rig.speaker.endAwaiting("turn", "the turn is done")
+        XCTAssertEqual(bed.fades.last?.to, 0)
+        XCTAssertTrue(rig.audio.holding, "the process was let go of with the fade unheard")
+        XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"), "the keeper stopped between the wait's hold and the fade's")
+        XCTAssertEqual(rig.seams.records, [], "the deferred claim applied between the wait's hold and the fade's")
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
+        rig.clock.fire()
+        await settle("the fade's hold to go") { !rig.audio.holding }
+        // Away, the last hold's going applies nothing either: the session is marked for the
+        // foreground's next path, and a sound on it is refused.
+        XCTAssertEqual(rig.seams.records, [], "a claim was applied from the background")
+        XCTAssertFalse(rig.speaker.running)
+        XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil))
     }
 
     /// A sound begun with nothing held holds nothing, and a claim change under it applies at once.

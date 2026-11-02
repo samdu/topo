@@ -335,11 +335,12 @@ final class KeeperSounds {
 
     // MARK: - The hold
 
-    /// Where a hold already stands, the process is held for `length` more (`bound` at most) —
-    /// extended, never taken alone: in front nothing suspends, and a sound holding alone would
-    /// keep a claim change waiting for nothing.
+    /// The process is held for `length` more (`bound` at most) — an extension of the turn's hold
+    /// that every caller has checked stands (`play`'s guard; the bed is on only under one, and
+    /// its fade-out is asked for before the wait's hold drops), never a hold taken alone: in
+    /// front nothing suspends, and a sound holding alone would keep a claim change waiting for
+    /// nothing.
     private func holdUntil(_ length: Duration) {
-        guard audio.heldForATurn else { return }
         if !holding {
             audio.wantAlive(true, for: .cue)
             holding = true
