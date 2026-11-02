@@ -128,6 +128,42 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertFalse(keeper.isReserved("job"), "the slot is free again")
     }
 
+    func testAStartFromBeforeASignOutReleasesNoLaterStartsSlot() async throws {
+        let gate = GatedTrackerFetcher()
+        fetcher = gate
+        let tool = self.tool
+        let first = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        await settle()
+        await keeper.endAll()
+        let second = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        await settle()
+        XCTAssertEqual(gate.pending, 2)
+        gate.release(TrackerFixtures.wiki)
+        let firstReply = await first.value
+        XCTAssertEqual(firstReply.status, ToolReply.failed, firstReply.text)
+        let third = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
+        XCTAssertEqual(third.status, ToolReply.failed, "the second start still holds the slot")
+        XCTAssertTrue(third.text.contains("is starting"), third.text)
+        gate.release(TrackerFixtures.wiki)
+        let secondReply = await second.value
+        XCTAssertEqual(secondReply.status, ToolReply.ok, secondReply.text)
+        XCTAssertEqual(host.starts, 1)
+        keeper.forget("A1")
+    }
+
+    func testTheReloadersForgetEndsEveryActivity() async throws {
+        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
+                                       reloadEveryControl: {}, schedule: { _, _ in })
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) },
+                                now: { [clock] in clock!.date }, reloader: reloader)
+        _ = await tool.run(["start", "job", timer])
+        reloader.forget(nil)
+        await settle()
+        XCTAssertEqual(host.ends.count, 1)
+        guard case .end("A1", nil, .now) = host.ends[0] else { return XCTFail("\(host.ends)") }
+        XCTAssertEqual(keeper.tasks, 0)
+    }
+
     func testTwoStartsOfOneSlotMakeOneActivity() async throws {
         let gate = GatedTrackerFetcher()
         fetcher = gate

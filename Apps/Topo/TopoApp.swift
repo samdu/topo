@@ -130,7 +130,6 @@ struct TopoApp: App {
         _ = SurfaceSync.shared
         // The Live Activities are the login's: ended with the slots at a sign-out, a takeover or
         // a viewer's arrival.
-        SurfaceReloader.shared.onForget { Task { await ActivityKeeper.shared.endAll() } }
         _roleSelector = State(initialValue: RoleSelector(database: AppRecords.database(),
                                                          isSignedIn: { LoginCache.standard.isSignedIn },
                                                          ensureZone: AppRecords.ensureZone))

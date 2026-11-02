@@ -105,7 +105,10 @@ struct ActivityTool: Tool {
         guard keeper.reserve(slot) else {
             return .failed("topo: slot \(slot) is starting; wait for it\n")
         }
-        defer { keeper.release(slot) }
+        // Released only under the login that reserved it: after an `endAll` the slot is another
+        // start's to hold, and this one lets go of nothing.
+        let reserved = keeper.generation
+        defer { if keeper.generation == reserved { keeper.release(slot) } }
         let reading = ActivityDocument.read(json, now: now())
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))

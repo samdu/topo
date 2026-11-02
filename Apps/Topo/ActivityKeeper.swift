@@ -94,8 +94,9 @@ final class ActivityKitHost: ActivityHost {
         }.value
     }
 
-    /// Ends the activity, or, ended already and still on the lock screen, sets how it is dismissed:
-    /// `.now` takes it off, which is how `endAll` clears what a default dismissal left shown.
+    /// Ends the activity. On one ended already and still on the lock screen, `.now` is meant to
+    /// take it off, which is what `endAll` asks for what a default dismissal left shown; whether
+    /// ActivityKit honours a second end that way is the device box on the PR, not a suite's word.
     func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool {
         let policy: ActivityUIDismissalPolicy = switch dismissal {
         case .now: .immediate
@@ -202,7 +203,7 @@ private extension Int64 {
 /// update and the help says so.
 @MainActor
 final class ActivityKeeper {
-    static let shared = ActivityKeeper(host: ActivityKitHost())
+    static let shared = ActivityKeeper(host: ActivityKitHost(), reloader: SurfaceReloader.shared)
     nonisolated static let interval: Duration = .seconds(20)
     /// How long a polled activity reads as current past its last update.
     nonisolated static let staleAfter: TimeInterval = 60
@@ -222,13 +223,16 @@ final class ActivityKeeper {
     private var resuming = false
     private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
 
+    /// `reloader`: the sign-out, the takeover and the viewer's arrival reach the keeper through its
+    /// `onForget`, as they reach the widgets' runs; every activity is the login's.
     init(host: ActivityHost, fetcher: TrackerFetcher = URLTrackerFetcher(),
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() }, reloader: SurfaceReloader? = nil) {
         self.host = host
         self.fetcher = fetcher
         self.sleep = sleep
         self.now = now
+        reloader?.onForget { [weak self] in Task { await self?.endAll() } }
     }
 
     /// The stale date a notice carries: `until`, and for a polled activity no later than
