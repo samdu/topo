@@ -279,7 +279,7 @@ final class ModelDownloads {
     /// Nil when the bundle has no readable manifest, in which case every model is `failed`.
     let manifest: ModelManifest?
     private let trouble: String?
-    private let session: URLSession
+    let session: URLSession
     private let relay: SessionRelay
     /// The models on disk in full.
     private(set) var present: Set<String> = []
@@ -309,12 +309,12 @@ final class ModelDownloads {
     var completion: (() -> Void)?
     /// Judges each task's rate and says which to cancel and when to make its replacement
     /// (`DownloadWatchdog`). Fed from `.progress`, ticked while it is active and the app is.
-    private let watchdog = DownloadWatchdog()
+    let watchdog = DownloadWatchdog()
     private let clock = ContinuousClock()
     private var ticking = false
     /// The keys whose task this process made and has not seen the end of: a `reconcile` whose
     /// snapshot of the session's tasks was taken before one was made leaves it alone.
-    private var live: Set<String> = []
+    private(set) var live: Set<String> = []
 
     /// The session's configuration: background, so the transfer outlives the process; nothing
     /// expensive or constrained, so the person's data settings decide; waiting for connectivity
@@ -329,7 +329,13 @@ final class ModelDownloads {
         return configuration
     }
 
-    private init(store: ModelStore = .standard(), manifest: Result<ModelManifest, Error> = Result { try ModelManifest.bundled() }) {
+    private convenience init() {
+        self.init(store: .standard(), manifest: Result { try ModelManifest.bundled() }, configuration: Self.configuration())
+    }
+
+    /// The app's is `shared`, over the background session; a test's is over an ephemeral one
+    /// whose protocol never answers, so nothing it makes reaches the network or completes.
+    init(store: ModelStore, manifest: Result<ModelManifest, Error>, configuration: URLSessionConfiguration) {
         self.store = store
         switch manifest {
         case .success(let m):
@@ -340,7 +346,7 @@ final class ModelDownloads {
             trouble = error.localizedDescription
         }
         relay = SessionRelay(store: store, manifest: self.manifest)
-        session = URLSession(configuration: Self.configuration(), delegate: relay, delegateQueue: nil)
+        session = URLSession(configuration: configuration, delegate: relay, delegateQueue: nil)
         relay.events = { [weak self] event in Task { @MainActor in self?.handle(event) } }
         // A background session carries on while the app is suspended and no progress reaches
         // the process meanwhile, so what was sampled before is no evidence now.
@@ -433,7 +439,7 @@ final class ModelDownloads {
         Self.held(id, after: after, wanted: wanted, present: present, failed: Set(failures.keys))
     }
 
-    private func enqueue(_ manifest: ModelManifest, excluding running: Set<String>, retry: Bool) {
+    func enqueue(_ manifest: ModelManifest, excluding running: Set<String>, retry: Bool) {
         let plan = Self.plan(manifest.models.map(\.id), after: after, wanted: wanted, present: present,
                              failed: Set(failures.keys), retry: retry)
         heldBack = plan.holding
@@ -712,7 +718,7 @@ final class ModelDownloads {
         "\(model.id)|\(file.path)"
     }
 
-    private func handle(_ event: SessionRelay.Event) {
+    func handle(_ event: SessionRelay.Event) {
         switch event {
         case .waiting(let key):
             waiting.insert(key)

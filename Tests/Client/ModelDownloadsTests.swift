@@ -355,3 +355,113 @@ final class ModelWaitersTests: XCTestCase {
         XCTAssertEqual(waiters.count, 1)
     }
 }
+
+/// `ModelDownloads` over an ephemeral session whose protocol never answers: what the glue between
+/// the watchdog, the relay and the session's state does with the events the other suites prove
+/// are produced. Nothing here reaches the network.
+/// A protocol that takes every request and answers none, so a task made under it stays running.
+private final class HangingProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {}
+    override func stopLoading() {}
+}
+
+@MainActor
+final class ModelDownloadsGlueTests: XCTestCase {
+    /// A store of this test's own, removed with the test.
+    private func scratch() -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("topo-glue-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
+    }
+
+    private func manifest() -> ModelManifest {
+        let revision = String(repeating: "0", count: 40)
+        let digest = SHA256.hash(data: Data("abc".utf8)).map { String(format: "%02x", $0) }.joined()
+        return ModelManifest(models: [
+            .init(id: "ear", repo: "example/ear", revision: revision, files: [.init(path: "encoder.bin", size: 3, sha256: digest)]),
+            .init(id: "voice", repo: "example/voice", revision: revision, files: [.init(path: "weight.bin", size: 3, sha256: digest)]),
+        ])
+    }
+
+    private func downloads(_ manifest: ModelManifest) -> ModelDownloads {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HangingProtocol.self]
+        return ModelDownloads(store: ModelStore(root: scratch()), manifest: .success(manifest), configuration: configuration)
+    }
+
+    /// The watchdog's cancel of `key`, decided: 20 s of samples at 36 KB/s.
+    private func crawl(_ downloads: ModelDownloads, _ key: String) {
+        let t0 = ContinuousClock.Instant.now
+        for s in 0...20 { downloads.watchdog.observe(key, bytes: Int64(s) * 36 * 1024, at: t0 + .seconds(s)) }
+        XCTAssertEqual(downloads.watchdog.decisions(at: t0 + .seconds(20)).map(\.key), [key])
+    }
+
+    private func tasks(of downloads: ModelDownloads) async -> [String] {
+        await withCheckedContinuation { continuation in
+            downloads.session.getAllTasks { continuation.resume(returning: $0.compactMap(\.taskDescription).sorted()) }
+        }
+    }
+
+    func testAPassMakesNoTaskForAKeyBetweenItsCancelAndItsReplacementOrOneThisProcessMade() async {
+        let manifest = manifest()
+        let downloads = downloads(manifest)
+        let key = "ear|encoder.bin"
+        downloads.start(["ear"])
+        // The first pass: one task, the key live. (`start`'s own pass lands at the first await,
+        // and is one more pass that makes no second task.)
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        XCTAssertEqual(downloads.live, [key])
+        var made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key])
+        // A second pass whose snapshot of the session missed that task (`excluding: []`) makes
+        // no second one: the key is live.
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key], "a pass makes no task for a key this process made")
+        // The watchdog cancels it: between the cancel and the relay's word, and between that
+        // word and the replacement's tick, the key is restarting and no pass makes a task.
+        crawl(downloads, key)
+        downloads.handle(.restarting(key))
+        XCTAssertEqual(downloads.live, [], "the cancelled task is not live")
+        XCTAssertTrue(downloads.watchdog.restarting(key))
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key], "a pass makes no task for a key between its cancel and its replacement")
+        XCTAssertEqual(downloads.live, [])
+        // Forgotten (verified, failed), a pass makes one again.
+        downloads.watchdog.forget(key)
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        made = await tasks(of: downloads)
+        XCTAssertEqual(made, [key, key], "a key no longer restarting or live is enqueued as any other")
+    }
+
+    func testARestartIsNotAFailureAnywhere() {
+        let manifest = manifest()
+        let downloads = downloads(manifest)
+        let key = "ear|encoder.bin"
+        downloads.start(["ear"])
+        downloads.start(["voice"], after: ["ear"])
+        downloads.enqueue(manifest, excluding: [], retry: true)
+        downloads.handle(.progress(key, 1))
+        XCTAssertEqual(downloads.status(for: "ear"), .downloading(done: 1, total: 3))
+        XCTAssertEqual(downloads.status(for: "voice"), .queued, "held behind the ear")
+        var settled: [Result<Void, ModelDownloadFailure>] = []
+        downloads.whenSettled(["ear"]) { settled.append($0) }
+        crawl(downloads, key)
+
+        downloads.handle(.restarting(key))
+
+        XCTAssertFalse(downloads.failed(["ear"]), "a restart sets no failure")
+        XCTAssertEqual(downloads.status(for: "ear"), .downloading(done: 1, total: 3), "the key stays in flight at the bytes last reported")
+        XCTAssertTrue(settled.isEmpty, "a waiter on the model is not told anything")
+        XCTAssertEqual(downloads.status(for: "voice"), .queued, "the model held behind it is still held")
+        XCTAssertTrue(downloads.watchdog.restarting(key), "the replacement is owed")
+        // A restart for a key no longer in flight (verified or failed meanwhile) owes nothing.
+        downloads.handle(.verifying(key))
+        downloads.handle(.restarting(key))
+        XCTAssertFalse(downloads.watchdog.restarting(key))
+        XCTAssertEqual(downloads.status(for: "ear"), .verifying)
+    }
+}
