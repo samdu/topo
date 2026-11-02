@@ -15,14 +15,14 @@ protocol ShareLine: AnyObject {
 extension Harness: ShareLine {}
 
 /// What the person shared from another app's share sheet (`ShareStore`, written by the share
-/// extension), made into turns: each share is put on the harness's line under the nonce the
-/// extension or the intent minted, and nothing for a nonce already there, so a drain run twice (before a
+/// extension) or attached through the composer's `+` (`ComposerAttachments`), made into turns: each share is put on the harness's line under the nonce the
+/// sheet, the intent or the composer's sheet minted, and nothing for a nonce already there, so a drain run twice (before a
 /// removal, after a crash) is one turn. A harness that has not read the log reads it first, since
 /// before it the harness cannot know what the log holds.
 ///
 /// The extension cannot bring Topo forward, so a share waits in the app group until the app next
-/// drains: when it comes to the front, when the harness first reads the log, and when a
-/// Shortcut's intent runs. The turn's text is written here, never by the
+/// drains: when it comes to the front, when the harness first reads the log, when a
+/// Shortcut's intent runs, and when the composer's sheet sends one. The turn's text is written here, never by the
 /// extension: the person's note and then what was shared under a line that says it was shared,
 /// each as it was kept, so nothing another app handed over reads as the person's own words. An image or a
 /// file is put in the guest's home first (`HomeFile`), under `shared/<the share's nonce>/`,
@@ -180,7 +180,10 @@ final class ShareInbox {
         case .image, .file:
             guard let path else { return nil }
             let what = share.kind == .image ? "an image" : "a file"
-            shared = "[Shared with Topo from another app: \(what), kept at \(path) (\(share.bytes ?? 0) bytes)]"
+            // Picked on this phone through the composer's `+`, or handed over by another app:
+            // the line says which, and the mind reads what is at the path either way.
+            let how = share.attached ? "Attached in Topo from this phone" : "Shared with Topo from another app"
+            shared = "[\(how): \(what), kept at \(path) (\(share.bytes ?? 0) bytes)]"
         }
         let none = share.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return none ? shared : "\(share.note)\n\n\(shared)"

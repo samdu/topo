@@ -62,6 +62,49 @@ final class DraftRowTests: XCTestCase {
         shot(app, "row-empty")
     }
 
+    /// The control for everything else opens the menu of what the screen offers over the row —
+    /// a file from the phone, a photo from the library — and the menu going away leaves the
+    /// words in the field: the row is the person's until they put the keyboard down.
+    func testTheControlForEverythingElseOpensItsMenuOverTheRow() throws {
+        let app = launch(owed: "")
+        keyboardMark(in: app).tap()
+        let field = ChatReading.field(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the mark put no field in the glass")
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "no keyboard on screen")
+        field.typeText("what is this")
+        let more = app.buttons["composer-more"]
+        XCTAssertTrue(more.exists, "the row has no control for everything else")
+        more.tap()
+        let file = app.buttons["Attach a file"], photo = app.buttons["Choose a photo"]
+        XCTAssertTrue(file.waitForExistence(timeout: 5), "the control opened no menu with the file picker in it")
+        XCTAssertTrue(photo.exists, "the menu has no photo picker")
+        XCTAssertFalse(app.buttons["Take a photo"].exists, "a simulator has no camera and offers one")
+        let screen = app.buttons["Share your screen"]
+        XCTAssertTrue(screen.exists, "the menu has no way to share the screen")
+        XCTAssertLessThan(photo.frame.midY, screen.frame.midY, "the screen is not last")
+        XCTAssertLessThan(file.frame.midY, photo.frame.midY, "the file is not before the photo")
+        shot(app, "menu")
+        // A tap on the transcript, clear of the menu, puts it away and nothing else.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        XCTAssertTrue(file.waitForNonExistence(timeout: 5), "the menu did not go")
+        XCTAssertTrue(ChatReading.fieldShown(app), "the menu going took the row with it")
+        XCTAssertEqual(field.value as? String, "what is this", "the menu took the words")
+        XCTAssertTrue(field.hasKeyboardFocus, "the menu took the keyboard")
+        shot(app, "menu-gone")
+
+        // The way to the screen share is a sheet holding the system's button, and Done puts it away.
+        more.tap()
+        XCTAssertTrue(screen.waitForExistence(timeout: 5))
+        screen.tap()
+        let done = app.buttons["screen-share-done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "the item put up no sheet")
+        XCTAssertTrue(app.descendants(matching: .any)["settings-screen-share"].waitForExistence(timeout: 5),
+                      "the sheet has no broadcast button")
+        shot(app, "screen-share")
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5), "Done did not put the sheet away")
+    }
+
     /// What is typed on the keyboard is in the field, and what is written past one line grows the
     /// field and the pane upward, the jewel and the send staying on the pane's bottom line, until
     /// the field has the look's most lines and its frame grows no further.

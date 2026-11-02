@@ -4,7 +4,8 @@ import Observation
 
 /// What the share sheet shows and does: the thing shared once it is read, why it was refused if
 /// it was, and the note. One sheet is one share: its nonce is minted with the sheet, and once it
-/// is kept a second Send keeps nothing.
+/// is kept a second Send keeps nothing. The composer's `+` puts up the same sheet over what the
+/// person picked on this phone (`take`), kept as a share that came in by the composer.
 @MainActor
 @Observable
 final class ShareSheetModel {
@@ -20,12 +21,38 @@ final class ShareSheetModel {
     /// A note over the limit is not sent and not cut: the sheet says so and Send waits.
     var noteTooLong: Bool { note.count > Share.noteLimit }
     private let store: ShareStore?
+    private let via: Share.Via
     private let nonce = UUID().uuidString
     private var login: String?
     private var scratch: URL?
 
-    init(store: ShareStore? = ShareStore.shared()) {
+    init(store: ShareStore? = ShareStore.shared(), via: Share.Via = .sheet) {
         self.store = store
+        self.via = via
+    }
+
+    /// Whether the sheet is over: cancelled, or its share kept. A read or a copy that lands
+    /// after keeps nothing and takes its own scratch away.
+    private var closed = false
+
+    /// Something picked on this phone, read as the sheet reads a share (`read`), or a file
+    /// already copied into a scratch folder of the store's (`take`): the door is read as it is
+    /// for a share, so a pick while signed out, or an image or a file where the guest is not,
+    /// is refused with the scratch taken away. A copy landing on a sheet already cancelled is
+    /// taken away too.
+    func take(_ item: ShareIntake.Item, in scratch: URL) {
+        guard !closed else { store?.discard(scratch); return }
+        self.scratch = scratch
+        guard let store, let door = store.door() else { return refuse(.signedOut) }
+        login = door.login
+        if item.kind == .image || item.kind == .file, !door.files { return refuse(.anotherPhone) }
+        state = .ready(item)
+    }
+
+    /// Shown refused, with the scratch, if any, taken away.
+    func refuse(_ refusal: ShareRefusal) {
+        discard()
+        state = .refused(refusal)
     }
 
     func read(_ providers: [NSItemProvider]) async {
@@ -36,7 +63,10 @@ final class ShareSheetModel {
         do {
             let scratch = try store.scratch()
             self.scratch = scratch
-            state = .ready(try await ShareIntake.item(from: providers, into: scratch))
+            let item = try await ShareIntake.item(from: providers, into: scratch)
+            // Cancelled while the read ran: what it read goes with the scratch.
+            guard !closed else { store.discard(scratch); return }
+            state = .ready(item)
         } catch let refusal as ShareRefusal {
             discard()
             state = .refused(refusal)
@@ -50,7 +80,7 @@ final class ShareSheetModel {
     func keep() -> Bool {
         guard let store, let login, case .ready(let item) = state, !noteTooLong else { return false }
         let share = Share(nonce: nonce, login: login, time: Date(), kind: item.kind, note: note,
-                          text: item.text, file: item.file?.lastPathComponent, bytes: item.bytes)
+                          text: item.text, file: item.file?.lastPathComponent, bytes: item.bytes, via: via)
         do {
             try store.keep(share, attachment: item.file)
         } catch {
@@ -63,7 +93,13 @@ final class ShareSheetModel {
         return true
     }
 
+    /// Takes away a scratch folder that never became this sheet's.
+    func discardScratch(_ scratch: URL) {
+        store?.discard(scratch)
+    }
+
     func discard() {
+        closed = true
         if let scratch { store?.discard(scratch) }
         scratch = nil
     }
