@@ -21,6 +21,7 @@ struct TopoApp: App {
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
     @State private var shares: ShareInbox
+    @State private var attachments: ComposerAttachments
     @State private var defaultSurface: DefaultSurface
     @State private var controlDefaults = ControlDefaults()
     @Environment(\.scenePhase) private var scenePhase
@@ -122,6 +123,8 @@ struct TopoApp: App {
         _widgetCues = State(initialValue: widgetCues)
         let shares = ShareInbox(line: harness)
         _shares = State(initialValue: shares)
+        // What the composer's `+` attaches goes in by the share store and out by the same drain.
+        _attachments = State(initialValue: ComposerAttachments(drain: { await shares.drain() }))
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
@@ -236,7 +239,7 @@ struct TopoApp: App {
     private var chat: some View {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
             .environment(voice).environment(speaker).environment(memory).environment(mascot)
-            .environment(connections)
+            .environment(connections).environment(attachments)
             // What every view draws with, which is the vault's `look.json` read onto the
             // compiled look. It is worn here rather than on the chat so that the first run,
             // the sign-in and the viewer screen are drawn by the same document; the memory

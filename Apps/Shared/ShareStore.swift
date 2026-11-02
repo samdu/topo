@@ -28,6 +28,17 @@ struct Share: Codable, Equatable, Sendable {
     /// The name of the image or file kept beside the record.
     var file: String?
     var bytes: Int?
+    /// Where it came in: another app's share sheet, or the composer's own `+` on this phone (a
+    /// file picked, a photo chosen). Absent on a record the extension wrote before there was a
+    /// second way in, and on a Shortcut's; only the composer's says so.
+    var via: Via?
+
+    enum Via: String, Codable, Sendable {
+        case sheet, composer
+    }
+
+    /// Whether the person attached it in Topo rather than handing it over from another app.
+    var attached: Bool { via == .composer }
 
     /// The longest note, in characters.
     static let noteLimit = 4000

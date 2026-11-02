@@ -420,6 +420,215 @@ final class ShareTests: XCTestCase {
         }
     }
 
+    /// A share the composer's `+` kept is marked as attached in Topo, not shared from another
+    /// app, with the note ahead of the line as a share's is; a record written before there was
+    /// a second way in, with no `via`, is the sheet's.
+    func testAnAttachmentIsMarkedAsAttachedInTopoAndARecordWithNoViaIsTheSheets() throws {
+        var attached = share(.image, note: " what is this ", file: "IMG.jpg", bytes: 12)
+        attached.via = .composer
+        XCTAssertEqual(ShareInbox.text(attached, path: "/home/topo/shared/ab/IMG.jpg"),
+                       " what is this \n\n[Attached in Topo from this phone: an image, kept at /home/topo/shared/ab/IMG.jpg (12 bytes)]")
+        var file = share(.file, file: "a.pdf", bytes: 3)
+        file.via = .composer
+        XCTAssertEqual(ShareInbox.text(file, path: "/home/topo/shared/ab/a.pdf"),
+                       "[Attached in Topo from this phone: a file, kept at /home/topo/shared/ab/a.pdf (3 bytes)]")
+        var sheet = file
+        sheet.via = .sheet
+        XCTAssertEqual(ShareInbox.text(sheet, path: "/p"), "[Shared with Topo from another app: a file, kept at /p (3 bytes)]")
+
+        let old = try JSONSerialization.data(withJSONObject: [
+            "nonce": UUID().uuidString, "login": "L", "time": 0, "kind": "file", "note": "", "file": "a.pdf", "bytes": 3,
+        ])
+        let read = try JSONDecoder().decode(Share.self, from: old)
+        XCTAssertNil(read.via)
+        XCTAssertFalse(read.attached)
+        XCTAssertEqual(ShareInbox.text(read, path: "/p"), "[Shared with Topo from another app: a file, kept at /p (3 bytes)]")
+        let again = try JSONDecoder().decode(Share.self, from: JSONEncoder().encode(attached))
+        XCTAssertEqual(again.via, .composer)
+    }
+
+    // MARK: The composer's `+`
+
+    /// A pick is refused before any picker is up where the door would refuse the share: signed
+    /// out, or an image or a file where the guest is not, each the sheet's own refusal with
+    /// nothing kept; where the door takes it the picker goes up and no sheet.
+    func testAPickIsRefusedSignedOutAndWhereTheGuestIsNotBeforeAnyPickerIsUp() throws {
+        let store = store
+        var drains = 0
+        let attachments = ComposerAttachments(store: { store }, drain: { drains += 1 })
+        attachments.pick(.file)
+        XCTAssertNil(attachments.picking)
+        XCTAssertEqual(attachments.sheet?.state, .refused(.signedOut))
+        attachments.cancel()
+        XCTAssertNil(attachments.sheet)
+
+        try store.open(files: false)
+        attachments.pick(.photo)
+        XCTAssertNil(attachments.picking)
+        XCTAssertEqual(attachments.sheet?.state, .refused(.anotherPhone))
+        XCTAssertEqual(attachments.up, .sheet)
+        attachments.cancel()
+
+        store.close()
+        try store.open(files: true)
+        attachments.pick(.file)
+        XCTAssertEqual(attachments.picking, .file)
+        XCTAssertNil(attachments.sheet)
+        XCTAssertEqual(attachments.up, .picker(.file))
+        // A second press while one is up does nothing.
+        attachments.pick(.photo)
+        XCTAssertEqual(attachments.picking, .file)
+        // The other picker going down is not this one's.
+        attachments.dismissed(.photo)
+        XCTAssertEqual(attachments.picking, .file)
+        attachments.dismissed(.file)
+        XCTAssertNil(attachments.picking)
+        XCTAssertNil(attachments.up)
+        // A photo picker closed with nothing puts up no sheet.
+        attachments.pick(.photo)
+        attachments.chose(photo: nil)
+        XCTAssertNil(attachments.picking)
+        XCTAssertNil(attachments.sheet)
+        XCTAssertEqual(drains, 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"])
+    }
+
+    /// What was picked is shown in the sheet, and Send keeps it as a share that came in by the
+    /// composer and drains at once; Cancel keeps nothing and takes the copy away.
+    func testAPickIsKeptAsAShareByTheComposerOnSendAndTakenAwayOnCancel() async throws {
+        try store.open(files: true)
+        let store = store
+        var drains = 0
+        let attachments = ComposerAttachments(store: { store }, drain: { drains += 1 })
+        let source = root.appendingPathComponent("Quarterly report.pdf")
+        try Data(repeating: 3, count: 2048).write(to: source)
+
+        attachments.pick(.file)
+        attachments.chose(file: source)
+        XCTAssertNil(attachments.picking, "the picker stayed up after the choice")
+        XCTAssertEqual(attachments.sheet?.state, .reading, "the sheet is not up reading while the copy is made")
+        XCTAssertEqual(attachments.up, .sheet)
+        let item = try await ready(attachments)
+        XCTAssertEqual(item.kind, .file)
+        XCTAssertEqual(item.bytes, 2048)
+        XCTAssertEqual(item.file?.lastPathComponent, "Quarterly report.pdf")
+        XCTAssertEqual(item.file?.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL, store.folder.standardizedFileURL,
+                       "the copy is not in a scratch folder of the store's")
+        attachments.sheet?.note = "read this"
+        attachments.send()
+        XCTAssertNil(attachments.sheet)
+        XCTAssertNil(attachments.up)
+        await Task.yield()
+        let kept = try XCTUnwrap(store.shares().first)
+        XCTAssertEqual(kept.via, .composer)
+        XCTAssertEqual(kept.kind, .file)
+        XCTAssertEqual(kept.note, "read this")
+        XCTAssertEqual(kept.file, "Quarterly report.pdf")
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.attachment(of: kept))), Data(repeating: 3, count: 2048))
+        let names = try FileManager.default.contentsOfDirectory(atPath: store.folder.path).sorted()
+        XCTAssertEqual(names, ["_open.json", kept.nonce].sorted(), "the scratch folder was left behind")
+        var waited = 0
+        while drains == 0, waited < 50 { await Task.yield(); waited += 1 }
+        XCTAssertEqual(drains, 1, "Send did not drain")
+        store.remove(nonce: kept.nonce)
+
+        attachments.pick(.photo)
+        attachments.chose(photo: try XCTUnwrap(NSItemProvider(contentsOf: source)))
+        XCTAssertEqual(attachments.up, .sheet)
+        _ = try await ready(attachments)
+        attachments.cancel()
+        XCTAssertNil(attachments.sheet)
+        XCTAssertEqual(store.shares(), [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"], "the copy was left behind")
+
+        // A sign-out between the pick and Send is the sheet's refusal, with the copy gone.
+        attachments.pick(.file)
+        attachments.chose(file: source)
+        _ = try await ready(attachments)
+        store.close()
+        attachments.send()
+        XCTAssertEqual(attachments.sheet?.state, .refused(.signedOut))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder.path))
+        attachments.cancel()
+        XCTAssertEqual(drains, 1)
+    }
+
+    /// A copy or a read that lands after its sheet was cancelled keeps nothing and takes its
+    /// scratch away, and a sheet put up after it is untouched: the late file never reaches the
+    /// sheet over the next pick.
+    func testACopyLandingOnACancelledSheetKeepsNothingAndTheNextSheetIsUntouched() async throws {
+        try store.open(files: true)
+        let store = store
+        let attachments = ComposerAttachments(store: { store }, drain: {})
+        let first = root.appendingPathComponent("first.pdf"), second = root.appendingPathComponent("second.pdf")
+        try Data(repeating: 1, count: 10).write(to: first)
+        try Data(repeating: 2, count: 20).write(to: second)
+
+        // The first sheet, cancelled while its copy is still on its way.
+        let early = ShareSheetModel(store: store, via: .composer)
+        early.discard()
+        early.took(ComposerAttachments.copy(first, as: .file, into: store))
+        XCTAssertEqual(early.state, .reading, "a cancelled sheet took a late copy")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"], "the late copy was left behind")
+        XCTAssertFalse(early.keep())
+
+        // The read's way: cancelled during the read, what it read goes too.
+        let reading = ShareSheetModel(store: store, via: .composer)
+        let provider = try XCTUnwrap(NSItemProvider(contentsOf: first))
+        let read = Task { await reading.read([provider]) }
+        reading.discard()
+        await read.value
+        XCTAssertEqual(reading.state, .reading)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"])
+
+        // The next pick's sheet is its own.
+        attachments.pick(.file)
+        attachments.chose(file: second)
+        let item = try await ready(attachments)
+        XCTAssertEqual(item.file?.lastPathComponent, "second.pdf")
+        XCTAssertEqual(item.bytes, 20)
+        attachments.sheet?.note = "the second"
+        attachments.send()
+        let kept = try XCTUnwrap(store.shares().first)
+        XCTAssertEqual(kept.file, "second.pdf")
+        XCTAssertEqual(kept.note, "the second")
+        XCTAssertEqual(store.shares().count, 1)
+    }
+
+    /// The sheet's item once the copy or the read has landed.
+    private func ready(_ attachments: ComposerAttachments) async throws -> ShareIntake.Item {
+        for _ in 0..<200 {
+            if case .ready(let item)? = attachments.sheet?.state { return item }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw Unexpected()
+    }
+
+    /// A picked file is copied into a scratch folder of the store's under the name the store
+    /// keeps it by, and one past the limit or missing is refused with no scratch left.
+    func testAPickedFileIsCopiedUnderTheStoresNameOrRefusedWithNoScratchLeft() throws {
+        try store.open(files: true)
+        let store = store
+        let source = root.appendingPathComponent("..notes.txt")
+        try Data("words".utf8).write(to: source)
+        guard case .taken(let item, let scratch) = ComposerAttachments.copy(source, as: .file, into: store) else { return XCTFail() }
+        XCTAssertEqual(item.file?.lastPathComponent, "notes.txt")
+        XCTAssertEqual(item.bytes, 5)
+        XCTAssertEqual(scratch.deletingLastPathComponent().standardizedFileURL, store.folder.standardizedFileURL)
+        store.discard(scratch)
+
+        guard case .refused(.nothing, let none) = ComposerAttachments.copy(root.appendingPathComponent("missing"), as: .file, into: store) else { return XCTFail() }
+        XCTAssertNil(none)
+        let big = root.appendingPathComponent("big.bin")
+        try Data().write(to: big)
+        let handle = try FileHandle(forWritingTo: big)
+        try handle.truncate(atOffset: UInt64(Share.fileLimit + 1))
+        try handle.close()
+        guard case .refused(.tooLarge, let none) = ComposerAttachments.copy(big, as: .file, into: store) else { return XCTFail() }
+        XCTAssertNil(none)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"])
+    }
+
     // MARK: The drain
 
     func testEachShareIsOneTurnUnderItsNonceOldestFirstAndIsThenGone() async throws {
