@@ -3766,6 +3766,11 @@
 				kind = exactVersion;
 				version = 0.18.2;
 			};
+			traits = (
+				NemoTextProcessing,
+				TTS,
+				Diarizer,
+			);
 		};
 /* End XCRemoteSwiftPackageReference section */
 

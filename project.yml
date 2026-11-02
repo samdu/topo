@@ -54,6 +54,13 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.18.2"
+    # The package's default traits, named: Xcode keeps the trait set of the version it last
+    # resolved in a DerivedData, so a pin moved without them builds the new version with the
+    # old version's set (0.17.7 declared NemoTextProcessing alone, and 0.18.2 built from its
+    # checkout had no TTS: `cannot find type 'PocketTtsManager'`). Named, the set is the
+    # project's whichever version the DerivedData last saw. TTS is the voice; Diarizer is
+    # nothing Topo calls, kept so the build is the package as released.
+    traits: [NemoTextProcessing, TTS, Diarizer]
 targets:
   Topo:
     type: application
