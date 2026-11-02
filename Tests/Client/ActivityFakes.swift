@@ -16,6 +16,9 @@ final class FakeActivityHost: ActivityHost {
     var enabled = true
     /// What `start` throws next, when set.
     var refusal: ActivityRefusal?
+    /// Awaited by `update` and `end` before they take effect: ActivityKit's own latency, for a
+    /// test that lands something while one is in flight.
+    var wait: (@Sendable () async -> Void)?
     private(set) var calls: [Call] = []
     var records: [ActivityRecord] = []
     private var next = 1
@@ -33,6 +36,7 @@ final class FakeActivityHost: ActivityHost {
 
     func update(_ id: String, _ notice: ActivityNotice) async -> Bool {
         calls.append(.update(id: id, state: notice.state, stale: notice.stale))
+        await wait?()
         guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
         records[index].state = notice.state
         return true
@@ -40,6 +44,7 @@ final class FakeActivityHost: ActivityHost {
 
     func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool {
         calls.append(.end(id: id, state: state, dismissal: dismissal))
+        await wait?()
         guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
         records[index].ended = true
         if let state { records[index].state = state }
@@ -49,6 +54,29 @@ final class FakeActivityHost: ActivityHost {
     var starts: Int { calls.filter { if case .start = $0 { true } else { false } }.count }
     var updates: Int { calls.filter { if case .update = $0 { true } else { false } }.count }
     var ends: [Call] { calls.filter { if case .end = $0 { true } else { false } } }
+}
+
+/// A wait the test opens: what the fake host's `update` and `end` hold on.
+final class HostGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var open = false
+
+    var held: Int { lock.withLock { waiting.count } }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                if open { continuation.resume() } else { waiting.append(continuation) }
+            }
+        }
+    }
+
+    /// Lets everything held through, and everything after.
+    func openUp() {
+        let held = lock.withLock { open = true; let all = waiting; waiting = []; return all }
+        held.forEach { $0.resume() }
+    }
 }
 
 /// A fetch that waits until the test lets it go: how a sign-out, an end or an update lands while

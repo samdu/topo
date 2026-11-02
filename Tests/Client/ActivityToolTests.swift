@@ -183,12 +183,21 @@ final class ActivityToolTests: XCTestCase {
         keeper.forget("A1")
     }
 
-    func testAnUpdateDuringASignOutKeepsNothing() async throws {
+    func testAnUpdateInFlightAcrossASignOutKeepsNothing() async throws {
         _ = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "until": "2026-11-02T06:00:00Z"}"#])
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let tool = self.tool
+        let update = Task { await tool.run(["update", "A1", #"{"relevance": 5}"#]) }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the update is in the host")
+        host.wait = nil
         await keeper.endAll()
-        let reply = await tool.run(["update", "A1", #"{"relevance": 5}"#])
-        XCTAssertEqual(reply.status, ToolReply.failed, "ended is not running")
-        XCTAssertEqual(keeper.tasks, 0)
+        gate.openUp()
+        _ = await update.value
+        XCTAssertEqual(keeper.tasks, 0, "the update from before the sign-out kept nothing")
+        let after = await tool.run(["update", "A1", #"{"relevance": 5}"#])
+        XCTAssertEqual(after.status, ToolReply.failed, "ended is not running")
     }
 
     func testOverBudgetDocumentIsRefusedWhole() async throws {

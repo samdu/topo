@@ -128,6 +128,8 @@ struct TopoApp: App {
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
+        // Built now so its sign-out hook is registered in every process, scene or none.
+        _ = ActivityKeeper.shared
         // The Live Activities are the login's: ended with the slots at a sign-out, a takeover or
         // a viewer's arrival.
         _roleSelector = State(initialValue: RoleSelector(database: AppRecords.database(),

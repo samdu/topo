@@ -220,6 +220,10 @@ final class ActivityKeeper {
     /// Counts the logins' ends: a call that read the activities before an await compares it after,
     /// since `endAll` may have run in between and nothing from before it may start or keep anything.
     private(set) var generation = 0
+    /// Counts the tool's updates of each activity: a poll that read the activity before its fetch
+    /// and finds the count moved after it leaves that round to the next, so a poll never writes
+    /// over an update the host has not applied yet.
+    private var revisions: [String: Int] = [:]
     private var resuming = false
     private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
 
@@ -248,6 +252,10 @@ final class ActivityKeeper {
 
     /// The tasks standing: what a suite counts after `endAll`.
     var tasks: Int { polls.count + ends.count }
+
+    /// The tool is about to update the activity: counted before the host is asked.
+    func touch(_ id: String) { revisions[id, default: 0] += 1 }
+    func revision(_ id: String) -> Int { revisions[id] ?? 0 }
 
     /// A slot held for a start that is still fetching; false when it is held already.
     func reserve(_ slot: String) -> Bool { reserved.insert(slot).inserted }
@@ -306,6 +314,7 @@ final class ActivityKeeper {
         polls[id] = nil
         ends[id]?.cancel()
         ends[id] = nil
+        revisions[id] = nil
     }
 
     /// A sign-out, a takeover or a viewer's arrival: the activities are the login's, the ones
@@ -330,6 +339,7 @@ final class ActivityKeeper {
                 return
             }
             let generation = generation
+            let revision = revision(id)
             let fetched = await fetcher.fetch(url)
             // Read again after the wait: the activity may be ended, updated, or the login's gone.
             guard !Task.isCancelled, generation == self.generation,
@@ -337,6 +347,9 @@ final class ActivityKeeper {
                 forget(id)
                 return
             }
+            // An update of the tool's since the fetch began may still be on its way to the host:
+            // this round is left to the next, which reads what the host then holds.
+            guard revision == self.revision(id) else { continue }
             guard let data = fetched, let tracker = ProgressTracker.read(data, now: now()).tracker else {
                 log.info("activity \(id, privacy: .public) poll gave no tracker")
                 continue

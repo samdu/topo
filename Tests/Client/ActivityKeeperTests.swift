@@ -100,6 +100,35 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(id)
     }
 
+    func testAPollLeavesARoundToTheNextWhenTheToolsUpdateIsStillInTheHost() async throws {
+        let fetcher = GatedTrackerFetcher()
+        let keeper = keeper(fetcher)
+        let id = try start()
+        keeper.keep(id)
+        await tick()
+        XCTAssertEqual(fetcher.pending, 1)
+        // The tool's update is sent and not yet applied by the host when the poll's fetch answers.
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        var updated = host.records[0].state
+        updated.relevance = 90
+        keeper.touch(id)
+        let sent = Task { [host] in await host!.update(id, ActivityNotice(state: updated, stale: nil, relevance: 90)) }
+        await settle()
+        fetcher.release(TrackerFixtures.wiki)
+        await settle()
+        XCTAssertEqual(host.updates, 1, "the poll wrote nothing over the update on its way")
+        host.wait = nil
+        gate.openUp()
+        _ = await sent.value
+        await tick()
+        fetcher.release(TrackerFixtures.wiki)
+        await settle()
+        guard case .update(_, let state, _) = host.calls.last else { return XCTFail("\(host.calls)") }
+        XCTAssertEqual(state.relevance, 90, "the next round reads what the host holds")
+        keeper.forget(id)
+    }
+
     func testASignOutDuringTheFetchUpdatesNothingAndLeavesNoTask() async throws {
         let fetcher = GatedTrackerFetcher()
         let keeper = keeper(fetcher)

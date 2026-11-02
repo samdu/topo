@@ -172,6 +172,7 @@ struct ActivityTool: Tool {
         if let note = fitted.note { notes.append(note) }
         let keeper = keeper()
         let generation = keeper.generation
+        keeper.touch(id)
         let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
         guard updated else { return .failed("topo: no activity \(id) running\n") }
         // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
