@@ -269,14 +269,16 @@ actor PocketVoiceEngine: VoiceEngine {
     private var manager: PocketTtsManager?
 
     /// `base` is the directory the manifest's Pocket entry was filled under: the port appends
-    /// `Models/pocket-tts/v2.1/english` to it and reads the pack from there. Offline first, as
+    /// `Models/pocket-tts/v2.1/english`, the April English pack's folder (`.english2026Apr`;
+    /// `.english` is Kyutai's October checkpoint, in a folder of its own), to it and reads the
+    /// pack from there. Offline first, as
     /// `Ear` does, so a file the store lacks is a load failure rather than a download over a
     /// session of the library's own.
     func load(base: URL) async throws {
         if manager != nil { return }
         ModelHub.offlineMode = true
         let manager = PocketTtsManager(
-            defaultVoice: Voice.speaker, language: .english, directory: base, placement: .ane,
+            defaultVoice: Voice.speaker, language: .english2026Apr, directory: base, placement: .ane,
             computeUnits: PocketTtsComputeUnits(
                 conditioner: .cpuAndNeuralEngine,
                 flowLM: .cpuAndNeuralEngine,
