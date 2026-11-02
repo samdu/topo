@@ -142,6 +142,10 @@ final class Harness {
     /// written: nothing more is coming to wait for. Not called for a turn another primary is
     /// answering, whose reply is still on its way.
     var onTurnFailed: (@MainActor (String) -> Void)?
+    /// Told the nonce of a turn that failed for the person — the attempt threw, or saving their
+    /// words did — right before `onTurnFailed`. Not told of a turn another device answered or
+    /// one the guest finished with iCloud behind, which end the same wait and are no failure.
+    var onTurnFailure: (@MainActor (String) -> Void)?
     /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
     /// owed, and what the install above reads the newest of.
     private var owedAloud: [Turn] {
@@ -966,6 +970,7 @@ final class Harness {
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
+            onTurnFailure?(attempt.nonce)
             onTurnFailed?(attempt.nonce)
             await refresh()
             await refreshUnfinished()
@@ -999,12 +1004,14 @@ final class Harness {
                 guard inFlight == generation else { return false }
                 turnOpen = false
                 failure = Failure(words: Self.describe(error))
+                onTurnFailure?(attempt.nonce)
                 onTurnFailed?(attempt.nonce)
             }
         } catch {
             guard inFlight == generation else { return false }
             turnOpen = false
             failure = Failure(words: Self.describe(error))
+            onTurnFailure?(attempt.nonce)
             onTurnFailed?(attempt.nonce)
             await refresh()
         }

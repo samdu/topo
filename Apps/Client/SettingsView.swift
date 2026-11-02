@@ -17,10 +17,12 @@ struct SettingsView: View {
     @State private var showConnections = false
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+    @AppStorage(EarconsSetting.key) private var earcons = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
+    static let earcons = "settings-earcons"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
 
@@ -44,6 +46,12 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
                     Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
+                }
+                Section {
+                    Toggle("Earcons", isOn: $earcons)
+                        .accessibilityIdentifier(SettingsView.earcons)
+                } footer: {
+                    Text("A short tone as the microphone opens, as your words go, as a reply read aloud ends, and when a spoken turn fails. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the

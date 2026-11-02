@@ -148,7 +148,7 @@ struct TopoApp: App {
         #endif
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
-        let speaker = Speaker(audio: audio, voice: spoken)
+        let speaker = Speaker(audio: audio, voice: spoken, earcons: Earcons(audio: audio))
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
         // and goes when its compile ends. A debug stand-in ear, which may load for ever, holds
         // nothing back.

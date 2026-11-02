@@ -103,6 +103,45 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertTrue(usage.text.contains("topo voice temperature VALUE"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice noise-suppression`"), "the mind is not told the tool exists")
         XCTAssertTrue(GuestTools.skill.contains("`topo voice temperature`"), "the mind is not told of the temperature")
+        XCTAssertTrue(usage.text.contains("topo voice earcons off"), usage.text)
+        XCTAssertTrue(GuestTools.skill.contains("`topo voice earcons`"), "the mind is not told of the earcons")
+    }
+
+    // MARK: - Earcons
+
+    func testAPhoneNeverAskedSoundsTheEarcons() async {
+        let defaults = defaults()
+        for arguments in [["earcons"], ["earcons", "status"]] {
+            let reply = await VoiceTool(defaults: defaults).run(arguments)
+            XCTAssertEqual(reply.text, "earcons on\n")
+            XCTAssertEqual(reply.status, 0)
+        }
+        XCTAssertTrue(EarconsSetting.enabled(defaults))
+    }
+
+    func testEarconsOffAndOnAreKeptWhereTheCuesReadThem() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        let off = await tool.run(["earcons", "off"])
+        XCTAssertEqual(off.text, "earcons off, from the next cue\n")
+        XCTAssertFalse(EarconsSetting.enabled(defaults))
+        XCTAssertEqual(defaults.object(forKey: EarconsSetting.key) as? Bool, false)
+        let status = await tool.run(["earcons", "status"])
+        XCTAssertEqual(status.text, "earcons off\n")
+        let on = await tool.run(["earcons", "on"])
+        XCTAssertEqual(on.text, "earcons on, from the next cue\n")
+        XCTAssertTrue(EarconsSetting.enabled(defaults))
+    }
+
+    func testEarconsRefusesWhatItDoesNotTakeAndChangesNothing() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        for arguments in [["earcons", "loud"], ["earcons", "on", "now"]] {
+            let reply = await tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments) was taken")
+            XCTAssertTrue(reply.text.contains("topo voice earcons on"), reply.text)
+        }
+        XCTAssertNil(defaults.object(forKey: EarconsSetting.key))
     }
 }
 

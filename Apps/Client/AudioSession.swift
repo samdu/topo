@@ -25,6 +25,8 @@ final class AudioSession {
     enum Hold: Hashable {
         case awaitingReply(String)
         case speaking
+        /// An earcon being heard out (`Earcons`), bounded by its own `Earcons.bound`.
+        case cue
     }
 
     private var recordClaims: Set<RecordClaim> = []

@@ -112,9 +112,11 @@ final class Speaker {
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          ceiling: Duration = .seconds(120),
          now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime,
-         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) {
+         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
+         earcons: Earcons? = nil) {
         self.audio = audio
         self.voice = voice
+        self.earcons = earcons
         self.ceiling = ceiling
         self.now = now
         queue = PlayQueue(makeEngine: makeEngine, center: center, heard: heard)
@@ -126,6 +128,9 @@ final class Speaker {
         queue.ensureActive = { [weak self] in try self?.audio.ensureActive() }
         queue.sessionFailed = { [weak self] in self?.audio.invalidate() }
         audio.onHoldChanged = { [weak self] held in self?.hold(held) }
+        // A cue is never played into an open microphone, and whether one is open or opening is
+        // this object's answer.
+        self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -433,6 +438,11 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
+    /// The cues a spoken exchange sounds (`Earcons`), on this speaker's session: the chat's press
+    /// plays the microphone's and the release's, this object plays `done` as a reply ends. The
+    /// app's to give; a speaker given none sounds nothing, which is every suite's but the cues' own.
+    let earcons: Earcons?
+
     /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
     /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
     /// with `VoiceInput.listening`.
@@ -450,6 +460,9 @@ final class Speaker {
 
     /// A reply is waiting for the microphone to close.
     var waitingForMicrophone: Bool { deferred != nil }
+
+    /// Whether a wait stands for the spoken turn `nonce`.
+    func isAwaiting(_ nonce: String) -> Bool { waits[nonce] != nil }
 
     #if DEBUG
     /// The spoken turns a wait is standing for, for a test.
@@ -682,11 +695,14 @@ final class Speaker {
         }
     }
 
-    /// The reply came to its end, rather than being stopped.
+    /// The reply came to its end, rather than being stopped. The cue first: its hold is taken
+    /// while the reply's still stands, so behind the lock the process is not let go of between
+    /// the two and nothing retakes a hold on a session the last one's going left to wait.
     private func finished() {
         #if DEBUG
         report.finished = report.started
         #endif
+        earcons?.play(.done)
         done()
     }
 

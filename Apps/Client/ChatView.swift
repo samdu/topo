@@ -293,6 +293,7 @@ struct ChatView: View {
                 harness.onReply = nil
                 harness.onWriting = nil
                 harness.onTurnFailed = nil
+                harness.onTurnFailure = nil
                 speaker.settled = nil
                 speaker.endAllWaits("the chat stopped answering")
             }
@@ -936,6 +937,12 @@ enum SpokenReply {
     /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
     static func follow(_ harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
         wire(harness: harness, speaker: speaker, readsAloud: readsAloud)
+        // A spoken turn that failed for the person sounds so — only one a wait stands for, so a
+        // typed turn is silent and one whose reply was read as it was written is not told
+        // twice — and before its wait ends, so the cue's hold is taken under the wait's.
+        harness.onTurnFailure = { nonce in
+            if speaker.isAwaiting(nonce) { speaker.earcons?.play(.failed) }
+        }
         // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
         // is owed no reply from the log, so nothing waits for one.
         harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
@@ -1024,7 +1031,10 @@ final class MicPress {
             return Task {
                 let heard = await voice.pressUp(as: .chat)
                 speaker.microphoneClosed()
+                // Nil is a tap that left the microphone open, or a release that reached no
+                // session: neither sends, and neither sounds.
                 guard let heard else { return }
+                speaker.earcons?.play(.sending(heard))
                 await send(heard)
             }
         }
@@ -1042,7 +1052,15 @@ final class MicPress {
         return Task {
             let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened()
-            guard let heard else { return }
+            guard let heard else {
+                // Nil is a session begun or a press refused, and only the microphone listening
+                // for the chat tells the two apart. The cue follows `VoiceInput`'s decision and
+                // never makes it.
+                if voice.listening, voice.owner == .chat { speaker.earcons?.play(.listening) }
+                return
+            }
+            // The press on the open microphone's waveform, which sends what it heard.
+            speaker.earcons?.play(.sending(heard))
             await send(heard)
         }
     }
