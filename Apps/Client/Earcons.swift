@@ -1,6 +1,7 @@
 #if os(iOS)
 import AVFoundation
 import Foundation
+import os
 
 /// A player for one cue: `AVAudioPlayer` in the app (`EarconPlayer`), a recorder in the suite.
 @MainActor
@@ -12,11 +13,14 @@ protocol CuePlayer: AnyObject {
 }
 
 /// `AVAudioPlayer` as a `CuePlayer`, its own delegate: the player's finish is posted on whatever
-/// thread the system chooses, and reaches the main actor here.
+/// thread the system chooses, and reaches the main actor here. Each play has a generation, read
+/// as the finish is posted and not in the hop, so a play begun between the two is not ended by
+/// the finish of the one before it.
 @MainActor
 final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
     private let player: AVAudioPlayer
     private var whenDone: (@MainActor () -> Void)?
+    private let generation = OSAllocatedUnfairLock(initialState: 0)
 
     init(url: URL) throws {
         player = try AVAudioPlayer(contentsOf: url)
@@ -27,15 +31,17 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 
     func play(whenDone: @escaping @MainActor () -> Void) -> Bool {
         self.whenDone = whenDone
+        generation.withLock { $0 += 1 }
         player.currentTime = 0
         return player.play()
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let finished = generation.withLock { $0 }
         Task { @MainActor in
-            let done = self.whenDone
+            guard self.generation.withLock({ $0 }) == finished, let done = self.whenDone else { return }
             self.whenDone = nil
-            done?()
+            done()
         }
     }
 }
@@ -46,17 +52,20 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 /// `THIRD-PARTY`) bundled as `earcon_<cue>.mp3`. On unless turned off (`EarconsSetting`: a toggle
 /// in the settings sheet and `topo voice earcons`).
 ///
-/// A cue is a moment, not a reply. It is played on the session as it stands, after
-/// `AudioSession.ensureActive()` has returned and refused when it throws, and reconfigures
-/// nothing. Where a hold already stands it holds the process for its own length too
-/// (`AudioSession.Hold.cue`, let go when the player has finished or at `bound`), taken before the
-/// player starts, so that `done` behind the lock is heard out before the reply's own hold goes
-/// and the last hold is let go of; its caller plays it before dropping the hold it follows, so
-/// the process is never let go of between the two. With nothing held — a press in front — a cue
-/// holds nothing, so a claim change waits on no cue. Nothing but `listening` is played into an
-/// open microphone. The players are handles into
-/// mediaserverd: a media services reset drops them and builds nothing, and the next cue makes
-/// its own afresh. Lifted from Daphne's `Earcons`, per `THIRD-PARTY`. Main only.
+/// A cue is a moment, not a reply. It is played on the session as it stands — live
+/// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing
+/// and activates nothing, in the background under a hold least of all. Where a hold that is not
+/// a cue's own already stands it holds the process for its own length too (`AudioSession.Hold.cue`,
+/// let go when the player has finished or at `bound`), taken before the player starts, so that
+/// `done` behind the lock is heard out before the reply's own hold goes and the last hold is let
+/// go of; its caller plays it before dropping the hold it follows, so the process is never let
+/// go of between the two. With nothing held — a press in front — a cue holds nothing, so a claim
+/// change waits on no cue; and under nothing but the cue before it, it lets that one's hold go,
+/// so cues cannot keep the process alive by themselves. Nothing but `listening` is played into
+/// an open microphone. The players are handles into mediaserverd: the speaker tells of a media
+/// services reset (`mediaServicesWereReset`), after it has dropped its own queue, and they are
+/// dropped and nothing built, so the next cue makes its own afresh. Lifted from Daphne's
+/// `Earcons`, per `THIRD-PARTY`. Main only.
 @MainActor
 final class Earcons {
     enum Cue: String, CaseIterable, Sendable {
@@ -88,14 +97,12 @@ final class Earcons {
     private var holding = false
     private var serial = 0
     private var bounding: Task<Void, Never>?
-    private var resetObserver: NSObjectProtocol?
     #if DEBUG
     /// Every cue played, in order, for a test.
     private(set) var played: [Cue] = []
     #endif
 
-    init(audio: AudioSession, center: NotificationCenter = .default, defaults: UserDefaults = .standard,
-         bundle: Bundle = .main,
+    init(audio: AudioSession, defaults: UserDefaults = .standard, bundle: Bundle = .main,
          makePlayer: @escaping @MainActor (URL) throws -> any CuePlayer = { try EarconPlayer(url: $0) },
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.audio = audio
@@ -103,16 +110,14 @@ final class Earcons {
         self.bundle = bundle
         self.makePlayer = makePlayer
         self.sleep = sleep
-        resetObserver = center.addObserver(
-            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.mediaServicesWereReset() }
-        }
     }
 
-    /// iOS reset the media server: the players were handles into it and are dropped, and the cue
-    /// that was playing is over with it. Nothing is built here; the next cue makes its own.
-    private func mediaServicesWereReset() {
+    /// iOS reset the media server, and the speaker has dropped its queue: the players were
+    /// handles into it and are dropped, and the cue that was playing is over with it. Nothing is
+    /// built here; the next cue makes its own. Told by `Speaker` rather than observed, so the
+    /// cue's hold goes after the speaker's own have, never into a keeper restarted on the engine
+    /// the reset killed.
+    func mediaServicesWereReset() {
         players = [:]
         if let playing { ended(playing, "the media server was reset") }
         AudioLog.say("media services reset: the earcons' players dropped")
@@ -120,7 +125,7 @@ final class Earcons {
 
     /// Sounds `cue`, and says whether it was played. Nothing is played with the setting off,
     /// into an open microphone (`listening` excepted, which is the microphone's own), on a
-    /// session that will not activate, or for a file the bundle lacks.
+    /// session that is not live, or for a file the bundle lacks.
     @discardableResult
     func play(_ cue: Cue) -> Bool {
         guard EarconsSetting.enabled(defaults) else { return false }
@@ -129,9 +134,9 @@ final class Earcons {
             return false
         }
         do {
-            try audio.ensureActive()
+            try audio.ensureLive()
         } catch {
-            AudioLog.say("earcon \(cue) refused: the session did not activate: \(error)")
+            AudioLog.say("earcon \(cue) refused: \(error)")
             return false
         }
         guard let player = player(for: cue) else { return false }
@@ -140,11 +145,17 @@ final class Earcons {
         bounding?.cancel()
         playing = mine
         // The hold before the player, so the process is held from the cue's first frame; only
-        // where a hold already stands, since in front nothing suspends and a cue that held alone
-        // would keep a claim change waiting for nothing.
-        if audio.holding {
-            audio.wantAlive(true, for: .cue)
-            holding = true
+        // where a hold that is not a cue's own stands, since in front nothing suspends and a cue
+        // that held alone would keep a claim change waiting for nothing. Under nothing but the
+        // cue before it, that one's hold goes now: it was taken for a turn that is over.
+        if audio.heldForATurn {
+            if !holding {
+                audio.wantAlive(true, for: .cue)
+                holding = true
+            }
+        } else if holding {
+            holding = false
+            audio.wantAlive(false, for: .cue)
         }
         guard player.play(whenDone: { [weak self] in self?.ended(mine, "heard out") }) else {
             AudioLog.say("earcon \(cue) did not start")

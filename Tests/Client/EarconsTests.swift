@@ -110,7 +110,7 @@ final class EarconsTests: XCTestCase {
         let defaults = makeDefaults()
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { isActive })
         let cues = CueRecorder()
-        let earcons = Earcons(audio: audio, center: center, defaults: defaults, bundle: Bundle(for: Earcons.self),
+        let earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),
                               makePlayer: { cues.make($0) }, sleep: sleep)
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
@@ -322,36 +322,42 @@ final class EarconsTests: XCTestCase {
 
     // MARK: - The turn
 
-    /// A spoken turn that fails sounds `failed`, once, before its wait ends; a turn no wait stands
-    /// for — a typed one, or one whose reply was already read — sounds nothing; and the other
-    /// ends of a wait the harness reports through `onTurnFailed` alone (a limb's turn, iCloud
-    /// behind a finished reply) sound nothing.
+    /// A harness over an in-memory log whose brain is the test's. No lease loop runs under it:
+    /// its sleep is parked and its pause throws.
+    private func harness(brain: any Brain, relay: GuestRelay = GuestRelay()) -> Harness {
+        Harness(database: InMemoryRecordDatabase(), device: DeviceID("phone"), ensureZone: {},
+                defaults: makeDefaults(), brain: brain, relay: relay,
+                leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
+                pause: { _ in throw CancellationError() })
+    }
+
+    /// A spoken turn that fails — a real turn, through the harness, whose brain throws — sounds
+    /// `failed`, once, before its wait ends and under the wait's hold; a typed turn that fails
+    /// the same way sounds nothing; and the other ends of a wait the harness reports through
+    /// `onTurnFailed` alone (a limb's turn, iCloud behind a finished reply) sound nothing.
     func testASpokenTurnThatFailsSoundsFailedOnceAndOtherEndsSoundNothing() async {
         let rig = await rig()
-        // No lease loop runs under the test: its sleep is parked and its pause throws.
-        let harness = Harness(database: InMemoryRecordDatabase(), device: DeviceID("phone"), ensureZone: {},
-                              defaults: makeDefaults(), brain: NoBrain(),
-                              leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
-                              pause: { _ in throw CancellationError() })
+        let harness = harness(brain: NoBrain())
         SpokenReply.follow(harness, speaker: rig.speaker) { true }
-        let ask = rig.speaker.awaitReply("spoken", readAloud: true)
+        let spoken = harness.willSend("what is the capital of France")
+        harness.markSpoken(spoken)
+        let ask = rig.speaker.awaitReply(spoken, readAloud: true)
         XCTAssertTrue(ask.spoken)
-        XCTAssertEqual(rig.speaker.awaiting, ["spoken"])
+        XCTAssertEqual(rig.speaker.awaiting, [spoken])
 
-        // The turn fails for the person: the harness tells the failure, then the end.
-        harness.onTurnFailure?("spoken")
+        // The turn fails for the person: the brain throws.
+        await harness.retry()
+        XCTAssertNotNil(harness.error)
         XCTAssertEqual(rig.earcons.played, [.failed])
-        XCTAssertTrue(rig.audio.holding, "the wait ended before the cue took its hold")
-        harness.onTurnFailed?("spoken")
         XCTAssertEqual(rig.speaker.awaiting, [])
-        XCTAssertEqual(rig.earcons.played, [.failed], "the end of the wait sounded again")
         XCTAssertTrue(rig.audio.holding, "the cue's hold went with the wait's")
+        XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"), "the keeper stopped between the wait's hold and the cue's")
         rig.cues.players.last?.finish()
         XCTAssertFalse(rig.audio.holding)
 
-        // A typed turn fails: no wait, no cue.
-        harness.onTurnFailure?("typed")
-        harness.onTurnFailed?("typed")
+        // A typed turn fails the same way: no wait, no cue.
+        harness.willSend("and of Italy")
+        await harness.retry()
         XCTAssertEqual(rig.earcons.played, [.failed])
 
         // A spoken turn ends another way: answered by another device, or finished with iCloud
@@ -360,6 +366,55 @@ final class EarconsTests: XCTestCase {
         harness.onTurnFailed?("limb")
         XCTAssertEqual(rig.speaker.awaiting, [])
         XCTAssertEqual(rig.earcons.played, [.failed])
+    }
+
+    /// A spoken turn whose reply is being read as the guest writes it, and whose turn then
+    /// fails — the guest's turn ends unanswered and the attempt throws — ends with `failed`, not
+    /// `done`: what was heard was cut short. Driven through the harness: the brain tells the
+    /// relay the guest's writing, then its failed end, then throws.
+    func testASpokenTurnThatFailsMidReplySoundsFailedNotDone() async throws {
+        let rig = await rig(heard: .dataRendered)
+        let relay = GuestRelay()
+        let brain = StreamingBrain(relay: relay) { [speaker = rig.speaker] in
+            for _ in 0..<600 where await !speaker.report.started { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        let harness = harness(brain: brain, relay: relay)
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        mascot.follow(harness)
+        SpokenReply.follow(harness, speaker: rig.speaker) { true }
+        let spoken = harness.willSend("what is the capital of France")
+        harness.markSpoken(spoken)
+        _ = rig.speaker.awaitReply(spoken, readAloud: true)
+
+        await harness.retry()
+        XCTAssertNotNil(harness.error)
+        XCTAssertTrue(rig.speaker.report.started, "the reply was not read as it was written")
+        try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
+        XCTAssertEqual(rig.earcons.played, [.failed], "a reply cut short by its turn's failure sounded done")
+        XCTAssertEqual(rig.speaker.awaiting, [])
+        XCTAssertTrue(rig.audio.holding, "the cue's hold did not stand once the reply's dropped")
+        rig.cues.players.last?.finish()
+        XCTAssertFalse(rig.audio.holding)
+    }
+
+    /// The real player's finish names the play it is for: a finish posted for one play and
+    /// delivered after the next has begun ends nothing, and the next play's own finish ends it.
+    func testAStaleFinishOfTheRealPlayerEndsNothing() async throws {
+        let url = try XCTUnwrap(Bundle(for: Earcons.self).url(forResource: "earcon_listening", withExtension: "mp3"))
+        let player = try EarconPlayer(url: url)
+        let poster = try AVAudioPlayer(contentsOf: url)
+        var first = 0
+        var second = 0
+        _ = player.play { first += 1 }
+        player.audioPlayerDidFinishPlaying(poster, successfully: true)
+        _ = player.play { second += 1 }
+        await drain()
+        XCTAssertEqual(first, 0, "the first play's finish was delivered to a play started again")
+        XCTAssertEqual(second, 0, "the first play's finish ended the second")
+        player.audioPlayerDidFinishPlaying(poster, successfully: true)
+        await drain()
+        XCTAssertEqual(second, 1)
+        XCTAssertEqual(first, 0)
     }
 
     /// The failure's cue is not played into an open microphone: a second press while the first
@@ -409,23 +464,36 @@ final class EarconsTests: XCTestCase {
         XCTAssertFalse(EarconsSetting.enabled(defaults))
         defaults.set(true, forKey: EarconsSetting.key)
         XCTAssertTrue(EarconsSetting.enabled(defaults))
+        // Anything kept that is not true reads as off, as the toggle reads it.
+        defaults.set("loud", forKey: EarconsSetting.key)
+        XCTAssertFalse(EarconsSetting.enabled(defaults))
     }
 
-    /// Review Focus 11: a cue on a session that will not activate is refused, not played. No
-    /// player is made, no hold is taken, and the refusal leaves the session for the next path.
-    func testACueOnAnInvalidSessionIsRefusedNotPlayed() async {
-        let rig = await rig()
-        rig.seams.activationError = Seams.Refused()
-        rig.audio.invalidate()
+    /// Review Focus 11: a cue on a session that is not live is refused, not played, and it
+    /// configures nothing to get one: no player is made, no hold is taken, and the session is
+    /// left for the next path, which is what activates it. Behind the lock that is the lock
+    /// screen's interruption with a claim change deferred under the wait's hold: `failed` for the
+    /// turn that then fails applies nothing from the background.
+    func testACueOnASessionThatIsNotLiveIsRefusedAndConfiguresNothing() async {
+        let rig = await rig(isActive: false)
+        rig.audio.wantRecord(true, for: .warm)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.audio.wantRecord(false, for: .warm)
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        await drain()
+        rig.seams.forget()
 
-        XCTAssertFalse(rig.earcons.play(.done))
+        rig.speaker.turnFailed("turn")
         XCTAssertEqual(rig.earcons.played, [])
-        XCTAssertTrue(rig.cues.players.isEmpty, "a player was made on a session that did not activate")
+        XCTAssertTrue(rig.cues.players.isEmpty, "a player was made on a session that is not live")
+        XCTAssertEqual(rig.seams.lines, [], "a cue configured the session")
+        XCTAssertEqual(rig.seams.records, [], "a cue applied a claim change from the background")
+        rig.speaker.endAwaiting("turn", "the turn failed")
         XCTAssertFalse(rig.audio.holding, "a hold was taken for a cue that was refused")
-        XCTAssertEqual(rig.seams.lines, ["activate failed"])
 
-        // The session back: the next cue is played, and the one before it stays refused.
-        rig.seams.activationError = nil
+        // In front, the next path activates the session, and the cue after it is played.
+        rig.audio.wantRecord(true, for: .warm)
         XCTAssertTrue(rig.earcons.play(.done))
         XCTAssertEqual(rig.earcons.played, [.done])
     }
@@ -443,15 +511,38 @@ final class EarconsTests: XCTestCase {
     }
 
     /// A cue begun with nothing held holds nothing: in front nothing suspends, and a claim change
-    /// made under it is applied at once rather than kept waiting on the cue.
+    /// made under it is applied at once rather than kept waiting on the cue. The session is the
+    /// foreground's, live by its warm claim; a cue on one nothing has activated is refused.
     func testACueBegunWithNothingHeldHoldsNothing() async {
         let rig = await rig()
+        XCTAssertFalse(rig.earcons.play(.sent), "a cue was played on a session nothing had activated")
+        rig.audio.wantRecord(true, for: .warm)
+        rig.seams.forget()
         XCTAssertTrue(rig.earcons.play(.sent))
         XCTAssertFalse(rig.audio.holding, "a cue held alone")
+        rig.audio.wantRecord(false, for: .warm)
+        XCTAssertEqual(rig.seams.lines, ["activate ok"], "the claim waited on the cue")
+        rig.cues.players.last?.finish()
+        XCTAssertFalse(rig.audio.holding)
+    }
+
+    /// A cue begun under nothing but the cue before it lets that one's hold go: cues cannot keep
+    /// the process alive by themselves, and a claim change made under the second applies at once.
+    func testACueUnderNothingButACuesHoldLetsItGo() async {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.earcons.play(.failed))
+        rig.speaker.endAwaiting("turn", "the turn failed")
+        XCTAssertTrue(rig.audio.holding, "the cue's hold went with the wait's")
+        XCTAssertFalse(rig.audio.heldForATurn)
+
+        XCTAssertTrue(rig.earcons.play(.listening))
+        XCTAssertFalse(rig.audio.holding, "a cue held under nothing but a cue's hold")
         rig.seams.forget()
         rig.audio.wantRecord(true, for: .warm)
         XCTAssertEqual(rig.seams.lines, ["activate ok"], "the claim waited on the cue")
-        rig.cues.players.last?.finish()
+        rig.cues.players[0].finish()
+        rig.cues.players[1].finish()
         XCTAssertFalse(rig.audio.holding)
     }
 
@@ -597,6 +688,29 @@ final class ManualSleep: @unchecked Sendable {
         }
         all.forEach { $0.resume() }
     }
+}
+
+/// A brain whose turn the guest writes part of a reply to, then ends in a failure: it tells the
+/// relay the guest's beginning, its writing and its failed end, waiting between the writing and
+/// the end for `beforeFailing`, and then throws as the attempt does.
+private struct StreamingBrain: Brain {
+    struct Died: Error {}
+    let relay: GuestRelay
+    let beforeFailing: @Sendable () async -> Void
+
+    func answer(_ request: BrainRequest) async throws -> Reply {
+        let answering = request.answering.map(\.ref)
+        await MainActor.run {
+            relay.tell(.began(pid: nil, answering: answering))
+            relay.tell(.update(.event(.writingBegan)))
+            relay.tell(.update(.event(.writing("Paris is the capital. It is on the Seine and"))))
+        }
+        await beforeFailing()
+        await MainActor.run { relay.tell(.update(.ended(.failed(.exited("the guest died"))))) }
+        throw Died()
+    }
+
+    func describe() async -> String { "a brain that dies mid-reply" }
 }
 
 /// A brain for a harness no turn is sent through.

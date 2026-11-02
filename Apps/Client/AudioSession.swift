@@ -18,14 +18,16 @@ final class AudioSession {
     /// `.profiling` is a run from a Mac (`--stay-awake`): a locked phone takes no launch and no copy.
     enum ScreenClaim: Hashable { case listening, speaking, profiling }
     /// Who is keeping the process running behind the lock: the wait for a spoken turn's reply,
-    /// one claim per turn outstanding, and the reading of a reply. Counted like the other two, so
+    /// one claim per turn outstanding, the reading of a reply, and a sound heard out beside
+    /// them. Counted like the other two, so
     /// the one letting go cannot cut what the other is still paying for — a reply handed to the
     /// speaker drops its own turn's wait with `.speaking` already taken, the keeper never stops
     /// between them, and a second thing said while the first is in flight is still held for.
     enum Hold: Hashable {
         case awaitingReply(String)
         case speaking
-        /// An earcon being heard out (`Earcons`), bounded by its own `Earcons.bound`.
+        /// A sound played beside the voice being heard out — an earcon, a receipt, the bed's
+        /// fade — taken only while another hold stands and bounded by its player's own bound.
         case cue
     }
 
@@ -39,6 +41,10 @@ final class AudioSession {
     var onHoldChanged: ((Bool) -> Void)?
     /// True while anything wants the process kept alive.
     var holding: Bool { !holds.isEmpty }
+    /// Whether a hold stands that is not a sound's own: what a sound may extend. A sound begun
+    /// under nothing but another sound's hold holds nothing, so a run of them cannot keep the
+    /// process alive past the wait or the reply they were played for.
+    var heldForATurn: Bool { holds.contains { $0 != .cue } }
     private var recordMode: Bool { !recordClaims.isEmpty }
     /// Whether the record configuration is the one for a microphone heard through Apple's voice
     /// processing (`NoiseSuppression`), which is its mode: `voiceChat` with, `default` without.
@@ -115,6 +121,18 @@ final class AudioSession {
     func ensureActive() throws {
         guard !valid else { return }
         try apply()
+    }
+
+    /// The first call of a sound that is a moment rather than a path (`Earcons`): free on a live
+    /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
+    /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
+    /// the session reconfigured and activated from the background under a hold, for a cue.
+    func ensureLive() throws {
+        guard valid else { throw NotLive() }
+    }
+
+    struct NotLive: Error, CustomStringConvertible {
+        var description: String { "the session is not live" }
     }
 
     /// Marks the session as needing configuring again, for a caller that found the audio dead

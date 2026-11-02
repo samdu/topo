@@ -938,12 +938,9 @@ enum SpokenReply {
     /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
     static func follow(_ harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
         wire(harness: harness, speaker: speaker, readsAloud: readsAloud)
-        // A spoken turn that failed for the person sounds so — only one a wait stands for, so a
-        // typed turn is silent and one whose reply was read as it was written is not told
-        // twice — and before its wait ends, so the cue's hold is taken under the wait's.
-        harness.onTurnFailure = { nonce in
-            if speaker.isAwaiting(nonce) { speaker.earcons?.play(.failed) }
-        }
+        // A spoken turn that failed for the person sounds so: the speaker cues `failed` for a
+        // wait standing for it, before the wait ends, and ends a reply it was reading with it.
+        harness.onTurnFailure = { nonce in speaker.turnFailed(nonce) }
         // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
         // is owed no reply from the log, so nothing waits for one.
         harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
