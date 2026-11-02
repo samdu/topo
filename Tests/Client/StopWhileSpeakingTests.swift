@@ -45,7 +45,7 @@ final class StopWhileSpeakingTests: XCTestCase {
                       permission: @escaping @MainActor () async -> Bool) async -> (Speaker, VoiceInput, Seams) {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }

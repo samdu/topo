@@ -55,6 +55,8 @@ final class Speaker {
     /// Whether the play queue's engine is running: what holds the process, the keeper being only
     /// what it renders.
     var running: Bool { queue.running }
+    /// Whether the play queue is dead: its engine stopped under it, or a rebuild refused.
+    var dead: Bool { queue.dead }
     #endif
     private var resetObserver: NSObjectProtocol?
     private var interruptionObserver: NSObjectProtocol?
@@ -69,6 +71,13 @@ final class Speaker {
     /// from its own release: a second thing said while the first is in flight is held for too,
     /// and the first being answered does not let go of the second.
     private var waits: [String: Task<Void, Never>] = [:]
+    /// The call a spoken exchange behind the lock is (`attach`): while it is up the wait for a
+    /// reply is not capped, since the system holds the session for the call's length, and its
+    /// hang-up is a mute. Nil where the app has not attached one.
+    private(set) var call: SpokenCall?
+    /// Told every hold change after this object has dealt with it, so the keeper comes first
+    /// and whoever listens — the call's driver — second.
+    var onHold: ((Bool) -> Void)?
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
@@ -125,7 +134,11 @@ final class Speaker {
         // queue's first call there as it is everywhere else.
         queue.ensureActive = { [weak self] in try self?.audio.ensureActive() }
         queue.sessionFailed = { [weak self] in self?.audio.invalidate() }
-        audio.onHoldChanged = { [weak self] held in self?.hold(held) }
+        audio.onHoldChanged = { [weak self] held in
+            guard let self else { return }
+            self.hold(held)
+            self.onHold?(held)
+        }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -147,6 +160,66 @@ final class Speaker {
             }
         }
     }
+
+    /// Wires the call: the session's phase follows the call's callbacks (`AudioSession.callPlaced`
+    /// and after), the queue comes back when the system activates the session and when the call
+    /// is over with a hold still standing, and the card's hang-up is a mute. A call that fails
+    /// leaves the hold standing and the keeper where the call left it: in front the resume
+    /// brings it back, behind the lock the activation is refused and the reply is read on unlock.
+    func attach(_ call: SpokenCall) {
+        self.call = call
+        call.onStart = { [weak self] in self?.audio.callPlaced() }
+        call.onActive = { [weak self] in
+            guard let self else { return }
+            audio.callActivated()
+            resumeAudio("the call's session is active")
+            // A reply that landed while the session was changing hands is read now.
+            readWhatWaited()
+        }
+        call.onInactive = { [weak self] in
+            guard let self else { return }
+            // A phone call took the session with ours still standing: the engine is dead and
+            // the hold stands, as at an interruption, until the system activates again.
+            AudioLog.say("the call's session was taken; the engine is dead, the hold stands")
+            audio.callDeactivated()
+            queue.interrupted()
+        }
+        call.onHangUp = { [weak self] in self?.hangUp() }
+        let over: (String) -> Void = { [weak self] why in
+            guard let self else { return }
+            // A call refused before the system performed its start never took the session: the
+            // keeper is where it was, on a session that was never the system's.
+            guard audio.call != .none else { return }
+            audio.callOver()
+            // The system's deactivation took the session with the engine on it: what is owed is
+            // kept and the engine is rebuilt over a session activated afresh, in front where that
+            // is allowed; behind the lock the activation is refused and the reply is read on unlock.
+            queue.interrupted()
+            if audio.holding { resumeAudio(why) }
+        }
+        call.onOver = { over("the call is over with a hold standing") }
+        call.onFailed = { why in over("the call failed (\(why)) with a hold standing") }
+    }
+
+    /// The card's hang-up: the person hung up on the reply, so it is not read, then or on
+    /// unlock. Every awaited turn's spoken mark goes with its wait (`settled`, which the chat
+    /// answers with `Harness.answeredAloud`, as a muted reply's is), and what is being read
+    /// stops, as at the mute.
+    func hangUp() {
+        AudioLog.say("hung up from the call; the reply will not be read")
+        for nonce in waits.keys.sorted() {
+            // What the guest writes of this turn from here is not read either: the chat's
+            // writing path was told the turn was spoken when it began, and nothing tells it
+            // otherwise until the turn ends.
+            hungUp.insert(nonce)
+            settled?(nonce)
+        }
+        stop()
+    }
+
+    /// The spoken turns hung up on whose turns have not ended: what the guest writes of them
+    /// is not begun. Forgotten as each turn ends (`writingEnded`).
+    private var hungUp: Set<String> = []
 
     /// The hold changed hands. The keeper is the play queue's silence: starting it needs the
     /// engine, and an engine under a session that is not active is the crash, so the session
@@ -232,12 +305,17 @@ final class Speaker {
             AudioLog.say("the wait for \(nonce) is not held: nothing is rendering")
             return Wait(spoken: true, held: false)
         }
-        waits[nonce] = Task { [ceiling] in
+        waits[nonce] = ceilingWait(nonce)
+        return Wait(spoken: true, held: true)
+    }
+
+    /// One pass of the ceiling for the wait on `nonce`.
+    private func ceilingWait(_ nonce: String) -> Task<Void, Never> {
+        Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
             self.capped(nonce)
         }
-        return Wait(spoken: true, held: true)
     }
 
     /// What a release was answered with. The two are not the same answer: whether the reply will
@@ -255,6 +333,14 @@ final class Speaker {
     /// ceiling's own path, and returns its line so a test reads what a run would.
     @discardableResult
     func capped(_ nonce: String) -> String {
+        // Under a call the system holds the session for the call's length and the card's
+        // hang-up is the bound, so the wait stands for another pass; the next ceiling asks again.
+        if call?.up == true, waits[nonce] != nil {
+            let line = "the ceiling passed under the call; the wait stands"
+            AudioLog.say(line)
+            waits[nonce] = ceilingWait(nonce)
+            return line
+        }
         let refused = refusals[nonce] ?? 0
         let what = refused == 0
             ? "the reply never landed"
@@ -327,9 +413,10 @@ final class Speaker {
     /// its sentences are read behind the last message's, each once. Nothing begins while a microphone
     /// is open or the voice is not resident: the reply is offered whole when it lands, as ever.
     func speak(writing text: String, answering nonce: String) {
+        guard !hungUp.contains(nonce) else { return }
         let settled = Self.settled(text)
         if written?.nonce != nonce {
-            guard !settled.isEmpty, !microphoneBusy, voice.ready,
+            guard !settled.isEmpty, !replyMustWait, voice.ready,
                   begin(settled, answering: nonce, reply: nil, reading: false) else { return }
             written = (nonce, "", 0, true)
         }
@@ -347,6 +434,7 @@ final class Speaker {
     /// The turn `nonce` is being answered no longer and no reply landed: what is queued is read
     /// out, and nothing more is waited for.
     func writingEnded(_ nonce: String) {
+        hungUp.remove(nonce)
         guard let reading = written, reading.nonce == nonce else { return }
         written = nil
         if reading.live, making == 0, queue.isIdle { finished() }
@@ -364,14 +452,16 @@ final class Speaker {
             nonce.map { refusals[$0, default: 0] += 1 }
             return false
         }
-        // Taken, and read once the microphone closes (`microphoneClosed`), with nothing touched
-        // before then: no session, no queue, and the turn's wait left standing.
-        if microphoneBusy {
+        // Taken, and read once the microphone closes or the call's session is activated
+        // (`readWhatWaited`), with nothing touched before then: no session, no queue, and the
+        // turn's wait left standing.
+        if replyMustWait {
             deferred = (text, nonce, reply)
+            let why = microphoneBusy ? "the microphone to close" : "the call's session to be activated"
             #if DEBUG
-            DebugRun.say("speak: waiting for the microphone to close")
+            DebugRun.say("speak: waiting for \(why)")
             #endif
-            AudioLog.say("the reply waits for the microphone to close")
+            AudioLog.say("the reply waits for \(why)")
             return true
         }
         do {
@@ -466,6 +556,12 @@ final class Speaker {
 
     private var microphoneBusy: Bool { opening || microphoneOpen() }
 
+    /// Whether a reply landing now waits rather than being read: a microphone is open or
+    /// opening, or the call's session is changing hands — placed and not yet activated by the
+    /// system, or taken with the call standing — where `ensureActive` would refuse it and the
+    /// activation is what reads it.
+    private var replyMustWait: Bool { microphoneBusy || audio.callChangingHands }
+
     /// A press is about to open the microphone. What is being read stops, so the microphone does
     /// not hear it, and every other wait goes, as at any press; a reply waiting for the microphone
     /// waits on with its wait, since opening it again is no reason to lose it — it is read when
@@ -484,13 +580,17 @@ final class Speaker {
     /// becomes Stop. Free while a microphone is still open or nothing is waiting. A reply the
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
-    func microphoneClosed() {
-        guard let waiting = deferred, !microphoneBusy else { return }
+    func microphoneClosed() { readWhatWaited() }
+
+    /// Reads the reply that waited for the microphone or for the call's session, if nothing
+    /// holds it back now. One the session refuses here keeps waiting, its turn still marked.
+    private func readWhatWaited() {
+        guard let waiting = deferred, !replyMustWait else { return }
         deferred = nil
-        AudioLog.say("the microphone closed; reading the reply that waited for it")
+        AudioLog.say("reading the reply that waited")
         guard speak(waiting.text, answering: waiting.nonce, reply: waiting.reply) else {
             deferred = waiting
-            AudioLog.say("the reply that waited for the microphone was not taken; it waits on")
+            AudioLog.say("the reply that waited was not taken; it waits on")
             return
         }
         waiting.nonce.map { settled?($0) }

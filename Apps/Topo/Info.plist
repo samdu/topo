@@ -50,6 +50,7 @@
 	<array>
 		<string>remote-notification</string>
 		<string>audio</string>
+		<string>voip</string>
 	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>

@@ -17,10 +17,12 @@ struct SettingsView: View {
     @State private var showConnections = false
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+    @AppStorage(SpokenCallSetting.key) private var spokenCall = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
+    static let spokenCall = "settings-spoken-call"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
 
@@ -44,6 +46,12 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
                     Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
+                }
+                Section {
+                    Toggle("Call for spoken replies", isOn: $spokenCall)
+                        .accessibilityIdentifier(SettingsView.spokenCall)
+                } footer: {
+                    Text("When you lock the phone or leave Topo while it is answering something you said, the answer is a call: a card on the Lock Screen while Topo speaks, and hanging up stops it. Off, Topo waits two minutes at most and reads the answer when you come back. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the

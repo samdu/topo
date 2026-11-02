@@ -131,14 +131,17 @@ targets:
     # is declared here, where it lands in the bundle. A silent push wakes the primary when a limb
     # writes a turn (see TurnPush); `audio` is the reply to a spoken turn, heard behind the lock,
     # the process running while the play queue renders, which its keeper makes true from the
-    # release of the press (Apps/Client/Speaker.swift). Both modes and the push entitlement
+    # release of the press (Apps/Client/Speaker.swift); `voip` is what lets the app place the
+    # CallKit call a spoken exchange behind the lock is (Apps/Client/SpokenCall.swift): without
+    # it the system refuses `CXStartCallAction` as unentitled. No VoIP push goes with it, since
+    # the call is only ever placed by the app for itself. The three modes and the push entitlement
     # (`aps-environment`, in this target's own entitlements) are here for the answering loop and the
     # voice: the watch and the TV never answer and never speak. The watch carries `aps-environment`
     # alone for its own `Surface` push (below): watchOS delivers a background push with no mode declared.
     info:
       path: Apps/Topo/Info.plist
       properties:
-        UIBackgroundModes: [remote-notification, audio]
+        UIBackgroundModes: [remote-notification, audio, voip]
         # A turn sent in front asks for a continued-processing task under this prefix, which
         # keeps the app running behind another app until the turn ends (GuestLifecycle,
         # Apps/Topo/ContinuedTurn.swift). Not a key Xcode generates, so it is here, and
