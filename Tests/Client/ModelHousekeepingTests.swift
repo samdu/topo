@@ -80,7 +80,7 @@ final class ModelHousekeepingTests: XCTestCase {
         try write(fakefs.appendingPathComponent("meta.db"))
         try write(fakefs.appendingPathComponent("data/bin/busybox"))
 
-        let rootfs = try filled(store, id: ModelManifest.rootfs, files: ["alpine-minirootfs-3.22.6-aarch64.tar.gz": "tarball"])
+        let rootfs = try filled(store, id: ModelManifest.rootfs, files: ["alpine-minirootfs-3.22.7-aarch64.tar.gz": "tarball"])
         let tarball = store.location(of: rootfs.files[0], in: rootfs)
         store.sweep(ModelManifest(models: voices.models + [rootfs]))
         XCTAssertTrue(store.isPresent(rootfs), "the rootfs was swept")
