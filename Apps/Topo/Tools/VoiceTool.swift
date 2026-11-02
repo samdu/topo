@@ -39,8 +39,9 @@ struct VoiceTool: Tool {
     topo voice working receipts             a short tone as you read, act or write, and one when the turn fails
     topo voice working sounds               the tones over a soft working bed until the reply begins
 
-    Receipts unless changed. Nothing sounds for a typed turn in any mode. A change applies from
-    the next sound, on this phone only, and they can change it back in Settings.
+    Receipts unless changed. The sounds are the spoken turn's: nothing sounds unless one is being
+    waited for aloud. A change applies from the next sound, on this phone only, and they can
+    change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {

@@ -55,7 +55,7 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier(SettingsView.workingSounds)
                 } footer: {
-                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo reads, acts or writes, and under Sounds a soft bed until the reply begins. Nothing for a typed turn. Kept on this device.")
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo reads, acts or writes, and under Sounds a soft bed until the reply begins. Only while a spoken turn is waited for. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the

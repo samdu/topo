@@ -128,6 +128,7 @@ final class Speaker {
         queue.ensureActive = { [weak self] in try self?.audio.ensureActive() }
         queue.sessionFailed = { [weak self] in self?.audio.invalidate() }
         audio.onHoldChanged = { [weak self] held in self?.hold(held) }
+        sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -156,6 +157,9 @@ final class Speaker {
     @discardableResult
     private func hold(_ held: Bool) -> Bool {
         guard held else { return queue.hold(false) }
+        // Under the reset handler the engine is dead and the queue about to be dropped: a hold
+        // change there (a wait ending, a sound's hold going) starts nothing.
+        guard !resetting else { return false }
         do {
             try audio.ensureActive()
         } catch {
@@ -285,19 +289,30 @@ final class Speaker {
         waits.keys.forEach { endAwaiting($0, why) }
     }
 
-    /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
-    /// nodes go too, since an engine that was running when the server went down will not start
-    /// again. Nothing is built here; the next `speak` activates the session and the first frame
-    /// builds the queue, which is how Say it again works after a reset with no press before it.
-    /// A turn that was still awaited is answered on the next pass the app runs, on the foreground.
+    /// iOS reset the media server: the sounds' players go first, so that nothing below finds a
+    /// bed to fade; the reply stops and the holds go with it; the play queue's nodes go too,
+    /// since an engine that was running when the server went down will not start again; and
+    /// last the sounds' own hold. Nothing is built or started here: a hold change under the
+    /// handler re-notifies `hold(true)` while another hold still stands, and `resetting` keeps
+    /// that from starting the keeper on the dead engine. The next `speak` activates the session
+    /// and the first frame builds the queue, which is how Say it again works after a reset with
+    /// no press before it. A turn that was still awaited is answered on the next pass the app
+    /// runs, on the foreground.
     private func mediaServicesWereReset() {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
         #endif
+        resetting = true
+        defer { resetting = false }
+        sounds?.dropPlayers()
         stop()
         queue.reset()
-        sounds?.mediaServicesWereReset()
+        sounds?.letGo("the media server was reset")
     }
+
+    /// True while the media-services-reset handler runs: no hold change under it may touch the
+    /// engine the reset killed.
+    private var resetting = false
 
     /// Loads the voice's model, downloading it on the first run. Called on the foreground so it
     /// is resident by the first reply; idempotent.

@@ -241,6 +241,23 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(WorkingSounds.mode(defaults), .off)
     }
 
+    /// No receipt sounds over Topo's own voice: a tool reached for after the reading began, with
+    /// a second wait keeping the hold, is silent; one after the reading ends sounds again.
+    func testNoReceiptSoundsOverTheVoice() async throws {
+        let rig = await rig(heard: .dataRendered)
+        _ = rig.speaker.awaitReply("first", readAloud: true)
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        XCTAssertTrue(rig.speaker.speak("Paris.", answering: "first"))
+        XCTAssertTrue(rig.speaker.speaking)
+        rig.sounds.follow(toolUse("Bash"))
+        XCTAssertEqual(rig.sounds.played, [], "a receipt sounded over the voice")
+        try await renderUntil(rig, "the reply to be made") { rig.speaker.report.finished }
+        await settle("the reply to end") { !rig.speaker.speaking }
+        rig.sounds.follow(toolUse("Bash"))
+        XCTAssertEqual(rig.sounds.played, [.act])
+        rig.speaker.endAwaiting("second", "the test is done")
+    }
+
     /// No receipt is played into an open microphone: a hands-free session listening while the
     /// turn it sent is worked on (a press of its own ends every wait, so the bed and the receipts
     /// go with them). The speaker tells the sounds as the press's call returns and as it closes.
@@ -288,17 +305,20 @@ final class KeeperSoundsTests: XCTestCase {
         rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
         await drain()
-        rig.players.bed?.interrupted()
         rig.seams.forget()
 
         XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil))
         XCTAssertEqual(rig.sounds.played, [])
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile], "a player was made on a session that is not live")
+        // The bed somehow still going: the wait's end fades it, and takes no hold for the fade,
+        // since the hold's keeper would reconfigure the session from the background.
+        rig.speaker.endAwaiting("turn", "the turn failed")
+        XCTAssertEqual(rig.players.bed?.fades.last?.to, 0)
+        XCTAssertFalse(rig.audio.holding, "the fade held on a session that is not live")
         rig.sounds.resume()
         XCTAssertEqual(rig.players.bed?.plays, 1, "the bed was played again on a session that is not live")
         XCTAssertEqual(rig.seams.lines, [], "a sound configured the session")
         XCTAssertEqual(rig.seams.records, [], "a sound applied a claim change from the background")
-        rig.speaker.endAwaiting("turn", "the test is done")
     }
 
     // MARK: - The bed
@@ -370,6 +390,7 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.working(false)
         XCTAssertEqual(bed.fades.last?.to, 0, "off did not stop the bed")
         // Wanted again before the pause lands: the pause is cancelled and the bed plays on.
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
         rig.defaults.set(WorkingSounds.Mode.sounds.rawValue, forKey: WorkingSounds.key)
         rig.sounds.working(true)
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
@@ -495,18 +516,40 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(rig.seams.lines, ["activate ok"], "the claim waited on a sound")
     }
 
-    /// iOS reset the media server: the players are dropped and nothing is built in the handler;
-    /// the next sound makes its own.
-    func testAMediaServicesResetDropsThePlayersAndBuildsNothing() async {
+    /// iOS reset the media server with a receipt's hold standing and the bed playing: the players
+    /// are dropped and nothing is built, started or spoken to in the handler — not the keeper on
+    /// the dead engine as the waits end under it, not the dropped bed — and the next sound makes
+    /// its own.
+    func testAMediaServicesResetDropsThePlayersAndBuildsNothing() async throws {
         let rig = await rig(mode: .sounds)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.sounds.follow(toolUse("WebSearch"))
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_read"])
+        let bed = try XCTUnwrap(rig.players.bed)
+        await settle("the receipt's hold to ask for its length") { rig.clock.asked.contains(KeeperSounds.toneLength) }
+        let fades = bed.fades.count
+        let engines = rig.seams.engines.count
+        let transitions = rig.speaker.keeperTransitions.count
+        let asked = rig.clock.asked.count
+        // The reset leaves the engine stopped, as the offline one is not by the notification
+        // alone: the wait ending under the handler with the receipt's hold still standing
+        // re-notifies the hold, and on a stopped engine that is the keeper started again.
+        let engine = try XCTUnwrap(rig.seams.engines.last)
+        engine.stop()
+        let starts = rig.seams.playEngineStarts
 
         rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
         await drain()
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_read"], "a player was built in the reset handler")
         XCTAssertFalse(rig.audio.holding, "the reset left a hold standing")
+        XCTAssertEqual(rig.seams.engines.count, engines, "an engine was built in the reset handler")
+        XCTAssertFalse(rig.speaker.keeperTransitions.dropFirst(transitions).contains("playing"), "the keeper was started in the reset handler: \(rig.speaker.keeperTransitions)")
+        XCTAssertEqual(rig.seams.playEngineStarts, starts, "the engine the reset killed was started again")
+        XCTAssertFalse(engine.isRunning)
+        XCTAssertFalse(rig.speaker.running)
+        XCTAssertEqual(bed.fades.count, fades, "the dropped bed was faded")
+        XCTAssertEqual(bed.pauses, 0, "the dropped bed was spoken to")
+        XCTAssertEqual(rig.clock.asked.count, asked, "a sleep was asked for in the reset handler")
 
         _ = rig.speaker.awaitReply("again", readAloud: true)
         rig.sounds.follow(toolUse("WebSearch"))

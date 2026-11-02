@@ -73,21 +73,26 @@ final class WorkingAudioPlayer: WorkingPlayer {
 
 /// The keeper's sounds: what a phone in a pocket hears of a spoken turn being worked on. The
 /// receipts are tool-class tones, Daphne's bloops (Sam's own, `THIRD-PARTY`) bundled as
-/// `bloop_<tone>.wav` — `read` as the guest searches, `act` as it builds or reaches for the
-/// calendar, `write` as it writes, each through `MascotMapping.activity(tool:path:)`'s classes, and
-/// `error` when its turn fails — and the bed is `thinking_bed.wav`, an 8 s loop under −20 dBFS at
-/// `bedVolume`, faded in from the release and out at the reply's first frame, paused rather than
-/// stopped so the next wait picks it up where the last left it. The mode is `WorkingSounds`:
-/// `off` sounds nothing, `receipts` the tones, `sounds` the tones over the bed.
+/// `bloop_<tone>.wav` — `read` as the guest searches the web, `act` as it runs a command or
+/// writes code, `write` as it writes prose, each through `MascotMapping.activity(tool:path:)`'s
+/// classes (a tool with no class, the file reads included, sounds nothing), and `error` when the
+/// guest's turn fails — and the bed is `thinking_bed.wav`, an 8 s loop under −20 dBFS at
+/// `bedVolume`, faded in from the release and out when the wait it was for ends (a reply landing
+/// ends its own wait before its first frame) or at the reply's first frame under a second wait,
+/// paused rather than stopped so the next wait picks it up where the last left it. The mode is
+/// `WorkingSounds`: `off` sounds nothing, `receipts` the tones, `sounds` the tones over the bed.
 ///
-/// They are the keeper's, so they sound only while a hold stands (`AudioSession.holding`): a
-/// typed turn, which holds nothing, makes none. Every sound is played on the session as it stands,
-/// after `AudioSession.ensureActive()` has returned and refused when it throws, and reconfigures
-/// nothing; none is played into an open microphone, and the bed dips while one is open. Where a
-/// hold already stands a sound holds the process for its own length too (`AudioSession.Hold.cue`,
-/// let go at the receipt's length or the bed's fade-out, `bound` at most), taken before it starts
-/// and before the hold it follows drops, so an error receipt and the bed's fade behind the lock
-/// are heard out before the last hold is let go of; with nothing held it holds nothing. The
+/// They are the keeper's, so they sound only while a hold that is not a sound's own stands
+/// (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes none, and a typed
+/// turn worked on while a spoken turn's wait stands receipts with it. No receipt sounds over
+/// Topo's own voice (`voiceSpeaking`, the speaker's). Every sound is played on the session as it
+/// stands, live (`AudioSession.ensureLive()`) and refused when it is not, so it configures and
+/// activates nothing; no receipt is played into an open microphone, and the bed dips while one
+/// is open. Where such a hold already stands a sound holds the process for its own length too
+/// (`AudioSession.Hold.cue`, let go at the receipt's length or the bed's fade-out, `bound` at
+/// most), taken before it starts and before the hold it follows drops, so an error receipt and
+/// the bed's fade behind the lock are heard out before the last hold is let go of; with nothing
+/// held it holds nothing. The
 /// players are handles into mediaserverd: a media services reset drops them and builds nothing,
 /// and the next sound makes its own. An interruption stops the bed under a wait that still wants
 /// it, so the speaker asks for it again where it rebuilds its own engine (`resume`).
@@ -136,6 +141,9 @@ final class KeeperSounds {
     private var players: [Tone: any WorkingPlayer] = [:]
     private var bed: (any WorkingPlayer)?
     private var bedOn = false
+    /// Whether Topo's own voice is being read out; `Speaker` answers it. A receipt over the voice
+    /// is a stray tone in the middle of a sentence.
+    var voiceSpeaking: @MainActor () -> Bool = { false }
     private var microphoneIsOpen = false
     /// The pause the fade-out ends in, cancelled when the bed is wanted again before it lands.
     private var parking: Task<Void, Never>?
@@ -158,18 +166,17 @@ final class KeeperSounds {
         self.sleep = sleep
     }
 
-    /// iOS reset the media server, and the speaker has dropped its queue: the players were
-    /// handles into it and are dropped, the bed is off and whatever held the process lets go.
-    /// Nothing is built here; the next sound makes its own. Told by `Speaker` rather than
-    /// observed, so the sound's hold goes after the speaker's own have, never into a keeper
-    /// restarted on the engine the reset killed.
-    func mediaServicesWereReset() {
+    /// iOS reset the media server: the players were handles into it and are dropped, and the bed
+    /// is off. Told by `Speaker`'s reset handler first of all, so that nothing it does after —
+    /// ending the waits, which fades a bed — finds a player to speak to; the sound's hold goes
+    /// at the handler's end (`letGo`), after the speaker's own holds have. Nothing is built here;
+    /// the next sound makes its own.
+    func dropPlayers() {
         players = [:]
         bed = nil
         bedOn = false
         parking?.cancel()
         parking = nil
-        letGo("the media server was reset")
         AudioLog.say("media services reset: the keeper's sounds dropped")
     }
 
@@ -213,6 +220,10 @@ final class KeeperSounds {
         guard audio.heldForATurn else { return false }
         if microphoneIsOpen {
             AudioLog.say("receipt \(tone) not played: the microphone is open")
+            return false
+        }
+        if voiceSpeaking() {
+            AudioLog.say("receipt \(tone) not played: Topo is speaking")
             return false
         }
         guard activate(for: "receipt \(tone)") else { return false }
@@ -267,8 +278,9 @@ final class KeeperSounds {
     // MARK: - The bed
 
     /// The speaker is waiting for a reply, or has stopped: the bed fades in under `sounds` while
-    /// a hold stands, and out otherwise. Off goes through whatever the mode, so a mode changed
-    /// mid-wait, or a wait ended, still stops it.
+    /// a hold stands, and out otherwise. Off goes through whatever the mode, so a bed begun
+    /// under `sounds` is still faded out at its wait's end after the mode changed under it (a
+    /// change applies at the next sound; the bed plays on to the end of the wait it was for).
     func working(_ on: Bool) {
         let want = on && WorkingSounds.mode(defaults) == .sounds && audio.heldForATurn
         // An interruption stops the player under a bed that is still wanted, so "already on" has
@@ -296,8 +308,11 @@ final class KeeperSounds {
         } else {
             guard let bed, bed.isPlaying else { return }
             // Held through the fade, since the wait that wanted it is ending; then paused rather
-            // than stopped, so the next wait picks the loop up where this one left it.
-            holdUntil(Self.parkAfter)
+            // than stopped, so the next wait picks the loop up where this one left it. The hold
+            // is a sound's and asks the same of the session: on one that is not live (the
+            // lock screen's interruption, with the player somehow still going) it would be a
+            // hold whose keeper reconfigures the session from the background, so none is taken.
+            if activate(for: "the working bed's fade") { holdUntil(Self.parkAfter) }
             bed.setVolume(0, fadeDuration: Self.fadeOut)
             AudioLog.say("the working bed fades out")
             parking = Task { [sleep] in
@@ -355,7 +370,9 @@ final class KeeperSounds {
         }
     }
 
-    private func letGo(_ why: String) {
+    /// The sound's hold, if one stands, goes now: at the end of the reset handler, after the
+    /// speaker's own holds have.
+    func letGo(_ why: String) {
         letting?.cancel()
         letting = nil
         guard holding else { return }
