@@ -1055,7 +1055,7 @@ final class MicPress {
             speaker.microphoneOpened()
             guard let heard else {
                 // Nil is a session begun or a press refused, and only the chat holding the
-                // microphone (`owner`, which every refusal clears), on a press that found it
+                // microphone (`owner`, which every refusal that begins no session clears), on a press that found it
                 // closed, tells the two apart. The cue follows `VoiceInput`'s decision and never
                 // makes it.
                 if !drawn.open, voice.owner == .chat { speaker.earcons?.play(.listening) }

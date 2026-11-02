@@ -57,7 +57,7 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 /// and activates nothing, in the background under a hold least of all. Where a hold that is not
 /// a cue's own already stands it holds the process for its own length too (`AudioSession.Hold.cue`,
 /// let go when the player has finished or at `bound`), taken before the player starts, so that
-/// `done` behind the lock is heard out before the reply's own hold goes and the last hold is let
+/// `done` behind the lock is heard out before the last hold goes and it is let
 /// go of; its caller plays it before dropping the hold it follows, so the process is never let
 /// go of between the two. With nothing held — a press in front — a cue holds nothing, so a claim
 /// change waits on no cue; and under nothing but the cue before it, it lets that one's hold go,

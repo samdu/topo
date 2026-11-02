@@ -464,7 +464,7 @@ final class Speaker {
     }
 
     /// Ends things: a press, the Stop item, a sign-out, a reset, a reply that stopped making
-    /// progress. Both holds go, since whatever was being waited for is not going to be heard now
+    /// progress. The holds go, since whatever was being waited for is not going to be heard now
     /// either.
     func stop() {
         cancel()
@@ -472,7 +472,7 @@ final class Speaker {
     }
 
     /// The cues a spoken exchange sounds (`Earcons`), on this speaker's session: the chat's press
-    /// plays the microphone's and the release's, this object plays `done` as a reply ends. The
+    /// plays the microphone's and the release's, this object plays `done` as a reply ends, or `failed` for one its turn's failure cut short. The
     /// app's to give; a speaker given none sounds nothing, which is every suite's but the cues' own.
     let earcons: Earcons?
 
@@ -733,6 +733,9 @@ final class Speaker {
     /// the two and nothing retakes a hold on a session the last one's going left to wait. A reply
     /// cut short by its turn's failure (`turnFailed`) ends with `failed`, not `done`.
     private func finished() {
+        // The queue's drained lands on main a hop after the audio thread saw it: one landing
+        // after a stop, or after the end `made` or `writingEnded` already saw, ends nothing twice.
+        guard speaking else { return }
         #if DEBUG
         report.finished = report.started
         #endif

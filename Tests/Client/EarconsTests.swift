@@ -2,6 +2,7 @@ import AVFoundation
 import TopoCore
 import TopoCoreTesting
 import TopoTurn
+import TopoUserland
 import UIKit
 import XCTest
 
@@ -437,6 +438,41 @@ final class EarconsTests: XCTestCase {
         }
     }
 
+    /// A guest that exits before its turn's end is not a failure: the bridge reads its transcript
+    /// and a reply found there answers the turn, so the reading-under-way site tells no failure
+    /// for that end — only for an error result, the one end nothing is recovered from. Through the
+    /// harness: a brain that tells the guest's exit, then answers.
+    func testAGuestThatExitsAndIsAnsweredFromItsTranscriptSoundsNoFailure() async {
+        let rig = await rig()
+        let relay = GuestRelay()
+        let harness = harness(brain: ExitedThenAnswered(relay: relay), relay: relay)
+        SpokenReply.follow(harness, speaker: rig.speaker) { true }
+        let spoken = harness.willSend("what is the capital of France")
+        harness.markSpoken(spoken)
+        _ = rig.speaker.awaitReply(spoken, readAloud: true)
+
+        await harness.retry()
+        XCTAssertNil(harness.error)
+        XCTAssertFalse(rig.earcons.played.contains(.failed), "a turn answered from the transcript sounded failed: \(rig.earcons.played)")
+        XCTAssertEqual(rig.speaker.awaiting, [])
+    }
+
+    /// A failure told twice for one turn with its wait standing — the guest's end and the
+    /// attempt's own — sounds `failed` once.
+    func testAFailureToldTwiceForOneWaitSoundsFailedOnce() async {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.turnFailed("turn")
+        rig.speaker.turnFailed("turn")
+        XCTAssertEqual(rig.earcons.played, [.failed])
+        rig.speaker.endAwaiting("turn", "the turn failed")
+        // The next wait for the same nonce is its own: a failure of it sounds again.
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.turnFailed("turn")
+        XCTAssertEqual(rig.earcons.played, [.failed, .failed])
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
     /// The real player's finish names the play it is for: a finish posted for one play and
     /// delivered after the next has begun ends nothing, and the next play's own finish ends it.
     func testAStaleFinishOfTheRealPlayerEndsNothing() async throws {
@@ -762,12 +798,32 @@ private struct StreamingBrain: Brain {
         }
         await beforeFailing()
         if tellsEnd {
-            await MainActor.run { relay.tell(.update(.ended(.failed(.exited("the guest died"))))) }
+            await MainActor.run { relay.tell(.update(.ended(.failed(.result(StreamingBrain.errorResult))))) }
         }
         throw Died()
     }
 
     func describe() async -> String { "a brain that dies mid-reply" }
+
+    /// Claude Code's own word that it received the turn and ended it without an answer.
+    static let errorResult = StreamEvent.TurnResult(isError: true, subtype: "error_during_execution", text: nil, session: nil, duration: nil)
+}
+
+/// A brain whose guest exits before the stream's end, and whose reply is then found in the
+/// transcript: the harness's turn is answered, not failed.
+private struct ExitedThenAnswered: Brain {
+    let relay: GuestRelay
+
+    func answer(_ request: BrainRequest) async throws -> Reply {
+        let answering = request.answering.map(\.ref)
+        await MainActor.run {
+            relay.tell(.began(pid: nil, answering: answering))
+            relay.tell(.update(.ended(.failed(.exited("the guest died")))))
+        }
+        return Reply(text: "Paris.", model: "claude-haiku-4-5", context: 0, outputTokens: 0)
+    }
+
+    func describe() async -> String { "a brain whose guest exits and is answered from its transcript" }
 }
 
 /// A brain for a harness no turn is sent through.
