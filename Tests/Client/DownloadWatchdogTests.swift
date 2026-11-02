@@ -182,6 +182,53 @@ final class DownloadWatchdogTests: XCTestCase {
         flow(dog, "m|crawl", rate: 36 * KB, from: 29, to: 40)
         dog.resigned(at: at(40))
         XCTAssertEqual(dog.probe([:], at: at(100)), [], "a task the session no longer holds is not in the probe")
+        // A count below the sample's is a counter the progress did not sample, not a stall.
+        flow(dog, "m|h", rate: 36 * KB, from: 100, to: 110)
+        dog.resigned(at: at(110))
+        XCTAssertEqual(dog.probe(["m|h": 36 * KB * 5], at: at(200)), [], "bytes below the resign's are not judged by the probe")
+        XCTAssertEqual(dog.kept("m|h"), 0)
+    }
+
+    func testTheProbeJudgesNothingWhileAFlowingTaskHasNoBaseline() {
+        // A sibling made just before the lock, its first byte not yet in: both ran at 250 KB/s
+        // the whole time away, one thin link, and the one with a baseline is not a crawl.
+        let dog = DownloadWatchdog()
+        flow(dog, "m|a", rate: 250 * KB, from: 0, to: 10)
+        dog.resigned(at: at(10))
+        XCTAssertEqual(dog.probe(["m|a": 250 * KB * 130, "m|b": 250 * KB * 120], at: at(130)), [], "no baseline for a sibling, no judgement")
+        // A sibling restarting is not a sibling flowing.
+        flow(dog, "m|c", rate: 36 * KB, from: 130, to: 150)
+        flow(dog, "m|d", rate: 36 * KB, from: 130, to: 150)
+        XCTAssertEqual(dog.decisions(at: at(150)), [], "two crawls on one link")
+        dog.forget("m|d")
+        flow(dog, "m|e", rate: 20 * MB, from: 150, to: 170)
+        flow(dog, "m|c", rate: 36 * KB, from: 151, to: 170, start: 36 * KB * 21)
+        XCTAssertEqual(dog.decisions(at: at(170)).map(\.key), ["m|c"])
+        dog.resigned(at: at(171))
+        XCTAssertEqual(dog.probe(["m|c": 0, "m|e": 20 * MB * 20 + 20 * MB * 60], at: at(231)), [], "c is restarting; e flew")
+    }
+
+    func testAStallAfterAFastStartIsCancelledAWindowIn() {
+        // The rate is the newest sample against the newest at or before the window's edge, not
+        // against the first ever: a task that flew for 30 s and then stopped is slow at 50 s.
+        let dog = DownloadWatchdog()
+        flow(dog, "m|f", rate: 2 * MB, from: 0, to: 30)
+        XCTAssertEqual(dog.decisions(at: at(40)), [], "10 s of silence: the window still holds 10 s of flow, 1 MB/s")
+        XCTAssertEqual(dog.decisions(at: at(50)).map(\.rate), [0], "20 s of silence after a fast start")
+    }
+
+    func testLateProgressFromACancelledTaskIsNotItsReplacementsSample() {
+        let dog = DownloadWatchdog()
+        flow(dog, "m|f", rate: 36 * KB, from: 0, to: 20)
+        XCTAssertEqual(dog.decisions(at: at(20)).count, 1)
+        dog.observe("m|f", bytes: 36 * KB * 21, at: at(21))
+        XCTAssertEqual(dog.kept("m|f"), 0, "between its cancel and its replacement a key takes no sample")
+        dog.cancelled("m|f", at: at(21))
+        dog.observe("m|f", bytes: 36 * KB * 22, at: at(22))
+        XCTAssertEqual(dog.kept("m|f"), 0, "owed a replacement, still none")
+        XCTAssertEqual(dog.restartsDue(at: at(22)), ["m|f"])
+        dog.observe("m|f", bytes: 36 * KB * 22, at: at(23))
+        XCTAssertEqual(dog.kept("m|f"), 1, "the replacement's own first sample")
     }
 
     func testACancelInFlightAndAReplacementOwedAreKeptAcrossTheTimeAway() {

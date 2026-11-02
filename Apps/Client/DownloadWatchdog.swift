@@ -38,8 +38,8 @@ final class DownloadWatchdog {
     nonisolated static let window: Duration = .seconds(20)
     /// How often `ModelDownloads` asks.
     nonisolated static let tick: Duration = .seconds(5)
-    /// How long after each cancel its replacement is made, by attempt; the last holds for the
-    /// attempts past it.
+    /// How long after each cancel its replacement is made, by attempt; past these,
+    /// `laterBackoff`.
     nonisolated static let backoff: [Duration] = [.zero, .seconds(15), .seconds(30), .seconds(60)]
     /// Past `backoff.count` attempts, a file is cancelled again no sooner than this after the last.
     nonisolated static let cooldown: Duration = .seconds(300)
@@ -143,9 +143,15 @@ final class DownloadWatchdog {
         guard let resignedAt, now - resignedAt.at >= Self.window else { return [] }
         let elapsed = Self.seconds(now - resignedAt.at)
         var rates: [String: Int64] = [:]
-        for (key, bytes) in received {
-            guard let before = resignedAt.bytes[key], !restarting(key) else { continue }
-            rates[key] = max(0, Int64((Double(bytes - before) / elapsed).rounded(.down)))
+        for (key, bytes) in received where !restarting(key) {
+            // A task with no sample at the resign (made just before it, its first byte not yet
+            // in) has no baseline: the span is not judged, since its rate is the comparison the
+            // others are judged against. A count below the sample's is a counter the progress
+            // did not sample (Foundation's agree, offset included; a guard, not a stall): not
+            // judged either. Both are judged after a window of foreground samples, as any task.
+            guard let before = resignedAt.bytes[key] else { return [] }
+            guard bytes >= before else { continue }
+            rates[key] = Int64((Double(bytes - before) / elapsed).rounded(.down))
         }
         return cancels(rates, at: now)
     }
@@ -192,7 +198,7 @@ final class DownloadWatchdog {
 
     /// The relay says the cancel is complete and the resume data, if any, is on disk: the
     /// replacement is owed after this attempt's backoff. False for a key not cancelling, which is
-    /// a late word about a cancel `resigned` or `forget` has already let go of.
+    /// a late word about a cancel `forget` has already let go of.
     @discardableResult
     func cancelled(_ key: String, at now: Instant) -> Bool {
         guard cancelling.remove(key) != nil else { return false }

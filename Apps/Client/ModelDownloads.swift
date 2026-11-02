@@ -544,10 +544,11 @@ final class ModelDownloads {
     /// restart and not a failure. A task the session no longer holds is forgotten instead.
     private func cancel(_ cancel: DownloadWatchdog.Cancel) {
         guard let (model, file) = parse(cancel.key) else { return }
-        Perf.mark(DownloadWatchdog.slowMark(id: model.id, path: file.path, rate: cancel.rate, attempt: cancel.attempt))
         let key = cancel.key
         session.getAllTasks { [relay] tasks in
             if let task = tasks.first(where: { $0.taskDescription == key }) as? URLSessionDownloadTask {
+                // Marked once the task is in hand, so every `download.slow` has its restart.
+                Perf.mark(DownloadWatchdog.slowMark(id: model.id, path: file.path, rate: cancel.rate, attempt: cancel.attempt))
                 relay.cancelForRestart(task, key: key)
             } else {
                 Task { @MainActor in self.watchdog.forget(key) }
@@ -733,15 +734,19 @@ final class ModelDownloads {
             startTicking()
         case .resumed(let key, let offset):
             if let (model, file) = parse(key) { Perf.mark(DownloadWatchdog.resumedMark(id: model.id, path: file.path, from: offset)) }
+            // A server that answers the resume with the whole file (200, the range ignored)
+            // gives an offset of 0: the task carries on from nothing, and nothing cancels it
+            // again, since its next replacement would start from nothing too.
+            if offset == 0 { watchdog.restarted(key, resumed: false) }
         case .staleResume(let key):
             // A task made from resume data the server no longer honours (the Hub's signed URLs
             // expire): the data is gone with it, and the file is fetched from its URL afresh.
             live.remove(key)
             watchdog.forget(key)
             guard let (model, file) = parse(key), !present.contains(model.id) else { break }
-            let (task, _) = makeTask(model, file)
-            Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: false))
-            watchdog.restarted(key, resumed: false)
+            let (task, fromResume) = makeTask(model, file)
+            Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: 0, resumed: fromResume))
+            watchdog.restarted(key, resumed: fromResume)
             inFlight[key] = 0
             live.insert(key)
             task.resume()
