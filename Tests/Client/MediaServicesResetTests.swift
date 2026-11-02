@@ -81,12 +81,16 @@ final class Seams {
     /// How many of the next play engines refuse to start, which is the media server saying no to
     /// an engine built under a session something else still holds.
     var playEngineRefusals = 0
+    /// Every `start()` of a play engine, the dropped ones included: a test that stops an engine
+    /// as a reset leaves it reads here whether anything started it again.
+    nonisolated(unsafe) var playEngineStarts = 0
 
     /// The play queue's engine: offline manual rendering, so it starts and plays on a host with
     /// no audio device, and its player reclassed so every buffer scheduled on it is counted.
     func makePlayEngine(rate: Int) -> AVAudioEngine {
         lines.append("engine made")
         let engine = CapturingPlayEngine()
+        engine.seams = self
         if playEngineRefusals > 0 {
             playEngineRefusals -= 1
             engine.refusesToStart = true
@@ -138,6 +142,8 @@ private final class CapturingPlayEngine: AVAudioEngine {
     /// Set by the seams: `start()` throws, as the media server refuses one under a session
     /// another app is holding.
     var refusesToStart = false
+    /// Counts the starts (`Seams.playEngineStarts`).
+    weak var seams: Seams?
 
     struct WillNotStart: Error {}
 
@@ -147,6 +153,7 @@ private final class CapturingPlayEngine: AVAudioEngine {
     }
 
     override func start() throws {
+        seams?.playEngineStarts += 1
         if refusesToStart { throw WillNotStart() }
         try super.start()
     }

@@ -634,18 +634,32 @@ final class EarconsTests: XCTestCase {
     /// iOS reset the media server: the players were handles into it and are dropped, the cue
     /// that was playing is over with its hold, and nothing is built in the handler — the next
     /// cue makes its own player afresh.
-    func testAMediaServicesResetDropsThePlayersAndBuildsNothing() async {
+    func testAMediaServicesResetDropsThePlayersAndBuildsNothing() async throws {
         let rig = await rig()
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         XCTAssertTrue(rig.earcons.play(.done))
         XCTAssertEqual(rig.cues.files, ["earcon_done"])
-        rig.speaker.endAwaiting("turn", "the turn failed")
         XCTAssertTrue(rig.audio.holding)
+        let engines = rig.seams.engines.count
+        let transitions = rig.speaker.keeperTransitions.count
+        // The reset leaves the engine stopped, as the offline one is not by the notification
+        // alone. The wait and the cue's hold both stand: the wait ends under the handler with the
+        // cue's hold still there, which re-notifies the hold, and on a stopped engine that is the
+        // keeper started again.
+        let engine = try XCTUnwrap(rig.seams.engines.last)
+        engine.stop()
+        let starts = rig.seams.playEngineStarts
 
         rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
         await drain()
         XCTAssertEqual(rig.cues.files, ["earcon_done"], "a player was built in the reset handler")
         XCTAssertFalse(rig.audio.holding, "the reset left the cue's hold standing")
+        XCTAssertEqual(rig.speaker.awaiting, [])
+        XCTAssertEqual(rig.seams.engines.count, engines, "an engine was built in the reset handler")
+        XCTAssertFalse(rig.speaker.keeperTransitions.dropFirst(transitions).contains("playing"), "the keeper was started in the reset handler: \(rig.speaker.keeperTransitions)")
+        XCTAssertEqual(rig.seams.playEngineStarts, starts, "the engine the reset killed was started again")
+        XCTAssertFalse(engine.isRunning)
+        XCTAssertFalse(rig.speaker.running)
 
         // The old player is not heard out, and its late finish moves nothing.
         rig.cues.players[0].finish()
