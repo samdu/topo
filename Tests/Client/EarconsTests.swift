@@ -219,6 +219,25 @@ final class EarconsTests: XCTestCase {
         XCTAssertEqual(rig.earcons.played, [.listening], "a release into the row sounded")
     }
 
+    /// A hands-free session over the row: the tap sounds `listening`, and the press on the
+    /// waveform that writes what it heard into the row sounds nothing, since nothing went.
+    func testTheWaveformPressIntoTheRowSoundsNothing() async {
+        let rig = await rig(hears: "purple elephants")
+        let sent = Sent()
+        defer { rig.voice.cancel() }
+        await press(rig, true, sent, dictating: true)
+        await press(rig, false, sent, dictating: true)
+        XCTAssertTrue(rig.voice.handsFree)
+        XCTAssertEqual(rig.earcons.played, [.listening])
+
+        utterance(into: rig.voice.sink)
+        await press(rig, true, sent, dictating: true)
+        XCTAssertEqual(sent.texts, ["purple elephants"], "the words were not handed to the row")
+        XCTAssertEqual(rig.earcons.played, [.listening], "a waveform press into the row sounded")
+        await press(rig, false, sent, dictating: true)
+        XCTAssertEqual(rig.earcons.played, [.listening])
+    }
+
     /// A tap opens the microphone hands free and its release sounds nothing, since nothing went;
     /// the press on the waveform sends what was heard and sounds `sent`.
     func testATapsReleaseSoundsNothingAndThePressOnTheWaveformSoundsSent() async {
@@ -238,6 +257,24 @@ final class EarconsTests: XCTestCase {
         // Its release is the sending press's own and reaches no session.
         await press(rig, false, sent)
         XCTAssertEqual(rig.earcons.played, [.listening, .sent])
+    }
+
+    /// A chat press while another gate holds the microphone — the first run's — opens nothing,
+    /// and sounds nothing though the microphone is listening: the cue is the chat's own.
+    func testAPressWhileAnotherGateHoldsTheMicrophoneSoundsNothing() async {
+        let rig = await rig()
+        let sent = Sent()
+        defer { rig.voice.cancel() }
+        _ = await rig.voice.pressDown(as: .firstRun)
+        XCTAssertTrue(rig.voice.listening)
+        XCTAssertEqual(rig.voice.owner, .firstRun)
+
+        await press(rig, true, sent)
+        XCTAssertEqual(rig.voice.owner, .firstRun, "the chat's press took the microphone from the first run")
+        XCTAssertEqual(rig.earcons.played, [], "listening sounded for a microphone the chat does not hold")
+        await press(rig, false, sent)
+        XCTAssertEqual(rig.earcons.played, [])
+        XCTAssertEqual(sent.texts, [])
     }
 
     /// A press while Topo speaks is Stop: it opens nothing, and neither it, its release nor the
@@ -369,32 +406,35 @@ final class EarconsTests: XCTestCase {
     }
 
     /// A spoken turn whose reply is being read as the guest writes it, and whose turn then
-    /// fails — the guest's turn ends unanswered and the attempt throws — ends with `failed`, not
-    /// `done`: what was heard was cut short. Driven through the harness: the brain tells the
-    /// relay the guest's writing, then its failed end, then throws.
+    /// fails, ends with `failed`, not `done`: what was heard was cut short. Driven through the
+    /// harness twice: a brain that tells the relay the guest's writing, then its failed end, then
+    /// throws (the guest's shape), and one that throws with no end told (a brain over the API),
+    /// where only the attempt's own order — the failure before the writing is dropped — says so.
     func testASpokenTurnThatFailsMidReplySoundsFailedNotDone() async throws {
-        let rig = await rig(heard: .dataRendered)
-        let relay = GuestRelay()
-        let brain = StreamingBrain(relay: relay) { [speaker = rig.speaker] in
-            for _ in 0..<600 where await !speaker.report.started { try? await Task.sleep(for: .milliseconds(10)) }
-        }
-        let harness = harness(brain: brain, relay: relay)
-        let mascot = Mascot(model: "claude-haiku-4-5")
-        mascot.follow(harness)
-        SpokenReply.follow(harness, speaker: rig.speaker) { true }
-        let spoken = harness.willSend("what is the capital of France")
-        harness.markSpoken(spoken)
-        _ = rig.speaker.awaitReply(spoken, readAloud: true)
+        for tellsEnd in [true, false] {
+            let rig = await rig(heard: .dataRendered)
+            let relay = GuestRelay()
+            let brain = StreamingBrain(relay: relay, tellsEnd: tellsEnd) { [speaker = rig.speaker] in
+                for _ in 0..<600 where await !speaker.report.started { try? await Task.sleep(for: .milliseconds(10)) }
+            }
+            let harness = harness(brain: brain, relay: relay)
+            let mascot = Mascot(model: "claude-haiku-4-5")
+            mascot.follow(harness)
+            SpokenReply.follow(harness, speaker: rig.speaker) { true }
+            let spoken = harness.willSend("what is the capital of France")
+            harness.markSpoken(spoken)
+            _ = rig.speaker.awaitReply(spoken, readAloud: true)
 
-        await harness.retry()
-        XCTAssertNotNil(harness.error)
-        XCTAssertTrue(rig.speaker.report.started, "the reply was not read as it was written")
-        try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
-        XCTAssertEqual(rig.earcons.played, [.failed], "a reply cut short by its turn's failure sounded done")
-        XCTAssertEqual(rig.speaker.awaiting, [])
-        XCTAssertTrue(rig.audio.holding, "the cue's hold did not stand once the reply's dropped")
-        rig.cues.players.last?.finish()
-        XCTAssertFalse(rig.audio.holding)
+            await harness.retry()
+            XCTAssertNotNil(harness.error)
+            XCTAssertTrue(rig.speaker.report.started, "the reply was not read as it was written")
+            try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
+            XCTAssertEqual(rig.earcons.played, [.failed], "end told \(tellsEnd): a reply cut short by its turn's failure sounded done")
+            XCTAssertEqual(rig.speaker.awaiting, [])
+            XCTAssertTrue(rig.audio.holding, "the cue's hold did not stand once the reply's dropped")
+            rig.cues.players.last?.finish()
+            XCTAssertFalse(rig.audio.holding)
+        }
     }
 
     /// The real player's finish names the play it is for: a finish posted for one play and
@@ -691,11 +731,12 @@ final class ManualSleep: @unchecked Sendable {
 }
 
 /// A brain whose turn the guest writes part of a reply to, then ends in a failure: it tells the
-/// relay the guest's beginning, its writing and its failed end, waiting between the writing and
-/// the end for `beforeFailing`, and then throws as the attempt does.
+/// relay the guest's beginning and its writing, waits for `beforeFailing`, tells its failed end
+/// if `tellsEnd`, and then throws as the attempt does.
 private struct StreamingBrain: Brain {
     struct Died: Error {}
     let relay: GuestRelay
+    var tellsEnd = true
     let beforeFailing: @Sendable () async -> Void
 
     func answer(_ request: BrainRequest) async throws -> Reply {
@@ -706,7 +747,9 @@ private struct StreamingBrain: Brain {
             relay.tell(.update(.event(.writing("Paris is the capital. It is on the Seine and"))))
         }
         await beforeFailing()
-        await MainActor.run { relay.tell(.update(.ended(.failed(.exited("the guest died"))))) }
+        if tellsEnd {
+            await MainActor.run { relay.tell(.update(.ended(.failed(.exited("the guest died"))))) }
+        }
         throw Died()
     }
 
