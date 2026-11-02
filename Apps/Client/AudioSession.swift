@@ -35,7 +35,14 @@ final class AudioSession {
     /// A path wanted the session while the call's phase has it the system's and not active.
     struct CallNotActive: Error, CustomStringConvertible {
         let phase: CallPhase
-        var description: String { "the call's session is \(phase == .placed ? "placed and not yet activated" : "deactivated with the call standing")" }
+        var description: String {
+            switch phase {
+            case .placed: "the call's session is placed and not yet activated"
+            case .active: "the call's session is the system's; nothing here configures it"
+            case .deactivated: "the call's session is deactivated with the call standing"
+            case .none: "no call"
+            }
+        }
     }
 
     private var recordClaims: Set<RecordClaim> = []
@@ -369,11 +376,12 @@ final class AudioSession {
         }
         applied = true
         valid = false
-        // Leaving the record configuration for the quiet one is the exchange's end in front of
-        // nothing held: the hand-back goes first, so what the press paused is told to resume
-        // before the mixable session is activated beside it. Logged, not thrown: the quiet
-        // configuration is still wanted whether or not other audio was told.
-        if configuredRecord == true, !recordMode {
+        // Leaving the record configuration for the quiet one with nothing held is the exchange's
+        // end: the hand-back goes first, so what the press paused is told to resume before the
+        // mixable session is activated beside it. Logged, not thrown: the quiet configuration is
+        // still wanted whether or not other audio was told. Under a hold or an open microphone
+        // the exchange is not over, and other audio is told at the last hold's drop instead.
+        if configuredRecord == true, !recordMode, !kept {
             do {
                 try deactivate(true)
                 AudioLog.say("the record configuration is let go; other audio told to resume")

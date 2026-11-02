@@ -51,7 +51,7 @@ struct SettingsView: View {
                     Toggle("Call for spoken replies", isOn: $spokenCall)
                         .accessibilityIdentifier(SettingsView.spokenCall)
                 } footer: {
-                    Text("When you lock the phone or leave Topo while it is answering something you said, the answer is a call: a card on the Lock Screen while Topo speaks, and hanging up stops it. Off, Topo waits two minutes at most and reads the answer when you come back. Kept on this device.")
+                    Text("When you lock the phone or leave Topo with a spoken answer on its way, the wait and the answer are a call: a card on the Lock Screen, or the green pill in another app, until Topo has finished speaking, and hanging up stops it. Off, Topo keeps the phone awake for two minutes at most; an answer slower than that is read when you come back. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the

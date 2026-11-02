@@ -87,10 +87,11 @@ final class SpokenCall: NSObject {
         grace = Task { [sleep] in
             try? await sleep(Self.activationGrace)
             guard !Task.isCancelled, self.id == call, self.state == .starting else { return }
-            // The system too, or its card outlives the exchange's use of it; the end that comes
-            // back finds nothing to do.
-            self.system.request(CXTransaction(action: CXEndCallAction(call: call))) { _ in }
+            // Failed first, so the end the system performs for this request finds no call of
+            // ours and is not a hang-up; the system is told too, or its card outlives the
+            // exchange's use of it.
             self.fail("never activated")
+            self.system.request(CXTransaction(action: CXEndCallAction(call: call))) { _ in }
         }
     }
 

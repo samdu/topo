@@ -33,8 +33,13 @@ final class FakeCallSystem: CallSystem {
 
     func setDelegate(_ delegate: CXProviderDelegate) { self.delegate = delegate }
 
+    /// Records the request and, as CallKit does for the app's own end, performs its end action
+    /// on the delegate before the completion is answered.
     func request(_ transaction: CXTransaction, completion: @escaping @MainActor (Error?) -> Void) {
         requests.append((transaction, completion))
+        if let end = transaction.actions.first as? CXEndCallAction {
+            delegate?.provider?(provider, perform: end)
+        }
     }
 
     func report(_ call: UUID, update: CXCallUpdate) { reports.append((call, update)) }
@@ -554,6 +559,8 @@ final class SpokenCallSpeakerTests: XCTestCase {
         XCTAssertTrue(condition(), "waited six seconds for \(what)", file: file, line: line)
     }
 
+    private func tick() async { try? await Task.sleep(for: .milliseconds(20)) }
+
     private func fixture(ceiling: Duration = .seconds(120)) async -> (Speaker, SpokenCall, AudioSession) {
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
                                  deactivate: seams.deactivate, isActive: { [unowned self] in active })
@@ -588,7 +595,9 @@ final class SpokenCallSpeakerTests: XCTestCase {
         XCTAssertTrue(speaker.keeping)
         lock(audio, call)
         XCTAssertEqual(audio.call, .placed)
-        // The system's activation reconfigures the hardware under the running engine.
+        XCTAssertTrue(speaker.dead, "the engine is dead from the placing: nothing is scheduled on a session the system is taking")
+        XCTAssertFalse(speaker.running)
+        // The system's activation reconfigures the hardware; a rebuild asked for now is refused.
         center.post(name: .AVAudioEngineConfigurationChange, object: seams.engines.last)
         await settle("the rebuild to be refused") { speaker.dead }
         XCTAssertFalse(speaker.keeping, "no keeper on a session the system has not activated")
@@ -645,8 +654,6 @@ final class SpokenCallSpeakerTests: XCTestCase {
         speaker.awaitReply("n", readAloud: true)
         lock(audio, call)
         activate(call)
-        try? await Task.sleep(for: .milliseconds(120))
-        XCTAssertEqual(speaker.awaiting, ["n"], "the ceiling passed and the wait stands")
         XCTAssertEqual(speaker.capped("n"), "the ceiling passed under the call; the wait stands")
         XCTAssertEqual(speaker.awaiting, ["n"])
         XCTAssertTrue(speaker.holding)
@@ -707,6 +714,70 @@ final class SpokenCallSpeakerTests: XCTestCase {
         speaker.speak(writing: "Hello again. And more", answering: "n2")
         XCTAssertTrue(speaker.speaking, "the next turn's writing is read")
         speaker.stop()
+    }
+
+    func testAReplyThatWaitedForAnActivationThatNeverCameIsReadWhenTheCallIsOver() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        XCTAssertTrue(speaker.speak("Hello there.", answering: "n"))
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        // Unlocked at once: the app comes forward and ends the call before the system activated it.
+        active = true
+        audio.wantRecord(true, for: .warm)
+        call.end()
+        await tick()
+        sleep.fire()
+        await settle("the call to be over") { call.state == .idle }
+        await settle("the reply to be read") { speaker.report.started }
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        XCTAssertEqual(settled, ["n"])
+        XCTAssertEqual(speaker.awaiting, [])
+        speaker.stop()
+    }
+
+    func testAHangUpWhileTheReplyIsBeingReadClearsItsMarkToo() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        activate(call)
+        speaker.speak(writing: "Hello there. And", answering: "n")
+        await settle("the reading to begin") { speaker.report.started }
+        XCTAssertEqual(speaker.awaiting, [], "a reply being read has no wait left")
+        call.provider(system.provider, perform: CXEndCallAction(call: call.id!))
+        XCTAssertEqual(settled, ["n"], "the turn being read is settled, so a relaunch does not read it")
+        XCTAssertFalse(speaker.speaking)
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        active = true
+        speaker.speak(writing: "Hello there. And more.", answering: "n")
+        XCTAssertFalse(speaker.speaking, "nor is what the guest writes of it next")
+    }
+
+    func testTheAppsOwnEndIsNotAHangUp() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        activate(call)
+        active = true
+        audio.wantRecord(true, for: .warm)
+        call.end()
+        XCTAssertEqual(system.fulfilled.compactMap { $0 as? CXEndCallAction }.count, 1, "the system performed the end")
+        XCTAssertEqual(settled, [], "and it is not a hang-up: the mark stands")
+        XCTAssertEqual(speaker.awaiting, ["n"])
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertTrue(speaker.holding)
+        XCTAssertTrue(speaker.keeping, "the keeper carries the wait on in front")
+        speaker.stop()
+    }
+
+    func testTheHoldIsToldToWhoeverListensAfterTheKeeper() async {
+        let (speaker, _, _) = await fixture()
+        var told: [(held: Bool, keeping: Bool)] = []
+        speaker.onHold = { [unowned speaker] held in told.append((held, speaker.keeping)) }
+        speaker.awaitReply("n", readAloud: true)
+        speaker.endAwaiting("n", "done")
+        XCTAssertEqual(told.map(\.held), [true, false])
+        XCTAssertEqual(told.map(\.keeping), [true, false], "the keeper is dealt with before the listener hears")
     }
 
     func testACallThatFailsLeavesTheHoldStandingAndTheKeeperDownBehindTheLock() async {

@@ -11,7 +11,8 @@ import TopoCore
 /// the speaker; so does the Stop item, a sign-out and a media services
 /// reset. An interruption does not: iOS posts one at the lock screen with nothing in it, so a
 /// `.began` marks the engine dead and leaves the hold standing, and the rebuild at `.ended` or at
-/// the configuration change carries the reply on. No hold outlives its ceiling either way.
+/// the configuration change carries the reply on. No hold outlives its ceiling either way, while
+/// no call is up (`attach`): under one the system holds the session and the card's hang-up is the bound.
 ///
 /// One voice. When the `Voice` (Pocket TTS, on the device) is resident, the reply is cut into
 /// sentences, each synthesised behind the one before and pushed to the play queue frame by frame
@@ -168,7 +169,14 @@ final class Speaker {
     /// brings it back, behind the lock the activation is refused and the reply is read on unlock.
     func attach(_ call: SpokenCall) {
         self.call = call
-        call.onStart = { [weak self] in self?.audio.callPlaced() }
+        call.onStart = { [weak self] in
+            guard let self else { return }
+            // The session is the system's from here until it activates it: a frame scheduled
+            // meanwhile would be heard twice once the activation's rebuild puts it back, so the
+            // engine is dead and what is owed waits, as at an interruption.
+            audio.callPlaced()
+            queue.interrupted()
+        }
         call.onActive = { [weak self] in
             guard let self else { return }
             audio.callActivated()
@@ -196,6 +204,9 @@ final class Speaker {
             // is allowed; behind the lock the activation is refused and the reply is read on unlock.
             queue.interrupted()
             if audio.holding { resumeAudio(why) }
+            // A reply that waited for an activation that never came is read now, where the
+            // session allows it, rather than left to its ceiling.
+            readWhatWaited()
         }
         call.onOver = { over("the call is over with a hold standing") }
         call.onFailed = { why in over("the call failed (\(why)) with a hold standing") }
@@ -207,7 +218,11 @@ final class Speaker {
     /// stops, as at the mute.
     func hangUp() {
         AudioLog.say("hung up from the call; the reply will not be read")
-        for nonce in waits.keys.sorted() {
+        // The reply being read as the guest writes it has no wait left (`begin` ended it) and
+        // its mark still stands on disk: it goes the same way, or a relaunch reads it at unlock.
+        var hung = Set(waits.keys)
+        if let written, written.live { hung.insert(written.nonce) }
+        for nonce in hung.sorted() {
             // What the guest writes of this turn from here is not read either: the chat's
             // writing path was told the turn was spoken when it began, and nothing tells it
             // otherwise until the turn ends.

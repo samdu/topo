@@ -37,8 +37,8 @@ struct VoiceTool: Tool {
     topo voice call on                      it is: a card on the Lock Screen while you answer, hang up stops you
     topo voice call off                     no call: the wait behind the lock is capped at two minutes
 
-    On unless turned off. A change applies from the next time the phone locks or leaves Topo with a
-    spoken reply on its way, on this phone only, and they can change it back in Settings.
+    On unless turned off. A change applies from the next spoken reply, on this phone only, and
+    they can change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -76,7 +76,7 @@ struct VoiceTool: Tool {
         case "on", "off":
             let on = arguments[1] == "on"
             defaults.store.set(on, forKey: SpokenCallSetting.key)
-            return .ok("call for spoken replies \(on ? "on" : "off"), from the next lock\n")
+            return .ok("call for spoken replies \(on ? "on" : "off"), from the next spoken reply\n")
         default:
             return .usage(usage + "\n")
         }
