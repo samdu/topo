@@ -319,8 +319,9 @@ enum VoiceTemperature {
     static let key = "voiceTemperature"
 
     /// What a phone never asked speaks at, chosen by Sam's ear between the two published
-    /// defaults: Kyutai's own package speaks English at 0.3 (kyutai-labs/pocket-tts#223) and
-    /// FluidAudio at 0.7.
+    /// defaults: Kyutai's own package speaks English at 0.3 (kyutai-labs/pocket-tts#223), and
+    /// FluidAudio speaks the April pack Topo has at 0.7 (its `.english`, Kyutai's October
+    /// checkpoint, follows Kyutai at 0.3).
     static let standard = 0.5
 
     /// What the decoder is ever handed. Below 0 the square root is not a number; 1 is the
