@@ -115,13 +115,14 @@ extension ModelStore {
 /// Caches on the first load after every install and never takes away: one generation per install
 /// until iOS purges Caches under pressure. Cleared as a whole, and only on a new install, before
 /// any model loads (`ModelHousekeeping.launch`), so the next load compiles the one generation this
-/// install uses. Nothing else in Caches is touched.
+/// install uses; with `keep` set the generations stand, which is the experiment. Nothing else in
+/// Caches is touched.
 struct CompileCache {
     /// The install the cache was last cleared for.
     static let recorded = "topo.models.compileCacheInstall"
     /// The experiment's switch (`Keep compiled models across installs` in the settings sheet):
-    /// true keeps the cache a new install would clear, and records nothing, so turning it off
-    /// clears at the next launch as if the installs between had not happened.
+    /// true keeps the cache a new install would clear, and records nothing, so with it off again
+    /// the first launch after an install made while it was on clears, as a new install does.
     static let keep = "topo.models.keepCompileCache"
 
     let directory: URL

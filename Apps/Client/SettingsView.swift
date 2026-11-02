@@ -4,7 +4,8 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// microphone's noise suppression, the voice's temperature, the diagnostics, the acknowledgements, and the way out.
+/// microphone's noise suppression, the voice's temperature, the experiment's switch on the compile cache, the
+/// diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
@@ -65,7 +66,7 @@ struct SettingsView: View {
                     Toggle("Keep compiled models across installs", isOn: $keepCompiled)
                         .accessibilityIdentifier(SettingsView.keepCompiled)
                 } footer: {
-                    Text("An experiment. A new build's first launch normally clears what the last build compiled for the Neural Engine and compiles the ear and the voice again. On, nothing is cleared, so the next build's first launch shows whether the compiled models are reused. Off again clears at the next launch. Kept on this device.")
+                    Text("An experiment. A new build's first launch normally clears what the last build compiled for the Neural Engine and compiles the ear and the voice again. On, nothing is cleared, so the next build's first launch shows whether the compiled models are reused. Off again, the first launch after an install made while it was on clears, as a new install does. Kept on this device.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
