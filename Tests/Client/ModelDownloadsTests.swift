@@ -137,6 +137,93 @@ final class ModelDownloadsTests: XCTestCase {
         XCTAssertFalse(store.isPresent(model))
     }
 
+    /// The branch that decides between a failure and a restart: a task the watchdog cancelled
+    /// completes as a restart, in either order of the cancel's handler and the completion, and
+    /// never as a failure; one it did not cancel completes as a failure; one that finished as it
+    /// was cancelled completes with no error and is owed nothing.
+    func testACancelForARestartIsNeverAFailureWhicheverCallbackComesFirst() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("topo-relay-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ModelManifest.Model(id: "example", repo: "example/example", revision: String(repeating: "0", count: 40), files: [
+            .init(path: "weight.bin", size: 3, sha256: digest(Data("abc".utf8))),
+        ])
+        let key = "example|weight.bin"
+        let handlers = Handlers()
+        let relay = SessionRelay(store: ModelStore(root: root), manifest: ModelManifest(models: [model])) { _, handler in
+            handlers.keep(handler)
+        }
+        let events = Events()
+        relay.events = { events.add($0) }
+        let session = URLSession.shared
+        func task() -> URLSessionDownloadTask {
+            let task = session.downloadTask(with: URL(string: "https://example.invalid/weight.bin")!)
+            task.taskDescription = key
+            return task
+        }
+        let cancelled = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+
+        // Completion first, then the handler with resume data.
+        let a = task()
+        relay.cancelForRestart(a, key: key)
+        XCTAssertTrue(relay.isRestarting(a))
+        relay.urlSession(session, task: a, didCompleteWithError: cancelled)
+        XCTAssertFalse(relay.isRestarting(a))
+        XCTAssertEqual(events.all, [], "the completion of a cancel for a restart says nothing")
+        try handlers.take()(Data("resume".utf8))
+        XCTAssertEqual(events.all, [.restarting(key)])
+        let resume = ModelStore(root: root).resumeData(for: model.files[0], in: model)
+        XCTAssertEqual(try Data(contentsOf: resume), Data("resume".utf8), "the handler wrote the resume data before saying so")
+
+        // Handler first (no resume data), then the completion.
+        events.clear()
+        let b = task()
+        relay.cancelForRestart(b, key: key)
+        try handlers.take()(nil)
+        XCTAssertEqual(events.all, [.restarting(key)])
+        relay.urlSession(session, task: b, didCompleteWithError: cancelled)
+        XCTAssertEqual(events.all, [.restarting(key)], "one restart, no failure")
+        XCTAssertFalse(relay.isRestarting(b))
+
+        // Finished as it was cancelled: no error, nothing owed, the set clean.
+        events.clear()
+        let c = task()
+        relay.cancelForRestart(c, key: key)
+        relay.urlSession(session, task: c, didCompleteWithError: nil)
+        XCTAssertFalse(relay.isRestarting(c))
+        XCTAssertEqual(events.all, [])
+
+        // Not the watchdog's cancel: a failure, as before.
+        let d = task()
+        relay.urlSession(session, task: d, didCompleteWithError: cancelled)
+        XCTAssertEqual(events.all.count, 1)
+        guard case .failed(let failedKey, _)? = events.all.first else { return XCTFail("a cancel of the system's own is a failure") }
+        XCTAssertEqual(failedKey, key)
+
+        // The relay keys by the task, not the key: a's identifier gone does not shield d.
+        XCTAssertFalse(relay.isRestarting(d))
+    }
+
+    private final class Handlers: @unchecked Sendable {
+        private let lock = NSLock()
+        private var kept: [@Sendable (Data?) -> Void] = []
+        func keep(_ handler: @escaping @Sendable (Data?) -> Void) { lock.withLock { kept.append(handler) } }
+        func take() throws -> @Sendable (Data?) -> Void {
+            try lock.withLock {
+                guard !kept.isEmpty else { throw Missing() }
+                return kept.removeFirst()
+            }
+        }
+        struct Missing: Error {}
+    }
+
+    private final class Events: @unchecked Sendable {
+        private let lock = NSLock()
+        private var events: [SessionRelay.Event] = []
+        var all: [SessionRelay.Event] { lock.withLock { events } }
+        func add(_ event: SessionRelay.Event) { lock.withLock { events.append(event) } }
+        func clear() { lock.withLock { events = [] } }
+    }
+
     private func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
