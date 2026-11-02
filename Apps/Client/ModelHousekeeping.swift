@@ -115,10 +115,15 @@ extension ModelStore {
 /// Caches on the first load after every install and never takes away: one generation per install
 /// until iOS purges Caches under pressure. Cleared as a whole, and only on a new install, before
 /// any model loads (`ModelHousekeeping.launch`), so the next load compiles the one generation this
-/// install uses. Nothing else in Caches is touched.
+/// install uses; with `keep` set the generations stand, which is the experiment. Nothing else in
+/// Caches is touched.
 struct CompileCache {
     /// The install the cache was last cleared for.
     static let recorded = "topo.models.compileCacheInstall"
+    /// The experiment's switch (`Keep compiled models across installs` in the settings sheet):
+    /// true keeps the cache a new install would clear, and records nothing, so with it off again
+    /// the first launch after an install made while it was on clears, as a new install does.
+    static let keep = "topo.models.keepCompileCache"
 
     let directory: URL
     let defaults: UserDefaults
@@ -146,6 +151,8 @@ struct CompileCache {
     enum Outcome: Equatable {
         /// The install recorded is this one: nothing done.
         case sameInstall
+        /// A new install, and `keep` is set: nothing removed and nothing recorded.
+        case kept
         case cleared
         case absent
         /// The removal threw; nothing recorded, so the next launch tries again.
@@ -153,10 +160,15 @@ struct CompileCache {
     }
 
     /// Clears the cache when `install` is not the one last recorded. The key is recorded only
-    /// once the directory is gone or was never there.
+    /// once the directory is gone or was never there. With `keep` set the cache is left as it
+    /// stands and nothing is recorded.
     @discardableResult
     func clear(install: String) -> Outcome {
         if defaults.string(forKey: Self.recorded) == install { return .sameInstall }
+        if defaults.bool(forKey: Self.keep) {
+            log.notice("compile cache: kept for install \(install, privacy: .public)")
+            return .kept
+        }
         // Caches, and the app's folder in it, judged with `lstat`: a folder behind a link is
         // somewhere else's, so nothing is removed and nothing recorded. The cache folder itself,
         // were it a link, is removed as a link, which touches nothing behind it.

@@ -364,6 +364,37 @@ final class ModelHousekeepingTests: XCTestCase {
         for sibling in siblings { XCTAssertTrue(exists(sibling), "\(sibling.path) is not the compile cache") }
     }
 
+    /// The experiment's switch: a new install with `keep` set removes nothing and records
+    /// nothing, so the install after it with the switch off clears as a new install does.
+    func testTheCompileCacheIsKeptAcrossInstallsWhileAsked() throws {
+        let caches = base.appendingPathComponent("Library/Caches", isDirectory: true)
+        let cache = CompileCache.directory(caches: caches, bundleIdentifier: "zone.hexagon.topo")
+        let suite = "topo-compile-cache-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try write(cache.appendingPathComponent("A/bundle.e5"))
+        var removed = 0
+        let clear = CompileCache(directory: cache, defaults: defaults) { url in
+            removed += 1
+            try FileManager.default.removeItem(at: url)
+        }
+        XCTAssertEqual(clear.clear(install: "A"), .cleared)
+        try write(cache.appendingPathComponent("A/bundle.e5"))
+
+        defaults.set(true, forKey: CompileCache.keep)
+        XCTAssertEqual(clear.clear(install: "B"), .kept, "a new install with the switch on keeps the cache")
+        XCTAssertEqual(clear.clear(install: "C"), .kept)
+        XCTAssertTrue(exists(cache.appendingPathComponent("A/bundle.e5")), "nothing was removed")
+        XCTAssertEqual(removed, 1, "the removal was never asked for")
+        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "A", "a kept install is not recorded")
+        XCTAssertEqual(clear.clear(install: "A"), .sameInstall, "the recorded install is still the one that cleared")
+
+        defaults.set(false, forKey: CompileCache.keep)
+        XCTAssertEqual(clear.clear(install: "C"), .cleared, "the switch off, the next launch clears for the new install")
+        XCTAssertFalse(exists(cache))
+        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "C")
+    }
+
     /// The cache's own folder under Caches a link to somewhere else: nothing behind it is
     /// removed, and the key is not recorded, so a later launch looks again.
     func testACacheReachedThroughALinkIsNotCleared() throws {
