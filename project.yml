@@ -58,8 +58,10 @@ packages:
     # resolved in a DerivedData, so a pin moved without them builds the new version with the
     # old version's set (0.17.7 declared NemoTextProcessing alone, and 0.18.2 built from its
     # checkout had no TTS: `cannot find type 'PocketTtsManager'`). Named, the set is the
-    # project's whichever version the DerivedData last saw. TTS is the voice; Diarizer is
-    # nothing Topo calls, kept so the build is the package as released.
+    # project's whichever version the DerivedData last saw. It is the default set at this pin,
+    # read again at every bump: a default trait a later version adds stays off until it is
+    # named here. TTS is the voice; Diarizer is nothing Topo calls, kept so the build is the
+    # package as released.
     traits: [NemoTextProcessing, TTS, Diarizer]
 targets:
   Topo:
