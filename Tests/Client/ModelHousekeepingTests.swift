@@ -108,7 +108,7 @@ final class ModelHousekeepingTests: XCTestCase {
         XCTAssertEqual(store.directory(for: pinned), store.root.appendingPathComponent(ModelManifest.claudeCode, isDirectory: true))
         XCTAssertTrue(store.owns(pinned), "Claude Code's home is Topo's, under Models/")
 
-        // The shipped entry's id and path, with a file of the test's own in place of 226 MB.
+        // The shipped entry's id and path, with a file of the test's own in place of 312 MB.
         let claude = try filled(store, id: pinned.id, files: [pinned.files[0].path: "a binary"])
         let binary = store.location(of: claude.files[0], in: claude)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
