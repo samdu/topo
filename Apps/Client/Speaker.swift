@@ -165,7 +165,7 @@ final class Speaker {
     private func hold(_ held: Bool) -> Bool {
         guard held else { return queue.hold(false) }
         // Under the reset handler the engine is dead and the queue about to be dropped: a hold
-        // change there starts nothing.
+        // change there (a wait ending, a sound's hold going) starts nothing.
         guard !resetting else { return false }
         do {
             try audio.ensureActive()
@@ -324,9 +324,8 @@ final class Speaker {
         earcons?.mediaServicesWereReset()
     }
 
-    /// True while the media-services-reset handler runs: a hold change under it — a wait ending
-    /// with a cue's hold still standing, the cue's hold going — re-notifies `hold(true)`, and
-    /// that may start nothing on the engine the reset killed.
+    /// True while the media-services-reset handler runs: no hold change under it may touch the
+    /// engine the reset killed.
     private var resetting = false
 
     /// Loads the voice's model, downloading it on the first run. Called on the foreground so it

@@ -123,7 +123,7 @@ final class AudioSession {
         try apply()
     }
 
-    /// The first call of a sound that is a moment rather than a path (`Earcons`): free on a live
+    /// The first call of a sound that is a moment rather than a path (a cue, a receipt): free on a live
     /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
     /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
     /// the session reconfigured and activated from the background under a hold, for a cue.
