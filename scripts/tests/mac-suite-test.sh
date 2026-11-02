@@ -19,7 +19,8 @@
 # being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
 # and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
 # build's directory is built over for the pins it was built from and made afresh for any
-# other; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
+# other, and so is the package state every build and test of the project resolves into,
+# before any of a suite resolves; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
 # pid and is running from before its lane starts to after it stops: one that did not start or
 # took no assertion starts no lane, one that ended before the tests runs none, and one that
 # ended under the tests is red; and `topo_ui:quiet` hands the runner its marker
@@ -94,6 +95,7 @@ fake "$tree/scripts/model-manifest.sh" 'exit 0'
 # DEVELOPER_DIR it ran under in $CALLS.developer.
 pin="$(sed -n 's/^XCODE_VERSION="\(.*\)"$/\1/p' "$root/scripts/mac-suite.sh")"
 fake "$work/bin/xcodebuild" '
+case "$*" in *"-clonedSourcePackagesDirPath build/packages"*) echo "packages=$(cat build/packages/Package.resolved 2>/dev/null)" >> "$CALLS" ;; esac
 case "$*" in
   -version) [ ! -e "${DEVELOPER_DIR:-/nonexistent}/broken" ] || exit 1
     if [ -n "${DEVELOPER_DIR-}" ]; then echo "Xcode $(plutil -extract CFBundleShortVersionString raw -o - "$DEVELOPER_DIR/../version.plist")"; else echo "Xcode ${FAKE_XCODE:-'"$pin"'}"; fi; echo "Build version 1" ;;
@@ -185,11 +187,11 @@ is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(
 is "green: four test actions, each without xcodebuild's diagnostics" \
   "$(grep -cE '^xcodebuild test(-without-building)? ' "$CALLS"):$(grep -cE '^xcodebuild test(-without-building)? .* -collect-test-diagnostics never ' "$CALLS")" "4:4"
 
-# Every build that resolves the packages keeps their state in build/packages, which is kept for
-# the pins it was resolved from and made afresh for any other, since Xcode 27.2 carries the trait
-# set of the last resolution into the next.
+# Every build and test of the project resolves its packages into build/packages, which is kept
+# for the pins it was resolved from and made afresh for any other, since Xcode 27.2 carries the
+# trait set of the last resolution into the next.
 is "green: every build and test of the project resolves its packages into build/packages" \
-  "$(grep -cE '^xcodebuild (build|build-for-testing|test) -project Topo.xcodeproj ' "$CALLS"):$(grep -cE '^xcodebuild (build|build-for-testing|test) -project Topo.xcodeproj .*-clonedSourcePackagesDirPath build/packages( |$)' "$CALLS")" "7:7"
+  "$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj ' "$CALLS"):$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj .*-clonedSourcePackagesDirPath build/packages( |$)' "$CALLS")" "9:9"
 
 # The device build's directory and the package state are kept for the pins they were built
 # from, and no others.
@@ -209,6 +211,14 @@ suite device-moved others
 is "pins that moved: exits 0" "$status" 0
 is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
 is "pins that moved: the package state is made afresh" "$([ -e "$tree/build/packages/workspace-state.json" ] || echo afresh):$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "afresh:pins: two"
+is "pins that moved: every resolution of the suite came after the state was made afresh" "$(calls 'packages=pins: two'):$(calls 'packages=')" "5:5"
+# The same in each suite that resolves on its own: the state is fresh before its first resolution.
+echo "pins: three" > "$pins"
+suite packages-unit topo_unit
+is "pins that moved, topo_unit: every resolution came after the state was made afresh" "$(calls 'packages=pins: three'):$(calls 'packages=')" "2:2"
+echo "pins: four" > "$pins"
+suite packages-ui topo_ui
+is "pins that moved, topo_ui: every resolution came after the state was made afresh" "$(calls 'packages=pins: four'):$(calls 'packages=')" "2:2"
 is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
 rm -f "$tree/build/device/Package.resolved"
 suite device-unknown others

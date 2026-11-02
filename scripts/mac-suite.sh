@@ -103,18 +103,20 @@ check=no
 lane=fast
 RESULTS="$root/build/validate"
 PACKAGE_PINS=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
-# Every build that resolves the project's packages keeps their checkouts and state in one place
-# of this checkout's own, build/packages, rather than in whichever derived data the build
-# writes: Xcode 27.2 keeps the set of package traits it enabled at the last resolution and
+# Every xcodebuild of the project that resolves its packages, the test actions included (a
+# test-without-building resolves the graph before it reads the products), keeps their checkouts
+# and state in one place of this checkout's own, build/packages, and none in the derived data
+# it writes: Xcode 27.2 keeps the set of package traits it enabled at the last resolution and
 # applies it to the next, whatever version the pin now names, so a package state that last saw
-# one version builds another with the wrong set (FluidAudio 0.18.2 after 0.17.7 compiled with no
-# TTS and no `PocketTtsManager`, and with the traits named on the package reference refused the
-# resolution outright, on every retry). So the state is kept for the pins it was resolved from,
-# a copy of which is in it, and made afresh for any other, which is `fresh_packages` at the
-# start of every suite that builds.
+# one version builds another with that version's set (a trait the new version turns on by
+# default stays off, and the code behind it is not there to compile) or, where the project
+# names a trait the old version did not declare, refuses the resolution, on every retry. So the
+# state is kept for the pins it was resolved from, a copy of which is in it, and made afresh for
+# any other: `fresh_packages`, before the first resolution of each suite. The copy goes before
+# the tree, so a removal that is cut short is finished by the next run.
 PACKAGES=(-clonedSourcePackagesDirPath build/packages)
 fresh_packages() {
-  cmp -s "$PACKAGE_PINS" build/packages/Package.resolved || rm -rf build/packages
+  cmp -s "$PACKAGE_PINS" build/packages/Package.resolved || { rm -f build/packages/Package.resolved; rm -rf build/packages; }
   mkdir -p build/packages
   cp "$PACKAGE_PINS" build/packages/Package.resolved 2>/dev/null || true
 }
@@ -438,7 +440,7 @@ suite_topo_unit() {
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
       "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
       xcodebuild test-without-building \
-      -project Topo.xcodeproj -scheme Topo \
+      -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" \
       "${NO_DIAGNOSE[@]}" \
       -skip-testing:TopoUITests \
@@ -643,7 +645,7 @@ suite_topo_ui() {
     [ "$part" = quiet ] || runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
     [ -z "$models" ] || runner+=("TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$models")
     run "$RESULTS/$name.log" bounded 3600 env ${runner[@]+"${runner[@]}"} xcodebuild test-without-building \
-      -project Topo.xcodeproj -scheme Topo \
+      -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" \
       "${NO_DIAGNOSE[@]}" \
       "${select[@]}" \
@@ -822,8 +824,9 @@ suite_others() {
   # The device build's derived data outlives the commit that made it, and what it keeps of a
   # package is wrong once the pins move: a Swift module scan still names the headers of the
   # version before, and a package whose headers moved fails the build. So it is kept only for
-  # the pins it was built from, a copy of which is in it, and is made afresh for any other.
-  cmp -s "$PACKAGE_PINS" build/device/Package.resolved || rm -rf build/device
+  # the pins it was built from, a copy of which is in it, and is made afresh for any other; the
+  # copy goes before the tree, so a removal that is cut short is finished by the next run.
+  cmp -s "$PACKAGE_PINS" build/device/Package.resolved || { rm -f build/device/Package.resolved; rm -rf build/device; }
   mkdir -p build/device
   cp "$PACKAGE_PINS" build/device/Package.resolved 2>/dev/null || true
   run "$RESULTS/Topo-iOS-Release-build.log" xcodebuild build -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
