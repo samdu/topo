@@ -97,7 +97,7 @@ final class ConversationTests: XCTestCase {
     /// The app's wiring over the seams: the speaker tells the conversation the call's moments,
     /// the microphone asks it at an interruption, and the chat's send is installed.
     private func make(detector: ScriptedDetector = ScriptedDetector(),
-                      sends: Bool = true) async -> (Conversation, VoiceInput, Speaker) {
+                      sends: Bool = true, deafAfter: TimeInterval = 3_600) async -> (Conversation, VoiceInput, Speaker) {
         let seams = Seams()
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
                                  deactivate: seams.deactivate, isActive: { true })
@@ -123,6 +123,7 @@ final class ConversationTests: XCTestCase {
                                         appActive: { [unowned self] in active },
                                         holding: { [unowned self] in holding },
                                         otherCall: { [unowned self] in other },
+                                        deafAfter: deafAfter,
                                         center: center, sleep: idle.sleep)
         speaker.onCall = { conversation.call($0) }
         conversation.conversingChanged = { [unowned self] in told.append($0) }
@@ -321,8 +322,9 @@ final class ConversationTests: XCTestCase {
 
     // MARK: - The end, every way
 
-    private func begun(_ detector: ScriptedDetector = ScriptedDetector()) async -> (Conversation, VoiceInput, Speaker) {
-        let made = await make(detector: detector)
+    private func begun(_ detector: ScriptedDetector = ScriptedDetector(),
+                       deafAfter: TimeInterval = 3_600) async -> (Conversation, VoiceInput, Speaker) {
+        let made = await make(detector: detector, deafAfter: deafAfter)
         await tap(made.1)
         leave()
         placeAndActivate(made.0)
@@ -405,16 +407,59 @@ final class ConversationTests: XCTestCase {
 
     // MARK: - The review's blockers
 
-    /// The lock's `.began` under the active call leaves the microphone running: the session stays
-    /// live, and a suspend there had no way back.
-    func testAnInterruptionsStartUnderTheActiveCallLeavesTheMicrophoneRunning() async {
+    /// The lock's `.began` under the active call: the session is suspended, never carried across
+    /// it on its engine, and rebuilt at once on the call's live session.
+    func testAnInterruptionsStartUnderTheActiveCallRebuildsTheMicrophone() async {
         let (conversation, voice, _) = await begun()
         defer { conversation.stop("test", sending: false) }
         XCTAssertTrue(voice.listening && !voice.suspended)
+        let starts = voice.sessions
         beganInterruption()
+        await settle("suspended and rebuilt") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on)
+        XCTAssertEqual(voice.sessions, starts, "a rebuild counted as a new session")
+    }
+
+    /// A reply that landed while a phone call held the session is read once the call is back
+    /// and nothing has been said: it is judged at the resume, not left waiting for an
+    /// utterance.
+    func testAReplyThatWaitedThroughAPhoneCallIsReadAtTheResume() async {
+        let (conversation, voice, speaker) = await begun()
+        defer { conversation.stop("test", sending: false) }
+        audio.callDeactivated()
+        conversation.call(.taken)
+        XCTAssertTrue(voice.suspended)
+        XCTAssertFalse(speaker.speak("The lights are off."), "a reply was read into a suspended microphone")
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        audio.callActivated()
+        conversation.call(.active)
+        await settle("the microphone closed for the reply") { !voice.listening }
+        await settle("the reply read") { !speaker.waitingForMicrophone }
+    }
+
+    /// The engine stops under the call with nothing to say so (a route change): no samples for
+    /// the deaf window rebuilds it once, and deaf again ends the conversation with what was kept.
+    func testADeafMicrophoneIsRebuiltOnceThenEndsTheConversationWithItsWords() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let (conversation, voice, _) = await begun(detector, deafAfter: 0.5)
+        utterance(into: voice.sink)
+        await settle("ended") { !conversation.on }
+        XCTAssertEqual(ends, 1)
+        await settle("what was kept sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+        XCTAssertFalse(voice.listening)
+    }
+
+    func testAMuteClosesTheMicrophoneAndAReopenWaitingOnItOpensNothing() async {
+        let (conversation, voice, _) = await begun()
+        defer { conversation.stop("test", sending: false) }
+        conversation.call(.muted(true))
+        XCTAssertFalse(voice.listening)
+        voice.cancel()
         await drain()
-        XCTAssertFalse(voice.suspended, "the lock's interruption suspended a microphone on the active call")
-        XCTAssertTrue(voice.listening)
+        XCTAssertFalse(voice.listening, "the microphone opened under the mute")
+        conversation.call(.muted(false))
+        await settle("open at the unmute") { voice.listening }
     }
 
     /// A phone call takes the session and never gives it back: the idle clock ends the

@@ -22,6 +22,10 @@ final class Conversation {
     static let idle: Duration = .seconds(120)
     /// How often the detector is fed what has arrived.
     static let feedEvery: Duration = .milliseconds(256)
+    /// Listening this long with no samples arriving is a dead engine (a route change stops it
+    /// under the call): the session is suspended and rebuilt, and a second time running ends
+    /// the conversation.
+    static let deafAfter: TimeInterval = 2
 
     private(set) var on = false
 
@@ -34,6 +38,9 @@ final class Conversation {
     /// Whether a call other than Topo's is up: a phone call the person is on. Topo's call placed
     /// over one would put it on hold, so nothing is carried while one is.
     @ObservationIgnored private let otherCall: @MainActor () -> Bool
+    @ObservationIgnored private let deafLimit: TimeInterval
+    /// Times running the microphone was found deaf with no samples since: the second ends it.
+    private var deafStrikes = 0
     /// The idle clock's sleep, a seam for the suite.
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private let now: @MainActor () -> Date
@@ -83,6 +90,7 @@ final class Conversation {
          appActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active },
          holding: @escaping @MainActor () -> Bool,
          otherCall: @escaping @MainActor () -> Bool = { false },
+         deafAfter: TimeInterval = Conversation.deafAfter,
          center: NotificationCenter = .default,
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
          now: @escaping @MainActor () -> Date = { Date() }) {
@@ -93,6 +101,7 @@ final class Conversation {
         self.appActive = appActive
         self.holding = holding
         self.otherCall = otherCall
+        self.deafLimit = deafAfter
         self.sleep = sleep
         self.now = now
         observers = [
@@ -134,6 +143,7 @@ final class Conversation {
         policy = Endpoint.Policy()
         fedTo = 0
         muted = false
+        deafStrikes = 0
         restartIdle()
         conversingChanged(true)
         // Suspended at the interruption's start, it waits for the call's activation; still
@@ -185,7 +195,9 @@ final class Conversation {
                 feeder?.cancel()
                 feeder = nil
                 if endingUtterance { dropDecoded = true }
-                if voice.listening, voice.owner == .chat, !endingUtterance { voice.cancel(.chat) }
+                // Opening counts: a cancel moves the generation, so a reopen waiting on its
+                // permission opens nothing.
+                if voice.owner == .chat, !endingUtterance { voice.cancel(.chat) }
                 AudioLog.say("conversation: muted from the card; the microphone is closed")
             } else {
                 AudioLog.say("conversation: unmuted from the card")
@@ -202,6 +214,9 @@ final class Conversation {
         }
         AudioLog.say("conversation: resumed on the call's session")
         startFeeding(reset: fedTo == 0)
+        // A reply that waited while the microphone was suspended is judged now: `listening`
+        // did not change, so nothing observed fires for it.
+        react()
     }
 
     /// The app is active again with no conversation: a session suspended at an interruption's
@@ -232,11 +247,25 @@ final class Conversation {
         guard let detector = endpoint.detector else { return }
         let mine = voice.generation
         let sink = voice.sink
+        let now = now
+        let deafLimit = deafLimit
         feeder = Task { [weak self] in
             if reset { await detector.reset() }
+            var heardAt = now()
+            var arrived = -1
             while !Task.isCancelled {
-                guard let self, self.on, self.voice.generation == mine, self.voice.listening else { return }
-                let (samples, _) = sink.peek(from: self.fedTo)
+                guard let self, self.on, self.voice.generation == mine, self.voice.listening,
+                      !self.voice.suspended else { return }
+                let (samples, end) = sink.peek(from: self.fedTo)
+                // Deafness is the sink not growing, not an empty peek: a part-chunk left over
+                // stays in every peek after the engine stops.
+                if end == arrived {
+                    if now().timeIntervalSince(heardAt) >= deafLimit { return self.deaf() }
+                } else {
+                    if arrived >= 0 { self.deafStrikes = 0 }
+                    arrived = end
+                    heardAt = now()
+                }
                 var offset = 0
                 while samples.count - offset >= Endpoint.chunk {
                     let chunk = Array(samples[offset..<offset + Endpoint.chunk])
@@ -260,6 +289,19 @@ final class Conversation {
                 try? await Task.sleep(for: Self.feedEvery)
             }
         }
+    }
+
+    /// The microphone listened with nothing arriving: suspended so the call's live session
+    /// rebuilds it, once; deaf again with nothing heard since, the conversation ends with what
+    /// was kept.
+    private func deaf() {
+        deafStrikes += 1
+        guard deafStrikes < 2 else {
+            return stop("the microphone stayed deaf after a rebuild", sending: true)
+        }
+        AudioLog.say("conversation: no samples for \(deafLimit) s; the microphone is rebuilt")
+        voice.suspend("no samples arriving")
+        react()
     }
 
     /// The detector heard the utterance end: it is decoded as a release decodes it, the next one
@@ -291,6 +333,7 @@ final class Conversation {
     private func watch() {
         withObservationTracking {
             _ = voice.listening
+            _ = voice.suspended
             _ = speaker.speaking
             _ = speaker.waitingForMicrophone
         } onChange: { [weak self] in
@@ -325,7 +368,7 @@ final class Conversation {
     private func reopen() async {
         let opened = await voice.reopen(as: .chat)
         reopening = false
-        guard on else {
+        guard on, !muted else {
             if opened { voice.cancel(.chat) }
             return
         }
@@ -383,10 +426,10 @@ final class Conversation {
         if endingUtterance {
             // The decode under way finishes the open utterance: sent, or dropped with the end.
             if !sending { dropDecoded = true }
-        } else if voice.listening, voice.owner == .chat {
+        } else if voice.owner == .chat {
             // A suspended session was never judged by the detector: what it kept is decoded,
             // and silence decodes to nothing.
-            if sending, !muted, policy.speaking || voice.suspended {
+            if voice.listening, sending, !muted, policy.speaking || voice.suspended {
                 handingOff = true
                 Task {
                     let heard = await voice.end(as: .chat)

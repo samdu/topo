@@ -311,8 +311,12 @@ final class SpokenCallTests: XCTestCase {
         XCTAssertEqual(call.state, .idle)
     }
 
-    func testMuteAndHoldAreFulfilledAndChangeNothing() {
+    /// The mute is fulfilled and told to `onMute` (the conversation's microphone); the hold is
+    /// fulfilled; neither changes the call.
+    func testMuteAndHoldAreFulfilledAndTheMuteIsTold() {
         let call = call()
+        var mutes: [Bool] = []
+        call.onMute = { mutes.append($0) }
         bringUp(call)
         let mute = CXSetMutedCallAction(call: call.id!, muted: true)
         call.provider(system.provider, perform: mute)
@@ -322,6 +326,7 @@ final class SpokenCallTests: XCTestCase {
         XCTAssertTrue(system.fulfilled.contains { $0 === held })
         XCTAssertEqual(call.state, .up)
         XCTAssertEqual(events, ["start", "active"])
+        XCTAssertEqual(mutes, [true], "the card's mute did not reach the conversation")
     }
 }
 

@@ -144,18 +144,10 @@ final class VoiceInput {
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in
                 guard let self else { return }
-                // Under an active call the session stays live through the lock's `.began`
-                // (`AudioSession.invalidate`), so a session the call carries keeps its tap: a
-                // phone call taking ours arrives as the call's deactivation, not here.
-                if self.carries?() == true {
-                    if self.audio.call == .active {
-                        AudioLog.say("microphone: an interruption's start under the active call; the session stays live")
-                        return
-                    }
-                    self.suspend("the interruption's start")
-                } else {
-                    self.cancel()
-                }
+                // A session the conversation carries is suspended, never carried across the
+                // event on its engine: under the call's live session it is rebuilt at once
+                // (`Conversation`), otherwise at the call's activation.
+                if self.carries?() == true { self.suspend("the interruption's start") } else { self.cancel() }
             }
         }
         resetObserver = center.addObserver(
