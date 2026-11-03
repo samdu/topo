@@ -344,7 +344,7 @@ final class CallWantTests: XCTestCase {
         let system = FakeCallSystem()
         let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
         var enabled = true
-        let driver = SpokenCallDriver(call: call, enabled: { enabled })
+        let driver = SpokenCallDriver(call: call, enabled: { enabled }, center: NotificationCenter(), initial: .active)
         driver.holdChanged(true)
         XCTAssertEqual(system.starts.count, 0, "in front")
         driver.scene(.inactive)
@@ -363,6 +363,34 @@ final class CallWantTests: XCTestCase {
         driver.holdChanged(false)
         driver.scene(.background)
         XCTAssertEqual(system.starts.count, 1, "nothing held places none")
+    }
+
+    @MainActor
+    func testTheDriverFollowsUIKitsBackground() {
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let center = NotificationCenter()
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: center, initial: .active)
+        driver.holdChanged(true)
+        center.post(name: UIApplication.willResignActiveNotification, object: nil)
+        XCTAssertEqual(system.starts.count, 0, "resigning active is not the background")
+        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        XCTAssertEqual(system.starts.count, 1, "the background places the call")
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        XCTAssertEqual(system.ends.count, 1, "coming forward ends it")
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(system.starts.count, 1, "active is not the background: the call stays over")
+        XCTAssertFalse(call.up)
+        withExtendedLifetime(driver) {}
+    }
+
+    func testADriverMadeInTheBackgroundPlacesTheCallAtTheFirstHold() {
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        XCTAssertEqual(system.starts.count, 1, "a launch into the background is the background")
     }
 }
 

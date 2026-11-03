@@ -154,7 +154,7 @@ struct TopoApp: App {
         sounds.follow(harness)
         let speaker = Speaker(audio: audio, voice: spoken, sounds: sounds, earcons: Earcons(audio: audio))
         // A spoken exchange behind the lock is a call: placed while a hold stands with the
-        // scene in the background, ended as the app comes forward (`SpokenCall`).
+        // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
         speaker.attach(call)
         let callDriver = SpokenCallDriver(call: call)
@@ -284,8 +284,10 @@ struct TopoApp: App {
                 if signIn.phase == .signedIn { shares.follow(from: .signedIn, to: .signedIn, guestIsHere: owner) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
+                // Said in the audio log beside the call driver's own source, UIKit's, so a run
+                // says which of the two the lock reached first.
+                AudioLog.say("scene \(phase)")
                 audio.warmRecord(phase == .active)
-                callDriver.scene(phase)
                 if phase == .active {
                     Perf.mark("scene.active")
                     Task { await widgetCues.drain() }
