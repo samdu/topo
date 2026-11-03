@@ -206,6 +206,13 @@ is "a first device build: the package state names the pins it was resolved from"
 suite device-same others
 is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
 is "the same pins: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
+# A resolution rewrites the pins' originHash for the path it ran at; the same pins under another
+# hash are the same pins.
+printf '{\n  "originHash" : "aaa",\npins: one\n' > "$pins"
+cp "$pins" "$tree/build/packages/Package.resolved"
+printf '{\n  "originHash" : "bbb",\npins: one\n' > "$pins"
+suite device-rehashed others
+is "the same pins under another originHash: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
 echo "pins: two" > "$pins"
 suite device-moved others
 is "pins that moved: exits 0" "$status" 0

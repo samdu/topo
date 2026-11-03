@@ -105,7 +105,7 @@ From a worktree of `origin/main` on buddybox, at the commit to ship:
 scripts/archive-upload.sh --validate --upload
 ```
 
-It refuses a tree with uncommitted changes and a commit on no remote branch, since the About screen names the commit as its source. The schema is judged at that commit first (4, *Proving it*): a commit whose diff since the last check adds a record type, a field, a query or a subscription predicate needs its deploy before the build goes out.
+It refuses a tree with uncommitted changes and a commit on no remote branch, since the About screen names the commit as its source. It resolves the packages into the worktree's `build/packages`, kept for the pins they were resolved from and made afresh when they move (`docs/testing.md`). The schema is judged at that commit first (4, *Proving it*): a commit whose diff since the last check adds a record type, a field, a query or a subscription predicate needs its deploy before the build goes out.
 
 App Store Connect's validation reads every key of every bundle in the archive, the watch app included, against what the store accepts; `scripts/check-built-plist.sh` reads the keys the product must carry and refuses the one store rejection it has met (`WKBackgroundModes` naming `remote-notification`, 90362), so a value the store refuses for any other reason is found here first. Processing takes a few minutes, and the build then appears under **TestFlight** in the app record and in every internal group that has access to all builds. A debug build on the phone is signed out and deleted before the TestFlight build is installed (4).
 

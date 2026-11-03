@@ -81,10 +81,24 @@ MISSING
   exit 1
 fi
 
+# The packages resolve into build/packages, kept for the pins they were resolved from and made
+# afresh for any other, never into the derived data Xcode shares between builds: Xcode 27.2
+# carries the package traits of the last resolution into the next, so a state that last saw one
+# version of a package refuses or misbuilds another (docs/testing.md). The pins are compared
+# without the originHash a resolution rewrites, and the copy goes before the tree, so a removal
+# cut short is finished by the next run.
+pins=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+packages="$out/packages"
+[ -f "$pins" ] && cmp -s <(grep -v '"originHash"' "$pins") <(grep -v '"originHash"' "$packages/Package.resolved" 2>/dev/null) \
+  || { rm -f "$packages/Package.resolved"; rm -rf "$packages"; }
+mkdir -p "$packages"
+cp "$pins" "$packages/Package.resolved" 2>/dev/null || true
+
 rm -rf "$archive"
 xcodebuild archive \
   -project "$project" \
   -scheme "$scheme" \
+  -clonedSourcePackagesDirPath "$packages" \
   -destination 'generic/platform=iOS' \
   -archivePath "$archive" \
   -allowProvisioningUpdates ${auth[@]+"${auth[@]}"} \
