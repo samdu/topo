@@ -95,7 +95,8 @@ final class ActivityKitHost: ActivityHost {
     }
 
     /// Ends the activity. On one ended already and still on the lock screen, `.now` is meant to
-    /// take it off, which is what `endAll` asks for what a default dismissal left shown; whether
+    /// take it off, which is what `endAll`, a resume past `until` and the tool's take-down ask for
+    /// what a default dismissal left shown, and a date at that date; whether
     /// ActivityKit honours a second end that way is the device box on the PR, not a suite's word.
     func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool {
         let policy: ActivityUIDismissalPolicy = switch dismissal {
