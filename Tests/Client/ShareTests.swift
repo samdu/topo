@@ -596,6 +596,42 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(store.shares().count, 1)
     }
 
+    /// A file picker closed with nothing puts up no sheet and takes the picker down; the copy the
+    /// picker hands over in its `-Inbox` folder of the temporary folder is taken away once copied,
+    /// and a file anywhere else is left where it is.
+    func testAFilePickerClosedWithNothingPutsUpNoSheetAndThePickersCopyIsTakenAway() async throws {
+        try store.open(files: true)
+        let store = store
+        let attachments = ComposerAttachments(store: { store }, drain: {})
+        attachments.pick(.file)
+        attachments.chose(file: nil)
+        XCTAssertNil(attachments.picking, "the picker stayed up after its Cancel")
+        XCTAssertNil(attachments.sheet, "a picker closed with nothing put up a sheet")
+
+        let inbox = FileManager.default.temporaryDirectory.appendingPathComponent("test-\(UUID().uuidString)-Inbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: inbox) }
+        let copy = inbox.appendingPathComponent("picked.pdf")
+        try Data(repeating: 4, count: 64).write(to: copy)
+        attachments.pick(.file)
+        attachments.chose(file: copy)
+        let item = try await ready(attachments)
+        XCTAssertEqual(item.bytes, 64)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path), "the picker's copy was left behind")
+        attachments.cancel()
+
+        let elsewhere = root.appendingPathComponent("kept.pdf")
+        try Data(repeating: 5, count: 8).write(to: elsewhere)
+        ComposerAttachments.removePickerCopy(elsewhere)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: elsewhere.path), "a file outside the picker's folder was taken away")
+        // A picked file landing after its picker was answered is the picker's copy, and goes.
+        let late = inbox.appendingPathComponent("late.pdf")
+        try Data(repeating: 6, count: 8).write(to: late)
+        attachments.chose(file: late)
+        XCTAssertNil(attachments.sheet)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: late.path), "a late pick's copy was left behind")
+    }
+
     /// Whether the phone has a camera, as the test turns it on and off.
     @MainActor private final class Camera {
         var available = true

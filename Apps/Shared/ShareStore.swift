@@ -95,6 +95,8 @@ enum ShareRefusal: Error, Equatable {
     case tooLong
     case tooMany
     case failed
+    /// The composer's file picker could not be put up (the app between two screens).
+    case noPicker
 
     var words: String {
         switch self {
@@ -105,6 +107,7 @@ enum ShareRefusal: Error, Equatable {
         case .tooLong: "That is more text than Topo takes at once."
         case .tooMany: "Topo is holding as many shares as it can. Open Topo so it can read them."
         case .failed: "Topo could not keep that."
+        case .noPicker: "Topo could not open the file picker. Try again."
         }
     }
 }
