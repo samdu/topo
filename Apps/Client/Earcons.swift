@@ -87,6 +87,8 @@ final class Earcons {
     private let bundle: Bundle
     private let makePlayer: @MainActor (URL) throws -> any CuePlayer
     private let sleep: @Sendable (Duration) async throws -> Void
+    /// How long a cue the player has finished still takes to leave the route (`outputTail`).
+    private let tail: @MainActor () -> Duration
     /// Whether a microphone is open or opening; `Speaker` answers it.
     var microphoneOpen: @MainActor () -> Bool = { false }
     private var players: [Cue: any CuePlayer] = [:]
@@ -104,7 +106,9 @@ final class Earcons {
 
     init(audio: AudioSession, defaults: UserDefaults = .standard, bundle: Bundle = .main,
          makePlayer: @escaping @MainActor (URL) throws -> any CuePlayer = { try EarconPlayer(url: $0) },
-         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+         tail: @escaping @MainActor () -> Duration = Earcons.outputTail) {
+        self.tail = tail
         self.audio = audio
         self.defaults = defaults
         self.bundle = bundle
@@ -157,7 +161,7 @@ final class Earcons {
             holding = false
             audio.wantAlive(false, for: .cue)
         }
-        guard player.play(whenDone: { [weak self] in self?.ended(mine, "heard out") }) else {
+        guard player.play(whenDone: { [weak self] in self?.finished(mine) }) else {
             AudioLog.say("earcon \(cue) did not start")
             ended(mine, "it did not start")
             return false
@@ -173,6 +177,32 @@ final class Earcons {
         }
         return true
     }
+
+    /// The player has handed the cue's last frame to the route, which is not the person having
+    /// heard it: what the route still holds is lost with the session, and the hold this cue
+    /// stands on is the last one when it is `done` behind the lock, so its going lets the session
+    /// go. So the hold stands for the route's tail too, and the bound still caps the whole. A cue
+    /// begun in the tail is the one playing, and this one's end moves nothing.
+    private func finished(_ mine: Int) {
+        guard playing == mine else { return }
+        let tail = tail()
+        guard holding, tail > .zero else { return ended(mine, "heard out") }
+        Task { [sleep] in
+            try? await sleep(tail)
+            self.ended(mine, "heard out")
+        }
+    }
+
+    /// What a finished cue still takes to leave the route: the session's output latency and one
+    /// I/O buffer, and a margin over both, since the session let go of tears the route down at
+    /// once and a Bluetooth link's own buffering is more than the session reports for it.
+    static func outputTail() -> Duration {
+        let session = AVAudioSession.sharedInstance()
+        return .seconds(session.outputLatency + session.ioBufferDuration) + margin
+    }
+
+    /// The margin `outputTail` adds over what the session reports.
+    static let margin: Duration = .milliseconds(250)
 
     /// The cue `mine` is over, one way or another: its hold goes. Free for any other cue's.
     private func ended(_ mine: Int, _ why: String) {
