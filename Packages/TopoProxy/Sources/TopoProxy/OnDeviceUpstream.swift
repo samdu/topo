@@ -14,12 +14,15 @@ import Foundation
 ///   window's management. Tools are not offered to the model.
 /// - Anything else: a 404 in the API's error shape.
 ///
-/// Every refusal is a 400 `invalid_request_error` whose message says why — a model that cannot
-/// run here, a request that cannot be made to fit, a generation that failed — because Claude Code
-/// shows a 400's message at once and retries a 5xx for minutes (2.1.285, measured: a 503 was
-/// asked eight times over 100 s), which would leave the person on *Asking…* with no reason. A refusal (a guardrail, a language the model does not
-/// speak) is the reply itself, a sentence saying so, so the person reads why there is no answer.
-/// Ending the body's iteration (the client gone) cancels the generation.
+/// What fails before a reply begins — a model that cannot run here, a body that cannot be read or
+/// counted, a request that cannot be made to fit — is a 400 `invalid_request_error` whose message
+/// says why, because Claude Code shows a 400's message at once and retries a 5xx for minutes
+/// (2.1.285, measured: a 503 was asked eight times over 100 s), which would leave the person on
+/// *Asking…* with no reason. A generation that fails once a stream has begun can only be an `error`
+/// event, with the same words; Claude Code asks once more without a stream and then says it. A
+/// refusal (a guardrail, a language the model does not speak) is the reply itself, a sentence
+/// saying so, so the person reads why there is no answer. Ending the body's iteration (the client
+/// gone) cancels the generation.
 public struct OnDeviceUpstream: Upstream {
     public typealias Log = @Sendable (String) -> Void
     let model: any LocalModel
@@ -41,9 +44,14 @@ public struct OnDeviceUpstream: Upstream {
             do { translation = try MessagesTranslation.translate(request.body ?? Data()) } catch {
                 return Self.refusal("Topo could not read the request: \(error)")
             }
-            let count = (try? await model.tokenCount(instructions: MessagesTranslation.instructions,
-                                                     history: translation.history, prompt: translation.prompt)) ?? 0
-            return Self.json(200, ["input_tokens": count])
+            if let reason = await model.unavailability() { return Self.refusal(reason) }
+            do {
+                let count = try await model.tokenCount(instructions: MessagesTranslation.instructions,
+                                                       history: translation.history, prompt: translation.prompt)
+                return Self.json(200, ["input_tokens": count])
+            } catch {
+                return Self.refusal(Self.words(for: error))
+            }
         case ("POST", "/v1/messages"):
             return await messages(request.body ?? Data())
         default:
@@ -59,12 +67,8 @@ public struct OnDeviceUpstream: Upstream {
             let fit = try await translation.fit(model)
             (fitted, tokens) = (fit.0, fit.tokens)
             log("on-device: \(fit.0.history.count) turns, \(fit.tokens) tokens, \(fit.dropped) older turns left out")
-        } catch let failure as MessagesTranslation.Failure {
-            return Self.refusal("Topo could not read the request: \(failure)")
-        } catch LocalModelError.tooLong {
-            return Self.refusal("That message is too long for Apple's on-device model.")
         } catch {
-            return Self.refusal("Apple's on-device model failed: \(error)")
+            return Self.refusal(Self.words(for: error))
         }
         let generation = model.stream(instructions: MessagesTranslation.instructions, history: fitted.history, prompt: fitted.prompt)
         let id = "msg_ondevice_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -77,17 +81,26 @@ public struct OnDeviceUpstream: Upstream {
             for try await snapshot in generation { text = snapshot }
         } catch LocalModelError.declined(let words) {
             text = Self.appending(words, to: text)
-        } catch LocalModelError.unavailable(let reason) {
-            return Self.refusal(reason)
         } catch {
-            return Self.refusal("Apple's on-device model failed: \(error)")
+            return Self.refusal(Self.words(for: error))
         }
         return Self.json(200, Self.message(id: id, text: text, inputTokens: tokens, stop: "end_turn"))
     }
 
+    /// What the person is told of `error`, before a reply or in place of one.
+    static func words(for error: any Error) -> String {
+        switch error {
+        case let failure as MessagesTranslation.Failure: "Topo could not read the request: \(failure)"
+        case LocalModelError.tooLong: "That message is too long for Apple's on-device model."
+        case LocalModelError.unavailable(let reason): reason
+        default: "Apple's on-device model failed: \(error)"
+        }
+    }
+
     /// The generation's snapshots as the API's events, each delta the part of a snapshot past what
-    /// was already sent. A snapshot that does not extend what was sent (the model revising) sends
-    /// nothing until one does, so no word is ever sent twice.
+    /// was already sent, compared by Unicode scalars so a snapshot that ends inside a character
+    /// (an emoji's joiner, a combining accent) still extends what was sent. A snapshot that does not
+    /// extend it (the model revising) sends nothing until one does, so no word is ever sent twice.
     static func events(of generation: AsyncThrowingStream<String, Error>, id: String, inputTokens: Int) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -95,22 +108,25 @@ public struct OnDeviceUpstream: Upstream {
                 continuation.yield(event("content_block_start", ["type": "content_block_start", "index": 0,
                                                                  "content_block": ["type": "text", "text": ""]]))
                 var sent = ""
+                var sentScalars = 0
                 func delta(_ text: String) {
                     guard !text.isEmpty else { return }
                     sent += text
+                    sentScalars += text.unicodeScalars.count
                     continuation.yield(event("content_block_delta", ["type": "content_block_delta", "index": 0,
                                                                      "delta": ["type": "text_delta", "text": text]]))
                 }
                 do {
                     for try await snapshot in generation {
-                        if snapshot.hasPrefix(sent) { delta(String(snapshot.dropFirst(sent.count))) }
+                        if snapshot.unicodeScalars.starts(with: sent.unicodeScalars) {
+                            delta(String(String.UnicodeScalarView(snapshot.unicodeScalars.dropFirst(sentScalars))))
+                        }
                     }
                 } catch LocalModelError.declined(let words) {
                     delta(sent.isEmpty ? words : "\n\n" + words)
                 } catch {
                     if !Task.isCancelled {
-                        let message = { if case LocalModelError.unavailable(let reason) = error { reason } else { "Apple's on-device model failed: \(error)" } }()
-                        continuation.yield(event("error", ["type": "error", "error": ["type": "api_error", "message": message]]))
+                        continuation.yield(event("error", ["type": "error", "error": ["type": "api_error", "message": words(for: error)]]))
                     }
                     continuation.finish()
                     return

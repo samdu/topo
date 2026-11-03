@@ -655,9 +655,10 @@ struct ChatView: View {
     }
 
     /// What the chat's harness says of the model and the context, for Topo: the model the debug
-    /// build's pin makes of the setting, since that is the model that answers.
+    /// build's pin makes of the one chosen (on device, without an account), since that is the
+    /// model that answers.
     private var harnessFacts: HarnessFacts {
-        let setting = ClaudeModel(setting: modelSetting) ?? .default
+        let setting = chosenModel
         let limit = harness.window.map { Compaction.threshold(window: $0, setting: Compaction.Setting(kept: compactAt)) }
         return HarnessFacts(model: ClaudeModel.effective(setting).rawValue, context: harness.context, limit: limit)
     }

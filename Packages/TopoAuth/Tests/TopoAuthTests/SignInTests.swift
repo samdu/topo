@@ -753,6 +753,72 @@ func settle() async {
         #expect(signIn.phase == .idle)
     }
 
+    /// A local login and an owed logout never stand together: the choice is refused while the
+    /// logout is owed and taken once it has run, and a Claude sign-in after it is not local.
+    @Test func itWaitsForAnOwedLogoutAndAClaudeSignInEndsIt() async {
+        let login = FakeLogin()
+        login.logoutRefused = true
+        let cache = cache()
+        cache.save(claudeAI)
+        login.answer(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        signIn.signOut()
+        await signIn.loggedOut()
+        #expect(cache.defaults.bool(forKey: SignIn.signOutOwedKey))
+        signIn.useWithoutAccount()
+        guard case .failed = signIn.phase else { Issue.record("taken while the logout was owed: \(signIn.phase)"); return }
+        #expect(!LocalLogin(defaults: cache.defaults).isOn)
+        #expect(!cache.isSignedIn)
+
+        login.logoutRefused = false
+        await signIn.loggedOut()
+        #expect(!cache.defaults.bool(forKey: SignIn.signOutOwedKey), "the refused press did not ask the logout again")
+        signIn.useWithoutAccount()
+        #expect(signIn.isLocal)
+
+        // Signed out of it and into Claude: the phone is not local any more, then or at relaunch.
+        signIn.signOut()
+        await signIn.loggedOut()
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(claudeAI)
+        login.attempts[0].heard(.ended(.succeeded))
+        await until("signed in") { signIn.phase == .signedIn }
+        #expect(!signIn.isLocal)
+        #expect(!LocalLogin(defaults: cache.defaults).isOn)
+        await signIn.refresh()
+        #expect(cache.status?.authMethod == "claude.ai")
+    }
+
+    /// A Claude sign-in clears a local flag left standing, whatever left it.
+    @Test func aClaudeSignInClearsTheFlag() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        LocalLogin(defaults: cache.defaults).set(true)
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(claudeAI)
+        login.attempts[0].heard(.ended(.succeeded))
+        await until("signed in") { signIn.phase == .signedIn }
+        #expect(!LocalLogin(defaults: cache.defaults).isOn)
+        #expect(!signIn.isLocal)
+    }
+
+    /// A sign-out the app did not live to finish ends a local login at the next launch.
+    @Test func anOwedSignOutAtLaunchEndsALocalLogin() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.useWithoutAccount()
+        cache.defaults.set(true, forKey: SignIn.signOutOwedKey)
+        let relaunched = SignIn(login: FakeLogin(), cache: cache)
+        await relaunched.prepare()
+        #expect(!LocalLogin(defaults: cache.defaults).isOn)
+        #expect(!relaunched.isLocal)
+        #expect(relaunched.phase == .idle)
+    }
+
     /// A Claude login is not local, and the choice is not offered over one or over a login running.
     @Test func itIsNotOfferedOverALoginOrWhileOneRuns() async {
         let login = FakeLogin()

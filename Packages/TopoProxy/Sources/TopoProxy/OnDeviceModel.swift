@@ -36,7 +36,9 @@ public enum OnDeviceModel {
     /// when it can. Asked afresh each time: a model still downloading is ready later.
     public static func unavailability() -> String? {
         #if canImport(FoundationModels)
-        guard #available(iOS 26, macOS 26, *) else { return "Apple's on-device model needs iOS 26 or later." }
+        // 26.4 is where the model counts its own tokens, which is what fits a conversation to its
+        // window; no estimate is taken in its place (`SystemLocalModel.tokenCount`).
+        guard #available(iOS 26.4, macOS 26.4, *) else { return "Apple's on-device model needs iOS 26.4 or later." }
         let model = SystemLanguageModel.default
         switch model.availability {
         case .available:
@@ -121,9 +123,10 @@ public struct SystemLocalModel: LocalModel {
             return try await SystemLanguageModel.default.tokenCount(for: entries)
         }
         #endif
-        // Before 26.4 there is no counter: three characters a token is more than the model's
-        // tokenizer takes for English, so what is kept fits.
-        return (instructions.count + prompt.count + history.reduce(0) { $0 + $1.text.count }) / 3 + 8 * (history.count + 2)
+        // Before 26.4 there is no counter, and no estimate stands in for one: characters a token
+        // differ several times over between languages, and a request fitted on a guess is a
+        // generation that fails at the window.
+        throw LocalModelError.unavailable(OnDeviceModel.unavailability() ?? "Apple's on-device model can't count its tokens here.")
     }
 
     public func stream(instructions: String, history: [LocalTurn], prompt: String) -> AsyncThrowingStream<String, Error> {

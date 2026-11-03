@@ -242,17 +242,16 @@ struct Forwarder: Sendable {
     let local: any Upstream
     let log: APIProxy.Log
 
-    /// Whether `request` is answered on the phone rather than sent to the API: one that carries the
-    /// placeholder key a phone with no Claude login launches with, whatever its path or model,
-    /// which is what keeps the placeholder from ever leaving the phone; or a message (or its
+    /// Whether `request` is answered on the phone rather than sent to the API: one with the
+    /// placeholder key a phone with no Claude login launches with anywhere in any header's value,
+    /// whatever its spelling, its path or its model, which is what keeps the placeholder from ever
+    /// leaving the phone; or a message (or its
     /// count) whose body names the on-device model, which is a signed-in person who chose it.
     /// Nothing else is: a request for a Claude model goes to the API, and its failure is its own.
     static func isLocal(_ request: InboundRequest) -> Bool {
-        let placeholder = OnDeviceModel.placeholderKey
-        if request.headers.values("x-api-key").contains(where: { $0.trimmingCharacters(in: .whitespaces) == placeholder }) { return true }
-        if request.headers.values("Authorization").contains(where: {
-            $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare("Bearer \(placeholder)") == .orderedSame
-        }) { return true }
+        if request.headers.contains(where: { $0.value.range(of: OnDeviceModel.placeholderKey, options: .caseInsensitive) != nil }) {
+            return true
+        }
         guard request.method == "POST",
               let route = canonical(request.path), route == "/v1/messages" || route == "/v1/messages/count_tokens",
               let object = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],

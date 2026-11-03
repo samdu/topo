@@ -84,8 +84,10 @@ public final class SignIn {
         self.signInAgain = signInAgain
         let owed = cache.defaults.bool(forKey: Self.signOutOwedKey)
         if owed {
-            // A sign-out the app did not live to finish: nothing of the login stands from here.
+            // A sign-out the app did not live to finish: nothing of the login stands from here,
+            // a login without an account included.
             cache.clear()
+            self.local.set(false)
             login.discardCredential()
         }
         phase = cache.isSignedIn ? .signedIn : .preparing("")
@@ -157,13 +159,21 @@ public final class SignIn {
     }
 
     /// Uses Topo without a Claude account (`LocalLogin`): signed in at once, with Apple's on-device
-    /// model as the mind. Only from the screen's resting states, as a login starts.
+    /// model as the mind. Only from the screen's resting states, as a login starts, and never while
+    /// a sign-out's logout is owed: a local login and an owed logout never stand together, since
+    /// the next launch would end the one for the other. Refused then, the press asks the logout
+    /// again.
     public func useWithoutAccount() {
         switch phase {
         case .idle, .failed: break
         case .preparing, .approving, .signedIn: return
         }
         generation += 1
+        guard !signOutOwed else {
+            enqueueLogout()
+            phase = .failed("Topo is still signing out of Claude. Try again in a moment.")
+            return
+        }
         local.set(true)
         cache.save(LocalLogin.status)
         phase = .signedIn
@@ -239,6 +249,8 @@ public final class SignIn {
             return
         }
         cache.save(status)
+        // A Claude login is not a login without an account.
+        local.set(false)
         // The new credential is not the one a sign-out owed.
         cache.defaults.removeObject(forKey: Self.signOutOwedKey)
         signInAgain = false

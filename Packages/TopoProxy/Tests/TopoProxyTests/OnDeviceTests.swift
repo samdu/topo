@@ -85,6 +85,16 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         ("x-api-key: \(OnDeviceModel.placeholderKey)", "/v1/%256d%2565ssages", "opus"),
         ("Authorization: Bearer \(OnDeviceModel.placeholderKey)", "/v1/messages", "fable"),
         ("authorization: bearer \(OnDeviceModel.placeholderKey)", "/api/oauth/profile", "fable"),
+        // Spellings a header dictionary merges or a hand-written client sends.
+        ("x-api-key: \(OnDeviceModel.placeholderKey)\r\nx-api-key: \(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("x-api-key: \(OnDeviceModel.placeholderKey)\r\nX-API-KEY: \(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("x-api-key: \(OnDeviceModel.placeholderKey), \(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("x-api-key: \"\(OnDeviceModel.placeholderKey)\"", "/v1/messages", "sonnet"),
+        ("Authorization: Bearer\t\(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("Authorization: Bearer  \(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("Authorization: Bearer x\r\nAuthorization: Bearer \(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("x-api-key: sk-ant-real\r\n x\(OnDeviceModel.placeholderKey)", "/v1/messages", "sonnet"),
+        ("X-Other: \(OnDeviceModel.placeholderKey.uppercased())", "/v1/messages", "sonnet"),
     ])
     func thePlaceholderIsNeverForwarded(_ header: String, _ path: String, _ model: String) async throws {
         let upstream = StubUpstream()
@@ -290,10 +300,26 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
 
     /// A snapshot that does not extend what was sent sends nothing, and no word is sent twice.
     @Test func aRevisedSnapshotNeverRepeatsText() async throws {
-        let upstream = OnDeviceUpstream(model: FakeLocalModel(snapshots: ["Hello", "Help", "Hello world"]))
+        // The revision is longer than what was sent, so a diff that skipped the check would send its tail.
+        let upstream = OnDeviceUpstream(model: FakeLocalModel(snapshots: ["Hello", "Help me out", "Hello world"]))
         let events = sseEvents(try await collect(try await upstream.send(request(messagesBody([("user", "hi")])))))
         let deltas = events.compactMap { ($0.data["delta"] as? [String: Any])?["text"] as? String }
         #expect(deltas == ["Hello", " world"])
+    }
+
+    /// A snapshot that ends inside a character (an emoji's joiner, a skin tone, a flag's second
+    /// half, a combining accent) is still extended by the next, and the reply arrives whole.
+    @Test(arguments: [
+        ["Hi \u{1F469}", "Hi \u{1F469}\u{200D}\u{1F4BB} there"],
+        ["Wave \u{1F44B}", "Wave \u{1F44B}\u{1F3FD}!"],
+        ["Flag \u{1F1EC}", "Flag \u{1F1EC}\u{1F1E7} ok"],
+        ["cafe", "cafe\u{0301} au lait"],
+    ])
+    func aSnapshotEndingInsideACharacterIsExtended(_ snapshots: [String]) async throws {
+        let upstream = OnDeviceUpstream(model: FakeLocalModel(snapshots: snapshots))
+        let events = sseEvents(try await collect(try await upstream.send(request(messagesBody([("user", "hi")])))))
+        let deltas = events.compactMap { ($0.data["delta"] as? [String: Any])?["text"] as? String }
+        #expect(deltas.joined() == snapshots.last)
     }
 
     @Test func aRequestNotAskingForAStreamIsOneMessage() async throws {
@@ -324,6 +350,31 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         #expect(error?["type"] as? String == "invalid_request_error")
         #expect((error?["message"] as? String)?.contains("Apple Intelligence") == true)
         #expect(model.requests.isEmpty)
+    }
+
+    /// A generation that fails once the stream has begun is an `error` event in the words a
+    /// refusal before it would have said, never a `message_stop`.
+    @Test(arguments: [
+        (LocalModelError.tooLong, "too long for Apple's on-device model"),
+        (LocalModelError.unavailable("Apple's on-device model is still downloading."), "still downloading"),
+        (LocalModelError.failed("boom"), "failed: "),
+    ])
+    func aFailureMidStreamIsAnErrorEventInTheSameWords(_ failure: LocalModelError, _ words: String) async throws {
+        let model = FakeLocalModel(snapshots: ["Hel"], failure: failure)
+        let events = sseEvents(try await collect(try await OnDeviceUpstream(model: model).send(request(messagesBody([("user", "hi")])))))
+        #expect(events.last?.name == "error")
+        #expect(!events.contains { $0.name == "message_stop" })
+        let message = (events.last?.data["error"] as? [String: Any])?["message"] as? String
+        #expect(message?.contains(words) == true, "\(message ?? "nil")")
+    }
+
+    /// A count the model cannot make is refused with the reason, never answered as nothing.
+    @Test func aCountThatCannotBeMadeIsRefused() async throws {
+        let model = FakeLocalModel(unavailable: "Apple's on-device model needs iOS 26.4 or later.")
+        let response = try await OnDeviceUpstream(model: model).send(request(messagesBody([("user", "hi")]), path: "/v1/messages/count_tokens"))
+        #expect(response.status == 400)
+        let object = try JSONSerialization.jsonObject(with: try await collect(response)) as? [String: Any]
+        #expect(((object?["error"] as? [String: Any])?["message"] as? String)?.contains("26.4") == true)
     }
 
     @Test func countTokensIsTheTranslatedCount() async throws {
