@@ -2408,7 +2408,7 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/scripts/strip-luxtts.sh",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_LuxTtsG2pResources.bundle",
 			);
 			name = "Strip FluidAudio's LuxTTS lexicon";
 			outputFileListPaths = (
@@ -2417,7 +2417,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\"$SRCROOT/scripts/strip-luxtts.sh\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_FluidAudio.bundle\"\n";
+			shellScript = "set -e\n\"$SRCROOT/scripts/strip-luxtts.sh\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_LuxTtsG2pResources.bundle\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -3892,8 +3892,13 @@
 			repositoryURL = "https://github.com/FluidInference/FluidAudio";
 			requirement = {
 				kind = exactVersion;
-				version = 0.17.7;
+				version = 0.18.2;
 			};
+			traits = (
+				NemoTextProcessing,
+				TTS,
+				Diarizer,
+			);
 		};
 /* End XCRemoteSwiftPackageReference section */
 
