@@ -315,10 +315,11 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
     @Test func anUnavailableModelSaysWhy() async throws {
         let model = FakeLocalModel(unavailable: "Turn on Apple Intelligence in Settings to use the on-device model.")
         let response = try await OnDeviceUpstream(model: model).send(request(messagesBody([("user", "hi")])))
-        #expect(response.status == 503)
+        // A 400, which Claude Code says at once, and not a 5xx, which it retries for minutes.
+        #expect(response.status == 400)
         let object = try JSONSerialization.jsonObject(with: try await collect(response)) as? [String: Any]
         let error = object?["error"] as? [String: Any]
-        #expect(error?["type"] as? String == "overloaded_error")
+        #expect(error?["type"] as? String == "invalid_request_error")
         #expect((error?["message"] as? String)?.contains("Apple Intelligence") == true)
         #expect(model.requests.isEmpty)
     }
@@ -353,12 +354,17 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
     /// Skipped where the model is not available, which is said by the skip, not taken as a pass.
     @Test(.enabled(if: OnDeviceModel.unavailability() == nil, "Apple's on-device model is not available here"))
     func theRealModelAnswers() async throws {
-        let response = try await OnDeviceUpstream().send(request(messagesBody([("user", "Reply with the single word: yes")])))
+        // With a turn before it, so the transcript the session is made from has a prompt and a
+        // response in it, which is the path every turn after the first takes.
+        let response = try await OnDeviceUpstream().send(request(messagesBody([
+            ("user", "My dog is called Daphne."), ("assistant", "Daphne is a lovely name."),
+            ("user", "What is my dog called? Reply with her name only."),
+        ])))
         #expect(response.status == 200)
         let events = sseEvents(try await collect(response))
         #expect(events.first?.name == "message_start")
         #expect(events.last?.name == "message_stop")
         let text = events.compactMap { ($0.data["delta"] as? [String: Any])?["text"] as? String }.joined()
-        #expect(!text.isEmpty)
+        #expect(text.contains("Daphne"), "\(text)")
     }
 }

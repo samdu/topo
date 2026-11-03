@@ -14,8 +14,10 @@ import Foundation
 ///   window's management. Tools are not offered to the model.
 /// - Anything else: a 404 in the API's error shape.
 ///
-/// A model that cannot run here is a 503 `overloaded_error` whose message says why; a request
-/// that cannot be made to fit is a 400. A refusal (a guardrail, a language the model does not
+/// Every refusal is a 400 `invalid_request_error` whose message says why — a model that cannot
+/// run here, a request that cannot be made to fit, a generation that failed — because Claude Code
+/// shows a 400's message at once and retries a 5xx for minutes (2.1.285, measured: a 503 was
+/// asked eight times over 100 s), which would leave the person on *Asking…* with no reason. A refusal (a guardrail, a language the model does not
 /// speak) is the reply itself, a sentence saying so, so the person reads why there is no answer.
 /// Ending the body's iteration (the client gone) cancels the generation.
 public struct OnDeviceUpstream: Upstream {
@@ -37,7 +39,7 @@ public struct OnDeviceUpstream: Upstream {
         case ("POST", "/v1/messages/count_tokens"):
             let translation: MessagesTranslation
             do { translation = try MessagesTranslation.translate(request.body ?? Data()) } catch {
-                return Self.error(400, "invalid_request_error", "\(error)")
+                return Self.refusal("Topo could not read the request: \(error)")
             }
             let count = (try? await model.tokenCount(instructions: MessagesTranslation.instructions,
                                                      history: translation.history, prompt: translation.prompt)) ?? 0
@@ -50,7 +52,7 @@ public struct OnDeviceUpstream: Upstream {
     }
 
     private func messages(_ body: Data) async -> UpstreamResponse {
-        if let reason = await model.unavailability() { return Self.error(503, "overloaded_error", reason) }
+        if let reason = await model.unavailability() { return Self.refusal(reason) }
         let fitted: MessagesTranslation, tokens: Int
         do {
             let translation = try MessagesTranslation.translate(body)
@@ -58,11 +60,11 @@ public struct OnDeviceUpstream: Upstream {
             (fitted, tokens) = (fit.0, fit.tokens)
             log("on-device: \(fit.0.history.count) turns, \(fit.tokens) tokens, \(fit.dropped) older turns left out")
         } catch let failure as MessagesTranslation.Failure {
-            return Self.error(400, "invalid_request_error", "Topo could not read the request: \(failure)")
+            return Self.refusal("Topo could not read the request: \(failure)")
         } catch LocalModelError.tooLong {
-            return Self.error(400, "invalid_request_error", "That message is too long for Apple's on-device model.")
+            return Self.refusal("That message is too long for Apple's on-device model.")
         } catch {
-            return Self.error(500, "api_error", "Apple's on-device model failed: \(error)")
+            return Self.refusal("Apple's on-device model failed: \(error)")
         }
         let generation = model.stream(instructions: MessagesTranslation.instructions, history: fitted.history, prompt: fitted.prompt)
         let id = "msg_ondevice_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -76,9 +78,9 @@ public struct OnDeviceUpstream: Upstream {
         } catch LocalModelError.declined(let words) {
             text = Self.appending(words, to: text)
         } catch LocalModelError.unavailable(let reason) {
-            return Self.error(503, "overloaded_error", reason)
+            return Self.refusal(reason)
         } catch {
-            return Self.error(500, "api_error", "Apple's on-device model failed: \(error)")
+            return Self.refusal("Apple's on-device model failed: \(error)")
         }
         return Self.json(200, Self.message(id: id, text: text, inputTokens: tokens, stop: "end_turn"))
     }
@@ -157,4 +159,7 @@ public struct OnDeviceUpstream: Upstream {
     static func error(_ status: Int, _ type: String, _ message: String) -> UpstreamResponse {
         json(status, ["type": "error", "error": ["type": type, "message": message]])
     }
+
+    /// What the on-device model will not or cannot do, as an answer Claude Code says at once.
+    static func refusal(_ message: String) -> UpstreamResponse { error(400, "invalid_request_error", message) }
 }

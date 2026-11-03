@@ -136,7 +136,9 @@ public struct SystemLocalModel: LocalModel {
             let task = Task {
                 let session = LanguageModelSession(transcript: Transcript(entries: Self.transcript(instructions: instructions, history: history)))
                 do {
-                    for try await snapshot in session.streamResponse(to: prompt) {
+                    // The reply is bounded by what the fitting left free, so it never runs past the window.
+                    let options = GenerationOptions(maximumResponseTokens: MessagesTranslation.replyReserve)
+                    for try await snapshot in session.streamResponse(to: prompt, options: options) {
                         continuation.yield(snapshot.content)
                     }
                     continuation.finish()
