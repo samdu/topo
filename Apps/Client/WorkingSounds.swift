@@ -89,7 +89,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// stands, live (`AudioSession.ensureLive()`) and refused when it is not, so it configures and
 /// activates nothing; no receipt is played into an open microphone, and the bed dips while one
 /// is open. Where such a hold already stands a sound holds the process for its own length too
-/// (`AudioSession.Hold.cue`, let go at the receipt's length or the bed's fade-out, `bound` at
+/// (`AudioSession.Hold.sound`, let go at the receipt's length or the bed's fade-out, `bound` at
 /// most), taken before it starts and before the hold it follows drops, so an error receipt and
 /// the bed's fade behind the lock are heard out before the last hold is let go of; with nothing
 /// held it holds nothing. The
@@ -144,7 +144,12 @@ final class KeeperSounds {
     /// Whether Topo's own voice is being read out; `Speaker` answers it. A receipt over the voice
     /// is a stray tone in the middle of a sentence.
     var voiceSpeaking: @MainActor () -> Bool = { false }
-    private var microphoneIsOpen = false
+    /// Whether a microphone is open or opening, asked at each sound; `Speaker` answers it. Asked
+    /// rather than told, since a microphone opens on paths no press goes through (a conversation
+    /// reopening it behind the lock), and a receipt played into one is heard by it.
+    var microphoneOpen: @MainActor () -> Bool = { false }
+    /// What the bed's level was last set for: `duck()` moves it only when the answer has changed.
+    private var ducked = false
     /// The pause the fade-out ends in, cancelled when the bed is wanted again before it lands.
     private var parking: Task<Void, Never>?
     /// Whether a sound holds the process, and the task that lets go of it.
@@ -218,7 +223,7 @@ final class KeeperSounds {
         // The keeper's: a turn nothing waits for aloud sounds nothing, and a receipt under nothing
         // but a sound's own hold would be the receipts keeping the process alive by themselves.
         guard audio.heldForATurn else { return false }
-        if microphoneIsOpen {
+        if microphoneOpen() {
             AudioLog.say("receipt \(tone) not played: the microphone is open")
             return false
         }
@@ -338,15 +343,17 @@ final class KeeperSounds {
         working(true)
     }
 
-    /// A microphone is open over the bed, or closed again: it dips, and no receipt is played.
-    func duck(_ microphoneOpen: Bool) {
-        guard microphoneOpen != microphoneIsOpen else { return }
-        microphoneIsOpen = microphoneOpen
+    /// A microphone opened over the bed, or closed again: the bed is set to the level the answer
+    /// now asks for. Told at each microphone moment; a receipt asks for itself (`play`).
+    func duck() {
+        let open = microphoneOpen()
+        guard open != ducked else { return }
+        ducked = open
         guard bedOn, let bed, bed.isPlaying else { return }
         bed.setVolume(target, fadeDuration: 0.15)
     }
 
-    private var target: Float { microphoneIsOpen ? Self.duckedVolume : Self.bedVolume }
+    private var target: Float { microphoneOpen() ? Self.duckedVolume : Self.bedVolume }
 
     // MARK: - The hold
 
@@ -357,7 +364,7 @@ final class KeeperSounds {
     /// nothing.
     private func holdUntil(_ length: Duration) {
         if !holding {
-            audio.wantAlive(true, for: .cue)
+            audio.wantAlive(true, for: .sound)
             holding = true
         }
         letting?.cancel()
@@ -378,7 +385,7 @@ final class KeeperSounds {
         guard holding else { return }
         holding = false
         AudioLog.say("the keeper's sound let go: \(why)")
-        audio.wantAlive(false, for: .cue)
+        audio.wantAlive(false, for: .sound)
     }
 }
 #endif
