@@ -56,7 +56,8 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 /// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing
 /// and activates nothing, in the background under a hold least of all. Where a hold that is not
 /// a cue's own already stands it holds the process for its own length too (`AudioSession.Hold.cue`,
-/// let go when the player has finished or at `bound`), taken before the player starts, so that
+/// let go when the player has finished and the route's tail has passed, or at `bound`), taken
+/// before the player starts, so that
 /// `done` behind the lock is heard out before the last hold goes and it is let
 /// go of; its caller plays it before dropping the hold it follows, so the process is never let
 /// go of between the two. With nothing held — a press in front — a cue holds nothing, so a claim
@@ -102,6 +103,9 @@ final class Earcons {
     #if DEBUG
     /// Every cue played, in order, for a test.
     private(set) var played: [Cue] = []
+    /// The cue playing and the last one begun, by serial, for a test.
+    var playingForATest: Int? { playing }
+    var serialForATest: Int { serial }
     #endif
 
     init(audio: AudioSession, defaults: UserDefaults = .standard, bundle: Bundle = .main,
@@ -166,7 +170,7 @@ final class Earcons {
             ended(mine, "it did not start")
             return false
         }
-        AudioLog.say("earcon \(cue)")
+        AudioLog.say("earcon \(cue) (\(route()))")
         #if DEBUG
         played.append(cue)
         #endif
@@ -199,6 +203,14 @@ final class Earcons {
     static func outputTail() -> Duration {
         let session = AVAudioSession.sharedInstance()
         return .seconds(session.outputLatency + session.ioBufferDuration) + margin
+    }
+
+    /// Where a cue goes and how loud the session is, for the log: a cue played and not heard is
+    /// told apart from one played into the receiver or at a call's volume.
+    private func route() -> String {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: "+")
+        return "route \(outputs.isEmpty ? "none" : outputs), mode \(session.mode.rawValue), volume \(String(format: "%.2f", session.outputVolume))"
     }
 
     /// The margin `outputTail` adds over what the session reports.

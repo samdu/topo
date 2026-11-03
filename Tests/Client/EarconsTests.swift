@@ -666,8 +666,9 @@ final class EarconsTests: XCTestCase {
         rig.cues.players.last?.finish()
         await settle("the tail to be asked for") { clock.asked.contains(tail) }
         XCTAssertTrue(rig.audio.holding, "the hold went as the player finished, with the cue still in the route")
-        clock.fire()
+        clock.fire(tail)
         await settle("the hold to go after the tail") { !rig.audio.holding }
+        await settle("the bound to be cancelled") { clock.cancelled }
 
         _ = rig.speaker.awaitReply("second", readAloud: true)
         XCTAssertTrue(rig.earcons.play(.failed))
@@ -678,9 +679,10 @@ final class EarconsTests: XCTestCase {
         // (cues hold nothing by themselves), and the first tail ending moves nothing after.
         XCTAssertTrue(rig.earcons.play(.done))
         XCTAssertFalse(rig.audio.holding)
-        clock.fire()
+        XCTAssertEqual(rig.earcons.playingForATest, rig.earcons.serialForATest, "the cue begun in the tail is the one playing")
+        clock.fire(tail)
         await drain()
-        XCTAssertFalse(rig.audio.holding)
+        XCTAssertEqual(rig.earcons.playingForATest, rig.earcons.serialForATest, "the first cue's tail ended the one begun in it")
     }
 
     /// A second cue while the first is still sounding keeps the one hold and lets it go when the
@@ -771,7 +773,7 @@ private final class Prompt {
 /// A sleep the test fires, so a bound is a moment the test chooses.
 final class ManualSleep: @unchecked Sendable {
     private let lock = NSLock()
-    private var waiting: [CheckedContinuation<Void, any Error>] = []
+    private var waiting: [(duration: Duration, continuation: CheckedContinuation<Void, any Error>)] = []
     private var _asked: [Duration] = []
     private var _cancelled = false
 
@@ -788,12 +790,12 @@ final class ManualSleep: @unchecked Sendable {
         }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.withLock { waiting.append(continuation) }
+                lock.withLock { waiting.append((duration, continuation)) }
             }
         } onCancel: {
             let cancelled = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
                 _cancelled = true
-                let all = waiting
+                let all = waiting.map(\.continuation)
                 waiting = []
                 return all
             }
@@ -803,11 +805,21 @@ final class ManualSleep: @unchecked Sendable {
 
     func fire() {
         let all = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
-            let all = waiting
+            let all = waiting.map(\.continuation)
             waiting = []
             return all
         }
         all.forEach { $0.resume() }
+    }
+
+    /// Wakes only the sleeps asked for `duration`, so a tail is told apart from a bound.
+    func fire(_ duration: Duration) {
+        let some = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
+            let some = waiting.filter { $0.duration == duration }.map(\.continuation)
+            waiting.removeAll { $0.duration == duration }
+            return some
+        }
+        some.forEach { $0.resume() }
     }
 }
 
