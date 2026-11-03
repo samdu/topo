@@ -30,8 +30,10 @@ final class AudioSession {
     /// (`SpokenCall`). From the call's placing until the system says it is over the session is
     /// the system's: `placed` is set and not yet activated, `active` is held active by the system
     /// at the call's priority, `deactivated` is taken away with the call still standing (a phone
-    /// call holds it). Nothing here activates or hands back while the phase is not `none`.
-    enum CallPhase { case none, placed, active, deactivated }
+    /// call holds it), `closing` is ended and on its way back, still active until the system
+    /// deactivates it about a second later. Nothing here activates or hands back while the phase
+    /// is not `none`.
+    enum CallPhase { case none, placed, active, deactivated, closing }
     /// A path wanted the session while the call's phase has it the system's and not active.
     struct CallNotActive: Error, CustomStringConvertible {
         let phase: CallPhase
@@ -40,6 +42,7 @@ final class AudioSession {
             case .placed: "the call's session is placed and not yet activated"
             case .active: "the call's session is the system's; nothing here configures it"
             case .deactivated: "the call's session is deactivated with the call standing"
+            case .closing: "the call's session is closing; the system deactivates it"
             case .none: "no call"
             }
         }
@@ -166,7 +169,9 @@ final class AudioSession {
             // The system holds the session active for the call, and nothing here doubts it: a
             // `.began` iOS posts at the lock screen with a call up is not the session gone.
             return
-        case .placed, .deactivated:
+        case .placed, .deactivated, .closing:
+            // A closing session is still active, and the system takes it a second later with
+            // whatever was put on it: a press or a reading started now would be cut there.
             throw CallNotActive(phase: call)
         case .none:
             guard !valid else { return }
@@ -240,7 +245,10 @@ final class AudioSession {
     func microphone(open: Bool) {
         guard microphoneOpen != open else { return }
         microphoneOpen = open
-        if !open { applyDeferred(after: "the microphone has closed") }
+        if !open {
+            clearOverride(after: "the microphone has closed")
+            applyDeferred(after: "the microphone has closed")
+        }
     }
 
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
@@ -283,7 +291,24 @@ final class AudioSession {
         // The speaker first, so the keeper's engine is stopped before the session is let go: a
         // deactivation with an engine still rendering is refused as busy.
         onHoldChanged?(holding)
-        if !holding { letGo(after: "the last hold is gone") }
+        if !holding {
+            clearOverride(after: "the last hold is gone")
+            letGo(after: "the last hold is gone")
+        }
+    }
+
+    /// Clears the call's speaker override once the call is over and nothing keeps the session:
+    /// a route change under an open microphone's tap or a reply's engine is the change the
+    /// session is kept from, so with either standing it waits for the last of them.
+    private func clearOverride(after what: String) {
+        guard overridden, call == .none, !kept else { return }
+        overridden = false
+        do {
+            try speakerOverride(false)
+            AudioLog.say("\(what): the call's speaker override is cleared")
+        } catch {
+            AudioLog.say("\(what): the call's speaker override did not clear: \(error)")
+        }
     }
 
     /// The last hold has gone. In front, what waited is applied, as it is when the microphone
@@ -299,12 +324,6 @@ final class AudioSession {
         if isActive() { applyDeferred(after: what) } else { handBack(after: what) }
     }
 
-    /// Topo has finished with the session away from the front: it is deactivated, telling the
-    /// audio the press paused — a podcast, music — that it may resume, which the record
-    /// configuration going on its own never does. A deactivation is allowed from the background
-    /// where an activation is not. The claims that waited stay waiting for the next audio path,
-    /// which configures and activates afresh, and a refusal (an engine still rendering) is
-    /// logged and leaves the session where it was, marked as needing configuring.
     /// Whether other audio took up again a second after it was told to, for the log alone: the
     /// hand-back's effect is the other app's to decide, and this is the only sight of it.
     private func noteOtherAudio(after what: String) {
@@ -315,6 +334,12 @@ final class AudioSession {
         }
     }
 
+    /// Topo has finished with the session away from the front: it is deactivated, telling the
+    /// audio the press paused — a podcast, music — that it may resume, which the record
+    /// configuration going on its own never does. A deactivation is allowed from the background
+    /// where an activation is not. The claims that waited stay waiting for the next audio path,
+    /// which configures and activates afresh, and a refusal (an engine still rendering) is
+    /// logged and leaves the session where it was, marked as needing configuring.
     private func handBack(after what: String) {
         valid = false
         // Marked invalid, the next audio path configures from the claims as they stand, so
@@ -332,9 +357,46 @@ final class AudioSession {
     }
 
     /// True while the call's session is on its way to the system or back from it: placed and
-    /// not yet activated, or taken with the call standing. A reply landing then waits for the
-    /// activation (`Speaker`), as one does for an open microphone.
-    var callChangingHands: Bool { call == .placed || call == .deactivated }
+    /// not yet activated, taken with the call standing, or closing. A reply landing then waits
+    /// for the activation or the call's end (`Speaker`), as one does for an open microphone, and
+    /// a press waits for the same (`settled`).
+    var callChangingHands: Bool { call == .placed || call == .deactivated || call == .closing }
+
+    private var settling: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    /// Waits until the call's session is no longer changing hands — activated, or the call over
+    /// — or for `bound`, whichever is first, and answers whether it settled. Free when it is not
+    /// changing hands. A press waits here rather than being refused, since the window is the
+    /// second after a reply ends, which is when a person answers. Each wait's bound ends that
+    /// wait alone.
+    func settled(within bound: Duration, sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async -> Bool {
+        guard callChangingHands else { return true }
+        let id = UUID()
+        let timer = Task { @MainActor [weak self] in
+            try? await sleep(bound)
+            guard !Task.isCancelled else { return }
+            self?.settling.removeValue(forKey: id)?.resume()
+        }
+        await withCheckedContinuation { settling[id] = $0 }
+        timer.cancel()
+        return !callChangingHands
+    }
+
+    private func releaseSettling() {
+        let waiting = settling.values
+        settling = [:]
+        waiting.forEach { $0.resume() }
+    }
+
+    /// The call was ended, by Topo or from the card: the session stays the system's, active,
+    /// until its deactivation (`callOver`), and nothing new is put on it meanwhile.
+    func callClosing() {
+        // A call refused before the system performed its start never took the session.
+        guard call != .none, call != .closing else { return }
+        call = .closing
+        valid = false
+        AudioLog.say("call closing: nothing new goes on the session until it is over")
+    }
 
     /// `SpokenCall`'s `onStart`: the system is placing the call and will activate the session
     /// itself, so the record configuration is set with the mode as it stands and nothing is
@@ -359,6 +421,7 @@ final class AudioSession {
         call = .active
         applied = true
         valid = true
+        defer { releaseSettling() }
         // CallKit routes an activated call to the earpiece, whatever the category's
         // `defaultToSpeaker` says: a reply read there is not heard from a phone held away or
         // lying down. Overridden to the speaker only from the earpiece, so AirPods, a car or
@@ -395,10 +458,8 @@ final class AudioSession {
         guard call != .none else { return }
         call = .none
         valid = false
-        if overridden {
-            overridden = false
-            do { try speakerOverride(false) } catch { AudioLog.say("call over: the speaker override did not clear: \(error)") }
-        }
+        releaseSettling()
+        clearOverride(after: "the call is over")
         AudioLog.say("call over: other audio playing \(otherAudioPlaying())")
         guard !kept else {
             AudioLog.say("call over with \(keptBy); the session waits for the next audio path")

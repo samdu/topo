@@ -1,4 +1,5 @@
 import AVFoundation
+import CallKit
 import UIKit
 import XCTest
 
@@ -10,6 +11,9 @@ import XCTest
 /// `Speaker` and `VoiceInput` on the audio seams, so what is held is what a press on the glass does.
 @MainActor
 final class StopWhileSpeakingTests: XCTestCase {
+    /// The session the last `chat` was made over.
+    private var audio: AudioSession!
+
     override func tearDown() {
         UIApplication.shared.isIdleTimerDisabled = false
         super.tearDown()
@@ -46,6 +50,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        self.audio = audio
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
@@ -412,6 +417,214 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertTrue(voice.handsFree, "the release was taken for the end of a hold, or ran before the press")
         XCTAssertEqual(sent.texts, [])
         XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).appearance, .handsFree)
+    }
+
+    /// The order the call's driver relies on (`SpokenCallDriver.microphoneChanged`): a press's
+    /// microphone is told before the waits it ends drop the hold, and it is not told closed while
+    /// a tap has left it open — only once it has closed.
+    func testThePressTellsTheMicrophoneBeforeTheHoldGoesAndClosedOnlyOnceItIs() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        _ = speaker.awaitReply("earlier", readAloud: true)
+        XCTAssertTrue(speaker.holding)
+        var told: [String] = []
+        speaker.onHold = { told.append("hold \($0)") }
+        speaker.onMicrophone = { told.append("microphone \($0)") }
+        let press = MicPress()
+        let sent = Sent()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+
+        // A tap: the microphone stays open, hands-free.
+        let down = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }
+        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }
+        await down?.value
+        await up?.value
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(told.first, "microphone true", "the hold went before the microphone was told: \(told)")
+        XCTAssertTrue(told.contains("hold false"), "the press ended the wait: \(told)")
+        XCTAssertFalse(told.contains("microphone false"), "told closed while the tap left it open: \(told)")
+
+        // The keyboard closes it.
+        voice.cancel(.chat)
+        speaker.microphoneClosed()
+        XCTAssertEqual(told.last, "microphone false", "\(told)")
+    }
+
+    /// Whether the microphone is listening within a second: a press let through by the call's
+    /// end, and not by its own bound, which the tests set far past this.
+    private func listensPromptly(_ voice: VoiceInput) async -> Bool {
+        for _ in 0..<100 where !voice.listening { try? await Task.sleep(for: .milliseconds(10)) }
+        return voice.listening
+    }
+
+    /// A call `up` before the press, then ended: the session is closing.
+    private func closingCall(_ speaker: Speaker, activated: Bool = true) -> (SpokenCall, FakeCallSystem, ManualSleep) {
+        let system = FakeCallSystem()
+        let sleep = ManualSleep()
+        let call = SpokenCall(system: system, sleep: sleep.sleep)
+        speaker.attach(call)
+        call.start()
+        call.provider(system.provider, perform: system.starts.last!)
+        if activated { call.provider(system.provider, didActivate: AVAudioSession.sharedInstance()) }
+        call.end()
+        return (call, system, sleep)
+    }
+
+    /// A press as the call closes — the moment a reply ends, which is when a person answers —
+    /// waits for the call's end and opens on the session that follows it, not on the one the
+    /// system is about to deactivate.
+    func testAPressWhileTheCallClosesOpensOnceItIsOver() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let (call, system, _) = closingCall(speaker)
+        voice.callSettle = .seconds(30)
+        XCTAssertEqual(audio.call, .closing)
+        XCTAssertThrowsError(try audio.ensureActive(), "a closing session was handed to a path")
+        let press = MicPress()
+        let sent = Sent()
+        let down = press.gesture(true, drawn: Composer.MicState(voice, speaking: speaker.speaking),
+                                 speaker: speaker, voice: voice) { sent.add($0) }
+        await drain()
+        XCTAssertFalse(voice.listening, "the microphone opened on the closing call's session")
+        XCTAssertNil(voice.refusal, "the press was refused rather than waiting")
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(audio.call, .none)
+        let listened = await listensPromptly(voice)
+        XCTAssertTrue(listened, "the press did not open as the call was over")
+        await down?.value
+    }
+
+    /// A tap while the press waits for the call opens the microphone hands-free once it is
+    /// over, as a tap does; and a second press meanwhile does not cancel it.
+    func testATapWhileThePressWaitsForTheCallOpensHandsFree() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let (call, system, _) = closingCall(speaker)
+        voice.callSettle = .seconds(30)
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let down = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        // Nothing seemed to happen, so the person presses again, and lifts once it has.
+        let again = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
+        await again?.value
+        XCTAssertFalse(voice.listening)
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        let listened = await listensPromptly(voice)
+        XCTAssertTrue(listened, "the tap was taken for a cancel")
+        await down?.value
+        XCTAssertTrue(voice.handsFree)
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertTrue(voice.listening, "the release of a press that reached nothing closed the microphone")
+    }
+
+    /// The speaker counts the presses opening: one press's answer is not another's, in
+    /// whichever order the two are answered.
+    func testAReplyWaitsUntilEveryPressOpeningHasAnswered() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        _ = speaker.awaitReply("n", readAloud: true)
+        speaker.microphoneOpening()
+        speaker.microphoneOpening()
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "n"))
+        speaker.microphoneOpened(counted: true)
+        await drain()
+        XCTAssertEqual(speaker.report.speaks, 0, "one press's answer read the reply under the other")
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        speaker.microphoneOpened(counted: false)
+        XCTAssertTrue(speaker.waitingForMicrophone, "a press that was not opening counted one off")
+        speaker.microphoneOpened(counted: true)
+        await settle("the reply to start once no press was opening") { speaker.report.started }
+    }
+
+    /// The call is placed and not yet activated, with a reply waiting for the activation. A
+    /// press held and released while it waits is cancelled, and the press after it waits too;
+    /// at the activation the first press's answer is not the second's, so the reply is not
+    /// read under the microphone the second opens.
+    func testACancelledPressDoesNotReadTheWaitingReplyUnderThePressAfterIt() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        speaker.attach(call)
+        voice.callSettle = .seconds(30)
+        _ = speaker.awaitReply("n", readAloud: true)
+        call.start()
+        call.provider(system.provider, perform: system.starts.last!)
+        XCTAssertEqual(audio.call, .placed)
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "n"))
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let first = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        let second = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
+        await drain()
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        let listened = await listensPromptly(voice)
+        XCTAssertTrue(listened, "the activation did not let the second press through")
+        await first?.value
+        await second?.value
+        await drain()
+        XCTAssertEqual(speaker.report.speaks, 0, "the reply was read under the opening microphone")
+        XCTAssertTrue(speaker.waitingForMicrophone, "the reply stopped waiting")
+    }
+
+    /// A call that never held the session is finished by its closing grace, not a
+    /// deactivation: the press waits for that too.
+    func testAPressWaitsForACloseOnlyTheGraceFinishes() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let (_, _, sleep) = closingCall(speaker, activated: false)
+        voice.callSettle = .seconds(30)
+        XCTAssertEqual(audio.call, .closing)
+        for _ in 0..<100 where sleep.waiting == 0 { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(sleep.waiting, 1, "the closing grace is not waiting")
+        let down = MicPress().gesture(true, drawn: Composer.MicState(voice, speaking: speaker.speaking),
+                                      speaker: speaker, voice: voice) { _ in }
+        await drain()
+        XCTAssertFalse(voice.listening)
+        sleep.fire()
+        let listened = await listensPromptly(voice)
+        XCTAssertEqual(audio.call, .none)
+        XCTAssertTrue(listened, "the grace's finish did not let the press through")
+        await down?.value
+    }
+
+    /// A hold released while the press waits for the call: nothing opens when it is over.
+    func testAHoldReleasedWhileThePressWaitsForTheCallOpensNothing() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let (call, system, _) = closingCall(speaker)
+        let press = MicPress()
+        let sent = Sent()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let down = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        await down?.value
+        await drain()
+        XCTAssertFalse(voice.listening, "a released press opened the microphone once the call was over")
+        XCTAssertNil(voice.owner)
+        XCTAssertEqual(sent.texts, [])
+    }
+
+    /// A call that never settles: past the bound the press goes on and the closing session
+    /// refuses it, rather than the press waiting for ever.
+    func testAPressPastTheBoundIsRefusedByTheClosingSession() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        _ = closingCall(speaker)
+        voice.callSettle = .milliseconds(100)
+        await MicPress().gesture(true, drawn: Composer.MicState(voice, speaking: speaker.speaking),
+                                 speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertFalse(voice.listening)
+        XCTAssertEqual(audio.call, .closing)
+        XCTAssertTrue(voice.refusal?.contains("closing") ?? false, "\(voice.refusal ?? "no refusal")")
+        XCTAssertNil(voice.owner)
     }
 }
 

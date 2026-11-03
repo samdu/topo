@@ -35,6 +35,9 @@ final class SpokenCall: NSObject {
     var onHangUp: () -> Void = {}
     /// The card's mute, true muted.
     var onMute: (Bool) -> Void = { _ in }
+    /// Ended, by `end` or from the card: the session is still the system's and goes with the
+    /// deactivation, so nothing new is put on it.
+    var onClosing: () -> Void = {}
     /// The call is gone and the session is the app's again.
     var onOver: () -> Void = {}
     /// The call could not be placed, was never activated, or went with the system's call
@@ -51,6 +54,9 @@ final class SpokenCall: NSObject {
     private(set) var active = false
     /// A call wanted while the last one was still closing.
     private var again = false
+    /// Whether a call may be placed now: the driver's background. A retry or a call wanted while
+    /// the last one closed is not placed once the app has come forward.
+    var mayPlace: () -> Bool = { true }
     /// Placings of this call the system refused so far: a refusal is tried again, twice, before
     /// the call fails.
     private var refusals = 0
@@ -120,6 +126,7 @@ final class SpokenCall: NSObject {
         grace = Task { [sleep] in
             do { try await sleep(Self.retryAfter) } catch { return }
             guard !Task.isCancelled, self.id == call, self.state == .starting else { return }
+            guard self.mayPlace() else { return self.fail("not placed: the app came forward before the retry") }
             self.place()
         }
     }
@@ -151,6 +158,7 @@ final class SpokenCall: NSObject {
     private func close(_ call: UUID) {
         state = .closing
         active = false
+        onClosing()
         grace?.cancel()
         grace = Task { [sleep] in
             try? await sleep(Self.closingGrace)
@@ -166,7 +174,10 @@ final class SpokenCall: NSObject {
         active = false
         AudioLog.say("call: over")
         onOver()
-        if again { again = false; start() }
+        if again {
+            again = false
+            if mayPlace() { start() } else { AudioLog.say("call: the call wanted behind it is not placed: the app is in front") }
+        }
     }
 
     private func fail(_ why: String) {
@@ -414,6 +425,8 @@ final class SpokenCallDriver {
     private let enabled: () -> Bool
     private var holding = false
     private var conversing = false
+    /// The chat's microphone is open or opening: a call up is kept for it.
+    private var microphone = false
     private var phase: ScenePhase
     private var observers: [NSObjectProtocol] = []
 
@@ -423,6 +436,7 @@ final class SpokenCallDriver {
         self.call = call
         self.enabled = enabled
         phase = initial
+        call.mayPlace = { [weak self] in self?.phase == .background }
         let follow: [(Notification.Name, ScenePhase, String)] = [
             (UIApplication.didEnterBackgroundNotification, .background, "the app entered the background"),
             (UIApplication.willEnterForegroundNotification, .inactive, "the app is coming forward"),
@@ -438,11 +452,18 @@ final class SpokenCallDriver {
         }
     }
 
-    /// The whole rule, as a function of the five facts: placed in the background, kept in front
-    /// while it is up.
+    /// The whole rule, as a function of the facts: placed in the background for a hold or a
+    /// conversation, and kept while it is up for either or an open microphone, so a press in
+    /// front under the call does not end it under the session the microphone opens on.
     nonisolated static func wants(holding: Bool, conversing: Bool = false, phase: ScenePhase, enabled: Bool,
-                                  up: Bool = false) -> Bool {
-        (holding || conversing) && enabled && (phase == .background || up)
+                                  up: Bool = false, microphone: Bool = false) -> Bool {
+        let exchange = holding || conversing
+        return enabled && (exchange && phase == .background || up && (exchange || microphone))
+    }
+
+    func microphoneChanged(_ open: Bool) {
+        microphone = open
+        decide()
     }
 
     func holdChanged(_ holding: Bool) {
@@ -462,12 +483,13 @@ final class SpokenCallDriver {
 
     private func decide() {
         let enabled = enabled()
-        let wanted = Self.wants(holding: holding, conversing: conversing, phase: phase, enabled: enabled, up: call.up)
+        let wanted = Self.wants(holding: holding, conversing: conversing, phase: phase, enabled: enabled,
+                                up: call.up, microphone: microphone)
         // Each decision with its facts, so a run says why a lock placed no call.
         if wanted != call.up {
-            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), conversing \(conversing), app \(phase), setting \(enabled))")
-        } else if wanted, phase != .background {
-            AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), app \(phase))")
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), conversing \(conversing), microphone \(microphone), app \(phase), setting \(enabled))")
+        } else if wanted, phase != .background, call.state == .up {
+            AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), conversing \(conversing), microphone \(microphone), app \(phase))")
         } else if holding || conversing, !wanted {
             AudioLog.say("call driver: no call (app \(phase), setting \(enabled))")
         }

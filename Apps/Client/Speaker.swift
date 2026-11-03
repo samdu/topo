@@ -79,13 +79,15 @@ final class Speaker {
     /// Told every hold change after this object has dealt with it, so the keeper comes first
     /// and whoever listens — the call's driver — second.
     var onHold: ((Bool) -> Void)?
+    /// Told that the chat's microphone is opening (at the press, before any wait it ends) and
+    /// that it has closed: a call kept up in front is kept while it is open (`SpokenCallDriver`),
+    /// so the session the press opened on is not ended under it.
+    var onMicrophone: ((Bool) -> Void)?
     /// The call's moments, told after the speaker has dealt with each — but for the placing,
     /// told first, so an open microphone is off the session before the session changes hands
     /// (`Conversation`).
     var onCall: ((CallMoment) -> Void)?
     enum CallMoment: Equatable { case placing, active, taken, hungUp, over, muted(Bool) }
-
-    /// A reply is held for an open microphone or the call's session, to be read when it closes.
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
@@ -207,6 +209,7 @@ final class Speaker {
             self?.hangUp()
             self?.onCall?(.hungUp)
         }
+        call.onClosing = { [weak self] in self?.audio.callClosing() }
         let over: (String) -> Void = { [weak self] why in
             guard let self else { return }
             defer { onCall?(.over) }
@@ -559,10 +562,12 @@ final class Speaker {
     /// with `VoiceInput.listening`.
     var microphoneOpen: @MainActor () -> Bool = { false }
 
-    /// A press is opening a microphone: set at the press, before `VoiceInput` has awaited the
-    /// permission prompt or started anything, so a reply landing in between waits as it would for
-    /// one already open. `microphoneOpened` clears it.
-    private var opening = false
+    /// The presses opening a microphone: counted at the press, before `VoiceInput` has awaited
+    /// the permission prompt or the call's session or started anything, so a reply landing in
+    /// between waits as it would for one already open, and counted off by `microphoneOpened`. A
+    /// count, not a flag: a press released while it waited is answered after the press that
+    /// followed it has begun opening, and its answer is not that one's.
+    private var openings = 0
 
     /// Told the nonce of a spoken turn whose reply waited for the microphone, once that reply has
     /// been taken or dropped. Until then its turn stays marked spoken (`Harness.answeredAloud` is
@@ -578,14 +583,15 @@ final class Speaker {
     #endif
 
     /// The press's call into `VoiceInput` has returned: the microphone is listening, or the
-    /// press opened nothing, or it closed a hands-free session. It is no longer opening, and a
-    /// reply that waited is read if no microphone is open.
-    func microphoneOpened() {
-        opening = false
+    /// press opened nothing, or it closed a hands-free session. A press that was opening
+    /// (`counted`, told `microphoneOpening`) is no longer, and a reply that waited is read if no
+    /// microphone is open or opening.
+    func microphoneOpened(counted: Bool) {
+        if counted { openings = max(openings - 1, 0) }
         microphoneClosed()
     }
 
-    private var microphoneBusy: Bool { opening || microphoneOpen() }
+    private var microphoneBusy: Bool { openings > 0 || microphoneOpen() }
 
     /// Whether a reply landing now waits rather than being read: a microphone is open or
     /// opening, or the call's session is changing hands — placed and not yet activated by the
@@ -598,12 +604,13 @@ final class Speaker {
     /// waits on with its wait, since opening it again is no reason to lose it — it is read when
     /// this one closes.
     func microphoneOpening() {
+        onMicrophone?(true)
         let waiting = deferred
         deferred = nil
         cancel()
         deferred = waiting
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
-        opening = true
+        openings += 1
     }
 
     /// The press that opened a microphone has done what it was going to, or a microphone closed:
@@ -611,7 +618,11 @@ final class Speaker {
     /// becomes Stop. Free while a microphone is still open or nothing is waiting. A reply the
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
-    func microphoneClosed() { readWhatWaited() }
+    func microphoneClosed() {
+        readWhatWaited()
+        // After the reading, so a reply read now holds the call before the microphone lets it go.
+        if !microphoneBusy { onMicrophone?(false) }
+    }
 
     /// Reads the reply that waited for the microphone or for the call's session, if nothing
     /// holds it back now. One the session refuses here keeps waiting, its turn still marked.

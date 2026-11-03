@@ -1042,16 +1042,17 @@ final class MicPress {
         // A press on a closed microphone stops what is being read, so the mic does not hear it.
         // One on the open microphone leaves the speaker alone: nothing is read while it is open,
         // and a reply waiting for it to close is read once this press closes it.
+        let opens = !stopping && !drawn.open
         if stopping {
             speaker.stop()
-        } else if !drawn.open {
+        } else if opens {
             // From here to `pressDown`'s answer the microphone is opening, and nothing is read.
             speaker.microphoneOpening()
         }
         if stopping { return nil }
         return Task {
             let heard = await voice.pressDown(as: .chat)
-            speaker.microphoneOpened()
+            speaker.microphoneOpened(counted: opens)
             guard let heard else { return }
             await send(heard)
         }
