@@ -19,12 +19,14 @@ struct SettingsView: View {
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
     @AppStorage(SpokenCallSetting.key) private var spokenCall = true
     @AppStorage(EarconsSetting.key) private var earcons = true
+    @AppStorage(WorkingSounds.key) private var workingSounds = WorkingSounds.standard.rawValue
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
     static let spokenCall = "settings-spoken-call"
     static let earcons = "settings-earcons"
+    static let workingSounds = "settings-working-sounds"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
 
@@ -60,6 +62,16 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.earcons)
                 } footer: {
                     Text("A short tone as the microphone opens, as your words go, as a reply read aloud ends, and when a spoken turn fails. Kept on this device.")
+                }
+                Section {
+                    // The mode as the sounds read it, so one kept that is not a mode shows as the standard.
+                    Picker("While Topo works", selection: Binding(get: { WorkingSounds.Mode(rawValue: workingSounds) ?? WorkingSounds.standard },
+                                                                 set: { workingSounds = $0.rawValue })) {
+                        ForEach(WorkingSounds.Mode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .accessibilityIdentifier(SettingsView.workingSounds)
+                } footer: {
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed until the reply begins. Only while a spoken turn is waited for. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the
