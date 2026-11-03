@@ -199,18 +199,6 @@ final class AudioSession {
         var description: String { "the session is not live" }
     }
 
-    /// The first call of a sound that is a moment rather than a path (a cue, a receipt): free on a live
-    /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
-    /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
-    /// the session reconfigured and activated from the background under a hold, for a cue.
-    func ensureLive() throws {
-        guard valid else { throw NotLive() }
-    }
-
-    struct NotLive: Error, CustomStringConvertible {
-        var description: String { "the session is not live" }
-    }
-
     /// Marks the session as needing configuring again, for a caller that found the audio dead
     /// under a session this object believed was live.
     /// Under an active call it changes nothing: the session is the system's and live until the
