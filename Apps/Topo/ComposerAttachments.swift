@@ -38,6 +38,9 @@ final class ComposerAttachments {
     /// an exception rather than a refusal.
     let cameraAvailable: @MainActor () -> Bool
     var hasCamera: Bool { cameraAvailable() }
+    /// The file picker, held here rather than by a view: the chat's views come and go while the
+    /// picker is up, and a picker whose holder went with them never hands back its pick.
+    @ObservationIgnored let files = AttachmentFilePicker()
 
     let store: @MainActor () -> ShareStore?
     private let drain: @MainActor () async -> Void
@@ -52,8 +55,9 @@ final class ComposerAttachments {
 
     /// What is over the chat for this: a picker, or the sheet. One at a time; the photo picker
     /// and the sheet are one presentation of the chat's, which the sheet follows the picker in,
-    /// the file picker is `fileImporter`'s own and the camera is a cover of its own, so a
-    /// `.picker` of either of those is up as something other than the sheet's presentation.
+    /// the file picker is presented by UIKit (`AttachmentFilePicker`) and the camera is a cover of
+    /// its own, so a `.picker` of either of those is up as something other than the sheet's
+    /// presentation.
     enum Up: Identifiable, Equatable {
         case picker(Source)
         case sheet
@@ -72,33 +76,69 @@ final class ComposerAttachments {
     }
 
     /// The `+`'s item pressed: the door judged first, then the picker up. A second press while
-    /// one is up does nothing, and nor does the camera where there is none.
+    /// one is up does nothing, and nor does the camera where there is none; a file picker the
+    /// model still counts up that has been off the screen for a while without answering is let
+    /// go first, so the `+` is never dead.
     func pick(_ source: Source) {
+        if picking == .file, sheet == nil, files.abandoned() {
+            picking = nil
+        }
         guard picking == nil, sheet == nil, source != .camera || hasCamera else { return }
         guard let store = store(), let door = store.door() else { return refuse(.signedOut) }
         guard door.files else { return refuse(.anotherPhone) }
         picking = source
     }
 
-    /// The picker came down with nothing: cancelled, or swiped away.
+    /// The photo picker came down with nothing (`chose(photo: nil)` is its way), or a suite says
+    /// a picker went.
     func dismissed(_ source: Source) {
         guard picking == source else { return }
         picking = nil
     }
 
-    /// The file picker's choice: the picker goes down and the sheet goes up at once, reading,
-    /// while the file is copied into a scratch folder of the store's off the main actor; the
-    /// copy lands on the sheet it was made for, which takes it or, cancelled meanwhile, takes
-    /// it away. The system hands over the original under its grant, not a copy, so the copy
-    /// is this one's and its reading can take as long as an iCloud download.
-    func chose(file url: URL) {
-        guard picking == .file, let store = store() else { return dismissed(.file) }
+    /// The file picker's choice, or nothing: the picker goes down and the sheet goes up at once,
+    /// reading, while the file is copied into a scratch folder of the store's off the main actor;
+    /// the copy lands on the sheet it was made for, which takes it or, cancelled meanwhile, takes
+    /// it away. The picker hands over a copy of its own in the app's temporary folder, already
+    /// downloaded, which is taken away once it is copied, whatever came of the copy.
+    func chose(file url: URL?) {
+        guard picking == .file else {
+            if let url { ComposerAttachments.removePickerCopy(url) }
+            return
+        }
         picking = nil
+        guard let url else { return }
+        guard let store = store() else {
+            ComposerAttachments.removePickerCopy(url)
+            return refuse(.signedOut)
+        }
         let model = ShareSheetModel(store: store, via: .composer)
         sheet = model
         Task.detached(priority: .userInitiated) {
             let outcome = ComposerAttachments.copy(url, as: .file, into: store)
+            ComposerAttachments.removePickerCopy(url)
             await MainActor.run { model.took(outcome) }
+        }
+    }
+
+    /// Takes away the copy the file picker made, which it puts in an `-Inbox` folder of the app's
+    /// temporary folder, and nothing else: a URL anywhere but there is left where it is.
+    nonisolated static func removePickerCopy(_ url: URL) {
+        let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+        let copy = url.resolvingSymlinksInPath().standardizedFileURL
+        let inbox = copy.deletingLastPathComponent()
+        guard inbox.lastPathComponent.hasSuffix("-Inbox"),
+              inbox.deletingLastPathComponent().path == temporary.path else { return }
+        try? FileManager.default.removeItem(at: copy)
+    }
+
+    /// The file picker put up by UIKit, once `picking` says it is up; one that cannot be put up
+    /// (the app between two screens) is the sheet's refusal, not a silent nothing.
+    func presentFilePicker() {
+        guard picking == .file else { return }
+        guard files.present({ [weak self] url in self?.chose(file: url) }) else {
+            picking = nil
+            return refuse(.noPicker)
         }
     }
 
@@ -196,7 +236,8 @@ final class ComposerAttachments {
 
     /// A copy of the file at `url` in a fresh scratch folder of the store's, under the name the
     /// store keeps it by, judged against the store's limit; the copy is what the picker's caller
-    /// hands the sheet. `url` is read under its own grant where it has one (a file picker's URL).
+    /// hands the sheet. `url` is read under its own grant where it has one; the file picker's is
+    /// a copy of its own and has none.
     nonisolated static func copy(_ url: URL, as kind: Share.Kind, into store: ShareStore) -> Picked {
         let granted = url.startAccessingSecurityScopedResource()
         defer { if granted { url.stopAccessingSecurityScopedResource() } }
@@ -220,23 +261,27 @@ final class ComposerAttachments {
 }
 
 /// The pickers and the sheet, hung on the chat: each is up while the model says so, and hands
-/// back what it holds. The file picker is SwiftUI's own (`fileImporter`, one file of any kind,
-/// opened under its grant and copied by `ComposerAttachments.copy`), the photo picker the
-/// system's over the library in its compatible representation, so a HEIC arrives as a JPEG the
-/// mind can read; one image, chosen with no permission asked; and the camera the system's over
-/// the whole screen (`CameraPicker`, a cover of its own, which hands back what it took or
-/// nothing). The photo picker and the sheet are one presentation (`Up`), so the sheet follows
-/// the picker as SwiftUI sequences the two, and neither is swiped away: the picker's Cancel and
-/// the sheet's are the ways down, so every change of what is up is the model's own.
+/// back what it holds. The photo picker is the system's over the library in its compatible
+/// representation, so a HEIC arrives as a JPEG the mind can read; one image, chosen with no
+/// permission asked. It and the sheet are one presentation (`Up`), so the sheet follows the
+/// picker as SwiftUI sequences the two. The camera is the system's over the whole screen
+/// (`CameraPicker`, a cover of its own, which hands back what it took or nothing). The file
+/// picker is the system's document picker, put up by UIKit over whatever is on top
+/// (`AttachmentFilePicker`) and answering through its delegate
+/// alone: SwiftUI's own (`fileImporter`) writes its `isPresented` false before it hands over the
+/// pick, and a binding that took that write as a cancel dropped every pick. What it picked
+/// reaches the model only once it is off the screen, so the sheet that follows is not put up
+/// over a picker still going. The photo picker and the sheet are not swiped away, and
+/// a swipe on the file picker is its Cancel: every change of what is up is the model's own.
 struct ComposerPickers: ViewModifier {
     @Bindable var attachments: ComposerAttachments
     var marks: ShareSheet.Marks
 
     func body(content: Content) -> some View {
         content
-            .fileImporter(isPresented: fileUp, allowedContentTypes: [.item]) { result in
-                guard case .success(let url) = result else { return attachments.dismissed(.file) }
-                attachments.chose(file: url)
+            .onChange(of: attachments.picking == .file) { _, up in
+                guard up else { return }
+                attachments.presentFilePicker()
             }
             .sheet(item: up) { up in
                 switch up {
@@ -245,8 +290,8 @@ struct ComposerPickers: ViewModifier {
                         .ignoresSafeArea()
                         .interactiveDismissDisabled()
                 case .picker(.file), .picker(.camera):
-                    // The file picker is `fileImporter`'s and the camera the cover's, not a
-                    // sheet of this one's.
+                    // The file picker is UIKit's and the camera the cover's, not a sheet of
+                    // this one's.
                     EmptyView()
                 case .sheet:
                     if let model = attachments.sheet {
@@ -267,11 +312,6 @@ struct ComposerPickers: ViewModifier {
                 set: { up in if !up { attachments.dismissed(.camera) } })
     }
 
-    private var fileUp: Binding<Bool> {
-        Binding(get: { attachments.picking == .file },
-                set: { up in if !up { attachments.dismissed(.file) } })
-    }
-
     /// What is presented: the photo picker or the sheet. Nothing is written back: a nil the
     /// system writes as one presentation gives way to the next is not a cancel, and neither
     /// can be swiped away.
@@ -288,6 +328,86 @@ extension ShareSheetModel {
         case .refused(let refusal, let scratch):
             if let scratch { discardScratch(scratch) }
             refuse(refusal)
+        }
+    }
+}
+
+/// `UIDocumentPickerViewController` over every kind of file, one file, handed over as a copy in
+/// the app's temporary folder, put up by UIKit over the view controller on top. Its answer, the
+/// copy, or nil for its Cancel (a swipe down included), is handed over once the picker has left
+/// the screen, and once only.
+@MainActor
+final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate {
+    private var shown: UIDocumentPickerViewController?
+    private var chosen: (@MainActor (URL?) -> Void)?
+    private var presented: Date?
+
+    /// How long a picker may be off the screen without answering before it is taken for gone:
+    /// longer than a presentation takes to land.
+    static let grace: TimeInterval = 3
+
+    /// A picker put up more than `grace` ago that is not on the screen and never answered: let
+    /// go, so the next press puts up another. False while one is up or none is held.
+    func abandoned(now: Date = Date()) -> Bool {
+        guard let shown, let presented, now.timeIntervalSince(presented) > Self.grace,
+              shown.presentingViewController == nil, !shown.isBeingPresented else { return false }
+        self.shown = nil
+        self.chosen = nil
+        self.presented = nil
+        return true
+    }
+
+    /// Puts the picker up; false when one is already up or nothing can present it.
+    func present(_ chosen: @escaping @MainActor (URL?) -> Void) -> Bool {
+        guard shown == nil, let presenter = Self.presenter() else { return false }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        picker.allowsMultipleSelection = false
+        picker.delegate = self
+        shown = picker
+        self.chosen = chosen
+        presented = Date()
+        presenter.present(picker, animated: true)
+        return true
+    }
+
+    /// The view controller on top of the app's key window, which is what can present; nil while
+    /// the one on top is on its way off the screen.
+    private static func presenter() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard var top = scenes.first(where: { $0.activationState == .foregroundActive })?.keyWindow?.rootViewController else {
+            return nil
+        }
+        while let next = top.presentedViewController { top = next }
+        return top.isBeingDismissed ? nil : top
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        urls.dropFirst().forEach { ComposerAttachments.removePickerCopy($0) }
+        answer(controller, urls.first)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        answer(controller, nil)
+    }
+
+    /// The answer, handed over when the picker is off the screen: after its own dismissal where
+    /// it is still up or on its way down, at once where it has already gone.
+    private func answer(_ controller: UIDocumentPickerViewController, _ url: URL?) {
+        guard controller === shown, let chosen else {
+            if let url { ComposerAttachments.removePickerCopy(url) }
+            return
+        }
+        shown = nil
+        self.chosen = nil
+        presented = nil
+        let hand = { MainActor.assumeIsolated { chosen(url) } }
+        if controller.presentingViewController != nil, !controller.isBeingDismissed {
+            controller.dismiss(animated: true, completion: hand)
+        } else if let transition = controller.transitionCoordinator {
+            // Called whether the transition finished or was cancelled: either way it is over.
+            transition.animate(alongsideTransition: nil) { _ in hand() }
+        } else {
+            hand()
         }
     }
 }
