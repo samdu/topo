@@ -49,6 +49,11 @@ final class SpokenCall: NSObject {
     private(set) var active = false
     /// A call wanted while the last one was still closing.
     private var again = false
+    /// Placings of this call the system refused so far: a refusal is tried again, twice, before
+    /// the call fails.
+    private var refusals = 0
+    static let placeAttempts = 3
+    static let retryAfter: Duration = .milliseconds(750)
 
     /// A call is up or on its way up.
     var up: Bool { state == .starting || state == .up || (state == .closing && again) }
@@ -74,6 +79,11 @@ final class SpokenCall: NSObject {
     func start() {
         if state == .closing { again = true; return }
         guard state == .idle else { return }
+        refusals = 0
+        place()
+    }
+
+    private func place() {
         let call = UUID()
         id = call
         state = .starting
@@ -82,7 +92,13 @@ final class SpokenCall: NSObject {
         let action = CXStartCallAction(call: call, handle: CXHandle(type: .generic, value: Self.name))
         system.request(CXTransaction(action: action)) { [weak self] error in
             guard let self, let error, self.id == call else { return }
-            self.fail("not placed: \(error.localizedDescription)")
+            self.refusals += 1
+            let why = "code \((error as NSError).code), \(error.localizedDescription); app \(Self.appState())"
+            guard self.state == .starting, self.refusals < Self.placeAttempts else {
+                return self.fail("not placed after \(self.refusals) attempts: \(why)")
+            }
+            AudioLog.say("call: refused (\(why)); placing again in \(Self.retryAfter)")
+            self.retry(call)
         }
         grace = Task { [sleep] in
             try? await sleep(Self.activationGrace)
@@ -92,6 +108,26 @@ final class SpokenCall: NSObject {
             // exchange's use of it.
             self.fail("never activated")
             self.system.request(CXTransaction(action: CXEndCallAction(call: call))) { _ in }
+        }
+    }
+
+    /// A refused placing is tried again under a new id after `retryAfter`, unless the call was
+    /// ended meanwhile (`end` closes it, which cancels this).
+    private func retry(_ call: UUID) {
+        grace?.cancel()
+        grace = Task { [sleep] in
+            do { try await sleep(Self.retryAfter) } catch { return }
+            guard !Task.isCancelled, self.id == call, self.state == .starting else { return }
+            self.place()
+        }
+    }
+
+    private static func appState() -> String {
+        switch UIApplication.shared.applicationState {
+        case .active: "active"
+        case .inactive: "inactive"
+        case .background: "background"
+        @unknown default: "unknown"
         }
     }
 

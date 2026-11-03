@@ -756,6 +756,9 @@ final class Speaker {
                                 idle ? "ttfa" : "next", seconds, first, audio, seconds / audio, words))
             #endif
         } catch {
+            // Logged in every build, so a sentence that failed is not read as the reply's end:
+            // the error alone, never the words.
+            AudioLog.say("voice: a sentence failed to synthesise (\(String(describing: type(of: error)))): the reply goes on without it")
             #if DEBUG
             DebugRun.say("voice: say failed — \(error.localizedDescription)")
             #endif
