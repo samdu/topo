@@ -37,6 +37,16 @@ final class VoiceInput {
     private(set) var owner: Gate?
     /// True while the microphone stays open after a tap, until the next press.
     private(set) var handsFree = false
+    /// True while a hands-free session is held across the call's session changing hands
+    /// (`suspend`): its generation, owner and sink stand and `listening` stays true, so a reply
+    /// waits for it as for any open microphone; its engine is gone, and `resume` opens it again.
+    private(set) var suspended = false
+    /// Whether a session's caption glances run: false while the conversation carries it behind
+    /// the lock, where nothing draws them and each glance is a decode of the whole utterance.
+    var glancing = true
+    /// Asked at an interruption's start: true when the conversation carries the open session
+    /// across it (`Conversation.carries`), which suspends it rather than dropping it.
+    var carries: (@MainActor () -> Bool)?
     /// Presses that reached `begin`, whatever became of them, and sessions whose microphone
     /// ran, counted when the engine starts, so a press cancelled during the prompts or refused
     /// at the input is a press and not a session. The UI test reads both: the first proves a
@@ -72,6 +82,9 @@ final class VoiceInput {
     /// The microphone prompt's answer: the system's in production, injected by the suite so a
     /// press can be driven through `pressDown` and `pressUp` without TCC.
     private let permission: @MainActor () async -> Bool
+    /// Whether the microphone is already allowed, read without asking: a microphone opened with
+    /// no thumb (`reopen`) never puts the prompt up.
+    private let permitted: @MainActor () -> Bool
     /// Turns the input node's voice processing on or off, on an engine that is not running; the
     /// system's in production, recorded by the suite, whose offline engine has no voice unit.
     private let voiceProcessing: (AVAudioEngine, Bool) throws -> Void
@@ -87,10 +100,22 @@ final class VoiceInput {
     /// Counts sessions; everything asynchronous checks it belongs to the current one. Readable
     /// so the suite can drive a press under the generation the object is on.
     private(set) var generation = 0
+    /// How long a press waits for the call's session to settle (`AudioSession.settled`): past
+    /// the call's closing grace, so a call only the grace finishes is waited out. Settable for
+    /// the suite.
+    var callSettle: Duration = .seconds(3)
+    /// The generation of the press waiting out the call's session (`begin`), and whether a
+    /// tap's release came meanwhile. A generation, so a press cancelled while it waited leaves
+    /// nothing that reads as the next press's.
+    private var settling: Int?
+    private var tappedWhileSettling = false
+    /// Presses `pressDown` ignored while a press waited out the call's session, whose releases
+    /// are owed nothing. Cleared at the next press that begins.
+    private var ignoredWhileSettling = 0
     /// True from the press until the microphone is running: the permission prompts, mainly.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
-    private var ending = false
+    private(set) var ending = false
     private var pressedAt: Date?
     private var interruptionObserver: NSObjectProtocol?
     private var resetObserver: NSObjectProtocol?
@@ -107,6 +132,7 @@ final class VoiceInput {
          formats: @escaping (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
              = VoiceInput.readFormats,
          permission: @escaping @MainActor () async -> Bool = { await AVAudioApplication.requestRecordPermission() },
+         permitted: @escaping @MainActor () -> Bool = { AVAudioApplication.shared.recordPermission == .granted },
          voiceProcessing: @escaping (AVAudioEngine, Bool) throws -> Void = VoiceInput.setVoiceProcessing,
          defaults: UserDefaults = .standard) {
         self.voiceProcessing = voiceProcessing
@@ -119,6 +145,7 @@ final class VoiceInput {
         self.makeEngine = makeEngine
         self.formats = formats
         self.permission = permission
+        self.permitted = permitted
         interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
@@ -127,7 +154,13 @@ final class VoiceInput {
             // may be up and is not to be cancelled for it.
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            Task { @MainActor in self?.cancel() }
+            Task { @MainActor in
+                guard let self else { return }
+                // A session the conversation carries is suspended, never carried across the
+                // event on its engine: under the call's live session it is rebuilt at once
+                // (`Conversation`), otherwise at the call's activation.
+                if self.carries?() == true { self.suspend("the interruption's start") } else { self.cancel() }
+            }
         }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
@@ -158,7 +191,12 @@ final class VoiceInput {
     /// when a permission is denied.
     func pressDown(as gate: Gate) async -> String? {
         if listening, owner == gate, handsFree { return await end(as: gate) }
-        guard !listening, !starting, !ending else { return nil }
+        guard !listening, !starting, !ending else {
+            // A press made while another waits out the call's session reaches nothing, and so
+            // does its release, whenever it comes.
+            if settling == generation { ignoredWhileSettling += 1 }
+            return nil
+        }
         pressedAt = Date()
         await begin(as: gate)
         return nil
@@ -166,9 +204,22 @@ final class VoiceInput {
 
     /// The thumb comes up for `gate`. A hold ends and returns what it heard, to be sent; a tap
     /// leaves the microphone open and returns nil. A release while the permission prompts are
-    /// still up cancels the press, so no microphone is left open with nobody holding it.
+    /// still up cancels the press, so no microphone is left open with nobody holding it; so does
+    /// a hold released while the press waits out a call's session (`begin`), and a tap released
+    /// there opens it hands-free once the session settles.
     func pressUp(as gate: Gate) async -> String? {
         releases += 1
+        if ignoredWhileSettling > 0 {
+            ignoredWhileSettling -= 1
+            return nil
+        }
+        // A tap while the press waits out the call's session is a tap, not a cancel: the
+        // microphone opens hands-free once the session settles.
+        if settling == generation, owner == gate, let pressedAt,
+           Date().timeIntervalSince(pressedAt) < Self.tapLimit {
+            tappedWhileSettling = true
+            return nil
+        }
         if starting, owner == gate {
             generation += 1
             starting = false
@@ -191,6 +242,66 @@ final class VoiceInput {
         tearDown()
     }
 
+    /// Holds an open hands-free session across the call's session changing hands: the tap comes
+    /// off and the engine is stopped and dropped — an engine keeps the input format of the route
+    /// it was made on, and a call can move the route, where a tap on the old format raises past
+    /// any `catch` — while the session's generation, owner and samples stand. The audio session
+    /// hears the microphone close, so what waited on it applies. Nothing for a session that is
+    /// not running.
+    func suspend(_ why: String) {
+        guard listening, !ending, !starting, !suspended else { return }
+        suspended = true
+        captioner?.cancel()
+        captioner = nil
+        removeTap()
+        if engine?.isRunning == true { engine?.stop() }
+        engine = nil
+        AudioLog.say("microphone suspended (\(why)): what was heard is kept")
+        audio.microphone(open: false)
+    }
+
+    /// Opens a suspended session again, on the session the call's activation made live: the
+    /// press's own path — `ensureActive`, a new engine, voice processing set before the one read
+    /// of the formats, the guard, the tap — on the same generation, going on into the same
+    /// samples. A refusal leaves the session suspended with what it heard, for its owner to end
+    /// (`end` decodes what was kept) or drop; answers whether the microphone is running.
+    @discardableResult
+    func resume() -> Bool {
+        guard listening, suspended, !ending, let gate = owner else { return false }
+        do {
+            try startMicrophone(as: gate, mine: generation, resuming: true)
+            suspended = false
+            return true
+        } catch {
+            removeTap()
+            if engine?.isRunning == true { engine?.stop() }
+            engine = nil
+            if error is InputUnavailable || error is SessionInactive { audio.invalidate() }
+            refusal = "the microphone did not resume: \(error)"
+            AudioLog.say(refusal ?? "")
+            return false
+        }
+    }
+
+    /// Opens a hands-free session with no thumb: the conversation's next utterance behind the
+    /// lock. A press in everything but the gesture: the permission is not asked — one not
+    /// already granted refuses — and the ear's readiness, the session, the engine and the tap go
+    /// through `press` as a thumb's do. Answers whether the microphone is listening for `gate`.
+    /// It does not wait out a call's session changing hands, as a thumb's press does, and refuses:
+    /// behind the lock the wait could end at the call's end, on a session the background cannot
+    /// activate.
+    func reopen(as gate: Gate) async -> Bool {
+        guard !listening, !starting, !ending, !denied, permitted() else { return false }
+        guard !audio.callChangingHands else {
+            refusal = "the call's session is changing hands"
+            return false
+        }
+        await begin(as: gate)
+        guard listening, owner == gate else { return false }
+        handsFree = true
+        return true
+    }
+
     private func begin(as gate: Gate) async {
         presses += 1
         refusal = nil
@@ -200,6 +311,7 @@ final class VoiceInput {
         #endif
         generation += 1
         let mine = generation
+        ignoredWhileSettling = 0
         starting = true
         owner = gate
         text = ""
@@ -213,7 +325,21 @@ final class VoiceInput {
         // Released or cancelled while the prompt was up: start nothing.
         guard generation == mine else { return }
         denied = false
+        // The call's session changing hands — closing as a reply ends, which is when a person
+        // answers — is waited out rather than refused: a tap put on a closing session is cut by
+        // its deactivation. Past the bound the press goes on and `ensureActive` refuses it.
+        var tapped = false
+        if audio.callChangingHands {
+            settling = mine
+            tappedWhileSettling = false
+            _ = await audio.settled(within: callSettle)
+            if settling == mine { settling = nil }
+            // Released or cancelled while it waited: start nothing.
+            guard generation == mine else { return }
+            tapped = tappedWhileSettling
+        }
         press(as: gate, mine: mine)
+        if tapped, listening, generation == mine { handsFree = true }
     }
 
     /// The microphone was refused at the prompt: the press is over, and the button stays dimmed
@@ -283,7 +409,7 @@ final class VoiceInput {
     /// an engine exists, the engine before its input node is read, voice processing set before
     /// the formats are read, and the formats before a tap is installed on them; a throw anywhere
     /// leaves the press refused with nothing running.
-    private func startMicrophone(as gate: Gate, mine: Int) throws {
+    private func startMicrophone(as gate: Gate, mine: Int, resuming: Bool = false) throws {
         // The setting is read now and not again, so a change made mid-utterance is the next
         // press's. The session hears of it first, because the mode is the session's.
         audio.wantVoiceProcessing(NoiseSuppression.enabled(defaults))
@@ -319,7 +445,8 @@ final class VoiceInput {
         let meter = meter
         #endif
         let sink = sink
-        sink.reset()
+        // A resumed session goes on into the samples it suspended with: one utterance.
+        if !resuming { sink.reset() }
         // The tap block is `@Sendable`, and it is load-bearing: it runs on the audio thread, and
         // a closure formed on the main actor without it is main-actor-isolated by inference,
         // which Swift 6 opens with an executor check that traps off the main thread
@@ -333,9 +460,9 @@ final class VoiceInput {
         engine.prepare()
         try engine.start()
         audio.microphone(open: true)
-        AudioLog.say("microphone open: noise suppression \(suppress ? "on" : "off")")
+        AudioLog.say("microphone \(resuming ? "resumed" : "open"): noise suppression \(suppress ? "on" : "off")")
         listening = true
-        sessions += 1
+        if !resuming { sessions += 1 }
         audio.wantScreenAwake(true, for: .listening)
         startCaptions(for: mine)
     }
@@ -343,11 +470,14 @@ final class VoiceInput {
     /// The caption on the ear's path: every `glanceEvery`, the audio so far decoded bare, once
     /// there is a second of it and something new has arrived since the last glance.
     private func startCaptions(for mine: Int) {
+        guard glancing else { return }
         captioner = Task { [weak self] in
             var seen = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.glanceEvery)
                 guard let self, self.generation == mine, self.listening, !self.ending else { return }
+                // Behind the lock nobody reads a caption: the conversation stops the glances.
+                guard self.glancing else { continue }
                 let samples = self.sink.peek()
                 guard samples.count > seen, samples.count > Ear.rate else { continue }
                 seen = samples.count
@@ -426,6 +556,7 @@ final class VoiceInput {
         starting = false
         ending = false
         handsFree = false
+        suspended = false
         owner = nil
         pressedAt = nil
         audio.wantScreenAwake(false, for: .listening)

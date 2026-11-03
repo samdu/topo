@@ -1,10 +1,11 @@
 import Foundation
 import TopoTools
 
-/// `topo voice`: the mind's hand on how this phone hears and speaks. Two settings, each read and
+/// `topo voice`: the mind's hand on how this phone hears and speaks. Three settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
-/// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press, and
-/// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's.
+/// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
+/// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
+/// and Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks.
 struct VoiceTool: Tool {
     /// The defaults are read and written from the service's own task; `UserDefaults` is safe there.
     private let defaults: Defaults
@@ -16,7 +17,7 @@ struct VoiceTool: Tool {
     private struct Defaults: @unchecked Sendable { let store: UserDefaults }
 
     let name = "voice"
-    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature"
+    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the call behind the lock"
     let usage = """
     topo voice noise-suppression [status]   whether the microphone is cleaned up before it is heard
     topo voice noise-suppression on         clean it up: Apple's voice processing (noise suppression, echo
@@ -31,6 +32,13 @@ struct VoiceTool: Tool {
 
     \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. A change applies from the next reply read aloud, on this phone only, and they
     can change it back in Settings.
+
+    topo voice call [status]                whether a spoken reply behind the lock is a call
+    topo voice call on                      it is: a card on the Lock Screen while you answer, hang up stops you
+    topo voice call off                     no call: the wait behind the lock is capped at two minutes
+
+    On unless turned off. A change applies from the next spoken reply, on this phone only, and
+    they can change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -38,6 +46,7 @@ struct VoiceTool: Tool {
         switch arguments.first {
         case "noise-suppression": return noiseSuppression(arguments)
         case "temperature": return temperature(arguments)
+        case "call": return call(arguments)
         default: return .usage(usage + "\n")
         }
     }
@@ -58,6 +67,19 @@ struct VoiceTool: Tool {
     private func set(_ on: Bool) -> ToolReply {
         defaults.store.set(on, forKey: NoiseSuppression.key)
         return .ok("noise suppression \(on ? "on" : "off"), from the next press\n")
+    }
+
+    private func call(_ arguments: [String]) -> ToolReply {
+        switch arguments.count == 2 ? arguments[1] : "status" {
+        case "status":
+            return .ok("call for spoken replies \(SpokenCallSetting.enabled(defaults.store) ? "on" : "off")\n")
+        case "on", "off":
+            let on = arguments[1] == "on"
+            defaults.store.set(on, forKey: SpokenCallSetting.key)
+            return .ok("call for spoken replies \(on ? "on" : "off"), from the next spoken reply\n")
+        default:
+            return .usage(usage + "\n")
+        }
     }
 
     private func temperature(_ arguments: [String]) -> ToolReply {

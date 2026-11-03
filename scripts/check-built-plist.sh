@@ -98,7 +98,7 @@ fi
 
 modes="$(plutil -extract UIBackgroundModes json -o - -- "$plist" 2>/dev/null || true)"
 status=0
-for mode in remote-notification audio; do
+for mode in remote-notification audio voip; do
     case "$modes" in
         *"\"$mode\""*) ;;
         *)

@@ -26,6 +26,27 @@ final class AudioSession {
         case awaitingReply(String)
         case speaking
     }
+    /// Where the session is with the CallKit call a spoken exchange behind the lock is
+    /// (`SpokenCall`). From the call's placing until the system says it is over the session is
+    /// the system's: `placed` is set and not yet activated, `active` is held active by the system
+    /// at the call's priority, `deactivated` is taken away with the call still standing (a phone
+    /// call holds it), `closing` is ended and on its way back, still active until the system
+    /// deactivates it about a second later. Nothing here activates or hands back while the phase
+    /// is not `none`.
+    enum CallPhase { case none, placed, active, deactivated, closing }
+    /// A path wanted the session while the call's phase has it the system's and not active.
+    struct CallNotActive: Error, CustomStringConvertible {
+        let phase: CallPhase
+        var description: String {
+            switch phase {
+            case .placed: "the call's session is placed and not yet activated"
+            case .active: "the call's session is the system's; nothing here configures it"
+            case .deactivated: "the call's session is deactivated with the call standing"
+            case .closing: "the call's session is closing; the system deactivates it"
+            case .none: "no call"
+            }
+        }
+    }
 
     private var recordClaims: Set<RecordClaim> = []
     private var screenClaims: Set<ScreenClaim> = []
@@ -52,9 +73,23 @@ final class AudioSession {
     /// either refuses: activation is commonly refused while another app is in front, which is
     /// exactly where a media services reset is asked for.
     private let configure: (Bool, Bool) throws -> Void
+    /// Sets the category and the mode as `configure` does and activates nothing: the call's
+    /// configuration, which the system activates itself.
+    private let setCategory: (Bool, Bool) throws -> Void
+    /// Deactivates the session, telling other audio it may resume when asked to (the hand-back).
+    private let deactivate: (_ notifyingOthers: Bool) throws -> Void
+    private(set) var call: CallPhase = .none
+    /// The record flag of the last configuration that set the category, nil before one has:
+    /// entering the quiet configuration from the record one is where the hand-back goes.
+    private var configuredRecord: Bool?
     /// Whether the app is in front, which is the only place a configuration is worth attempting:
     /// iOS refuses one from the background for a non-mixable session.
     private let isActive: @MainActor () -> Bool
+    /// Whether another app is playing — a podcast, music — which the foreground's warm claim
+    /// leaves alone (`warmRecord`).
+    private let otherAudioPlaying: @MainActor () -> Bool
+    /// Whether the microphone may be used, which the warm claim asks before it takes the session.
+    private let recordPermitted: @MainActor () -> Bool
     /// True once the session has been configured; a reset re-applies only a session that was.
     private var applied = false
     /// A claim change that came in while a hold stood or the microphone was open, waiting for
@@ -78,14 +113,32 @@ final class AudioSession {
     /// True only between a configuration that activated the session and the next reset or failure.
     private var valid = false
     private var resetObserver: NSObjectProtocol?
+    /// The outputs the session is routed to now, by port type (`currentRoute`).
+    private let outputs: @MainActor () -> [AVAudioSession.Port]
+    /// Overrides the output to the speaker, or clears the override.
+    private let speakerOverride: @MainActor (Bool) throws -> Void
+    /// Whether the call's activation overrode the earpiece to the speaker.
+    private var overridden = false
 
     /// iOS resetting the media server leaves the session at its default category and inactive, so
     /// the configuration the claims asked for is applied again; a session never configured is left
     /// alone, since activating it is not the reset's to decide.
     init(center: NotificationCenter = .default,
          configure: @escaping (Bool, Bool) throws -> Void = AudioSession.configureSession(record:processed:),
-         isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive) {
+         setCategory: @escaping (Bool, Bool) throws -> Void = AudioSession.setCategory(record:processed:),
+         deactivate: @escaping (Bool) throws -> Void = AudioSession.deactivate(notifyingOthers:),
+         isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive,
+         otherAudioPlaying: @escaping @MainActor () -> Bool = { AVAudioSession.sharedInstance().isOtherAudioPlaying },
+         recordPermitted: @escaping @MainActor () -> Bool = { AVAudioApplication.shared.recordPermission == .granted },
+         outputs: @escaping @MainActor () -> [AVAudioSession.Port] = { AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType) },
+         speakerOverride: @escaping @MainActor (Bool) throws -> Void = { try AVAudioSession.sharedInstance().overrideOutputAudioPort($0 ? .speaker : .none) }) {
+        self.outputs = outputs
+        self.speakerOverride = speakerOverride
         self.configure = configure
+        self.otherAudioPlaying = otherAudioPlaying
+        self.recordPermitted = recordPermitted
+        self.setCategory = setCategory
+        self.deactivate = deactivate
         self.isActive = isActive
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
@@ -111,13 +164,42 @@ final class AudioSession {
     /// configuration there is an interruption that took the session, and the end of one is
     /// exactly when iOS allows the session back.
     func ensureActive() throws {
-        guard !valid else { return }
-        try apply()
+        switch call {
+        case .active:
+            // The system holds the session active for the call, and nothing here doubts it: a
+            // `.began` iOS posts at the lock screen with a call up is not the session gone.
+            return
+        case .placed, .deactivated, .closing:
+            // A closing session is still active, and the system takes it a second later with
+            // whatever was put on it: a press or a reading started now would be cut there.
+            throw CallNotActive(phase: call)
+        case .none:
+            guard !valid else { return }
+            try apply()
+        }
+    }
+
+    /// The first call of a sound that is a moment rather than a path (a cue, a receipt): free on a live
+    /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
+    /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
+    /// the session reconfigured and activated from the background under a hold, for a cue.
+    func ensureLive() throws {
+        guard valid else { throw NotLive() }
+    }
+
+    struct NotLive: Error, CustomStringConvertible {
+        var description: String { "the session is not live" }
     }
 
     /// Marks the session as needing configuring again, for a caller that found the audio dead
     /// under a session this object believed was live.
-    func invalidate() { valid = false }
+    /// Under an active call it changes nothing: the session is the system's and live until the
+    /// system says otherwise (`callDeactivated`, `callOver`), and a `.began` iOS posts at the lock
+    /// screen or as the call takes the session is not the session gone.
+    func invalidate() {
+        guard call != .active else { return }
+        valid = false
+    }
 
     /// Claims or drops the record configuration for one surface. The session is touched only
     /// when the answer changes, so a press that finds it already claimed pays nothing. A failure
@@ -126,6 +208,11 @@ final class AudioSession {
     func wantRecord(_ on: Bool, for who: RecordClaim) {
         let was = recordMode
         if on { recordClaims.insert(who) } else { recordClaims.remove(who) }
+        // The warm claim another app's playing put off is taken with the exchange's own: a press
+        // drops its claim as the microphone closes, before the wait's hold is taken, and the
+        // record configuration has to stand from the press to the reply's end, not hand the
+        // session back between the two and read the reply over the podcast.
+        if on, who != .warm, warmWanted { recordClaims.insert(.warm) }
         guard recordMode != was else { return }
         guard !kept else {
             deferredClaims = true
@@ -158,17 +245,33 @@ final class AudioSession {
     func microphone(open: Bool) {
         guard microphoneOpen != open else { return }
         microphoneOpen = open
-        if !open { applyDeferred(after: "the microphone has closed") }
+        if !open {
+            clearOverride(after: "the microphone has closed")
+            applyDeferred(after: "the microphone has closed")
+        }
     }
 
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
     /// first `playAndRecord` activation of a launch costs a route change, seconds of it on
     /// AirPods, and paying that at the press is what a press feeling slow is. Permission-gated,
-    /// so an unasked phone meets the microphone prompt at the button, never on a foreground.
+    /// so an unasked phone meets the microphone prompt at the button, never on a foreground. Not
+    /// taken while another app is playing: the record configuration cannot mix, so taking it
+    /// would pause the podcast with nothing said, and Topo takes the session from other audio
+    /// only when a spoken exchange starts — that press pays the route change instead, and takes
+    /// the warm claim with its own (`wantRecord`), so the exchange keeps the session to its end
+    /// and Topo holds it, as it would have, until it leaves the front.
     func warmRecord(_ on: Bool) {
-        if on, AVAudioApplication.shared.recordPermission != .granted { return }
+        warmWanted = on
+        if on, !recordPermitted() { return }
+        if on, otherAudioPlaying() {
+            return AudioLog.say("not warming the record configuration: another app is playing")
+        }
         wantRecord(on, for: .warm)
     }
+
+    /// The app is in front and would warm the record configuration: the warm claim stands, or
+    /// waits for the next press because another app was playing.
+    private var warmWanted = false
 
     /// Claims or drops the hold that keeps the process running when the phone is locked or Topo
     /// is behind another app. Under the `audio` background mode iOS runs a backgrounded process
@@ -185,8 +288,194 @@ final class AudioSession {
         // taken while another already stands is the moment to retry a keeper an earlier refusal
         // left down, and a hold nothing renders for is a hold on paper.
         guard holding != wasHolding else { onHoldChanged?(holding); return }
-        if !holding { applyDeferred(after: "the last hold is gone") }
+        // The speaker first, so the keeper's engine is stopped before the session is let go: a
+        // deactivation with an engine still rendering is refused as busy.
         onHoldChanged?(holding)
+        if !holding {
+            clearOverride(after: "the last hold is gone")
+            letGo(after: "the last hold is gone")
+        }
+    }
+
+    /// Clears the call's speaker override once the call is over and nothing keeps the session:
+    /// a route change under an open microphone's tap or a reply's engine is the change the
+    /// session is kept from, so with either standing it waits for the last of them.
+    private func clearOverride(after what: String) {
+        guard overridden, call == .none, !kept else { return }
+        overridden = false
+        do {
+            try speakerOverride(false)
+            AudioLog.say("\(what): the call's speaker override is cleared")
+        } catch {
+            AudioLog.say("\(what): the call's speaker override did not clear: \(error)")
+        }
+    }
+
+    /// The last hold has gone. In front, what waited is applied, as it is when the microphone
+    /// closes; away, the session is handed back (`handBack`), with what waited left for the next
+    /// audio path; under a call nothing is let go until the system says the call is over
+    /// (`callOver`), since the session is the system's until then.
+    private func letGo(after what: String) {
+        guard !kept else { return }
+        guard call == .none else {
+            AudioLog.say("\(what) under the call; the session is the system's until it is over")
+            return
+        }
+        if isActive() { applyDeferred(after: what) } else { handBack(after: what) }
+    }
+
+    /// Whether other audio took up again a second after it was told to, for the log alone: the
+    /// hand-back's effect is the other app's to decide, and this is the only sight of it.
+    private func noteOtherAudio(after what: String) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            AudioLog.say("a second after \(what): other audio playing \(self.otherAudioPlaying())")
+        }
+    }
+
+    /// Topo has finished with the session away from the front: it is deactivated, telling the
+    /// audio the press paused — a podcast, music — that it may resume, which the record
+    /// configuration going on its own never does. A deactivation is allowed from the background
+    /// where an activation is not. The claims that waited stay waiting for the next audio path,
+    /// which configures and activates afresh, and a refusal (an engine still rendering) is
+    /// logged and leaves the session where it was, marked as needing configuring.
+    private func handBack(after what: String) {
+        valid = false
+        // Marked invalid, the next audio path configures from the claims as they stand, so
+        // nothing is owed to a later apply of what waited; and other audio has been told, so the
+        // quiet configuration that next path may enter owes it nothing more.
+        deferredClaims = false
+        do {
+            try deactivate(true)
+            configuredRecord = nil
+            AudioLog.say("\(what) with the app away; the session is handed back and other audio told to resume (record \(recordMode), other audio playing \(otherAudioPlaying()))")
+            noteOtherAudio(after: what)
+        } catch {
+            AudioLog.say("\(what) with the app away; the session could not be handed back: \(error)")
+        }
+    }
+
+    /// True while the call's session is on its way to the system or back from it: placed and
+    /// not yet activated, taken with the call standing, or closing. A reply landing then waits
+    /// for the activation or the call's end (`Speaker`), as one does for an open microphone, and
+    /// a press waits for the same (`settled`).
+    var callChangingHands: Bool { call == .placed || call == .deactivated || call == .closing }
+
+    private var settling: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    /// Waits until the call's session is no longer changing hands — activated, or the call over
+    /// — or for `bound`, whichever is first, and answers whether it settled. Free when it is not
+    /// changing hands. A press waits here rather than being refused, since the window is the
+    /// second after a reply ends, which is when a person answers. Each wait's bound ends that
+    /// wait alone.
+    func settled(within bound: Duration, sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async -> Bool {
+        guard callChangingHands else { return true }
+        let id = UUID()
+        let timer = Task { @MainActor [weak self] in
+            try? await sleep(bound)
+            guard !Task.isCancelled else { return }
+            self?.settling.removeValue(forKey: id)?.resume()
+        }
+        await withCheckedContinuation { settling[id] = $0 }
+        timer.cancel()
+        return !callChangingHands
+    }
+
+    private func releaseSettling() {
+        let waiting = settling.values
+        settling = [:]
+        waiting.forEach { $0.resume() }
+    }
+
+    /// The call was ended, by Topo or from the card: the session stays the system's, active,
+    /// until its deactivation (`callOver`), and nothing new is put on it meanwhile.
+    func callClosing() {
+        // A call refused before the system performed its start never took the session.
+        guard call != .none, call != .closing else { return }
+        call = .closing
+        valid = false
+        AudioLog.say("call closing: nothing new goes on the session until it is over")
+    }
+
+    /// `SpokenCall`'s `onStart`: the system is placing the call and will activate the session
+    /// itself, so the record configuration is set with the mode as it stands and nothing is
+    /// activated, and the session is not this object's again until `callActivated`. A category
+    /// that will not set is logged: the call goes on without it, on whatever the session was.
+    func callPlaced() {
+        call = .placed
+        valid = false
+        do {
+            try setCategory(true, processed)
+            configuredRecord = true
+            voiceProcessed = processed
+            AudioLog.say("call placed: the record configuration is set (voice processing \(processed)); the system activates")
+        } catch {
+            AudioLog.say("call placed: the category did not set: \(error)")
+        }
+    }
+
+    /// The system activated the session for the call: it is live, at the call's priority, and
+    /// stays so until `callDeactivated` or `callOver`.
+    func callActivated() {
+        call = .active
+        applied = true
+        valid = true
+        defer { releaseSettling() }
+        // CallKit routes an activated call to the earpiece, whatever the category's
+        // `defaultToSpeaker` says: a reply read there is not heard from a phone held away or
+        // lying down. Overridden to the speaker only from the earpiece, so AirPods, a car or
+        // headphones keep the call. A route override, not a category or an activation, made
+        // before the speaker's rebuild puts an engine on the new session.
+        let route = outputs()
+        if route.contains(.builtInReceiver) {
+            do {
+                try speakerOverride(true)
+                overridden = true
+                AudioLog.say("call activated: the session is the system's and live; the earpiece overridden to the speaker")
+            } catch {
+                AudioLog.say("call activated: the session is the system's and live; the earpiece could not be overridden: \(error)")
+            }
+        } else {
+            AudioLog.say("call activated: the session is the system's and live (route \(route.map(\.rawValue).joined(separator: ", ")))")
+        }
+    }
+
+    /// The system took the session with the call still standing (a phone call holds this one):
+    /// nothing is valid until it activates again.
+    func callDeactivated() {
+        call = .deactivated
+        valid = false
+        AudioLog.say("call deactivated with the call standing: the session is not live")
+    }
+
+    /// The call is over, ended or failed, and the session is this object's again, inactive. With
+    /// a hold standing or the microphone open nothing is done here: the speaker re-ensures for
+    /// its keeper, in front where that is allowed. With nothing kept, in front the claims that
+    /// waited are applied; away, the session is handed back so what the exchange paused resumes.
+    func callOver() {
+        // A call refused before the system performed its start never took the session.
+        guard call != .none else { return }
+        call = .none
+        valid = false
+        releaseSettling()
+        clearOverride(after: "the call is over")
+        AudioLog.say("call over: other audio playing \(otherAudioPlaying())")
+        guard !kept else {
+            AudioLog.say("call over with \(keptBy); the session waits for the next audio path")
+            return
+        }
+        if isActive() {
+            if deferredClaims {
+                deferredClaims = false
+                AudioLog.say("call over; the claims are applied (record \(recordMode))")
+                applyOrRemember()
+            } else {
+                AudioLog.say("call over in front; the session waits for the next audio path")
+            }
+        } else {
+            handBack(after: "the call is over")
+        }
     }
 
     /// The claim changes a hold or an open microphone stood in the way of, applied once neither
@@ -228,9 +517,29 @@ final class AudioSession {
     }
 
     private func apply() throws {
+        // Nothing activates beside the call: the claims wait for `callOver`.
+        guard call == .none else {
+            deferredClaims = true
+            throw CallNotActive(phase: call)
+        }
         applied = true
         valid = false
+        // Leaving the record configuration for the quiet one with nothing held is the exchange's
+        // end: the hand-back goes first, so what the press paused is told to resume before the
+        // mixable session is activated beside it. Logged, not thrown: the quiet configuration is
+        // still wanted whether or not other audio was told. Under a hold or an open microphone
+        // the exchange is not over, and other audio is told at the last hold's drop instead.
+        if configuredRecord == true, !recordMode, !kept {
+            do {
+                try deactivate(true)
+                AudioLog.say("the record configuration is let go; other audio told to resume")
+                noteOtherAudio(after: "the record configuration let go")
+            } catch {
+                AudioLog.say("the record configuration is let go; other audio could not be told: \(error)")
+            }
+        }
         try configure(recordMode, processed)
+        configuredRecord = recordMode
         voiceProcessed = recordMode && processed
         valid = true
     }
@@ -247,6 +556,11 @@ final class AudioSession {
     static func appIsActive() -> Bool { UIApplication.shared.applicationState == .active }
 
     nonisolated static func configureSession(record: Bool, processed: Bool) throws {
+        try setCategory(record: record, processed: processed)
+        try AVAudioSession.sharedInstance().setActive(true)
+    }
+
+    nonisolated static func setCategory(record: Bool, processed: Bool) throws {
         let session = AVAudioSession.sharedInstance()
         if record {
             try session.setCategory(.playAndRecord, mode: processed ? .voiceChat : .default,
@@ -254,7 +568,12 @@ final class AudioSession {
         } else {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         }
-        try session.setActive(true)
+    }
+
+    /// `notifyOthersOnDeactivation` is what tells the app whose audio this session interrupted
+    /// that it may resume; without it the podcast paused at the press stays paused.
+    nonisolated static func deactivate(notifyingOthers: Bool) throws {
+        try AVAudioSession.sharedInstance().setActive(false, options: notifyingOthers ? [.notifyOthersOnDeactivation] : [])
     }
 }
 #endif

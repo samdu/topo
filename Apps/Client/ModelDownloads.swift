@@ -67,6 +67,8 @@ struct ModelManifest: Codable, Sendable {
     /// the parent of the directory it is given.
     static let parakeet = "parakeet-tdt-0.6b-v2"
     static let ctc = "parakeet-ctc-110m-coreml"
+    /// Silero's voice activity detector, which ends an utterance behind the lock (`Endpoint`).
+    static let vad = "silero-vad-coreml"
     /// The voice's repository. Its paths are repository-relative (`v2.1/english/…`), because
     /// FluidAudio's Pocket loader reads the language pack from beneath the repository root.
     static let pocket = "pocket-tts-coreml"

@@ -1,4 +1,5 @@
 import OSLog
+import CallKit
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -17,6 +18,9 @@ struct TopoApp: App {
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
+    @State private var callDriver: SpokenCallDriver
+    @State private var conversation: Conversation
+    private let endpoint: Endpoint
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
@@ -149,6 +153,14 @@ struct TopoApp: App {
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
         let speaker = Speaker(audio: audio, voice: spoken)
+        // A spoken exchange behind the lock is a call: placed while a hold stands with the
+        // app in the background, ended as the app comes forward (`SpokenCall`).
+        let call = SpokenCall()
+        speaker.attach(call)
+        let callDriver = SpokenCallDriver(call: call)
+        speaker.onHold = { callDriver.holdChanged($0) }
+        speaker.onMicrophone = { callDriver.microphoneChanged($0) }
+        _callDriver = State(initialValue: callDriver)
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
         // and goes when its compile ends. A debug stand-in ear, which may load for ever, holds
         // nothing back.
@@ -164,6 +176,29 @@ struct TopoApp: App {
         // it to close (`Speaker.speak`).
         speaker.microphoneOpen = { voice.listening }
         MicrophoneWatch.start(voice, speaker)
+        // An open hands-free spoken turn as the app goes behind the lock goes on as a
+        // conversation over the call: the call is placed for it, the resident stays up for it,
+        // and the microphone is suspended across the session changing hands, at whichever of
+        // the interruption's start and the call's placing comes first.
+        let endpoint = Endpoint()
+        self.endpoint = endpoint
+        let calls = CXCallObserver()
+        let conversation = Conversation(voice: voice, speaker: speaker, endpoint: endpoint,
+                                        holding: { [weak audio] in audio?.holding ?? false },
+                                        otherCall: { calls.calls.contains { !$0.hasEnded && $0.uuid != call.id } })
+        speaker.onCall = { conversation.call($0) }
+        conversation.conversingChanged = { callDriver.conversingChanged($0) }
+        voice.carries = { [weak conversation] in
+            guard let conversation, conversation.carries() else { return false }
+            conversation.noteInterruption()
+            return true
+        }
+        GuestResident.shared.conversing = { [weak conversation] beginning in
+            guard let conversation else { return false }
+            return beginning ? conversation.beginIfCarried() : conversation.on
+        }
+        conversation.ended = { GuestResident.shared.conversationEnded() }
+        _conversation = State(initialValue: conversation)
         _voice = State(initialValue: voice)
         _speaker = State(initialValue: speaker)
         // What the process costs, a line a minute, with what it was doing.
@@ -235,7 +270,7 @@ struct TopoApp: App {
     /// The app: the chat and everything the scene's phases drive.
     private var chat: some View {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
-            .environment(voice).environment(speaker).environment(memory).environment(mascot)
+            .environment(voice).environment(speaker).environment(conversation).environment(memory).environment(mascot)
             .environment(connections)
             // What every view draws with, which is the vault's `look.json` read onto the
             // compiled look. It is worn here rather than on the chat so that the first run,
@@ -273,6 +308,9 @@ struct TopoApp: App {
                 if signIn.phase == .signedIn { shares.follow(from: .signedIn, to: .signedIn, guestIsHere: owner) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
+                // Said in the audio log beside the call driver's own source, UIKit's, so a run
+                // says which of the two the lock reached first.
+                AudioLog.say("scene \(phase)")
                 audio.warmRecord(phase == .active)
                 if phase == .active {
                     Perf.mark("scene.active")
@@ -283,6 +321,7 @@ struct TopoApp: App {
                     Task.detached(priority: .utility) { ScreenTool.sweep(under: GuestResident.homeDirectory) }
                     LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
+                    endpoint.prepare()
                     speaker.prepare()
                     // The guest's rootfs and Claude Code, fetched (and the rootfs imported)
                     // on the same cue, so the userland is on the phone before anything
