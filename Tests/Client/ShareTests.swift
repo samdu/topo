@@ -3,7 +3,9 @@ import TopoAuth
 import TopoCore
 import TopoCoreTesting
 import TopoTurn
+import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 import XCTest
 
 @testable import Topo
@@ -612,7 +614,7 @@ final class ShareTests: XCTestCase {
         XCTAssertNil(attachments.picking, "the picker stayed up after its Cancel")
         XCTAssertNil(attachments.sheet, "a picker closed with nothing put up a sheet")
         attachments.pick(.file)
-        XCTAssertEqual(attachments.filePresses, 2, "a second press after a Cancel put no picker up")
+        XCTAssertEqual(attachments.filePresses, 2, "a second press after a Cancel was not counted")
         attachments.chose(file: nil)
 
         let inbox = FileManager.default.temporaryDirectory.appendingPathComponent("test-\(UUID().uuidString)-Inbox", isDirectory: true)
@@ -637,6 +639,59 @@ final class ShareTests: XCTestCase {
         attachments.chose(file: late)
         XCTAssertNil(attachments.sheet)
         XCTAssertFalse(FileManager.default.fileExists(atPath: late.path), "a late pick's copy was left behind")
+    }
+
+    /// A file picker that stands in for the system's: counts what it is asked to put up, and
+    /// says it was left behind when the test says so.
+    @MainActor private final class StandInPicker: FilePicking {
+        var stuck = false
+        var presents = 0
+        func abandoned(now: Date) -> Bool {
+            defer { stuck = false }
+            return stuck
+        }
+        func present(_ chosen: @escaping @MainActor (URL?) -> Void) -> Bool {
+            presents += 1
+            return true
+        }
+    }
+
+    /// A press over a file picker that went without answering lets it go and asks for another,
+    /// and the chat puts that one up: a press takes `picking` from `.file` back to `.file` in
+    /// one call, so the chat is told by the count of presses and not by `picking`.
+    func testAPressOverAStuckFilePickerPutsAnotherUp() throws {
+        try store.open(files: true)
+        let store = store
+        let picker = StandInPicker()
+        let attachments = ComposerAttachments(store: { store }, drain: {}, files: picker)
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.rootViewController = UIHostingController(rootView: Color.clear.modifier(ComposerPickers(attachments: attachments, marks: .init())))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let settle = {
+            window.layoutIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            window.layoutIfNeeded()
+        }
+        settle()
+        XCTAssertEqual(picker.presents, 0, "the chat put a picker up with nothing pressed")
+
+        attachments.pick(.file)
+        settle()
+        XCTAssertEqual(picker.presents, 1, "a press put no picker up")
+        attachments.pick(.file)
+        settle()
+        XCTAssertEqual(picker.presents, 1, "a press while one is up put up another")
+
+        picker.stuck = true
+        attachments.pick(.file)
+        XCTAssertEqual(attachments.picking, .file)
+        XCTAssertEqual(attachments.filePresses, 2)
+        settle()
+        XCTAssertEqual(picker.presents, 2, "a press over a stuck picker put none up, leaving the + dead")
     }
 
     /// The sheet's item once the copy or the read has landed.
