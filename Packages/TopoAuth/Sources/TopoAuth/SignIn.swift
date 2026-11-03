@@ -61,6 +61,7 @@ public final class SignIn {
 
     private let login: any ClaudeLogin
     private let cache: LoginCache
+    private let local: LocalLogin
     private var attempt: (any LoginAttempt)?
     /// Counts attempts, sign-outs and cancels: what an older one hears afterwards reaches nothing.
     private var generation = 0
@@ -74,10 +75,11 @@ public final class SignIn {
     /// takes that token's `oauth_token` too.
     private let accept: @Sendable (ClaudeLoginStatus) -> Bool
 
-    public init(login: any ClaudeLogin, cache: LoginCache = .standard, signInAgain: Bool = false,
+    public init(login: any ClaudeLogin, cache: LoginCache = .standard, local: LocalLogin? = nil, signInAgain: Bool = false,
                 accept: @escaping @Sendable (ClaudeLoginStatus) -> Bool = { $0.isClaudeAI }) {
         self.login = login
         self.cache = cache
+        self.local = local ?? LocalLogin(defaults: cache.defaults)
         self.accept = accept
         self.signInAgain = signInAgain
         let owed = cache.defaults.bool(forKey: Self.signOutOwedKey)
@@ -134,6 +136,13 @@ public final class SignIn {
     /// sign-out's logout has yet to run. It never waits on the queue: a start in the queue boots
     /// the guest, and the boot calls this.
     public func refresh() async {
+        // Without an account there is no login of Claude Code's to ask about.
+        if local.isOn, !signOutOwed {
+            cache.save(LocalLogin.status)
+            if case .approving = phase { return }
+            phase = .signedIn
+            return
+        }
         let generation = generation
         guard !signOutOwed, let status = try? await login.status(),
               self.generation == generation, !signOutOwed else { return }
@@ -146,6 +155,22 @@ public final class SignIn {
             phase = .idle
         }
     }
+
+    /// Uses Topo without a Claude account (`LocalLogin`): signed in at once, with Apple's on-device
+    /// model as the mind. Only from the screen's resting states, as a login starts.
+    public func useWithoutAccount() {
+        switch phase {
+        case .idle, .failed: break
+        case .preparing, .approving, .signedIn: return
+        }
+        generation += 1
+        local.set(true)
+        cache.save(LocalLogin.status)
+        phase = .signedIn
+    }
+
+    /// Whether this phone is using Topo without a Claude account.
+    public var isLocal: Bool { phase == .signedIn && local.isOn }
 
     /// Starts a login. The sheet opens once it has asked for its browser.
     public func start() {
@@ -267,6 +292,7 @@ public final class SignIn {
     /// connection's token the keychain would not remove), which the sign-in screen then says.
     public func signOut(unfinished: String? = nil) {
         cache.defaults.set(true, forKey: Self.signOutOwedKey)
+        local.set(false)
         cache.clear()
         endAttempt()
         enqueueLogout()

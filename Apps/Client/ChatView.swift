@@ -2,6 +2,7 @@
 import SwiftUI
 import TopoAuth
 import TopoCore
+import TopoProxy
 import TopoTurn
 
 /// Single-device chat: the transcript from the log, the glass under it holding the microphone
@@ -50,6 +51,8 @@ struct ChatView: View {
     /// global space, which is what Topo hangs under while it is.
     @State private var modelsOpen = false
     @State private var modelStop: CGRect?
+    /// A stop of the model slider that cannot be chosen, pressed: the alert says why.
+    @State private var refusedModel: ChatBar.Model?
     @State private var showSettings = false
     @State private var showDiagnostics = false
     /// The two edges the pane's presence is read from, in the chat's own space: where the
@@ -241,6 +244,12 @@ struct ChatView: View {
             // The memory screen is the sheet's Memory section, and also what the offer card
             // above the composer opens, so the chat presents it too.
             .sheet(isPresented: $showMemory) { MemoryView() }
+            .alert(refusedModel.map { "\($0.name) isn't available" } ?? "",
+                   isPresented: Binding(get: { refusedModel != nil }, set: { if !$0 { refusedModel = nil } })) {
+                Button("OK", role: .cancel) { refusedModel = nil }
+            } message: {
+                Text(refusedModel?.unavailable ?? "")
+            }
         }
         .task {
             #if DEBUG && os(iOS)
@@ -401,8 +410,16 @@ struct ChatView: View {
     }
 
     /// The model the setting names, which is what the slider's knob is on and not what a debug
-    /// build's pin makes of it.
-    private var chosenModel: ClaudeModel { ClaudeModel(setting: modelSetting) ?? .default }
+    /// build's pin makes of it; the on-device model on a phone using Topo without an account.
+    private var chosenModel: ClaudeModel { signIn.isLocal ? .onDevice : ClaudeModel(setting: modelSetting) ?? .default }
+
+    /// Why `model` cannot be chosen now, or nil when it can: Apple's model where this phone cannot
+    /// run it (asked each time the slider is drawn, since a model still downloading is ready
+    /// later), and Claude's without a Claude login.
+    private func unavailable(_ model: ClaudeModel) -> String? {
+        if model == .onDevice { return OnDeviceModel.unavailability() }
+        return signIn.isLocal ? "Sign out and sign in with Claude to use \(harness.name(of: model))." : nil
+    }
 
     /// The model chosen on the model slider while it is open, which is the head Topo wears under
     /// it in every build and through a turn (`Mascot.chosen`); nil while it is shut.
@@ -428,11 +445,12 @@ struct ChatView: View {
     /// harness's model, which is the setting.
     @ViewBuilder private var modelSlider: some View {
         if modelsOpen {
-            ChatBar.Drop(models: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
+            ChatBar.Drop(models: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0), unavailable: unavailable($0)) },
                          chosen: chosenModel.rawValue,
                          choose: { alias in
                              if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
                          },
+                         refuse: { refusedModel = $0 },
                          stop: { modelStop = $0 })
         }
     }

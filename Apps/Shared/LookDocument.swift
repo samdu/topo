@@ -195,6 +195,7 @@ enum LookDocument {
     }
 
     private static func mind(_ value: inout Look.Mind, _ r: Reader) {
+        r.title("onDevice", &value.onDevice)
         r.title("sonnet", &value.sonnet)
         r.title("opus", &value.opus)
         r.title("fable", &value.fable)

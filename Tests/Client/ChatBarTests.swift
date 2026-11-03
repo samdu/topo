@@ -360,7 +360,9 @@ final class ChatBarTests: XCTestCase {
             let report = try JSONDecoder().decode(DebugRun.ChatReport.self, from: Data(raw.utf8))
             XCTAssertEqual(report.model, model.rawValue)
             XCTAssertEqual(report.effectiveModel, ClaudeModel.effective(model).rawValue)
-            XCTAssertEqual(report.effectiveModel, ClaudeModel.haiku.rawValue, "a debug build asks \(model) unpinned")
+            // The on-device model spends no subscription and is not pinned; every Claude model is.
+            XCTAssertEqual(report.effectiveModel, model.isClaude ? ClaudeModel.haiku.rawValue : model.rawValue,
+                           "a debug build asks \(model) unpinned")
         }
     }
 }

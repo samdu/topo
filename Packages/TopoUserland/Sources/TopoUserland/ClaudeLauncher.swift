@@ -52,13 +52,18 @@ public struct ClaudeLauncher: ResidentLauncher {
     public let command: String
     public let home: String
     public let environment: @Sendable () async throws -> [String: String]
+    /// What a process launched with a model is told besides `--model`: for Apple's on-device model,
+    /// that every model Claude Code asks on the side is that one too (`OnDeviceModel.environment`).
+    public let modelEnvironment: @Sendable (String?) -> [String: String]
 
     public init(guest: Guest = .shared, command: String = ClaudeCodeInstaller.command,
                 home: String = ClaudeLauncher.home,
+                modelEnvironment: @escaping @Sendable (String?) -> [String: String] = { _ in [:] },
                 environment: @escaping @Sendable () async throws -> [String: String]) {
         self.guest = guest
         self.command = command
         self.home = home
+        self.modelEnvironment = modelEnvironment
         self.environment = environment
     }
 
@@ -127,16 +132,18 @@ public struct ClaudeLauncher: ResidentLauncher {
             + Self.arguments(model: model, resume: resume, memory: memory, note: note)
     }
 
-    /// The resident's environment: the guest's, what `environment` answers now, and last the
+    /// The resident's environment: the guest's, what `environment` answers now, what
+    /// `modelEnvironment` says of the model the process is launched with, and last the
     /// launcher's own keys — `HOME` at the mount and `IS_SANDBOX=1` — so nothing the callback
     /// supplies overrides them. `IS_SANDBOX` is set by this launcher and no other launch path, and
     /// inherited, as part of the environment, by whatever the resident starts, which runs in the
     /// same sandbox (the bypass flag is an argument and is not inherited): the guest runs
     /// everything as root, and Claude Code refuses to bypass permissions as root unless it is told
     /// it is in a sandbox, which it is.
-    public func launchEnvironment(compactAt: Int? = nil, note: String? = nil) async throws -> [String: String] {
+    public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, model: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
+        environment.merge(modelEnvironment(model)) { _, new in new }
         environment["HOME"] = home
         environment["IS_SANDBOX"] = "1"
         // The threshold is the launcher's too. The window is always given, because Claude Code
@@ -171,6 +178,6 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
     public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
         try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory, note: note),
-                              environment: try await launchEnvironment(compactAt: compactAt, note: note))
+                              environment: try await launchEnvironment(compactAt: compactAt, note: note, model: model))
     }
 }

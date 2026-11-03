@@ -668,6 +668,7 @@ struct Look: Equatable, Sendable {
         /// The longest a name may be, in characters: the notice and a stop of the slider hold a word.
         static let longest = 24
 
+        var onDevice = "On device"
         var sonnet = "Sonnet"
         var opus = "Opus"
         var fable = "Fable"
@@ -675,6 +676,7 @@ struct Look: Equatable, Sendable {
         /// The name of the model `alias` names, or nil for one the chat does not offer.
         func name(_ alias: String) -> String? {
             switch alias {
+            case "apple-on-device": onDevice
             case "sonnet": sonnet
             case "opus": opus
             case "fable": fable

@@ -15,8 +15,11 @@ import TopoCore
 /// is read whole before it is forwarded (the debug pin has to read it); the response body never
 /// is. A client that goes away mid-response cancels the upstream request.
 ///
-/// In a debug build the `model` of every `/v1/messages` body is rewritten to `pinnedModel`
-/// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
+/// A request for Apple's on-device model, or one carrying its placeholder key, is answered on the
+/// phone by the second upstream (`OnDeviceUpstream`, `Forwarder.isLocal`) and never forwarded.
+///
+/// In a debug build the `model` of every `/v1/messages` body going to the API is rewritten to
+/// `pinnedModel` before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
 /// is judged in its canonical form (`canonical(_:)`), so a doubled slash, a dot segment or
 /// percent-encoding does not take a request past the pin; a path still percent-encoded after
 /// `decodePasses` is refused with a 400 before its body is read.

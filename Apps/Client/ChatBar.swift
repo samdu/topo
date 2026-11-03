@@ -11,6 +11,8 @@ enum ChatBar {
     struct Model: Equatable, Identifiable, Sendable {
         var id: String
         var name: String
+        /// Why it cannot be chosen now, in words for the person, or nil when it can.
+        var unavailable: String? = nil
     }
 
     /// What the UI suites find the controls by: the model's control, the slider it opens, a stop
@@ -83,6 +85,8 @@ enum ChatBar {
         var models: [Model]
         var chosen: String
         var choose: (String) -> Void = { _ in }
+        /// A stop that cannot be chosen was pressed: its model, which says why.
+        var refuse: (Model) -> Void = { _ in }
         /// The chosen stop's column in the global space, down to the foot of the glass.
         var stop: (CGRect) -> Void = { _ in }
         @Environment(\.look) private var look
@@ -91,7 +95,7 @@ enum ChatBar {
 
         var body: some View {
             let slider = look.bar.slider
-            Slider(models: models, chosen: chosen, choose: choose,
+            Slider(models: models, chosen: chosen, choose: choose, refuse: refuse,
                    stop: { stop($0.inset(by: UIEdgeInsets(top: 0, left: 0, bottom: -slider.padding, right: 0))) })
                 .padding(slider.padding)
                 .background {
@@ -165,6 +169,8 @@ enum ChatBar {
         /// The alias of the one chosen.
         var chosen: String
         var choose: (String) -> Void = { _ in }
+        /// A stop that cannot be chosen was pressed: its model, which says why.
+        var refuse: (Model) -> Void = { _ in }
         /// The chosen stop's column in the global space, as laid out.
         var stop: (CGRect) -> Void = { _ in }
         @Environment(\.look) private var look
@@ -189,14 +195,17 @@ enum ChatBar {
                         .offset(x: stops.inset, y: line - slider.track / 2)
                     ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
                         let own = index == at
-                        Button { choose(model.id) } label: {
+                        // A stop that cannot be chosen has its name drawn as the line's rest, the
+                        // look's dimmest ink, and a press of it says why rather than choosing it.
+                        let off = model.unavailable != nil
+                        Button { if off { refuse(model) } else { choose(model.id) } } label: {
                             VStack(spacing: gap) {
                                 // The knob stands on the chosen stop, so its own mark is not drawn.
                                 Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
                                     .frame(width: min(slider.stop, knob), height: min(slider.stop, knob))
                                     .frame(height: knob)
                                 Text(model.name).font(slider.labelFont).lineLimit(1).fixedSize(horizontal: false, vertical: true)
-                                    .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
+                                    .foregroundStyle(own ? ink : ink.opacity(off ? slider.restOpacity : slider.restLabelOpacity))
                             }
                             .frame(width: column, height: proxy.size.height, alignment: .top)
                             .contentShape(Rectangle())
@@ -204,6 +213,7 @@ enum ChatBar {
                         .buttonStyle(.plain)
                         .accessibilityIdentifier(ChatBar.stop(model.id))
                         .accessibilityLabel(model.name)
+                        .accessibilityHint(model.unavailable ?? "")
                         .accessibilityAddTraits(own ? .isSelected : [])
                         .position(x: stops.x(of: index), y: proxy.size.height / 2)
                     }
@@ -224,7 +234,7 @@ enum ChatBar {
                 }
                 // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
                 .highPriorityGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
-                    guard let index = stops.nearest(to: drag.location.x), index != at else { return }
+                    guard let index = stops.nearest(to: drag.location.x), index != at, models[index].unavailable == nil else { return }
                     choose(models[index].id)
                 })
                 // To the eighth of a point, so a layout pass that moves nothing reports nothing new.

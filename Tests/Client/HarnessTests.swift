@@ -1633,6 +1633,19 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.name(of: .sonnet), "Sonnet", "a name the look did not set changed")
     }
 
+    /// A phone using Topo without an account asks the on-device model whatever the setting says,
+    /// and the setting is kept for when it signs in with Claude.
+    func testWithoutAnAccountTheModelIsOnDeviceAndTheSettingIsKept() {
+        let defaults = makeDefaults()
+        let harness = harness(InMemoryRecordDatabase(), defaults: defaults, transport: ScriptedTransport())
+        harness.model = .opus
+        LocalLogin(defaults: defaults).set(true)
+        XCTAssertEqual(harness.model, .onDevice)
+        XCTAssertEqual(Harness.model(in: defaults), .onDevice)
+        LocalLogin(defaults: defaults).set(false)
+        XCTAssertEqual(harness.model, .opus)
+    }
+
     /// Muted, what the guest writes of a spoken turn's reply is not read as it comes; with the
     /// mute lifted while it is still being written, it is read from its first sentence, since
     /// nothing of it has been.

@@ -12,7 +12,7 @@ import TopoUserland
 @MainActor
 @Observable
 final class Harness {
-    static let modelKey = "model"
+    nonisolated static let modelKey = "model"
 
     private(set) var turns: [Turn] = []
     /// A read of the log has returned, with turns or with none: what the transcript draws is the
@@ -341,6 +341,13 @@ final class Harness {
     /// The guest, when it is what answers.
     var guest: GuestBridge? { brain as? GuestBridge }
 
+    /// The model a phone with `defaults` asks: the on-device model without an account, the setting
+    /// otherwise.
+    nonisolated static func model(in defaults: UserDefaults) -> ClaudeModel {
+        if LocalLogin(defaults: defaults).isOn { return .onDevice }
+        return defaults.string(forKey: modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default
+    }
+
     /// What the look calls the models (`Look.Mind`), handed over by the chat as the look changes.
     var mind = Look.Mind()
 
@@ -351,8 +358,11 @@ final class Harness {
     /// resident process at its next idle moment, never in the middle of a turn. What the brain is
     /// told is the setting as it is when the telling runs, not as it was set: two choices made
     /// in a moment set it twice, and the last of them is what must stand.
+    ///
+    /// A phone using Topo without an account (`LocalLogin`) has the on-device model whatever the
+    /// setting says, which is kept for when it signs in with Claude.
     var model: ClaudeModel {
-        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default }
+        get { Self.model(in: defaults) }
         set {
             defaults.set(newValue.rawValue, forKey: Self.modelKey)
             let brain = brain

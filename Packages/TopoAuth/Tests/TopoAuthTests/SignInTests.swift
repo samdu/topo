@@ -679,3 +679,94 @@ func settle() async {
         #expect(LoginMigration.items.map(\.account) == ["claude", "claude-guest"])
     }
 }
+
+/// Using Topo without a Claude account (`LocalLogin`).
+@Suite @MainActor struct LocalLoginTests {
+    let claudeAI = ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai", subscriptionType: "max")
+
+    func cache() -> LoginCache {
+        LoginCache(defaults: UserDefaults(suiteName: "topo-local-\(UUID().uuidString)")!)
+    }
+
+    func ready(_ login: FakeLogin, cache: LoginCache) async -> SignIn {
+        let signIn = SignIn(login: login, cache: cache)
+        await signIn.prepare()
+        return signIn
+    }
+
+    @Test func usingItWithoutAnAccountIsSignedInAtOnce() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        #expect(signIn.phase == .idle)
+        signIn.useWithoutAccount()
+        #expect(signIn.phase == .signedIn)
+        #expect(signIn.isLocal)
+        #expect(cache.isSignedIn)
+        #expect(LocalLogin(defaults: cache.defaults).isOn)
+        #expect(login.begins == 0)
+    }
+
+    /// Review focus 7: the boot's refresh keeps a local login without asking Claude Code, which
+    /// has no login to report; and a phone that relaunches comes up signed in.
+    @Test func aLocalLoginIsKeptAcrossARefreshAndARelaunch() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.useWithoutAccount()
+        login.answer(ClaudeLoginStatus(loggedIn: false))
+        await signIn.refresh()
+        #expect(signIn.phase == .signedIn)
+        #expect(cache.isSignedIn)
+        #expect(login.statusAsked == 0)
+        let relaunched = SignIn(login: login, cache: cache)
+        #expect(relaunched.phase == .signedIn)
+        #expect(relaunched.isLocal)
+    }
+
+    /// Without the local login, a status that is not Claude.ai's is no login, an API key's
+    /// included: nothing but the person's choice on the screen makes a phone local.
+    @Test func anAPIKeyIsNotALoginWithoutIt() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(claudeAI)
+        let signIn = SignIn(login: login, cache: cache)
+        login.answer(ClaudeLoginStatus(loggedIn: true, authMethod: "api_key"))
+        await signIn.refresh()
+        #expect(signIn.phase == .idle)
+        #expect(!cache.isSignedIn)
+    }
+
+    @Test func signOutEndsIt() async {
+        let login = FakeLogin()
+        let cache = cache()
+        let signIn = await ready(login, cache: cache)
+        signIn.useWithoutAccount()
+        signIn.signOut()
+        #expect(signIn.phase == .idle)
+        #expect(!signIn.isLocal)
+        #expect(!cache.isSignedIn)
+        #expect(!LocalLogin(defaults: cache.defaults).isOn)
+        await signIn.loggedOut()
+        // Signed out, a refresh asks Claude Code again and finds nobody.
+        await signIn.refresh()
+        #expect(signIn.phase == .idle)
+    }
+
+    /// A Claude login is not local, and the choice is not offered over one or over a login running.
+    @Test func itIsNotOfferedOverALoginOrWhileOneRuns() async {
+        let login = FakeLogin()
+        let cache = cache()
+        cache.save(claudeAI)
+        let signedIn = SignIn(login: login, cache: cache)
+        signedIn.useWithoutAccount()
+        #expect(!signedIn.isLocal)
+        #expect(!LocalLogin(defaults: cache.defaults).isOn)
+
+        let fresh = self.cache()
+        let signIn = await ready(FakeLogin(), cache: fresh)
+        signIn.start()
+        signIn.useWithoutAccount()
+        #expect(!LocalLogin(defaults: fresh.defaults).isOn)
+    }
+}

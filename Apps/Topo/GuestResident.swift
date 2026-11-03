@@ -111,10 +111,10 @@ final class GuestResident {
         }
     }
 
-    /// The model a process is started with: the setting, as the debug pin makes it.
+    /// The model a process is started with: the setting, as the debug pin makes it, and the
+    /// on-device model on a phone using Topo without an account (`Harness.model`).
     static var model: String {
-        let setting = UserDefaults.standard.string(forKey: Harness.modelKey).flatMap(ClaudeModel.init(setting:))
-        return ClaudeModel.effective(setting ?? .default).rawValue
+        ClaudeModel.effective(Harness.model(in: .standard)).rawValue
     }
 
     /// The share of its window a process is started to compact at: this device's setting, or nil
@@ -155,7 +155,7 @@ final class GuestResident {
             let ports = LaunchPorts(proxy: proxy, tools: tools)
             await self.booted?()
             let made = Self.launchEnvironment(ports: ports) { port in try Self.launchCredential(port: port) }
-            let launcher = ClaudeLauncher {
+            let launcher = ClaudeLauncher(modelEnvironment: Self.modelEnvironment) {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
                 // first reads for its life.
@@ -213,10 +213,21 @@ final class GuestResident {
 
     /// What every launch of the resident is given for its login: refused while the cache says
     /// signed out, so nothing launches between a sign-out and its logout; otherwise the proxy and,
-    /// in a debug build launched with one, the developer's token.
-    nonisolated static func launchCredential(port: UInt16, cache: LoginCache = .standard) throws -> [String: String] {
+    /// in a debug build launched with one, the developer's token. A phone using Topo without an
+    /// account (`LocalLogin`) is given the on-device model's placeholder key, which the proxy answers
+    /// on the phone and never sends on.
+    nonisolated static func launchCredential(port: UInt16, cache: LoginCache = .standard,
+                                             local: LocalLogin = .standard) throws -> [String: String] {
         guard cache.isSignedIn else { throw GuestBridgeError.notReady("signed out") }
+        let login = local.isOn ? OnDeviceModel.environment(placeholder: true) : [:]
         return APIProxy.guestEnvironment(port: port).merging(developerEnvironment) { _, new in new }
+            .merging(login) { _, new in new }
+    }
+
+    /// What a process asking the on-device model is told besides its `--model`: every model Claude
+    /// Code asks on the side is the on-device one too, so nothing it sends names a Claude model.
+    nonisolated static func modelEnvironment(_ model: String?) -> [String: String] {
+        model == OnDeviceModel.id ? OnDeviceModel.environment(placeholder: false) : [:]
     }
 
     /// The guest's home, made if it is not there: excluded from backup, since Claude Code keeps

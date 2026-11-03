@@ -50,6 +50,7 @@ struct LookTool: Tool {
             Field(path: "mascot.scale", range: "0.25–4 pt a pixel") { String(format: "%g pt a pixel", Double($0.mascot.scale)) },
             Field(path: "mascot.clearance", range: "0–64 pt") { points($0.mascot.clearance) },
             Field(path: "mascot.roamSpeed", range: "10–400 pt a second") { String(format: "%g pt a second", Double($0.mascot.roamSpeed)) },
+            Field(path: "mind.onDevice", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.onDevice },
             Field(path: "mind.sonnet", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.sonnet },
             Field(path: "mind.opus", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.opus },
             Field(path: "mind.fable", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.fable },

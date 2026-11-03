@@ -243,6 +243,33 @@ final class GuestLoginTests: XCTestCase {
         XCTAssertEqual(try GuestResident.launchCredential(port: 4000, cache: cache)["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: 4000))
     }
 
+    /// Review focus 8: the placeholder key is given to a launch only on a phone using Topo
+    /// without an account, and never to the login's own processes, whose status would then be
+    /// the key's rather than the Claude login's.
+    func testThePlaceholderKeyIsALaunchsOnlyWithoutAnAccount() throws {
+        let defaults = UserDefaults(suiteName: "launch-\(UUID().uuidString)")!
+        let cache = LoginCache(defaults: defaults)
+        let local = LocalLogin(defaults: defaults)
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
+        XCTAssertNil(try GuestResident.launchCredential(port: 4000, cache: cache, local: local)["ANTHROPIC_API_KEY"])
+        local.set(true)
+        cache.save(LocalLogin.status)
+        let launch = try GuestResident.launchCredential(port: 4000, cache: cache, local: local)
+        XCTAssertEqual(launch["ANTHROPIC_API_KEY"], OnDeviceModel.placeholderKey)
+        XCTAssertEqual(launch["ANTHROPIC_SMALL_FAST_MODEL"], OnDeviceModel.id)
+        XCTAssertEqual(launch["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: 4000))
+    }
+
+    /// Review focus 9: a process launched with the on-device model asks nothing else on the side,
+    /// and one launched with a Claude model is told nothing of it.
+    func testAnOnDeviceProcessAsksTheOnDeviceModelOnTheSideToo() {
+        let told = GuestResident.modelEnvironment(OnDeviceModel.id)
+        for variable in OnDeviceModel.modelVariables { XCTAssertEqual(told[variable], OnDeviceModel.id, variable) }
+        XCTAssertNil(told["ANTHROPIC_API_KEY"], "the key is the login's, not the model's")
+        XCTAssertEqual(GuestResident.modelEnvironment("sonnet"), [:])
+        XCTAssertEqual(GuestResident.modelEnvironment(nil), [:])
+    }
+
     private final class Heard: @unchecked Sendable {
         private let lock = NSLock()
         private var all: [URL] = []
