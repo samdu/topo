@@ -227,7 +227,8 @@ final class Speaker {
             // writing path was told the turn was spoken when it began, and nothing tells it
             // otherwise until the turn ends.
             hungUp.insert(nonce)
-            settled?(nonce)
+            // A reply waiting for the activation is settled by `stop`, which drops it: once.
+            if nonce != deferred?.nonce { settled?(nonce) }
         }
         stop()
     }
