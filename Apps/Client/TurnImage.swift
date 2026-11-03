@@ -50,7 +50,11 @@ struct TurnImage: Equatable {
               let marker = line.range(of: Self.marker) else { return nil }
         let how = line[line.index(after: line.startIndex)..<marker.lowerBound]
         guard hows.contains(how) else { return nil }
-        let rest = line[marker.upperBound..<line.index(line.endIndex, offsetBy: -" bytes)]".count)]
+        // The marker's last space can be the suffix's first, so the two are judged to stand apart
+        // before the words between them are taken.
+        let suffix = line.index(line.endIndex, offsetBy: -" bytes)]".count)
+        guard marker.upperBound <= suffix else { return nil }
+        let rest = line[marker.upperBound..<suffix]
         // The size is the last " (<digits>" of the line; the path is everything before it, so a
         // name with brackets or spaces in it is read whole.
         guard let open = rest.range(of: " (", options: .backwards) else { return nil }
@@ -59,8 +63,14 @@ struct TurnImage: Equatable {
         let path = String(rest[..<open.lowerBound])
         guard path.hasPrefix(sharedFolder) else { return nil }
         let parts = path.dropFirst(sharedFolder.count).split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == 2, parts.allSatisfy(plain) else { return nil }
+        guard parts.count == 2, nonce(parts[0]), plain(parts[1]) else { return nil }
         return (path, String(parts[0]), String(parts[1]))
+    }
+
+    /// The folder the inbox names for a share: its nonce, lowercased, which is letters, digits and
+    /// dashes. Nothing else is taken there, so no words of a turn stand in a path the picture hides.
+    private static func nonce(_ part: Substring) -> Bool {
+        (1...64).contains(part.count) && part.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
     }
 
     /// One path component that names something in its folder: not empty, not hidden, no

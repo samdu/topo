@@ -147,7 +147,9 @@ final class ShareInbox {
         let base = open(home.resolvingSymlinksInPath().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard base >= 0 else { return nil }
         defer { close(base) }
-        let file = openat(base, [folder, image.nonce, image.name].joined(separator: "/"), O_RDONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
+        // Non-blocking, so a pipe the guest made at the name answers at once rather than holding
+        // the open until something writes it; the type is judged before anything is read.
+        let file = openat(base, [folder, image.nonce, image.name].joined(separator: "/"), O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC)
         guard file >= 0 else { return nil }
         let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
         var status = stat()
