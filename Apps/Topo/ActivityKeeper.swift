@@ -384,8 +384,9 @@ final class ActivityKeeper {
         log.info("every activity ended with the login")
     }
 
-    /// How a tracker that finished is taken down: at its `until` when that is still ahead, at
-    /// once when it has passed, and the system's own way when it has none.
+    /// How a tracker that finished is taken down: at its `until` when that is still ahead (the
+    /// system takes it down four hours after the end at the latest), at once when it has passed,
+    /// and the system's own way when it has none.
     func finished(_ state: ActivityState) -> ActivityDismissal {
         guard let until = state.until else { return .standard }
         return until > now() ? .at(until) : .now

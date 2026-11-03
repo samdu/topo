@@ -248,7 +248,7 @@ final class ActivityKeeperTests: XCTestCase {
         XCTAssertEqual(host.calls.count, 5, "and nothing acts after")
     }
 
-    /// Codex, round 1: a resume acts on each activity as the host holds it at its turn, not as
+    /// A resume acts on each activity as the host holds it at its turn, not as
     /// it was listed. With A and B past their until and A's end held in the host, an update that
     /// moves B's until ahead lands first, and B is kept rather than ended.
     func testResumeKeepsWhatAnUpdateExtendedWhileAnotherEndWasInTheHost() async throws {
@@ -281,7 +281,7 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(b)
     }
 
-    /// Codex, round 1: the until task and a resume both find an activity past its until; the
+    /// The until task and a resume both find an activity past its until; the
     /// one that passes the gate second finds it ended and sends nothing.
     func testUntilAndResumeEndAnExpiredActivityOnce() async throws {
         let keeper = keeper(FakeTrackerFetcher([]))
@@ -300,7 +300,7 @@ final class ActivityKeeperTests: XCTestCase {
         XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
     }
 
-    /// Codex, round 1: an update of the tool's still in the host when the poll's fetch answers.
+    /// An update of the tool's still in the host when the poll's fetch answers.
     /// The poll waits its turn, finds the update counted, and leaves the round: the relevance the
     /// update set is not put back from the poll's read.
     func testAPollWaitsForAToolUpdateInTheHostAndWritesNothingOverIt() async throws {
@@ -333,7 +333,7 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(id)
     }
 
-    /// Codex, round 1, the other way round: the poll's update is in the host when the tool's is
+    /// The other way round: The poll's update is in the host when the tool's is
     /// sent. The tool's waits its turn and lands after it, so the host ends on the tool's.
     func testAToolUpdateLandsAfterAPollUpdateInTheHost() async throws {
         let fetcher = GatedTrackerFetcher()
@@ -364,7 +364,29 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(id)
     }
 
-    /// The inline thread on finishing: a polled tracker that finishes before its until is taken
+    /// A polled tracker that finishes before its until is taken
+    /// A resume whose turn for an activity comes after a sign-out has counted itself keeps
+    /// nothing for it: the sign-out's end follows, and no until task outlives the login.
+    func testAResumeAcrossASignOutKeepsNothing() async throws {
+        let keeper = keeper(FakeTrackerFetcher([]))
+        _ = try start(poll: false, until: clock.date.addingTimeInterval(-1))
+        _ = try start(poll: false, until: clock.date.addingTimeInterval(600))
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let resumed = Task { await keeper.resume() }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "A's end is in the host")
+        host.wait = nil
+        let signedOut = Task { await keeper.endAll() }
+        await settle()
+        XCTAssertEqual(keeper.generation, 1)
+        gate.openUp()
+        await resumed.value
+        await signedOut.value
+        XCTAssertEqual(keeper.tasks, 0, "B was not kept under the login that ended")
+        XCTAssertTrue(host.records.allSatisfy(\.ended))
+    }
+
     /// down at its until, not left for the system's default.
     func testAFinishedTrackerIsTakenDownAtItsUntil() async throws {
         let done = TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true)
@@ -376,7 +398,7 @@ final class ActivityKeeperTests: XCTestCase {
         guard case .end(id, _?, .at(until)) = host.ends.first else { return XCTFail("\(host.ends)") }
     }
 
-    /// The inline thread on resuming: one ended and still shown that is past its until is taken
+    /// One ended and still shown that is past its until is taken
     /// off at the next return to the screen.
     func testResumeTakesDownAnEndedActivityPastItsUntil() async throws {
         let keeper = keeper(FakeTrackerFetcher([]))

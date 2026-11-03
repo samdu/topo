@@ -22,7 +22,8 @@ struct ActivityTool: Tool {
         topo activity update ID JSON             new content: what the document carries replaces, the rest stands
         topo activity end ID [--dismiss now|default|DATE] [JSON]
                                                  end one, with a last document if given; default leaves it on the
-                                                 lock screen a while, now takes it off, DATE (ISO 8601) at that time;
+                                                 lock screen a while, now takes it off, DATE (ISO 8601) at that time
+                                                 or four hours after the end, whichever is sooner;
                                                  one ended and still shown is taken down with now or DATE and no document
         topo activity example                    a tracker and a timer: the quickest way to the shape
 
@@ -223,9 +224,11 @@ struct ActivityTool: Tool {
         // One ended and still shown can be taken down with `--dismiss now` or a date, and nothing
         // else: a last document or the default dismissal is for one still running.
         let takesDown = reading == nil && dismissal != .standard
+        let keeper = keeper()
+        let generation = keeper.generation
         // Judged at the gate as the host then holds it: another end that passed first leaves this
         // one ended, and no second end is sent.
-        let reply = await keeper().changing(id, ended: takesDown) { record -> ToolReply in
+        let reply = await keeper.changing(id, ended: takesDown) { record -> ToolReply in
             var state: ActivityState?
             var notes = reading?.notes ?? []
             if let reading {
@@ -238,9 +241,17 @@ struct ActivityTool: Tool {
                 if let note = fitted.note { notes.append(note) }
                 state = fit
             }
-            keeper().forget(id)
-            guard await keeper().end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
-            let text = (record.ended ? "took down \(id)\n" : "ended \(id)\n") + Self.notes(notes)
+            // A sign-out that counted itself while this waited at the gate ends the activity next.
+            guard keeper.generation == generation else { return .failed("topo: the login ended while the end waited; the sign-out ends it\n") }
+            keeper.forget(id)
+            guard await keeper.end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
+            let said: String
+            switch (record.ended, dismissal) {
+            case (true, .at(let date)): said = "takes down \(id) at \(date.ISO8601Format())\n"
+            case (true, _): said = "took down \(id)\n"
+            default: said = "ended \(id)\n"
+            }
+            let text = said + Self.notes(notes)
             return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
         }
         return reply ?? .failed("topo: no activity \(id) running\n")

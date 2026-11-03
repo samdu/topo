@@ -148,7 +148,7 @@ final class ActivityDocumentTests: XCTestCase {
         XCTAssertEqual(layout.tint, .token(.secondary))
     }
 
-    /// Codex, round 1: `families` given as `{}` on an update clears the regions, where an update
+    /// `families` given as `{}` on an update clears the regions, where an update
     /// without the field leaves them.
     func testAnEmptyFamiliesUpdateClearsTheRegions() throws {
         let first = ActivityState(read(#"{"tint": "primary", "families": {"lockScreen": {"kind": "text", "text": "Tea"}}}"#).document, tracker: nil)

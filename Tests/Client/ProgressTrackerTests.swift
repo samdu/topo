@@ -101,7 +101,7 @@ final class ProgressTrackerTests: XCTestCase {
         XCTAssertEqual(missing.title, "")
     }
 
-    /// Codex, round 1: `current` names a step as the document wrote it, so a dropped step before
+    /// `current` names a step as the document wrote it, so a dropped step before
     /// it does not move the focus onto the step after.
     func testCurrentNamesTheStepAsWrittenWhenAnEarlierOneIsDropped() throws {
         let tracker = try XCTUnwrap(read(#"{"title": "Job", "steps": [0, {"label": "Download", "state": "running", "note": "Fetching"}, {"label": "Install"}], "current": 1}"#).tracker)

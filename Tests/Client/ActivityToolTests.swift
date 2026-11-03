@@ -197,12 +197,46 @@ final class ActivityToolTests: XCTestCase {
         let signedOut = Task { await keeper.endAll() }
         await settle()
         XCTAssertEqual(keeper.generation, 1)
+        XCTAssertTrue(host.ends.isEmpty, "the sign-out's end waits behind the update in the host")
         gate.openUp()
         _ = await update.value
         await signedOut.value
         XCTAssertEqual(keeper.tasks, 0, "the update from before the sign-out kept nothing")
         let after = await tool.run(["update", "A1", #"{"relevance": 5}"#])
         XCTAssertEqual(after.status, ToolReply.failed, "ended is not running")
+    }
+
+    /// An update and an end that wait at the gate while a sign-out counts itself send nothing:
+    /// the sign-out's own end is the only one, and the update's host call is the first update's.
+    func testAnUpdateAndAnEndQueuedAcrossASignOutSendNothing() async throws {
+        _ = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "until": "2026-11-02T06:00:00Z"}"#])
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let tool = self.tool
+        let first = Task { await tool.run(["update", "A1", #"{"relevance": 5}"#]) }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the first update is in the host")
+        host.wait = nil
+        let queued = Task { await tool.run(["update", "A1", #"{"relevance": 6}"#]) }
+        let ended = Task { await tool.run(["end", "A1", #"{"relevance": 7}"#]) }
+        await settle()
+        let keeper = self.keeper!
+        let signedOut = Task { await keeper.endAll() }
+        await settle()
+        XCTAssertEqual(keeper.generation, 1)
+        gate.openUp()
+        _ = await first.value
+        let update = await queued.value
+        let end = await ended.value
+        await signedOut.value
+        XCTAssertEqual(update.status, ToolReply.failed, update.text)
+        XCTAssertTrue(update.text.contains("login ended"), update.text)
+        XCTAssertEqual(end.status, ToolReply.failed, end.text)
+        XCTAssertTrue(end.text.contains("login ended"), end.text)
+        XCTAssertEqual(host.updates, 1, "\(host.calls)")
+        XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
+        guard case .end("A1", nil, .now) = host.ends[0] else { return XCTFail("\(host.ends)") }
+        XCTAssertEqual(keeper.tasks, 0)
     }
 
     func testOverBudgetDocumentIsRefusedWhole() async throws {
@@ -240,7 +274,7 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(host.starts, 0)
     }
 
-    /// Codex, round 1: a tracker given beside a poll does not skip the start's fetch. A fetch that
+    /// A tracker given beside a poll does not skip the start's fetch. A fetch that
     /// fails starts nothing; one that answers is the tracker drawn, and the given one is noted
     /// as set aside.
     func testAPollIsFetchedAtTheStartEvenBesideATracker() async throws {
@@ -257,7 +291,7 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(state.card?.title, "A tracker", "the polled tracker is drawn")
     }
 
-    /// Codex, round 1: an end while the poll's end of a finished tracker is still in the host
+    /// An end while the poll's end of a finished tracker is still in the host
     /// waits its turn, finds the activity ended, and sends no second end.
     func testAnEndWhileThePollsEndIsInTheHostSendsNoSecond() async throws {
         let done = TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true)
@@ -279,7 +313,7 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
     }
 
-    /// Codex, round 1, through the tool: `topo activity update` while the poll's fetch is out and
+    /// Through the tool, `topo activity update` while the poll's fetch is out and
     /// its own update is still in the host. The poll's round waits, finds the update counted and
     /// is left to the next, so the relevance the tool set stands.
     func testAToolUpdateInTheHostIsNotOverwrittenByThePoll() async throws {
@@ -341,7 +375,7 @@ final class ActivityToolTests: XCTestCase {
         keeper.forget("A1")
     }
 
-    /// The inline thread on dismissal: one ended and still shown is taken down with
+    /// One ended and still shown is taken down with
     /// `--dismiss now`, and not with the default or a last document.
     func testAnEndedActivityIsTakenDownWithDismissNow() async throws {
         _ = await tool.run(["start", "job", timer])
