@@ -3,11 +3,14 @@ import Foundation
 /// The models the phone harness offers, each by its family's alias: Claude Code resolves `sonnet`,
 /// `opus` and `fable` to the latest of the family it knows, so what is sent carries no version and a
 /// newer model is a newer Claude Code (the guest's pin, `scripts/model-manifest.sh`) and no change
-/// here. Sonnet is the default; the others are a setting. Haiku is not offered — it is what `pinned`
+/// here. `apple-on-device` is Apple's on-device model, which the guest's proxy answers on the phone
+/// (`OnDeviceUpstream`) and which no request ever carries past it. Sonnet is the default; the others
+/// are a setting, and the on-device model is the only one a phone with no Claude login has. Haiku is not offered — it is what `pinned`
 /// forces a debug build onto, so it is a case without being a choice, named by its model id because
 /// that is what the proxy writes at the wire (`APIProxy.pinnedModel`), and `allCases` (the model slider)
 /// is written out rather than synthesised to keep it that way.
 public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
+    case onDevice = "apple-on-device"
     case sonnet
     case opus
     case fable
@@ -16,7 +19,10 @@ public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     public static let `default` = ClaudeModel.sonnet
     /// What the chat offers, smallest to largest, which is the order of Topo's heads. Haiku is
     /// deliberately absent.
-    public static let allCases: [ClaudeModel] = [.sonnet, .opus, .fable]
+    public static let allCases: [ClaudeModel] = [.onDevice, .sonnet, .opus, .fable]
+
+    /// The models that are Claude's, which a phone with no Claude login cannot ask.
+    public var isClaude: Bool { self != .onDevice }
     public var id: String { rawValue }
 
     /// The model a kept setting names: one of the aliases, or a model id of an offered family, which
@@ -24,7 +30,8 @@ public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     /// included, since it is not a choice.
     public init?(setting: String) {
         let kept = setting.lowercased()
-        guard let model = Self.allCases.first(where: { kept == $0.rawValue || kept.hasPrefix("claude-\($0.rawValue)-") })
+        if kept == Self.onDevice.rawValue { self = .onDevice; return }
+        guard let model = Self.allCases.filter(\.isClaude).first(where: { kept == $0.rawValue || kept.hasPrefix("claude-\($0.rawValue)-") })
         else { return nil }
         self = model
     }
@@ -35,7 +42,8 @@ public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     /// `swift test` all are, and such a build is signed into a real Claude subscription — Sam's,
     /// through the seeded setup token — so a stray turn spends his account. Pinning the cheapest
     /// model makes the cost of an accidental turn a rounding error rather than a judgement call.
-    /// Only a release build lets the slider choose.
+    /// Only a release build lets the slider choose among Claude's models. The on-device model is
+    /// not pinned (`effective`): it is answered on the phone and spends no subscription.
     public static let pinned: ClaudeModel? = {
         #if DEBUG
         .haiku
@@ -46,12 +54,15 @@ public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
 
     /// The model a request actually carries: the pin when there is one, the asked-for model
     /// otherwise. Every call path goes through here, so there is one place the pin can be read.
-    public static func effective(_ requested: ClaudeModel) -> ClaudeModel { pinned ?? requested }
+    public static func effective(_ requested: ClaudeModel) -> ClaudeModel {
+        requested == .onDevice ? .onDevice : pinned ?? requested
+    }
 
     /// The family's name, which is what the app calls the model where the look names no other
     /// (`Look.Mind`).
     public var displayName: String {
         switch self {
+        case .onDevice: "On device"
         case .sonnet: "Sonnet"
         case .opus: "Opus"
         case .fable: "Fable"

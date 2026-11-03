@@ -56,8 +56,11 @@ public actor APIProxy {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     public private(set) var port: UInt16?
 
-    public init(upstream: any Upstream = URLSessionUpstream(), log: @escaping Log = APIProxy.defaultLog) throws {
-        forwarder = Forwarder(upstream: upstream, log: log)
+    /// - Parameter local: what answers a request for Apple's on-device model (`Forwarder.isLocal`);
+    ///   `OnDeviceUpstream` over the system's model when nil.
+    public init(upstream: any Upstream = URLSessionUpstream(), local: (any Upstream)? = nil,
+                log: @escaping Log = APIProxy.defaultLog) throws {
+        forwarder = Forwarder(upstream: upstream, local: local ?? OnDeviceUpstream(log: log), log: log)
         self.log = log
     }
 
@@ -232,7 +235,27 @@ public actor APIProxy {
 /// next is read.
 struct Forwarder: Sendable {
     let upstream: any Upstream
+    /// Apple's on-device model (`OnDeviceUpstream`), for the requests `isLocal` names.
+    let local: any Upstream
     let log: APIProxy.Log
+
+    /// Whether `request` is answered on the phone rather than sent to the API: one that carries the
+    /// placeholder key a phone with no Claude login launches with, whatever its path or model,
+    /// which is what keeps the placeholder from ever leaving the phone; or a message (or its
+    /// count) whose body names the on-device model, which is a signed-in person who chose it.
+    /// Nothing else is: a request for a Claude model goes to the API, and its failure is its own.
+    static func isLocal(_ request: InboundRequest) -> Bool {
+        let placeholder = OnDeviceModel.placeholderKey
+        if request.headers.values("x-api-key").contains(where: { $0.trimmingCharacters(in: .whitespaces) == placeholder }) { return true }
+        if request.headers.values("Authorization").contains(where: {
+            $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare("Bearer \(placeholder)") == .orderedSame
+        }) { return true }
+        guard request.method == "POST",
+              let route = canonical(request.path), route == "/v1/messages" || route == "/v1/messages/count_tokens",
+              let object = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+              let model = object["model"] as? String else { return false }
+        return model == OnDeviceModel.id
+    }
 
     /// Request headers that belong to this hop and not the next, or that URLSession sets itself.
     /// `Authorization` is not among them: the guest's credential goes through unchanged.
@@ -310,15 +333,18 @@ struct Forwarder: Sendable {
             try? await inbound.send(Self.errorResponse(status: 405, type: "invalid_request_error", message: "Topo's proxy does not tunnel."))
             return false
         }
+        // Answered on the phone: no pin, since nothing spends a subscription, and nothing upstream.
+        let local = Self.isLocal(request)
+        let upstream = local ? self.local : self.upstream
         var body = request.body
         #if DEBUG
-        if APIProxy.pinnedModel != nil, Self.canonical(request.path) == nil {
+        if !local, APIProxy.pinnedModel != nil, Self.canonical(request.path) == nil {
             log("\(line) refused: the path is still percent-encoded after \(Self.decodePasses) decodes")
             try? await inbound.send(Self.errorResponse(status: 400, type: "invalid_request_error",
                                                        message: "A debug build of Topo refuses a path still percent-encoded after \(Self.decodePasses) decodes: it cannot tell whether the request needs its model pinned."))
             return request.keepAlive
         }
-        if let pinned = APIProxy.pinnedModel, request.method == "POST", Self.canonical(request.path) == "/v1/messages" {
+        if !local, let pinned = APIProxy.pinnedModel, request.method == "POST", Self.canonical(request.path) == "/v1/messages" {
             guard let rewritten = Self.pin(body, to: pinned) else {
                 log("\(line) refused: the debug pin could not read the body")
                 try? await inbound.send(Self.errorResponse(status: 400, type: "invalid_request_error",
@@ -346,8 +372,9 @@ struct Forwarder: Sendable {
             // else is the upstream failing, and a bad gateway.
             let status = { if case .foreignTarget? = error as? UpstreamError { 400 } else { 502 } }()
             log("\(line) \(status) in \(Self.elapsed(since: started)): failed upstream: \(Self.describe(error))")
+            let destination = local ? "Apple's on-device model" : "api.anthropic.com"
             try? await inbound.send(Self.errorResponse(status: status, type: "api_error",
-                                                       message: "Topo's proxy could not reach api.anthropic.com: \(Self.describe(error))"))
+                                                       message: "Topo's proxy could not reach \(destination): \(Self.describe(error))"))
             return request.keepAlive
         }
 

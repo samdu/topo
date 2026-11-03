@@ -8,18 +8,18 @@ import Testing
 
     /// What is offered is sent as its family's alias, with no version in it.
     @Test func theOfferedModelsAreAliases() {
-        #expect(ClaudeModel.allCases.map(\.rawValue) == ["sonnet", "opus", "fable"])
-        #expect(ClaudeModel.allCases.map(\.displayName) == ["Sonnet", "Opus", "Fable"])
+        #expect(ClaudeModel.allCases.map(\.rawValue) == ["apple-on-device", "sonnet", "opus", "fable"])
+        #expect(ClaudeModel.allCases.map(\.displayName) == ["On device", "Sonnet", "Opus", "Fable"])
     }
 
     @Test(arguments: [("sonnet", ClaudeModel.sonnet), ("opus", .opus), ("fable", .fable),
                       ("claude-sonnet-5", .sonnet), ("claude-opus-5", .opus), ("claude-fable-5-1", .fable),
-                      ("claude-opus-5-5", .opus)])
+                      ("claude-opus-5-5", .opus), ("apple-on-device", .onDevice), ("Apple-On-Device", .onDevice)])
     func aKeptSettingNamesItsFamily(_ kept: String, _ model: ClaudeModel) {
         #expect(ClaudeModel(setting: kept) == model)
     }
 
-    @Test(arguments: ["", "claude-haiku-5-5", "haiku", "gpt-5", "claude-sonnetish", "sonnet-5"])
+    @Test(arguments: ["", "claude-haiku-5-5", "haiku", "gpt-5", "claude-sonnetish", "sonnet-5", "apple", "claude-apple-on-device-1", "apple-on-device-2"])
     func aSettingThatNamesNoOfferedModelIsNone(_ kept: String) {
         #expect(ClaudeModel(setting: kept) == nil)
     }
@@ -32,5 +32,13 @@ import Testing
         for asked in [ClaudeModel.sonnet, .opus, .fable, .haiku] {
             #expect(ClaudeModel.effective(asked) == .haiku)
         }
+    }
+
+    /// The on-device model is answered on the phone, so the pin, which is about spending a
+    /// subscription, leaves it as asked, in every build.
+    @Test func effectiveKeepsOnDevice() {
+        #expect(ClaudeModel.effective(.onDevice) == .onDevice)
+        #expect(!ClaudeModel.onDevice.isClaude)
+        #expect(ClaudeModel.allCases.filter(\.isClaude) == [.sonnet, .opus, .fable])
     }
 }

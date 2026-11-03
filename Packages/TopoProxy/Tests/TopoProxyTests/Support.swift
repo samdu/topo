@@ -226,9 +226,9 @@ final class LogLines: @unchecked Sendable {
 }
 
 /// A proxy over `upstream`, started, with its log captured.
-func startedProxy(_ upstream: any Upstream) async throws -> (APIProxy, UInt16, LogLines) {
+func startedProxy(_ upstream: any Upstream, local: (any Upstream)? = nil) async throws -> (APIProxy, UInt16, LogLines) {
     let lines = LogLines()
-    let proxy = try APIProxy(upstream: upstream, log: lines.log)
+    let proxy = try APIProxy(upstream: upstream, local: local, log: lines.log)
     let port = try await proxy.start()
     return (proxy, port, lines)
 }
