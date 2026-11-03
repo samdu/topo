@@ -159,7 +159,10 @@ final class TuningSliderTests: XCTestCase {
         openSettings(app, badge: badge)
         let slider = app.sliders["tuning-clearance"]
         let form = app.collectionViews.firstMatch
-        for _ in 0..<10 where !(slider.exists && slider.isHittable) {
+        // Scrolled until it sits in the form's upper half, not only hittable: one at the sheet's
+        // foot takes the tap and not the drag that `adjust` makes, as the audio sections above it
+        // leave it on a phone.
+        for _ in 0..<10 where !(slider.exists && slider.isHittable && slider.frame.midY < form.frame.midY) {
             form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.8))
                 .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.3)))
         }
