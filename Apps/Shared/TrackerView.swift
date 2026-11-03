@@ -185,7 +185,8 @@ struct ActivityRegionView: View {
     let state: ActivityState
     var stale = false
 
-    /// The most the island's small regions take, in points: Apple's Live Activities
+    /// The most the island's small regions take, in points (a ceiling: a region smaller than it
+    /// keeps its own size): Apple's Live Activities
     /// specifications (Human Interface Guidelines, *Specifications*, iOS dimensions) give a compact
     /// leading or trailing region 52.33 by 36.67 on a 393-point-wide phone and 62.33 by 36.67 on a
     /// 430-point one, and the minimal 36.67 to 45 by 36.67; the smaller phone's compact figure fits
@@ -206,11 +207,12 @@ struct ActivityRegionView: View {
 
     var body: some View {
         if let bound = Self.bound(region) {
-            content
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .frame(maxWidth: bound.width, maxHeight: bound.height)
-                .clipped()
+            Bounded(bound: bound) {
+                content
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+            }
+            .clipped()
         } else {
             content
         }
@@ -233,6 +235,27 @@ struct ActivityRegionView: View {
             case .islandCompactLeading, .islandCompactTrailing, .islandMinimal:
                 OctopusMark().frame(width: TrackerView.ringSize, height: TrackerView.ringSize)
             }
+        }
+    }
+
+    /// Offers its content no more than `bound` and takes the content's own size, no larger than
+    /// `bound`: a ceiling, so a ring or a short count keeps the island as snug as it was.
+    struct Bounded: Layout {
+        let bound: CGSize
+
+        private func offer(_ proposal: ProposedViewSize) -> ProposedViewSize {
+            ProposedViewSize(width: min(proposal.width ?? bound.width, bound.width),
+                             height: min(proposal.height ?? bound.height, bound.height))
+        }
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            let size = subviews.first?.sizeThatFits(offer(proposal)) ?? .zero
+            return CGSize(width: min(size.width, bound.width), height: min(size.height, bound.height))
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center,
+                                  proposal: ProposedViewSize(bounds.size))
         }
     }
 
