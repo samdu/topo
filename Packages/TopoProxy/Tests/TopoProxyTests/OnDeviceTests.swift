@@ -217,8 +217,10 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         let model = FakeLocalModel(window: 2048)
         var messages: [(String, Any)] = []
         for n in 0..<20 {
-            messages.append(("user", "question \(n) " + String(repeating: "q", count: 400)))
-            messages.append(("assistant", "answer \(n) " + String(repeating: "a", count: 400)))
+            // Long questions and short answers, so dropping one turn at a time would stop with the
+            // history opening on an answer.
+            messages.append(("user", "question \(n) " + String(repeating: "q", count: 700)))
+            messages.append(("assistant", "answer \(n) " + String(repeating: "a", count: 40)))
         }
         messages.append(("user", "the last thing"))
         let translation = try MessagesTranslation.translate(Data(messagesBody(messages).utf8))
