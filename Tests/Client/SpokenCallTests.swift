@@ -861,6 +861,8 @@ final class SpokenCallSpeakerTests: XCTestCase {
         await tick()
         XCTAssertFalse(speaker.speaking, "the reply that waited is not read when the call is over")
         XCTAssertFalse(speaker.report.started)
+        speaker.speak(writing: "Hello there. And more", answering: "n")
+        XCTAssertFalse(speaker.speaking, "nor is what the guest writes of the turn hung up on")
     }
 
     func testTheAppsOwnEndIsNotAHangUp() async {
