@@ -162,6 +162,9 @@ final class Speaker {
         // A cue is never played into an open microphone, and whether one is open or opening is
         // this object's answer.
         self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
+        // No receipt is played into an open microphone, and whether one is open or opening is this
+        // object's answer, asked at each sound rather than told at the press alone.
+        sounds?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -655,7 +658,7 @@ final class Speaker {
     /// microphone is open or opening.
     func microphoneOpened(counted: Bool) {
         if counted { openings = max(openings - 1, 0) }
-        sounds?.duck(microphoneBusy)
+        sounds?.duck()
         microphoneClosed()
     }
 
@@ -666,6 +669,13 @@ final class Speaker {
     /// system, taken with the call standing, or closing — where `ensureActive` would refuse it
     /// and the activation or the call's end is what reads it.
     private var replyMustWait: Bool { microphoneBusy || audio.callChangingHands }
+
+    /// A microphone began listening on a path no press told this object of — a hands-free session
+    /// opened again behind the lock — so the bed dips under it as under a press's. Nothing else:
+    /// what waits is read at its close, as ever.
+    func microphoneListening() {
+        sounds?.duck()
+    }
 
     /// A press is about to open the microphone. What is being read stops, so the microphone does
     /// not hear it, and every other wait goes, as at any press; a reply waiting for the microphone
@@ -679,7 +689,7 @@ final class Speaker {
         deferred = waiting
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         openings += 1
-        sounds?.duck(true)
+        sounds?.duck()
     }
 
     /// The press that opened a microphone has done what it was going to, or a microphone closed:
@@ -688,7 +698,7 @@ final class Speaker {
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
     func microphoneClosed() {
-        sounds?.duck(microphoneBusy)
+        sounds?.duck()
         readWhatWaited()
         // After the reading, so a reply read now holds the call before the microphone lets it go.
         if !microphoneBusy { onMicrophone?(false) }

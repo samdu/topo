@@ -55,7 +55,7 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 /// A cue is a moment, not a reply. It is played on the session as it stands — live
 /// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing
 /// and activates nothing, in the background under a hold least of all. Where a hold that is not
-/// a cue's own already stands it holds the process for its own length too (`AudioSession.Hold.cue`,
+/// a sound's own (a cue's or a receipt's) already stands it holds the process for its own length too (`AudioSession.Hold.cue`, its own beside the receipts' `.sound`,
 /// let go when the player has finished and the route's tail has passed, or at `bound`), taken
 /// before the player starts, so that
 /// `done` behind the lock is heard out before the last hold goes and it is let

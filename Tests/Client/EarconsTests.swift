@@ -623,6 +623,21 @@ final class EarconsTests: XCTestCase {
         XCTAssertFalse(rig.audio.holding)
     }
 
+    /// The keeper's sounds hold under their own case (`.sound`), so a failed turn's error receipt
+    /// letting go while the `failed` cue still plays leaves the cue's hold standing: the one
+    /// letting go cannot cut what the other is still paying for.
+    func testAReceiptLettingGoLeavesTheCuesHoldStanding() async {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        // The error receipt, held as `KeeperSounds` holds it.
+        rig.audio.wantAlive(true, for: .sound)
+        XCTAssertTrue(rig.earcons.play(.failed))
+        rig.speaker.endAwaiting("turn", "the turn failed")
+        XCTAssertFalse(rig.audio.heldForATurn)
+        rig.audio.wantAlive(false, for: .sound)
+        XCTAssertTrue(rig.audio.holding, "the receipt letting go cut the cue's hold")
+    }
+
     /// The cue's hold is bounded: a player whose finish never comes is let go of at `Earcons.bound`,
     /// so no hold outlives its cue. A finish after that moves nothing.
     func testTheBoundLetsGoOfAHoldWhosePlayerNeverFinishes() async {

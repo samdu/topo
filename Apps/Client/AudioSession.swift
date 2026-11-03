@@ -26,8 +26,12 @@ final class AudioSession {
     enum Hold: Hashable {
         case awaitingReply(String)
         case speaking
-        /// A sound played beside the voice being heard out — a cue, a receipt, the bed's fade —
-        /// taken only while another hold stands and bounded by the sound's own bound.
+        /// The keeper's sound being heard out — a receipt, the bed's fade — taken only while
+        /// another hold stands and bounded by the sound's own bound. Its own case, so another
+        /// sound's hold letting go cannot cut it, nor it another's.
+        case sound
+        /// An earcon being heard out (`Earcons`), on the same terms as `sound` and its own case
+        /// beside it, so a receipt's hold letting go cannot cut the cue's, nor the cue's a receipt's.
         case cue
     }
     /// Where the session is with the CallKit call a spoken exchange behind the lock is
@@ -65,7 +69,7 @@ final class AudioSession {
     /// Whether a hold stands that is not a sound's own: what a sound may extend. A sound begun
     /// under nothing but another sound's hold holds nothing, so a run of them cannot keep the
     /// process alive past the wait or the reply they were played for.
-    var heldForATurn: Bool { holds.contains { $0 != .cue } }
+    var heldForATurn: Bool { holds.contains { $0 != .sound && $0 != .cue } }
     private var recordMode: Bool { !recordClaims.isEmpty }
     /// Whether the record configuration is the one for a microphone heard through Apple's voice
     /// processing (`NoiseSuppression`), which is its mode: `voiceChat` with, `default` without.

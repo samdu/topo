@@ -292,6 +292,31 @@ final class KeeperSoundsTests: XCTestCase {
         await settle("the receipt's hold to go") { !rig.audio.holding }
     }
 
+    /// A microphone opened on a path no press goes through — a hands-free session behind the lock
+    /// opened again as its words are sent — is still one no receipt is played into, since the
+    /// sounds ask the speaker at each one rather than being told at a press; and the bed dips
+    /// once the watch on the microphone tells the speaker it is listening.
+    func testNoReceiptIsPlayedIntoAMicrophoneNoPressOpened() async throws {
+        let rig = await rig(mode: .sounds)
+        var open = false
+        rig.speaker.microphoneOpen = { open }
+        rig.speaker.microphoneClosed()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
+        open = true
+        rig.sounds.follow(toolUse("WebSearch"))
+        XCTAssertEqual(rig.sounds.played, [], "a receipt was played into a microphone no press opened")
+        rig.speaker.microphoneListening()
+        XCTAssertEqual(bed.fades.last?.to, KeeperSounds.duckedVolume, "the bed did not dip under the microphone")
+        open = false
+        rig.speaker.microphoneClosed()
+        XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
+        rig.sounds.follow(toolUse("Bash"))
+        XCTAssertEqual(rig.sounds.played, [.act])
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
     /// A sound on a session that is not live is refused and configures nothing to get one: no
     /// player, no hold, nothing played. Behind the lock that is the lock screen's interruption
     /// with a claim change deferred under the wait's hold, which a sound must not apply from the
