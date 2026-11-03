@@ -110,6 +110,12 @@ final class AudioSession {
     /// True only between a configuration that activated the session and the next reset or failure.
     private var valid = false
     private var resetObserver: NSObjectProtocol?
+    /// The outputs the session is routed to now, by port type (`currentRoute`).
+    private let outputs: @MainActor () -> [AVAudioSession.Port]
+    /// Overrides the output to the speaker, or clears the override.
+    private let speakerOverride: @MainActor (Bool) throws -> Void
+    /// Whether the call's activation overrode the earpiece to the speaker.
+    private var overridden = false
 
     /// iOS resetting the media server leaves the session at its default category and inactive, so
     /// the configuration the claims asked for is applied again; a session never configured is left
@@ -120,7 +126,11 @@ final class AudioSession {
          deactivate: @escaping (Bool) throws -> Void = AudioSession.deactivate(notifyingOthers:),
          isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive,
          otherAudioPlaying: @escaping @MainActor () -> Bool = { AVAudioSession.sharedInstance().isOtherAudioPlaying },
-         recordPermitted: @escaping @MainActor () -> Bool = { AVAudioApplication.shared.recordPermission == .granted }) {
+         recordPermitted: @escaping @MainActor () -> Bool = { AVAudioApplication.shared.recordPermission == .granted },
+         outputs: @escaping @MainActor () -> [AVAudioSession.Port] = { AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType) },
+         speakerOverride: @escaping @MainActor (Bool) throws -> Void = { try AVAudioSession.sharedInstance().overrideOutputAudioPort($0 ? .speaker : .none) }) {
+        self.outputs = outputs
+        self.speakerOverride = speakerOverride
         self.configure = configure
         self.otherAudioPlaying = otherAudioPlaying
         self.recordPermitted = recordPermitted
@@ -295,6 +305,16 @@ final class AudioSession {
     /// where an activation is not. The claims that waited stay waiting for the next audio path,
     /// which configures and activates afresh, and a refusal (an engine still rendering) is
     /// logged and leaves the session where it was, marked as needing configuring.
+    /// Whether other audio took up again a second after it was told to, for the log alone: the
+    /// hand-back's effect is the other app's to decide, and this is the only sight of it.
+    private func noteOtherAudio(after what: String) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            AudioLog.say("a second after \(what): other audio playing \(self.otherAudioPlaying())")
+        }
+    }
+
     private func handBack(after what: String) {
         valid = false
         // Marked invalid, the next audio path configures from the claims as they stand, so
@@ -304,7 +324,8 @@ final class AudioSession {
         do {
             try deactivate(true)
             configuredRecord = nil
-            AudioLog.say("\(what) with the app away; the session is handed back and other audio told to resume (record \(recordMode))")
+            AudioLog.say("\(what) with the app away; the session is handed back and other audio told to resume (record \(recordMode), other audio playing \(otherAudioPlaying()))")
+            noteOtherAudio(after: what)
         } catch {
             AudioLog.say("\(what) with the app away; the session could not be handed back: \(error)")
         }
@@ -338,7 +359,23 @@ final class AudioSession {
         call = .active
         applied = true
         valid = true
-        AudioLog.say("call activated: the session is the system's and live")
+        // CallKit routes an activated call to the earpiece, whatever the category's
+        // `defaultToSpeaker` says: a reply read there is not heard from a phone held away or
+        // lying down. Overridden to the speaker only from the earpiece, so AirPods, a car or
+        // headphones keep the call. A route override, not a category or an activation, made
+        // before the speaker's rebuild puts an engine on the new session.
+        let route = outputs()
+        if route.contains(.builtInReceiver) {
+            do {
+                try speakerOverride(true)
+                overridden = true
+                AudioLog.say("call activated: the session is the system's and live; the earpiece overridden to the speaker")
+            } catch {
+                AudioLog.say("call activated: the session is the system's and live; the earpiece could not be overridden: \(error)")
+            }
+        } else {
+            AudioLog.say("call activated: the session is the system's and live (route \(route.map(\.rawValue).joined(separator: ", ")))")
+        }
     }
 
     /// The system took the session with the call still standing (a phone call holds this one):
@@ -358,6 +395,11 @@ final class AudioSession {
         guard call != .none else { return }
         call = .none
         valid = false
+        if overridden {
+            overridden = false
+            do { try speakerOverride(false) } catch { AudioLog.say("call over: the speaker override did not clear: \(error)") }
+        }
+        AudioLog.say("call over: other audio playing \(otherAudioPlaying())")
         guard !kept else {
             AudioLog.say("call over with \(keptBy); the session waits for the next audio path")
             return
@@ -430,6 +472,7 @@ final class AudioSession {
             do {
                 try deactivate(true)
                 AudioLog.say("the record configuration is let go; other audio told to resume")
+                noteOtherAudio(after: "the record configuration let go")
             } catch {
                 AudioLog.say("the record configuration is let go; other audio could not be told: \(error)")
             }

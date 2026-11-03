@@ -124,6 +124,15 @@ final class SpokenCallTests: XCTestCase {
 
     private func tick() async { try? await Task.sleep(for: .milliseconds(20)) }
 
+    private func settle(file: StaticString = #filePath, line: UInt = #line,
+                        until condition: @escaping @MainActor () -> Bool) async {
+        for _ in 0..<500 {
+            if condition() { return }
+            await tick()
+        }
+        XCTAssertTrue(condition(), "waited ten seconds", file: file, line: line)
+    }
+
     /// Places the call and has the system perform and activate it.
     private func bringUp(_ call: SpokenCall) {
         call.start()
@@ -217,13 +226,51 @@ final class SpokenCallTests: XCTestCase {
         XCTAssertEqual(events, ["start", "failed: never activated"])
     }
 
-    func testNotPlacedIsAFailure() {
+    /// A refused placing is tried again under a new id, twice; the third refusal fails the call.
+    func testARefusedPlacingIsTriedAgainTwiceThenFails() async {
+        let call = call()
+        call.start()
+        let first = system.starts[0].callUUID
+        system.answer(0, FakeCallSystem.Refused())
+        XCTAssertEqual(call.state, .starting, "the first refusal failed the call")
+        XCTAssertEqual(events, [])
+        await settle { self.sleep.waiting >= 1 }
+        sleep.fire()
+        await settle { self.system.starts.count == 2 }
+        XCTAssertNotEqual(system.starts[1].callUUID, first, "the retry reused the refused id")
+        system.answer(system.requests.count - 1, FakeCallSystem.Refused())
+        await settle { self.sleep.waiting >= 1 }
+        sleep.fire()
+        await settle { self.system.starts.count == 3 }
+        system.answer(system.requests.count - 1, FakeCallSystem.Refused())
+        XCTAssertEqual(call.state, .idle)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertTrue(events[0].hasPrefix("failed: not placed after 3 attempts"), events[0])
+        await tick()
+        XCTAssertEqual(system.starts.count, 3, "a failed call was placed again")
+    }
+
+    func testAnEndDuringTheRetryPlacesNothingMore() async {
         let call = call()
         call.start()
         system.answer(0, FakeCallSystem.Refused())
-        XCTAssertEqual(call.state, .idle)
-        XCTAssertEqual(events.count, 1)
-        XCTAssertTrue(events[0].hasPrefix("failed: not placed"), events[0])
+        await settle { self.sleep.waiting >= 1 }
+        call.end()
+        sleep.fire()
+        await tick()
+        XCTAssertEqual(system.starts.count, 1, "a call ended during its retry was placed again")
+    }
+
+    func testAPlacingThatSucceedsOnItsRetryIsTheCall() async {
+        let call = call()
+        call.start()
+        system.answer(0, FakeCallSystem.Refused())
+        await settle { self.sleep.waiting >= 1 }
+        sleep.fire()
+        await settle { self.system.starts.count == 2 }
+        call.provider(system.provider, perform: system.starts[1])
+        XCTAssertEqual(events, ["start"])
+        XCTAssertEqual(call.id, system.starts[1].callUUID)
     }
 
     func testAStartActionForACallNoLongerWantedIsFailed() {
@@ -411,6 +458,29 @@ final class AudioSessionCallTests: XCTestCase {
     private func audio(_ seams: Seams) -> AudioSession {
         AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
                      deactivate: seams.deactivate, isActive: { [unowned self] in active })
+    }
+
+    /// CallKit routes an activated call to the earpiece: the activation overrides it to the
+    /// speaker, and the call's end clears the override. A route of headphones is left alone.
+    func testTheCallsEarpieceIsOverriddenToTheSpeakerAndClearedAtTheEnd() {
+        let seams = Seams()
+        var route: [AVAudioSession.Port] = [.builtInReceiver]
+        var overrides: [Bool] = []
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { [unowned self] in active },
+                                 outputs: { route }, speakerOverride: { overrides.append($0) })
+        active = false
+        audio.callPlaced()
+        audio.callActivated()
+        XCTAssertEqual(overrides, [true], "the call's earpiece was left as the route")
+        audio.callOver()
+        XCTAssertEqual(overrides, [true, false], "the override outlived the call")
+
+        route = [.bluetoothHFP]
+        audio.callPlaced()
+        audio.callActivated()
+        audio.callOver()
+        XCTAssertEqual(overrides, [true, false], "AirPods were overridden to the speaker")
     }
 
     func testACallsConfigureActivatesNothing() {
