@@ -287,11 +287,15 @@ final class VoiceInput {
     /// lock. A press in everything but the gesture: the permission is not asked — one not
     /// already granted refuses — and the ear's readiness, the session, the engine and the tap go
     /// through `press` as a thumb's do. Answers whether the microphone is listening for `gate`.
-    /// It does not wait out a call's session changing hands, as a thumb's press does: behind the
-    /// lock the wait could end at the call's end, on a session the background cannot activate,
-    /// and the conversation opens again at the call's next activation.
+    /// It does not wait out a call's session changing hands, as a thumb's press does, and refuses:
+    /// behind the lock the wait could end at the call's end, on a session the background cannot
+    /// activate.
     func reopen(as gate: Gate) async -> Bool {
-        guard !listening, !starting, !ending, !denied, permitted(), !audio.callChangingHands else { return false }
+        guard !listening, !starting, !ending, !denied, permitted() else { return false }
+        guard !audio.callChangingHands else {
+            refusal = "the call's session is changing hands"
+            return false
+        }
         await begin(as: gate)
         guard listening, owner == gate else { return false }
         handsFree = true

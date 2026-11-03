@@ -265,6 +265,10 @@ final class SpokenCall: NSObject {
         AudioLog.say("call: hung up from the card")
         close(action.callUUID)
         onHangUp()
+        // A hang-up wants no call behind it: what the hang-up's own effects asked for as they
+        // ran (a dropped hold or a conversation's end, told while the open microphone still kept
+        // the closing call) is not placed at its finish.
+        again = false
     }
 
     /// The card's mute: told to `onMute`, which closes the microphone a conversation behind the
@@ -418,7 +422,9 @@ enum SpokenCallSetting {
 /// at every unlock and placing it again at every lock hands the session back and forth under
 /// the reply, and takes it back from whatever other audio was told it could resume. Resigning
 /// active — Control Center, a notification pulled down, the app switcher — is not the
-/// background, and places none.
+/// background, and places none. A call up is also kept while the chat's microphone is open or
+/// opening (`microphoneChanged`), so a press in front under it does not end it under the session
+/// the microphone opens on.
 @MainActor
 final class SpokenCallDriver {
     private let call: SpokenCall

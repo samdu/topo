@@ -595,8 +595,8 @@ final class Speaker {
 
     /// Whether a reply landing now waits rather than being read: a microphone is open or
     /// opening, or the call's session is changing hands — placed and not yet activated by the
-    /// system, or taken with the call standing — where `ensureActive` would refuse it and the
-    /// activation is what reads it.
+    /// system, taken with the call standing, or closing — where `ensureActive` would refuse it
+    /// and the activation or the call's end is what reads it.
     private var replyMustWait: Bool { microphoneBusy || audio.callChangingHands }
 
     /// A press is about to open the microphone. What is being read stops, so the microphone does

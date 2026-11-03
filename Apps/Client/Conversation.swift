@@ -378,6 +378,12 @@ final class Conversation {
     }
 
     private func reopen() async {
+        // The call over or taken between `react` and this task: nothing opens on a session the
+        // background cannot activate.
+        guard on, callUp else {
+            reopening = false
+            return
+        }
         let opened = await voice.reopen(as: .chat)
         reopening = false
         guard on, !muted else {

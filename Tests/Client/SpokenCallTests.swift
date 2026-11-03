@@ -525,6 +525,30 @@ final class CallWantTests: XCTestCase {
         XCTAssertFalse(call.up)
     }
 
+    /// The card's hang-up with the microphone flag still standing (a decode running past the
+    /// hang-up) and the hang-up's own effects asking for the call (the hold's drop, then the
+    /// conversation's end): no call is placed behind the one hung up.
+    @MainActor
+    func testAHangUpPlacesNoCallBehindIt() {
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        call.provider(system.provider, perform: system.starts[0])
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        driver.conversingChanged(true)
+        driver.microphoneChanged(true)
+        call.onHangUp = {
+            driver.holdChanged(false)
+            driver.conversingChanged(false)
+        }
+        call.provider(system.provider, perform: CXEndCallAction(call: call.id!))
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(system.starts.count, 1, "a call was placed behind the one hung up")
+        driver.microphoneChanged(false)
+        XCTAssertEqual(system.starts.count, 1)
+    }
+
     @MainActor
     func testADriverMadeInTheBackgroundPlacesTheCallAtTheFirstHold() {
         let system = FakeCallSystem()

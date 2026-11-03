@@ -65,6 +65,7 @@ final class StopWhileSpeakingTests: XCTestCase {
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
                                permission: permission,
+                               permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) })
         speaker.microphoneOpen = { input.listening }
         return (speaker, input, seams)
@@ -455,6 +456,27 @@ final class StopWhileSpeakingTests: XCTestCase {
     private func listensPromptly(_ voice: VoiceInput) async -> Bool {
         for _ in 0..<100 where !voice.listening { try? await Task.sleep(for: .milliseconds(10)) }
         return voice.listening
+    }
+
+    /// A conversation's reopen, a press with no thumb, does not wait out the call's session
+    /// changing hands as a thumb's press does: it is refused, and says why, so nothing it opens
+    /// can land on a session the background cannot activate once the call is over.
+    func testAReopenIsRefusedWhileTheCallsSessionChangesHands() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        voice.callSettle = .milliseconds(100)
+        audio.callPlaced()
+        let placed = await voice.reopen(as: .chat)
+        XCTAssertFalse(placed)
+        XCTAssertEqual(voice.refusal, "the call's session is changing hands")
+        audio.callActivated()
+        let active = await voice.reopen(as: .chat)
+        XCTAssertTrue(active, "a reopen on the call's live session was refused: \(voice.refusal ?? "")")
+        voice.cancel(.chat)
+        audio.callClosing()
+        let closing = await voice.reopen(as: .chat)
+        XCTAssertFalse(closing)
+        XCTAssertEqual(voice.refusal, "the call's session is changing hands")
     }
 
     /// A call `up` before the press, then ended: the session is closing.
