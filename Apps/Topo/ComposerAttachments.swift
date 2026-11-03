@@ -64,15 +64,20 @@ final class ComposerAttachments {
     }
 
     /// The `+`'s item pressed: the door judged first, then the picker up. A second press while
-    /// one is up does nothing.
+    /// one is up does nothing; a file picker the model still counts up that has been off the
+    /// screen for a while without answering is let go first, so the `+` is never dead.
     func pick(_ source: Source) {
+        if picking == .file, sheet == nil, files.abandoned() {
+            picking = nil
+        }
         guard picking == nil, sheet == nil else { return }
         guard let store = store(), let door = store.door() else { return refuse(.signedOut) }
         guard door.files else { return refuse(.anotherPhone) }
         picking = source
     }
 
-    /// The picker came down with nothing: cancelled, or swiped away.
+    /// The photo picker came down with nothing (`chose(photo: nil)` is its way), or a suite says
+    /// a picker went.
     func dismissed(_ source: Source) {
         guard picking == source else { return }
         picking = nil
@@ -120,7 +125,7 @@ final class ComposerAttachments {
         guard picking == .file else { return }
         guard files.present({ [weak self] url in self?.chose(file: url) }) else {
             picking = nil
-            return refuse(.failed)
+            return refuse(.noPicker)
         }
     }
 
@@ -164,7 +169,8 @@ final class ComposerAttachments {
 
     /// A copy of the file at `url` in a fresh scratch folder of the store's, under the name the
     /// store keeps it by, judged against the store's limit; the copy is what the picker's caller
-    /// hands the sheet. `url` is read under its own grant where it has one (a file picker's URL).
+    /// hands the sheet. `url` is read under its own grant where it has one; the file picker's is
+    /// a copy of its own and has none.
     nonisolated static func copy(_ url: URL, as kind: Share.Kind, into store: ShareStore) -> Picked {
         let granted = url.startAccessingSecurityScopedResource()
         defer { if granted { url.stopAccessingSecurityScopedResource() } }
@@ -192,10 +198,11 @@ final class ComposerAttachments {
 /// representation, so a HEIC arrives as a JPEG the mind can read; one image, chosen with no
 /// permission asked. It and the sheet are one presentation (`Up`), so the sheet follows the
 /// picker as SwiftUI sequences the two. The file picker is the system's document picker, put up
-/// by UIKit over whatever is on top (`AttachmentFilePicker`), since one wrapped in a SwiftUI sheet
-/// draws nothing and SwiftUI's own (`fileImporter`) beside the sheet on one view never answers;
-/// what it picked reaches the model only once it is off the screen, so the sheet that follows is
-/// not put up over a picker still going. The photo picker and the sheet are not swiped away, and
+/// by UIKit over whatever is on top (`AttachmentFilePicker`) and answering through its delegate
+/// alone: SwiftUI's own (`fileImporter`) writes its `isPresented` false before it hands over the
+/// pick, and a binding that took that write as a cancel dropped every pick. What it picked
+/// reaches the model only once it is off the screen, so the sheet that follows is not put up
+/// over a picker still going. The photo picker and the sheet are not swiped away, and
 /// a swipe on the file picker is its Cancel: every change of what is up is the model's own.
 struct ComposerPickers: ViewModifier {
     @Bindable var attachments: ComposerAttachments
@@ -253,6 +260,22 @@ extension ShareSheetModel {
 final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate {
     private var shown: UIDocumentPickerViewController?
     private var chosen: (@MainActor (URL?) -> Void)?
+    private var presented: Date?
+
+    /// How long a picker may be off the screen without answering before it is taken for gone:
+    /// longer than a presentation takes to land.
+    static let grace: TimeInterval = 3
+
+    /// A picker put up more than `grace` ago that is not on the screen and never answered: let
+    /// go, so the next press puts up another. False while one is up or none is held.
+    func abandoned(now: Date = Date()) -> Bool {
+        guard let shown, let presented, now.timeIntervalSince(presented) > Self.grace,
+              shown.presentingViewController == nil, !shown.isBeingPresented else { return false }
+        self.shown = nil
+        self.chosen = nil
+        self.presented = nil
+        return true
+    }
 
     /// Puts the picker up; false when one is already up or nothing can present it.
     func present(_ chosen: @escaping @MainActor (URL?) -> Void) -> Bool {
@@ -262,6 +285,7 @@ final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate {
         picker.delegate = self
         shown = picker
         self.chosen = chosen
+        presented = Date()
         presenter.present(picker, animated: true)
         return true
     }
@@ -295,10 +319,12 @@ final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate {
         }
         shown = nil
         self.chosen = nil
+        presented = nil
         let hand = { MainActor.assumeIsolated { chosen(url) } }
         if controller.presentingViewController != nil, !controller.isBeingDismissed {
             controller.dismiss(animated: true, completion: hand)
         } else if let transition = controller.transitionCoordinator {
+            // Called whether the transition finished or was cancelled: either way it is over.
             transition.animate(alongsideTransition: nil) { _ in hand() }
         } else {
             hand()
