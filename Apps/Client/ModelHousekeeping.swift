@@ -112,8 +112,10 @@ extension ModelStore {
 }
 
 /// The Neural Engine's compiled bundles for the models, which CoreML writes under the app's
-/// Caches on a model's first load and reuses after: kept across installs, so an update whose
-/// models are the same bytes need not compile them again. Removed whole only when the person asks
+/// Caches on a model's first load and reuses after: kept across installs, so that an update whose
+/// models are the same bytes may skip compiling them again, if CoreML's key for a compiled bundle
+/// survives the install (unmeasured; #543's device check), and one per OS build or model pack
+/// that differs until iOS purges Caches. Removed whole only when the person asks
 /// (`Clear compiled model cache` in the settings sheet), and then at the next launch, before any
 /// model loads (`ModelHousekeeping.launch`), so no compile is writing into it as it goes; iOS
 /// purges Caches under pressure besides. Nothing else in Caches is touched.
@@ -266,7 +268,7 @@ enum ModelHousekeeping {
         return (ear(), voice())
     }
 
-    /// The cache's launch step as the app runs it: this install's key against the standard
+    /// The cache's launch step as the app runs it, which clears only when asked: this install's key against the standard
     /// cache. An image whose key cannot be read is logged as an install of its own.
     static func clearCompileCache() {
         guard let cache = CompileCache.standard() else {
