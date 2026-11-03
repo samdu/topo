@@ -27,6 +27,10 @@ final class ComposerAttachments {
 
     /// The picker on the screen, if one is.
     private(set) var picking: Source?
+    /// Counts the presses that put the file picker up, which is what the chat puts it up on: a
+    /// press that lets a stuck picker go sets `picking` from `.file` back to `.file` within one
+    /// call, which a watch on `picking` never sees.
+    private(set) var filePresses = 0
     /// The share sheet over what was picked, or its refusal, while it is up.
     private(set) var sheet: ShareSheetModel?
 
@@ -74,10 +78,11 @@ final class ComposerAttachments {
         guard let store = store(), let door = store.door() else { return refuse(.signedOut) }
         guard door.files else { return refuse(.anotherPhone) }
         picking = source
+        if source == .file { filePresses += 1 }
     }
 
-    /// The photo picker came down with nothing (`chose(photo: nil)` is its way), or a suite says
-    /// a picker went.
+    /// A picker taken down by something other than its own answer, or a suite saying a picker
+    /// went; a picker's answer with nothing is its `chose(…: nil)`.
     func dismissed(_ source: Source) {
         guard picking == source else { return }
         picking = nil
@@ -200,7 +205,7 @@ final class ComposerAttachments {
 /// picker as SwiftUI sequences the two. The file picker is the system's document picker, put up
 /// by UIKit over whatever is on top (`AttachmentFilePicker`) and answering through its delegate
 /// alone: SwiftUI's own (`fileImporter`) writes its `isPresented` false before it hands over the
-/// pick, and a binding that took that write as a cancel dropped every pick. What it picked
+/// pick, so a binding that reads that write as a cancel drops every pick. What it picked
 /// reaches the model only once it is off the screen, so the sheet that follows is not put up
 /// over a picker still going. The photo picker and the sheet are not swiped away, and
 /// a swipe on the file picker is its Cancel: every change of what is up is the model's own.
@@ -210,8 +215,7 @@ struct ComposerPickers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: attachments.picking == .file) { _, up in
-                guard up else { return }
+            .onChange(of: attachments.filePresses) {
                 attachments.presentFilePicker()
             }
             .sheet(item: up) { up in

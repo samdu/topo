@@ -603,9 +603,17 @@ final class ShareTests: XCTestCase {
         let store = store
         let attachments = ComposerAttachments(store: { store }, drain: {})
         attachments.pick(.file)
+        // Each press that puts the picker up is counted, since the chat puts it up on the count;
+        // a press while it is up is not.
+        XCTAssertEqual(attachments.filePresses, 1)
+        attachments.pick(.file)
+        XCTAssertEqual(attachments.filePresses, 1)
         attachments.chose(file: nil)
         XCTAssertNil(attachments.picking, "the picker stayed up after its Cancel")
         XCTAssertNil(attachments.sheet, "a picker closed with nothing put up a sheet")
+        attachments.pick(.file)
+        XCTAssertEqual(attachments.filePresses, 2, "a second press after a Cancel put no picker up")
+        attachments.chose(file: nil)
 
         let inbox = FileManager.default.temporaryDirectory.appendingPathComponent("test-\(UUID().uuidString)-Inbox", isDirectory: true)
         try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
