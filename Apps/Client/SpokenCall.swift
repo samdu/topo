@@ -389,7 +389,15 @@ final class SpokenCallDriver {
     }
 
     private func decide() {
-        if Self.wants(holding: holding, phase: phase, enabled: enabled()) { call.start() } else { call.end() }
+        let enabled = enabled()
+        let wanted = Self.wants(holding: holding, phase: phase, enabled: enabled)
+        // Each decision with the three facts, so a run says why a lock placed no call.
+        if wanted != call.up {
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), scene \(phase), setting \(enabled))")
+        } else if holding, !wanted {
+            AudioLog.say("call driver: no call (scene \(phase), setting \(enabled))")
+        }
+        if wanted { call.start() } else { call.end() }
     }
 }
 #endif
