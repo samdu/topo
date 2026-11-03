@@ -362,27 +362,29 @@ final class AudioSession {
     /// a press waits for the same (`settled`).
     var callChangingHands: Bool { call == .placed || call == .deactivated || call == .closing }
 
-    private var settling: [CheckedContinuation<Void, Never>] = []
+    private var settling: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     /// Waits until the call's session is no longer changing hands — activated, or the call over
     /// — or for `bound`, whichever is first, and answers whether it settled. Free when it is not
     /// changing hands. A press waits here rather than being refused, since the window is the
-    /// second after a reply ends, which is when a person answers.
+    /// second after a reply ends, which is when a person answers. Each wait's bound ends that
+    /// wait alone.
     func settled(within bound: Duration, sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async -> Bool {
         guard callChangingHands else { return true }
+        let id = UUID()
         let timer = Task { @MainActor [weak self] in
             try? await sleep(bound)
             guard !Task.isCancelled else { return }
-            self?.releaseSettling()
+            self?.settling.removeValue(forKey: id)?.resume()
         }
-        await withCheckedContinuation { settling.append($0) }
+        await withCheckedContinuation { settling[id] = $0 }
         timer.cancel()
         return !callChangingHands
     }
 
     private func releaseSettling() {
-        let waiting = settling
-        settling = []
+        let waiting = settling.values
+        settling = [:]
         waiting.forEach { $0.resume() }
     }
 

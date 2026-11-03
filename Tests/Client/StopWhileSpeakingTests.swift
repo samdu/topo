@@ -506,16 +506,36 @@ final class StopWhileSpeakingTests: XCTestCase {
         let down = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
         await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        // Nothing seemed to happen, so the person presses again.
+        // Nothing seemed to happen, so the person presses again, and lifts once it has.
         let again = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
         await again?.value
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
         XCTAssertFalse(voice.listening)
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
         let listened = await listensPromptly(voice)
         XCTAssertTrue(listened, "the tap was taken for a cancel")
         await down?.value
         XCTAssertTrue(voice.handsFree)
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertTrue(voice.listening, "the release of a press that reached nothing closed the microphone")
+    }
+
+    /// The speaker counts the presses opening: one press's answer is not another's, in
+    /// whichever order the two are answered.
+    func testAReplyWaitsUntilEveryPressOpeningHasAnswered() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        _ = speaker.awaitReply("n", readAloud: true)
+        speaker.microphoneOpening()
+        speaker.microphoneOpening()
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "n"))
+        speaker.microphoneOpened(counted: true)
+        await drain()
+        XCTAssertEqual(speaker.report.speaks, 0, "one press's answer read the reply under the other")
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        speaker.microphoneOpened(counted: false)
+        XCTAssertTrue(speaker.waitingForMicrophone, "a press that was not opening counted one off")
+        speaker.microphoneOpened(counted: true)
+        await settle("the reply to start once no press was opening") { speaker.report.started }
     }
 
     /// The call is placed and not yet activated, with a reply waiting for the activation. A

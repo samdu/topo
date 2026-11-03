@@ -573,7 +573,7 @@ final class Speaker {
     /// press opened nothing, or it closed a hands-free session. A press that was opening
     /// (`counted`, told `microphoneOpening`) is no longer, and a reply that waited is read if no
     /// microphone is open or opening.
-    func microphoneOpened(counted: Bool = true) {
+    func microphoneOpened(counted: Bool) {
         if counted { openings = max(openings - 1, 0) }
         microphoneClosed()
     }

@@ -96,6 +96,9 @@ final class VoiceInput {
     /// nothing that reads as the next press's.
     private var settling: Int?
     private var tappedWhileSettling = false
+    /// Presses `pressDown` ignored while a press waited out the call's session, whose releases
+    /// are owed nothing. Cleared at the next press that begins.
+    private var ignoredWhileSettling = 0
     /// True from the press until the microphone is running: the permission prompts, mainly.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
@@ -167,7 +170,12 @@ final class VoiceInput {
     /// when a permission is denied.
     func pressDown(as gate: Gate) async -> String? {
         if listening, owner == gate, handsFree { return await end(as: gate) }
-        guard !listening, !starting, !ending else { return nil }
+        guard !listening, !starting, !ending else {
+            // A press made while another waits out the call's session reaches nothing, and so
+            // does its release, whenever it comes.
+            if settling == generation { ignoredWhileSettling += 1 }
+            return nil
+        }
         pressedAt = Date()
         await begin(as: gate)
         return nil
@@ -180,11 +188,14 @@ final class VoiceInput {
     /// there opens it hands-free once the session settles.
     func pressUp(as gate: Gate) async -> String? {
         releases += 1
+        if ignoredWhileSettling > 0 {
+            ignoredWhileSettling -= 1
+            return nil
+        }
         // A tap while the press waits out the call's session is a tap, not a cancel: the
-        // microphone opens hands-free once the session settles, and a press made after that tap
-        // and before then (which `pressDown` ignores) does not cancel it with its release.
+        // microphone opens hands-free once the session settles.
         if settling == generation, owner == gate, let pressedAt,
-           tappedWhileSettling || Date().timeIntervalSince(pressedAt) < Self.tapLimit {
+           Date().timeIntervalSince(pressedAt) < Self.tapLimit {
             tappedWhileSettling = true
             return nil
         }
@@ -219,6 +230,7 @@ final class VoiceInput {
         #endif
         generation += 1
         let mine = generation
+        ignoredWhileSettling = 0
         starting = true
         owner = gate
         text = ""
