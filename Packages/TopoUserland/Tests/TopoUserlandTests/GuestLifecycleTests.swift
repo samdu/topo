@@ -834,11 +834,14 @@ final class GuestLifecycleTests: XCTestCase {
         let process = try XCTUnwrap(launcher.last)
         let turn = try await session.send("long")
         await eventually("written") { process.turns.count == 1 }
+        // The turn's own bound (`GuestSession.defaultTurnBound`, three minutes) sleeps beside
+        // everything below, so every count includes it.
+        await eventually("the turn's bound asleep") { await clock.pending == 1 }
         lifecycle.didEnterBackground()
         XCTAssertEqual(asked, [true], "the way out did not ask with the conversation free to begin")
         XCTAssertEqual(outcomes.all, [.conversing])
         XCTAssertTrue(time.begun.isEmpty, "a background task was asked for under a conversation")
-        await eventually("the backstop asleep") { await clock.pending == 1 }
+        await eventually("the backstop asleep") { await clock.pending == 2 }
         await clock.advance(by: GraceBudget.firstTick + .seconds(20))
         XCTAssertFalse(process.terminated, "the resident was ended under a conversation")
 
@@ -847,7 +850,7 @@ final class GuestLifecycleTests: XCTestCase {
         time.remaining = 28.2
         await eventually("the first tick asleep") { await clock.pending == 3 }
         await clock.advance(by: GraceBudget.firstTick)
-        // The backstop's sleep, the one beside it and the teardown's wait: two are standing the
+        // The turn's bound, the backstop's sleep and the teardown's wait: two are standing the
         // moment the first tick is spent, so the count that says the teardown is waiting is three.
         await eventually("the teardown waiting on the turn") { await clock.pending == 3 }
         await clock.advance(by: .milliseconds(15_200))
@@ -873,20 +876,24 @@ final class GuestLifecycleTests: XCTestCase {
         let process = try XCTUnwrap(launcher.last)
         _ = try await session.send("long")
         await eventually("written") { process.turns.count == 1 }
+        // The turn's own bound sleeps beside everything below, so every count includes it.
+        await eventually("the turn's bound asleep") { await clock.pending == 1 }
         lifecycle.didEnterBackground()
-        await eventually("the backstop asleep") { await clock.pending == 1 }
+        await eventually("the backstop asleep") { await clock.pending == 2 }
         await clock.advance(by: GuestLifecycle.sparedCheck)
         await eventually("asked again") { asked.count == 2 }
         XCTAssertTrue(time.begun.isEmpty, "the backstop ran a background under a live conversation")
         on = false
         time.remaining = 28.2
-        await eventually("the backstop asleep again") { await clock.pending == 1 }
+        await eventually("the backstop asleep again") { await clock.pending == 2 }
         await clock.advance(by: GuestLifecycle.sparedCheck)
         await eventually("the way out begun") { time.begun.count == 1 }
         XCTAssertEqual(asked, [true, false, false], "the backstop asked as though a conversation could begin")
         XCTAssertEqual(outcomes.all, [.conversing, .conversationGone])
-        await eventually("the first tick asleep") { await clock.pending >= 1 }
+        // The backstop has returned: the turn's bound and the first tick.
+        await eventually("the first tick asleep") { await clock.pending == 2 }
         await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the teardown waiting on the turn") { await clock.pending == 2 }
         await clock.advance(by: .milliseconds(15_200))
         await eventually("the background task ended") { time.open.isEmpty }
         XCTAssertTrue(process.terminated, "the resident outlived a conversation that had gone")
