@@ -770,10 +770,14 @@ private final class Prompt {
     }
 }
 
-/// A sleep the test fires, so a bound is a moment the test chooses.
+/// A sleep the test fires, so a bound is a moment the test chooses. A cancellation wakes only
+/// the sleep it cancels, as `Task.sleep`'s does, and a sleep is counted in `asked` only once it
+/// is waiting, so a test that settles on `asked` and then fires cannot miss it.
 final class CueSleep: @unchecked Sendable {
     private let lock = NSLock()
-    private var waiting: [(duration: Duration, continuation: CheckedContinuation<Void, any Error>)] = []
+    private var waiting: [(id: Int, duration: Duration, continuation: CheckedContinuation<Void, any Error>)] = []
+    private var cancelledEarly: Set<Int> = []
+    private var next = 0
     private var _asked: [Duration] = []
     private var _cancelled = false
 
@@ -781,25 +785,29 @@ final class CueSleep: @unchecked Sendable {
     var cancelled: Bool { lock.withLock { _cancelled } }
 
     func sleep(_ duration: Duration) async throws {
-        lock.withLock { _asked.append(duration) }
-        // Cancelled before the sleep began, which a finish straight after the play does: as
-        // cancelled as one cut short.
-        do { try Task.checkCancellation() } catch {
-            lock.withLock { _cancelled = true }
-            throw error
-        }
+        let id = lock.withLock { () -> Int in next += 1; return next }
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                lock.withLock { waiting.append((duration, continuation)) }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                // Cancelled before the sleep began, which a finish straight after the play does:
+                // as cancelled as one cut short.
+                let early = lock.withLock { () -> Bool in
+                    _asked.append(duration)
+                    if cancelledEarly.remove(id) != nil || Task.isCancelled { _cancelled = true; return true }
+                    waiting.append((id, duration, continuation))
+                    return false
+                }
+                if early { continuation.resume(throwing: CancellationError()) }
             }
         } onCancel: {
-            let cancelled = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
+            let mine = lock.withLock { () -> CheckedContinuation<Void, any Error>? in
                 _cancelled = true
-                let all = waiting.map(\.continuation)
-                waiting = []
-                return all
+                guard let index = waiting.firstIndex(where: { $0.id == id }) else {
+                    cancelledEarly.insert(id)
+                    return nil
+                }
+                return waiting.remove(at: index).continuation
             }
-            cancelled.forEach { $0.resume(throwing: CancellationError()) }
+            mine?.resume(throwing: CancellationError())
         }
     }
 
