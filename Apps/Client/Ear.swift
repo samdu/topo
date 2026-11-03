@@ -58,8 +58,13 @@ final class Ear {
     /// multiword aliases and the default gate were the whole corruption engine ("get some" →
     /// "jetsam"), and that dropping them costs one recall hit while zeroing every invented
     /// word. The rescorer's other knobs stay stock because past this gate they measurably do
-    /// nothing. A term shorter than `minTermLength` is ignored by the rescorer, so the store
-    /// refuses one.
+    /// nothing, except the one FluidAudio added since the sweep and turned on by default: the
+    /// confident-word bias gate (`confidentWordBiasGate`), which takes the context bonus off a
+    /// term where Parakeet heard every word at 0.99 or better and the term is under 0.80
+    /// similar, so fewer replacements happen. It is off here (`VocabularyRescorer.Config` at
+    /// the session), because the sweep measured the rescorer without it and nothing has
+    /// measured it since. A term shorter than `minTermLength` is ignored by the rescorer, so
+    /// the store refuses one.
     nonisolated static let minSimilarity: Float = 0.65
     nonisolated static let minTermLength = 3
 
@@ -340,7 +345,8 @@ actor EarEngine: SpeechEngine {
             guard !vterms.isEmpty else { return nil }
             let context = CustomVocabularyContext(terms: vterms, minSimilarity: Ear.minSimilarity,
                                                   minTermLength: Ear.minTermLength)
-            return try await VocabularyBoostingSession(vocabulary: context, ctcModels: ctcModels, config: .init())
+            return try await VocabularyBoostingSession(vocabulary: context, ctcModels: ctcModels,
+                                                       config: .init(confidentWordBiasGate: false))
         }
     }
 
