@@ -379,15 +379,19 @@ final class SpokenCallTests: XCTestCase {
 
 /// When a call is wanted: the whole table.
 final class CallWantTests: XCTestCase {
-    func testOnlyAHoldOrAConversationInTheBackgroundWithTheSettingOnPlacesACall() {
+    /// A hold or a conversation in the background with the setting on places a call, and a call
+    /// up is kept in front for as long as either stands.
+    func testAHoldOrAConversationInTheBackgroundPlacesACallAndAnUpCallIsKeptInFront() {
         for holding in [false, true] {
             for conversing in [false, true] {
                 for phase in [ScenePhase.active, .inactive, .background] {
                     for enabled in [false, true] {
-                        let want = SpokenCallDriver.wants(holding: holding, conversing: conversing,
-                                                          phase: phase, enabled: enabled)
-                        XCTAssertEqual(want, (holding || conversing) && phase == .background && enabled,
-                                       "holding \(holding), conversing \(conversing), \(phase), enabled \(enabled)")
+                        for up in [false, true] {
+                            let want = SpokenCallDriver.wants(holding: holding, conversing: conversing,
+                                                              phase: phase, enabled: enabled, up: up)
+                            XCTAssertEqual(want, (holding || conversing) && enabled && (phase == .background || up),
+                                           "holding \(holding), conversing \(conversing), \(phase), enabled \(enabled), up \(up)")
+                        }
                     }
                 }
             }
@@ -408,9 +412,15 @@ final class CallWantTests: XCTestCase {
         XCTAssertEqual(system.starts.count, 1)
         driver.holdChanged(true)
         XCTAssertEqual(system.starts.count, 1, "told again, placed once")
+        driver.scene(.inactive)
         driver.scene(.active)
-        XCTAssertEqual(system.ends.count, 1, "coming forward ends it")
+        XCTAssertEqual(system.ends.count, 0, "coming forward with the hold standing ended the exchange's call")
+        driver.holdChanged(false)
+        XCTAssertEqual(system.ends.count, 1, "the hold's end in front did not end the call")
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        driver.holdChanged(true)
+        XCTAssertEqual(system.starts.count, 1, "a hold in front placed a call")
+        driver.holdChanged(false)
         enabled = false
         driver.scene(.background)
         XCTAssertEqual(system.starts.count, 1, "the setting off places none")
@@ -432,10 +442,14 @@ final class CallWantTests: XCTestCase {
         center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
         XCTAssertEqual(system.starts.count, 1, "the background places the call")
         center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
-        XCTAssertEqual(system.ends.count, 1, "coming forward ends it")
         center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        XCTAssertEqual(system.ends.count, 0, "coming forward with the hold standing ended the call")
+        XCTAssertTrue(call.up)
+        driver.holdChanged(false)
+        XCTAssertEqual(system.ends.count, 1)
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
-        XCTAssertEqual(system.starts.count, 1, "active is not the background: the call stays over")
+        driver.holdChanged(true)
+        XCTAssertEqual(system.starts.count, 1, "active is not the background: no call is placed in front")
         XCTAssertFalse(call.up)
         withExtendedLifetime(driver) {}
     }

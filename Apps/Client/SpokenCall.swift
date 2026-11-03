@@ -401,10 +401,13 @@ enum SpokenCallSetting {
 /// background and the setting is on. The background is UIKit's (`applicationState` at the start,
 /// then `didEnterBackgroundNotification` until `willEnterForegroundNotification`), Daphne's
 /// device-proven source, rather than SwiftUI's scene phase; both are logged (`app …`, `scene …`)
-/// so a run says which the lock reached first. In front the keeper's path is the proven one and
-/// the card would be noise over the chat, so the app coming forward ends the call and the keeper
-/// takes over. Resigning active — Control Center, a notification pulled down, the app switcher —
-/// is not the background, and places none.
+/// so a run says which the lock reached first. A call is placed only in the background, and once
+/// up it lasts the whole exchange: the app coming forward with a hold standing keeps it, the card
+/// over the chat, until the reply has been read and the hold goes, as Daphne's does — ending it
+/// at every unlock and placing it again at every lock hands the session back and forth under
+/// the reply, and takes it back from whatever other audio was told it could resume. Resigning
+/// active — Control Center, a notification pulled down, the app switcher — is not the
+/// background, and places none.
 @MainActor
 final class SpokenCallDriver {
     private let call: SpokenCall
@@ -435,9 +438,11 @@ final class SpokenCallDriver {
         }
     }
 
-    /// The whole rule, as a function of the three facts.
-    nonisolated static func wants(holding: Bool, conversing: Bool = false, phase: ScenePhase, enabled: Bool) -> Bool {
-        (holding || conversing) && phase == .background && enabled
+    /// The whole rule, as a function of the five facts: placed in the background, kept in front
+    /// while it is up.
+    nonisolated static func wants(holding: Bool, conversing: Bool = false, phase: ScenePhase, enabled: Bool,
+                                  up: Bool = false) -> Bool {
+        (holding || conversing) && enabled && (phase == .background || up)
     }
 
     func holdChanged(_ holding: Bool) {
@@ -457,10 +462,12 @@ final class SpokenCallDriver {
 
     private func decide() {
         let enabled = enabled()
-        let wanted = Self.wants(holding: holding, conversing: conversing, phase: phase, enabled: enabled)
-        // Each decision with the three facts, so a run says why a lock placed no call.
+        let wanted = Self.wants(holding: holding, conversing: conversing, phase: phase, enabled: enabled, up: call.up)
+        // Each decision with its facts, so a run says why a lock placed no call.
         if wanted != call.up {
             AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), conversing \(conversing), app \(phase), setting \(enabled))")
+        } else if wanted, phase != .background {
+            AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), app \(phase))")
         } else if holding || conversing, !wanted {
             AudioLog.say("call driver: no call (app \(phase), setting \(enabled))")
         }
