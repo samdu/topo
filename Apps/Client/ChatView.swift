@@ -300,6 +300,7 @@ struct ChatView: View {
                 harness.onReply = nil
                 harness.onWriting = nil
                 harness.onTurnFailed = nil
+                harness.onTurnFailure = nil
                 speaker.settled = nil
                 speaker.endAllWaits("the chat stopped answering")
             }
@@ -634,6 +635,7 @@ struct ChatView: View {
                                     dictation = going
                                 }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
+                                                 dictating: !going.sends,
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
@@ -946,6 +948,9 @@ enum SpokenReply {
     /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
     static func follow(_ harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
         wire(harness: harness, speaker: speaker, readsAloud: readsAloud)
+        // A spoken turn that failed for the person sounds so: the speaker cues `failed` for a
+        // wait standing for it, before the wait ends, and ends a reply it was reading with it.
+        harness.onTurnFailure = { nonce in speaker.turnFailed(nonce) }
         // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
         // is owed no reply from the log, so nothing waits for one.
         harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
@@ -1022,9 +1027,12 @@ final class MicPress {
     /// The gesture's own call, as the finger lands or lifts, with the state the composer drew
     /// the button in: the press is what the person saw, not what the speaker says by the time
     /// the callback runs. Answers the task carrying the press to `VoiceInput`, and nil for a stop
-    /// and its release, which reach nothing. What a release heard is handed to `send`.
+    /// and its release, which reach nothing. What a release heard is handed to `send`; with
+    /// `dictating`, `send` writes it into the row rather than sending it, so the release sounds
+    /// no cue — nothing went — and only the microphone's own `listening` is heard.
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
+                 dictating: Bool = false,
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
@@ -1034,7 +1042,10 @@ final class MicPress {
             return Task {
                 let heard = await voice.pressUp(as: .chat)
                 speaker.microphoneClosed()
+                // Nil is a tap that left the microphone open, or a release that reached no
+                // session: neither sends, and neither sounds.
                 guard let heard else { return }
+                if !dictating { speaker.earcons?.play(.sending(heard)) }
                 await send(heard)
             }
         }
@@ -1053,7 +1064,16 @@ final class MicPress {
         return Task {
             let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened(counted: opens)
-            guard let heard else { return }
+            guard let heard else {
+                // Nil is a session begun or a press refused, and only the chat holding the
+                // microphone (`owner`, which every refusal that begins no session clears), on a press that found it
+                // closed, tells the two apart. The cue follows `VoiceInput`'s decision and never
+                // makes it.
+                if !drawn.open, voice.owner == .chat { speaker.earcons?.play(.listening) }
+                return
+            }
+            // The press on the open microphone's waveform, which sends what it heard.
+            if !dictating { speaker.earcons?.play(.sending(heard)) }
             await send(heard)
         }
     }

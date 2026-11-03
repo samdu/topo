@@ -152,7 +152,7 @@ struct TopoApp: App {
         #endif
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
-        let speaker = Speaker(audio: audio, voice: spoken)
+        let speaker = Speaker(audio: audio, voice: spoken, earcons: Earcons(audio: audio))
         // A spoken exchange behind the lock is a call: placed while a hold stands with the
         // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
