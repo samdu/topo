@@ -112,18 +112,17 @@ extension ModelStore {
 }
 
 /// The Neural Engine's compiled bundles for the models, which CoreML writes under the app's
-/// Caches on the first load after every install and never takes away: one generation per install
-/// until iOS purges Caches under pressure. Cleared as a whole, and only on a new install, before
-/// any model loads (`ModelHousekeeping.launch`), so the next load compiles the one generation this
-/// install uses; with `keep` set the generations stand, which is the experiment. Nothing else in
-/// Caches is touched.
+/// Caches on a model's first load and reuses after: kept across installs, so an update whose
+/// models are the same bytes need not compile them again. Removed whole only when the person asks
+/// (`Clear compiled model cache` in the settings sheet), and then at the next launch, before any
+/// model loads (`ModelHousekeeping.launch`), so no compile is writing into it as it goes; iOS
+/// purges Caches under pressure besides. Nothing else in Caches is touched.
 struct CompileCache {
-    /// The install the cache was last cleared for.
+    /// The install the launch last saw, so a new one is logged once.
     static let recorded = "topo.models.compileCacheInstall"
-    /// The experiment's switch (`Keep compiled models across installs` in the settings sheet):
-    /// true keeps the cache a new install would clear, and records nothing, so with it off again
-    /// the first launch after an install made while it was on clears, as a new install does.
-    static let keep = "topo.models.keepCompileCache"
+    /// Set by the settings sheet's button: the next launch removes the cache. Removed only once
+    /// the directory is gone or was never there, so a removal that fails is tried again.
+    static let requested = "topo.models.clearCompileCache"
 
     let directory: URL
     let defaults: UserDefaults
@@ -149,29 +148,32 @@ struct CompileCache {
     }
 
     enum Outcome: Equatable {
-        /// The install recorded is this one: nothing done.
+        /// No clear asked for, and the install recorded is this one: nothing done.
         case sameInstall
-        /// A new install, and `keep` is set: nothing removed and nothing recorded.
+        /// No clear asked for, and a new install: the cache stands, and the install is recorded.
         case kept
+        /// A clear was asked for and the directory removed.
         case cleared
+        /// A clear was asked for and there was no directory.
         case absent
-        /// The removal threw; nothing recorded, so the next launch tries again.
+        /// The removal threw or was refused; the request stands, so the next launch tries again.
         case failed(String)
     }
 
-    /// Clears the cache when `install` is not the one last recorded. The key is recorded only
-    /// once the directory is gone or was never there. With `keep` set the cache is left as it
-    /// stands and nothing is recorded.
+    /// The launch's word on the cache: removes it when a clear was asked for, and otherwise
+    /// leaves it, logging a new install once.
     @discardableResult
-    func clear(install: String) -> Outcome {
-        if defaults.string(forKey: Self.recorded) == install { return .sameInstall }
-        if defaults.bool(forKey: Self.keep) {
+    func launch(install: String) -> Outcome {
+        let newInstall = defaults.string(forKey: Self.recorded) != install
+        if newInstall { defaults.set(install, forKey: Self.recorded) }
+        guard defaults.bool(forKey: Self.requested) else {
+            guard newInstall else { return .sameInstall }
             log.notice("compile cache: kept for install \(install, privacy: .public)")
             return .kept
         }
         // Caches, and the app's folder in it, judged with `lstat`: a folder behind a link is
-        // somewhere else's, so nothing is removed and nothing recorded. The cache folder itself,
-        // were it a link, is removed as a link, which touches nothing behind it.
+        // somewhere else's, so nothing is removed. The cache folder itself, were it a link, is
+        // removed as a link, which touches nothing behind it.
         let parent = directory.deletingLastPathComponent()
         if linkOnChain(from: parent.deletingLastPathComponent(), to: parent) {
             log.error("compile cache: \(parent.path, privacy: .public) is reached through a link; not cleared")
@@ -189,8 +191,8 @@ struct CompileCache {
             log.error("compile cache: not cleared, retried next launch: \(error.localizedDescription, privacy: .public)")
             return .failed(error.localizedDescription)
         }
-        defaults.set(install, forKey: Self.recorded)
-        log.notice("compile cache: \(outcome == .cleared ? "cleared" : "absent", privacy: .public) for install \(install, privacy: .public)")
+        defaults.removeObject(forKey: Self.requested)
+        log.notice("compile cache: \(outcome == .cleared ? "cleared" : "absent", privacy: .public) on request")
         return outcome
     }
 
@@ -199,7 +201,7 @@ struct CompileCache {
     /// installed over itself is a new key too; the UUID is there so that a build is never
     /// mistaken for another whatever its path. `CFBundleVersion` is no part of it, since every
     /// development install carries 1. Should the bundle's path ever move on a plain launch, the
-    /// cost is one extra clear and so one recompile of the models, never a lost file.
+    /// cost is one extra log line.
     static func installKey() -> String? {
         guard let image = imageUUID() else { return nil }
         return installKey(image: image, bundle: Bundle.main.bundleURL)
@@ -254,8 +256,8 @@ func linkOnChain(from anchor: URL, to url: URL) -> Bool {
 }
 
 enum ModelHousekeeping {
-    /// The launch's first word on the models, in order: the compile cache is cleared for a new
-    /// install, and only then are the ear and the voice made, since a debug build's may start
+    /// The launch's first word on the models, in order: the compile cache is cleared if the
+    /// person asked, and only then are the ear and the voice made, since a debug build's may start
     /// loading as they are made. Their `prepare` runs on the foreground, from the scene's body,
     /// which SwiftUI only evaluates after the app's `init` has returned.
     @MainActor
@@ -264,14 +266,14 @@ enum ModelHousekeeping {
         return (ear(), voice())
     }
 
-    /// The clear as the app runs it: this install's key against the standard cache. An image
-    /// whose key cannot be read clears nothing and records nothing.
+    /// The cache's launch step as the app runs it: this install's key against the standard
+    /// cache. An image whose key cannot be read is logged as an install of its own.
     static func clearCompileCache() {
-        guard let cache = CompileCache.standard(), let key = CompileCache.installKey() else {
-            log.error("compile cache: no install key or bundle id; not cleared")
+        guard let cache = CompileCache.standard() else {
+            log.error("compile cache: no bundle id; not looked at")
             return
         }
-        cache.clear(install: key)
+        cache.launch(install: CompileCache.installKey() ?? "unknown")
     }
 }
 #endif

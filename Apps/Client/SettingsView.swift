@@ -4,7 +4,7 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// microphone's noise suppression, the voice's temperature, the experiment's switch on the compile cache, the
+/// microphone's noise suppression, the voice's temperature, the clear of the compiled models, the
 /// diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
@@ -19,14 +19,14 @@ struct SettingsView: View {
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
-    @AppStorage(CompileCache.keep) private var keepCompiled = false
+    @AppStorage(CompileCache.requested) private var clearRequested = false
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
-    /// The experiment toggle's identifier, for the UI suite.
-    static let keepCompiled = "settings-keep-compiled"
+    /// The clear button's identifier, for the UI suite, which finds it whichever label it wears.
+    static let clearCompiled = "settings-clear-compiled"
 
     var body: some View {
         NavigationStack {
@@ -63,10 +63,13 @@ struct SettingsView: View {
                     Text("How much chance Topo's voice is drawn with: lower is steadier, higher livelier. \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. Applies from the next reply. Kept on this device.")
                 }
                 Section {
-                    Toggle("Keep compiled models across installs", isOn: $keepCompiled)
-                        .accessibilityIdentifier(SettingsView.keepCompiled)
+                    Button(clearRequested ? "Clears at the next launch" : "Clear compiled model cache") {
+                        clearRequested = true
+                    }
+                    .disabled(clearRequested)
+                    .accessibilityIdentifier(SettingsView.clearCompiled)
                 } footer: {
-                    Text("An experiment. A new build's first launch normally clears what the last build compiled for the Neural Engine and compiles the ear and the voice again. On, nothing is cleared, so the next build's first launch shows whether the compiled models are reused. Off again, the first launch after an install made while it was on clears, as a new install does. Kept on this device.")
+                    Text("What the ear and the voice were compiled to for this phone's Neural Engine, kept across updates so a new build starts without compiling them again. Cleared at the next launch, which then compiles each again, about half a minute apiece.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
