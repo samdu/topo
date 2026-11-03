@@ -185,7 +185,39 @@ struct ActivityRegionView: View {
     let state: ActivityState
     var stale = false
 
+    /// The most the island's small regions take, in points: Apple's Live Activities
+    /// specifications (Human Interface Guidelines, *Specifications*, iOS dimensions) give a compact
+    /// leading or trailing region 52.33 by 36.67 on a 393-point-wide phone and 62.33 by 36.67 on a
+    /// 430-point one, and the minimal 36.67 to 45 by 36.67; the smaller phone's compact figure fits
+    /// both. A view that takes all the width it is offered — a timer's `Text` does — is otherwise
+    /// handed the island's whole width and stretches it across the screen.
+    static let compactBound = CGSize(width: 52.33, height: 36.67)
+    static let minimalBound = CGSize(width: 45, height: 36.67)
+
+    /// The bound a region is drawn within, nil for the lock screen and the expanded island, which
+    /// the system lays out at their full width.
+    static func bound(_ region: ActivityRegion) -> CGSize? {
+        switch region {
+        case .islandCompactLeading, .islandCompactTrailing: compactBound
+        case .islandMinimal: minimalBound
+        case .lockScreen, .islandExpanded: nil
+        }
+    }
+
     var body: some View {
+        if let bound = Self.bound(region) {
+            content
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .frame(maxWidth: bound.width, maxHeight: bound.height)
+                .clipped()
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         let layout = state.layout.map(ActivityLayout.read) ?? ActivityLayout()
         if let node = layout.regions[region] {
             WidgetNodeView(node: node, context: WidgetContext(slot: slot, revision: 0, family: .accessoryRectangular))
