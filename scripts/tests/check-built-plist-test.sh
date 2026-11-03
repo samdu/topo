@@ -344,7 +344,7 @@ for case in no-watch companion only dependent short version mode; do
     fi
 done
 
-for place in FluidAudio_FluidAudio.bundle FluidAudio_Renamed.bundle; do
+for place in FluidAudio_LuxTtsG2pResources.bundle FluidAudio_Renamed.bundle; do
     make_app "$work/luxtts-$place/Topo.app"
     mkdir -p "$work/luxtts-$place/Topo.app/$place"
     printf x > "$work/luxtts-$place/Topo.app/$place/luxtts_en_us_lexicon.tsv.zz"
