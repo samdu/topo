@@ -91,6 +91,11 @@ final class VoiceInput {
     /// the call's closing grace, so a call only the grace finishes is waited out. Settable for
     /// the suite.
     var callSettle: Duration = .seconds(3)
+    /// The generation of the press waiting out the call's session (`begin`), and whether a
+    /// tap's release came meanwhile. A generation, so a press cancelled while it waited leaves
+    /// nothing that reads as the next press's.
+    private var settling: Int?
+    private var tappedWhileSettling = false
     /// True from the press until the microphone is running: the permission prompts, mainly.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
@@ -170,10 +175,19 @@ final class VoiceInput {
 
     /// The thumb comes up for `gate`. A hold ends and returns what it heard, to be sent; a tap
     /// leaves the microphone open and returns nil. A release while the permission prompts are
-    /// still up, or while the press waits out a call's session settling (`begin`), cancels the
-    /// press, so no microphone is left open with nobody holding it.
+    /// still up cancels the press, so no microphone is left open with nobody holding it; so does
+    /// a hold released while the press waits out a call's session (`begin`), and a tap released
+    /// there opens it hands-free once the session settles.
     func pressUp(as gate: Gate) async -> String? {
         releases += 1
+        // A tap while the press waits out the call's session is a tap, not a cancel: the
+        // microphone opens hands-free once the session settles, and a press made after that tap
+        // and before then (which `pressDown` ignores) does not cancel it with its release.
+        if settling == generation, owner == gate, let pressedAt,
+           tappedWhileSettling || Date().timeIntervalSince(pressedAt) < Self.tapLimit {
+            tappedWhileSettling = true
+            return nil
+        }
         if starting, owner == gate {
             generation += 1
             starting = false
@@ -221,12 +235,18 @@ final class VoiceInput {
         // The call's session changing hands — closing as a reply ends, which is when a person
         // answers — is waited out rather than refused: a tap put on a closing session is cut by
         // its deactivation. Past the bound the press goes on and `ensureActive` refuses it.
+        var tapped = false
         if audio.callChangingHands {
+            settling = mine
+            tappedWhileSettling = false
             _ = await audio.settled(within: callSettle)
+            if settling == mine { settling = nil }
             // Released or cancelled while it waited: start nothing.
             guard generation == mine else { return }
+            tapped = tappedWhileSettling
         }
         press(as: gate, mine: mine)
+        if tapped, listening, generation == mine { handsFree = true }
     }
 
     /// The microphone was refused at the prompt: the press is over, and the button stays dimmed
