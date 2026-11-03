@@ -870,3 +870,45 @@ private final class Sent {
     private(set) var texts: [String] = []
     func add(_ text: String) { texts.append(text) }
 }
+
+/// The call (buddy/spoken-call) and the cues (buddy/earcons) together, which neither branch has
+/// alone: whichever of the two merges second owes main this suite.
+@MainActor
+final class EarconsUnderTheCallTests: XCTestCase {
+    /// Behind the lock under an active call, after the `.began` the lock posts has invalidated
+    /// the session: `done` is played, its hold stands for the route's tail, and the session is
+    /// handed back only once the call is over after that tail, never under the cue.
+    func testDoneUnderTheCallIsPlayedAndTheHandBackWaitsForItsTail() async {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { false })
+        let cues = CueRecorder()
+        let clock = CueSleep()
+        let tail = Duration.milliseconds(400)
+        let earcons = Earcons(audio: audio, defaults: makeDefaults(), bundle: Bundle(for: Earcons.self),
+                              makePlayer: { cues.make($0) }, sleep: { try await clock.sleep($0) }, tail: { tail })
+        audio.wantAlive(true, for: .speaking)
+        audio.callPlaced()
+        audio.callActivated()
+        audio.invalidate()
+        XCTAssertTrue(earcons.play(.done), "the cue was refused under a call the system holds")
+        audio.wantAlive(false, for: .speaking)
+        cues.players.last?.finish()
+        XCTAssertTrue(audio.holding, "the cue's hold went at the player's finish, with the tone still in the route")
+        for _ in 0..<300 where !clock.asked.contains(tail) { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(clock.asked.contains(tail))
+        clock.fire()
+        for _ in 0..<300 where audio.holding { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(audio.holding)
+        XCTAssertEqual(seams.deactivations, [], "nothing is handed back under the call")
+        audio.callOver()
+        XCTAssertEqual(seams.deactivations, [true], "the call over with nothing held hands the session back")
+    }
+
+    private func makeDefaults() -> UserDefaults {
+        let name = "earcons-under-the-call-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+}
