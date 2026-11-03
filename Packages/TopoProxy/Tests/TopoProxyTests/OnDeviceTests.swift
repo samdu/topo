@@ -368,6 +368,16 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         #expect(message?.contains(words) == true, "\(message ?? "nil")")
     }
 
+    /// A window the model did not say (0) is refused as the model not answering, not as a
+    /// message too long: no person's message is too long for a window nobody read.
+    @Test func aWindowNotSaidIsNotATooLongMessage() async throws {
+        let response = try await OnDeviceUpstream(model: FakeLocalModel(window: 0)).send(request(messagesBody([("user", "hi")])))
+        #expect(response.status == 400)
+        let object = try JSONSerialization.jsonObject(with: try await collect(response)) as? [String: Any]
+        let message = (object?["error"] as? [String: Any])?["message"] as? String
+        #expect(message?.contains("too long") == false, "\(message ?? "nil")")
+    }
+
     /// A count the model cannot make is refused with the reason, never answered as nothing.
     @Test func aCountThatCannotBeMadeIsRefused() async throws {
         let model = FakeLocalModel(unavailable: "Apple's on-device model needs iOS 26.4 or later.")
@@ -403,21 +413,22 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         #expect(await model.cancelled.wait(3))
     }
 
-    /// Apple's own model, where this Mac or simulator has it: a real answer in the API's shape.
-    /// Skipped where the model is not available, which is said by the skip, not taken as a pass.
-    @Test(.enabled(if: OnDeviceModel.unavailability() == nil, "Apple's on-device model is not available here"))
-    func theRealModelAnswers() async throws {
-        // With a turn before it, so the transcript the session is made from has a prompt and a
-        // response in it, which is the path every turn after the first takes.
-        let response = try await OnDeviceUpstream().send(request(messagesBody([
-            ("user", "My dog is called Daphne."), ("assistant", "Daphne is a lovely name."),
-            ("user", "What is my dog called? Reply with her name only."),
-        ])))
-        #expect(response.status == 200)
-        let events = sseEvents(try await collect(response))
-        #expect(events.first?.name == "message_start")
-        #expect(events.last?.name == "message_stop")
-        let text = events.compactMap { ($0.data["delta"] as? [String: Any])?["text"] as? String }.joined()
-        #expect(text.contains("Daphne"), "\(text)")
+    /// Apple's own model as this Mac or simulator has it: where it is available, its window and a
+    /// count read through `SystemLocalModel` under the suite's pool (the lane pins the pool to one
+    /// thread, on which the window read on a pool thread is 0); where it is not, a reason in
+    /// words. Never skipped. No generation runs here: Apple's generation holds a thread of the
+    /// cooperative pool for its length, which on the lane's pool of one stalls every other test
+    /// in the process, so the generation is proven by hand (`docs/guest.md`).
+    @Test func theRealModelSaysItsWindowAndCounts() async throws {
+        let model = SystemLocalModel()
+        if let reason = await model.unavailability() {
+            #expect(!reason.isEmpty)
+            return
+        }
+        #expect(await model.contextSize() >= 4096)
+        let count = try await model.tokenCount(instructions: MessagesTranslation.instructions,
+                                               history: [LocalTurn(.user, "My dog is called Daphne."), LocalTurn(.assistant, "A lovely name.")],
+                                               prompt: "What is my dog called?")
+        #expect(count > 0 && count < 1024, "\(count)")
     }
 }

@@ -104,7 +104,10 @@ public struct MessagesTranslation: Sendable, Equatable {
     /// that does not fit alone is cut from its start. Answers the fitted translation, its count,
     /// and how many turns were left out.
     public func fit(_ model: any LocalModel) async throws -> (MessagesTranslation, tokens: Int, dropped: Int) {
-        let budget = await model.contextSize() - Self.replyReserve
+        let window = await model.contextSize()
+        // A window the model did not say is not one a message is too long for.
+        guard window > 0 else { throw LocalModelError.unavailable("Apple's on-device model didn't say how much it can read.") }
+        let budget = window - Self.replyReserve
         guard budget > 0 else { throw LocalModelError.tooLong }
         var fitted = self
         var dropped = 0

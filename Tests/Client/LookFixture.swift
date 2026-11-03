@@ -212,7 +212,7 @@ enum LookFixture {
           "hairline": 0.25
         }
       },
-      "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" },
+      "mind": { "onDevice": "Pocket", "sonnet": "Small", "opus": "Medium", "fable": "Large" },
       "reading": { "markSize": 80, "spacing": 20, "font": { "style": "title3", "weight": "medium" },
                    "ink": ["#203040", "#C0D0E0"] },
       "setup": { "spacing": 2, "symbolSpacing": 8, "symbolSize": 10, "barWidth": 60, "barHeight": 4,

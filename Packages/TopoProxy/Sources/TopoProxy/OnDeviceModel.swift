@@ -105,13 +105,23 @@ public protocol LocalModel: Sendable {
 public struct SystemLocalModel: LocalModel {
     public init() {}
 
-    public func unavailability() async -> String? { OnDeviceModel.unavailability() }
+    public func unavailability() async -> String? { await Self.offThePool { OnDeviceModel.unavailability() } }
 
+    /// The window, read off the cooperative pool: the property blocks while it asks the system,
+    /// and read on a pool thread it answers 0 when the pool has no other (measured on macOS 27
+    /// with `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`: 0 on the pool, 8192 off it).
     public func contextSize() async -> Int {
         #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *) { return SystemLanguageModel.default.contextSize }
+        if #available(iOS 26, macOS 26, *) { return await Self.offThePool { SystemLanguageModel.default.contextSize } }
         #endif
         return 0
+    }
+
+    /// `read`, on a queue of its own rather than a thread of the cooperative pool.
+    static func offThePool<T: Sendable>(_ read: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: read()) }
+        }
     }
 
     public func tokenCount(instructions: String, history: [LocalTurn], prompt: String) async throws -> Int {
