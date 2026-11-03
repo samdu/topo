@@ -192,9 +192,14 @@ final class ActivityToolTests: XCTestCase {
         await settle()
         XCTAssertEqual(gate.held, 1, "the update is in the host")
         host.wait = nil
-        await keeper.endAll()
+        // The sign-out counts its login out at once and then waits its turn behind the update.
+        let keeper = self.keeper!
+        let signedOut = Task { await keeper.endAll() }
+        await settle()
+        XCTAssertEqual(keeper.generation, 1)
         gate.openUp()
         _ = await update.value
+        await signedOut.value
         XCTAssertEqual(keeper.tasks, 0, "the update from before the sign-out kept nothing")
         let after = await tool.run(["update", "A1", #"{"relevance": 5}"#])
         XCTAssertEqual(after.status, ToolReply.failed, "ended is not running")
@@ -272,6 +277,68 @@ final class ActivityToolTests: XCTestCase {
         let reply = await ended.value
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
         XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
+    }
+
+    /// Codex, round 1, through the tool: `topo activity update` while the poll's fetch is out and
+    /// its own update is still in the host. The poll's round waits, finds the update counted and
+    /// is left to the next, so the relevance the tool set stands.
+    func testAToolUpdateInTheHostIsNotOverwrittenByThePoll() async throws {
+        let fetcher = GatedTrackerFetcher()
+        self.fetcher = fetcher
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        fetcher.release(TrackerFixtures.wiki)
+        _ = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
+        await settle()
+        clock.advance(20)
+        await settle()
+        XCTAssertEqual(fetcher.pending, 1, "the poll's fetch is out")
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let tool = self.tool
+        let updated = Task { await tool.run(["update", "A1", #"{"relevance": 90}"#]) }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the tool's update is in the host")
+        fetcher.release(TrackerFixtures.wiki)
+        await settle()
+        host.wait = nil
+        gate.openUp()
+        let reply = await updated.value
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        await settle()
+        XCTAssertEqual(host.updates, 1, "the poll wrote nothing over it: \(host.calls)")
+        XCTAssertEqual(host.records[0].state.relevance, 90)
+        keeper.forget("A1")
+    }
+
+    /// The other way round, through the tool: the poll's update is in the host when the tool's is
+    /// asked for. The tool's waits its turn, merges over what the host then holds, and lands last.
+    func testAToolUpdateWaitsForThePollsUpdateInTheHost() async throws {
+        let fetcher = GatedTrackerFetcher()
+        self.fetcher = fetcher
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        fetcher.release(TrackerFixtures.wiki)
+        _ = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
+        await settle()
+        clock.advance(20)
+        await settle()
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let moved = TrackerFixtures.wiki.replacingOccurrences(of: #""label": "Download", "state": "running""#, with: #""label": "Download", "state": "done""#)
+        fetcher.release(moved)
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the poll's update is in the host")
+        let tool = self.tool
+        let updated = Task { await tool.run(["update", "A1", #"{"relevance": 90}"#]) }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the tool's waits at the keeper")
+        host.wait = nil
+        gate.openUp()
+        let reply = await updated.value
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertEqual(host.updates, 2)
+        XCTAssertEqual(host.records[0].state.relevance, 90, "the tool's update is the last applied")
+        XCTAssertEqual(host.records[0].state.card?.steps[1].state, .done, "merged over the poll's card, not the one read before the wait")
+        keeper.forget("A1")
     }
 
     /// The inline thread on dismissal: one ended and still shown is taken down with

@@ -8,7 +8,8 @@ import Foundation
 ///
 /// `read` judges every field where it is read and lets a bad field cost itself and nothing else:
 /// a label over the contract's length is cut with a note, a state that is not a case is `waiting`
-/// with a note, a `current` outside the steps is derived from them. Only a tracker with no steps
+/// with a note, a `current` names a step as written and one that is not a kept step is derived
+/// from them. Only a tracker with no steps
 /// at all is unreadable, since there is nothing to draw. The type is `Codable` under
 /// `ProgressTracker.decoder` and `encoder` (dates as epoch seconds, as the pane writes them), which
 /// is how it crosses a process boundary once judged; the JSON the pane answers carries more

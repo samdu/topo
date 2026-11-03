@@ -229,8 +229,9 @@ final class ActivityKeeper {
     /// held before another's call to it returned, and none of them overtakes another in the host.
     private var busy = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
-    /// Activities this keeper or the tool took off the lock screen at once: ended and gone, so a
-    /// resume sends them nothing more.
+    /// Activities this process took off the lock screen at once (`end` with `.now`): a resume
+    /// sends them nothing more. A sign-out ends every one again, and the tool's take-down is asked
+    /// for by name; both stand.
     private var takenDown: Set<String> = []
     private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
 
@@ -313,6 +314,7 @@ final class ActivityKeeper {
         guard !resuming else { return }
         resuming = true
         defer { resuming = false }
+        let generation = generation
         for id in host.running().map(\.id) {
             await changing(id, ended: true) { record in
                 if let until = record.state.until, until <= now() {
@@ -320,7 +322,9 @@ final class ActivityKeeper {
                     forget(id)
                     await end(id, nil, dismissal: .now)
                     log.info("activity \(id, privacy: .public) ended at its until")
-                } else if !record.ended {
+                } else if !record.ended, generation == self.generation {
+                    // Kept only under the login that resumed: a sign-out queued behind this turn
+                    // has already counted itself, and its end follows.
                     keep(id)
                 }
             }

@@ -23,7 +23,7 @@ struct ActivityTool: Tool {
         topo activity end ID [--dismiss now|default|DATE] [JSON]
                                                  end one, with a last document if given; default leaves it on the
                                                  lock screen a while, now takes it off, DATE (ISO 8601) at that time;
-                                                 one ended and still shown is taken down with now or DATE
+                                                 one ended and still shown is taken down with now or DATE and no document
         topo activity example                    a tracker and a timer: the quickest way to the shape
 
         A SLOT is [a-z0-9-], at most 32 characters, one activity a slot. The document is an object with any of:
@@ -177,6 +177,8 @@ struct ActivityTool: Tool {
                 return Self.overBudget(fitted.note, notes, "nothing changed")
             }
             if let note = fitted.note { notes.append(note) }
+            // A sign-out that counted itself while this waited at the gate ends the activity next.
+            guard keeper.generation == generation else { return .failed("topo: the login ended while the update waited; nothing changed\n") }
             keeper.touch(id)
             let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
             guard updated else { return .failed("topo: no activity \(id) running\n") }
