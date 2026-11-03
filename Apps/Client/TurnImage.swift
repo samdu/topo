@@ -116,6 +116,9 @@ enum TurnImages {
         return cache
     }()
     private static var age = 0
+    /// Where pictures are read and decoded: a file read blocks, so it is kept off the cooperative
+    /// pool, and one queue reads one picture at a time however many bubbles ask.
+    private nonisolated static let reading = DispatchQueue(label: "zone.hexagon.topo.turn-image", qos: .userInitiated)
 
     final class Box {
         let image: CGImage
@@ -127,7 +130,9 @@ enum TurnImages {
     static func load(_ image: TurnImage, from files: TurnImageFiles) async -> CGImage? {
         if let cached = cached(image) { return cached }
         let asked = age
-        let picture = await Task.detached(priority: .userInitiated) { files.data(image).flatMap(decode) }.value
+        let picture = await withCheckedContinuation { (answer: CheckedContinuation<CGImage?, Never>) in
+            reading.async { answer.resume(returning: files.data(image).flatMap(decode)) }
+        }
         guard asked == age, let picture else { return nil }
         cache.setObject(Box(picture), forKey: image.path as NSString)
         return picture

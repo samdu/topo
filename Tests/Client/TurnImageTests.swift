@@ -131,6 +131,7 @@ final class TurnImageTests: XCTestCase {
         let bytes = try Data(contentsOf: big)
         let image = try XCTUnwrap(TurnImage.find(in: "[Attached in Topo from this phone: an image, kept at /home/topo/shared/n/big.png (1 bytes)]"))
         let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
         let files = TurnImageFiles(data: { _ in gate.wait(); return bytes })
         let load = Task { await TurnImages.load(image, from: files) }
         try await Task.sleep(for: .milliseconds(50))
