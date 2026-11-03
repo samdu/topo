@@ -15,7 +15,7 @@ import SwiftUI
 /// session back when it is resumed.
 ///
 /// No VoIP push: the call is only ever placed by the app, for itself, with a hold standing and
-/// the scene in the background (`SpokenCallDriver`). The `voip` background mode is declared all
+/// the app in the background (`SpokenCallDriver`). The `voip` background mode is declared all
 /// the same (`project.yml`), since the system refuses `CXStartCallAction` from an app without it.
 ///
 /// The audio session is the system's for the call's life. This class never touches it:
@@ -356,21 +356,41 @@ enum SpokenCallSetting {
 }
 
 /// Places the call and ends it: a call is wanted while a hold stands (`AudioSession.holding`,
-/// told through `Speaker.onHold` after the speaker has dealt with the keeper), the scene is in
-/// the background and the setting is on. In front the keeper's path is the proven one and the
-/// card would be noise over the chat, so the app coming forward ends the call and the keeper
-/// takes over; `.inactive` — Control Center, a notification pulled down, the app switcher — is
-/// not the background, and places none.
+/// told through `Speaker.onHold` after the speaker has dealt with the keeper), the app is in the
+/// background and the setting is on. The background is UIKit's (`applicationState` at the start,
+/// then `didEnterBackgroundNotification` until `willEnterForegroundNotification`), Daphne's
+/// device-proven source, rather than SwiftUI's scene phase; both are logged (`app …`, `scene …`)
+/// so a run says which the lock reached first. In front the keeper's path is the proven one and
+/// the card would be noise over the chat, so the app coming forward ends the call and the keeper
+/// takes over. Resigning active — Control Center, a notification pulled down, the app switcher —
+/// is not the background, and places none.
 @MainActor
 final class SpokenCallDriver {
     private let call: SpokenCall
     private let enabled: () -> Bool
     private var holding = false
-    private var phase: ScenePhase = .active
+    private var phase: ScenePhase
+    private var observers: [NSObjectProtocol] = []
 
-    init(call: SpokenCall, enabled: @escaping () -> Bool = { SpokenCallSetting.enabled() }) {
+    init(call: SpokenCall, enabled: @escaping () -> Bool = { SpokenCallSetting.enabled() },
+         center: NotificationCenter = .default,
+         initial: ScenePhase = UIApplication.shared.applicationState == .background ? .background : .active) {
         self.call = call
         self.enabled = enabled
+        phase = initial
+        let follow: [(Notification.Name, ScenePhase, String)] = [
+            (UIApplication.didEnterBackgroundNotification, .background, "the app entered the background"),
+            (UIApplication.willEnterForegroundNotification, .inactive, "the app is coming forward"),
+            (UIApplication.didBecomeActiveNotification, .active, "the app is active"),
+        ]
+        observers = follow.map { name, phase, said in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    AudioLog.say("call driver: \(said)")
+                    self?.scene(phase)
+                }
+            }
+        }
     }
 
     /// The whole rule, as a function of the three facts.
@@ -393,9 +413,9 @@ final class SpokenCallDriver {
         let wanted = Self.wants(holding: holding, phase: phase, enabled: enabled)
         // Each decision with the three facts, so a run says why a lock placed no call.
         if wanted != call.up {
-            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), scene \(phase), setting \(enabled))")
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), app \(phase), setting \(enabled))")
         } else if holding, !wanted {
-            AudioLog.say("call driver: no call (scene \(phase), setting \(enabled))")
+            AudioLog.say("call driver: no call (app \(phase), setting \(enabled))")
         }
         if wanted { call.start() } else { call.end() }
     }
