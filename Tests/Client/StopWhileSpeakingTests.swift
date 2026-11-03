@@ -252,6 +252,48 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(showing().appearance, .stop)
     }
 
+    /// The release of a spoken press holds the process from the thumb coming up, before the final
+    /// transcription and the send, so a lock in between finds it held. The turn's own wait is
+    /// taken at the send, and the release lets go once the send is done, leaving that wait.
+    func testASpokenReleaseIsHeldUntilItsTurnsWaitIsTaken() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertTrue(voice.listening)
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        XCTAssertFalse(audio.holding, "something held the process before the release")
+
+        var heldAtTheSend = false
+        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+            heldAtTheSend = self.audio.holding
+            _ = speaker.awaitReply("turn", readAloud: true)
+        }
+        XCTAssertTrue(audio.holding, "the release was not held from the thumb coming up")
+        await up?.value
+        XCTAssertTrue(heldAtTheSend, "the process was not held between the release and the send")
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        XCTAssertTrue(audio.holding)
+        speaker.endAwaiting("turn", "the test is done")
+        XCTAssertFalse(audio.holding, "the release's hold outlived its send")
+    }
+
+    /// A release that sends nothing — a tap that leaves the microphone open — lets its hold go.
+    func testAReleaseThatSendsNothingLetsItsHoldGo() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let sent = Sent()
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { sent.add($0) }?.value
+        XCTAssertTrue(voice.listening, "a tap did not leave the microphone open")
+        XCTAssertEqual(sent.texts, [])
+        XCTAssertFalse(audio.holding, "a release that sent nothing kept its hold")
+    }
+
     /// Round four's blocker: the press has left the gesture but the microphone is not yet
     /// listening — `VoiceInput.begin` is waiting on the permission prompt — when a reply lands. It
     /// is not read: the microphone is opening from the press on, and the reply waits for the

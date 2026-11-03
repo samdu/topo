@@ -634,6 +634,7 @@ struct ChatView: View {
                                     dictation = going
                                 }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
+                                                 speaks: going.sends && readAloud,
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
@@ -1025,13 +1026,19 @@ final class MicPress {
     /// and its release, which reach nothing. What a release heard is handed to `send`.
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
-                 send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
+                 speaks: Bool = false, send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
                 stopping = false
                 return nil
             }
+            // A release whose words will be read a reply is held from the thumb coming up, not
+            // from the send after the final transcription: a lock in between would otherwise
+            // suspend the process with the turn half made. Taken here, in the gesture's callback,
+            // and let go once the send is done, its turn's wait taken by then.
+            let release = speaks ? speaker.releasing(readAloud: true) : nil
             return Task {
+                defer { release.map { speaker.released($0, "its send is done") } }
                 let heard = await voice.pressUp(as: .chat)
                 speaker.microphoneClosed()
                 guard let heard else { return }

@@ -131,6 +131,22 @@ final class SpokenCall: NSObject {
         }
     }
 
+    /// Makes Topo known to the system's call service while the app is in front, with a request
+    /// that changes nothing: the end of a call that does not exist, answered as unknown. The
+    /// service lets a call be started from the background only when it judges the person meant
+    /// it, and it judges an app it has not yet looked up too slowly: the first placing of a
+    /// launch, made at the background notification, was judged after the app had stopped being
+    /// visible and refused (`requesttransaction` error 6, "user intent could not be validated"),
+    /// where every later one, from an app already looked up, was judged within milliseconds and
+    /// allowed. Told at each coming to the front, so the placing that follows it finds Topo
+    /// known.
+    func introduce() {
+        system.introduce { error in
+            let answer = error.map { "code \(($0 as NSError).code)" } ?? "no error"
+            AudioLog.say("call: introduced to the call service in front (\(answer))")
+        }
+    }
+
     private static func appState() -> String {
         switch UIApplication.shared.applicationState {
         case .active: "active"
@@ -338,6 +354,9 @@ protocol CallSystem: AnyObject {
     /// The provider whose callbacks are the call's, compared by identity on a reset.
     var provider: CXProvider { get }
     func setDelegate(_ delegate: CXProviderDelegate)
+    /// Asks the call service for something that changes nothing, so it has looked the app up
+    /// before a call is placed from the background (`SpokenCall.introduce`).
+    func introduce(completion: @escaping @MainActor (Error?) -> Void)
     func request(_ transaction: CXTransaction, completion: @escaping @MainActor (Error?) -> Void)
     func report(_ call: UUID, update: CXCallUpdate)
     /// Reports the outgoing call connecting and connected, at once.
@@ -370,6 +389,10 @@ final class CallKitSystem: CallSystem {
 
     func setDelegate(_ delegate: CXProviderDelegate) {
         provider.setDelegate(delegate, queue: nil)
+    }
+
+    func introduce(completion: @escaping @MainActor (Error?) -> Void) {
+        request(CXTransaction(action: CXEndCallAction(call: UUID())), completion: completion)
     }
 
     func request(_ transaction: CXTransaction, completion: @escaping @MainActor (Error?) -> Void) {
@@ -443,6 +466,7 @@ final class SpokenCallDriver {
         self.enabled = enabled
         phase = initial
         call.mayPlace = { [weak self] in self?.phase == .background }
+        if initial == .active { call.introduce() }
         let follow: [(Notification.Name, ScenePhase, String)] = [
             (UIApplication.didEnterBackgroundNotification, .background, "the app entered the background"),
             (UIApplication.willEnterForegroundNotification, .inactive, "the app is coming forward"),
@@ -452,6 +476,7 @@ final class SpokenCallDriver {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     AudioLog.say("call driver: \(said)")
+                    if phase == .active { self?.call.introduce() }
                     self?.scene(phase)
                 }
             }

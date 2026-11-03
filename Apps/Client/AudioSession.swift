@@ -23,6 +23,10 @@ final class AudioSession {
     /// speaker drops its own turn's wait with `.speaking` already taken, the keeper never stops
     /// between them, and a second thing said while the first is in flight is still held for.
     enum Hold: Hashable {
+        /// A spoken press released, its words still being finished and sent: from the thumb
+        /// coming up to the turn's own wait, one per release, so a lock before the send still
+        /// finds the process held.
+        case releasing(Int)
         case awaitingReply(String)
         case speaking
     }
@@ -413,6 +417,15 @@ final class AudioSession {
         } catch {
             AudioLog.say("call placed: the category did not set: \(error)")
         }
+    }
+
+    /// The session as a reply about to be read finds it: the call's phase, the mode, the voice
+    /// processing it is configured for, the route and the system's output volume. Read only.
+    func describeOutput() -> String {
+        let session = AVAudioSession.sharedInstance()
+        let route = outputs().map(\.rawValue).joined(separator: ", ")
+        return "call \(call), mode \(session.mode.rawValue), voice processing \(voiceProcessed), "
+            + "route \(route.isEmpty ? "none" : route), overridden \(overridden), volume \(String(format: "%.2f", session.outputVolume))"
     }
 
     /// The system activated the session for the call: it is live, at the call's priority, and
