@@ -197,6 +197,7 @@ final class Speaker {
             queue.interrupted()
         }
         call.onHangUp = { [weak self] in self?.hangUp() }
+        call.onClosing = { [weak self] in self?.audio.callClosing() }
         let over: (String) -> Void = { [weak self] why in
             guard let self else { return }
             // A call refused before the system performed its start never took the session: the

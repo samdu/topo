@@ -494,6 +494,24 @@ final class CallWantTests: XCTestCase {
         XCTAssertEqual(system.starts.count, 2, "the call wanted behind the closing one was placed in front")
     }
 
+    /// Resigning active on the way forward (`willEnterForeground` before `didBecomeActive`) is
+    /// in front too: a retry landing then places nothing.
+    @MainActor
+    func testNothingIsPlacedOnTheWayToTheFront() async {
+        let system = FakeCallSystem()
+        let sleep = ManualSleep()
+        let call = SpokenCall(system: system, sleep: sleep.sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        system.answer(0, FakeCallSystem.Refused())
+        for _ in 0..<100 where sleep.waiting == 0 { try? await Task.sleep(for: .milliseconds(10)) }
+        driver.scene(.inactive)
+        sleep.fire()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(system.starts.count, 1, "the retry placed a call on the way to the front")
+        XCTAssertFalse(call.up)
+    }
+
     @MainActor
     func testADriverMadeInTheBackgroundPlacesTheCallAtTheFirstHold() {
         let system = FakeCallSystem()
@@ -546,6 +564,28 @@ final class AudioSessionCallTests: XCTestCase {
         audio.callActivated()
         audio.callOver()
         XCTAssertEqual(overrides, [true, false, true, false], "AirPods were overridden to the speaker")
+    }
+
+    /// An ended call's session is still active until the system deactivates it, and nothing
+    /// new goes on it: `closing` refuses every path and is changing hands until the call is over.
+    /// A call that never took the session has nothing to close.
+    func testAClosingCallsSessionRefusesEveryPathUntilItIsOver() {
+        let seams = Seams()
+        let audio = audio(seams)
+        audio.callClosing()
+        XCTAssertEqual(audio.call, .none, "a call that never took the session closed one")
+        audio.callPlaced()
+        audio.callActivated()
+        XCTAssertNoThrow(try audio.ensureLive())
+        audio.callClosing()
+        XCTAssertEqual(audio.call, .closing)
+        XCTAssertTrue(audio.callChangingHands)
+        XCTAssertThrowsError(try audio.ensureActive())
+        XCTAssertThrowsError(try audio.ensureLive(), "a cue was let onto a closing session")
+        audio.callOver()
+        XCTAssertEqual(audio.call, .none)
+        XCTAssertFalse(audio.callChangingHands)
+        XCTAssertNoThrow(try audio.ensureActive())
     }
 
     func testACallsConfigureActivatesNothing() {
@@ -880,6 +920,7 @@ final class SpokenCallSpeakerTests: XCTestCase {
         activate(call)
         XCTAssertTrue(speaker.running)
         call.provider(system.provider, perform: CXEndCallAction(call: call.id!))
+        XCTAssertEqual(audio.call, .closing, "the card's hang-up left the session open to new paths")
         XCTAssertFalse(speaker.holding, "the hang-up ends the wait")
         XCTAssertFalse(speaker.running, "and the engine with it")
         XCTAssertEqual(seams.deactivations, [], "not yet: the call is closing")
@@ -953,6 +994,24 @@ final class SpokenCallSpeakerTests: XCTestCase {
         speaker.writingEnded("n")
         speaker.speak(writing: "Hello again. And more", answering: "n2")
         XCTAssertTrue(speaker.speaking, "the next turn's writing is read")
+        speaker.stop()
+    }
+
+    /// A reply landing as the call closes is read on the session after it, not on the one the
+    /// system is about to deactivate.
+    func testAReplyLandingWhileTheCallClosesWaitsForItsEnd() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        activate(call)
+        active = true
+        speaker.awaitReply("m", readAloud: true)
+        call.end()
+        XCTAssertEqual(audio.call, .closing)
+        XCTAssertTrue(speaker.speak("Hello there.", answering: "m"), "taken, to be read at the call's end")
+        XCTAssertFalse(speaker.speaking, "read onto the closing call's session")
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        await settle("the reply to be read") { speaker.report.started }
         speaker.stop()
     }
 

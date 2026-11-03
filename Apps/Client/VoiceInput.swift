@@ -87,6 +87,10 @@ final class VoiceInput {
     /// Counts sessions; everything asynchronous checks it belongs to the current one. Readable
     /// so the suite can drive a press under the generation the object is on.
     private(set) var generation = 0
+    /// How long a press waits for the call's session to settle (`AudioSession.settled`): past
+    /// the call's closing grace, so a call only the grace finishes is waited out. Settable for
+    /// the suite.
+    var callSettle: Duration = .seconds(3)
     /// True from the press until the microphone is running: the permission prompts, mainly.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
@@ -166,7 +170,8 @@ final class VoiceInput {
 
     /// The thumb comes up for `gate`. A hold ends and returns what it heard, to be sent; a tap
     /// leaves the microphone open and returns nil. A release while the permission prompts are
-    /// still up cancels the press, so no microphone is left open with nobody holding it.
+    /// still up, or while the press waits out a call's session settling (`begin`), cancels the
+    /// press, so no microphone is left open with nobody holding it.
     func pressUp(as gate: Gate) async -> String? {
         releases += 1
         if starting, owner == gate {
@@ -213,6 +218,14 @@ final class VoiceInput {
         // Released or cancelled while the prompt was up: start nothing.
         guard generation == mine else { return }
         denied = false
+        // The call's session changing hands — closing as a reply ends, which is when a person
+        // answers — is waited out rather than refused: a tap put on a closing session is cut by
+        // its deactivation. Past the bound the press goes on and `ensureActive` refuses it.
+        if audio.callChangingHands {
+            _ = await audio.settled(within: callSettle)
+            // Released or cancelled while it waited: start nothing.
+            guard generation == mine else { return }
+        }
         press(as: gate, mine: mine)
     }
 

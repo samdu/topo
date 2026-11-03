@@ -33,6 +33,9 @@ final class SpokenCall: NSObject {
     var onInactive: () -> Void = {}
     /// Ended from outside the app: the call card, the Lock Screen, the watch.
     var onHangUp: () -> Void = {}
+    /// Ended, by `end` or from the card: the session is still the system's and goes with the
+    /// deactivation, so nothing new is put on it.
+    var onClosing: () -> Void = {}
     /// The call is gone and the session is the app's again.
     var onOver: () -> Void = {}
     /// The call could not be placed, was never activated, or went with the system's call
@@ -153,6 +156,7 @@ final class SpokenCall: NSObject {
     private func close(_ call: UUID) {
         state = .closing
         active = false
+        onClosing()
         grace?.cancel()
         grace = Task { [sleep] in
             try? await sleep(Self.closingGrace)
@@ -470,7 +474,7 @@ final class SpokenCallDriver {
         let wanted = Self.wants(holding: holding, phase: phase, enabled: enabled, up: call.up, microphone: microphone)
         // Each decision with its facts, so a run says why a lock placed no call.
         if wanted != call.up {
-            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), app \(phase), setting \(enabled))")
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), microphone \(microphone), app \(phase), setting \(enabled))")
         } else if wanted, phase != .background, call.state == .up {
             AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), microphone \(microphone), app \(phase))")
         } else if holding, !wanted {
