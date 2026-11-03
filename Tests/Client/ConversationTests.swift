@@ -118,6 +118,7 @@ final class ConversationTests: XCTestCase {
                                permission: { true }, permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) })
         speaker.microphoneOpen = { input.listening }
+        MicrophoneWatch.start(input, speaker)
         let conversation = Conversation(voice: input, speaker: speaker, endpoint: Endpoint(detector: detector),
                                         enabled: { [unowned self] in enabled },
                                         appActive: { [unowned self] in active },
@@ -429,11 +430,28 @@ final class ConversationTests: XCTestCase {
         audio.callDeactivated()
         conversation.call(.taken)
         XCTAssertTrue(voice.suspended)
-        XCTAssertFalse(speaker.speak("The lights are off."), "a reply was read into a suspended microphone")
-        XCTAssertTrue(speaker.waitingForMicrophone)
+        XCTAssertTrue(speaker.speak("The lights are off."), "the reply was refused rather than kept")
+        XCTAssertTrue(speaker.waitingForMicrophone, "a reply was read into a suspended microphone")
         audio.callActivated()
         conversation.call(.active)
         await settle("the microphone closed for the reply") { !voice.listening }
+        await settle("the reply read") { !speaker.waitingForMicrophone }
+    }
+
+    /// Words said into the microphone before a reply landed are judged before the reply closes
+    /// it: sent, then the reply read.
+    func testWordsHeardBeforeAWaitingReplyAreJudgedBeforeTheReplyClosesTheMicrophone() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        audio.callDeactivated()
+        conversation.call(.taken)
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        utterance(into: voice.sink)
+        audio.callActivated()
+        conversation.call(.active)
+        await settle("the words sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"], "words heard before the reply were dropped for it")
         await settle("the reply read") { !speaker.waitingForMicrophone }
     }
 

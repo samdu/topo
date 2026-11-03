@@ -286,6 +286,8 @@ final class Conversation {
                         return
                     }
                 }
+                // A reply waiting on this microphone is judged once what was heard has been.
+                if self.speaker.waitingForMicrophone { self.react() }
                 try? await Task.sleep(for: Self.feedEvery)
             }
         }
@@ -345,9 +347,15 @@ final class Conversation {
         }
     }
 
+    /// Whether the detector has been fed everything the sink holds but the part-chunk it is
+    /// waiting to fill: until then, an utterance with nothing said in it is not known to be one.
+    private var caughtUp: Bool {
+        voice.sink.peek(from: .max).end - fedTo < Endpoint.chunk
+    }
+
     private func react() {
         guard on, !endingUtterance else { return }
-        if voice.listening, !voice.suspended, speaker.waitingForMicrophone, !policy.speaking {
+        if voice.listening, !voice.suspended, speaker.waitingForMicrophone, !policy.speaking, caughtUp {
             // A reply landed over an utterance with nothing said in it: the microphone closes
             // unsent, and the reply is read.
             AudioLog.say("conversation: a reply landed over silence; the microphone closes for it")
