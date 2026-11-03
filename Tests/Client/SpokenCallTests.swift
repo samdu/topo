@@ -413,6 +413,74 @@ final class AudioSessionCallTests: XCTestCase {
         XCTAssertNoThrow(try audio.ensureActive())
     }
 
+    func testTheSessionStaysLiveUnderAnActiveCallWhateverInvalidatesIt() {
+        let seams = Seams()
+        let audio = audio(seams)
+        audio.callPlaced()
+        XCTAssertThrowsError(try audio.ensureLive(), "placed and not yet activated: not live")
+        audio.callActivated()
+        // The `.began` iOS posts at the lock screen, or as the call takes the session, and a
+        // queue that found its engine dead: neither is the call's session gone.
+        audio.invalidate()
+        XCTAssertNoThrow(try audio.ensureLive(), "a cue after the reply under the call is played")
+        audio.callDeactivated()
+        XCTAssertThrowsError(try audio.ensureLive(), "taken with the call standing: not live")
+        audio.callActivated()
+        audio.callOver()
+        XCTAssertThrowsError(try audio.ensureLive(), "the call over: the session is no longer the system's")
+        XCTAssertEqual(seams.records, [], "and nothing was configured for any of it")
+    }
+
+    func testTheWarmClaimLeavesAnotherAppPlayingAlone() {
+        let seams = Seams()
+        var playing = true
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { true },
+                                 otherAudioPlaying: { playing }, recordPermitted: { true })
+        audio.warmRecord(true)
+        XCTAssertEqual(seams.records, [], "a podcast playing as Topo comes forward is not paused by it")
+        XCTAssertEqual(seams.deactivations, [])
+        audio.warmRecord(false)
+        XCTAssertEqual(seams.records, [], "and nothing was taken to give back")
+        playing = false
+        audio.warmRecord(true)
+        XCTAssertEqual(seams.records, [true], "with nothing else playing the record configuration is warmed")
+    }
+
+    func testAnExchangeBegunOverAnotherAppKeepsTheRecordConfigurationUntilTopoLeavesTheFront() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { true },
+                                 otherAudioPlaying: { true }, recordPermitted: { true })
+        audio.warmRecord(true)
+        XCTAssertEqual(seams.records, [])
+        // The press: the record configuration is taken, which is where the podcast pauses.
+        audio.wantRecord(true, for: .chat)
+        audio.microphone(open: true)
+        XCTAssertEqual(seams.records, [true])
+        // The release: the press's claim goes as the microphone closes, before the wait's hold.
+        audio.wantRecord(false, for: .chat)
+        audio.microphone(open: false)
+        XCTAssertEqual(seams.records, [true], "the session went back to the quiet configuration between the release and the wait")
+        XCTAssertEqual(seams.deactivations, [], "and the podcast was told to resume under the reply")
+        audio.wantAlive(true, for: .awaitingReply("n"))
+        audio.wantAlive(false, for: .awaitingReply("n"))
+        XCTAssertEqual(seams.records, [true], "the reply's end in front keeps it, as the warm claim does")
+        // Topo leaves the front: the quiet configuration, the podcast told to resume first.
+        audio.warmRecord(false)
+        XCTAssertEqual(seams.records, [true, false])
+        XCTAssertEqual(seams.deactivations, [true])
+    }
+
+    func testTheWarmClaimWaitsForThePermission() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { true },
+                                 otherAudioPlaying: { false }, recordPermitted: { false })
+        audio.warmRecord(true)
+        XCTAssertEqual(seams.records, [])
+    }
+
     func testTheClaimsWaitUnderTheCallAndApplyWhenItIsOverInFront() {
         let seams = Seams()
         let audio = audio(seams)
@@ -751,6 +819,48 @@ final class SpokenCallSpeakerTests: XCTestCase {
         active = true
         speaker.speak(writing: "Hello there. And more.", answering: "n")
         XCTAssertFalse(speaker.speaking, "nor is what the guest writes of it next")
+    }
+
+    func testAHangUpWhileAReplyIsReadStopsItAndNothingReadsItAgain() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        activate(call)
+        XCTAssertTrue(speaker.speak("Hello there. And more. And more again.", answering: "n"))
+        await settle("the reading to begin") { speaker.report.started }
+        XCTAssertTrue(speaker.speaking)
+        call.provider(system.provider, perform: CXEndCallAction(call: call.id!))
+        XCTAssertFalse(speaker.speaking, "the reading stops at the hang-up")
+        XCTAssertFalse(speaker.holding)
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(call.state, .idle)
+        let speaks = speaker.report.speaks
+        // Unlocked: the app comes forward, and nothing it holds reads the reply again.
+        active = true
+        audio.wantRecord(true, for: .warm)
+        await tick()
+        XCTAssertFalse(speaker.speaking, "nothing is read on unlock")
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        XCTAssertEqual(speaker.report.speaks, speaks)
+    }
+
+    func testAHangUpWithAReplyWaitingForTheActivationSettlesItUnread() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        XCTAssertTrue(speaker.speak("Hello there.", answering: "n"))
+        XCTAssertTrue(speaker.waitingForMicrophone, "the reply waits for the activation")
+        call.provider(system.provider, perform: CXEndCallAction(call: call.id!))
+        XCTAssertEqual(settled, ["n"], "its turn's mark goes, so a relaunch does not read it")
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        await tick()
+        sleep.fire()
+        await settle("the call to be over") { call.state == .idle }
+        active = true
+        audio.wantRecord(true, for: .warm)
+        await tick()
+        XCTAssertFalse(speaker.speaking, "the reply that waited is not read when the call is over")
+        XCTAssertFalse(speaker.report.started)
     }
 
     func testTheAppsOwnEndIsNotAHangUp() async {

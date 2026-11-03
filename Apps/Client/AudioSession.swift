@@ -90,6 +90,11 @@ final class AudioSession {
     /// Whether the app is in front, which is the only place a configuration is worth attempting:
     /// iOS refuses one from the background for a non-mixable session.
     private let isActive: @MainActor () -> Bool
+    /// Whether another app is playing — a podcast, music — which the foreground's warm claim
+    /// leaves alone (`warmRecord`).
+    private let otherAudioPlaying: @MainActor () -> Bool
+    /// Whether the microphone may be used, which the warm claim asks before it takes the session.
+    private let recordPermitted: @MainActor () -> Bool
     /// True once the session has been configured; a reset re-applies only a session that was.
     private var applied = false
     /// A claim change that came in while a hold stood or the microphone was open, waiting for
@@ -121,8 +126,12 @@ final class AudioSession {
          configure: @escaping (Bool, Bool) throws -> Void = AudioSession.configureSession(record:processed:),
          setCategory: @escaping (Bool, Bool) throws -> Void = AudioSession.setCategory(record:processed:),
          deactivate: @escaping (Bool) throws -> Void = AudioSession.deactivate(notifyingOthers:),
-         isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive) {
+         isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive,
+         otherAudioPlaying: @escaping @MainActor () -> Bool = { AVAudioSession.sharedInstance().isOtherAudioPlaying },
+         recordPermitted: @escaping @MainActor () -> Bool = { AVAudioApplication.shared.recordPermission == .granted }) {
         self.configure = configure
+        self.otherAudioPlaying = otherAudioPlaying
+        self.recordPermitted = recordPermitted
         self.setCategory = setCategory
         self.deactivate = deactivate
         self.isActive = isActive
@@ -177,7 +186,13 @@ final class AudioSession {
 
     /// Marks the session as needing configuring again, for a caller that found the audio dead
     /// under a session this object believed was live.
-    func invalidate() { valid = false }
+    /// Under an active call it changes nothing: the session is the system's and live until the
+    /// system says otherwise (`callDeactivated`, `callOver`), and a `.began` iOS posts at the lock
+    /// screen or as the call takes the session is not the session gone.
+    func invalidate() {
+        guard call != .active else { return }
+        valid = false
+    }
 
     /// Claims or drops the record configuration for one surface. The session is touched only
     /// when the answer changes, so a press that finds it already claimed pays nothing. A failure
@@ -186,6 +201,11 @@ final class AudioSession {
     func wantRecord(_ on: Bool, for who: RecordClaim) {
         let was = recordMode
         if on { recordClaims.insert(who) } else { recordClaims.remove(who) }
+        // The warm claim another app's playing put off is taken with the exchange's own: a press
+        // drops its claim as the microphone closes, before the wait's hold is taken, and the
+        // record configuration has to stand from the press to the reply's end, not hand the
+        // session back between the two and read the reply over the podcast.
+        if on, who != .warm, warmWanted { recordClaims.insert(.warm) }
         guard recordMode != was else { return }
         guard !kept else {
             deferredClaims = true
@@ -224,11 +244,24 @@ final class AudioSession {
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
     /// first `playAndRecord` activation of a launch costs a route change, seconds of it on
     /// AirPods, and paying that at the press is what a press feeling slow is. Permission-gated,
-    /// so an unasked phone meets the microphone prompt at the button, never on a foreground.
+    /// so an unasked phone meets the microphone prompt at the button, never on a foreground. Not
+    /// taken while another app is playing: the record configuration cannot mix, so taking it
+    /// would pause the podcast with nothing said, and Topo takes the session from other audio
+    /// only when a spoken exchange starts — that press pays the route change instead, and takes
+    /// the warm claim with its own (`wantRecord`), so the exchange keeps the session to its end
+    /// and Topo holds it, as it would have, until it leaves the front.
     func warmRecord(_ on: Bool) {
-        if on, AVAudioApplication.shared.recordPermission != .granted { return }
+        warmWanted = on
+        if on, !recordPermitted() { return }
+        if on, otherAudioPlaying() {
+            return AudioLog.say("not warming the record configuration: another app is playing")
+        }
         wantRecord(on, for: .warm)
     }
+
+    /// The app is in front and would warm the record configuration: the warm claim stands, or
+    /// waits for the next press because another app was playing.
+    private var warmWanted = false
 
     /// Claims or drops the hold that keeps the process running when the phone is locked or Topo
     /// is behind another app. Under the `audio` background mode iOS runs a backgrounded process
