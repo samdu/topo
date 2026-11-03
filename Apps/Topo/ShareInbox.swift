@@ -139,6 +139,18 @@ final class ShareInbox {
         return queued
     }
 
+    /// Where an image a turn names is in the guest's home on this phone: `shared/<nonce>/<name>`
+    /// under the home and nowhere else, nil where there is no such file. What a turn names is
+    /// read from the log, so the URL is judged again here, not only where the line was read.
+    nonisolated static func file(_ image: TurnImage, under home: URL = GuestResident.homeDirectory) -> URL? {
+        let folder = home.appendingPathComponent(folder, isDirectory: true).standardizedFileURL
+        let url = folder.appendingPathComponent(image.nonce, isDirectory: true)
+            .appendingPathComponent(image.name, isDirectory: false).standardizedFileURL
+        guard url.deletingLastPathComponent().deletingLastPathComponent().path == folder.path,
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
     /// Takes a share's file back out of the home.
     nonisolated static func unplace(_ share: Share, under home: URL) {
         guard let name = share.file else { return }

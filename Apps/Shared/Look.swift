@@ -123,6 +123,13 @@ struct Look: Equatable, Sendable {
         /// A failure the chat reports in the navigation bar: the one line of the chat whose
         /// colour says state, since it is the one that must not read as a caption.
         var trouble: Color = .red
+        /// The tallest a picture in the person's bubble is drawn (an image they attached or
+        /// shared), in points; it is as wide as the bubble lets it be up to that.
+        var imageMaxHeight: CGFloat = 260
+        /// The rounding of a picture's corners in the bubble.
+        var imageCornerRadius: CGFloat = 10
+        /// Between a picture in the bubble and the words over or under it.
+        var imageSpacing: CGFloat = 6
 
         init(_ screen: Screen = .current) {
             switch screen {
