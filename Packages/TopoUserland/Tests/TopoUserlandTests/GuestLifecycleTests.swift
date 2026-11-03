@@ -847,7 +847,9 @@ final class GuestLifecycleTests: XCTestCase {
         time.remaining = 28.2
         await eventually("the first tick asleep") { await clock.pending == 3 }
         await clock.advance(by: GraceBudget.firstTick)
-        await eventually("the teardown waiting on the turn") { await clock.pending >= 2 }
+        // The backstop's sleep, the one beside it and the teardown's wait: two are standing the
+        // moment the first tick is spent, so the count that says the teardown is waiting is three.
+        await eventually("the teardown waiting on the turn") { await clock.pending == 3 }
         await clock.advance(by: .milliseconds(15_200))
         await eventually("the background task ended") { time.open.isEmpty }
         XCTAssertTrue(process.terminated, "the background the conversation spared never ran")
