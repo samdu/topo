@@ -216,9 +216,6 @@ enum LookDocument {
         r.colour("text", &value.text)
         r.colour("caption", &value.caption)
         r.colour("trouble", &value.trouble)
-        r.imageHeight("imageMaxHeight", &value.imageMaxHeight)
-        r.indent("imageCornerRadius", &value.imageCornerRadius)
-        r.indent("imageSpacing", &value.imageSpacing)
     }
 
     private static func markdown(_ value: inout Look.Markdown, _ r: Reader) {
@@ -571,15 +568,6 @@ enum LookDocument {
         /// Room inside a reply, between its blocks, before a list's words or after a quote's bar,
         /// and the width of a quote's bar or a rule: none to 64 points, since a list indents by it
         /// once for every list it is inside and the words have to stay in the column.
-        /// The tallest a picture in a bubble is drawn: never so short it reads as nothing, never
-        /// taller than a screen.
-        func imageHeight(_ key: String, _ value: inout CGFloat) {
-            if let number = amount(key, in: 40...800, "a height in points between 40 and 800") {
-                took(key)
-                value = CGFloat(number)
-            }
-        }
-
         func indent(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...64, "a length in points between 0 and 64") {
                 took(key)

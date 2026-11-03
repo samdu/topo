@@ -239,8 +239,9 @@ struct TopoApp: App {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
             .environment(voice).environment(speaker).environment(memory).environment(mascot)
             .environment(connections)
-            // An image a turn carries is drawn from the guest's home, which is on this phone.
-            .environment(\.turnImageFiles, TurnImageFiles(url: { ShareInbox.file($0) }))
+            // An image a turn carries is drawn from the guest's home, which is on this phone; the
+            // root hands it to the signed-in chat alone (`RootView`).
+            .environment(\.turnImageFiles, TurnImageFiles(data: { ShareInbox.imageData($0) }))
             // What every view draws with, which is the vault's `look.json` read onto the
             // compiled look. It is worn here rather than on the chat so that the first run,
             // the sign-in and the viewer screen are drawn by the same document; the memory

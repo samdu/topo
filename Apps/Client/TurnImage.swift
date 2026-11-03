@@ -22,6 +22,9 @@ struct TurnImage: Equatable {
     static let sharedFolder = "/home/topo/shared/"
 
     private static let marker = ": an image, kept at "
+    /// What `ShareInbox.text` says of where an image came from, and nothing else: a line that
+    /// says anything else there is the person's words, drawn as written.
+    static let hows: Set<Substring> = ["Shared with Topo from another app", "Attached in Topo from this phone"]
 
     /// The first image line in `text`, nil when there is none.
     static func find(in text: String) -> TurnImage? {
@@ -45,9 +48,8 @@ struct TurnImage: Equatable {
     private static func read(_ line: Substring) -> (path: String, nonce: String, name: String)? {
         guard line.hasPrefix("["), line.hasSuffix(" bytes)]"),
               let marker = line.range(of: Self.marker) else { return nil }
-        // The how is the line's own words: one line, no bracket of its own.
         let how = line[line.index(after: line.startIndex)..<marker.lowerBound]
-        guard !how.isEmpty, !how.contains("["), !how.contains("]") else { return nil }
+        guard hows.contains(how) else { return nil }
         let rest = line[marker.upperBound..<line.index(line.endIndex, offsetBy: -" bytes)]".count)]
         // The size is the last " (<digits>" of the line; the path is everything before it, so a
         // name with brackets or spaces in it is read whole.
@@ -61,19 +63,22 @@ struct TurnImage: Equatable {
         return (path, String(parts[0]), String(parts[1]))
     }
 
-    /// One path component that names something in its folder: not empty, not `.` or `..`,
-    /// not hidden, no separator, no control character.
+    /// One path component that names something in its folder: not empty, not hidden, no
+    /// separator and no control or line-breaking character, judged scalar by scalar.
     private static func plain(_ part: Substring) -> Bool {
-        !part.isEmpty && !part.hasPrefix(".") && !part.contains("/")
-            && !part.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
+        !part.isEmpty && !part.hasPrefix(".")
+            && !part.unicodeScalars.contains { $0 == "/" || $0.value < 0x20 || (0x7f...0x9f).contains($0.value)
+                || $0 == "\u{2028}" || $0 == "\u{2029}" }
     }
 }
 
-/// Where a turn's image is on this device, if it is: the app hands one in through the environment
-/// where it keeps the guest's home (the phone Topo lives on), and a device without it — a viewer,
-/// the watch, the television — draws the line as written.
+/// The bytes of a turn's image on this device, if it has them: the app hands a reader in through
+/// the environment on the chat of the phone Topo lives on (`ShareInbox.imageData`, which opens it
+/// beneath the guest's home with no link followed), and a device or a screen without one — a
+/// viewer, the watch, the television, the sign-in — draws the line as written. Called off the
+/// main actor.
 struct TurnImageFiles: Sendable {
-    let url: @Sendable (TurnImage) -> URL?
+    let data: @Sendable (TurnImage) -> Data?
 }
 
 private struct TurnImageFilesKey: EnvironmentKey {
@@ -90,38 +95,43 @@ extension EnvironmentValues {
 /// Decoded pictures, kept in memory only, at no more than `maxPixels` on their long side, so a
 /// transcript of photos holds a few megabytes and not a camera's worth each. The turn on its way
 /// and the turn the log has share one decode, so the picture does not blink as the turn lands.
-/// `clear` empties it at a sign-out.
+/// `clear` empties it at a sign-out, and a read still under way then keeps nothing: each clear
+/// begins an age, and a picture is kept only in the age it was asked for in.
 @MainActor
 enum TurnImages {
     nonisolated static let maxPixels = 1024
-    private static let cache: NSCache<NSURL, Box> = {
-        let cache = NSCache<NSURL, Box>()
+    private static let cache: NSCache<NSString, Box> = {
+        let cache = NSCache<NSString, Box>()
         cache.countLimit = 24
         return cache
     }()
+    private static var age = 0
 
     final class Box {
         let image: CGImage
         init(_ image: CGImage) { self.image = image }
     }
 
-    static func cached(_ url: URL) -> CGImage? { cache.object(forKey: url as NSURL)?.image }
+    static func cached(_ image: TurnImage) -> CGImage? { cache.object(forKey: image.path as NSString)?.image }
 
-    static func load(_ url: URL) async -> CGImage? {
-        if let image = cached(url) { return image }
-        let image = await Task.detached(priority: .userInitiated) { decode(url) }.value
-        if let image { cache.setObject(Box(image), forKey: url as NSURL) }
-        return image
+    static func load(_ image: TurnImage, from files: TurnImageFiles) async -> CGImage? {
+        if let cached = cached(image) { return cached }
+        let asked = age
+        let picture = await Task.detached(priority: .userInitiated) { files.data(image).flatMap(decode) }.value
+        guard asked == age, let picture else { return nil }
+        cache.setObject(Box(picture), forKey: image.path as NSString)
+        return picture
     }
 
-    static func clear() { cache.removeAllObjects() }
+    static func clear() {
+        age += 1
+        cache.removeAllObjects()
+    }
 
-    /// The picture at `url`, drawn upright at no more than `maxPixels` on its long side; nil for
-    /// anything that is not a regular file of an image.
-    nonisolated static func decode(_ url: URL) -> CGImage? {
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-              values.isRegularFile == true, values.isSymbolicLink != true,
-              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+    /// The picture in `data`, drawn upright at no more than `maxPixels` on its long side; nil for
+    /// anything that is not an image.
+    nonisolated static func decode(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -142,20 +152,19 @@ struct PersonWords: View {
     var bare = false
     @Environment(\.look) private var look
     @Environment(\.turnImageFiles) private var files
-    @State private var loaded: (url: URL, image: CGImage)?
+    @State private var loaded: (path: String, image: CGImage)?
 
     private var image: TurnImage? { files == nil ? nil : TurnImage.find(in: text) }
-    private var url: URL? { image.flatMap { files?.url($0) } }
 
     var body: some View {
-        if let image, let url, let picture = picture(url) {
-            VStack(alignment: .trailing, spacing: look.transcript.imageSpacing) {
+        if let image, let picture = picture(image) {
+            VStack(alignment: .trailing, spacing: look.markdown.blockSpacing) {
                 if !image.before.isEmpty { words(image.before) }
                 Image(decorative: picture, scale: 1, orientation: .up)
                     .resizable()
                     .scaledToFit()
-                    .frame(maxHeight: look.transcript.imageMaxHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: look.transcript.imageCornerRadius, style: .continuous))
+                    .frame(maxHeight: look.markdown.imageMaxHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: look.markdown.imageCornerRadius, style: .continuous))
                     .accessibilityElement()
                     .accessibilityLabel("Image \(image.name)")
                     .accessibilityAddTraits(.isImage)
@@ -164,17 +173,17 @@ struct PersonWords: View {
             }
         } else {
             words(text)
-                .task(id: url) {
-                    guard let url, TurnImages.cached(url) == nil, let picture = await TurnImages.load(url) else { return }
-                    loaded = (url, picture)
+                .task(id: image?.path) {
+                    guard let image, let files, let picture = await TurnImages.load(image, from: files) else { return }
+                    loaded = (image.path, picture)
                 }
         }
     }
 
-    /// The picture for `url`: the one this view read, or one an earlier view of the same turn did.
-    private func picture(_ url: URL) -> CGImage? {
-        if let loaded, loaded.url == url { return loaded.image }
-        return TurnImages.cached(url)
+    /// The picture for `image`: the one this view read, or one an earlier view of the same turn did.
+    private func picture(_ image: TurnImage) -> CGImage? {
+        if let loaded, loaded.path == image.path { return loaded.image }
+        return TurnImages.cached(image)
     }
 
     private func words(_ text: String) -> some View {

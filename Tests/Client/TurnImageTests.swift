@@ -50,64 +50,105 @@ final class TurnImageTests: XCTestCase {
     }
 
     /// A line anywhere but the guest's shared folder, a path that leaves it, a hidden or nested
-    /// name, a file's line, or the line inside other words is not an image.
+    /// name, a file's line, the line inside other words, or a line that says anything but the
+    /// inbox's own words of where the image came from is not an image.
     func testNothingElseIsAnImage() {
+        let at = ": an image, kept at "
         let refused = [
-            "[Shared with Topo from another app: an image, kept at /home/topo/.claude/x.jpg (1 bytes)]",
-            "[Shared with Topo from another app: an image, kept at /home/topo/shared/../.claude/x (1 bytes)]",
-            "[Shared with Topo from another app: an image, kept at /home/topo/shared/n/../x.jpg (1 bytes)]",
-            "[Shared with Topo from another app: an image, kept at /home/topo/shared/n/.hidden (1 bytes)]",
-            "[Shared with Topo from another app: an image, kept at /home/topo/shared/n/m/x.jpg (1 bytes)]",
-            "[Shared with Topo from another app: an image, kept at /home/topo/shared//x.jpg (1 bytes)]",
-            "[Shared with Topo from another app: an image, kept at /home/topo/shared/n/x.jpg (bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/.claude/x.jpg (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared/../.claude/x (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared/n/../x.jpg (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared/n/.hidden (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared/n/m/x.jpg (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared//x.jpg (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared/n/x.jpg (bytes)]",
             "[Shared with Topo from another app: a file, kept at /home/topo/shared/n/x.jpg (1 bytes)]",
-            "look: [Shared with Topo from another app: an image, kept at /home/topo/shared/n/x.jpg (1 bytes)]",
-            "[a] [b: an image, kept at /home/topo/shared/n/x.jpg (1 bytes)]",
+            "look: [Shared with Topo from another app\(at)/home/topo/shared/n/x.jpg (1 bytes)]",
+            "[my own words\(at)/home/topo/shared/n/x.jpg (1 bytes)]",
+            "[Hi\u{2028}my words here\(at)/home/topo/shared/n/x.jpg (1 bytes)]",
+            "[Hi\rmy words\(at)/home/topo/shared/n/x.jpg (1 bytes)]",
+            "[Shared with Topo from another app\(at)/home/topo/shared/n/x\u{2028}y.jpg (1 bytes)]",
             "/home/topo/shared/n/x.jpg",
         ]
         for text in refused { XCTAssertNil(TurnImage.find(in: text), text) }
+        // Words after the line are kept too.
+        let after = TurnImage.find(in: "[Shared with Topo from another app\(at)/home/topo/shared/n/x.jpg (1 bytes)]\n\nand this")
+        XCTAssertEqual(after?.after, "and this")
     }
 
-    /// The file is found under the home's shared folder only, and only where it is.
-    func testTheFileIsTheHomesAndOnlyWhereItIs() throws {
-        let image = try XCTUnwrap(TurnImage.find(in: "[x: an image, kept at /home/topo/shared/n1/p.png (1 bytes)]"))
-        XCTAssertNil(ShareInbox.file(image, under: root), "a file that is not there was found")
-        let folder = root.appendingPathComponent("shared/n1", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Data([1]).write(to: folder.appendingPathComponent("p.png"))
-        XCTAssertEqual(ShareInbox.file(image, under: root)?.lastPathComponent, "p.png")
+    /// The bytes are read beneath the home's shared folder only, never through a link: not a
+    /// linked file, not a linked nonce folder, not a linked `shared`; and only where there is a file.
+    func testTheBytesAreTheHomesAndNeverThroughALink() throws {
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let outside = root.appendingPathComponent("private", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try png(width: 10, height: 10, to: outside.appendingPathComponent("secret.png"))
+        let shared = home.appendingPathComponent("shared", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared.appendingPathComponent("n1"), withIntermediateDirectories: true)
+        func image(_ nonce: String, _ name: String) throws -> TurnImage {
+            try XCTUnwrap(TurnImage.find(in: "[Shared with Topo from another app: an image, kept at /home/topo/shared/\(nonce)/\(name) (1 bytes)]"))
+        }
+        XCTAssertNil(ShareInbox.imageData(try image("n1", "p.png"), under: home), "a file that is not there was read")
+        try png(width: 10, height: 10, to: shared.appendingPathComponent("n1/p.png"))
+        XCTAssertNotNil(ShareInbox.imageData(try image("n1", "p.png"), under: home))
+        try FileManager.default.createSymbolicLink(at: shared.appendingPathComponent("n1/l.png"), withDestinationURL: outside.appendingPathComponent("secret.png"))
+        XCTAssertNil(ShareInbox.imageData(try image("n1", "l.png"), under: home), "a linked file was followed")
+        try FileManager.default.createSymbolicLink(atPath: shared.appendingPathComponent("evil").path, withDestinationPath: "../../private")
+        XCTAssertNil(ShareInbox.imageData(try image("evil", "secret.png"), under: home), "a linked folder was followed")
+        let other = root.appendingPathComponent("other-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: other.appendingPathComponent("shared").path, withDestinationPath: outside.deletingLastPathComponent().path + "/home/shared")
+        XCTAssertNil(ShareInbox.imageData(try image("n1", "p.png"), under: other), "a linked shared folder was followed")
     }
 
-    /// A picture is read upright at no more than `maxPixels` on its long side; what is not a
-    /// regular file of an image is nothing.
+    /// A picture is read upright at no more than `maxPixels` on its long side; what is not an
+    /// image is nothing.
     func testAPictureIsReadSmall() throws {
         let big = root.appendingPathComponent("big.png")
         try png(width: 3000, height: 2000, to: big)
-        let image = try XCTUnwrap(TurnImages.decode(big))
+        let image = try XCTUnwrap(TurnImages.decode(try Data(contentsOf: big)))
         XCTAssertEqual(max(image.width, image.height), TurnImages.maxPixels)
         XCTAssertGreaterThan(image.width, image.height)
-        let words = root.appendingPathComponent("words.png")
-        try Data("not a picture".utf8).write(to: words)
-        XCTAssertNil(TurnImages.decode(words))
-        let link = root.appendingPathComponent("link.png")
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: big)
-        XCTAssertNil(TurnImages.decode(link), "a link was followed")
+        XCTAssertNil(TurnImages.decode(Data("not a picture".utf8)))
     }
 
-    /// The bubble draws the picture where it has it, and the line as written where it has not.
+    /// A read still under way when the pictures are cleared keeps nothing.
+    func testAReadAcrossAClearKeepsNothing() async throws {
+        let big = root.appendingPathComponent("big.png")
+        try png(width: 3000, height: 3000, to: big)
+        let bytes = try Data(contentsOf: big)
+        let image = try XCTUnwrap(TurnImage.find(in: "[Attached in Topo from this phone: an image, kept at /home/topo/shared/n/big.png (1 bytes)]"))
+        let gate = DispatchSemaphore(value: 0)
+        let files = TurnImageFiles(data: { _ in gate.wait(); return bytes })
+        let load = Task { await TurnImages.load(image, from: files) }
+        try await Task.sleep(for: .milliseconds(50))
+        TurnImages.clear()
+        gate.signal()
+        let loaded = await load.value
+        XCTAssertNil(loaded, "a read across a clear answered")
+        XCTAssertNil(TurnImages.cached(image), "a read across a clear was kept")
+        let again = await TurnImages.load(image, from: TurnImageFiles(data: { _ in bytes }))
+        XCTAssertNotNil(again)
+        XCTAssertNotNil(TurnImages.cached(image))
+    }
+
+    /// The bubble draws the picture where it has it, with the words over it and under it, and the
+    /// line as written where it has not.
     func testTheBubbleDrawsThePictureWhereItHasIt() async throws {
-        let folder = root.appendingPathComponent("shared/n2", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try png(width: 400, height: 400, to: folder.appendingPathComponent("p.png"))
-        let text = "look\n\n[Shared with Topo from another app: an image, kept at /home/topo/shared/n2/p.png (9 bytes)]"
-        let root = root!
-        let files = TurnImageFiles(url: { ShareInbox.file($0, under: root) })
-        let url = try XCTUnwrap(files.url(try XCTUnwrap(TurnImage.find(in: text))))
-        _ = await TurnImages.load(url)
-        let drawn = try height(PersonWords(text: text).environment(\.turnImageFiles, files))
-        let plain = try height(PersonWords(text: text))
-        XCTAssertGreaterThan(drawn, plain + 100, "the picture was not drawn: \(drawn) against \(plain)")
-        XCTAssertLessThanOrEqual(drawn, Look().transcript.imageMaxHeight + plain + 20)
+        let bytes: Data = try {
+            let url = root.appendingPathComponent("p.png")
+            try png(width: 400, height: 400, to: url)
+            return try Data(contentsOf: url)
+        }()
+        let line = "[Shared with Topo from another app: an image, kept at /home/topo/shared/n2/p.png (9 bytes)]"
+        let files = TurnImageFiles(data: { _ in bytes })
+        _ = await TurnImages.load(try XCTUnwrap(TurnImage.find(in: line)), from: files)
+        let alone = try height(PersonWords(text: line).environment(\.turnImageFiles, files))
+        let words = try height(PersonWords(text: "look\n\n" + line + "\n\nand this").environment(\.turnImageFiles, files))
+        let plain = try height(PersonWords(text: line))
+        XCTAssertGreaterThan(alone, plain + 100, "the picture was not drawn: \(alone) against \(plain)")
+        XCTAssertLessThanOrEqual(alone, Look().markdown.imageMaxHeight + 1)
+        XCTAssertGreaterThan(words, alone + 20, "the words over and under the picture were not drawn: \(words) against \(alone)")
     }
 
     private func height(_ view: some View) throws -> CGFloat {
