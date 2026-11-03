@@ -327,13 +327,16 @@ final class SpokenCallTests: XCTestCase {
 
 /// When a call is wanted: the whole table.
 final class CallWantTests: XCTestCase {
-    func testOnlyAHoldInTheBackgroundWithTheSettingOnPlacesACall() {
+    func testOnlyAHoldOrAConversationInTheBackgroundWithTheSettingOnPlacesACall() {
         for holding in [false, true] {
-            for phase in [ScenePhase.active, .inactive, .background] {
-                for enabled in [false, true] {
-                    let want = SpokenCallDriver.wants(holding: holding, phase: phase, enabled: enabled)
-                    XCTAssertEqual(want, holding && phase == .background && enabled,
-                                   "holding \(holding), \(phase), enabled \(enabled)")
+            for conversing in [false, true] {
+                for phase in [ScenePhase.active, .inactive, .background] {
+                    for enabled in [false, true] {
+                        let want = SpokenCallDriver.wants(holding: holding, conversing: conversing,
+                                                          phase: phase, enabled: enabled)
+                        XCTAssertEqual(want, (holding || conversing) && phase == .background && enabled,
+                                       "holding \(holding), conversing \(conversing), \(phase), enabled \(enabled)")
+                    }
                 }
             }
         }

@@ -819,4 +819,94 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertTrue(time.begun.isEmpty)
         _ = clock
     }
+
+    // MARK: - A conversation behind the lock
+
+    /// A conversation the app is carrying at `didEnterBackground` spares the background: no task
+    /// is asked for, no grace counted, nothing torn down, and the resident answers on.
+    func testAConversationSparesTheBackgroundUntilItEnds() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        var asked: [Bool] = []
+        var on = true
+        lifecycle.conversing = { beginning in asked.append(beginning); return on }
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let turn = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        lifecycle.didEnterBackground()
+        XCTAssertEqual(asked, [true], "the way out did not ask with the conversation free to begin")
+        XCTAssertEqual(outcomes.all, [.conversing])
+        XCTAssertTrue(time.begun.isEmpty, "a background task was asked for under a conversation")
+        await eventually("the backstop asleep") { await clock.pending == 1 }
+        await clock.advance(by: GraceBudget.firstTick + .seconds(20))
+        XCTAssertFalse(process.terminated, "the resident was ended under a conversation")
+
+        on = false
+        lifecycle.conversationEnded()
+        time.remaining = 28.2
+        await eventually("the first tick asleep") { await clock.pending == 3 }
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the teardown waiting on the turn") { await clock.pending >= 2 }
+        await clock.advance(by: .milliseconds(15_200))
+        await eventually("the background task ended") { time.open.isEmpty }
+        XCTAssertTrue(process.terminated, "the background the conversation spared never ran")
+        XCTAssertEqual(time.begun.count, 1)
+        var ends: [GuestSession.TurnEnd] = []
+        for await update in turn { if case .ended(let end) = update { ends.append(end) } }
+        XCTAssertEqual(ends, [.abandoned])
+        lifecycle.conversationEnded()
+        XCTAssertEqual(time.begun.count, 1, "a second end ran a second way out")
+    }
+
+    /// The end nobody told: the backstop asks again, as a read that begins nothing, and runs the
+    /// spared background once the answer is no.
+    func testTheBackstopRunsTheSparedBackgroundWhenTheConversationIsGoneUntold() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        var asked: [Bool] = []
+        var on = true
+        lifecycle.conversing = { beginning in asked.append(beginning); return on }
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        lifecycle.didEnterBackground()
+        await eventually("the backstop asleep") { await clock.pending == 1 }
+        await clock.advance(by: GuestLifecycle.sparedCheck)
+        await eventually("asked again") { asked.count == 2 }
+        XCTAssertTrue(time.begun.isEmpty, "the backstop ran a background under a live conversation")
+        on = false
+        time.remaining = 28.2
+        await eventually("the backstop asleep again") { await clock.pending == 1 }
+        await clock.advance(by: GuestLifecycle.sparedCheck)
+        await eventually("the way out begun") { time.begun.count == 1 }
+        XCTAssertEqual(asked, [true, false, false], "the backstop asked as though a conversation could begin")
+        XCTAssertEqual(outcomes.all, [.conversing, .conversationGone])
+        await eventually("the first tick asleep") { await clock.pending >= 1 }
+        await clock.advance(by: GraceBudget.firstTick)
+        await clock.advance(by: .milliseconds(15_200))
+        await eventually("the background task ended") { time.open.isEmpty }
+        XCTAssertTrue(process.terminated, "the resident outlived a conversation that had gone")
+    }
+
+    /// Coming to the front ends the spare: a late end runs nothing in front, and the next way out
+    /// is an ordinary one.
+    func testComingBackUnderAConversationLeavesNoSparedBackgroundBehind() async throws {
+        let (lifecycle, session, launcher, clock, time, _) = make()
+        var on = true
+        lifecycle.conversing = { _ in on }
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        lifecycle.didEnterBackground()
+        lifecycle.willEnterForeground()
+        on = false
+        lifecycle.conversationEnded()
+        await clock.advance(by: GuestLifecycle.sparedCheck)
+        XCTAssertTrue(time.begun.isEmpty, "an end heard in front ran a way out")
+        XCTAssertFalse(process.terminated)
+        lifecycle.didEnterBackground()
+        XCTAssertEqual(time.begun.count, 1, "the next way out was not an ordinary one")
+    }
 }

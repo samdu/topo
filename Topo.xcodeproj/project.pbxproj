@@ -344,6 +344,7 @@
 		98351458B1674AC1309DA106 /* PanePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C3603530275DA0379CCB96F /* PanePresenceTests.swift */; };
 		98C8301B04A31D070F4CCB72 /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */; };
 		98F16241DBF61F9F1250FA71 /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333D38923B458890391C4F4C /* MascotView.swift */; };
+		99057F08DF55ACE5641CE65A /* EndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72E95D2B23E2FF1B696F524C /* EndpointTests.swift */; };
 		991ADA7B5521CE31F21F6C22 /* TopoBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2093D9815FF009868258903B /* TopoBadge.swift */; };
 		99B40888DAC3C3C3D6159522 /* AudioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D3BE114E74EF949FD68B7B /* AudioLog.swift */; };
 		9A4184B073E236E0DCE23947 /* accessoryInline.json in Resources */ = {isa = PBXBuildFile; fileRef = 588781B8314DD6D53044210F /* accessoryInline.json */; };
@@ -515,6 +516,7 @@
 		DD907806586C00822627ED3D /* WidgetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8108B3927AEA30E13C582080 /* WidgetStoreTests.swift */; };
 		DDAF0AAE6CDED176CD2FCEA2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 57BE8636EBBD805D555F974A /* Assets.xcassets */; };
 		DDC009CA5DA492EDD4FA67BB /* WidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE5605E998B30A3C3841A2D /* WidgetIntents.swift */; };
+		DE50DA7595CADE6E2509CC8C /* ConversationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02B77D63992C1352B785E60 /* ConversationTests.swift */; };
 		DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */; };
 		E07568309A0FBA96E0A9BF7C /* MarkdownRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42501D49784FE49024ED6C10 /* MarkdownRenderTests.swift */; };
 		E0BA063092821FBE13C4A13B /* licence-libarchive-unicode-tables.txt in Resources */ = {isa = PBXBuildFile; fileRef = F2F66E48EF5DF3901770D5FE /* licence-libarchive-unicode-tables.txt */; };
@@ -851,6 +853,7 @@
 		6CC10F86563FE12BC674EFBB /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		6D42B9802439D5A1AD7033D4 /* OnePasswordConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePasswordConnectionTests.swift; sourceTree = "<group>"; };
 		6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextToolTests.swift; sourceTree = "<group>"; };
+		72E95D2B23E2FF1B696F524C /* EndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointTests.swift; sourceTree = "<group>"; };
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		738BC8AD7B6AE57B9135A057 /* TopoWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TopoWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettledSpeechTests.swift; sourceTree = "<group>"; };
@@ -952,6 +955,7 @@
 		BE9C965D7E36544A4F9526C9 /* TopoHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyTests.swift; sourceTree = "<group>"; };
 		BEE1B3C3847A7B4EB6616526 /* EarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarTests.swift; sourceTree = "<group>"; };
+		C02B77D63992C1352B785E60 /* ConversationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTests.swift; sourceTree = "<group>"; };
 		C07F833992D5F5D8B519F030 /* systemMedium-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemMedium-light.png"; sourceTree = "<group>"; };
 		C1331DD9A0C14E9AC8FDD78E /* HomeFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFile.swift; sourceTree = "<group>"; };
 		C273B9B05389AA1C5777F528 /* TopoWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWidgets.swift; sourceTree = "<group>"; };
@@ -1510,12 +1514,14 @@
 				0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */,
 				D56E758F45E3E653043D416F /* ControlRequestTests.swift */,
 				D431E5424FB548AF6DBE3713 /* ControlToolTests.swift */,
+				C02B77D63992C1352B785E60 /* ConversationTests.swift */,
 				CB691F4A53012C9EAB76FB7B /* CountingDatabase.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
 				CCDC74A1818899420B9F821E /* DeviceIdentityTests.swift */,
 				4768AAF3DF2F75692350C8E5 /* DictationTests.swift */,
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
+				72E95D2B23E2FF1B696F524C /* EndpointTests.swift */,
 				893F3E3722F73D5670BE74E7 /* EnergyPulseTests.swift */,
 				F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */,
 				3B0DC42A89357598D9F05F49 /* FirstRunTests.swift */,
@@ -2664,12 +2670,14 @@
 				8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */,
 				4284B708B9BC30F3EF1F3A7D /* ControlRequestTests.swift in Sources */,
 				E24A9C95DA4BA49B0D069F99 /* ControlToolTests.swift in Sources */,
+				DE50DA7595CADE6E2509CC8C /* ConversationTests.swift in Sources */,
 				16A6CB3B7DFA5DDDB54521C0 /* CountingDatabase.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
 				A10FFE217C7B37F36B501F07 /* DeviceIdentityTests.swift in Sources */,
 				A9A69DD1D01C6C803CF034C8 /* DictationTests.swift in Sources */,
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
+				99057F08DF55ACE5641CE65A /* EndpointTests.swift in Sources */,
 				B106BEB8C12E88B983DCB512 /* EnergyPulseTests.swift in Sources */,
 				77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */,
 				A7570D161D96D686BCF9154D /* FirstRunTests.swift in Sources */,

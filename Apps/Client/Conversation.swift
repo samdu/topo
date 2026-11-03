@@ -31,6 +31,7 @@ final class Conversation {
     @ObservationIgnored private let enabled: @MainActor () -> Bool
     @ObservationIgnored private let appActive: @MainActor () -> Bool
     @ObservationIgnored private let holding: @MainActor () -> Bool
+    /// The idle clock's sleep, a seam for the suite.
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private let now: @MainActor () -> Date
 
@@ -194,7 +195,6 @@ final class Conversation {
         guard let detector = endpoint.detector else { return }
         let mine = voice.generation
         let sink = voice.sink
-        let sleep = sleep
         feeder = Task { [weak self] in
             if reset { await detector.reset() }
             while !Task.isCancelled {
@@ -220,7 +220,7 @@ final class Conversation {
                         return
                     }
                 }
-                try? await sleep(Self.feedEvery)
+                try? await Task.sleep(for: Self.feedEvery)
             }
         }
     }
