@@ -113,6 +113,20 @@ public final class GuestLifecycle {
     /// turn, kept for the process's life.
     private var results: [Int: Bool] = [:]
     private var inBackground = false
+    /// Whether a conversation behind the lock holds the resident up (the app's `Conversation`,
+    /// an open microphone carried into a call). While one does, no background is begun — no
+    /// grace, no freeze, no teardown — and the resident answers turns behind the lock as it does
+    /// in front. Asked with `beginning` true at `didEnterBackground`, where the app's answer
+    /// begins the conversation if it is to begin, so which of the two hears the notification
+    /// first does not matter; asked with false by the backstop, where it is a read and begins
+    /// nothing.
+    public var conversing: @MainActor (_ beginning: Bool) -> Bool = { _ in false }
+    /// The background generation a conversation spared, until `conversationEnded` or the
+    /// backstop runs it.
+    private var spared: Int?
+    /// How often a spared background asks `conversing` again: the backstop for an end nobody
+    /// told, so a resident is never left up behind the lock once the conversation has gone.
+    public static let sparedCheck: Duration = .seconds(30)
 
     public init(session: GuestSession, time: BackgroundTime,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
@@ -215,6 +229,7 @@ public final class GuestLifecycle {
 
     public func willEnterForeground() {
         inBackground = false
+        spared = nil
         generation += 1
         let mine = generation
         let session = session
@@ -225,6 +240,42 @@ public final class GuestLifecycle {
         inBackground = true
         generation += 1
         let mine = generation
+        if conversing(true) {
+            spared = mine
+            report(.conversing)
+            watchSpared(mine)
+            return
+        }
+        leave(mine)
+    }
+
+    /// The conversation that spared the background has ended: the background runs now, as the
+    /// app's leaving would have run it, with a generation of its own. Nothing in front, or when
+    /// no background was spared.
+    public func conversationEnded() {
+        guard inBackground, spared != nil else { return }
+        spared = nil
+        generation += 1
+        leave(generation)
+    }
+
+    /// The backstop: a spared background asks `conversing` again every `sparedCheck`, and runs
+    /// when the answer is no, whoever forgot to say so.
+    private func watchSpared(_ mine: Int) {
+        Task { [weak self, sleep] in
+            while true {
+                try? await sleep(Self.sparedCheck)
+                guard let self, self.spared == mine, self.inBackground else { return }
+                guard !self.conversing(false) else { continue }
+                self.report(.conversationGone)
+                self.conversationEnded()
+                return
+            }
+        }
+    }
+
+    /// The way out for background `mine`: the continued task's wait, or the grace.
+    private func leave(_ mine: Int) {
         let session = session
         // The moment the app left, for a cut's note: the way out below is called a tick later.
         let left = session.now()

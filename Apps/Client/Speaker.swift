@@ -79,6 +79,13 @@ final class Speaker {
     /// Told every hold change after this object has dealt with it, so the keeper comes first
     /// and whoever listens — the call's driver — second.
     var onHold: ((Bool) -> Void)?
+    /// The call's moments, told after the speaker has dealt with each — but for the placing,
+    /// told first, so an open microphone is off the session before the session changes hands
+    /// (`Conversation`).
+    var onCall: ((CallMoment) -> Void)?
+    enum CallMoment: Equatable { case placing, active, taken, hungUp, over }
+
+    /// A reply is held for an open microphone or the call's session, to be read when it closes.
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
@@ -171,6 +178,7 @@ final class Speaker {
         self.call = call
         call.onStart = { [weak self] in
             guard let self else { return }
+            onCall?(.placing)
             // The session is the system's from here until it activates it: a frame scheduled
             // meanwhile would be heard twice once the activation's rebuild puts it back, so the
             // engine is dead and what is owed waits, as at an interruption.
@@ -183,6 +191,7 @@ final class Speaker {
             resumeAudio("the call's session is active")
             // A reply that landed while the session was changing hands is read now.
             readWhatWaited()
+            onCall?(.active)
         }
         call.onInactive = { [weak self] in
             guard let self else { return }
@@ -191,10 +200,15 @@ final class Speaker {
             AudioLog.say("the call's session was taken; the engine is dead, the hold stands")
             audio.callDeactivated()
             queue.interrupted()
+            onCall?(.taken)
         }
-        call.onHangUp = { [weak self] in self?.hangUp() }
+        call.onHangUp = { [weak self] in
+            self?.hangUp()
+            self?.onCall?(.hungUp)
+        }
         let over: (String) -> Void = { [weak self] why in
             guard let self else { return }
+            defer { onCall?(.over) }
             // A call refused before the system performed its start never took the session: the
             // keeper is where it was, on a session that was never the system's.
             guard audio.call != .none else { return }

@@ -356,7 +356,9 @@ enum SpokenCallSetting {
 }
 
 /// Places the call and ends it: a call is wanted while a hold stands (`AudioSession.holding`,
-/// told through `Speaker.onHold` after the speaker has dealt with the keeper), the app is in the
+/// told through `Speaker.onHold` after the speaker has dealt with the keeper) or an open
+/// microphone is carried behind the lock (`Conversation`, told through `conversingChanged`,
+/// which keeps the call between an utterance's end and its wait's hold), the app is in the
 /// background and the setting is on. The background is UIKit's (`applicationState` at the start,
 /// then `didEnterBackgroundNotification` until `willEnterForegroundNotification`), Daphne's
 /// device-proven source, rather than SwiftUI's scene phase; both are logged (`app …`, `scene …`)
@@ -369,6 +371,7 @@ final class SpokenCallDriver {
     private let call: SpokenCall
     private let enabled: () -> Bool
     private var holding = false
+    private var conversing = false
     private var phase: ScenePhase
     private var observers: [NSObjectProtocol] = []
 
@@ -394,12 +397,17 @@ final class SpokenCallDriver {
     }
 
     /// The whole rule, as a function of the three facts.
-    nonisolated static func wants(holding: Bool, phase: ScenePhase, enabled: Bool) -> Bool {
-        holding && phase == .background && enabled
+    nonisolated static func wants(holding: Bool, conversing: Bool = false, phase: ScenePhase, enabled: Bool) -> Bool {
+        (holding || conversing) && phase == .background && enabled
     }
 
     func holdChanged(_ holding: Bool) {
         self.holding = holding
+        decide()
+    }
+
+    func conversingChanged(_ conversing: Bool) {
+        self.conversing = conversing
         decide()
     }
 
@@ -410,11 +418,11 @@ final class SpokenCallDriver {
 
     private func decide() {
         let enabled = enabled()
-        let wanted = Self.wants(holding: holding, phase: phase, enabled: enabled)
+        let wanted = Self.wants(holding: holding, conversing: conversing, phase: phase, enabled: enabled)
         // Each decision with the three facts, so a run says why a lock placed no call.
         if wanted != call.up {
-            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), app \(phase), setting \(enabled))")
-        } else if holding, !wanted {
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), conversing \(conversing), app \(phase), setting \(enabled))")
+        } else if holding || conversing, !wanted {
             AudioLog.say("call driver: no call (app \(phase), setting \(enabled))")
         }
         if wanted { call.start() } else { call.end() }
