@@ -6,8 +6,12 @@ import Foundation
 /// Claude Code's own request is several times the model's window (its system prompt and its tool
 /// definitions alone are ~14 K tokens), so none of it is passed through: its `system` blocks, its
 /// tools and its `system`-role messages are dropped, `<system-reminder>` spans are cut out of the
-/// words, a tool call or result becomes one bracketed line, and thinking is dropped. What is left
-/// is trimmed from the oldest turn until it fits (`fit`).
+/// words, and thinking, tool calls and tool results are dropped, a turn that was nothing else
+/// with them. No stand-in for a tool is written into the history: a model this small copies the
+/// last pattern it sees, and given `[used Bash]` lines it answers with one (measured on a phone,
+/// build 441914). An image or a document is a bracketed line in the prompt only, so the model
+/// knows one was sent, and nothing in the history. What is left is trimmed from the oldest turn
+/// until it fits (`fit`).
 public struct MessagesTranslation: Sendable, Equatable {
     public var history: [LocalTurn]
     public var prompt: String
@@ -42,9 +46,10 @@ public struct MessagesTranslation: Sendable, Equatable {
         }
         guard let messages = object["messages"] as? [[String: Any]] else { throw Failure.unreadable("no messages") }
         var turns: [LocalTurn] = []
-        for message in messages {
+        let last = messages.lastIndex { ($0["role"] as? String).flatMap(LocalTurn.Role.init(rawValue:)) != nil }
+        for (index, message) in messages.enumerated() {
             guard let role = (message["role"] as? String).flatMap(LocalTurn.Role.init(rawValue:)) else { continue }
-            let text = words(of: message["content"])
+            let text = words(of: message["content"], attachments: index == last && role == .user)
             guard !text.isEmpty else { continue }
             // Two turns of one side in a row are one turn: the model's transcript alternates.
             if let last = turns.last, last.role == role {
@@ -61,25 +66,19 @@ public struct MessagesTranslation: Sendable, Equatable {
         return MessagesTranslation(history: turns, prompt: prompt, stream: object["stream"] as? Bool ?? false)
     }
 
-    /// The words of a message's `content`: a string, or the text of its blocks.
-    static func words(of content: Any?) -> String {
+    /// The words of a message's `content`: a string, or the text of its blocks, with an image or a
+    /// document said as a bracketed line only where `attachments` (the prompt).
+    static func words(of content: Any?, attachments: Bool = false) -> String {
         if let text = content as? String { return withoutReminders(text) }
         guard let blocks = content as? [[String: Any]] else { return "" }
         return blocks.compactMap { block -> String? in
             switch block["type"] as? String {
             case "text": return (block["text"] as? String).map(withoutReminders)
-            case "tool_use": return "[used \((block["name"] as? String).map(safeName) ?? "a tool")]"
-            case "tool_result": return "[tool result]"
-            case "image": return "[image]"
-            case "document": return "[document]"
+            case "image": return attachments ? "[image]" : nil
+            case "document": return attachments ? "[document]" : nil
             default: return nil
             }
         }.filter { !$0.isEmpty }.joined(separator: "\n\n")
-    }
-
-    /// A tool's name as it is written into the model's words: letters, digits, `_` and `-` only.
-    static func safeName(_ name: String) -> String {
-        String(name.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-" }.prefix(64))
     }
 
     /// `text` with every `<system-reminder>…</system-reminder>` span cut out, an unclosed one to

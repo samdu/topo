@@ -203,13 +203,39 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         let translation = try MessagesTranslation.translate(Data(body.utf8))
         #expect(translation.history == [
             LocalTurn(.user, "what's in my notes?"),
-            LocalTurn(.assistant, "Let me look.\n\n[used Bash]"),
-            LocalTurn(.user, "[tool result]"),
-            LocalTurn(.assistant, "Nothing much."),
+            LocalTurn(.assistant, "Let me look.\n\nNothing much."),
         ])
         #expect(translation.prompt == "thanks  a lot")
         #expect(translation.stream)
         #expect(!translation.history.contains { $0.text.contains("secret.md") || $0.text.contains("Environment") })
+    }
+
+    /// A conversation whose last turns were Claude's tools, with photos in it, as a phone switched
+    /// to On device sends it: no stand-in for a tool or an attachment reaches the history, a turn
+    /// that was only a tool is gone, and only the prompt says what it carries.
+    @Test func aHistoryEndingInToolTurnsHasNoStandIns() throws {
+        let photo: [String: Any] = ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": "AAAA"]]
+        let body = messagesBody([
+            ("user", [photo, ["type": "text", "text": "what is this?"]]),
+            ("assistant", [["type": "text", "text": "A dog on a sofa."]]),
+            ("user", "check my calendar"),
+            ("assistant", [["type": "tool_use", "id": "t1", "name": "Bash", "input": ["command": "topo calendar"]]]),
+            ("user", [["type": "tool_result", "tool_use_id": "t1", "content": "dentist at 3"]]),
+            ("assistant", [["type": "tool_use", "id": "t2", "name": "Read", "input": ["file_path": "x"]]]),
+            ("user", [["type": "tool_result", "tool_use_id": "t2", "content": "notes"]]),
+            ("assistant", "You have the dentist at 3."),
+            ("user", [photo, ["type": "text", "text": "what's 12 times 12?"]]),
+        ])
+        let translation = try MessagesTranslation.translate(Data(body.utf8))
+        #expect(translation.history == [
+            LocalTurn(.user, "what is this?"),
+            LocalTurn(.assistant, "A dog on a sofa."),
+            LocalTurn(.user, "check my calendar"),
+            LocalTurn(.assistant, "You have the dentist at 3."),
+        ])
+        #expect(translation.prompt == "[image]\n\nwhat's 12 times 12?")
+        let all = translation.history.map(\.text).joined() + translation.prompt
+        #expect(!all.contains("[used") && !all.contains("[tool") && !all.contains("dentist at 3\n"))
     }
 
     @Test func anUnclosedReminderRunsToTheEnd() {
