@@ -240,7 +240,10 @@ final class AudioSession {
     func microphone(open: Bool) {
         guard microphoneOpen != open else { return }
         microphoneOpen = open
-        if !open { applyDeferred(after: "the microphone has closed") }
+        if !open {
+            clearOverride(after: "the microphone has closed")
+            applyDeferred(after: "the microphone has closed")
+        }
     }
 
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
@@ -283,7 +286,24 @@ final class AudioSession {
         // The speaker first, so the keeper's engine is stopped before the session is let go: a
         // deactivation with an engine still rendering is refused as busy.
         onHoldChanged?(holding)
-        if !holding { letGo(after: "the last hold is gone") }
+        if !holding {
+            clearOverride(after: "the last hold is gone")
+            letGo(after: "the last hold is gone")
+        }
+    }
+
+    /// Clears the call's speaker override once the call is over and nothing keeps the session:
+    /// a route change under an open microphone's tap or a reply's engine is the change the
+    /// session is kept from, so with either standing it waits for the last of them.
+    private func clearOverride(after what: String) {
+        guard overridden, call == .none, !kept else { return }
+        overridden = false
+        do {
+            try speakerOverride(false)
+            AudioLog.say("\(what): the call's speaker override is cleared")
+        } catch {
+            AudioLog.say("\(what): the call's speaker override did not clear: \(error)")
+        }
     }
 
     /// The last hold has gone. In front, what waited is applied, as it is when the microphone
@@ -299,12 +319,6 @@ final class AudioSession {
         if isActive() { applyDeferred(after: what) } else { handBack(after: what) }
     }
 
-    /// Topo has finished with the session away from the front: it is deactivated, telling the
-    /// audio the press paused — a podcast, music — that it may resume, which the record
-    /// configuration going on its own never does. A deactivation is allowed from the background
-    /// where an activation is not. The claims that waited stay waiting for the next audio path,
-    /// which configures and activates afresh, and a refusal (an engine still rendering) is
-    /// logged and leaves the session where it was, marked as needing configuring.
     /// Whether other audio took up again a second after it was told to, for the log alone: the
     /// hand-back's effect is the other app's to decide, and this is the only sight of it.
     private func noteOtherAudio(after what: String) {
@@ -315,6 +329,12 @@ final class AudioSession {
         }
     }
 
+    /// Topo has finished with the session away from the front: it is deactivated, telling the
+    /// audio the press paused — a podcast, music — that it may resume, which the record
+    /// configuration going on its own never does. A deactivation is allowed from the background
+    /// where an activation is not. The claims that waited stay waiting for the next audio path,
+    /// which configures and activates afresh, and a refusal (an engine still rendering) is
+    /// logged and leaves the session where it was, marked as needing configuring.
     private func handBack(after what: String) {
         valid = false
         // Marked invalid, the next audio path configures from the claims as they stand, so
@@ -395,10 +415,7 @@ final class AudioSession {
         guard call != .none else { return }
         call = .none
         valid = false
-        if overridden {
-            overridden = false
-            do { try speakerOverride(false) } catch { AudioLog.say("call over: the speaker override did not clear: \(error)") }
-        }
+        clearOverride(after: "the call is over")
         AudioLog.say("call over: other audio playing \(otherAudioPlaying())")
         guard !kept else {
             AudioLog.say("call over with \(keptBy); the session waits for the next audio path")

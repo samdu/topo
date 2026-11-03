@@ -446,6 +446,54 @@ final class CallWantTests: XCTestCase {
         withExtendedLifetime(driver) {}
     }
 
+    /// A press in front under the kept call: the waits it ends drop the hold, and the open
+    /// microphone keeps the call, so the session it opens on is not ended under it.
+    @MainActor
+    func testAnOpeningMicrophoneKeepsTheCallUpInFront() {
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        call.provider(system.provider, perform: system.starts[0])
+        driver.scene(.active)
+        driver.microphoneChanged(true)
+        driver.holdChanged(false)
+        XCTAssertEqual(system.ends.count, 0, "the press's ended wait ended the call under the microphone")
+        driver.microphoneChanged(false)
+        XCTAssertEqual(system.ends.count, 1, "the closed microphone with nothing held kept the call")
+        driver.microphoneChanged(true)
+        XCTAssertEqual(system.starts.count, 1, "a microphone in front placed a call")
+    }
+
+    /// A retry or a call wanted behind a closing one is not placed once the app is in front.
+    @MainActor
+    func testNothingIsPlacedInFront() async {
+        let system = FakeCallSystem()
+        let sleep = ManualSleep()
+        let call = SpokenCall(system: system, sleep: sleep.sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        system.answer(0, FakeCallSystem.Refused())
+        for _ in 0..<100 where sleep.waiting == 0 { try? await Task.sleep(for: .milliseconds(10)) }
+        driver.scene(.active)
+        sleep.fire()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(system.starts.count, 1, "the retry placed a call in front")
+        XCTAssertFalse(call.up)
+
+        // Behind the lock: the hold drops, the call closes, a hold comes back before the
+        // deactivation, and the app comes forward before it lands.
+        driver.scene(.background)
+        driver.holdChanged(true)
+        XCTAssertEqual(system.starts.count, 2)
+        call.provider(system.provider, perform: system.starts[1])
+        driver.holdChanged(false)
+        driver.holdChanged(true)
+        driver.scene(.active)
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(system.starts.count, 2, "the call wanted behind the closing one was placed in front")
+    }
+
     @MainActor
     func testADriverMadeInTheBackgroundPlacesTheCallAtTheFirstHold() {
         let system = FakeCallSystem()
@@ -482,11 +530,22 @@ final class AudioSessionCallTests: XCTestCase {
         audio.callOver()
         XCTAssertEqual(overrides, [true, false], "the override outlived the call")
 
+        // Over an open microphone the clear waits: a route change under its tap is the change
+        // the session is kept from.
+        audio.callPlaced()
+        audio.callActivated()
+        XCTAssertEqual(overrides, [true, false, true])
+        audio.microphone(open: true)
+        audio.callOver()
+        XCTAssertEqual(overrides, [true, false, true], "the override was cleared under the open microphone")
+        audio.microphone(open: false)
+        XCTAssertEqual(overrides, [true, false, true, false])
+
         route = [.bluetoothHFP]
         audio.callPlaced()
         audio.callActivated()
         audio.callOver()
-        XCTAssertEqual(overrides, [true, false], "AirPods were overridden to the speaker")
+        XCTAssertEqual(overrides, [true, false, true, false], "AirPods were overridden to the speaker")
     }
 
     func testACallsConfigureActivatesNothing() {

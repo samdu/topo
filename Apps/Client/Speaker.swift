@@ -79,6 +79,10 @@ final class Speaker {
     /// Told every hold change after this object has dealt with it, so the keeper comes first
     /// and whoever listens — the call's driver — second.
     var onHold: ((Bool) -> Void)?
+    /// Told that the chat's microphone is opening (at the press, before any wait it ends) and
+    /// that it has closed: a call kept up in front is kept while it is open (`SpokenCallDriver`),
+    /// so the session the press opened on is not ended under it.
+    var onMicrophone: ((Bool) -> Void)?
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
@@ -583,6 +587,7 @@ final class Speaker {
     /// waits on with its wait, since opening it again is no reason to lose it — it is read when
     /// this one closes.
     func microphoneOpening() {
+        onMicrophone?(true)
         let waiting = deferred
         deferred = nil
         cancel()
@@ -596,7 +601,11 @@ final class Speaker {
     /// becomes Stop. Free while a microphone is still open or nothing is waiting. A reply the
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
-    func microphoneClosed() { readWhatWaited() }
+    func microphoneClosed() {
+        readWhatWaited()
+        // After the reading, so a reply read now holds the call before the microphone lets it go.
+        if !microphoneOpen() { onMicrophone?(false) }
+    }
 
     /// Reads the reply that waited for the microphone or for the call's session, if nothing
     /// holds it back now. One the session refuses here keeps waiting, its turn still marked.
