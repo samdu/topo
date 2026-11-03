@@ -155,7 +155,7 @@ final class GuestResident {
             let ports = LaunchPorts(proxy: proxy, tools: tools)
             await self.booted?()
             let made = Self.launchEnvironment(ports: ports) { port in try Self.launchCredential(port: port) }
-            let launcher = ClaudeLauncher(modelEnvironment: Self.modelEnvironment) {
+            let launcher = Self.launcher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
                 // first reads for its life.
@@ -222,6 +222,12 @@ final class GuestResident {
         let login = local.isOn ? OnDeviceModel.environment(placeholder: true) : [:]
         return APIProxy.guestEnvironment(port: port).merging(developerEnvironment) { _, new in new }
             .merging(login) { _, new in new }
+    }
+
+    /// The resident's launcher over `environment`, told the model's own environment
+    /// (`modelEnvironment`) at each launch.
+    nonisolated static func launcher(environment: @escaping @Sendable () async throws -> [String: String]) -> ClaudeLauncher {
+        ClaudeLauncher(modelEnvironment: modelEnvironment, environment: environment)
     }
 
     /// What a process asking the on-device model is told besides its `--model`: every model Claude

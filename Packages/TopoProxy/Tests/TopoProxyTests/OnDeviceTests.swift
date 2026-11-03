@@ -298,13 +298,30 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         #expect(stop["stop_reason"] as? String == "end_turn")
     }
 
-    /// A snapshot that does not extend what was sent sends nothing, and no word is sent twice.
-    @Test func aRevisedSnapshotNeverRepeatsText() async throws {
-        // The revision is longer than what was sent, so a diff that skipped the check would send its tail.
-        let upstream = OnDeviceUpstream(model: FakeLocalModel(snapshots: ["Hello", "Help me out", "Hello world"]))
-        let events = sseEvents(try await collect(try await upstream.send(request(messagesBody([("user", "hi")])))))
+    /// A snapshot that revises what was already sent ends the stream as an error, never as a
+    /// clean end over the words the model took back, and ends the generation; the same reply not
+    /// streamed is the revision, whole.
+    @Test func aRevisionOfWhatWasSentEndsTheStreamAsAnError() async throws {
+        let model = FakeLocalModel(snapshots: ["Hello", "Help me out", "Help me out now"])
+        let events = sseEvents(try await collect(try await OnDeviceUpstream(model: model).send(request(messagesBody([("user", "hi")])))))
         let deltas = events.compactMap { ($0.data["delta"] as? [String: Any])?["text"] as? String }
-        #expect(deltas == ["Hello", " world"])
+        #expect(deltas == ["Hello"])
+        #expect(events.last?.name == "error")
+        #expect(!events.contains { $0.name == "message_delta" || $0.name == "message_stop" })
+        let message = (events.last?.data["error"] as? [String: Any])?["message"] as? String
+        #expect(message == OnDeviceUpstream.words(for: LocalModelError.revised))
+
+        // A generation that would go on after the revision is ended with the stream.
+        let going = FakeLocalModel(snapshots: ["Hello", "Help me out"], hangs: true)
+        let streamed = try await OnDeviceUpstream(model: going).send(request(messagesBody([("user", "hi")])))
+        let reader = Task { for try await _ in streamed.body {} }
+        #expect(await going.cancelled.wait(3), "the generation ran on after the stream ended")
+        reader.cancel()
+
+        let whole = OnDeviceUpstream(model: FakeLocalModel(snapshots: ["Hello", "Help me out"]))
+        let response = try await whole.send(request(messagesBody(stream: false, [("user", "hi")])))
+        let object = try JSONSerialization.jsonObject(with: try await collect(response)) as? [String: Any]
+        #expect(((object?["content"] as? [[String: Any]])?.first?["text"] as? String) == "Help me out")
     }
 
     /// A snapshot that ends inside a character (an emoji's joiner, a skin tone, a flag's second
@@ -387,10 +404,21 @@ func collect(_ response: UpstreamResponse) async throws -> Data {
         #expect(((object?["error"] as? [String: Any])?["message"] as? String)?.contains("26.4") == true)
     }
 
+    /// The count is the model's count of the translated request: Topo's instructions, the history
+    /// with its reminders cut out, and the prompt (the fake counts a token for every 4 characters).
     @Test func countTokensIsTheTranslatedCount() async throws {
-        let response = try await OnDeviceUpstream(model: FakeLocalModel()).send(request(messagesBody([("user", "hi")]), path: "/v1/messages/count_tokens"))
-        let object = try JSONSerialization.jsonObject(with: try await collect(response)) as? [String: Any]
-        #expect((object?["input_tokens"] as? Int ?? 0) > 0)
+        let instructions = MessagesTranslation.instructions.count
+        let cases: [(messages: [(String, Any)], characters: Int)] = [
+            ([("user", "hi")], instructions + 2),
+            ([("user", "<system-reminder>\(String(repeating: "x", count: 400))</system-reminder>What is the weather?"),
+              ("assistant", "Sunny."), ("user", "And tomorrow?")],
+             instructions + "What is the weather?".count + "Sunny.".count + "And tomorrow?".count),
+        ]
+        for (messages, characters) in cases {
+            let response = try await OnDeviceUpstream(model: FakeLocalModel()).send(request(messagesBody(messages), path: "/v1/messages/count_tokens"))
+            let object = try JSONSerialization.jsonObject(with: try await collect(response)) as? [String: Any]
+            #expect(object?["input_tokens"] as? Int == characters / 4)
+        }
     }
 
     @Test func anyOtherRouteIsNotFound() async throws {

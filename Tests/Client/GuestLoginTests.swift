@@ -270,6 +270,33 @@ final class GuestLoginTests: XCTestCase {
         XCTAssertEqual(GuestResident.modelEnvironment(nil), [:])
     }
 
+    /// Review focus 8, the login's side: with a login without an account standing, the login's
+    /// own environment carries nothing of the on-device model's, so `auth status` reads the
+    /// Claude login and not the placeholder key.
+    func testTheLoginsEnvironmentCarriesNoPlaceholderUnderALocalLogin() {
+        let local = LocalLogin.standard
+        let was = local.isOn
+        local.set(true)
+        defer { local.set(was) }
+        for browser in [false, true] {
+            let environment = GuestLogin.environment(tools: ["TOPO_TOOLS_URL": "http://127.0.0.1:1"], browser: browser)
+            XCTAssertNil(environment["ANTHROPIC_API_KEY"])
+            XCTAssertFalse(environment.values.contains { $0.contains(OnDeviceModel.placeholderKey) || $0 == OnDeviceModel.id },
+                           "\(environment)")
+        }
+    }
+
+    /// Review focus 9 as the resident launches: the launcher the resident makes tells a process
+    /// on the on-device model every side model's variable, and one on a Claude model none.
+    func testTheResidentsLauncherToldTheModelsEnvironment() async throws {
+        let launcher = GuestResident.launcher { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:1"] }
+        let onDevice = try await launcher.launchEnvironment(model: OnDeviceModel.id)
+        for variable in OnDeviceModel.modelVariables { XCTAssertEqual(onDevice[variable], OnDeviceModel.id, variable) }
+        XCTAssertEqual(onDevice["ANTHROPIC_BASE_URL"], "http://127.0.0.1:1")
+        let sonnet = try await launcher.launchEnvironment(model: "sonnet")
+        for variable in OnDeviceModel.modelVariables { XCTAssertNil(sonnet[variable], variable) }
+    }
+
     private final class Heard: @unchecked Sendable {
         private let lock = NSLock()
         private var all: [URL] = []

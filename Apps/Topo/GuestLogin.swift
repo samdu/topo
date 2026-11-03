@@ -175,8 +175,15 @@ struct GuestLogin: ClaudeLogin {
     /// Claude Code's own, to Claude's hosts.
     @MainActor
     static func environment(browser: Bool) async throws -> [String: String] {
+        environment(tools: try await GuestResident.shared.prepareTools(log: GuestResident.log), browser: browser)
+    }
+
+    /// The login's environment over the tool service's `tools`. Nothing of the on-device model's
+    /// is in it, a login without an account's placeholder key included: the login's status has
+    /// to be the Claude login's, never the key's.
+    nonisolated static func environment(tools: [String: String], browser: Bool) -> [String: String] {
         var environment = Guest.environment
-        environment.merge(try await GuestResident.shared.prepareTools(log: GuestResident.log)) { _, new in new }
+        environment.merge(tools) { _, new in new }
         environment.merge(GuestResident.developerEnvironment) { _, new in new }
         environment["HOME"] = ClaudeLauncher.home
         environment["BROWSER"] = browser ? ClaudeLauncher.home + "/" + GuestTools.browserPath : nil

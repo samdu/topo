@@ -92,6 +92,7 @@ public struct OnDeviceUpstream: Upstream {
         switch error {
         case let failure as MessagesTranslation.Failure: "Topo could not read the request: \(failure)"
         case LocalModelError.tooLong: "That message is too long for Apple's on-device model."
+        case LocalModelError.revised: "Apple's on-device model changed a reply it had already begun sending."
         case LocalModelError.unavailable(let reason): reason
         default: "Apple's on-device model failed: \(error)"
         }
@@ -100,7 +101,10 @@ public struct OnDeviceUpstream: Upstream {
     /// The generation's snapshots as the API's events, each delta the part of a snapshot past what
     /// was already sent, compared by Unicode scalars so a snapshot that ends inside a character
     /// (an emoji's joiner, a combining accent) still extends what was sent. A snapshot that does not
-    /// extend it (the model revising) sends nothing until one does, so no word is ever sent twice.
+    /// extend it (the model revising what was sent) ends the stream as an `error` event and the
+    /// generation with it: a delta cannot take back what was sent, and a clean end would leave the
+    /// person a reply the model no longer stands by. Claude Code asks once more without a stream,
+    /// which is answered whole.
     static func events(of generation: AsyncThrowingStream<String, Error>, id: String, inputTokens: Int) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -118,9 +122,8 @@ public struct OnDeviceUpstream: Upstream {
                 }
                 do {
                     for try await snapshot in generation {
-                        if snapshot.unicodeScalars.starts(with: sent.unicodeScalars) {
-                            delta(String(String.UnicodeScalarView(snapshot.unicodeScalars.dropFirst(sentScalars))))
-                        }
+                        guard snapshot.unicodeScalars.starts(with: sent.unicodeScalars) else { throw LocalModelError.revised }
+                        delta(String(String.UnicodeScalarView(snapshot.unicodeScalars.dropFirst(sentScalars))))
                     }
                 } catch LocalModelError.declined(let words) {
                     delta(sent.isEmpty ? words : "\n\n" + words)

@@ -83,6 +83,8 @@ public enum LocalModelError: Error, Equatable {
     case declined(String)
     /// What it was handed did not fit its window.
     case tooLong
+    /// A streamed reply changed what had already been sent (`OnDeviceUpstream.events`).
+    case revised
     case failed(String)
 }
 
