@@ -294,6 +294,32 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertFalse(audio.holding, "a release that sent nothing kept its hold")
     }
 
+    /// The press that closes a hands-free microphone sends what it heard, so it is held from the
+    /// press to its send as a release is.
+    func testAPressThatClosesTheOpenMicrophoneIsHeldUntilItsSend() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in }?.value
+        XCTAssertTrue(voice.listening, "a tap did not leave the microphone open")
+        XCTAssertFalse(audio.holding)
+        utterance(into: voice.sink)
+
+        var heldAtTheSend = false
+        let closing = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+            heldAtTheSend = self.audio.holding
+            _ = speaker.awaitReply("turn", readAloud: true)
+        }
+        XCTAssertTrue(audio.holding, "the press that closes the microphone was not held from the press")
+        await closing?.value
+        XCTAssertTrue(heldAtTheSend, "the process was not held between the press and the send")
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        speaker.endAwaiting("turn", "the test is done")
+        XCTAssertFalse(audio.holding, "the press's hold outlived its send")
+    }
+
     /// Round four's blocker: the press has left the gesture but the microphone is not yet
     /// listening — `VoiceInput.begin` is waiting on the permission prompt — when a reply lands. It
     /// is not read: the microphone is opening from the press on, and the reply waits for the

@@ -1057,7 +1057,11 @@ final class MicPress {
             speaker.microphoneOpening()
         }
         if stopping { return nil }
+        // A press on the open microphone closes it and sends what it heard, so it is that send's
+        // release and is held the same way.
+        let release = speaks && drawn.open ? speaker.releasing(readAloud: true) : nil
         return Task {
+            defer { release.map { speaker.released($0, "its send is done") } }
             let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened(counted: opens)
             guard let heard else { return }
