@@ -136,7 +136,7 @@ fi
 # Pocket TTS: Topo's own pack of Kyutai's `english_2026-04` weights, which is
 # FluidInference's English v2.1 pack with its flow decoder replaced by one converted at one
 # step a frame in place of eight (the count is fixed at conversion; the recipe is
-# `topo-voice-pack` in samdu/experiments), in that pack's layout because FluidAudio reads `v2.1/english`. It holds
+# `topo-voice-pack` in samdu/experiments), in that pack's layout because FluidAudio reads `v2.1/english` for the April pack (`PocketTtsLanguage.english2026Apr`, the one the voice names; `.english` is Kyutai's October checkpoint at `v2.1/english_2026-10`). It holds
 # only what the `.ane` placement at fp16 loads —
 # `ModelNames.PocketTTS.requiredModels(precision:placement:)` names the four bundles, and
 # `PocketTtsConstantsLoader` the three files under `constants_bin/`, with `marius.safetensors`
