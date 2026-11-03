@@ -385,6 +385,7 @@ final class CallWantTests: XCTestCase {
         withExtendedLifetime(driver) {}
     }
 
+    @MainActor
     func testADriverMadeInTheBackgroundPlacesTheCallAtTheFirstHold() {
         let system = FakeCallSystem()
         let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
