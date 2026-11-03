@@ -1131,7 +1131,14 @@ final class SpokenCallSpeakerTests: XCTestCase {
         await settle("the rebuild to be refused") { speaker.dead }
         // Behind the lock an activation of the non-mixable session is refused.
         seams.activationError = Seams.Refused()
-        system.answer(0, FakeCallSystem.Refused())
+        // Refused at every attempt: placed again after each refusal until the last.
+        for attempt in 0..<SpokenCall.placeAttempts {
+            system.answer(attempt, FakeCallSystem.Refused())
+            guard attempt < SpokenCall.placeAttempts - 1 else { break }
+            await settle("the retry's wait") { self.sleep.waiting > 0 }
+            sleep.fire()
+            await settle("the retry") { self.system.requests.count == attempt + 2 }
+        }
         XCTAssertEqual(audio.call, .none)
         XCTAssertTrue(speaker.holding, "the hold stands")
         XCTAssertFalse(speaker.keeping, "and the keeper could not be restarted from the background")
