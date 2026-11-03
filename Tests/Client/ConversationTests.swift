@@ -19,11 +19,31 @@ final class ScriptedDetector: VoiceDetector, @unchecked Sendable {
 
     func reset() async { lock.withLock { resets += 1; fed = 0 } }
 
-    func feed(_ chunk: [Float]) async throws -> Endpoint.Event? {
-        lock.withLock {
-            defer { fed += 1 }
-            return events[fed]
+    /// The chunk whose verdict waits for `release`, and the wait itself.
+    private var holdAt: Int?
+    private var held: CheckedContinuation<Void, Never>?
+    func hold(at chunk: Int) { lock.withLock { holdAt = chunk } }
+    var holding: Bool { lock.withLock { held != nil } }
+    func release() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            holdAt = nil
+            defer { held = nil }
+            return held
         }
+        waiting?.resume()
+    }
+
+    func feed(_ chunk: [Float]) async throws -> Endpoint.Event? {
+        let (event, waits) = lock.withLock { () -> (Endpoint.Event?, Bool) in
+            defer { fed += 1 }
+            return (events[fed], holdAt == fed)
+        }
+        if waits {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                lock.withLock { held = continuation }
+            }
+        }
+        return event
     }
 }
 
@@ -453,6 +473,44 @@ final class ConversationTests: XCTestCase {
         await settle("the words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"], "words heard before the reply were dropped for it")
         await settle("the reply read") { !speaker.waitingForMicrophone }
+    }
+
+    /// A reply landing while the detector is judging the chunk speech starts in waits for the
+    /// verdict: the microphone stays open, and the words are sent.
+    func testAReplyLandingMidVerdictWaitsForIt() async {
+        // Two utterances are eleven whole chunks and a part: the held one is the last whole one,
+        // so only the verdict in flight stands between the reply and the close.
+        let detector = ScriptedDetector([10: .start(40_960), 12: .end(52_000)])
+        detector.hold(at: 10)
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        utterance(into: voice.sink)
+        utterance(into: voice.sink)
+        await settle("the verdict pending") { detector.holding }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await drain()
+        XCTAssertTrue(voice.listening, "a reply closed the microphone over a chunk the detector was judging")
+        detector.release()
+        utterance(into: voice.sink)
+        await settle("the words sent") { self.sent.count == 1 }
+    }
+
+    /// Silence the detector has not yet been fed: the reply waits for it, then closes the
+    /// microphone unsent, from the feeder's own pass.
+    func testAReplyOverAnUnjudgedSilenceIsReadOnceTheSilenceIsJudged() async {
+        let detector = ScriptedDetector()
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        audio.callDeactivated()
+        conversation.call(.taken)
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        utterance(into: voice.sink)
+        audio.callActivated()
+        conversation.call(.active)
+        await settle("the silence judged") { detector.chunks >= 5 }
+        await settle("the microphone closed for the reply") { !voice.listening }
+        await settle("the reply read") { !speaker.waitingForMicrophone }
+        XCTAssertEqual(sent, [])
     }
 
     /// The engine stops under the call with nothing to say so (a route change): no samples for

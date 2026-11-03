@@ -68,6 +68,8 @@ final class Conversation {
     private var callUp = false
     private var policy = Endpoint.Policy()
     private var fedTo = 0
+    /// True while a chunk counted in `fedTo` is with the detector: its verdict is not in yet.
+    private var judging = false
     private var feeder: Task<Void, Never>?
     private var idleTimer: Task<Void, Never>?
     private var reopening = false
@@ -272,10 +274,12 @@ final class Conversation {
                     offset += Endpoint.chunk
                     self.fedTo += Endpoint.chunk
                     let event: Endpoint.Event?
+                    self.judging = true
                     do { event = try await detector.feed(chunk) } catch {
                         AudioLog.say("conversation: the detector failed on a chunk: \(error.localizedDescription)")
                         event = nil
                     }
+                    self.judging = false
                     guard !Task.isCancelled, self.on, self.voice.generation == mine else { return }
                     guard let event, let heard = self.policy.take(event) else { continue }
                     switch heard {
@@ -350,7 +354,7 @@ final class Conversation {
     /// Whether the detector has been fed everything the sink holds but the part-chunk it is
     /// waiting to fill: until then, an utterance with nothing said in it is not known to be one.
     private var caughtUp: Bool {
-        voice.sink.peek(from: .max).end - fedTo < Endpoint.chunk
+        !judging && voice.sink.peek(from: .max).end - fedTo < Endpoint.chunk
     }
 
     private func react() {
