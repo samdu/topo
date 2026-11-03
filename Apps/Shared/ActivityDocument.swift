@@ -30,6 +30,9 @@ struct ActivityDocument: Equatable, Sendable {
     /// Topo runs.
     var poll: URL?
     var regions: [ActivityRegion: WidgetNode] = [:]
+    /// The document carried `families` as an object: an update's regions then replace the
+    /// activity's, `{}` clearing them, where one without the field leaves them standing.
+    var familiesGiven = false
     var tint: WidgetColour?
     /// When the activity is over: its stale date, and the app ends it then while it runs, or at
     /// its next return to the screen.
@@ -112,6 +115,7 @@ struct ActivityDocument: Equatable, Sendable {
             else { reader.note("relevance", "is not a number between 0 and 100") }
         }
         if let trees = root["families"] {
+            document.familiesGiven = trees is [String: Any]
             document.regions = regions(trees, reader)
         }
         guard update || document.drawsSomething else {
@@ -256,7 +260,7 @@ struct ActivityState: Codable, Hashable, Sendable {
         card = tracker.map(TrackerCard.init) ?? previous?.card
         // The regions and the tint are two fields: a document that carries one leaves the other.
         var merged = previous?.layout.map(ActivityLayout.read) ?? ActivityLayout()
-        if !document.regions.isEmpty { merged.regions = document.regions }
+        if document.familiesGiven { merged.regions = document.regions }
         if let tint = document.tint { merged.tint = tint }
         layout = merged.isEmpty ? nil : merged.text
         until = document.until ?? previous?.until

@@ -101,6 +101,18 @@ final class ProgressTrackerTests: XCTestCase {
         XCTAssertEqual(missing.title, "")
     }
 
+    /// Codex, round 1: `current` names a step as the document wrote it, so a dropped step before
+    /// it does not move the focus onto the step after.
+    func testCurrentNamesTheStepAsWrittenWhenAnEarlierOneIsDropped() throws {
+        let tracker = try XCTUnwrap(read(#"{"title": "Job", "steps": [0, {"label": "Download", "state": "running", "note": "Fetching"}, {"label": "Install"}], "current": 1}"#).tracker)
+        XCTAssertEqual(tracker.steps.map(\.label), ["Download", "Install"])
+        XCTAssertEqual(tracker.current, 0)
+        XCTAssertEqual(tracker.focus.note, "Fetching")
+        let dropped = read(#"{"title": "Job", "steps": [0, {"label": "Download", "state": "running"}], "current": 0}"#)
+        XCTAssertEqual(dropped.tracker?.current, 0, "the dropped step's index is derived from the steps")
+        XCTAssertTrue(dropped.notes.contains { $0.hasPrefix("tracker.current") }, "\(dropped.notes)")
+    }
+
     func testStateDerivedWhenMissing() throws {
         XCTAssertEqual(try XCTUnwrap(read(#"{"steps": [{"label": "a", "state": "failed"}]}"#).tracker).state, .failed)
         XCTAssertEqual(try XCTUnwrap(read(#"{"steps": [{"label": "a", "state": "done"}, {"label": "b", "state": "skipped"}]}"#).tracker).state, .done)

@@ -148,6 +148,18 @@ final class ActivityDocumentTests: XCTestCase {
         XCTAssertEqual(layout.tint, .token(.secondary))
     }
 
+    /// Codex, round 1: `families` given as `{}` on an update clears the regions, where an update
+    /// without the field leaves them.
+    func testAnEmptyFamiliesUpdateClearsTheRegions() throws {
+        let first = ActivityState(read(#"{"tint": "primary", "families": {"lockScreen": {"kind": "text", "text": "Tea"}}}"#).document, tracker: nil)
+        let cleared = ActivityState(read(#"{"families": {}}"#, update: true).document, tracker: nil, over: first)
+        let layout = ActivityLayout.read(try XCTUnwrap(cleared.layout))
+        XCTAssertTrue(layout.regions.isEmpty, "\(layout.regions)")
+        XCTAssertEqual(layout.tint, .token(.primary), "the tint is its own field")
+        let untouched = ActivityState(read(#"{"relevance": 5}"#, update: true).document, tracker: nil, over: first)
+        XCTAssertEqual(untouched.layout, first.layout)
+    }
+
     // MARK: Review Focus 2 and 9
 
     func testBudgetCountsAttributesToo() throws {

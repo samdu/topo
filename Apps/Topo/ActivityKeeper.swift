@@ -220,11 +220,18 @@ final class ActivityKeeper {
     /// Counts the logins' ends: a call that read the activities before an await compares it after,
     /// since `endAll` may have run in between and nothing from before it may start or keep anything.
     private(set) var generation = 0
-    /// Counts the tool's updates of each activity: a poll that read the activity before its fetch
-    /// and finds the count moved after it leaves that round to the next, so a poll never writes
-    /// over an update the host has not applied yet.
+    /// Counts the tool's updates of each activity: a poll that read the count before its fetch
+    /// and finds it moved when its turn at the gate comes leaves that round to the next.
     private var revisions: [String: Int] = [:]
     private var resuming = false
+    /// The gate every change to an activity passes, one at a time: an update, an end, a resume's
+    /// or a sign-out's. Each reads the activity again inside it, so none acts on what the host
+    /// held before another's call to it returned, and none of them overtakes another in the host.
+    private var busy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// Activities this keeper or the tool took off the lock screen at once: ended and gone, so a
+    /// resume sends them nothing more.
+    private var takenDown: Set<String> = []
     private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
 
     /// `reloader`: the sign-out, the takeover and the viewer's arrival reach the keeper through its
@@ -253,7 +260,7 @@ final class ActivityKeeper {
     /// The tasks standing: what a suite counts after `endAll`.
     var tasks: Int { polls.count + ends.count }
 
-    /// The tool is about to update the activity: counted before the host is asked.
+    /// The tool is updating the activity: counted, inside the gate, before the host is asked.
     func touch(_ id: String) { revisions[id, default: 0] += 1 }
     func revision(_ id: String) -> Int { revisions[id] ?? 0 }
 
@@ -262,20 +269,61 @@ final class ActivityKeeper {
     func release(_ slot: String) { reserved.remove(slot) }
     func isReserved(_ slot: String) -> Bool { reserved.contains(slot) }
 
-    /// At launch and on every return to the screen: ends what is past its `until`, and keeps the
-    /// rest, since a process that was ended kept nothing. Two returns at once resume once.
+    /// Runs `work` on the activity as the host holds it when the gate opens to it, alone among
+    /// the keeper's changes; nil when the host has no such activity, or it is ended and
+    /// `ended` was not asked for.
+    @discardableResult
+    func changing<T>(_ id: String, ended: Bool = false, _ work: (ActivityRecord) async -> T) async -> T? {
+        await enter()
+        defer { leave() }
+        guard let record = host.running().first(where: { $0.id == id }), ended || !record.ended else { return nil }
+        return await work(record)
+    }
+
+    /// Ends the activity in the host, and notes one taken off at once. Called inside the gate.
+    @discardableResult
+    func end(_ id: String, _ state: ActivityState?, dismissal: ActivityDismissal) async -> Bool {
+        if dismissal == .now { takenDown.insert(id) }
+        return await host.end(id, state, dismissal: dismissal)
+    }
+
+    private func enter() async {
+        guard busy else {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /// Hands the gate to the next change waiting, which finds it still busy, or opens it.
+    private func leave() {
+        if waiting.isEmpty {
+            busy = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+
+    /// At launch and on every return to the screen: ends what is past its `until`, an ended one
+    /// still shown included, and keeps the rest, since a process that was ended kept nothing.
+    /// Each is judged as the host holds it at its turn at the gate, not as it was listed: an
+    /// update may have moved its `until`, or something else ended it, meanwhile. Two returns at
+    /// once resume once.
     func resume() async {
         guard !resuming else { return }
         resuming = true
         defer { resuming = false }
-        for record in host.running() where !record.ended {
-            if let until = record.state.until, until <= now() {
-                await host.end(record.id, nil, dismissal: .now)
-                forget(record.id)
-                log.info("activity \(record.id, privacy: .public) ended at its until")
-                continue
+        for id in host.running().map(\.id) {
+            await changing(id, ended: true) { record in
+                if let until = record.state.until, until <= now() {
+                    guard !takenDown.contains(id) else { return }
+                    forget(id)
+                    await end(id, nil, dismissal: .now)
+                    log.info("activity \(id, privacy: .public) ended at its until")
+                } else if !record.ended {
+                    keep(id)
+                }
             }
-            keep(record.id)
         }
     }
 
@@ -296,14 +344,16 @@ final class ActivityKeeper {
                     try? await sleep(.seconds(until.timeIntervalSince(now())))
                     guard !Task.isCancelled else { return }
                 }
-                // Read again: the person may have ended it while the task slept.
-                guard let current = host.running().first(where: { $0.id == id }), !current.ended else {
+                // Read again at the gate: the person may have ended it, or an update moved its
+                // `until` (which replaces this task), while the task slept or waited.
+                let ended = await changing(id) { record -> Bool in
+                    guard !Task.isCancelled, let current = record.state.until, current <= now() else { return false }
                     forget(id)
-                    return
+                    await end(id, nil, dismissal: .now)
+                    return true
                 }
-                await host.end(id, nil, dismissal: .now)
-                forget(id)
-                log.info("activity \(id, privacy: .public) ended at its until")
+                if ended == true { log.info("activity \(id, privacy: .public) ended at its until") }
+                if ended == nil { forget(id) }
             }
         }
     }
@@ -323,11 +373,18 @@ final class ActivityKeeper {
     func endAll() async {
         generation += 1
         reserved = []
-        for record in host.running() {
-            forget(record.id)
-            await host.end(record.id, nil, dismissal: .now)
+        for id in host.running().map(\.id) {
+            forget(id)
+            await changing(id, ended: true) { _ in await end(id, nil, dismissal: .now) }
         }
         log.info("every activity ended with the login")
+    }
+
+    /// How a tracker that finished is taken down: at its `until` when that is still ahead, at
+    /// once when it has passed, and the system's own way when it has none.
+    func finished(_ state: ActivityState) -> ActivityDismissal {
+        guard let until = state.until else { return .standard }
+        return until > now() ? .at(until) : .now
     }
 
     private func poll(_ id: String, _ url: URL) async {
@@ -341,34 +398,41 @@ final class ActivityKeeper {
             let generation = generation
             let revision = revision(id)
             let fetched = await fetcher.fetch(url)
-            // Read again after the wait: the activity may be ended, updated, or the login's gone.
-            guard !Task.isCancelled, generation == self.generation,
-                  let record = host.running().first(where: { $0.id == id }), !record.ended else {
+            guard !Task.isCancelled, generation == self.generation else {
                 forget(id)
                 return
             }
-            // An update of the tool's since the fetch began may still be on its way to the host:
-            // this round is left to the next, which reads what the host then holds.
-            guard revision == self.revision(id) else { continue }
             guard let data = fetched, let tracker = ProgressTracker.read(data, now: now()).tracker else {
                 log.info("activity \(id, privacy: .public) poll gave no tracker")
                 continue
             }
-            var state = record.state
-            state.card = TrackerCard(tracker)
-            guard let fitted = ActivityPayload.fit(state, with: record.attributes).state else {
-                log.info("activity \(id, privacy: .public) poll gave a tracker over the payload budget")
-                continue
-            }
-            if tracker.isRunning {
-                // Every fetch that answers moves the stale date, whether or not the card moved:
-                // a step longer than a minute is not a tracker gone quiet.
-                await host.update(id, notice(fitted, polled: true))
-            } else {
+            enum Round { case kept, gone, finished }
+            // Read again at the gate: the activity may be ended, updated, or the login's gone.
+            let round = await changing(id) { record -> Round in
+                guard !Task.isCancelled, generation == self.generation else { return .gone }
+                // An update of the tool's since the fetch began has passed the gate before this
+                // round, or is the host's now: this round is left to the next, which reads it.
+                guard revision == self.revision(id) else { return .kept }
+                var state = record.state
+                state.card = TrackerCard(tracker)
+                guard let fitted = ActivityPayload.fit(state, with: record.attributes).state else {
+                    log.info("activity \(id, privacy: .public) poll gave a tracker over the payload budget")
+                    return .kept
+                }
+                if tracker.isRunning {
+                    // Every fetch that answers moves the stale date, whether or not the card moved:
+                    // a step longer than a minute is not a tracker gone quiet.
+                    await host.update(id, notice(fitted, polled: true))
+                    return .kept
+                }
                 forget(id)
-                await host.end(id, fitted, dismissal: .standard)
-                log.info("activity \(id, privacy: .public) ended with its tracker")
-                return
+                await end(id, fitted, dismissal: finished(fitted))
+                return .finished
+            }
+            switch round {
+            case .kept?: continue
+            case .finished?: log.info("activity \(id, privacy: .public) ended with its tracker"); return
+            case .gone?, nil: forget(id); return
             }
         }
     }

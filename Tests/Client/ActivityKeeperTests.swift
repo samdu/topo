@@ -248,6 +248,145 @@ final class ActivityKeeperTests: XCTestCase {
         XCTAssertEqual(host.calls.count, 5, "and nothing acts after")
     }
 
+    /// Codex, round 1: a resume acts on each activity as the host holds it at its turn, not as
+    /// it was listed. With A and B past their until and A's end held in the host, an update that
+    /// moves B's until ahead lands first, and B is kept rather than ended.
+    func testResumeKeepsWhatAnUpdateExtendedWhileAnotherEndWasInTheHost() async throws {
+        let keeper = keeper(FakeTrackerFetcher([]))
+        let a = try start(poll: false, until: clock.date.addingTimeInterval(-1))
+        host.records[0].attributes = TopoActivityAttributes(slot: "a", poll: nil, started: clock.date)
+        let b = try start(poll: false, until: clock.date.addingTimeInterval(-1))
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let resumed = Task { await keeper.resume() }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "A's end is in the host")
+        let later = clock.date.addingTimeInterval(600)
+        let updated = Task { [host] in
+            await keeper.changing(b) { record in
+                var state = record.state
+                state.until = later
+                keeper.touch(b)
+                return await host!.update(b, ActivityNotice(state: state, stale: later, relevance: nil))
+            }
+        }
+        await settle()
+        host.wait = nil
+        gate.openUp()
+        _ = await updated.value
+        await resumed.value
+        XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
+        guard case .end(a, nil, .now) = host.ends[0] else { return XCTFail("\(host.ends)") }
+        XCTAssertFalse(host.records[1].ended, "B's until was moved ahead before its turn")
+        keeper.forget(b)
+    }
+
+    /// Codex, round 1: the until task and a resume both find an activity past its until; the
+    /// one that passes the gate second finds it ended and sends nothing.
+    func testUntilAndResumeEndAnExpiredActivityOnce() async throws {
+        let keeper = keeper(FakeTrackerFetcher([]))
+        let id = try start(poll: false, until: clock.date.addingTimeInterval(60))
+        keeper.keep(id)
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        await tick(60)
+        XCTAssertEqual(gate.held, 1, "the until task's end is in the host")
+        let resumed = Task { await keeper.resume() }
+        await settle()
+        host.wait = nil
+        gate.openUp()
+        await resumed.value
+        await settle()
+        XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
+    }
+
+    /// Codex, round 1: an update of the tool's still in the host when the poll's fetch answers.
+    /// The poll waits its turn, finds the update counted, and leaves the round: the relevance the
+    /// update set is not put back from the poll's read.
+    func testAPollWaitsForAToolUpdateInTheHostAndWritesNothingOverIt() async throws {
+        let fetcher = GatedTrackerFetcher()
+        let keeper = keeper(fetcher)
+        let id = try start()
+        keeper.keep(id)
+        await tick()
+        XCTAssertEqual(fetcher.pending, 1)
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        let updated = Task { [host] in
+            await keeper.changing(id) { record in
+                var state = record.state
+                state.relevance = 90
+                keeper.touch(id)
+                return await host!.update(id, ActivityNotice(state: state, stale: nil, relevance: 90))
+            }
+        }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the tool's update is in the host")
+        fetcher.release(TrackerFixtures.wiki)
+        await settle()
+        host.wait = nil
+        gate.openUp()
+        _ = await updated.value
+        await settle()
+        XCTAssertEqual(host.updates, 1, "the poll's round was left to the next: \(host.calls)")
+        XCTAssertEqual(host.records[0].state.relevance, 90)
+        keeper.forget(id)
+    }
+
+    /// Codex, round 1, the other way round: the poll's update is in the host when the tool's is
+    /// sent. The tool's waits its turn and lands after it, so the host ends on the tool's.
+    func testAToolUpdateLandsAfterAPollUpdateInTheHost() async throws {
+        let fetcher = GatedTrackerFetcher()
+        let keeper = keeper(fetcher)
+        let id = try start()
+        keeper.keep(id)
+        await tick()
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        fetcher.release(TrackerFixtures.wiki)
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the poll's update is in the host")
+        let updated = Task { [host] in
+            await keeper.changing(id) { record in
+                var state = record.state
+                state.relevance = 90
+                keeper.touch(id)
+                return await host!.update(id, ActivityNotice(state: state, stale: nil, relevance: 90))
+            }
+        }
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the tool's waits at the keeper, not in the host beside the poll's")
+        host.wait = nil
+        gate.openUp()
+        _ = await updated.value
+        XCTAssertEqual(host.updates, 2)
+        XCTAssertEqual(host.records[0].state.relevance, 90, "the tool's update is the last the host applied")
+        keeper.forget(id)
+    }
+
+    /// The inline thread on finishing: a polled tracker that finishes before its until is taken
+    /// down at its until, not left for the system's default.
+    func testAFinishedTrackerIsTakenDownAtItsUntil() async throws {
+        let done = TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true)
+        let keeper = keeper(FakeTrackerFetcher([done]))
+        let until = clock.date.addingTimeInterval(3600)
+        let id = try start(until: until)
+        keeper.keep(id)
+        await tick()
+        guard case .end(id, _?, .at(until)) = host.ends.first else { return XCTFail("\(host.ends)") }
+    }
+
+    /// The inline thread on resuming: one ended and still shown that is past its until is taken
+    /// off at the next return to the screen.
+    func testResumeTakesDownAnEndedActivityPastItsUntil() async throws {
+        let keeper = keeper(FakeTrackerFetcher([]))
+        let id = try start(poll: false, until: clock.date.addingTimeInterval(-1))
+        await host.end(id, nil, dismissal: .standard)
+        await keeper.resume()
+        XCTAssertEqual(host.ends.count, 2)
+        guard case .end(id, nil, .now) = host.ends[1] else { return XCTFail("\(host.ends)") }
+    }
+
     func testStaleDate() {
         let keeper = keeper(FakeTrackerFetcher([]))
         let until = clock.date.addingTimeInterval(30)

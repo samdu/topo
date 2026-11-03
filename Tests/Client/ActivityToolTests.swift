@@ -235,6 +235,61 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(host.starts, 0)
     }
 
+    /// Codex, round 1: a tracker given beside a poll does not skip the start's fetch. A fetch that
+    /// fails starts nothing; one that answers is the tracker drawn, and the given one is noted
+    /// as set aside.
+    func testAPollIsFetchedAtTheStartEvenBesideATracker() async throws {
+        fetcher = FakeTrackerFetcher([nil])
+        let failed = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "poll": "https://h/progress/x"}"#])
+        XCTAssertEqual(failed.status, ToolReply.failed, failed.text)
+        XCTAssertEqual((fetcher as? FakeTrackerFetcher)?.fetched.count, 1)
+        XCTAssertEqual(host.starts, 0)
+        fetcher = FakeTrackerFetcher([TrackerFixtures.tracker(steps: [("a", "running")])])
+        let started = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "poll": "https://h/progress/x"}"#])
+        XCTAssertEqual(started.status, ToolReply.refused, started.text)
+        XCTAssertTrue(started.text.contains(ActivityTool.trackerSetAside), started.text)
+        guard case .start(_, _, let state, _) = host.calls.last else { return XCTFail("\(host.calls)") }
+        XCTAssertEqual(state.card?.title, "A tracker", "the polled tracker is drawn")
+    }
+
+    /// Codex, round 1: an end while the poll's end of a finished tracker is still in the host
+    /// waits its turn, finds the activity ended, and sends no second end.
+    func testAnEndWhileThePollsEndIsInTheHostSendsNoSecond() async throws {
+        let done = TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true)
+        fetcher = FakeTrackerFetcher([TrackerFixtures.wiki, done])
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        _ = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
+        let gate = HostGate()
+        host.wait = { await gate.wait() }
+        await settle()
+        clock.advance(20)
+        await settle()
+        XCTAssertEqual(gate.held, 1, "the poll's end is in the host")
+        let ended = Task { await tool.run(["end", "A1"]) }
+        await settle()
+        host.wait = nil
+        gate.openUp()
+        let reply = await ended.value
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(host.ends.count, 1, "\(host.ends)")
+    }
+
+    /// The inline thread on dismissal: one ended and still shown is taken down with
+    /// `--dismiss now`, and not with the default or a last document.
+    func testAnEndedActivityIsTakenDownWithDismissNow() async throws {
+        _ = await tool.run(["start", "job", timer])
+        _ = await tool.run(["end", "A1"])
+        let again = await tool.run(["end", "A1"])
+        XCTAssertEqual(again.status, ToolReply.failed, "the default is for one still running")
+        let document = await tool.run(["end", "A1", "--dismiss", "now", timer])
+        XCTAssertEqual(document.status, ToolReply.failed, "a last document is for one still running")
+        let down = await tool.run(["end", "A1", "--dismiss", "now"])
+        XCTAssertEqual(down.status, ToolReply.ok, down.text)
+        XCTAssertEqual(down.text, "took down A1\n")
+        guard case .end("A1", nil, .now) = host.ends.last else { return XCTFail("\(host.ends)") }
+        XCTAssertEqual(host.ends.count, 2)
+    }
+
     func testUpdateReplacesWhatItCarries() async throws {
         _ = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "until": "2026-11-02T06:00:00Z"}"#])
         let reply = await tool.run(["update", "A1", #"{"tracker": \#(TrackerFixtures.tracker(steps: [("a", "done"), ("b", "running")], current: 1))}"#])

@@ -14,6 +14,8 @@ struct TrackerView: View {
     /// The system's word that the content is past its stale date: the activity reads how long ago
     /// it was updated rather than as current.
     var stale = false
+    /// The activity's tint: the lock screen's background (`activityBackgroundTint`), and the
+    /// accent in the island, which is drawn on black.
     var tint: Color?
     /// A fixed now: the relative times are then written once against it rather than ticking,
     /// which is how a snapshot of the view is the same picture every time. The extension gives
@@ -35,7 +37,12 @@ struct TrackerView: View {
         }
     }
 
-    private var accent: Color { tint ?? Theme.primary }
+    /// What the done steps, the ring and the tick are drawn in. On the lock screen a tint is the
+    /// background behind them, so they take the text's colour there rather than vanish into it.
+    private var accent: Color {
+        guard let tint else { return Theme.primary }
+        return form == .lockScreen ? Theme.text : tint
+    }
 
     private var full: some View {
         VStack(alignment: .leading, spacing: Self.rowSpacing) {

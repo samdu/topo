@@ -113,6 +113,8 @@ struct ProgressTracker: Codable, Hashable, Sendable {
             return Reading(notes: ["tracker.steps is missing or empty, and a tracker is its steps"])
         }
         var steps: [Step] = []
+        // Where each step the document wrote is among those kept: `current` names one as written.
+        var kept: [Int: Int] = [:]
         for (index, raw) in rawSteps.enumerated() {
             let path = "steps[\(index)]"
             guard steps.count < stepLimit else {
@@ -158,6 +160,7 @@ struct ProgressTracker: Codable, Hashable, Sendable {
             if let at = object["at"], !(at is NSNull) {
                 if let moment = date(at) { step.at = moment } else { note(path + ".at", "is not a time in epoch seconds") }
             }
+            kept[index] = steps.count
             steps.append(step)
         }
         guard !steps.isEmpty else {
@@ -200,8 +203,8 @@ struct ProgressTracker: Codable, Hashable, Sendable {
             ?? steps.firstIndex { $0.state == .waiting } ?? steps.count - 1
         var current = derivedCurrent
         if let raw = root["current"] {
-            if let index = integer(raw), steps.indices.contains(index) { current = index }
-            else { note("current", "is not the index of a step, so it was derived from them") }
+            if let index = integer(raw), let at = kept[index] { current = at }
+            else { note("current", "is not the index of a step that was kept, so it was derived from them") }
         }
 
         func moment(_ key: String) -> Date? {

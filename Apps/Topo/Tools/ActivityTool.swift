@@ -22,13 +22,15 @@ struct ActivityTool: Tool {
         topo activity update ID JSON             new content: what the document carries replaces, the rest stands
         topo activity end ID [--dismiss now|default|DATE] [JSON]
                                                  end one, with a last document if given; default leaves it on the
-                                                 lock screen a while, now takes it off, DATE (ISO 8601) at that time
+                                                 lock screen a while, now takes it off, DATE (ISO 8601) at that time;
+                                                 one ended and still shown is taken down with now or DATE
         topo activity example                    a tracker and a timer: the quickest way to the shape
 
         A SLOT is [a-z0-9-], at most 32 characters, one activity a slot. The document is an object with any of:
           "tracker": the decisions pane's progress tracker JSON (title, steps[label, state, note], current, eta…),
                      drawn as a segmented bar with the step in focus, its note and the estimate;
-          "poll": an http(s) URL answering that JSON (GET /progress/<id>), fetched at the start and every
+          "poll": an http(s) URL answering that JSON (GET /progress/<id>), fetched at the start (a tracker
+                     given beside it is set aside, and nothing starts if the fetch fails) and every
                      \(Int(ActivityKeeper.interval.components.seconds)) s while Topo runs — in front or holding background time — and
                      never while it is suspended: locked away, the activity reads "updated N ago" rather than moving;
           "families": a node tree per region, in topo widget's grammar: lockScreen, islandExpanded,
@@ -116,7 +118,10 @@ struct ActivityTool: Tool {
         var notes = reading.notes
         let document = reading.document
         var tracker = document.tracker
-        if tracker == nil, let poll = document.poll {
+        // A poll is fetched at the start whatever else the document carries, and what it answers
+        // is the tracker drawn: it is what every later round draws too.
+        if let poll = document.poll {
+            if tracker != nil { notes.append(Self.trackerSetAside) }
             let generation = keeper.generation
             let data = await fetcher.fetch(poll)
             guard keeper.generation == generation else {
@@ -155,30 +160,32 @@ struct ActivityTool: Tool {
 
     @MainActor
     private func update(id: String, json: String) async -> ToolReply {
-        guard let record = host().running().first(where: { $0.id == id && !$0.ended }) else {
-            return .failed("topo: no activity \(id) running\n")
-        }
         let reading = ActivityDocument.read(json, now: now(), update: true)
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
         }
         var notes = reading.notes
         if reading.document.poll != nil { notes.append(Self.pollStands) }
-        let asked = ActivityState(reading.document, tracker: reading.document.tracker, over: record.state)
-        let fitted = ActivityPayload.fit(asked, with: record.attributes)
-        guard let state = fitted.state else {
-            return Self.overBudget(fitted.note, notes, "nothing changed")
-        }
-        if let note = fitted.note { notes.append(note) }
         let keeper = keeper()
         let generation = keeper.generation
-        keeper.touch(id)
-        let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
-        guard updated else { return .failed("topo: no activity \(id) running\n") }
-        // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
-        if keeper.generation == generation { keeper.keep(id) }
-        let text = "updated \(id)\n" + Self.notes(notes)
-        return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+        // Merged over the state the host holds when the gate opens, not as it was before the
+        // wait, so a poll's round that passed first keeps its card.
+        let reply = await keeper.changing(id) { record -> ToolReply in
+            let asked = ActivityState(reading.document, tracker: reading.document.tracker, over: record.state)
+            let fitted = ActivityPayload.fit(asked, with: record.attributes)
+            guard let state = fitted.state else {
+                return Self.overBudget(fitted.note, notes, "nothing changed")
+            }
+            if let note = fitted.note { notes.append(note) }
+            keeper.touch(id)
+            let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
+            guard updated else { return .failed("topo: no activity \(id) running\n") }
+            // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
+            if keeper.generation == generation { keeper.keep(id) }
+            let text = "updated \(id)\n" + Self.notes(notes)
+            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+        }
+        return reply ?? .failed("topo: no activity \(id) running\n")
     }
 
     // MARK: Ending
@@ -203,36 +210,45 @@ struct ActivityTool: Tool {
             rest.removeSubrange(flag...(flag + 1))
         }
         guard rest.count <= 1 else { return .usage("topo: end takes an id, --dismiss and at most one document\n") }
-        guard let record = host().running().first(where: { $0.id == id && !$0.ended }) else {
-            return .failed("topo: no activity \(id) running\n")
-        }
-        var state: ActivityState?
-        var notes: [String] = []
+        var reading: ActivityDocument.Reading?
         if let json = rest.first {
-            let reading = ActivityDocument.read(json, now: now(), update: true)
-            guard case .read = reading.state else {
-                return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
+            let read = ActivityDocument.read(json, now: now(), update: true)
+            guard case .read = read.state else {
+                return .usage("topo: the document " + Self.why(read.state) + "\n" + Self.notes(read.notes))
             }
-            notes = reading.notes
-            if reading.document.poll != nil { notes.append(Self.pollStands) }
-            let asked = ActivityState(reading.document, tracker: reading.document.tracker, over: record.state)
-            let fitted = ActivityPayload.fit(asked, with: record.attributes)
-            guard let fit = fitted.state else {
-                return Self.overBudget(fitted.note, notes, "nothing ended")
-            }
-            if let note = fitted.note { notes.append(note) }
-            state = fit
+            reading = read
         }
-        keeper().forget(id)
-        guard await host().end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
-        let text = "ended \(id)\n" + Self.notes(notes)
-        return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+        // One ended and still shown can be taken down with `--dismiss now` or a date, and nothing
+        // else: a last document or the default dismissal is for one still running.
+        let takesDown = reading == nil && dismissal != .standard
+        // Judged at the gate as the host then holds it: another end that passed first leaves this
+        // one ended, and no second end is sent.
+        let reply = await keeper().changing(id, ended: takesDown) { record -> ToolReply in
+            var state: ActivityState?
+            var notes = reading?.notes ?? []
+            if let reading {
+                if reading.document.poll != nil { notes.append(Self.pollStands) }
+                let asked = ActivityState(reading.document, tracker: reading.document.tracker, over: record.state)
+                let fitted = ActivityPayload.fit(asked, with: record.attributes)
+                guard let fit = fitted.state else {
+                    return Self.overBudget(fitted.note, notes, "nothing ended")
+                }
+                if let note = fitted.note { notes.append(note) }
+                state = fit
+            }
+            keeper().forget(id)
+            guard await keeper().end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
+            let text = (record.ended ? "took down \(id)\n" : "ended \(id)\n") + Self.notes(notes)
+            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+        }
+        return reply ?? .failed("topo: no activity \(id) running\n")
     }
 
     // MARK: Words
 
     static let disabled = "topo: Live Activities are off for Topo; they are turned on in Settings › Topo › Live Activities\n"
     static let pollStands = "poll is set at the start and stands; it was ignored"
+    static let trackerSetAside = "tracker was set aside: poll is given, and the tracker it answers is the one drawn"
 
     /// Status 6: the whole document refused, since nothing of it fits beside the attributes.
     static func overBudget(_ note: String?, _ notes: [String], _ outcome: String) -> ToolReply {
