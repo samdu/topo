@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import Topo
@@ -90,6 +91,43 @@ final class ActivityDocumentTests: XCTestCase {
         let back = ActivityLayout.read(try XCTUnwrap(state.layout))
         XCTAssertEqual(back, reading.document.layout)
         XCTAssertNil(state.card)
+    }
+
+    /// The island's small regions take no more than Apple's sizes whatever width they are offered:
+    /// a timer tree, offered the screen's whole width, stays inside the compact region's 52.33 by
+    /// 36.67 and the minimal's 45 by 36.67, and is drawn (wider than the mark it would fall back
+    /// to); the tracker's ring keeps its own size rather than the bound's.
+    @MainActor
+    func testTheIslandsSmallRegionsKeepToApplesSizes() throws {
+        let timer = #"{"kind": "text", "text": "Tea", "date": "2026-11-02T06:00:00Z", "dateStyle": "timer"}"#
+        let reading = read(#"{"families": {"lockScreen": \#(timer), "islandCompactLeading": \#(timer), "islandCompactTrailing": \#(timer), "islandMinimal": \#(timer)}}"#)
+        XCTAssertEqual(reading.notes, [], "the timer tree was not read whole")
+        let trees = ActivityState(reading.document, tracker: nil)
+        let tracker = ActivityState(read(#"{"tracker": \#(TrackerFixtures.wiki)}"#).document,
+                                    tracker: read(#"{"tracker": \#(TrackerFixtures.wiki)}"#).document.tracker)
+        let offered = ProposedViewSize(width: 430, height: 200)
+        func size(_ region: ActivityRegion, _ state: ActivityState) throws -> CGSize {
+            let renderer = ImageRenderer(content: ActivityRegionView(region: region, slot: "s", state: state))
+            renderer.proposedSize = offered
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.cgImage, "\(region) drew nothing")
+            return CGSize(width: image.width, height: image.height)
+        }
+        for region in [ActivityRegion.islandCompactLeading, .islandCompactTrailing] {
+            XCTAssertGreaterThan(try size(region, trees).width, TrackerView.ringSize + 10, "\(region) drew the mark, not the timer")
+        }
+        XCTAssertEqual(try size(.islandMinimal, tracker), CGSize(width: TrackerView.ringSize, height: TrackerView.ringSize),
+                       "the ring was not left its own size")
+        for state in [trees, tracker] {
+            for region in [ActivityRegion.islandCompactLeading, .islandCompactTrailing, .islandMinimal] {
+                let bound = try XCTUnwrap(ActivityRegionView.bound(region))
+                let size = try size(region, state)
+                XCTAssertLessThanOrEqual(size.width, bound.width.rounded(.up), "\(region) took \(size.width) points across")
+                XCTAssertLessThanOrEqual(size.height, bound.height.rounded(.up), "\(region) took \(size.height) points down")
+            }
+        }
+        XCTAssertNil(ActivityRegionView.bound(.lockScreen))
+        XCTAssertNil(ActivityRegionView.bound(.islandExpanded))
     }
 
     func testAnUpdateStandsOverWhatItDoesNotCarry() throws {
