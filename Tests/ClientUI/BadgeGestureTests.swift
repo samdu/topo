@@ -26,7 +26,8 @@ final class BadgeGestureTests: XCTestCase {
         for row in ["Topo sits", "Vocabulary", "Memory", "Connections", "Context", "Noise suppression",
                     "settings-voice-temperature", "Diagnostics", "About Topo", "Sign out"] {
             let found = app.descendants(matching: .any)[row]
-            if !found.exists { app.swipeUp() }
+            // The audio sections put more than a swipe between some rows on a phone.
+            for _ in 0..<3 where !found.exists { app.swipeUp() }
             XCTAssertTrue(found.exists, "the settings have no \(row)")
         }
         // A sheet put up again is a new view, with nothing of the last one's own state: what its
