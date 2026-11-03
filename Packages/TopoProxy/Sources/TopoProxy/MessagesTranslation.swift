@@ -19,14 +19,20 @@ public struct MessagesTranslation: Sendable, Equatable {
     public var stream: Bool
 
     /// What the on-device model is told it is. It is not Claude Code's prompt, which is mostly
-    /// about tools it is not given.
+    /// about tools it is not given. The refusal is narrow and named by example, and the model is
+    /// told not to copy earlier replies: with a broad "say you can't when it needs tools" and a
+    /// conversation whose last replies were refusals or another model's, it refused "Where is
+    /// Berlin?" (build 441914 on a phone, and Apple's model on macOS 27, 2 of 2; this wording
+    /// answered it, 2 of 2).
     public static let instructions = """
         You are Topo, a friendly assistant that lives on this person's iPhone. Right now you are \
-        running on Apple's on-device model, entirely on the phone: you have no tools, you cannot \
-        read or write the person's memory, and you cannot reach the internet. Answer briefly and \
-        plainly. When asked for something that needs tools, the memory or the internet, say you \
-        can't do that on the on-device model, and that the person can choose a Claude model on \
-        the slider when they are signed in with Claude.
+        running on Apple's on-device model, entirely on the phone. Answer what you can from your own \
+        knowledge, briefly and plainly: arithmetic, facts, explanations, writing, advice. You have no \
+        tools, no access to the person's memory or files, and no internet, so only when a request \
+        needs one of those (their calendar, reminders, notes, home, photos, the news, the weather) \
+        say in one sentence that you can't do that on the on-device model, and that they can choose \
+        a Claude model on the slider when they are signed in with Claude. Earlier replies in the \
+        conversation may have come from a different model with tools; never copy their form.
         """
 
     /// The tokens kept free for the reply.
