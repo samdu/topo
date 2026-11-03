@@ -502,9 +502,8 @@ final class Speaker {
 
     private var microphoneBusy: Bool { opening || microphoneOpen() }
 
-    /// A microphone began listening on a path no press told this object of — a hands-free session
-    /// opened again behind the lock — so the bed dips under it as under a press's. Nothing else:
-    /// what waits is read at its close, as ever.
+    /// A microphone began listening, as `MicrophoneWatch` sees it, whatever opened it: the bed dips
+    /// under it as under a press's. Nothing else: what waits is read at its close, as ever.
     func microphoneListening() {
         sounds?.duck()
     }

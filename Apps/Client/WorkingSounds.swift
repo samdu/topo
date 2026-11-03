@@ -145,8 +145,8 @@ final class KeeperSounds {
     /// is a stray tone in the middle of a sentence.
     var voiceSpeaking: @MainActor () -> Bool = { false }
     /// Whether a microphone is open or opening, asked at each sound; `Speaker` answers it. Asked
-    /// rather than told, since a microphone opens on paths no press goes through (a conversation
-    /// reopening it behind the lock), and a receipt played into one is heard by it.
+    /// rather than told at the press, so no path that opens one is missed, and a receipt played
+    /// into one is heard by it.
     var microphoneOpen: @MainActor () -> Bool = { false }
     /// What the bed's level was last set for: `duck()` moves it only when the answer has changed.
     private var ducked = false
@@ -308,6 +308,7 @@ final class KeeperSounds {
                     return bedOn = false
                 }
             }
+            ducked = microphoneOpen()
             bed.setVolume(target, fadeDuration: Self.fadeIn)
             AudioLog.say("the working bed fades in")
         } else {
@@ -350,7 +351,7 @@ final class KeeperSounds {
         guard open != ducked else { return }
         ducked = open
         guard bedOn, let bed, bed.isPlaying else { return }
-        bed.setVolume(target, fadeDuration: 0.15)
+        bed.setVolume(open ? Self.duckedVolume : Self.bedVolume, fadeDuration: 0.15)
     }
 
     private var target: Float { microphoneOpen() ? Self.duckedVolume : Self.bedVolume }
