@@ -17,15 +17,16 @@ final class AudioSession {
     enum RecordClaim: Hashable { case firstRun, chat, warm }
     /// `.profiling` is a run from a Mac (`--stay-awake`): a locked phone takes no launch and no copy.
     enum ScreenClaim: Hashable { case listening, speaking, profiling }
-    /// Who is keeping the process running behind the lock: the wait for a spoken turn's reply,
-    /// one claim per turn outstanding, and the reading of a reply. Counted like the other two, so
+    /// Who is keeping the process running behind the lock: a spoken press released and not yet
+    /// sent, the wait for a spoken turn's reply, one claim per turn outstanding, and the reading
+    /// of a reply. Counted like the other two, so
     /// the one letting go cannot cut what the other is still paying for — a reply handed to the
     /// speaker drops its own turn's wait with `.speaking` already taken, the keeper never stops
     /// between them, and a second thing said while the first is in flight is still held for.
     enum Hold: Hashable {
         /// A spoken press released, its words still being finished and sent: from the thumb
-        /// coming up to the turn's own wait, one per release, so a lock before the send still
-        /// finds the process held.
+        /// coming up (or the press that closes a hands-free microphone) to the turn's own wait,
+        /// one per release, so a lock before the send still finds the process held.
         case releasing(Int)
         case awaitingReply(String)
         case speaking

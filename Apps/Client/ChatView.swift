@@ -1035,13 +1035,15 @@ final class MicPress {
             // A release whose words will be read a reply is held from the thumb coming up, not
             // from the send after the final transcription: a lock in between would otherwise
             // suspend the process with the turn half made. Taken here, in the gesture's callback,
-            // and let go once the send is done, its turn's wait taken by then.
-            let release = speaks ? speaker.releasing(readAloud: true) : nil
+            // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
+            // a send that took none returns.
+            let release = speaks ? speaker.releasing() : nil
             return Task {
-                defer { release.map { speaker.released($0, "its send is done") } }
+                defer { release.map { speaker.released($0, "its send took no wait") } }
                 let heard = await voice.pressUp(as: .chat)
                 speaker.microphoneClosed()
                 guard let heard else { return }
+                speaker.sending(under: release)
                 await send(heard)
             }
         }
@@ -1059,12 +1061,13 @@ final class MicPress {
         if stopping { return nil }
         // A press on the open microphone closes it and sends what it heard, so it is that send's
         // release and is held the same way.
-        let release = speaks && drawn.open ? speaker.releasing(readAloud: true) : nil
+        let release = speaks && drawn.open ? speaker.releasing() : nil
         return Task {
-            defer { release.map { speaker.released($0, "its send is done") } }
+            defer { release.map { speaker.released($0, "its send took no wait") } }
             let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened(counted: opens)
             guard let heard else { return }
+            speaker.sending(under: release)
             await send(heard)
         }
     }

@@ -323,6 +323,9 @@ final class Speaker {
     /// hold, and is reported as one rather than left for the chat to believe in.
     @discardableResult
     func awaitReply(_ nonce: String, readAloud: Bool) -> Wait {
+        // The release this turn was sent under is let go once its wait stands, or at once where
+        // none is taken: from here the wait is what holds the process for the turn.
+        defer { sending.map { released($0, "its turn's wait is taken") } }
         guard readAloud, voice.ready else {
             AudioLog.say("no wait held for \(nonce): \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
             return Wait(spoken: false, held: false)
@@ -388,17 +391,23 @@ final class Speaker {
     /// lets it go at `releaseBound`.
     private var releases: [Int: Task<Void, Never>] = [:]
     private var releaseSerial = 0
+    /// The release whose words are being sent right now (`sending(under:)`): set by the press's
+    /// task just before its send, which reaches `awaitReply` before its first suspension, so the
+    /// wait taken there is that release's turn's.
+    private var sending: Int?
     /// How long a release holds the process without its turn's wait: the final transcription
-    /// and the send, which take seconds, never this.
+    /// and the send's way to `awaitReply`, which take seconds, never this.
     static let releaseBound: Duration = .seconds(30)
 
     /// The thumb has come up on a spoken press: the process is held from here, before the final
     /// transcription and the send, so a lock in between does not suspend it with the turn half
-    /// made. Answers the release's token, which `released` lets go of once the send is done, or
-    /// nil where nothing would be read aloud or no keeper is rendering. One per release, so two
-    /// in flight are held for each. A press that follows ends waits, not releases.
-    func releasing(readAloud: Bool) -> Int? {
-        guard readAloud, voice.ready else { return nil }
+    /// made. Answers the release's token, or nil where the voice is not resident or no keeper is
+    /// rendering. The token is let go by `awaitReply` once its turn's wait stands (the press's
+    /// task names it with `sending(under:)` before the send), and otherwise by the press's task
+    /// once its send returns, or at `releaseBound`. One per release, so two in flight are held
+    /// for each.
+    func releasing() -> Int? {
+        guard voice.ready else { return nil }
         releaseSerial += 1
         let token = releaseSerial
         audio.wantAlive(true, for: .releasing(token))
@@ -416,9 +425,17 @@ final class Speaker {
         return token
     }
 
-    /// Lets go of a release's hold: its send is done (its turn's wait, if any, already taken), or
+    /// Names the release whose words the next send carries, so `awaitReply` lets it go as the
+    /// turn's wait is taken.
+    func sending(under token: Int?) { sending = token }
+
+    /// The releases still held, for a test.
+    var releasesHeld: Int { releases.count }
+
+    /// Lets go of a release's hold: its turn's wait is taken, its send returned without one, or
     /// its bound ran out. Free for one already let go.
     func released(_ token: Int, _ why: String) {
+        if sending == token { sending = nil }
         guard let bound = releases.removeValue(forKey: token) else { return }
         bound.cancel()
         AudioLog.say("release \(token) let go: \(why)")
@@ -448,8 +465,10 @@ final class Speaker {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
         #endif
-        stop()
+        // Releases first, so the holds `stop` drops do not leave one standing to start the keeper
+        // on the engine the reset invalidated.
         releases.keys.forEach { released($0, "the media server was reset") }
+        stop()
         queue.reset()
     }
 
@@ -565,10 +584,6 @@ final class Speaker {
         }
         speaking = true
         Perf.mark("speak.begin")
-        // Where and how loud the reply is about to be heard, so a run that sounded quiet says
-        // which of the session's states it was read under: the call's or not, its mode, the
-        // voice processing the session is configured for, the route and the system's volume.
-        AudioLog.say("the reply begins (\(audio.describeOutput()))")
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
         // And a hold that could not be honoured is a refused reply, like a rebuild that refuses:
@@ -581,6 +596,10 @@ final class Speaker {
             return false
         }
         progressed()
+        // Where and how loud the reply is about to be heard, so a run that sounded quiet says
+        // which of the session's states it was read under: the call's or not, its mode, the
+        // voice processing the session is configured for, the route and the system's volume.
+        AudioLog.say("the reply begins (\(audio.describeOutput()))")
         nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
@@ -596,8 +615,9 @@ final class Speaker {
     }
 
     /// Ends things: a press, the Stop item, a sign-out, a reset, a reply that stopped making
-    /// progress. Both holds go, since whatever was being waited for is not going to be heard now
-    /// either.
+    /// progress. The waits and the reading's hold go, since whatever was being waited for is not
+    /// going to be heard now either; a release stands, since the words it is finishing are still
+    /// sent, and goes at its turn's wait.
     func stop() {
         cancel()
         endAllWaits("stopped")

@@ -134,12 +134,11 @@ final class SpokenCall: NSObject {
     /// Makes Topo known to the system's call service while the app is in front, with a request
     /// that changes nothing: the end of a call that does not exist, answered as unknown. The
     /// service lets a call be started from the background only when it judges the person meant
-    /// it, and it judges an app it has not yet looked up too slowly: the first placing of a
-    /// launch, made at the background notification, was judged after the app had stopped being
-    /// visible and refused (`requesttransaction` error 6, "user intent could not be validated"),
-    /// where every later one, from an app already looked up, was judged within milliseconds and
-    /// allowed. Told at each coming to the front, so the placing that follows it finds Topo
-    /// known.
+    /// it, which it judges as allowed while the app is still visible; the first request of a
+    /// connection looks the app up first (about 150 ms), long enough that a placing made at the
+    /// background notification is judged after the app has stopped being visible and refused
+    /// (`requesttransaction` error 6, "user intent could not be validated"). Told at each coming
+    /// to the front, so the placing that follows it finds Topo known.
     func introduce() {
         system.introduce { error in
             let answer = error.map { "code \(($0 as NSError).code)" } ?? "no error"
