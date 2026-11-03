@@ -238,17 +238,15 @@ struct TurnRow: View {
 
     /// Topo's words are markdown, drawn as their blocks. The person's are drawn as they were
     /// typed: the row they are written in is drawn at the size the landed turn will be, which a
-    /// turn restyled on landing would not be, and what they typed is theirs to see as typed.
+    /// turn restyled on landing would not be, and what they typed is theirs to see as typed. The
+    /// one line drawn otherwise is an image's, drawn as the picture where it is on this device
+    /// (`PersonWords`).
     /// Words with nothing drawn around them report their lines, so the room at the end of a
     /// short line is room for Topo.
     @ViewBuilder
     private var words: some View {
         if mine {
-            Text(turn.text)
-                .font(look.transcript.bodyFont)
-                .foregroundStyle(look.transcript.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .mascotLines(bare)
+            PersonWords(text: turn.text, bare: bare)
         } else {
             MarkdownText(source: turn.text, bare: bare, reply: turn.ref, cue: cue)
         }
@@ -283,10 +281,7 @@ struct QueuedTurnRow: View {
 
     var body: some View {
         let enclosure = look.draft.sending
-        Text(turn.text)
-            .font(look.transcript.bodyFont)
-            .foregroundStyle(look.transcript.text)
-            .fixedSize(horizontal: false, vertical: true)
+        PersonWords(text: turn.text)
             .padding(.horizontal, enclosure.horizontalPadding)
             .padding(.vertical, enclosure.verticalPadding)
             .background { TurnShape.fill(enclosure) }
