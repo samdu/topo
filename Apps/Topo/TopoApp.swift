@@ -1,4 +1,5 @@
 import OSLog
+import CallKit
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -180,8 +181,10 @@ struct TopoApp: App {
         // the interruption's start and the call's placing comes first.
         let endpoint = Endpoint()
         self.endpoint = endpoint
+        let calls = CXCallObserver()
         let conversation = Conversation(voice: voice, speaker: speaker, endpoint: endpoint,
-                                        holding: { [weak audio] in audio?.holding ?? false })
+                                        holding: { [weak audio] in audio?.holding ?? false },
+                                        otherCall: { calls.calls.contains { !$0.hasEnded && $0.uuid != call.id } })
         speaker.onCall = { conversation.call($0) }
         conversation.conversingChanged = { callDriver.conversingChanged($0) }
         voice.carries = { [weak conversation] in

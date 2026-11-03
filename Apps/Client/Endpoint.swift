@@ -12,9 +12,10 @@ import FluidAudio
 /// not an end at all. Topo's policy over its events is `Policy`: a start shorter than `minSpeech`
 /// before its end is a cough, not an utterance.
 ///
-/// The model is fetched with the ear's (`ModelDownloads`, `ModelManifest.vad`) and loaded on the
-/// foreground with it (`VoiceInput.prepare`), never first behind the lock, where a model's first
-/// load has taken minutes; `ready` is loaded, not downloaded.
+/// The model is fetched with the ear's (`ModelDownloads`, `ModelManifest.vad`) and asked for on
+/// every foreground (`prepare`, beside the ear's), loading once it is on disk, so it is normally
+/// loaded in front, where a model's first load does not take the minutes it has behind the lock;
+/// `ready` is loaded, not downloaded, and nothing is carried until it is.
 @MainActor
 final class Endpoint {
     /// Silence after speech that ends an utterance. Daphne ended turns at 1.2 s of quiet only

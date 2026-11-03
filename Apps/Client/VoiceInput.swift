@@ -103,7 +103,7 @@ final class VoiceInput {
     /// True from the press until the microphone is running: the permission prompts, mainly.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
-    private var ending = false
+    private(set) var ending = false
     private var pressedAt: Date?
     private var interruptionObserver: NSObjectProtocol?
     private var resetObserver: NSObjectProtocol?
@@ -144,7 +144,18 @@ final class VoiceInput {
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in
                 guard let self else { return }
-                if self.carries?() == true { self.suspend("the interruption's start") } else { self.cancel() }
+                // Under an active call the session stays live through the lock's `.began`
+                // (`AudioSession.invalidate`), so a session the call carries keeps its tap: a
+                // phone call taking ours arrives as the call's deactivation, not here.
+                if self.carries?() == true {
+                    if self.audio.call == .active {
+                        AudioLog.say("microphone: an interruption's start under the active call; the session stays live")
+                        return
+                    }
+                    self.suspend("the interruption's start")
+                } else {
+                    self.cancel()
+                }
             }
         }
         resetObserver = center.addObserver(

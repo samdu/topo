@@ -33,6 +33,8 @@ final class SpokenCall: NSObject {
     var onInactive: () -> Void = {}
     /// Ended from outside the app: the call card, the Lock Screen, the watch.
     var onHangUp: () -> Void = {}
+    /// The card's mute, true muted.
+    var onMute: (Bool) -> Void = { _ in }
     /// The call is gone and the session is the app's again.
     var onOver: () -> Void = {}
     /// The call could not be placed, was never activated, or went with the system's call
@@ -218,12 +220,13 @@ final class SpokenCall: NSObject {
         onHangUp()
     }
 
-    /// The card's mute. Topo holds no microphone open between turns, so there is nothing to
-    /// mute; the action is fulfilled, so the card stays consistent, and changes nothing. The
-    /// hang-up is the control.
+    /// The card's mute: told to `onMute`, which closes the microphone a conversation behind the
+    /// lock holds open and keeps it closed until the unmute (`Conversation`). Always fulfilled,
+    /// never refused, so the card stays consistent.
     fileprivate func perform(mute action: CXSetMutedCallAction) {
-        AudioLog.say("call: \(action.isMuted ? "muted" : "unmuted") from the card; nothing to mute")
+        AudioLog.say("call: \(action.isMuted ? "muted" : "unmuted") from the card")
         system.fulfill(action)
+        onMute(action.isMuted)
     }
 
     fileprivate func perform(held action: CXSetHeldCallAction) {

@@ -83,7 +83,7 @@ final class Speaker {
     /// told first, so an open microphone is off the session before the session changes hands
     /// (`Conversation`).
     var onCall: ((CallMoment) -> Void)?
-    enum CallMoment: Equatable { case placing, active, taken, hungUp, over }
+    enum CallMoment: Equatable { case placing, active, taken, hungUp, over, muted(Bool) }
 
     /// A reply is held for an open microphone or the call's session, to be read when it closes.
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
@@ -202,6 +202,7 @@ final class Speaker {
             queue.interrupted()
             onCall?(.taken)
         }
+        call.onMute = { [weak self] in self?.onCall?(.muted($0)) }
         call.onHangUp = { [weak self] in
             self?.hangUp()
             self?.onCall?(.hungUp)
