@@ -105,14 +105,15 @@ final class EarconsTests: XCTestCase {
                      permission: @escaping @MainActor () async -> Bool = { true },
                      isActive: Bool = true,
                      heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
-                     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async -> Rig {
+                     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+                     tail: Duration = .zero) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = makeDefaults()
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { isActive })
         let cues = CueRecorder()
         let earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),
-                              makePlayer: { cues.make($0) }, sleep: sleep)
+                              makePlayer: { cues.make($0) }, sleep: sleep, tail: { tail })
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
@@ -650,6 +651,36 @@ final class EarconsTests: XCTestCase {
         await drain()
         XCTAssertEqual(clock.asked.count, 2)
         XCTAssertTrue(clock.cancelled, "the bound was left running after the cue was heard out")
+    }
+
+    /// A cue the player has finished is still in the route: the hold stands for the route's tail,
+    /// so `done` behind the lock is not cut off by the call it ends, and goes when the tail has
+    /// passed. A cue begun in the tail keeps the hold, and the first one's tail moves nothing.
+    func testTheHoldStandsForTheRoutesTailAfterTheFinish() async {
+        let clock = CueSleep()
+        let tail = Duration.milliseconds(400)
+        let rig = await rig(sleep: { try await clock.sleep($0) }, tail: tail)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.earcons.play(.done))
+        rig.speaker.endAwaiting("turn", "the reply was read")
+        rig.cues.players.last?.finish()
+        await settle("the tail to be asked for") { clock.asked.contains(tail) }
+        XCTAssertTrue(rig.audio.holding, "the hold went as the player finished, with the cue still in the route")
+        clock.fire()
+        await settle("the hold to go after the tail") { !rig.audio.holding }
+
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        XCTAssertTrue(rig.earcons.play(.failed))
+        rig.speaker.endAwaiting("second", "the turn failed")
+        rig.cues.players.last?.finish()
+        await settle("the first tail") { clock.asked.filter { $0 == tail }.count == 2 }
+        // A cue begun inside the first's tail, under the cue's hold alone, lets that hold go
+        // (cues hold nothing by themselves), and the first tail ending moves nothing after.
+        XCTAssertTrue(rig.earcons.play(.done))
+        XCTAssertFalse(rig.audio.holding)
+        clock.fire()
+        await drain()
+        XCTAssertFalse(rig.audio.holding)
     }
 
     /// A second cue while the first is still sounding keeps the one hold and lets it go when the
