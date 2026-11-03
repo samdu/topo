@@ -269,14 +269,16 @@ actor PocketVoiceEngine: VoiceEngine {
     private var manager: PocketTtsManager?
 
     /// `base` is the directory the manifest's Pocket entry was filled under: the port appends
-    /// `Models/pocket-tts/v2.1/english` to it and reads the pack from there. Offline first, as
+    /// `Models/pocket-tts/v2.1/english`, the April English pack's folder (`.english2026Apr`;
+    /// `.english` is Kyutai's October checkpoint, in a folder of its own), to it and reads the
+    /// pack from there. Offline first, as
     /// `Ear` does, so a file the store lacks is a load failure rather than a download over a
     /// session of the library's own.
     func load(base: URL) async throws {
         if manager != nil { return }
         ModelHub.offlineMode = true
         let manager = PocketTtsManager(
-            defaultVoice: Voice.speaker, language: .english, directory: base, placement: .ane,
+            defaultVoice: Voice.speaker, language: .english2026Apr, directory: base, placement: .ane,
             computeUnits: PocketTtsComputeUnits(
                 conditioner: .cpuAndNeuralEngine,
                 flowLM: .cpuAndNeuralEngine,
@@ -317,8 +319,9 @@ enum VoiceTemperature {
     static let key = "voiceTemperature"
 
     /// What a phone never asked speaks at, chosen by Sam's ear between the two published
-    /// defaults: Kyutai's own package speaks English at 0.3 (kyutai-labs/pocket-tts#223) and
-    /// FluidAudio at 0.7.
+    /// defaults: Kyutai's own package speaks English at 0.3 (kyutai-labs/pocket-tts#223), and
+    /// FluidAudio speaks the April pack Topo has at 0.7 (its `.english`, Kyutai's October
+    /// checkpoint, follows Kyutai at 0.3).
     static let standard = 0.5
 
     /// What the decoder is ever handed. Below 0 the square root is not a number; 1 is the
