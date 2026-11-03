@@ -29,7 +29,7 @@ final class ComposerAttachments {
 
     /// The picker on the screen, if one is.
     private(set) var picking: Source?
-    /// Counts the presses that put the file picker up, which is what the chat puts it up on: a
+    /// Counts the presses that ask for the file picker, which is what the chat puts it up on: a
     /// press that lets a stuck picker go sets `picking` from `.file` back to `.file` within one
     /// call, which a watch on `picking` never sees.
     private(set) var filePresses = 0
@@ -44,16 +44,18 @@ final class ComposerAttachments {
     var hasCamera: Bool { cameraAvailable() }
     /// The file picker, held here rather than by a view: the chat's views come and go while the
     /// picker is up, and a picker whose holder went with them never hands back its pick.
-    @ObservationIgnored let files = AttachmentFilePicker()
+    @ObservationIgnored let files: any FilePicking
 
     let store: @MainActor () -> ShareStore?
     private let drain: @MainActor () async -> Void
 
     init(store: @escaping @MainActor () -> ShareStore? = { ShareStore.shared() },
          drain: @escaping @MainActor () async -> Void,
+         files: any FilePicking = AttachmentFilePicker(),
          cameraAvailable: @escaping @MainActor () -> Bool = { UIImagePickerController.isSourceTypeAvailable(.camera) }) {
         self.store = store
         self.drain = drain
+        self.files = files
         self.cameraAvailable = cameraAvailable
     }
 
@@ -95,7 +97,8 @@ final class ComposerAttachments {
     }
 
     /// A picker taken down by something other than its own answer, or a suite saying a picker
-    /// went; a picker's answer with nothing is its `chose(…: nil)`.
+    /// went; a picker's answer with nothing is its `chose(…: nil)`, and a file picker gone
+    /// without answering is let go at the next press (`pick`).
     func dismissed(_ source: Source) {
         guard picking == source else { return }
         picking = nil
@@ -137,8 +140,9 @@ final class ComposerAttachments {
         try? FileManager.default.removeItem(at: copy)
     }
 
-    /// The file picker put up by UIKit, once `picking` says it is up; one that cannot be put up
-    /// (the app between two screens) is the sheet's refusal, not a silent nothing.
+    /// The file picker put up by UIKit, at each press that asks for it (`filePresses`) while
+    /// `picking` says it is up; one that cannot be put up (nothing on the screen to present it)
+    /// is the sheet's refusal, not a silent nothing.
     func presentFilePicker() {
         guard picking == .file else { return }
         guard files.present({ [weak self] url in self?.chose(file: url) }) else {
@@ -340,8 +344,21 @@ extension ShareSheetModel {
 /// the app's temporary folder, put up by UIKit over the view controller on top. Its answer, the
 /// copy, or nil for its Cancel (a swipe down included), is handed over once the picker has left
 /// the screen, and once only.
+/// What the model asks of the file picker: whether one it put up has gone without answering,
+/// and to put one up. `AttachmentFilePicker` in the app; a suite's stand-in where it judges the
+/// presses.
 @MainActor
-final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate {
+protocol FilePicking: AnyObject {
+    func abandoned(now: Date) -> Bool
+    func present(_ chosen: @escaping @MainActor (URL?) -> Void) -> Bool
+}
+
+extension FilePicking {
+    func abandoned() -> Bool { abandoned(now: Date()) }
+}
+
+@MainActor
+final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate, FilePicking {
     private var shown: UIDocumentPickerViewController?
     private var chosen: (@MainActor (URL?) -> Void)?
     private var presented: Date?
@@ -352,7 +369,7 @@ final class AttachmentFilePicker: NSObject, UIDocumentPickerDelegate {
 
     /// A picker put up more than `grace` ago that is not on the screen and never answered: let
     /// go, so the next press puts up another. False while one is up or none is held.
-    func abandoned(now: Date = Date()) -> Bool {
+    func abandoned(now: Date) -> Bool {
         guard let shown, let presented, now.timeIntervalSince(presented) > Self.grace,
               shown.presentingViewController == nil, !shown.isBeingPresented else { return false }
         self.shown = nil
