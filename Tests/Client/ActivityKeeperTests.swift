@@ -333,7 +333,7 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(id)
     }
 
-    /// The other way round: The poll's update is in the host when the tool's is
+    /// The other way round: the poll's update is in the host when the tool's is
     /// sent. The tool's waits its turn and lands after it, so the host ends on the tool's.
     func testAToolUpdateLandsAfterAPollUpdateInTheHost() async throws {
         let fetcher = GatedTrackerFetcher()
@@ -364,7 +364,6 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(id)
     }
 
-    /// A polled tracker that finishes before its until is taken
     /// A resume whose turn for an activity comes after a sign-out has counted itself keeps
     /// nothing for it: the sign-out's end follows, and no until task outlives the login.
     func testAResumeAcrossASignOutKeepsNothing() async throws {
@@ -387,7 +386,8 @@ final class ActivityKeeperTests: XCTestCase {
         XCTAssertTrue(host.records.allSatisfy(\.ended))
     }
 
-    /// down at its until, not left for the system's default.
+    /// A polled tracker that finishes before its until is taken down at its until, not left for
+    /// the system's default.
     func testAFinishedTrackerIsTakenDownAtItsUntil() async throws {
         let done = TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true)
         let keeper = keeper(FakeTrackerFetcher([done]))
