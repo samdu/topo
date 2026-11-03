@@ -193,6 +193,11 @@ final class AudioSession {
     func wantRecord(_ on: Bool, for who: RecordClaim) {
         let was = recordMode
         if on { recordClaims.insert(who) } else { recordClaims.remove(who) }
+        // The warm claim another app's playing put off is taken with the exchange's own: a press
+        // drops its claim as the microphone closes, before the wait's hold is taken, and the
+        // record configuration has to stand from the press to the reply's end, not hand the
+        // session back between the two and read the reply over the podcast.
+        if on, who != .warm, warmWanted { recordClaims.insert(.warm) }
         guard recordMode != was else { return }
         guard !kept else {
             deferredClaims = true
@@ -234,14 +239,21 @@ final class AudioSession {
     /// so an unasked phone meets the microphone prompt at the button, never on a foreground. Not
     /// taken while another app is playing: the record configuration cannot mix, so taking it
     /// would pause the podcast with nothing said, and Topo takes the session from other audio
-    /// only when a spoken exchange starts — that press pays the route change instead.
+    /// only when a spoken exchange starts — that press pays the route change instead, and takes
+    /// the warm claim with its own (`wantRecord`), so the exchange keeps the session to its end
+    /// and Topo holds it, as it would have, until it leaves the front.
     func warmRecord(_ on: Bool) {
+        warmWanted = on
         if on, !recordPermitted() { return }
         if on, otherAudioPlaying() {
             return AudioLog.say("not warming the record configuration: another app is playing")
         }
         wantRecord(on, for: .warm)
     }
+
+    /// The app is in front and would warm the record configuration: the warm claim stands, or
+    /// waits for the next press because another app was playing.
+    private var warmWanted = false
 
     /// Claims or drops the hold that keeps the process running when the phone is locked or Topo
     /// is behind another app. Under the `audio` background mode iOS runs a backgrounded process

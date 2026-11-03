@@ -447,6 +447,31 @@ final class AudioSessionCallTests: XCTestCase {
         XCTAssertEqual(seams.records, [true], "with nothing else playing the record configuration is warmed")
     }
 
+    func testAnExchangeBegunOverAnotherAppKeepsTheRecordConfigurationUntilTopoLeavesTheFront() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { true },
+                                 otherAudioPlaying: { true }, recordPermitted: { true })
+        audio.warmRecord(true)
+        XCTAssertEqual(seams.records, [])
+        // The press: the record configuration is taken, which is where the podcast pauses.
+        audio.wantRecord(true, for: .chat)
+        audio.microphone(open: true)
+        XCTAssertEqual(seams.records, [true])
+        // The release: the press's claim goes as the microphone closes, before the wait's hold.
+        audio.wantRecord(false, for: .chat)
+        audio.microphone(open: false)
+        XCTAssertEqual(seams.records, [true], "the session went back to the quiet configuration between the release and the wait")
+        XCTAssertEqual(seams.deactivations, [], "and the podcast was told to resume under the reply")
+        audio.wantAlive(true, for: .awaitingReply("n"))
+        audio.wantAlive(false, for: .awaitingReply("n"))
+        XCTAssertEqual(seams.records, [true], "the reply's end in front keeps it, as the warm claim does")
+        // Topo leaves the front: the quiet configuration, the podcast told to resume first.
+        audio.warmRecord(false)
+        XCTAssertEqual(seams.records, [true, false])
+        XCTAssertEqual(seams.deactivations, [true])
+    }
+
     func testTheWarmClaimWaitsForThePermission() {
         let seams = Seams()
         let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, setCategory: seams.setCategory,
