@@ -27,8 +27,8 @@ final class AudioSession {
         case awaitingReply(String)
         case speaking
         /// The keeper's sound being heard out — a receipt, the bed's fade — taken only while
-        /// another hold stands and bounded by the sound's own bound. Its own case, so another
-        /// sound's hold letting go cannot cut it, nor it another's.
+        /// another hold stands and bounded by the sound's own bound. Its own case, so no
+        /// other owner letting go can cut it.
         case sound
         /// An earcon being heard out (`Earcons`), on the same terms as `sound` and its own case
         /// beside it, so a receipt's hold letting go cannot cut the cue's, nor the cue's a receipt's.

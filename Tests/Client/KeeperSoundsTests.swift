@@ -292,15 +292,13 @@ final class KeeperSoundsTests: XCTestCase {
         await settle("the receipt's hold to go") { !rig.audio.holding }
     }
 
-    /// A microphone opened on a path no press goes through — a hands-free session behind the lock
-    /// opened again as its words are sent — is still one no receipt is played into, since the
-    /// sounds ask the speaker at each one rather than being told at a press; and the bed dips
-    /// once the watch on the microphone tells the speaker it is listening.
+    /// A microphone opened with no press telling the speaker is still one no receipt is played
+    /// into, since the sounds ask the speaker at each one; and the bed dips once the watch on the
+    /// microphone tells the speaker it is listening.
     func testNoReceiptIsPlayedIntoAMicrophoneNoPressOpened() async throws {
         let rig = await rig(mode: .sounds)
         var open = false
         rig.speaker.microphoneOpen = { open }
-        rig.speaker.microphoneClosed()
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         let bed = try XCTUnwrap(rig.players.bed)
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
