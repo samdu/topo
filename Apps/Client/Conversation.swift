@@ -20,8 +20,9 @@ final class Conversation {
     /// Listening this long with nothing said ends the conversation. Counted only while the
     /// microphone listens with no wait standing and nothing being read.
     static let idle: Duration = .seconds(120)
-    /// How often the detector is fed what has arrived.
-    static let feedEvery: Duration = .milliseconds(256)
+    /// How often what has arrived is taken: the detector fed its whole chunks, and the quiet
+    /// counted in 100 ms frames, which is the turn's rule's own tick.
+    static let feedEvery: Duration = .milliseconds(100)
     /// Listening this long with no samples arriving is a dead engine (a route change stops it
     /// under the call): the session is suspended and rebuilt, and a second time running ends
     /// the conversation.
@@ -69,7 +70,18 @@ final class Conversation {
     private var policy = Endpoint.Policy()
     private var fedTo = 0
     /// True while a chunk counted in `fedTo` is with the detector: its verdict is not in yet.
-    private var judging = false
+    private var detecting = false
+    /// The judge this conversation's utterances end by, taken as it begins: none when Smart Turn
+    /// was not loaded, and then the utterances end on Silero's silence alone.
+    @ObservationIgnored private var judge: (any TurnJudge)?
+    /// The turn's rule over the quiet and the judge's verdicts (`Endpoint.Judging`), one per
+    /// utterance, and how far into the sink its 100 ms frames have been counted.
+    private var rule = Endpoint.Judging()
+    private var framedTo = 0
+    /// Whether this utterance has logged a judge that threw: once is enough.
+    private var judgeThrew = false
+    /// The wait the rule is judged against, read at each verdict.
+    @ObservationIgnored private let wait: @MainActor () -> TimeInterval
     private var feeder: Task<Void, Never>?
     private var idleTimer: Task<Void, Never>?
     private var reopening = false
@@ -93,6 +105,7 @@ final class Conversation {
          holding: @escaping @MainActor () -> Bool,
          otherCall: @escaping @MainActor () -> Bool = { false },
          deafAfter: TimeInterval = Conversation.deafAfter,
+         wait: @escaping @MainActor () -> TimeInterval = { QuietWait.value() },
          center: NotificationCenter = .default,
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
          now: @escaping @MainActor () -> Date = { Date() }) {
@@ -104,6 +117,7 @@ final class Conversation {
         self.holding = holding
         self.otherCall = otherCall
         self.deafLimit = deafAfter
+        self.wait = wait
         self.sleep = sleep
         self.now = now
         observers = [
@@ -142,8 +156,9 @@ final class Conversation {
         on = true
         voice.glancing = false
         AudioLog.say("conversation: begun behind the lock (\(firstOff.map { "the microphone came off at \($0)" } ?? "the microphone still running"))")
-        policy = Endpoint.Policy()
-        fedTo = 0
+        judge = endpoint.judge
+        AudioLog.say("conversation: \(endpoint.judgeLine)")
+        freshUtterance()
         muted = false
         deafStrikes = 0
         restartIdle()
@@ -238,11 +253,27 @@ final class Conversation {
     // MARK: - Utterances
 
     private func startUtterance() {
-        policy = Endpoint.Policy()
-        fedTo = 0
+        freshUtterance()
         startFeeding(reset: true)
         restartIdle()
     }
+
+    /// Nothing judged yet: what the next utterance starts from.
+    private func freshUtterance() {
+        policy = Endpoint.Policy()
+        rule = Endpoint.Judging()
+        fedTo = 0
+        framedTo = 0
+        judgeThrew = false
+    }
+
+    #if DEBUG
+    /// The votes the rule holds now, for the suite.
+    var votes: Int { rule.votes }
+    #endif
+
+    /// Silero's silence for this conversation's streams: the cap with a judge, the end without.
+    private var silence: TimeInterval { Endpoint.silence(judged: judge != nil) }
 
     private func startFeeding(reset: Bool = false) {
         feeder?.cancel()
@@ -251,8 +282,9 @@ final class Conversation {
         let sink = voice.sink
         let now = now
         let deafLimit = deafLimit
+        let silence = silence
         feeder = Task { [weak self] in
-            if reset { await detector.reset() }
+            if reset { await detector.reset(silence: silence) }
             var heardAt = now()
             var arrived = -1
             while !Task.isCancelled {
@@ -274,21 +306,30 @@ final class Conversation {
                     offset += Endpoint.chunk
                     self.fedTo += Endpoint.chunk
                     let event: Endpoint.Event?
-                    self.judging = true
+                    self.detecting = true
                     do { event = try await detector.feed(chunk) } catch {
                         AudioLog.say("conversation: the detector failed on a chunk: \(error.localizedDescription)")
                         event = nil
                     }
-                    self.judging = false
+                    self.detecting = false
                     guard !Task.isCancelled, self.on, self.voice.generation == mine else { return }
                     guard let event, let heard = self.policy.take(event) else { continue }
                     switch heard {
                     case .speech:
+                        // The quiet is counted from where speech began, not from the silence
+                        // before it.
+                        if case .start(let at) = event { self.framedTo = max(self.framedTo, at) }
                         self.restartIdle()
                     case .ended:
-                        await self.endUtterance()
+                        await self.endUtterance(self.sileroEnd)
                         return
                     }
+                }
+                // The quiet after speech, frame by frame, for the judge.
+                if let judge = self.judge, self.policy.speaking,
+                   let ending = self.frames(judge, generation: mine) {
+                    await self.endUtterance(ending)
+                    return
                 }
                 // A reply waiting on this microphone is judged once what was heard has been.
                 if self.speaker.waitingForMicrophone { self.react() }
@@ -310,24 +351,110 @@ final class Conversation {
         react()
     }
 
-    /// The detector heard the utterance end: it is decoded as a release decodes it, the next one
-    /// opens at once unless a reply is to be read first, and the words are sent after, so the
-    /// send's wait for its turn is not time the microphone is deaf.
-    private func endUtterance() async {
+    /// Counts the whole frames that have arrived since the last pass into the rule, asking the
+    /// judge where it says to. Answers the end, in the log's words, if a frame reached the cap.
+    private func frames(_ judge: any TurnJudge, generation: Int) -> String? {
+        let (samples, _) = voice.sink.peek(from: framedTo)
+        let size = Endpoint.Judging.frame
+        var offset = 0
+        while samples.count - offset >= size {
+            let loud = Endpoint.loud(samples[offset..<offset + size])
+            offset += size
+            framedTo += size
+            switch rule.frame(loud: loud) {
+            case .none: continue
+            case .ask(let n): ask(n, of: judge, generation: generation)
+            case .end(let ending): return said(ending)
+            }
+        }
+        return nil
+    }
+
+    /// Hands the judge the utterance's last eight seconds, off the main actor; the verdict counts
+    /// only for the session, the utterance and the ask it was asked for.
+    private func ask(_ n: Int, of judge: any TurnJudge, generation: Int) {
+        let tail = voice.sink.tail(SmartTurn.windowSamples)
+        Task { [weak self] in
+            let verdict: Float?
+            var trouble: String?
+            do { verdict = try await judge.complete(tail) } catch {
+                verdict = nil
+                trouble = error.localizedDescription
+            }
+            self?.landed(verdict, ask: n, generation: generation, trouble: trouble)
+        }
+    }
+
+    private func landed(_ verdict: Float?, ask n: Int, generation: Int, trouble: String?) {
+        // A verdict from an utterance that has ended, or a session that has, reaches nothing.
+        guard on, voice.generation == generation, voice.listening, !endingUtterance else { return }
+        if let trouble, !judgeThrew {
+            judgeThrew = true
+            AudioLog.say("conversation: the judge failed (\(trouble)); the utterance ends on the quiet's cap")
+        }
+        // Speech that turned out a cough is not an utterance to end.
+        if let verdict, policy.speaking {
+            if case .end(let ending) = rule.verdict(verdict, ask: n, wait: wait()) {
+                feeder?.cancel()
+                feeder = nil
+                Task { await endUtterance(said(ending)) }
+                return
+            }
+        } else {
+            rule.unanswered(ask: n)
+        }
+        // A reply waiting on this microphone is judged once the verdict is in.
+        if speaker.waitingForMicrophone { react() }
+    }
+
+    private func said(_ ending: Endpoint.Judging.Ending) -> String {
+        switch ending {
+        case .judged(let p, let quiet):
+            return String(format: "complete %.2f after %.1f s quiet", p, quiet)
+        case .quiet(let quiet):
+            return String(format: "%.1f s of quiet", quiet) + lastVerdict
+        }
+    }
+
+    private var lastVerdict: String {
+        rule.lastVerdict.map { String(format: "; last verdict %.2f", $0) } ?? "; no verdict"
+    }
+
+    /// Silero's end, in the log's words.
+    private var sileroEnd: String {
+        String(format: "%.1f s of silence", silence) + (judge == nil ? "" : lastVerdict)
+    }
+
+    /// The utterance has ended, `why` saying how: it is decoded as a release decodes it, the next
+    /// one opens at once unless a reply is to be read first, and the words are sent after, so the
+    /// send's wait for its turn is not time the microphone is deaf. A detected end is a release:
+    /// it is held from here as a thumb's is (`Speaker.releasing`), the speaker's account of a turn
+    /// on its way, until the send has taken its turn's wait, or at once when nothing is sent.
+    private func endUtterance(_ why: String) async {
         guard on, voice.listening, !endingUtterance else { return }
         endingUtterance = true
         lastEnd = now()
         feeder = nil
+        AudioLog.say("conversation: ended an utterance (\(why))")
+        let release = speaker.releasing()
         let heard = await voice.end(as: .chat)
         endingUtterance = false
         let dropped = dropDecoded
         dropDecoded = false
         // The next utterance starts unjudged: speech already sent is not speech going on.
-        policy = Endpoint.Policy()
+        freshUtterance()
         if dropped {
+            release.map { speaker.released($0, "its words were dropped") }
             AudioLog.say("conversation: the utterance being decoded was dropped (hung up or muted)")
         } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
-            Task { await send(heard) }
+            let speaker = speaker
+            Task {
+                defer { release.map { speaker.released($0, "its send took no wait") } }
+                speaker.sending(under: release)
+                await send(heard)
+            }
+        } else {
+            release.map { speaker.released($0, "it heard nothing to send") }
         }
         react()
     }
@@ -352,9 +479,10 @@ final class Conversation {
     }
 
     /// Whether the detector has been fed everything the sink holds but the part-chunk it is
-    /// waiting to fill: until then, an utterance with nothing said in it is not known to be one.
+    /// waiting to fill, and no verdict of the judge's is in flight: until then, an utterance with
+    /// nothing said in it is not known to be one.
     private var caughtUp: Bool {
-        !judging && voice.sink.peek(from: .max).end - fedTo < Endpoint.chunk
+        !detecting && rule.inFlight == nil && voice.sink.peek(from: .max).end - fedTo < Endpoint.chunk
     }
 
     private func react() {
