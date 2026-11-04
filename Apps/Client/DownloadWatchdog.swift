@@ -21,9 +21,10 @@ import Foundation
 /// and acts on what it answers. A background session carries on while the app is suspended and
 /// no progress reaches the process meanwhile, so the watchdog is told the bytes each task was at
 /// when the app resigned (`resigned`) and the bytes each is at on return (`probe`), judges that
-/// span as one window, and drops every sample from before: nothing more is judged until a window
-/// of foreground samples exists. A cancel in flight and a replacement owed are kept across the
-/// time away, and made on the first tick after the return.
+/// span as one window, and drops every sample from before, anchoring each task left running that
+/// has had a first byte at the bytes it is at on return: nothing more is judged until a window
+/// has passed since. A cancel in flight and a replacement owed are kept across the time away, and
+/// made on the first tick after the return.
 ///
 /// Slowness is never a failure: a file is only ever cancelled to be made again.
 @MainActor
@@ -135,11 +136,14 @@ final class DownloadWatchdog {
 
     /// The app is in front again, with the bytes the session says each task is at now: the span
     /// since `resigned` is judged as one window where it is at least a window long, and the
-    /// crawls in it are cancelled at once. Every sample from before is dropped; a key not in
-    /// `received` is gone (finished, or the session no longer holds it).
+    /// crawls in it are cancelled at once. Every sample from before is dropped, and each task
+    /// left running that has had a first byte is anchored at the bytes it is at now, so one that
+    /// stalls on the return with no progress after is judged by that silence a window on. A key
+    /// not in `received` is gone (finished, or the session no longer holds it).
     func probe(_ received: [String: Int64], at now: Instant) -> [Cancel] {
         defer { resignedAt = nil }
         samples = [:]
+        for (key, bytes) in received where bytes > 0 && !restarting(key) { samples[key] = [Sample(at: now, bytes: bytes)] }
         guard let resignedAt, now - resignedAt.at >= Self.window else { return [] }
         let elapsed = Self.seconds(now - resignedAt.at)
         var rates: [String: Int64] = [:]

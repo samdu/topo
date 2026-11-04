@@ -166,11 +166,12 @@ final class DownloadWatchdogTests: XCTestCase {
         let cancels = dog.probe(["m|crawl": 36 * KB * 10 + 36 * KB * 60, "m|fast": 20 * MB * 10 + 20 * MB * 60], at: at(70))
         XCTAssertEqual(cancels.map(\.key), ["m|crawl"])
         XCTAssertLessThanOrEqual(abs(cancels[0].rate - 36 * KB), KB)
-        // What was sampled before the resign is not evidence now: the fast one needs a window
-        // of new samples before it is judged at all, slow or not.
+        // What was sampled before the resign is not evidence now: the fast one is anchored at the
+        // bytes the probe saw and needs a window from there before it is judged, slow or not. No
+        // progress comes after the return, and the silence alone is judged.
         XCTAssertEqual(dog.decisions(at: at(70)), [])
-        dog.observe("m|fast", bytes: 0, at: at(70))
-        XCTAssertEqual(dog.decisions(at: at(89)), [], "19 s of new samples")
+        XCTAssertTrue(dog.active, "the anchor keeps the ticks going with no progress to start them")
+        XCTAssertEqual(dog.decisions(at: at(89)), [], "19 s since the return")
         XCTAssertEqual(dog.decisions(at: at(90)).map(\.key), ["m|fast"], "20 s of silence after the return is a judgement of its own")
     }
 
@@ -186,7 +187,7 @@ final class DownloadWatchdogTests: XCTestCase {
         flow(dog, "m|h", rate: 36 * KB, from: 100, to: 110)
         dog.resigned(at: at(110))
         XCTAssertEqual(dog.probe(["m|h": 36 * KB * 5], at: at(200)), [], "bytes below the resign's are not judged by the probe")
-        XCTAssertEqual(dog.kept("m|h"), 0)
+        XCTAssertEqual(dog.kept("m|h"), 1, "but anchored at the return, and judged a window on")
     }
 
     func testTheProbeJudgesNothingWhileAFlowingTaskHasNoBaseline() {
@@ -196,6 +197,11 @@ final class DownloadWatchdogTests: XCTestCase {
         flow(dog, "m|a", rate: 250 * KB, from: 0, to: 10)
         dog.resigned(at: at(10))
         XCTAssertEqual(dog.probe(["m|a": 250 * KB * 130, "m|b": 250 * KB * 120], at: at(130)), [], "no baseline for a sibling, no judgement")
+        // Both anchored at the return, and done with here, so what follows is judged alone.
+        XCTAssertEqual(dog.kept("m|a"), 1)
+        XCTAssertEqual(dog.kept("m|b"), 1)
+        dog.forget("m|a")
+        dog.forget("m|b")
         // A sibling restarting is not a sibling flowing.
         flow(dog, "m|c", rate: 36 * KB, from: 130, to: 150)
         flow(dog, "m|d", rate: 36 * KB, from: 130, to: 150)
@@ -268,6 +274,28 @@ final class DownloadWatchdogTests: XCTestCase {
         dog.forget("m|f")
         dog.observe("m|g", bytes: 0, at: at(41))
         XCTAssertEqual(dog.kept("m|g"), 1, "after the probe, samples are taken again")
+    }
+
+    /// A task that ran fast through a short time away and stalls on the return, with no
+    /// progress after: the anchor the probe left is what judges it, a window on.
+    func testAStallRightAfterAShortTimeAwayIsCancelledAWindowOn() {
+        let dog = DownloadWatchdog()
+        flow(dog, "m|f", rate: 2 * MB, from: 0, to: 30)
+        dog.resigned(at: at(30))
+        XCTAssertEqual(dog.probe(["m|f": 2 * MB * 40], at: at(40)), [], "ten seconds away is not judged")
+        XCTAssertTrue(dog.active)
+        XCTAssertEqual(dog.decisions(at: at(59)), [])
+        XCTAssertEqual(dog.decisions(at: at(60)).map(\.key), ["m|f"], "20 s of silence since the return")
+    }
+
+    /// A task with no first byte at the return is not anchored: it is left alone, as before the
+    /// time away.
+    func testATaskWithNoFirstByteIsNotAnchoredByTheProbe() {
+        let dog = DownloadWatchdog()
+        dog.resigned(at: at(0))
+        XCTAssertEqual(dog.probe(["m|f": 0], at: at(60)), [])
+        XCTAssertEqual(dog.kept("m|f"), 0)
+        XCTAssertFalse(dog.active)
     }
 
     func testTheMarksNameTheModelThePathBytesAndACountAndNothingElse() {
