@@ -54,14 +54,6 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.17.7"
-  # ONNX Runtime, which runs Smart Turn, the judge of whether an open microphone's speaker has
-  # finished (Apps/Client/SmartTurn.swift). The model ships only as ONNX and does not convert to
-  # CoreML, so this is the one runtime for it. Pinned by revision ("Update ORT to 1.24.2"), as
-  # Daphne pins it, because the package's tags are years behind its releases. The iOS app only:
-  # the package has no watchOS or tvOS slice.
-  onnxruntime:
-    url: https://github.com/microsoft/onnxruntime-swift-package-manager
-    revision: b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2
 targets:
   Topo:
     type: application
@@ -100,8 +92,6 @@ targets:
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
-      - package: onnxruntime
-        product: onnxruntime
       - package: TopoUserland
       - package: TopoProxy
       - package: TopoProxy

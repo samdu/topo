@@ -1,9 +1,8 @@
 #if os(iOS)
 import Accelerate
+import CoreML
+import CryptoKit
 import Foundation
-#if canImport(OnnxRuntimeBindings)
-import OnnxRuntimeBindings
-#endif
 
 /// The judge of whether the speaker of an open microphone has finished, as the conversation asks
 /// it (`Endpoint.Judging`): the probability that the utterance whose last samples are `tail`
@@ -17,22 +16,27 @@ protocol TurnJudge: AnyObject, Sendable {
 ///
 /// A silence timeout hears every pause mid-thought as the end of the turn; this model listens to
 /// the last eight seconds of the turn itself — intonation, rate, the shape of the trailing off —
-/// and says whether it sounds finished. An 8 MB int8 Whisper-tiny encoder with a linear head, run
-/// by ONNX Runtime on the CPU (the model ships only as ONNX), audio-native, so it never waits on a
-/// transcript. Ported from Daphne's `SmartTurn.swift`, which is where what is known about it was
-/// learned: the score is not calibrated (the training set had no "ambiguous" class, so it reads as
-/// binary: debounced, never threshold-swept); it wants about 1.2 s of trailing quiet in the window
-/// before "complete" firms up; gaps inside the window past about 4 s are outside its training
-/// data; and "complete" is far more trustworthy than "incomplete" (95% against about 55%
-/// precision on real conversations), which is why a hard cap on the quiet still backs it.
+/// and says whether it sounds finished. A Whisper-tiny encoder with a linear head, audio-native,
+/// so it never waits on a transcript; here as Topo's own Core ML package of pipecat's fp32
+/// weights, an FP16 ML Program (`samthehugenerd/Smart-Turn-Topo`, made by `smart-turn-coreml` in
+/// samdu/experiments), which scores within 0.05 of pipecat's fp32 model. Ported from Daphne's
+/// `SmartTurn.swift`, which is where what is known about it was learned: the score is not
+/// calibrated (the training set had no "ambiguous" class, so it reads as binary: debounced, never
+/// threshold-swept); it wants about 1.2 s of trailing quiet in the window before "complete" firms
+/// up; gaps inside the window past about 4 s are outside its training data; and "complete" is far
+/// more trustworthy than "incomplete" (95% against about 55% precision on real conversations),
+/// which is why a hard cap on the quiet still backs it.
 ///
-/// Three things differ from Daphne's, each because Topo's surroundings do:
+/// Four things differ from Daphne's, each because Topo's surroundings do:
 ///
-/// - **Off the pool.** The session's `run` and the mel's three `sgemm`s are synchronous CPU work,
-///   so neither runs on the cooperative pool or the main actor: `load` and `complete` each run as
-///   one block on `queue`, a serial queue of this class's own, and every stored property is
-///   touched only there. One serial queue is also what keeps the `ORTSession` used from one
-///   thread at a time.
+/// - **Core ML.** Daphne runs pipecat's int8 ONNX export through ONNX Runtime; the phone runs the
+///   fp32 model as Core ML with compute units `.all`. The package is compiled on the phone the
+///   first time it is loaded and the compiled model kept in Caches (`compiled(_:)`), keyed by the
+///   package's bytes, so a new package compiles afresh and a purged cache only costs a compile.
+/// - **Off the pool.** Compiling, loading, the prediction and the mel's three `sgemm`s are
+///   synchronous work, so none of it runs on the cooperative pool or the main actor: `load` and
+///   `complete` each run as one block on `queue`, a serial queue of this class's own, and every
+///   stored property is touched only there.
 /// - **Floats in.** The sink already holds mono floats at 16 kHz, so `complete` takes them as they
 ///   are and `window` zero-pads them; Daphne's round trip through Int16 is not here.
 /// - **Model from the store.** The model is a download (`ModelManifest.smartTurn`, fetched with
@@ -44,8 +48,10 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
 
     static let windowSeconds = 8
     static let windowSamples = Ear.rate * windowSeconds
-    /// The model's one file, as the manifest names it.
-    static let file = "smart-turn-v3.2-cpu.onnx"
+    /// The model's package, as the manifest names it.
+    static let package = "smart-turn-v3.2-fp16.mlpackage"
+    static let input = "input_features"
+    static let output = "logits"
 
     #if DEBUG
     /// Called at the top of every block on `queue`, for the suite to see where it runs.
@@ -64,10 +70,7 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
     }
 
     // Touched only on `queue`.
-    #if canImport(OnnxRuntimeBindings)
-    private var env: ORTEnv?
-    private var session: ORTSession?
-    #endif
+    private var model: MLModel?
     /// [80][201], pipecat's filterbank exactly.
     private var filterbank: [Float] = []
 
@@ -78,50 +81,93 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
             throw Trouble.missing("the mel filterbank")
         }
         let judge = SmartTurn()
-        try await judge.load(model: directory.appendingPathComponent(file), filterbank: filterbank)
+        try await judge.load(model: directory.appendingPathComponent(package, isDirectory: true),
+                             filterbank: filterbank)
         return judge
     }
 
-    /// Reads the filterbank and opens the session. Idempotent; tens of milliseconds.
-    func load(model: URL, filterbank url: URL) async throws {
+    /// Reads the filterbank, compiles the package or takes the compiled copy, loads it and runs
+    /// it once on silence, so the first verdict of a conversation does not pay the model's first
+    /// run. Idempotent.
+    func load(model package: URL, filterbank url: URL, cache: URL = SmartTurn.cache) async throws {
         try await onQueue { [self] in
-            #if canImport(OnnxRuntimeBindings)
-            if session != nil { return }
-            guard FileManager.default.fileExists(atPath: model.path) else { throw Trouble.missing("the model") }
+            if model != nil { return }
+            guard FileManager.default.fileExists(atPath: package.path) else { throw Trouble.missing("the model") }
             let bank = try Data(contentsOf: url).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
             guard bank.count == Mel.bins * Mel.freqBins else {
                 throw Trouble.runtime("the filterbank is \(bank.count) floats")
             }
-            let made = try ORTEnv(loggingLevel: .warning)
-            let options = try ORTSessionOptions()
-            try options.setIntraOpNumThreads(1)
-            try options.setGraphOptimizationLevel(.all)
-            session = try ORTSession(env: made, modelPath: model.path, sessionOptions: options)
-            env = made
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .all
+            let loaded = try MLModel(contentsOf: Self.compiled(package, in: cache), configuration: configuration)
             filterbank = bank
-            #else
-            throw Trouble.runtime("ONNX Runtime is not linked in this build")
-            #endif
+            _ = try Self.predict(loaded, Mel.features(Self.window([]), filterbank: bank))
+            model = loaded
         }
     }
 
     func complete(_ tail: [Float]) async throws -> Float {
         try await onQueue { [self] in
-            #if canImport(OnnxRuntimeBindings)
-            guard let session else { throw Trouble.runtime("not loaded") }
-            var features = Mel.features(Self.window(tail), filterbank: filterbank)
-            let data = NSMutableData(bytes: &features, length: features.count * MemoryLayout<Float>.size)
-            let input = try ORTValue(tensorData: data, elementType: .float,
-                                     shape: [1, NSNumber(value: Mel.bins), NSNumber(value: Mel.frames)])
-            let out = try session.run(withInputs: ["input_features": input], outputNames: ["logits"], runOptions: nil)
-            guard let logits = out["logits"] else { throw Trouble.runtime("no logits") }
-            let bytes = try logits.tensorData() as Data
-            guard bytes.count >= MemoryLayout<Float>.size else { throw Trouble.runtime("empty logits") }
-            return bytes.withUnsafeBytes { $0.loadUnaligned(as: Float.self) }
-            #else
-            throw Trouble.runtime("ONNX Runtime is not linked in this build")
-            #endif
+            guard let model else { throw Trouble.runtime("not loaded") }
+            return try Self.predict(model, Mel.features(Self.window(tail), filterbank: filterbank))
         }
+    }
+
+    /// Where compiled packages are kept: Caches, which the system may empty, and outside the
+    /// model store's root, whose sweep removes whatever the manifest does not list.
+    static var cache: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("smart-turn", isDirectory: true)
+    }
+
+    /// The compiled model for `package`: the one in `cache` named for the package's bytes, or a
+    /// fresh compile moved there, with any other compile in `cache` removed. On `queue` only.
+    static func compiled(_ package: URL, in cache: URL) throws -> URL {
+        let fm = FileManager.default
+        let kept = cache.appendingPathComponent(try digest(package) + ".mlmodelc", isDirectory: true)
+        if fm.fileExists(atPath: kept.appendingPathComponent("coremldata.bin").path) { return kept }
+        let made = try MLModel.compileModel(at: package)
+        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        for old in (try? fm.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)) ?? [] {
+            try? fm.removeItem(at: old)
+        }
+        try fm.moveItem(at: made, to: kept)
+        return kept
+    }
+
+    /// The SHA-256 of every file in the package, in path order, with each path: the compiled
+    /// copy's name.
+    static func digest(_ package: URL) throws -> String {
+        let root = package.standardizedFileURL.path
+        guard let walk = FileManager.default.enumerator(at: package, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            throw Trouble.missing("the model")
+        }
+        var files: [(String, URL)] = []
+        for case let url as URL in walk where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            files.append((String(url.standardizedFileURL.path.dropFirst(root.count)), url))
+        }
+        guard !files.isEmpty else { throw Trouble.missing("the model") }
+        var hash = SHA256()
+        for (path, url) in files.sorted(by: { $0.0 < $1.0 }) {
+            hash.update(data: Data(path.utf8))
+            hash.update(data: try Data(contentsOf: url, options: .alwaysMapped))
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// One prediction over one window's features, `[1, 80, 800]` float32 in, the probability out.
+    private static func predict(_ model: MLModel, _ features: [Float]) throws -> Float {
+        let shape: [NSNumber] = [1, NSNumber(value: Mel.bins), NSNumber(value: Mel.frames)]
+        let array = try MLMultiArray(shape: shape, dataType: .float32)
+        guard features.count == array.count else { throw Trouble.runtime("\(features.count) features") }
+        array.withUnsafeMutableBytes { bytes, _ in
+            features.withUnsafeBytes { bytes.copyMemory(from: $0) }
+        }
+        let out = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: [input: array]))
+        guard let logits = out.featureValue(for: output)?.multiArrayValue, logits.count > 0 else {
+            throw Trouble.runtime("no logits")
+        }
+        return logits[0].floatValue
     }
 
     /// The last eight seconds, zero-padded at the front so the speech sits at the end of the

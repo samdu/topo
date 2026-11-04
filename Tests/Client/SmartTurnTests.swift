@@ -4,7 +4,7 @@ import XCTest
 @testable import Topo
 
 /// The judge runs on its own serial queue (`SmartTurn.queue`), never on the main actor or the
-/// cooperative pool: the session's `run` and the mel's `sgemm`s are synchronous CPU work.
+/// cooperative pool: the compile, the prediction and the mel's `sgemm`s are synchronous work.
 final class SmartTurnTests: XCTestCase {
     override func tearDown() {
         SmartTurn.onQueue = nil
@@ -25,7 +25,7 @@ final class SmartTurnTests: XCTestCase {
         } catch let trouble as SmartTurn.Trouble {
             XCTAssertTrue(trouble.localizedDescription.contains("not loaded"), trouble.localizedDescription)
         }
-        let nowhere = FileManager.default.temporaryDirectory.appendingPathComponent("no-such-model.onnx")
+        let nowhere = FileManager.default.temporaryDirectory.appendingPathComponent("no-such-model.mlpackage")
         do {
             try await judge.load(model: nowhere, filterbank: nowhere)
             XCTFail("a model that is not there loaded")
@@ -41,6 +41,31 @@ final class SmartTurnTests: XCTestCase {
         XCTAssertTrue(padded.dropLast(3).allSatisfy { $0 == 0 })
         let long = (0..<(SmartTurn.windowSamples + 5)).map(Float.init)
         XCTAssertEqual(SmartTurn.window(long), Array(long.suffix(SmartTurn.windowSamples)))
+    }
+
+    /// The compiled copy is named for every byte and every path of the package, so a new package
+    /// is never answered by an old compile.
+    func testThePackagesDigestChangesWithAnyByteOrPath() throws {
+        let package = FileManager.default.temporaryDirectory
+            .appendingPathComponent("digest-\(UUID().uuidString).mlpackage", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: package) }
+        let weights = package.appendingPathComponent("Data/com.apple.CoreML/weights", isDirectory: true)
+        try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: true)
+        try Data("manifest".utf8).write(to: package.appendingPathComponent("Manifest.json"))
+        try Data([1, 2, 3]).write(to: weights.appendingPathComponent("weight.bin"))
+        let first = try SmartTurn.digest(package)
+        XCTAssertEqual(try SmartTurn.digest(package), first, "the digest is not a function of the package")
+        XCTAssertEqual(first.count, 64)
+        try Data([1, 2, 4]).write(to: weights.appendingPathComponent("weight.bin"))
+        let byte = try SmartTurn.digest(package)
+        XCTAssertNotEqual(byte, first, "a changed weight kept the old compile's name")
+        try FileManager.default.moveItem(at: weights.appendingPathComponent("weight.bin"),
+                                         to: weights.appendingPathComponent("weight2.bin"))
+        XCTAssertNotEqual(try SmartTurn.digest(package), byte, "a renamed file kept the old compile's name")
+        let empty = package.deletingLastPathComponent().appendingPathComponent("empty-\(UUID().uuidString).mlpackage")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: empty) }
+        XCTAssertThrowsError(try SmartTurn.digest(empty), "an empty package was given a name")
     }
 }
 
@@ -115,18 +140,29 @@ final class SampleSinkTests: XCTestCase {
     }
 }
 
-/// The real model through ONNX Runtime on the simulator: it loads from the store's layout and
-/// judges the fixture's phrase with a second of quiet after it complete. The same phrase cut after
-/// "seven" ("purple elephants juggle seven") scores as complete too (0.99 when measured), so the
-/// cut is logged and not judged here. The model comes from a directory
-/// `scripts/fetch-ear-models.sh` filled (`TOPO_UITEST_EAR_MODELS`, the full lane's).
+/// The real model through Core ML on the simulator: it compiles from the store's layout into a
+/// cache of its own, named for the package, loads again from that compile, and judges the
+/// fixture's phrase with a second of quiet after it complete. The same phrase cut after "seven"
+/// ("purple elephants juggle seven") scores as complete too (0.99 when measured), so the cut is
+/// logged and not judged here. The model comes from a directory `scripts/fetch-ear-models.sh`
+/// filled (`TOPO_UITEST_EAR_MODELS`, the full lane's).
 final class SmartTurnRealTests: XCTestCase {
     func testTheRealModelLoadsAndJudgesTheFixtureComplete() async throws {
         guard let models = ProcessInfo.processInfo.environment["TOPO_UITEST_EAR_MODELS"], !models.isEmpty else {
             throw XCTSkip("missing coverage: no models directory (TOPO_UITEST_EAR_MODELS), so the real Smart Turn did not judge the fixture")
         }
-        let judge = try await SmartTurn.loaded(from: URL(fileURLWithPath: models)
-            .appendingPathComponent(ModelManifest.smartTurn))
+        let package = URL(fileURLWithPath: models).appendingPathComponent(ModelManifest.smartTurn)
+            .appendingPathComponent(SmartTurn.package, isDirectory: true)
+        let filterbank = try XCTUnwrap(Bundle.main.url(forResource: "smartturn-mel", withExtension: "bin"))
+        let cache = FileManager.default.temporaryDirectory
+            .appendingPathComponent("smart-turn-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        try await SmartTurn().load(model: package, filterbank: filterbank, cache: cache)
+        let compiled = try FileManager.default.contentsOfDirectory(atPath: cache.path)
+        XCTAssertEqual(compiled, [try SmartTurn.digest(package) + ".mlmodelc"], "the compile is not kept under the package's name")
+        let judge = SmartTurn()
+        try await judge.load(model: package, filterbank: filterbank, cache: cache)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cache.path), compiled, "a second load compiled again")
         let wav = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/purple-elephants.wav")
         let file = try AVAudioFile(forReading: wav)
