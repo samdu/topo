@@ -652,8 +652,10 @@ final class Speaker {
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
                 if !replyBegan {
-                    // The reply's first frame: the bed gives way to the voice.
+                    // The reply's first frame: the bed and any receipt still sounding give
+                    // way to the voice.
                     replyBegan = true
+                    sounds?.hush("Topo is speaking")
                     sounds?.working(false)
                 }
                 if first == nil {

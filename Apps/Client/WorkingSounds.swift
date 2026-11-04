@@ -85,7 +85,8 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// They are the keeper's, so they sound only while a hold that is not a sound's own stands
 /// (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes none, and a typed
 /// turn worked on while a spoken turn's wait stands receipts with it. No receipt sounds over
-/// Topo's own voice (`voiceSpeaking`, the speaker's). Every sound is played on the session as it
+/// Topo's own voice (`voiceSpeaking`, the speaker's), and one still sounding when the voice's
+/// first frame is scheduled or a microphone opens is stopped there (`hush`). Every sound is played on the session as it
 /// stands, live (`AudioSession.ensureLive()`) and refused when it is not, so it configures and
 /// activates nothing; no receipt is played into an open microphone, and the bed dips while one
 /// is open. Where such a hold already stands a sound holds the process for its own length too
@@ -94,8 +95,12 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// the bed's fade behind the lock are heard out before the last hold is let go of; with nothing
 /// held it holds nothing. The
 /// players are handles into mediaserverd: a media services reset drops them and builds nothing,
-/// and the next sound makes its own. An interruption stops the bed under a wait that still wants
-/// it, so the speaker asks for it again at the interruption's end (`Speaker.resumeAudio`, `resume`).
+/// and the next sound makes its own. Each is kept with the session's reset count it was made
+/// under (`AudioSession.resets`, counted at the notification) and checked against it before
+/// anything touches it, so a sound between the session's handler and the speaker's finds a
+/// stale player and drops it. An interruption stops the bed under a wait that still wants it, so
+/// the speaker asks for it again at the interruption's end (`Speaker.resumeAudio`, `resume`); a
+/// resume the session refuses leaves it wanted, for the next.
 ///
 /// Lifted from Daphne's `Keeper` and `WaitSounds`, per `THIRD-PARTY`. Main only.
 @MainActor
@@ -140,7 +145,12 @@ final class KeeperSounds {
     private let sleep: @Sendable (Duration) async throws -> Void
     private var players: [Tone: any WorkingPlayer] = [:]
     private var bed: (any WorkingPlayer)?
-    private var bedOn = false
+    /// The reset count the players were made under (`AudioSession.resets`): one made before a
+    /// reset is a dead handle however live the session is now.
+    private var madeUnder = 0
+    /// Whether the waits want the bed, which is not whether it is playing: a start or a resume
+    /// the session refused leaves it wanted, so the next resume that succeeds brings it back.
+    private var bedWanted = false
     /// Whether Topo's own voice is being read out; `Speaker` answers it. A receipt over the voice
     /// is a stray tone in the middle of a sentence.
     var voiceSpeaking: @MainActor () -> Bool = { false }
@@ -159,6 +169,8 @@ final class KeeperSounds {
     #if DEBUG
     /// Every receipt played, in order, for a test.
     private(set) var played: [Tone] = []
+    /// Whether a sound's own hold stands, for a test.
+    var holdingASound: Bool { holding }
     #endif
 
     init(audio: AudioSession, defaults: UserDefaults = .standard, bundle: Bundle = .main,
@@ -169,6 +181,7 @@ final class KeeperSounds {
         self.bundle = bundle
         self.makePlayer = makePlayer
         self.sleep = sleep
+        madeUnder = audio.resets
     }
 
     /// iOS reset the media server: the players were handles into it and are dropped, and the bed
@@ -177,12 +190,28 @@ final class KeeperSounds {
     /// at the handler's end (`letGo`), after the speaker's own holds have. Nothing is built here;
     /// the next sound makes its own.
     func dropPlayers() {
+        forget()
+        bedWanted = false
+        AudioLog.say("media services reset: the keeper's sounds dropped")
+    }
+
+    /// The players go, untouched: nothing is said to a handle the server may have killed.
+    private func forget() {
         players = [:]
         bed = nil
-        bedOn = false
         parking?.cancel()
         parking = nil
-        AudioLog.say("media services reset: the keeper's sounds dropped")
+        madeUnder = audio.resets
+    }
+
+    /// Asked before any cached player is touched. The session marks a reset at its notification,
+    /// before the speaker's handler has dropped the players, so a sound in between — the session
+    /// re-applied by its own handler, the speaker's still to run — finds them made under an
+    /// earlier count and drops them rather than speaking to them.
+    private func dropStale() {
+        guard madeUnder != audio.resets else { return }
+        forget()
+        AudioLog.say("the keeper's sounds were made before a media services reset: dropped")
     }
 
     // MARK: - The receipts
@@ -232,6 +261,7 @@ final class KeeperSounds {
             return false
         }
         guard activate(for: "receipt \(tone)") else { return false }
+        dropStale()
         guard let player = player(for: tone) else { return false }
         // The hold before the player, so the process is held from the tone's first frame.
         holdUntil(Self.toneLength)
@@ -287,25 +317,27 @@ final class KeeperSounds {
     /// under `sounds` is still faded out at its wait's end after the mode changed under it (a
     /// change applies at the next sound; the bed plays on to the end of the wait it was for).
     func working(_ on: Bool) {
+        dropStale()
         let want = on && WorkingSounds.mode(defaults) == .sounds && audio.heldForATurn
         // An interruption stops the player under a bed that is still wanted, so "already on" has
         // to mean "still playing" too.
-        if want == bedOn, !want || bed?.isPlaying == true { return }
-        bedOn = want
+        if want == bedWanted, !want || bed?.isPlaying == true { return }
+        bedWanted = want
         parking?.cancel()
         parking = nil
         if want {
-            guard activate(for: "the working bed") else { return bedOn = false }
+            // A refusal from here on leaves the bed wanted: it is the playing that failed.
+            guard activate(for: "the working bed") else { return }
             if bed == nil {
                 bed = make(Self.bedFile)
                 bed?.numberOfLoops = -1
             }
-            guard let bed else { return bedOn = false }
+            guard let bed else { return }
             if !bed.isPlaying {
                 bed.volume = 0
                 guard bed.play() else {
                     AudioLog.say("the working bed did not start")
-                    return bedOn = false
+                    return
                 }
             }
             ducked = microphoneOpen()
@@ -331,27 +363,44 @@ final class KeeperSounds {
 
     private func park() {
         parking = nil
-        guard !bedOn else { return }
+        dropStale()
+        guard !bedWanted else { return }
         bed?.pause()
         AudioLog.say("the working bed is paused")
     }
 
     /// The speaker's engine is back after an interruption: a bed still wanted and not playing
-    /// is played again, through the same refusal path as its start.
+    /// is played again, through the same refusal path as its start, and a refusal leaves it
+    /// wanted for the next.
     func resume() {
-        guard bedOn else { return }
-        bedOn = false
+        dropStale()
+        guard bedWanted, bed?.isPlaying != true else { return }
+        bedWanted = false
         working(true)
     }
 
     /// A microphone opened over the bed, or closed again: the bed is set to the level the answer
     /// now asks for. Told at each microphone moment; a receipt asks for itself (`play`).
     func duck() {
+        dropStale()
         let open = microphoneOpen()
+        // A receipt still sounding as a microphone opens would be heard by it.
+        if open { hush("a microphone is open") }
         guard open != ducked else { return }
         ducked = open
-        guard bedOn, let bed, bed.isPlaying else { return }
+        guard bedWanted, let bed, bed.isPlaying else { return }
         bed.setVolume(open ? Self.duckedVolume : Self.bedVolume, fadeDuration: 0.15)
+    }
+
+    /// Topo's voice or a microphone has begun: a receipt still sounding is stopped, since the
+    /// checks at its start only kept it from beginning over either. Its hold runs to its own
+    /// bound (`toneLength`), which the bed's fade may share.
+    func hush(_ why: String) {
+        dropStale()
+        for (tone, player) in players where player.isPlaying {
+            player.pause()
+            AudioLog.say("receipt \(tone) stopped: \(why)")
+        }
     }
 
     private var target: Float { microphoneOpen() ? Self.duckedVolume : Self.bedVolume }

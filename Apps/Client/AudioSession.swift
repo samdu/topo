@@ -99,8 +99,21 @@ final class AudioSession {
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            // Marked at the notification itself, before any handler's task runs: every handle
+            // made before it is dead from this moment, whichever object's handler comes first.
+            MainActor.assumeIsolated { self?.serverWasReset() }
             Task { @MainActor in self?.mediaServicesWereReset() }
         }
+    }
+
+    /// How many media services resets this session has seen, counted at the notification: a
+    /// handle into mediaserverd kept across calls (a sound's player) is good only while this is
+    /// the count it was made under.
+    private(set) var resets = 0
+
+    private func serverWasReset() {
+        resets += 1
+        valid = false
     }
 
     private func mediaServicesWereReset() {

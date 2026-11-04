@@ -108,8 +108,11 @@ final class KeeperSoundsTests: XCTestCase {
         return UserDefaults(suiteName: name)!
     }
 
+    /// `speakerCenter` puts the speaker's notifications on a center of their own, so a test posts
+    /// a reset to the session's handler and the speaker's one at a time, in the order it chooses.
     private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true,
-                     heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) async -> Rig {
+                     heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
+                     speakerCenter: NotificationCenter? = nil) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = makeDefaults()
@@ -122,7 +125,7 @@ final class KeeperSoundsTests: XCTestCase {
         let voice = Voice(engine: ScriptedVoice())
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
-        let speaker = Speaker(audio: audio, voice: voice, center: center,
+        let speaker = Speaker(audio: audio, voice: voice, center: speakerCenter ?? center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
                               heard: heard, sounds: sounds)
         return Rig(speaker: speaker, sounds: sounds, players: players, seams: seams, audio: audio,
@@ -315,6 +318,51 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
+    /// A receipt still sounding when a microphone opens is stopped, whether a press opens it or
+    /// the watch on the microphone sees it listening: the check at a receipt's start only kept
+    /// it from beginning into one.
+    func testAReceiptStillSoundingIsStoppedWhenAMicrophoneOpens() async throws {
+        let rig = await rig()
+        var open = false
+        rig.speaker.microphoneOpen = { open }
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
+        XCTAssertTrue(act.isPlaying)
+        rig.speaker.microphoneOpening()
+        XCTAssertFalse(act.isPlaying, "a receipt played on into a microphone a press is opening")
+        XCTAssertEqual(act.pauses, 1)
+        rig.speaker.microphoneOpened()
+
+        _ = rig.speaker.awaitReply("again", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        XCTAssertTrue(act.isPlaying)
+        open = true
+        rig.speaker.microphoneListening()
+        XCTAssertFalse(act.isPlaying, "a receipt played on into a microphone no press opened")
+        XCTAssertEqual(act.pauses, 2)
+        open = false
+        rig.speaker.microphoneClosed()
+        rig.speaker.endAwaiting("again", "the test is done")
+    }
+
+    /// A receipt still sounding when the reply's first frame is scheduled is stopped, so the
+    /// voice is not heard over a tone.
+    func testAReceiptStillSoundingIsStoppedAtTheReplysFirstFrame() async throws {
+        let rig = await rig(heard: .dataRendered)
+        _ = rig.speaker.awaitReply("first", readAloud: true)
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
+        XCTAssertTrue(act.isPlaying)
+        XCTAssertTrue(rig.speaker.speak("Paris.", answering: "first"))
+        await settle("the reply to start") { rig.speaker.report.started }
+        XCTAssertFalse(act.isPlaying, "a receipt played on over the reply")
+        XCTAssertEqual(act.pauses, 1)
+        try await renderUntil(rig, "the reply to be made") { rig.speaker.report.finished }
+        rig.speaker.endAwaiting("second", "the test is done")
+    }
+
     /// A sound on a session that is not live is refused and configures nothing to get one: no
     /// player, no hold, nothing played. Behind the lock that is the lock screen's interruption
     /// with a claim change deferred under the wait's hold, which a sound must not apply from the
@@ -364,6 +412,35 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertFalse(bed.isPlaying)
         XCTAssertEqual(rig.seams.lines, [], "a sound configured the session")
         XCTAssertEqual(rig.seams.records, [], "a sound applied a claim change from the background")
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// An interruption's first end is refused by the session and its second is not, with the
+    /// wait standing throughout: the refused resume leaves the bed wanted, so the second brings
+    /// it back with the engine.
+    func testARefusedResumeLeavesTheBedWantedForTheNext() async throws {
+        let rig = await rig(mode: .sounds)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        bed.interrupted()
+        await drain()
+
+        rig.seams.activationError = CancellationError()
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
+        await drain()
+        XCTAssertEqual(bed.plays, 1, "the bed was played on a session that refused")
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"])
+
+        rig.seams.activationError = nil
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
+        await drain()
+        XCTAssertEqual(bed.plays, 2, "the bed a refused resume left wanted did not come back with the engine")
+        XCTAssertTrue(bed.isPlaying)
+        XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
@@ -545,6 +622,22 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil))
     }
 
+    /// The bed wanted again inside its fade cancels the pause and nothing else: the fade's hold
+    /// stands until its own length is up.
+    func testTheBedWantedInsideItsFadeLeavesTheFadesHold() async throws {
+        let rig = await rig(mode: .sounds)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.working(false)
+        XCTAssertTrue(rig.sounds.holdingASound)
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
+        rig.sounds.working(true)
+        await drain()
+        XCTAssertTrue(rig.sounds.holdingASound, "cancelling the pause let go of the fade's hold")
+        rig.clock.fire()
+        await settle("the fade's hold to go") { !rig.sounds.holdingASound }
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
     /// A sound begun with nothing held holds nothing, and a claim change under it applies at once.
     func testASoundBegunWithNothingHeldHoldsNothing() async {
         let rig = await rig(mode: .sounds)
@@ -604,6 +697,57 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.endAwaiting("again", "the test is done")
     }
 
+    /// The session's reset handler has run and the speaker's has not (each on a center of its
+    /// own, posted one at a time): the session is live again under a wait still standing, and a
+    /// sound in between finds players made before the reset. Neither is spoken to; the receipt
+    /// makes its own.
+    func testASoundBetweenTheSessionsResetHandlerAndTheSpeakersMakesItsOwnPlayer() async throws {
+        let speakerCenter = NotificationCenter()
+        let rig = await rig(mode: .sounds, speakerCenter: speakerCenter)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        let bed = try XCTUnwrap(rig.players.bed)
+        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
+        let fades = bed.fades.count
+
+        rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        await drain()
+        XCTAssertNoThrow(try rig.audio.ensureLive(), "the session's handler did not make it live again")
+        XCTAssertTrue(rig.audio.heldForATurn)
+
+        rig.sounds.working(false)
+        XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was faded")
+        XCTAssertEqual(bed.pauses, 0, "a bed made before the reset was paused")
+        rig.sounds.duck()
+        XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was ducked")
+        XCTAssertTrue(rig.sounds.tool("Bash", path: nil))
+        XCTAssertEqual(act.plays, 1, "a receipt made before the reset was played")
+        XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_act", "bloop_act"])
+
+        speakerCenter.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        await drain()
+        XCTAssertTrue(rig.speaker.awaiting.isEmpty)
+    }
+
+    /// A sound at the reset's notification, before any handler has run, is refused: the session
+    /// counts the reset and stops being live at the notification itself.
+    func testASoundAtTheResetNotificationIsRefused() async throws {
+        let rig = await rig(mode: .sounds)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        let bed = try XCTUnwrap(rig.players.bed)
+        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
+        let fades = bed.fades.count
+
+        rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        XCTAssertFalse(rig.sounds.tool("Bash", path: nil), "a receipt played at the reset's notification")
+        rig.sounds.working(false)
+        XCTAssertEqual(act.plays, 1, "a receipt made before the reset was played")
+        XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was faded")
+        XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_act"], "a player was made on a reset session")
+        await drain()
+    }
+
     // MARK: - The harness
 
     /// Following the harness wraps what Topo installed: he still hears every activity, and the
@@ -636,10 +780,13 @@ final class KeeperSoundsTests: XCTestCase {
     }
 }
 
-/// A sleep the test fires, so a bound or a pause is a moment the test chooses.
+/// A sleep the test fires, so a bound or a pause is a moment the test chooses. Each sleep is its
+/// own: cancelling one ends that one and no other.
 final class PausedSleep: @unchecked Sendable {
     private let lock = NSLock()
-    private var waiting: [CheckedContinuation<Void, any Error>] = []
+    private var waiting: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    /// Sleeps cancelled before their continuation was kept, which end as soon as it is.
+    private var cancelled: Set<UUID> = []
     private var _asked: [Duration] = []
 
     var asked: [Duration] { lock.withLock { _asked } }
@@ -647,25 +794,33 @@ final class PausedSleep: @unchecked Sendable {
     func sleep(_ duration: Duration) async throws {
         lock.withLock { _asked.append(duration) }
         try Task.checkCancellation()
+        let id = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                lock.withLock { waiting.append(continuation) }
+                let early = lock.withLock { () -> Bool in
+                    if cancelled.remove(id) != nil { return true }
+                    waiting[id] = continuation
+                    return false
+                }
+                if early { continuation.resume(throwing: CancellationError()) }
             }
         } onCancel: {
-            let cancelled = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
-                let all = waiting
-                waiting = []
-                return all
+            let mine = lock.withLock { () -> CheckedContinuation<Void, any Error>? in
+                guard let continuation = waiting.removeValue(forKey: id) else {
+                    cancelled.insert(id)
+                    return nil
+                }
+                return continuation
             }
-            cancelled.forEach { $0.resume(throwing: CancellationError()) }
+            mine?.resume(throwing: CancellationError())
         }
     }
 
     /// Every sleep waiting ends now.
     func fire() {
         let all = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
-            let all = waiting
-            waiting = []
+            let all = Array(waiting.values)
+            waiting = [:]
             return all
         }
         all.forEach { $0.resume() }
