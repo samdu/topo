@@ -140,7 +140,7 @@ fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleK
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
-  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-2\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-2\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
+  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; stale=""; for pid in ${FAKE_LEFT_PIDS-}; do stale="$stale{\"name\":\"topo-validate-unit-$pid\",\"udid\":\"LEFT-$pid\",\"deviceTypeIdentifier\":\"type.iPhone\"},"; done; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-2\":[$stale{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-2\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
   "simctl get_app_container") [ -z "${FAKE_NO_CONTAINER-}" ] || exit 2; mkdir -p "$CALLS.container"; echo "$CALLS.container" ;;
 esac'
@@ -192,6 +192,15 @@ is "green: four test actions, each without xcodebuild's diagnostics" \
 # trait set of the last resolution into the next.
 is "green: every build and test of the project resolves its packages into build/packages" \
   "$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj ' "$CALLS"):$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj .*-clonedSourcePackagesDirPath build/packages( |$)' "$CALLS")" "9:9"
+
+# A device a SIGKILLed run left behind, named for a pid no longer running, is deleted before a
+# new one is made; one named for a running pid is another run's and is left alone.
+sleep 0 & dead=$!; wait "$dead"
+FAKE_LEFT_PIDS="$dead $$" suite left-behind topo_unit
+is "left behind: the dead run's device is shut down and deleted before the first is made" \
+  "$(grep -E "^xcrun simctl (shutdown LEFT-$dead|delete LEFT-$dead|create)" "$CALLS" | head -n 3 | cut -d' ' -f1-3 | tr '\n' '|')" \
+  "xcrun simctl shutdown|xcrun simctl delete|xcrun simctl create|"
+is "left behind: a running pid's device is left alone" "$(calls "xcrun simctl delete LEFT-$$")" 0
 
 # The device build's directory and the package state are kept for the pins they were built
 # from, and no others.
