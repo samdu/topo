@@ -11,6 +11,7 @@ final class ActivityToolTests: XCTestCase {
     private var clock: FakeClock!
     private var keeper: ActivityKeeper!
     private var fetcher: TrackerFetcher!
+    private var login: LoginLife!
 
     private var tool: ActivityTool {
         ActivityTool(host: { [host] in host! }, keeper: { [keeper] in keeper! }, fetcher: fetcher, now: { [clock] in clock!.date })
@@ -20,7 +21,9 @@ final class ActivityToolTests: XCTestCase {
         host = FakeActivityHost()
         clock = FakeClock()
         fetcher = FakeTrackerFetcher([])
-        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        login = LoginLife()
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date },
+                                login: login)
     }
 
     private let timer = #"{"version": 1, "until": "2026-11-02T06:00:00Z", "families": {"lockScreen": {"kind": "text", "text": "Tea", "date": "2026-11-02T06:00:00Z", "dateStyle": "timer"}}}"#
@@ -116,10 +119,7 @@ final class ActivityToolTests: XCTestCase {
         fetcher = gate
         let tool = self.tool
         let started = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
-        await settle()
-        XCTAssertEqual(gate.pending, 1)
-        await keeper.endAll()
-        gate.release(TrackerFixtures.wiki)
+        await SigningOut.midFlight(login, reached: { gate.pending == 1 }) { gate.release(TrackerFixtures.wiki) }
         let reply = await started.value
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
         XCTAssertTrue(reply.text.contains("login ended"), reply.text)
@@ -133,8 +133,7 @@ final class ActivityToolTests: XCTestCase {
         fetcher = gate
         let tool = self.tool
         let first = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
-        await settle()
-        await keeper.endAll()
+        await SigningOut.midFlight(login, reached: { gate.pending == 1 })
         let second = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
         await settle()
         XCTAssertEqual(gate.pending, 2)
@@ -151,14 +150,15 @@ final class ActivityToolTests: XCTestCase {
         keeper.forget("A1")
     }
 
-    func testTheReloadersForgetEndsEveryActivity() async throws {
-        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
-                                       reloadEveryControl: {}, schedule: { _, _ in })
-        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) },
-                                now: { [clock] in clock!.date }, reloader: reloader)
+    /// The phase leaving signed in on its own (`SignIn.refresh` finding the login gone) reaches
+    /// the keeper too, through `DefaultSurface.follow`.
+    func testALoginLostToARefreshEndsEveryActivity() async throws {
         _ = await tool.run(["start", "job", timer])
-        reloader.forget(nil)
-        await settle()
+        let surface = DefaultSurface(store: { nil }, reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
+                                                                               reloadEveryControl: {}, schedule: { _, _ in }),
+                                     login: login)
+        surface.follow(from: .signedIn, to: .idle, latest: nil)
+        await login.tornDown()
         XCTAssertEqual(host.ends.count, 1)
         guard case .end("A1", nil, .now) = host.ends[0] else { return XCTFail("\(host.ends)") }
         XCTAssertEqual(keeper.tasks, 0)
@@ -192,15 +192,17 @@ final class ActivityToolTests: XCTestCase {
         await settle()
         XCTAssertEqual(gate.held, 1, "the update is in the host")
         host.wait = nil
-        // The sign-out counts its login out at once and then waits its turn behind the update.
+        // The sign-out moves the epoch at once and then waits its turn behind the update.
         let keeper = self.keeper!
-        let signedOut = Task { await keeper.endAll() }
+        let before = login.epoch
+        login.moveEpoch()
+        login.runTeardowns()
         await settle()
-        XCTAssertEqual(keeper.generation, 1)
+        XCTAssertFalse(before.isCurrent)
         XCTAssertTrue(host.ends.isEmpty, "the sign-out's end waits behind the update in the host")
         gate.openUp()
         _ = await update.value
-        await signedOut.value
+        await login.tornDown()
         XCTAssertEqual(keeper.tasks, 0, "the update from before the sign-out kept nothing")
         let after = await tool.run(["update", "A1", #"{"relevance": 5}"#])
         XCTAssertEqual(after.status, ToolReply.failed, "ended is not running")
@@ -221,14 +223,12 @@ final class ActivityToolTests: XCTestCase {
         let ended = Task { await tool.run(["end", "A1", #"{"relevance": 7}"#]) }
         await settle()
         let keeper = self.keeper!
-        let signedOut = Task { await keeper.endAll() }
-        await settle()
-        XCTAssertEqual(keeper.generation, 1)
-        gate.openUp()
+        let before = login.epoch
+        await SigningOut.midFlight(login, release: { gate.openUp() })
+        XCTAssertFalse(before.isCurrent)
         _ = await first.value
         let update = await queued.value
         let end = await ended.value
-        await signedOut.value
         XCTAssertEqual(update.status, ToolReply.failed, update.text)
         XCTAssertTrue(update.text.contains("login ended"), update.text)
         XCTAssertEqual(end.status, ToolReply.failed, end.text)
@@ -296,7 +296,7 @@ final class ActivityToolTests: XCTestCase {
     func testAnEndWhileThePollsEndIsInTheHostSendsNoSecond() async throws {
         let done = TrackerFixtures.tracker(steps: [("a", "done")], state: "done", ended: true)
         fetcher = FakeTrackerFetcher([TrackerFixtures.wiki, done])
-        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date }, login: login)
         _ = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
         let gate = HostGate()
         host.wait = { await gate.wait() }
@@ -319,7 +319,7 @@ final class ActivityToolTests: XCTestCase {
     func testAToolUpdateInTheHostIsNotOverwrittenByThePoll() async throws {
         let fetcher = GatedTrackerFetcher()
         self.fetcher = fetcher
-        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date }, login: login)
         fetcher.release(TrackerFixtures.wiki)
         _ = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
         await settle()
@@ -349,7 +349,7 @@ final class ActivityToolTests: XCTestCase {
     func testAToolUpdateWaitsForThePollsUpdateInTheHost() async throws {
         let fetcher = GatedTrackerFetcher()
         self.fetcher = fetcher
-        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        keeper = ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date }, login: login)
         fetcher.release(TrackerFixtures.wiki)
         _ = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
         await settle()
@@ -432,7 +432,7 @@ final class ActivityToolTests: XCTestCase {
     func testSignOutEndsActivities() async throws {
         _ = await tool.run(["start", "job", timer])
         _ = await tool.run(["start", "two", #"{"tracker": \#(TrackerFixtures.wiki)}"#])
-        await keeper.endAll()
+        await SigningOut.now(login)
         XCTAssertEqual(host.ends.count, 2)
         for end in host.ends {
             guard case .end(_, nil, .now) = end else { return XCTFail("\(end)") }

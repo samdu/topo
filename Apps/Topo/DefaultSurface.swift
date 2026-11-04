@@ -14,14 +14,17 @@ import TopoCore
 final class DefaultSurface {
     let store: @MainActor () -> SurfaceStore?
     let reloader: SurfaceReloader
+    let login: LoginLife
     /// The reply the default was last written for, so a read that brings the same reply writes
     /// nothing.
     private var written: TurnRef?
     private var wroteEmpty = false
 
-    init(store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() }, reloader: SurfaceReloader = .shared) {
+    init(store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() }, reloader: SurfaceReloader = .shared,
+         login: LoginLife = .shared) {
         self.store = store
         self.reloader = reloader
+        self.login = login
     }
 
     /// A reply the log brought: the default follows it when it is the newest in `turns`.
@@ -41,11 +44,14 @@ final class DefaultSurface {
     }
 
     /// The login's phase moving. Every way a login ends — the settings sheet, a demotion, a
-    /// viewer's takeover — ends here too, and a signed-out phone keeps no surface; only a login
-    /// ending: a launch that finds no token (the keychain unreadable before the first unlock
-    /// included) takes nothing away. Signed in, the default is written for the newest reply.
+    /// viewer's takeover, and a refresh that finds the login gone (`SignIn.refresh`), which has no
+    /// steps of its own — ends here too: the login's epoch moves and its teardowns run
+    /// (`LoginLife.end`), and a signed-out phone keeps no surface. Only a login ending: a launch
+    /// that finds no token (the keychain unreadable before the first unlock included) takes
+    /// nothing away. Signed in, the default is written for the newest reply.
     func follow(from was: SignIn.Phase, to phase: SignIn.Phase, latest reply: Turn?) {
         if was == .signedIn, phase != .signedIn {
+            login.end()
             reloader.forget(store())
             forget()
         }

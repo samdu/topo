@@ -124,7 +124,7 @@ struct TopoApp: App {
         let shares = ShareInbox(line: harness)
         _shares = State(initialValue: shares)
         // A sign-out, a takeover or a viewer's arrival takes the pictures read for the bubbles.
-        SurfaceReloader.shared.onForget { TurnImages.clear() }
+        TurnImages.endWith(.shared)
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))

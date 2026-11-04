@@ -108,10 +108,10 @@ struct ActivityTool: Tool {
         guard keeper.reserve(slot) else {
             return .failed("topo: slot \(slot) is starting; wait for it\n")
         }
-        // Released only under the login that reserved it: after an `endAll` the slot is another
+        // Released only under the login that reserved it: after the login ends the slot is another
         // start's to hold, and this one lets go of nothing.
-        let reserved = keeper.generation
-        defer { if keeper.generation == reserved { keeper.release(slot) } }
+        let reserved = keeper.login.epoch
+        defer { if reserved.isCurrent { keeper.release(slot) } }
         let reading = ActivityDocument.read(json, now: now())
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
@@ -123,9 +123,9 @@ struct ActivityTool: Tool {
         // is the tracker drawn: it is what every later round draws too.
         if let poll = document.poll {
             if tracker != nil { notes.append(Self.trackerSetAside) }
-            let generation = keeper.generation
+            let epoch = keeper.login.epoch
             let data = await fetcher.fetch(poll)
-            guard keeper.generation == generation else {
+            guard epoch.isCurrent else {
                 return .failed("topo: the login ended while the tracker was fetched; nothing started\n")
             }
             guard let data else {
@@ -168,7 +168,7 @@ struct ActivityTool: Tool {
         var notes = reading.notes
         if reading.document.poll != nil { notes.append(Self.pollStands) }
         let keeper = keeper()
-        let generation = keeper.generation
+        let epoch = keeper.login.epoch
         // Merged over the state the host holds when the gate opens, not as it was before the
         // wait, so a poll's round that passed first keeps its card.
         let reply = await keeper.changing(id) { record -> ToolReply in
@@ -178,13 +178,13 @@ struct ActivityTool: Tool {
                 return Self.overBudget(fitted.note, notes, "nothing changed")
             }
             if let note = fitted.note { notes.append(note) }
-            // A sign-out that counted itself while this waited at the gate ends the activity next.
-            guard keeper.generation == generation else { return .failed("topo: the login ended while the update waited; nothing changed\n") }
+            // A sign-out that moved the epoch while this waited at the gate ends the activity next.
+            guard epoch.isCurrent else { return .failed("topo: the login ended while the update waited; nothing changed\n") }
             keeper.touch(id)
             let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
             guard updated else { return .failed("topo: no activity \(id) running\n") }
             // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
-            if keeper.generation == generation { keeper.keep(id) }
+            if epoch.isCurrent { keeper.keep(id) }
             let text = "updated \(id)\n" + Self.notes(notes)
             return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
         }
@@ -225,7 +225,7 @@ struct ActivityTool: Tool {
         // else: a last document or the default dismissal is for one still running.
         let takesDown = reading == nil && dismissal != .standard
         let keeper = keeper()
-        let generation = keeper.generation
+        let epoch = keeper.login.epoch
         // Judged at the gate as the host then holds it: another end that passed first leaves this
         // one ended, and no second end is sent.
         let reply = await keeper.changing(id, ended: takesDown) { record -> ToolReply in
@@ -241,8 +241,8 @@ struct ActivityTool: Tool {
                 if let note = fitted.note { notes.append(note) }
                 state = fit
             }
-            // A sign-out that counted itself while this waited at the gate ends the activity next.
-            guard keeper.generation == generation else { return .failed("topo: the login ended while the end waited; the sign-out ends it\n") }
+            // A sign-out that moved the epoch while this waited at the gate ends the activity next.
+            guard epoch.isCurrent else { return .failed("topo: the login ended while the end waited; the sign-out ends it\n") }
             keeper.forget(id)
             guard await keeper.end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
             let said: String
