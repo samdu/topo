@@ -1,0 +1,60 @@
+{
+ "id": "b36e250e",
+ "kind": "progress",
+ "title": "macOS update on buddybox",
+ "steps": [
+  {
+   "label": "Check for update",
+   "state": "done",
+   "note": "26.1 → 26.2 available",
+   "at": 1793580000.0
+  },
+  {
+   "label": "Download",
+   "state": "done",
+   "note": "",
+   "at": 1793580060.0
+  },
+  {
+   "label": "Install and restart",
+   "state": "running",
+   "note": "host not back yet, 4 min in",
+   "at": 1793580300.0
+  },
+  {
+   "label": "Wait for host",
+   "state": "skipped",
+   "note": "",
+   "at": 1793580300.0
+  },
+  {
+   "label": "Restore console session",
+   "state": "waiting",
+   "note": "",
+   "at": null
+  },
+  {
+   "label": "Verify versions",
+   "state": "waiting",
+   "note": "",
+   "at": null
+  },
+  {
+   "label": "Post-checks",
+   "state": "waiting",
+   "note": "",
+   "at": null
+  }
+ ],
+ "current": 2,
+ "state": "running",
+ "eta": 1793590200.0,
+ "started": 1793580000.0,
+ "updated": 1793580300.0,
+ "ended": null,
+ "owner": {
+  "session": "mac-update",
+  "address": "buddybox",
+  "link": "https://claude.ai/code/x"
+ }
+}

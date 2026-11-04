@@ -190,6 +190,10 @@ targets:
         # says so in its answer), without the system's own sheet for choosing more put up at the
         # first read of each launch. No setting generates this key.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
+        # The mind's Live Activities (`topo activity`, docs/widgets.md). Without the key
+        # `Activity.request` refuses every start; no setting generates it, and
+        # `scripts/check-built-plist.sh` reads it off the product.
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
@@ -229,6 +233,10 @@ targets:
       - Apps/Shared/WidgetDocument.swift
       - Apps/Shared/ControlDocument.swift
       - Apps/Shared/WidgetNodeView.swift
+      # The Live Activity's document, its tracker and the views that draw them (docs/widgets.md).
+      - Apps/Shared/ActivityDocument.swift
+      - Apps/Shared/ProgressTracker.swift
+      - Apps/Shared/TrackerView.swift
       - Apps/Shared/SurfaceStore.swift
       - Apps/Shared/Theme.swift
       - Apps/Shared/OctopusMark.swift
