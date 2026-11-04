@@ -780,6 +780,11 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(picker.presents, 2, "a press over a stuck picker put none up, leaving the + dead")
     }
 
+    /// Whether the phone has a camera, as the test turns it on and off.
+    @MainActor private final class Camera {
+        var available = true
+    }
+
     /// Waits for the sheet to show `refusal`.
     private func refused(_ attachments: ComposerAttachments, _ refusal: ShareRefusal) async throws {
         for _ in 0..<200 {
@@ -796,6 +801,113 @@ final class ShareTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(25))
         }
         throw Unexpected()
+    }
+
+    /// The camera is offered only where there is one, and a capture lands in a scratch folder of
+    /// the store's as an upright JPEG no larger than the export's side, named for its moment and
+    /// kept as an image; the photo library gets nothing.
+    func testACaptureIsAnUprightJPEGInTheScratchAndTheCameraIsOfferedOnlyWhereThereIsOne() async throws {
+        try store.open(files: true)
+        let store = store
+        let none = ComposerAttachments(store: { store }, drain: {}, cameraAvailable: { false })
+        XCTAssertFalse(none.hasCamera)
+        none.pick(.camera)
+        XCTAssertNil(none.picking, "a phone with no camera put the camera up")
+        XCTAssertNil(none.sheet)
+        // The camera is asked for again at the press: one a restriction took since the menu
+        // was built puts nothing up.
+        let camera = Camera()
+        let some = ComposerAttachments(store: { store }, drain: {}, cameraAvailable: { camera.available })
+        XCTAssertTrue(some.hasCamera)
+        camera.available = false
+        some.pick(.camera)
+        XCTAssertNil(some.picking, "a camera taken since the menu was built was put up")
+        camera.available = true
+        some.pick(.camera)
+        XCTAssertEqual(some.picking, .camera)
+        XCTAssertEqual(some.up, .picker(.camera), "the cover's picker is what is up")
+        some.dismissed(.camera)
+        XCTAssertNil(some.picking)
+        some.pick(.camera)
+        some.chose(camera: nil)
+        XCTAssertNil(some.sheet, "a cancelled camera put up a sheet")
+
+        // A tall picture held sideways: 3000 by 4000 stored as 4000 by 3000 turned left.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let stored = UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000), format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4000, height: 3000))
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2000, height: 3000))
+        }
+        let held = UIImage(cgImage: try XCTUnwrap(stored.cgImage), scale: 1, orientation: .left)
+        XCTAssertEqual(held.size, CGSize(width: 3000, height: 4000))
+        let time = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-01T21:55:03Z"))
+        guard case .taken(let item, let scratch) = ComposerAttachments.capture(held, at: time, into: store) else { return XCTFail() }
+        XCTAssertEqual(item.kind, .image)
+        let file = try XCTUnwrap(item.file)
+        XCTAssertEqual(file.lastPathComponent, ComposerAttachments.captureName(at: time))
+        XCTAssertTrue(file.lastPathComponent.hasPrefix("Photo 2026-11-0"), file.lastPathComponent)
+        XCTAssertTrue(file.lastPathComponent.hasSuffix(".jpg"))
+        XCTAssertFalse(file.lastPathComponent.contains(":"))
+        XCTAssertEqual(scratch.deletingLastPathComponent().standardizedFileURL, store.folder.standardizedFileURL)
+        let data = try Data(contentsOf: file)
+        XCTAssertEqual(item.bytes, data.count)
+        XCTAssertEqual(Array(data.prefix(2)), [0xFF, 0xD8], "not a JPEG")
+        let kept = try XCTUnwrap(UIImage(data: data))
+        XCTAssertEqual(kept.imageOrientation, .up, "the capture leans on its orientation flag")
+        XCTAssertEqual(kept.size.height, ComposerAttachments.captureSide)
+        XCTAssertEqual(kept.size.width, (3000 * ComposerAttachments.captureSide / 4000).rounded(.down))
+        // Turned left, the stored picture's left half (blue) is at the bottom of the upright one.
+        let cg = try XCTUnwrap(kept.cgImage)
+        func pixel(_ x: Int, _ y: Int) -> (r: UInt8, b: UInt8) {
+            let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            context.draw(cg, in: CGRect(x: -x, y: -(cg.height - 1 - y), width: cg.width, height: cg.height))
+            let bytes = context.data!.assumingMemoryBound(to: UInt8.self)
+            return (bytes[0], bytes[2])
+        }
+        let top = pixel(cg.width / 2, 10), bottom = pixel(cg.width / 2, cg.height - 10)
+        XCTAssertGreaterThan(top.r, 200, "the top is not red: \(top)")
+        XCTAssertGreaterThan(bottom.b, 200, "the bottom is not blue: \(bottom)")
+        store.discard(scratch)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"])
+
+        // What the camera hands back goes the attachment's way: the sheet up reading, then ready
+        // with the capture, and Send keeps it as an image attached by the composer.
+        var sent = 0
+        let taking = ComposerAttachments(store: { store }, drain: { sent += 1 }, cameraAvailable: { true })
+        taking.pick(.camera)
+        taking.chose(camera: held)
+        XCTAssertNil(taking.picking)
+        XCTAssertEqual(taking.up, .sheet, "the sheet is not up over the capture")
+        let taken = try await ready(taking)
+        XCTAssertEqual(taken.kind, .image)
+        XCTAssertTrue(taken.file?.lastPathComponent.hasPrefix("Photo ") == true)
+        taking.sheet?.note = "the picture"
+        taking.send()
+        XCTAssertNil(taking.sheet)
+        let share = try XCTUnwrap(store.shares().first)
+        XCTAssertEqual(share.kind, .image)
+        XCTAssertEqual(share.via, .composer)
+        XCTAssertTrue(share.attached)
+        XCTAssertEqual(share.note, "the picture")
+        XCTAssertTrue(share.file?.hasPrefix("Photo ") == true, share.file ?? "")
+        for _ in 0..<200 where sent == 0 { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(sent, 1, "Send did not drain once")
+        store.remove(nonce: share.nonce)
+
+        // A capture made under one login that lands after a sign-out and a sign-in is refused.
+        taking.pick(.camera)
+        store.close()
+        try store.open(files: true)
+        taking.chose(camera: held)
+        try await refused(taking, .signedOut)
+        taking.send()
+        XCTAssertEqual(store.shares(), [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"], "the capture was left behind")
+        XCTAssertEqual(sent, 1)
     }
 
     /// A picked file is copied into a scratch folder of the store's under the name the store

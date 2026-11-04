@@ -202,6 +202,9 @@ struct Composer: View {
             if let choose = menu.choosePhoto {
                 Button("Choose a photo", systemImage: look.composer.flank.photo, action: choose)
             }
+            if let take = menu.takePhoto {
+                Button("Take a photo", systemImage: look.composer.flank.camera, action: take)
+            }
         } label: {
             // Laid out in the slot the plan gives it and no larger, so a mark larger than its
             // slot is cut at the slot's edge and stands over nothing.
@@ -946,6 +949,8 @@ struct ComposerMenu {
     var attachFile: (@MainActor () -> Void)?
     /// The photo library's picker.
     var choosePhoto: (@MainActor () -> Void)?
+    /// The camera, where the phone has one.
+    var takePhoto: (@MainActor () -> Void)?
 }
 
 private struct ComposerMenuKey: EnvironmentKey {

@@ -622,10 +622,12 @@ struct Look: Equatable, Sendable {
             /// navigation bar, replies read aloud and muted, and the model. SF Symbol names.
             var more = "plus"
             /// The marks of what the control for everything else offers: a file from the
-            /// phone's file picker and a photo from the library. Drawn in the system's own menu
-            /// and beside the thing in the sheet, so only the names are the look's.
+            /// phone's file picker, a photo from the library and one taken with the camera. Drawn
+            /// in the system's own menu, and the file's and the photo's beside the thing in the
+            /// sheet (a capture is an image there), so only the names are the look's.
             var file = "doc"
             var photo = "photo"
+            var camera = "camera"
             var keyboard = "keyboard"
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"

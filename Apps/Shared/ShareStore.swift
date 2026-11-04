@@ -29,7 +29,7 @@ struct Share: Codable, Equatable, Sendable {
     var file: String?
     var bytes: Int?
     /// Where it came in: another app's share sheet, or the composer's own `+` on this phone (a
-    /// file picked, a photo chosen). Absent on a record the extension wrote before there was a
+    /// file picked, a photo chosen or taken). Absent on a record the extension wrote before there was a
     /// second way in, and on a Shortcut's; only the composer's says so.
     var via: Via?
 
