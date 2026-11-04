@@ -507,6 +507,52 @@ class Decisions(unittest.TestCase):
             self.assertIsNone(janitor.peer_token(os.path.join(d, "absent")))
 
 
+class Pool(unittest.TestCase):
+    """A vm-linux job runnable and unserved past POOL_WAIT is said; one blocked
+    on `needs`, held by a concurrency group, or beside a job in progress is not."""
+
+    def prun(self, *js, prs=(578,)):
+        return {"id": 41790277897, "name": "PR validate", "prs": list(prs), "jobs": list(js)}
+
+    def pjob(self, name, status, created, completed=None, labels=("vm-linux",)):
+        return {"name": name, "status": status, "labels": list(labels),
+                "created_at": ago(created), "completed_at": ago(completed) if completed else None}
+
+    RUNNERS = [{"status": "offline", "busy": False}] * 4
+
+    def test_a_job_queued_past_the_wait_is_said(self):
+        line = janitor.decide_pool([self.prun(self.pjob("select", "queued", timedelta(minutes=41)))], self.RUNNERS, NOW)
+        self.assertIn("vm-linux pool is not serving", line)
+        self.assertIn("select for #578 (run 41790277897), waiting 41 min", line)
+        self.assertIn("0 online (0 busy), 4 offline", line)
+
+    def test_a_job_queued_inside_the_wait_is_not(self):
+        self.assertIsNone(janitor.decide_pool([self.prun(self.pjob("select", "queued", timedelta(minutes=20)))], [], NOW))
+
+    def test_the_wait_runs_from_the_last_job_ending(self):
+        # review_gate was created with the run, but only became runnable when reviewer_ran ended.
+        run = self.prun(self.pjob("reviewer_ran", "completed", timedelta(minutes=50), timedelta(minutes=5)),
+                        self.pjob("review_gate", "queued", timedelta(minutes=50)))
+        self.assertIsNone(janitor.decide_pool([run], [], NOW))
+
+    def test_a_run_with_a_job_in_progress_waits_on_nothing(self):
+        run = self.prun(self.pjob("codex", "in_progress", timedelta(minutes=50)),
+                        self.pjob("post_feedback", "queued", timedelta(minutes=50)))
+        self.assertIsNone(janitor.decide_pool([run], [], NOW))
+
+    def test_pending_and_other_labels_are_not_the_pool(self):
+        runs = [self.prun(self.pjob("codex", "pending", timedelta(hours=2))),
+                self.prun(self.pjob("build", "queued", timedelta(hours=2), labels=("toolbox",)))]
+        self.assertIsNone(janitor.decide_pool(runs, [], NOW))
+
+    def test_the_oldest_is_named_and_all_are_counted(self):
+        runs = [self.prun(self.pjob("select", "queued", timedelta(minutes=35)), prs=(579,)),
+                self.prun(self.pjob("review_cap", "queued", timedelta(minutes=90)), prs=())]
+        line = janitor.decide_pool(runs, [], NOW)
+        self.assertIn("2 vm-linux jobs", line)
+        self.assertIn("review_cap for no PR", line)
+
+
 class Stuck(unittest.TestCase):
     """The PRs that wait on something nobody is going to do: a dev build never
     recut, a run cancelled inside the reviewer, a conflict with no engineer to
@@ -936,6 +982,9 @@ if tool == "gh":
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
+    if a[0] == "api" and "/actions/runs?status=" in a[1]:
+        out(S.get("pool_runs", {}).get(a[1].split("status=")[1].split("&")[0], []))
+    if a[0] == "api" and "/actions/runners?" in a[1]: out(S.get("pool_runners", []))
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
