@@ -73,6 +73,9 @@ final class DownloadWatchdog {
     private var resignedAt: (at: Instant, bytes: [String: Int64])?
     /// Keys whose last replacement carried no resume data: cancelled no more.
     private var unresumable: Set<String> = []
+    /// Keys forgotten since the session was last asked for the bytes `probe` is handed, while
+    /// that answer is owed: the answer may predate a forget, and is no word about those keys.
+    private var forgottenSinceAsked: Set<String>?
 
     /// Whether there is anything to tick for: a key with samples, or a restart owed.
     var active: Bool { !samples.isEmpty || !pending.isEmpty }
@@ -111,6 +114,7 @@ final class DownloadWatchdog {
 
     /// The task is done with, one way or another: verifying, verified or failed.
     func forget(_ key: String) {
+        forgottenSinceAsked?.insert(key)
         samples[key] = nil
         cancelling.remove(key)
         pending[key] = nil
@@ -134,13 +138,25 @@ final class DownloadWatchdog {
         samples = [:]
     }
 
+    /// The session is being asked for the bytes the next `probe` is handed: a key forgotten from
+    /// here until that probe is left out of it, since the session's answer may have been taken
+    /// before the task finished.
+    func asking() {
+        forgottenSinceAsked = []
+    }
+
     /// The app is in front again, with the bytes the session says each task is at now: the span
     /// since `resigned` is judged as one window where it is at least a window long, and the
     /// crawls in it are cancelled at once. Every sample from before is dropped, and each task
     /// left running that has had a first byte is anchored at the bytes it is at now, so one that
     /// stalls on the return with no progress after is judged by that silence a window on. A key
-    /// not in `received` is gone (finished, or the session no longer holds it).
-    func probe(_ received: [String: Int64], at now: Instant) -> [Cancel] {
+    /// not in `received` is gone (finished, or the session no longer holds it), and so is a key
+    /// forgotten since `asking`: neither anchored nor judged, nor a rate the others are judged
+    /// against.
+    func probe(_ answered: [String: Int64], at now: Instant) -> [Cancel] {
+        let forgotten = forgottenSinceAsked ?? []
+        forgottenSinceAsked = nil
+        let received = answered.filter { !forgotten.contains($0.key) }
         defer { resignedAt = nil }
         samples = [:]
         for (key, bytes) in received where bytes > 0 && !restarting(key) { samples[key] = [Sample(at: now, bytes: bytes)] }

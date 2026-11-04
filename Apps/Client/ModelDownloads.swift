@@ -537,6 +537,7 @@ final class ModelDownloads {
     private func becameActive() {
         lifecycle += 1
         let asked = lifecycle
+        watchdog.asking()
         session.getAllTasks { [weak self] tasks in
             var bytes: [String: Int64] = [:]
             for task in tasks {

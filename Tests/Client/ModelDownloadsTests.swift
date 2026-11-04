@@ -1,4 +1,5 @@
 import CryptoKit
+import UIKit
 import XCTest
 
 @testable import Topo
@@ -559,22 +560,47 @@ final class ModelDownloadsGlueTests: XCTestCase {
     }
 
     /// A probe's answer is applied only for the return that asked for it, with the app in front:
-    /// one landing after the app resigned again leaves that resign's baseline standing.
+    /// each move in or out of the foreground advances the generation, so return 1's answer
+    /// landing after a resign and a second return is dropped and leaves the watchdog as it was.
     func testAProbeLandingAfterTheAppResignedAgainIsDropped() {
+        // Synchronous throughout: each posted return asks the session, whose answer hops to the
+        // main actor and would be applied at the first suspension.
         let downloads = downloads(manifest())
         let key = "ear|encoder.bin"
         let t0 = ContinuousClock.Instant.now
-        downloads.watchdog.observe(key, bytes: 1024, at: t0)
-        downloads.watchdog.resigned(at: t0)
-        let asked = downloads.lifecycle
-        downloads.probed([key: 2048], asked: asked - 1, active: true)
+        let center = NotificationCenter.default
+        let start = downloads.lifecycle
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        XCTAssertEqual(downloads.lifecycle, start + 1, "a return advances the generation")
+        let first = downloads.lifecycle
+        center.post(name: UIApplication.willResignActiveNotification, object: nil)
+        XCTAssertEqual(downloads.lifecycle, start + 2, "a resign advances it")
+        downloads.watchdog.observe(key, bytes: 4096, at: t0)
+        XCTAssertEqual(downloads.watchdog.kept(key), 0, "away: nothing sampled")
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        XCTAssertEqual(downloads.lifecycle, start + 3)
+        downloads.probed([key: 2048], asked: first, active: true)
         downloads.watchdog.observe(key, bytes: 4096, at: t0 + .seconds(1))
-        XCTAssertEqual(downloads.watchdog.kept(key), 0, "a later move in or out of the foreground: the resign stands")
-        downloads.probed([key: 2048], asked: asked, active: false)
-        downloads.watchdog.observe(key, bytes: 4096, at: t0 + .seconds(1))
+        XCTAssertEqual(downloads.watchdog.kept(key), 0, "return 1's answer, late: the resign stands")
+        downloads.probed([key: 2048], asked: downloads.lifecycle, active: false)
         XCTAssertEqual(downloads.watchdog.kept(key), 0, "the app not in front: the resign stands")
-        downloads.probed([key: 2048], asked: asked, active: true)
+        downloads.probed([key: 2048], asked: downloads.lifecycle, active: true)
         XCTAssertEqual(downloads.watchdog.kept(key), 1, "the return that asked, in front: anchored")
+    }
+
+    /// A file that finishes between a return's ask and its answer is not brought back by the
+    /// answer: the answer is the session's from before, and the finished task reports nothing
+    /// more, so a stalled sibling is judged alone.
+    func testAFileFinishedBeforeTheProbeLandsIsNotRestored() {
+        let downloads = downloads(manifest())
+        let a = "ear|encoder.bin"
+        let b = "ear|decoder.bin"
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        downloads.watchdog.forget(a)
+        downloads.probed([a: 2 * 1024 * 1024, b: 2 * 1024 * 1024], asked: downloads.lifecycle, active: true)
+        XCTAssertEqual(downloads.watchdog.kept(a), 0, "forgotten since the ask: not anchored")
+        XCTAssertEqual(downloads.watchdog.kept(b), 1)
     }
 
     /// The watchdog's cancel of `key`, decided: 20 s of samples at 36 KB/s.

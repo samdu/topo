@@ -290,6 +290,39 @@ final class DownloadWatchdogTests: XCTestCase {
         XCTAssertEqual(dog.decisions(at: at(60)).map(\.key), ["m|f"], "20 s of silence since the return")
     }
 
+    /// The session's answer to a return may be taken before a task finishes: a key forgotten
+    /// between the ask and the probe is neither anchored nor judged, nor a rate the others are
+    /// judged against, so a sibling that stalls is judged alone by the floor.
+    func testAKeyForgottenSinceTheAskIsNotRestoredByTheProbe() {
+        let dog = DownloadWatchdog()
+        flow(dog, "m|a", rate: 2 * MB, from: 0, to: 10)
+        flow(dog, "m|b", rate: 2 * MB, from: 0, to: 10)
+        dog.resigned(at: at(10))
+        dog.asking()
+        dog.forget("m|a")
+        XCTAssertEqual(dog.probe(["m|a": 2 * MB * 14, "m|b": 2 * MB * 14], at: at(15)), [], "five seconds away is not judged")
+        XCTAssertEqual(dog.kept("m|a"), 0, "a finished task is not anchored by an answer from before it finished")
+        XCTAssertEqual(dog.kept("m|b"), 1)
+        XCTAssertEqual(dog.decisions(at: at(35)).map(\.key), ["m|b"], "a stall beside nothing, judged by the floor")
+
+        // A long time away: the forgotten key is not judged with the rest.
+        flow(dog, "m|c", rate: 36 * KB, from: 100, to: 110)
+        flow(dog, "m|d", rate: 36 * KB, from: 100, to: 110)
+        dog.resigned(at: at(110))
+        dog.asking()
+        dog.forget("m|c")
+        XCTAssertEqual(dog.probe(["m|c": 36 * KB * 170, "m|d": 36 * KB * 170], at: at(170)).map(\.key), ["m|d"])
+        XCTAssertEqual(dog.attempts("m|c"), 0)
+
+        // The next ask starts afresh: a key forgotten before it is the answer's to say.
+        flow(dog, "m|e", rate: 2 * MB, from: 200, to: 210)
+        dog.forget("m|e")
+        dog.resigned(at: at(210))
+        dog.asking()
+        _ = dog.probe(["m|e": 2 * MB * 215], at: at(215))
+        XCTAssertEqual(dog.kept("m|e"), 1, "a task the session still reports after the ask is anchored")
+    }
+
     /// A task with no first byte at the return is not anchored: it is left alone, as before the
     /// time away.
     func testATaskWithNoFirstByteIsNotAnchoredByTheProbe() {
