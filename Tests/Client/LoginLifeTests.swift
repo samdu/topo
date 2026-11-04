@@ -19,6 +19,17 @@ final class LoginLifeTests: XCTestCase {
         XCTAssertTrue(login.epoch.isCurrent, "work of the next login would be dropped")
     }
 
+    /// Work begun after a sign-out's first step, while the sign-out is under way, is not current
+    /// once the teardowns run.
+    func testWorkBegunDuringTheSignOutIsNotCurrentAfterTheTeardowns() {
+        let login = LoginLife()
+        login.moveEpoch()
+        let during = login.epoch
+        XCTAssertTrue(during.isCurrent)
+        login.runTeardowns()
+        XCTAssertFalse(during.isCurrent, "work begun during the sign-out would land after its teardowns and keep what it made")
+    }
+
     func testTeardownsRunInTheOrderRegisteredAtEveryEnd() {
         let login = LoginLife()
         var ran: [String] = []
@@ -103,6 +114,7 @@ final class LoginLifeTests: XCTestCase {
         let signIn = SignIn(login: GoneLogin(), cache: cache)
         let was = signIn.phase
         XCTAssertEqual(was, .signedIn)
+        let held = login.epoch
         await signIn.refresh()
         XCTAssertEqual(signIn.phase, .idle, "the refresh did not take the login away")
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in }, reloadEveryControl: {},
@@ -111,6 +123,7 @@ final class LoginLifeTests: XCTestCase {
         DefaultSurface(store: { store }, reloader: reloader, login: login).follow(from: was, to: signIn.phase, latest: nil)
         await login.tornDown()
         await sync.flush()
+        XCTAssertFalse(held.isCurrent, "the login lost to the refresh left its epoch standing")
 
         XCTAssertEqual(host.ends.count, 1, "the activity outlived the login")
         guard case .end(id, nil, .now) = host.ends[0] else { return XCTFail("\(host.ends)") }

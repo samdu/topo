@@ -336,7 +336,8 @@ final class DefaultSurfaceTests: XCTestCase {
         var everything = 0
         let surface = DefaultSurface(store: { store },
                                      reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: { everything += 1 },
-                                                               schedule: { _, body in body() }))
+                                                               schedule: { _, body in body() }),
+                                     login: LoginLife())
         try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
         surface.follow(from: .idle, to: .signedIn, latest: turn(2, .assistant, "Tonight."))
         XCTAssertNotNil(store.read(slot: SurfaceStore.defaultSlot))

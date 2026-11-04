@@ -164,6 +164,26 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(keeper.tasks, 0)
     }
 
+    /// A start received while the sign-out is under way (after its first step, the guest's tool
+    /// call answered while the harness is waited on) whose fetch lands after the teardowns
+    /// starts nothing and keeps nothing.
+    func testAStartReceivedDuringASignOutStartsNothing() async throws {
+        let gate = GatedTrackerFetcher()
+        fetcher = gate
+        let tool = self.tool
+        login.moveEpoch()
+        let started = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        await settle()
+        XCTAssertEqual(gate.pending, 1)
+        login.runTeardowns()
+        await login.tornDown()
+        gate.release(TrackerFixtures.wiki)
+        let reply = await started.value
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(host.starts, 0, "an activity started after the sign-out's end")
+        XCTAssertEqual(keeper.tasks, 0)
+    }
+
     func testTwoStartsOfOneSlotMakeOneActivity() async throws {
         let gate = GatedTrackerFetcher()
         fetcher = gate
@@ -208,7 +228,7 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(after.status, ToolReply.failed, "ended is not running")
     }
 
-    /// An update and an end that wait at the gate while a sign-out counts itself send nothing:
+    /// An update and an end that wait at the gate while a sign-out moves the epoch send nothing:
     /// the sign-out's own end is the only one, and the update's host call is the first update's.
     func testAnUpdateAndAnEndQueuedAcrossASignOutSendNothing() async throws {
         _ = await tool.run(["start", "job", #"{"tracker": \#(TrackerFixtures.wiki), "until": "2026-11-02T06:00:00Z"}"#])
@@ -223,9 +243,7 @@ final class ActivityToolTests: XCTestCase {
         let ended = Task { await tool.run(["end", "A1", #"{"relevance": 7}"#]) }
         await settle()
         let keeper = self.keeper!
-        let before = login.epoch
         await SigningOut.midFlight(login, release: { gate.openUp() })
-        XCTAssertFalse(before.isCurrent)
         _ = await first.value
         let update = await queued.value
         let end = await ended.value

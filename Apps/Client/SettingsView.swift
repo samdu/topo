@@ -147,8 +147,8 @@ struct ContextSection: View {
 /// read: a call left out here is a reply still being read, or a memory still on disk, for an
 /// account the app has just let go of.
 struct SignOut {
-    /// The login's epoch moves first (`LoginLife`), so anything begun under it that lands from
-    /// here on, while the harness below is waited on included, finds it gone and drops itself.
+    /// The login's epoch moves first (`LoginLife`), so work that checks it and lands from here
+    /// on, while the harness below is waited on included, finds it gone and drops itself.
     var moveEpoch: @MainActor () -> Void
     /// The reply in the ear goes with the login: one still being read would otherwise carry on,
     /// holding the process open.
@@ -164,8 +164,8 @@ struct SignOut {
     /// The memory is the person's and stays in their iCloud; the copy of it on this phone goes
     /// with the login.
     var forgetMemory: @MainActor () -> Void
-    /// What features registered to end with the login (`LoginLife.onEnd`), just before the
-    /// surfaces go.
+    /// What features registered to end with the login (`LoginLife.onEnd`), started just before the
+    /// surfaces go, with the epoch moved once more for work begun since the first step.
     var runTeardowns: @MainActor () -> Void
     /// The widgets' documents, images and pending taps, and every timeline read again at once, so
     /// no lock screen keeps the conversation of an account the phone no longer has.

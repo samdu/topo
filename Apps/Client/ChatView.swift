@@ -480,7 +480,7 @@ struct ChatView: View {
                  forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 
-    /// The way out, built here because this is where the five things it ends are in scope, and
+    /// The way out, built here because this is where the things it ends are in scope, and
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {

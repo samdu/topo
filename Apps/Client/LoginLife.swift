@@ -50,18 +50,22 @@ final class LoginLife {
         count += 1
     }
 
-    /// Runs every registered teardown, in the order they were registered.
+    /// Moves the epoch again, then runs every registered teardown in the order they were
+    /// registered. The second move is for work begun while the sign-out was under way (a tool
+    /// call answered while the harness was waited on): it took the epoch after the first move, and
+    /// would otherwise land after the teardown that ends it and keep what it made.
     func runTeardowns() {
+        moveEpoch()
         teardowns.forEach { $0() }
     }
 
-    /// A login ending by a path with no steps of its own (the phase leaving signed in): both at once.
+    /// A login ending by a path with no steps of its own (the phase leaving signed in).
     func end() {
-        moveEpoch()
         runTeardowns()
     }
 
-    /// Returns once every awaiting teardown started so far has finished.
+    /// Returns once every awaiting teardown started so far has finished. Each teardown's task is
+    /// kept until then; what the app never waits on is a finished task a sign-out, a handful a run.
     func tornDown() async {
         while !ending.isEmpty {
             let started = ending
