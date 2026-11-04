@@ -607,11 +607,20 @@ slot_holder=$!
 lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" sh -c "echo \$\$ > '$work/budget/held'; exec sleep 60" &
 holder=$!
 for _ in $(seq 100); do [ -s "$work/budget/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
-began=$SECONDS
-LOCK_WAIT=10 TOPO_VALIDATE_SLOTS=1 validate
+# The wait is counted in looks, LOCK_POLL apart, so the looks are what is counted here, by a
+# `sleep` that notes each one: a busy Mac stretches the wall clock, not the count. Ten seconds
+# at three a look is four looks in all; an allowance each would be four more after the suite.
+mkdir -p "$work/budget/bin"
+printf '#!/bin/sh
+echo "$1" >> "%s"
+exec /bin/sleep "$1"
+' "$work/budget/looks" > "$work/budget/bin/sleep"
+chmod +x "$work/budget/bin/sleep"
+: > "$work/budget/looks"
+PATH="$work/budget/bin:$PATH" LOCK_POLL=3 LOCK_WAIT=10 TOPO_VALIDATE_SLOTS=1 validate
 is "one allowance: exits 2" "$status" 2
 case "$out" in *"Waiting for a suite"*"Waiting for a checkout"*"gave up after waiting"*) ok "one allowance: it waited for a suite, then a checkout, then gave up" ;; *) fail "one allowance: $out" ;; esac
-[ $((SECONDS - began)) -lt 14 ] && ok "one allowance: within the ten seconds and not six and ten" || fail "one allowance: gave up after $((SECONDS - began)) s"
+is "one allowance: four looks in all, for the suite and the checkout together" "$(grep -cx 3 "$work/budget/looks")" 4
 kill "$(cat "$work/budget/held")" "$holder" "$slot_holder" 2>/dev/null; wait "$holder" "$slot_holder" 2>/dev/null
 # A commit whose logs a run is still writing keeps them, however many commits have run since.
 for n in 1 2 3 4 5 6 7 8 9 a b c; do
