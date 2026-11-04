@@ -263,7 +263,7 @@ def fingerprint(*parts):
 
 
 def pr_fingerprint(pr, run, jobs, conds):
-    """What a PR's lines were said of: its head, the unticked boxes, its labels, base and review decision, the run's status and
+    """What a PR's lines were said of: whether a device box is ticked, its head, the unticked boxes, its labels, base and review decision, the run's status and
     conclusion, every job's conclusion, and which conditions hold. No age and
     no updated-at, so time passing and a comment move nothing; `idle` is age
     alone and is left out, so a PR already reported is not said again for

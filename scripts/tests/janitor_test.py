@@ -2638,6 +2638,14 @@ class WholePass(unittest.TestCase):
         self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7"), got)
         self.assertIn("the pass stopped early: KeyError", "\n".join(got))
 
+    def test_a_leading_merge_refusal_is_saved_when_the_pass_stops_before_it_ends(self):
+        ticked = pr(body="- [x] suite\n- [x] device: the phone shows it")
+        p, _ = self.run_pass(self.scripted(prs=[ticked, {"number": 8, "isDraft": False}], worktrees="",
+                                           merge_refused="the merge commit cannot be cleanly created"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        got = self.report_lines()
+        self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7: merge refused"), got)
+
 
 if __name__ == "__main__":
     unittest.main()
