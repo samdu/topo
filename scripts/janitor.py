@@ -1088,20 +1088,30 @@ class Shell:
         return self.gh_api(f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
                            "[.jobs[] | {id, name, conclusion, steps: [.steps[] | {name, conclusion}]}]") or []
 
+    def whole(self, path, key, item_jq):
+        """One page of a list endpoint, refused rather than read as whole when
+        the endpoint holds more than the page carries."""
+        page = self.gh_api(f"{path}{'&' if '?' in path else '?'}per_page=100",
+                           f"{{total: .total_count, n: (.{key} | length), items: [.{key}[] | {item_jq}]}}") or {}
+        if (page.get("n") or 0) < (page.get("total") or 0):
+            raise RuntimeError(f"{path} holds {page['total']} {key}, more than one page of {page['n']}")
+        return page.get("items") or []
+
     def pool_runs(self):
-        """The queued and in-progress runs, each with its newest attempt's jobs."""
-        runs = []
+        """The queued and in-progress runs, each once, with its newest attempt's jobs."""
+        runs = {}
         for status in ("queued", "in_progress"):
-            runs += self.gh_api(f"repos/{REPO}/actions/runs?status={status}&per_page=100",
-                                "[.workflow_runs[] | {id, name, prs: [.pull_requests[].number]}]") or []
-        for run in runs:
-            run["jobs"] = self.gh_api(f"repos/{REPO}/actions/runs/{run['id']}/jobs?per_page=100",
-                                      "[.jobs[] | {name, status, labels, created_at, completed_at}]") or []
-        return runs
+            for run in self.whole(f"repos/{REPO}/actions/runs?status={status}", "workflow_runs",
+                                  "{id, name, prs: [.pull_requests[].number]}"):
+                runs.setdefault(run["id"], run)
+        for run in runs.values():
+            run["jobs"] = self.whole(f"repos/{REPO}/actions/runs/{run['id']}/jobs", "jobs",
+                                     "{name, status, labels, created_at, completed_at}")
+        return list(runs.values())
 
     def pool_runners(self):
-        return self.gh_api(f"repos/{REPO}/actions/runners?per_page=100",
-                           f'[.runners[] | select(any(.labels[]; .name == "{POOL_LABEL}")) | {{status, busy}}]') or []
+        return self.whole(f"repos/{REPO}/actions/runners", "runners",
+                          f'select(any(.labels[]; .name == "{POOL_LABEL}")) | {{status, busy}}')
 
     def merge(self, number, head):
         self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",

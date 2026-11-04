@@ -535,6 +535,12 @@ class Pool(unittest.TestCase):
                         self.pjob("review_gate", "queued", timedelta(minutes=50)))
         self.assertIsNone(janitor.decide_pool([run], [], NOW))
 
+    def test_a_job_runnable_since_its_predecessor_ended_waits_from_then(self):
+        run = self.prun(self.pjob("review_cap", "completed", timedelta(minutes=90), timedelta(minutes=60)),
+                        self.pjob("reviewer_ran", "completed", timedelta(minutes=90), timedelta(minutes=40)),
+                        self.pjob("review_gate", "queued", timedelta(minutes=90)))
+        self.assertIn("review_gate for #578 (run 41790277897), waiting 40 min", janitor.decide_pool([run], [], NOW))
+
     def test_a_run_with_a_job_in_progress_waits_on_nothing(self):
         run = self.prun(self.pjob("codex", "in_progress", timedelta(minutes=50)),
                         self.pjob("post_feedback", "queued", timedelta(minutes=50)))
@@ -982,11 +988,14 @@ if tool == "gh":
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
+    def page(path, items):
+        # One page as the pool's reads ask for it; pool_totals says an endpoint holds more.
+        out({"total": S.get("pool_totals", {}).get(path, len(items)), "n": len(items), "items": items})
     if a[0] == "api" and "/actions/runs?status=" in a[1]:
-        out(S.get("pool_runs", {}).get(a[1].split("status=")[1].split("&")[0], []))
-    if a[0] == "api" and "/actions/runners?" in a[1]: out(S.get("pool_runners", []))
+        page("runs", S.get("pool_runs", {}).get(a[1].split("status=")[1].split("&")[0], []))
+    if a[0] == "api" and "/actions/runners?" in a[1]: page("runners", S.get("pool_runners", []))
     if a[0] == "api" and "/jobs?" in a[1] and a[1].split("/runs/")[1].split("/")[0] in S.get("pool_jobs", {}):
-        out(S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
+        page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
@@ -1208,6 +1217,31 @@ class WholePass(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(said(), expected, [r["body"]["text"] for r in Bridge.received])
         self.assertIn("select for #7 (run 900)", Bridge.received[-1]["body"]["text"])
+
+    def test_a_run_in_both_lists_is_counted_once(self):
+        # It started between the two reads: listed queued, then in progress, with one job still queued.
+        run = {"id": 900, "name": "PR validate", "prs": [7]}
+        p, _ = self.run_pass(self.scripted(
+            pool_runs={"queued": [run], "in_progress": [run]},
+            pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                "created_at": ago(timedelta(hours=1)), "completed_at": None}]}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("1 vm-linux job queued", Bridge.received[0]["body"]["text"])
+
+    def test_a_list_longer_than_its_page_is_said_unread_not_read_as_whole(self):
+        for path in ("runs", "jobs", "runners"):
+            Bridge.received.clear()
+            if os.path.exists(self.state):
+                os.remove(self.state)   # a fresh pass each time, so the read failure is not already said
+            p, _ = self.run_pass(self.scripted(
+                pool_runs={"queued": [{"id": 900, "name": "PR validate", "prs": [7]}]},
+                pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                    "created_at": ago(timedelta(minutes=5)), "completed_at": None}]},
+                pool_totals={path: 101}))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            text = " ".join(r["body"]["text"] for r in Bridge.received)
+            self.assertIn("could not read the runs waiting on vm-linux", text, path)
+            self.assertIn("more than one page", text, path)
 
     def test_a_worktree_with_uncommitted_changes_is_left_with_its_sessions_and_said_once(self):
         s = self.scripted(status={self.wt: " M file.swift"})
