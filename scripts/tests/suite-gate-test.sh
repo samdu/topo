@@ -75,8 +75,12 @@ check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly
 # that joins the tailnet as tag:ci reaches what that tag grants), and nothing but a pull_request starts a run.
 hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
 check.(hosts.empty?, "every job runs on vm-linux#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
-# automerge.yaml's jobs run on a pull_request too, so they are on the same pool.
-merge_jobs = YAML.load_file(automerge).fetch("jobs")
+# automerge.yaml holds a write token, so only workflow_run starts it: GitHub runs main's copy
+# for that, where a pull_request would run the PR's own. Its jobs are on the same pool.
+merge_doc = YAML.load_file(automerge)
+merge_triggers = merge_doc.fetch(true) { merge_doc.fetch("on") }
+check.(merge_triggers.keys == %w[workflow_run], "only workflow_run starts automerge.yaml (#{merge_triggers.keys.join(', ')})")
+merge_jobs = merge_doc.fetch("jobs")
 merge_hosts = merge_jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
 check.(!merge_jobs.empty? && merge_hosts.empty?, "every job of automerge.yaml runs on vm-linux#{merge_hosts.empty? ? '' : " (not: #{merge_hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
 triggers = workflow.fetch(true) { workflow.fetch("on") }
