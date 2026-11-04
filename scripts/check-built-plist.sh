@@ -17,7 +17,8 @@
 #
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
 # the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location,
-# HomeKit, Photos or Alarms with no string saying why, and nothing shows it until the first call that asks.
+# HomeKit or Photos with no string saying why, and nothing shows it until the first call that asks.
+# AlarmKit's is read beside them: without it AlarmKit schedules no alarm.
 # `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is read beside them: without it a limited
 # photo library puts the system's sheet for choosing more up at a tool's call.
 #

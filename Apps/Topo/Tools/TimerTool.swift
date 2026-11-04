@@ -10,8 +10,13 @@ protocol AlarmScheduler: Sendable {
     func schedule(id: UUID, label: String, duration: TimeInterval) async throws
     /// Topo's alarms and their states (AlarmKit lists only the app's own).
     func alarms() async throws -> [(id: UUID, state: String)]
-    /// Whether there was one with that id to cancel.
-    func cancel(id: UUID) async -> Bool
+    /// Cancels one; throws what AlarmKit throws.
+    func cancel(id: UUID) async throws
+}
+
+/// AlarmKit's refusal of one alarm more than it holds, said so the mind can ask which to drop.
+struct AlarmLimit: Error {
+    let reason = "the phone already holds as many of Topo's alarms as AlarmKit allows"
 }
 
 /// Below iOS 26: no AlarmKit, so no timer.
@@ -19,11 +24,12 @@ struct NoAlarms: AlarmScheduler {
     var authorizer: (any Authorizer)? { nil }
     func schedule(id: UUID, label: String, duration: TimeInterval) async throws {}
     func alarms() async throws -> [(id: UUID, state: String)] { [] }
-    func cancel(id: UUID) async -> Bool { false }
+    func cancel(id: UUID) async throws {}
 }
 
 /// The label and the time each alarm sounds, which AlarmKit's own `Alarm` does not carry, kept for
-/// `topo timer list` while Topo runs; a relaunch lists an alarm by its id and state alone.
+/// `topo timer list` while Topo runs (and soonest first by them); a relaunch lists an alarm by its id
+/// and state alone, and those last.
 @MainActor
 final class TimerBook {
     static let shared = TimerBook()
@@ -47,8 +53,10 @@ struct TimerTool: Tool {
     let scheduler: any AlarmScheduler
     let book: @MainActor () -> TimerBook
     let broker: PermissionBroker
-    /// Whether Topo is on the screen, where the system's prompt can be raised.
-    var onScreen: @MainActor () -> Bool = { UIApplication.shared.applicationState == .active }
+    /// Where Topo stands: the system's prompt can be raised unless it is in the background. A
+    /// system alert, another tool's prompt among them, makes the app inactive and not backgrounded,
+    /// so a start made under one still asks, and waits on the prompt already up (`PermissionBroker`).
+    var state: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
     var now: @Sendable () -> Date = { Date() }
     var makeID: @Sendable () -> UUID = { UUID() }
 
@@ -93,7 +101,7 @@ struct TimerTool: Tool {
             guard seconds >= 1, seconds <= Self.longest else {
                 throw ToolFailure("a timer runs from 1s to 24h; \(span) is outside that", status: ToolReply.usage)
             }
-            let label = parsed.words.count == 2 ? PhoneTool.flat(parsed.words[1]) : "Timer"
+            let label = parsed.words.count == 2 ? PhoneTool.flat(parsed.words[1]).trimmingCharacters(in: .whitespaces) : "Timer"
             guard !label.isEmpty else { throw ToolFailure("the label is empty", status: ToolReply.usage) }
             guard label.count <= Self.labelLimit else {
                 throw ToolFailure("the label is \(label.count) characters, past \(Self.labelLimit)", status: ToolReply.usage)
@@ -108,7 +116,7 @@ struct TimerTool: Tool {
         let authorizer = scheduler.authorizer
         // The system's prompt needs Topo in front: a start that would raise it off the screen asks
         // nothing. The parse is pure, so reading it here and again in the run costs nothing.
-        if case .start? = try? parse(arguments), let authorizer, await authorizer.access() == .undetermined, await !onScreen() {
+        if case .start? = try? parse(arguments), let authorizer, await authorizer.access() == .undetermined, await state() == .background {
             return Self.offScreen
         }
         // Only a start needs the permission; one below iOS 26 has none to ask and is answered in `start`.
@@ -134,6 +142,8 @@ struct TimerTool: Tool {
         let fires = now().addingTimeInterval(span)
         do {
             try await scheduler.schedule(id: id, label: label, duration: span)
+        } catch let error as AlarmLimit {
+            return .failed("topo: no timer was set: \(error.reason). Cancel one with topo timer cancel, or ask the person which to drop.\n")
         } catch {
             return .failed("topo: AlarmKit did not set the timer: \(error.localizedDescription)\n")
         }
@@ -158,8 +168,15 @@ struct TimerTool: Tool {
     }
 
     private func cancel(_ id: String) async -> ToolReply {
-        guard let uuid = UUID(uuidString: id), await scheduler.cancel(id: uuid) else {
-            return .failed("topo: no timer of Topo's with the id \(id)\n")
+        let missing = ToolReply(status: ToolReply.failed, text: "topo: no timer of Topo's with the id \(id)\n")
+        guard let uuid = UUID(uuidString: id) else { return missing }
+        // Asked of the list first, so a cancel AlarmKit refused is not said as no such timer: that
+        // one may still sound.
+        do {
+            guard try await scheduler.alarms().contains(where: { $0.id == uuid }) else { return missing }
+            try await scheduler.cancel(id: uuid)
+        } catch {
+            return .failed("topo: AlarmKit did not cancel \(id), which may still sound: \(error.localizedDescription)\n")
         }
         await book().drop(uuid)
         return .ok("cancelled: \(id)\n")

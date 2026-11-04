@@ -190,8 +190,9 @@ targets:
         # `Activity.request` refuses every start; no setting generates it, and
         # `scripts/check-built-plist.sh` reads it off the product.
         NSSupportsLiveActivities: true
-        # `topo timer`'s alarms (docs/widgets.md, *Timers*). AlarmKit ends the process at the
-        # prompt without it; `scripts/check-built-plist.sh` reads it off the product.
+        # `topo timer`'s alarms (docs/widgets.md, *Timers*). Without it AlarmKit schedules no alarm;
+        # no setting generates it (Xcode has no INFOPLIST_KEY_ for it), and
+        # `scripts/check-built-plist.sh` reads it off the product.
         NSAlarmKitUsageDescription: Topo sounds a timer you ask it for when it reaches zero, even with the phone locked or on silent.
     settings:
       base:

@@ -18,7 +18,11 @@ struct AlarmKitScheduler: AlarmScheduler {
         let stop = AlarmButton(text: "Stop", textColor: Theme.onPrimary, systemImageName: "stop.circle")
         let presentation = AlarmPresentation(alert: .init(title: title, stopButton: stop), countdown: .init(title: title))
         let attributes = AlarmAttributes(presentation: presentation, metadata: TopoAlarmMetadata(label: label), tintColor: Theme.primary)
-        _ = try await AlarmManager.shared.schedule(id: id, configuration: .timer(duration: duration, attributes: attributes))
+        do {
+            _ = try await AlarmManager.shared.schedule(id: id, configuration: .timer(duration: duration, attributes: attributes))
+        } catch AlarmManager.AlarmError.maximumLimitReached {
+            throw AlarmLimit()
+        }
     }
 
     func alarms() async throws -> [(id: UUID, state: String)] {
@@ -27,8 +31,8 @@ struct AlarmKitScheduler: AlarmScheduler {
         }
     }
 
-    func cancel(id: UUID) async -> Bool {
-        (try? await manager.run { manager, _ in try manager.cancel(id: id) }) != nil
+    func cancel(id: UUID) async throws {
+        try await manager.run { manager, _ in try manager.cancel(id: id) }
     }
 
     static func state(_ state: Alarm.State) -> String {
