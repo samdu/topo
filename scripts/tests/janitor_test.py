@@ -507,6 +507,82 @@ class Decisions(unittest.TestCase):
             self.assertIsNone(janitor.peer_token(os.path.join(d, "absent")))
 
 
+class Stuck(unittest.TestCase):
+    """The PRs that wait on something nobody is going to do: a dev build never
+    recut, a run cancelled inside the reviewer, a conflict with no engineer to
+    resolve it, and a passed review left unmerged."""
+
+    # (b) A run cancelled in the reviewer chain alone: #545 (codex past its time
+    # limit, no verdict) and #565 (a verdict posted, then codex past its limit).
+    def chain_cancelled(self, post_feedback="skipped"):
+        return jobs(select="success", test="success", review_cap="success", codex="cancelled",
+                    post_feedback=post_feedback, reviewer_ran="failure", review_gate="failure")
+
+    def test_a_run_cancelled_inside_the_reviewer_reruns_codex_once(self):
+        for pf in ("skipped", "success"):
+            j = self.chain_cancelled(pf)
+            w = janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)
+            self.assertEqual(kinds(w), ["rerun"], pf)
+            self.assertEqual(w[0]["job_id"], job_id(j, "codex"))
+            self.assertIn("cancelled inside the reviewer", w[0]["text"])
+
+    def test_after_its_one_rerun_a_reviewer_cancelled_again_is_reported_red(self):
+        w = janitor.decide_pr(pr(), run("cancelled"), self.chain_cancelled(), {"rerun": {f"7:{HEAD}": {}}}, NOW)
+        self.assertEqual(kinds(w), ["report:red"])
+
+    def test_a_cancel_outside_the_reviewer_is_still_the_runs_own(self):
+        j = jobs(select="success", test="cancelled", review_cap="success", codex="skipped", reviewer_ran="failure")
+        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)), ["report:cancelled"])
+        j = jobs(select="success", test="success", review_cap="success", codex="success", reviewer_ran="cancelled",
+                 review_gate="cancelled", extra="cancelled")
+        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)), ["report:cancelled"])
+
+    def test_a_reviewer_cancelled_inside_the_settle_waits(self):
+        self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=3)), self.chain_cancelled(), {}, NOW), [])
+
+    # (c) Conflicts with main, its engineer gone.
+    def test_a_ready_pr_that_conflicts_with_main_and_has_no_session_is_reported(self):
+        dirty = pr(mergeStateStatus="DIRTY", headRefName="buddy/on-device-model")
+        w = janitor.decide_pr(dirty, None, [], {}, NOW, sessions={"topo-other", "buddy-janitor"})
+        self.assertIn("report:dirty", kinds(w))
+        self.assertIn("topo-on-device-model", next(x["text"] for x in w if x["key"].startswith("7:dirty")))
+
+    def test_a_conflicted_pr_with_no_run_is_not_told_a_push_starts_one(self):
+        w = janitor.decide_pr(pr(mergeStateStatus="DIRTY"), None, [], {}, NOW, sessions={"topo-x"})
+        self.assertIn("none starts while it conflicts with main", w[0]["text"])
+
+    def test_a_conflict_is_left_to_a_session_that_stands_or_one_that_could_not_be_read(self):
+        dirty = pr(mergeStateStatus="DIRTY", headRefName="buddy/on-device-model")
+        for sessions in ({"topo-on-device-model"}, {"on-device-model"}, None):
+            self.assertNotIn("report:dirty", kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions=sessions)), sessions)
+
+    def test_a_draft_or_a_pr_that_does_not_conflict_is_not_reported_dirty(self):
+        for p_ in (pr(mergeStateStatus="DIRTY", isDraft=True), pr(mergeStateStatus="UNKNOWN"), pr(mergeStateStatus="BLOCKED")):
+            self.assertNotIn("report:dirty", kinds(janitor.decide_pr(p_, None, [], {}, NOW, sessions=set())))
+
+    def test_dirty_is_in_the_fingerprint_so_it_is_said_once_per_head(self):
+        a = janitor.pr_fingerprint(pr(), None, [], ["dirty"])
+        self.assertEqual(a, janitor.pr_fingerprint(pr(updatedAt=ago(timedelta(minutes=1))), None, [], ["dirty"]))
+        self.assertNotEqual(a, janitor.pr_fingerprint(pr(headRefOid="fff0000"), None, [], ["dirty"]))
+
+    # (d) A review that passed with P2s alone: Codex's verdict is `blocking: false`, so
+    # review_gate is green, and a green run with every box ticked is merged.
+    def test_a_passed_review_with_every_box_ticked_left_by_automerge_is_merged(self):
+        j = jobs(select="success", test="success", review_cap="success", codex="success", post_feedback="success",
+                 reviewer_ran="success", review_gate="success")
+        w = janitor.decide_pr(pr(body="- [x] suite\n- [x] device: the phone"), run(), j, {}, NOW)
+        self.assertEqual(kinds(w), ["merge"])
+
+    # (a) A dev slot behind its PR.
+    def test_a_slot_serving_another_commit_than_the_head_is_stale(self):
+        slots = [{"slot": "pr-7", "commit": "2ebe731"}, {"slot": "pr-8", "commit": HEAD[:7]},
+                 {"slot": "pr-9", "commit": "1234567"}, {"slot": "main", "commit": "aaaaaaa"}, "junk",
+                 {"slot": "pr-10", "commit": None}]
+        prs = [pr(), pr(number=8), pr(number=11), pr(number=10)]
+        self.assertEqual([(p_["number"], c) for p_, c in janitor.decide_slots(prs, slots)], [(7, "2ebe731")])
+        self.assertEqual(janitor.decide_slots(prs, {"x": 1}), [])
+
+
 class DeviceBoxes(unittest.TestCase):
     """Step 8's counting: which results verify which box, and how many respondents they are."""
 
@@ -862,6 +938,7 @@ if tool == "gh":
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
+    if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
     if a[:2] == ["pr", "merge"] or a[:2] == ["run", "rerun"]: sys.exit(0)
     if a[:2] == ["issue", "list"] and a[a.index("--repo") + 1] == "samdu/topo-link":
         if S.get("builds_error"): print(S["builds_error"], file=sys.stderr); sys.exit(1)
@@ -918,8 +995,14 @@ elif tool == "tmux":
         out(S["panes"])
     sys.exit(0)
 elif tool == "curl":
+    if "slots.json" in a[-1]:
+        if S.get("slots_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
+        out(json.dumps(S.get("slots", [])))
     if S.get("page_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
     out(json.dumps({"commit": S["published"]}))
+elif tool == "bash" and a[0].endswith("topo-suites-gate.sh"):
+    code = S.get("gate", {}).get(a[2], 1)
+    print({0: "green: fake", 1: "not green: fake"}.get(code, "unread: fake")); sys.exit(code)
 elif tool == "bash":
     if S.get("publish_snapshot"):
         import shutil; shutil.copy(os.environ["JANITOR_STATE"], S["publish_snapshot"])
@@ -2345,6 +2428,74 @@ class WholePass(unittest.TestCase):
             self.assertEqual(sum(line in t for t in texts), 1, f"{builds}: said once while it stands")
             with open(self.state, "w") as f:
                 json.dump(self.seed, f)
+
+    # The stuck cases (class Stuck's) through a whole pass.
+    def texts(self, since=0):
+        return "\n".join(r["body"]["text"] for r in Bridge.received[since:])
+
+    def test_a_dev_build_behind_a_green_head_is_said_once_per_head(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"topo-suites-gate.sh /r/topo {HEAD}", calls)
+        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}", self.texts())
+        n = len(Bridge.received)
+        p, calls = self.run_pass(s)
+        self.assertNotIn("dev build", self.texts(n))
+        self.assertNotIn("topo-suites-gate", calls, "said at this head: not judged again")
+        s["prs"] = [pr(isDraft=True, headRefOid="fedcba9876")]
+        s["gate"] = {"fedcba9876": 0}
+        self.run_pass(s)
+        self.assertIn("its head is fedcba9", self.texts(n))
+
+    def test_a_behind_build_whose_head_has_not_passed_or_is_being_cut_says_nothing(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 1}, worktrees="")
+        self.run_pass(s)
+        self.assertNotIn("dev build", self.texts())
+        os.makedirs(os.path.join(self.work, "github", "topo-ota-dev.pr", "pr-7.lock"))
+        s["gate"] = {HEAD: 0}
+        p, calls = self.run_pass(s)
+        self.assertNotIn("topo-suites-gate", calls)
+        self.assertNotIn("dev build", self.texts())
+
+    def test_a_gate_that_cannot_judge_or_slots_that_do_not_answer_are_said_once(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 2}, worktrees="")
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the suites gate could not judge"), 1)
+        s = dict(s, slots_down=True)
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("could not read the dev slots"), 1)
+
+    def test_a_conflicted_pr_with_no_session_is_said_once_per_head(self):
+        s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees="",
+                          panes="topo-other\t/x")
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1)
+        s["panes"] = "topo-gone\t/x"
+        s["prs"] = [pr(mergeStateStatus="DIRTY", headRefName="buddy/gone", headRefOid="fedcba9876")]
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, "its session stands")
+
+    def test_a_reviewer_cancelled_run_has_codex_rerun(self):
+        j = jobs(select="success", test="success", review_cap="success", codex="cancelled", post_feedback="success",
+                 reviewer_ran="failure", review_gate="failure")
+        s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertIn(f"gh run rerun --repo samdu/topo --job {job_id(j, 'codex')}", calls)
+        self.assertNotIn("--failed", calls)
+        self.assertIn("reran codex of #7", self.texts())
+
+    def test_a_merge_github_refuses_is_said_with_the_refusal(self):
+        s = self.scripted(worktrees="", merge_refused="Pull request is not mergeable: the merge commit cannot be cleanly created")
+        self.run_pass(s)
+        self.assertIn("#7: merge refused", self.texts())
+        self.assertIn("cannot be cleanly created", self.texts())
 
 
 if __name__ == "__main__":

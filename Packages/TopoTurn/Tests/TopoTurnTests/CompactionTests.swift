@@ -2,7 +2,7 @@ import XCTest
 
 @testable import TopoTurn
 
-/// The compaction setting and Claude Code's arithmetic at its pin (2.1.285): the threshold is
+/// The compaction setting and Claude Code's arithmetic at its pin (2.1.316): the threshold is
 /// `min(floor(e * pct / 100), e - 13000)` over `e`, the window less 20 000.
 final class CompactionTests: XCTestCase {
     func testTheOneReaderTakesAutoAndWholePercentsInRange() {
