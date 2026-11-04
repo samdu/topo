@@ -470,6 +470,129 @@ final class StopWhileSpeakingTests: XCTestCase {
         return (call, system, sleep)
     }
 
+    /// The release of a spoken press holds the process from the thumb coming up, before the final
+    /// transcription and the send, so a lock in between finds it held. The turn's own wait is
+    /// taken at the send, and the release lets go once the send is done, leaving that wait.
+    func testASpokenReleaseIsHeldUntilItsTurnsWaitIsTaken() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertTrue(voice.listening)
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        XCTAssertFalse(audio.holding, "something held the process before the release")
+
+        var heldAtTheSend = false
+        var releasesPastTheWait = -1
+        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+            heldAtTheSend = self.audio.holding
+            _ = speaker.awaitReply("turn", readAloud: true)
+            // The send goes on past its wait, as `sendSpoken`'s drain of the line does: the
+            // release is the wait's business from here, not the send's.
+            releasesPastTheWait = speaker.releasesHeld
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(audio.holding, "the release was not held from the thumb coming up")
+        await up?.value
+        XCTAssertTrue(heldAtTheSend, "the process was not held between the release and the send")
+        XCTAssertEqual(releasesPastTheWait, 0, "the release outlived its turn's wait")
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        XCTAssertTrue(audio.holding)
+        speaker.endAwaiting("turn", "the test is done")
+        XCTAssertFalse(audio.holding, "the release's hold outlived its send")
+    }
+
+    /// A release that sends nothing — a tap that leaves the microphone open — lets its hold go.
+    func testAReleaseThatSendsNothingLetsItsHoldGo() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let sent = Sent()
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { sent.add($0) }?.value
+        XCTAssertTrue(voice.listening, "a tap did not leave the microphone open")
+        XCTAssertEqual(sent.texts, [])
+        XCTAssertEqual(speaker.releasesHeld, 0)
+        XCTAssertFalse(audio.holding, "a release that sent nothing kept its hold")
+    }
+
+    /// The press that closes a hands-free microphone sends what it heard, so it is held from the
+    /// press to its send as a release is.
+    func testAPressThatClosesTheOpenMicrophoneIsHeldUntilItsSend() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let opening = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in }
+        XCTAssertEqual(speaker.releasesHeld, 0, "the press that opens the microphone took a release")
+        await opening?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in }?.value
+        XCTAssertTrue(voice.listening, "a tap did not leave the microphone open")
+        XCTAssertFalse(audio.holding)
+        utterance(into: voice.sink)
+
+        var heldAtTheSend = false
+        var releasesPastTheWait = -1
+        let closing = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+            heldAtTheSend = self.audio.holding
+            _ = speaker.awaitReply("turn", readAloud: true)
+            // The send goes on past its wait, as `sendSpoken`'s drain of the line does: the
+            // release is the wait's business from here, not the send's.
+            releasesPastTheWait = speaker.releasesHeld
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(audio.holding, "the press that closes the microphone was not held from the press")
+        await closing?.value
+        XCTAssertTrue(heldAtTheSend, "the process was not held between the press and the send")
+        XCTAssertEqual(releasesPastTheWait, 0, "the release outlived its turn's wait")
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        speaker.endAwaiting("turn", "the test is done")
+        XCTAssertFalse(audio.holding, "the press's hold outlived its send")
+    }
+
+    /// Codex's sequence on #547: a call kept in front for a wait, a press under it that ends that
+    /// wait, and the release that sends the next turn. The release is held from the thumb coming
+    /// up, so the microphone's close finds a hold standing and the driver keeps the call, and the
+    /// new turn's wait is taken on the call's live session.
+    func testAReleaseUnderAKeptCallKeepsItForTheNextTurn() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        speaker.attach(call)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
+        speaker.onHold = { driver.holdChanged($0) }
+        speaker.onMicrophone = { driver.microphoneChanged($0) }
+        _ = speaker.awaitReply("first", readAloud: true)
+        driver.scene(.background)
+        XCTAssertEqual(system.starts.count, 1, "the lock with a wait standing placed no call")
+        call.provider(system.provider, perform: system.starts[0])
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        driver.scene(.active)
+        XCTAssertTrue(call.up, "coming forward with the wait standing ended the call")
+
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in }?.value
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(speaker.awaiting, [], "the press did not end the wait it was made over")
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        var held2 = false
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+            held2 = speaker.awaitReply("second", readAloud: true).held
+        }?.value
+        XCTAssertEqual(system.ends.count, 0, "the release ended the call the next turn needed")
+        XCTAssertTrue(call.up)
+        XCTAssertTrue(held2, "the next turn's wait was not held")
+        XCTAssertEqual(speaker.awaiting, ["second"])
+        speaker.endAwaiting("second", "the test is done")
+        withExtendedLifetime(driver) {}
+    }
+
     /// A press as the call closes — the moment a reply ends, which is when a person answers —
     /// waits for the call's end and opens on the session that follows it, not on the one the
     /// system is about to deactivate.

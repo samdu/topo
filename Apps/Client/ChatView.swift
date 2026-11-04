@@ -624,6 +624,7 @@ struct ChatView: View {
                                     dictation = going
                                 }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
+                                                 speaks: going.sends && readAloud,
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
@@ -1015,16 +1016,24 @@ final class MicPress {
     /// and its release, which reach nothing. What a release heard is handed to `send`.
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
-                 send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
+                 speaks: Bool = false, send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
                 stopping = false
                 return nil
             }
+            // A release whose words will be read a reply is held from the thumb coming up, not
+            // from the send after the final transcription: a lock in between would otherwise
+            // suspend the process with the turn half made. Taken here, in the gesture's callback,
+            // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
+            // a send that took none returns.
+            let release = speaks ? speaker.releasing() : nil
             return Task {
+                defer { release.map { speaker.released($0, "its send took no wait") } }
                 let heard = await voice.pressUp(as: .chat)
                 speaker.microphoneClosed()
                 guard let heard else { return }
+                speaker.sending(under: release)
                 await send(heard)
             }
         }
@@ -1040,10 +1049,15 @@ final class MicPress {
             speaker.microphoneOpening()
         }
         if stopping { return nil }
+        // A press on the open microphone closes it and sends what it heard, so it is that send's
+        // release and is held the same way.
+        let release = speaks && drawn.open ? speaker.releasing() : nil
         return Task {
+            defer { release.map { speaker.released($0, "its send took no wait") } }
             let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened(counted: opens)
             guard let heard else { return }
+            speaker.sending(under: release)
             await send(heard)
         }
     }
