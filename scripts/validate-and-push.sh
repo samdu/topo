@@ -339,7 +339,7 @@ sha="$1" lane="$2" suite="$3" run="$4"
 cache="$HOME/Library/Caches/topo-validate"
 results="$cache/logs/$run"
 refuse() { echo "error: $1 on $(hostname -s)." >&2; exit 76; }
-busy() { echo "error: $1 on $(hostname -s)." >&2; exit 75; }
+busy() { echo "busy: $1 on $(hostname -s)." >&2; exit 75; }
 # Whether anything of a run is still going: every process of a suite here has the run'"'"'s
 # results directory in its arguments, from the way into the session down to mac-suite.sh,
 # and this script has the run'"'"'s name as the last of its own, which a child it has forked
@@ -347,6 +347,15 @@ busy() { echo "error: $1 on $(hostname -s)." >&2; exit 75; }
 # suite leaves a run that is going from the fork on, with no moment between.
 going() { ps -axww -o args= | grep -v grep | grep -q -e "$cache/logs/$1[\" ]" -e " -s -- [0-9a-f]\{40\} [a-z]* [a-z_:]* $1\$"; }
 left_in() { [ -s "$1/run" ] && going "$(sed -n 1p "$1/run")"; }
+# What the attempt leaves, whatever it ends in: the ref the commit was pushed to, and the
+# slot'"'"'s record of its run while it is still this run'"'"'s. A SIGKILL leaves the record, which is
+# what keeps a suite it left going in its checkout.
+slot=""
+done_here() {
+  git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 2>/dev/null
+  [ -z "$slot" ] || [ "$(sed -n 1p "$cache/slots/$slot/run" 2>/dev/null)" != "$run" ] || rm -f "$cache/slots/$slot/run"
+}
+trap done_here EXIT
 # One suite of a name at a time: by its lock, and by the record of one a killed run left going.
 exec 6>> "$cache/suite-$suite.lock"
 lockf -s -t 0 6 || busy "another validation is running $suite"
@@ -391,7 +400,6 @@ fi
 git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 9>&- && git -C "$checkout" clean --quiet -fd 6>&- 9>&- \
   || refuse "could not check $sha out in $checkout"
 [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
-git --git-dir="$cache/repo.git" update-ref -d "refs/validate/$sha" 6>&- 9>&-
 cd "$checkout" || refuse "could not enter $checkout"
 scripts/mac-suite.sh --check --cache "$cache" "$suite" 6>&- 9>&- || exit 76
 ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do going "$old" || rm -rf "${cache:?}/logs/$old"; done
@@ -413,7 +421,7 @@ exit "$status"
 # lacking something, or lost partway. Only a suite that ran to a result there has one: a Mac
 # that fell asleep is not a red suite, and the suite is still to run.
 run_on() {
-  local at="$1" suite="$2" run="$short-$$-${2/:/-}" status=0 began said
+  local at="$1" suite="$2" run="$short-$$-${2/:/-}" status=0 began said logged
   local there="Library/Caches/topo-validate"
   ssh_to "$at" "mkdir -p $there/logs && { [ -d $there/repo.git ] || git init --quiet --bare $there/repo.git; }" \
     || { echo "$at: not reached; it runs nothing of this validation."; return 2; }
@@ -431,13 +439,14 @@ run_on() {
           kill "$suite_pid" 2>/dev/null || true; wait "$suite_pid" 2>/dev/null || true
         fi
         exit 143' TERM INT HUP
+  logged="$(wc -l < "$logs/mac-suite.log" 2>/dev/null || echo 0)"
   ssh_to "$at" bash -s -- "$sha" "$lane" "$suite" "$run" <<<"$on_host" >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- &
   suite_pid=$!
   wait "$suite_pid" || status=$?
   trap 'exit 143' TERM INT HUP
   case "$status" in
     75) echo "$suite: $at is busy with another validation."; return 1 ;;
-    76) echo "$suite: $at cannot run it and runs nothing of this validation:"; sed -n '/^error: /p' "$logs/mac-suite.log" | tail -n 12; return 2 ;;
+    76) echo "$suite: $at cannot run it and runs nothing of this validation:"; tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 2 ;;
   esac
   mkdir -p "$logs/$at"
   if ! rsync -a --exclude '*.xcresult' -e "ssh $ssh_options" "$at:$there/logs/$run/" "$logs/$at/" 2>/dev/null; then
@@ -817,7 +826,9 @@ red="$(sed -n 's/=failure$//p' <<<"$results" | tr '\n' ' ')"
 red="${red% }"
 if [ -n "$red" ]; then
   echo "RED at $short: $red. Logs: $logs/mac-suite.log"
-  sed -n '/^error: /p' "$logs/mac-suite.log" | tail -n 20
+  # The script's own errors, a compiler's (`<file>:<line>: error: …`) and xcodebuild's
+  # annotations; a lent Mac that was busy says `busy:`, which is none of them.
+  { grep -E '^error: |: error: |^::error::' "$logs/mac-suite.log" || true; } | tail -n 20
 else
   echo "Every suite asked for passed at $short (${chosen[*]:-none needed}) in $minutes min."
 fi

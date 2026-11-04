@@ -148,7 +148,7 @@ if [ "${FAKE_SUITES-}" = twice ]; then
 fi
 status=0
 for suite in "${suites[@]}"; do
-  case " ${FAKE_SUITES-} " in *" $suite=failure "*) echo "$suite=failure" >> "$results/suites.txt"; status=1 ;; *) echo "$suite=success" >> "$results/suites.txt" ;; esac
+  case " ${FAKE_SUITES-} " in *" $suite=failure "*) echo "Fake.swift:1:2: error: $suite does not compile"; echo "$suite=failure" >> "$results/suites.txt"; status=1 ;; *) echo "$suite=success" >> "$results/suites.txt" ;; esac
 done
 exit "$status"
 '
@@ -319,6 +319,7 @@ is "red: exits 1" "$status" 1
 is "red: nothing pushed" "$(origin_head)" ""
 is "red: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
 grep -q 'RED at .*: others' <<<"$out" && ok "red: names the suite" || fail "red: $out"
+grep -qx 'Fake.swift:1:2: error: others does not compile' <<<"$out" && ok "red: the compiler's error is in the summary" || fail "red: no compiler error in the summary: $out"
 # A suite that died without a result is every suite red.
 scratch died Apps/Client/SettingsView.swift
 git -C "$repo" push -q origin topic
@@ -752,6 +753,7 @@ is "others alone on a host: exits 0" "$status" 0
 is "others alone on a host: ran there" "$(recorded checkout)" "$(there laptop)"
 is "others alone on a host: with none of its person's git configuration" "$(recorded gitconfig)" /dev/null
 [ ! -e "$TOPO_VALIDATE_CACHE/slots/1/checkout" ] && ok "others alone on a host: no checkout here" || fail "others alone on a host: a checkout was made here"
+is "others alone on a host: no slot record or ref is left there" "$(cat "$FAKE_HOSTS"/laptop/Library/Caches/topo-validate/slots/*/run 2>/dev/null)$(git --git-dir="$FAKE_HOSTS/laptop/Library/Caches/topo-validate/repo.git" for-each-ref refs/validate)" ""
 scratch host-harness scripts/janitor.py
 TOPO_VALIDATE_HOSTS=laptop validate
 is "scripts alone on a host: exits 0" "$status" 0
@@ -804,6 +806,13 @@ mkdir -p "$FAKE_HOSTS/laptop/Library/Caches/topo-validate/slots/1"
 lockf -k "$FAKE_HOSTS/laptop/Library/Caches/topo-validate/slots/1/lock" sh -c "echo \$\$ > '$work/host-busy/held'; exec sleep 60" &
 holder=$!
 for _ in $(seq 100); do [ -s "$work/host-busy/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+HOST_RETRY=0 TOPO_VALIDATE_HOSTS=laptop FAKE_SUITES="others=failure" validate
+is "a host busy, red here: exits 1" "$status" 1
+grep -q '^busy: every checkout (1) is held by another validation' "$(ls -d "$TOPO_VALIDATE_LOGS/$sha"/*/ | tail -n 1)mac-suite.log" \
+  && ok "a host busy: it says busy in the log" || fail "a host busy: no busy line in the log"
+case "$out" in *"busy: "*) fail "a host busy, red here: the busy lines are in the summary: $out" ;; *"error: others does not compile"*) ok "a host busy, red here: the summary is the suite's error" ;; *) fail "a host busy, red here: $out" ;; esac
+is "a host busy: no ref is left for the commit there" "$(git --git-dir="$FAKE_HOSTS/laptop/Library/Caches/topo-validate/repo.git" for-each-ref refs/validate)" ""
+git -C "$repo" commit -q --allow-empty -m again; sha="$(git -C "$repo" rev-parse HEAD)"
 TOPO_VALIDATE_HOSTS=laptop validate
 is "a host busy: exits 0" "$status" 0
 [ -n "$(recorded checkout)" ] && ok "a host busy: the suite ran" || fail "a host busy: the suite ran nowhere"
