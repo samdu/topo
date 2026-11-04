@@ -30,6 +30,33 @@ final class LoginLifeTests: XCTestCase {
         XCTAssertFalse(during.isCurrent, "work begun during the sign-out would land after its teardowns and keep what it made")
     }
 
+    /// A sign-out runs the teardowns at its own step and then moves the phase off signed in at
+    /// its last: the phase's follower does not run them, or clear the surfaces, a second time.
+    /// Signed in again, a login lost to a refresh runs them once more.
+    func testOneSignOutEndsTheLoginOnce() async {
+        let login = LoginLife()
+        var ran = 0
+        login.onEnd { ran += 1 }
+        var everything = 0
+        let surface = DefaultSurface(store: { nil },
+                                     reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: { everything += 1 },
+                                                               reloadControlKind: { _ in }, reloadEveryControl: {}, schedule: { _, _ in }),
+                                     login: login)
+        await SignOut(moveEpoch: { login.moveEpoch() }, stopSpeaking: {}, forgetShares: {}, forgetHarness: {}, forgetMemory: {},
+                      runTeardowns: { login.runTeardowns() }, forgetSurfaces: {}, forgetConnections: {}, forgetLogin: {}).act()
+        XCTAssertEqual(ran, 1)
+        // `forgetLogin`'s `SignIn.signOut` moves the phase, which the app's observer hands here.
+        surface.follow(from: .signedIn, to: .idle, latest: nil)
+        XCTAssertEqual(ran, 1, "the sign-out's teardowns ran a second time at the phase's change")
+        XCTAssertEqual(everything, 0, "the surfaces were cleared a second time")
+        surface.follow(from: .idle, to: .signedIn, latest: nil)
+        let held = login.epoch
+        surface.follow(from: .signedIn, to: .idle, latest: nil)
+        XCTAssertEqual(ran, 2, "a login lost after the next sign-in did not end")
+        XCTAssertEqual(everything, 1)
+        XCTAssertFalse(held.isCurrent)
+    }
+
     func testTeardownsRunInTheOrderRegisteredAtEveryEnd() {
         let login = LoginLife()
         var ran: [String] = []

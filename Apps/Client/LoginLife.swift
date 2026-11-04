@@ -26,6 +26,10 @@ final class LoginLife {
     }
 
     private var count = 0
+    /// Whether the login's end has yet to run its teardowns: false from a sign-out's teardowns
+    /// until the phase is next signed in, so the phase leaving signed in at that sign-out's last
+    /// step does not end the login a second time.
+    private(set) var standing = true
     private var teardowns: [@MainActor () -> Void] = []
     private var ending: [Task<Void, Never>] = []
 
@@ -56,12 +60,18 @@ final class LoginLife {
     /// would otherwise land after the teardown that ends it and keep what it made.
     func runTeardowns() {
         moveEpoch()
+        standing = false
         teardowns.forEach { $0() }
     }
 
     /// A login ending by a path with no steps of its own (the phase leaving signed in).
     func end() {
         runTeardowns()
+    }
+
+    /// The phase is signed in again: the next leaving of it is a login's end to run.
+    func began() {
+        standing = true
     }
 
     /// Returns once every awaiting teardown started so far has finished. Each teardown's task is

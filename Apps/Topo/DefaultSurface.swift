@@ -43,19 +43,25 @@ final class DefaultSurface {
         write(reply)
     }
 
-    /// The login's phase moving. Every way a login ends — the settings sheet, a demotion, a
-    /// viewer's takeover, and a refresh that finds the login gone (`SignIn.refresh`), which has no
-    /// steps of its own — ends here too: the login's epoch moves and its teardowns run
-    /// (`LoginLife.end`), and a signed-out phone keeps no surface. Only a login ending: a launch
-    /// that finds no token (the keychain unreadable before the first unlock included) takes
-    /// nothing away. Signed in, the default is written for the newest reply.
+    /// The login's phase moving. A refresh that finds the login gone (`SignIn.refresh`) has no
+    /// steps of its own, so it ends here: the login's epoch moves and its teardowns run
+    /// (`LoginLife.end`), and the surfaces go. The settings sheet, a takeover and a viewer's
+    /// arrival have already run both by the time their last step moves the phase
+    /// (`LoginLife.standing` is false), so they are not run a second time. Only a login ending: a
+    /// launch that finds no token (the keychain unreadable before the first unlock included)
+    /// takes nothing away. Signed in, the default is written for the newest reply.
     func follow(from was: SignIn.Phase, to phase: SignIn.Phase, latest reply: Turn?) {
         if was == .signedIn, phase != .signedIn {
-            login.end()
-            reloader.forget(store())
+            if login.standing {
+                login.end()
+                reloader.forget(store())
+            }
             forget()
         }
-        if phase == .signedIn { launched(latest: reply) }
+        if phase == .signedIn {
+            if was != .signedIn { login.began() }
+            launched(latest: reply)
+        }
     }
 
     /// A login ended and the surfaces with it: the next sign-in writes the default afresh.
