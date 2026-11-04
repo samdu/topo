@@ -172,7 +172,7 @@ jobs:
       scripts: ${{ steps.suites.outputs.scripts }}
       suites_reason: ${{ steps.suites.outputs.reason }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
       - name: Choose the lane
@@ -435,7 +435,7 @@ jobs:
           esac
           echo "PR #$PR_NUMBER draft: $draft (the event said ${{ github.event.pull_request.draft }})"
           echo "draft=$draft" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: steps.draft.outputs.draft == 'false'
         with:
           persist-credentials: false
@@ -494,6 +494,14 @@ jobs:
       cancel-in-progress: false
       queue: max
     runs-on: vm-linux
+    # Codex answers in one to five minutes and the steps before it in seconds,
+    # so what runs past the job's 30 minutes is a hang: Codex itself, or a
+    # checkout over a runner's failing network. A job past its limit is
+    # concluded cancelled, and so is the run, which redraft.yaml does not read
+    # and which leaves reviewer_ran and review_gate red after a verdict that
+    # may already be posted. So the steps that reach the network are bounded
+    # on their own, well inside the job's limit, and a hang fails its step
+    # instead; the login's write-back and deletion run `always()` either way.
     timeout-minutes: 30
     permissions:
       contents: read
@@ -510,7 +518,7 @@ jobs:
         # OAuth client must not fail `codex` or the required `review_gate` and hold
         # a mergeable PR. Without this the status feed becomes a merge dependency.
         continue-on-error: true
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
@@ -532,7 +540,8 @@ jobs:
       # is repo-scoped and cannot push, comment or merge. The jobs that comment
       # are separate ones, checking out scripts/ alone with no persisted
       # credential (review_cap, above).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
 
@@ -557,6 +566,7 @@ jobs:
           echo "The merge ref merges the event's PR head, $HEAD_SHA."
 
       - name: Pre-fetch base and head refs for the PR
+        timeout-minutes: 5
         env:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -672,7 +682,7 @@ jobs:
       # unconditionally waits on the Responses proxy its API-key path starts,
       # so it cannot run on a ChatGPT login. `codex exec` reads the login from
       # $CODEX_HOME/auth.json on its own.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install Codex CLI
@@ -694,6 +704,7 @@ jobs:
 
       - name: Run Codex
         id: run_codex
+        timeout-minutes: 20
         env:
           CODEX_HOME: ${{ runner.temp }}/codex-home
           CODEX_MODEL: gpt-6.1-sol
@@ -856,7 +867,7 @@ jobs:
       # `overwrite` so a re-run of this job alone replaces the last attempt's
       # file rather than being refused for a name that already exists.
       - name: Upload the verdict
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-verdict
           path: ${{ runner.temp }}/codex-verdict/verdict.json
@@ -920,7 +931,7 @@ jobs:
     outputs:
       capped: ${{ steps.recount.outputs.capped }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           sparse-checkout: scripts
@@ -936,13 +947,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: scripts/review-cap.sh >> "$GITHUB_OUTPUT"
       - name: Download the verdict
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: codex-verdict
           path: ${{ runner.temp }}/codex-verdict
       - name: Report Codex feedback
         if: ${{ steps.recount.outputs.capped == 'false' }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           CODEX_VERDICT_PATH: ${{ runner.temp }}/codex-verdict/verdict.json
           # The PR head this verdict read, which the next run's prompt step
@@ -1107,7 +1118,7 @@ jobs:
       # below with no verdict in hand, which is what they fail closed on.
       - name: Download the verdict
         if: ${{ needs.codex.outputs.has_verdict == 'true' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: codex-verdict
           path: ${{ runner.temp }}/codex-verdict
@@ -1224,7 +1235,7 @@ jobs:
         # OAuth client must not fail `codex` or the required `review_gate` and hold
         # a mergeable PR. Without this the status feed becomes a merge dependency.
         continue-on-error: true
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}

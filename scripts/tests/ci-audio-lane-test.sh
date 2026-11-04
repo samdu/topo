@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Holds scripts/ci-audio-lane.sh to one lane at a time, with no audio device: brew, sudo and
 # SwitchAudioSource are fakes (the last keeps the two defaults in a file), and a fake swiftc
-# builds a feeder that only writes the heartbeat and a meter that always hears the fixture. The
+# builds a feeder that only writes the heartbeat, renamed into place as the real one writes it, and
+# a meter that always hears the fixture. The
 # script runs from a checkout whose path has a space in it. A second start refuses with exit 3
 # and leaves the first lane running, its log, saved defaults and devices untouched; a start that
 # arrives while another is held inside start refuses; a pid file naming a live process that is
@@ -76,11 +77,12 @@ case "$2" in
 #include <time.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
-  char path[4096];
+  char path[4096], next[4096];
   snprintf(path, sizeof path, "%s/heartbeat", argv[2]);
+  snprintf(next, sizeof next, "%s/../heartbeat-%d.next", argv[2], (int)getpid());
   for (;;) {
-    FILE *f = fopen(path, "w");
-    if (f) { fprintf(f, "%ld\n", (long)time(0)); fclose(f); }
+    FILE *f = fopen(next, "w");
+    if (f) { fprintf(f, "%ld\n", (long)time(0)); fclose(f); rename(next, path); }
     usleep(500000);
   }
 }
