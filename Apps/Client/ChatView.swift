@@ -18,6 +18,9 @@ struct ChatView: View {
     @State private var setupStood = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
+    /// What the composer's `+` attaches, where the app made one; a canvas or a screen made
+    /// without it offers nothing there.
+    @Environment(ComposerAttachments.self) private var attachments: ComposerAttachments?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
@@ -241,6 +244,14 @@ struct ChatView: View {
             // The memory screen is the sheet's Memory section, and also what the offer card
             // above the composer opens, so the chat presents it too.
             .sheet(isPresented: $showMemory) { MemoryView() }
+            // The pickers the `+` puts up and the sheet over what was picked, on a view of
+            // their own so the chat's own sheets and theirs never share one presentation.
+            .background {
+                if let attachments {
+                    Color.clear.modifier(ComposerPickers(attachments: attachments,
+                                                         marks: ShareSheet.Marks(image: look.composer.flank.photo, file: look.composer.flank.file)))
+                }
+            }
         }
         .task {
             #if DEBUG && os(iOS)
@@ -594,6 +605,13 @@ struct ChatView: View {
                                holdsTopo: look.mascot.placement == .glass)
     }
 
+    /// What the composer's `+` offers: a file and a photo where the app made the attachments,
+    /// and nothing where it did not.
+    private var composerMenu: ComposerMenu {
+        guard let attachments else { return ComposerMenu() }
+        return ComposerMenu(attachFile: { attachments.pick(.file) }, choosePhoto: { attachments.pick(.photo) })
+    }
+
     /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
     private var micState: Composer.MicState {
         Composer.MicState(voice, speaking: speaker.speaking)
@@ -630,6 +648,7 @@ struct ChatView: View {
                             micReport: micReport,
                             focused: { focused = $0 },
                             room: room)
+            .environment(\.composerMenu, composerMenu)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {

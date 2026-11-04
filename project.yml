@@ -298,6 +298,7 @@ targets:
       - Apps/Shared/ShareStore.swift
       - Apps/Shared/ShareIntake.swift
       - Apps/Shared/ShareSheetModel.swift
+      - Apps/Shared/ShareSheet.swift
     info:
       path: Apps/Share/Info.plist
       properties:

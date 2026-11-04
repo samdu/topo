@@ -395,6 +395,8 @@ enum LookDocument {
         r.alpha("heldOpacity", &value.heldOpacity)
         r.reach("slot", &value.slot)
         r.symbol("more", &value.more)
+        r.symbol("file", &value.file)
+        r.symbol("photo", &value.photo)
         r.symbol("keyboard", &value.keyboard)
         r.retired("keyboardDown")
         r.symbol("speaking", &value.speaking)
