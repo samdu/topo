@@ -149,6 +149,7 @@ IDLE = timedelta(minutes=45)       # nothing moving, nothing running
 REPEAT = timedelta(hours=24)       # a failed read, a refusal, a worktree left: said again after this
 POOL_WAIT = timedelta(minutes=30)  # a runnable vm-linux job waiting this long is a pool that is not serving
 POOL_LABEL = "vm-linux"
+POOL_PAGE = 100   # per_page of the pool reads; a full page is refused as maybe not whole
 DIGEST = timedelta(hours=24)       # one line naming what still stands, no oftener than this
 DIGEST_NAMES = 40                  # PRs, and issues, the digest names before it counts the rest
 SWEEP = timedelta(hours=24)        # a merged branch's worktree lives this long
@@ -1138,12 +1139,13 @@ class Shell:
                            "[.jobs[] | {id, name, conclusion, steps: [.steps[] | {name, conclusion}]}]") or []
 
     def whole(self, path, key, item_jq):
-        """One page of a list endpoint, refused rather than read as whole when
-        the endpoint holds more than the page carries."""
-        page = self.gh_api(f"{path}{'&' if '?' in path else '?'}per_page=100",
-                           f"{{total: .total_count, n: (.{key} | length), items: [.{key}[] | {item_jq}]}}") or {}
-        if (page.get("n") or 0) < (page.get("total") or 0):
-            raise RuntimeError(f"{path} holds {page['total']} {key}, more than one page of {page['n']}")
+        """One page of a list endpoint, refused rather than read as whole when it
+        is full (as `listed` does). total_count is not read: GitHub's can count a
+        run its status filter no longer lists, total 1 beside an empty page."""
+        page = self.gh_api(f"{path}{'&' if '?' in path else '?'}per_page={POOL_PAGE}",
+                           f"{{n: (.{key} | length), items: [.{key}[] | {item_jq}]}}") or {}
+        if (page.get("n") or 0) >= POOL_PAGE:
+            raise RuntimeError(f"{path} answered a full page of {page['n']} {key}; the list may not be whole")
         return page.get("items") or []
 
     def pool_runs(self):
