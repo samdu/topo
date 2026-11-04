@@ -310,8 +310,8 @@ final class Speaker {
         return "type \(type), reason \(reason), wasSuspended \(suspended), options \(options)"
     }
 
-    /// The release of a spoken press: hold the process open for the reply that is coming, so the
-    /// turn is written, asked and answered behind the lock. Capped, and dropped the moment the
+    /// A spoken turn sent: hold the process open for the reply that is coming, so the turn is
+    /// written, asked and answered behind the lock, taking over from the release's hold. Capped, and dropped the moment the
     /// reply is being read, the turn fails, or anything ends the reply. Nothing is held for a
     /// reply that could not be heard anyway — replies muted, or a voice that is not
     /// resident at the release — since those turns make no audio to keep the phone awake for.
@@ -319,8 +319,9 @@ final class Speaker {
     /// The answer says both what was decided and what was achieved: `spoken` is whether the reply
     /// will be read aloud when it lands, which is what makes the turn a spoken one — the caller
     /// records the mark from it and states no condition of its own — and `held` is whether the
-    /// keeper is actually rendering for it. A keeper that would not start is a refusal, not a
-    /// hold, and is reported as one rather than left for the chat to believe in.
+    /// keeper is actually rendering for it, or will be at the activation of a call being placed.
+    /// A keeper that would not start is a refusal, not a hold, and is reported as one rather
+    /// than left for the chat to believe in.
     @discardableResult
     func awaitReply(_ nonce: String, readAloud: Bool) -> Wait {
         // The release this turn was sent under is let go once its wait stands, or at once where
@@ -332,7 +333,12 @@ final class Speaker {
         }
         waits[nonce]?.cancel()
         audio.wantAlive(true, for: .awaitingReply(nonce))
-        guard queue.keeping else {
+        // Under a call on its way — asked of the system or placed by it — the keeper may be down
+        // until the activation, whose resume starts it again for the holds standing: a wait taken
+        // then is held, or the call it is placed for would end with nothing holding it.
+        let placing = audio.call == .placed || call?.state == .starting
+        if placing { AudioLog.say("the wait for \(nonce) is held for the call's activation") }
+        guard queue.keeping || placing else {
             // The claim is one the process cannot honour: nothing is rendering, so nothing is
             // keeping it running, and saying otherwise would be a hold that exists only on paper.
             // The refusal itself is the queue's and is already logged there; what brought it down
@@ -456,7 +462,7 @@ final class Speaker {
         waits.keys.forEach { endAwaiting($0, why) }
     }
 
-    /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
+    /// iOS reset the media server: the reply stops, every hold goes with it, and the play queue's
     /// nodes go too, since an engine that was running when the server went down will not start
     /// again. Nothing is built here; the next `speak` activates the session and the first frame
     /// builds the queue, which is how Say it again works after a reset with no press before it.
@@ -465,8 +471,7 @@ final class Speaker {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
         #endif
-        // Releases first, so the holds `stop` drops do not leave one standing to start the keeper
-        // on the engine the reset invalidated.
+        // Every release goes, so none outlives the queue the reset drops.
         releases.keys.forEach { released($0, "the media server was reset") }
         stop()
         queue.reset()

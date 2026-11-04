@@ -30,7 +30,7 @@ jobs:
     runs-on: vm-linux
     steps:
       - name: Back to draft when the round is over
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const run = context.payload.workflow_run

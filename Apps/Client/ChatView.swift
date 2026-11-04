@@ -360,9 +360,11 @@ struct ChatView: View {
         .onChange(of: look.mind, initial: true) { _, mind in harness.mind = mind }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
-            // it, so nothing said into it was meant. A reply plays on — that is what the hold is
-            // for — and the press that starts the next one is what stops it. A hands-free spoken
-            // turn the lock carries into a call is the exception (`Conversation.scene`).
+            // it, so nothing said into it was meant. One already released is not: its words are
+            // being decoded to be sent, and the release's hold carries them behind the lock
+            // (`VoiceInput.drop`). A reply plays on — that is what the hold is for — and the press
+            // that starts the next one is what stops it. A hands-free spoken turn the lock carries
+            // into a call is the exception (`Conversation.scene`).
             conversation.scene(phase)
         }
         .onDisappear { if !conversation.on { voice.cancel(.chat) } }
@@ -526,9 +528,10 @@ struct ChatView: View {
             return
         }
         #endif
-        // The reply to this will be read aloud, so the process is held open from here: the turn
-        // is written, asked and answered behind the lock. Nothing is held for a reply that could
-        // not be heard anyway — the setting off, or a voice that is not resident.
+        // The reply to this will be read aloud, so the process is held open from here, the wait
+        // taking over from the release's hold: the turn is written, asked and answered behind
+        // the lock. Nothing is held for a reply that could not be heard anyway — the setting
+        // off, or a voice that is not resident.
         // The wait says whether the reply will be read aloud, which is what marks the turn as
         // spoken; whether the process is being kept running for it is its own answer, and this
         // screen states no condition of its own either way.

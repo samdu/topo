@@ -159,10 +159,11 @@ final class Conversation {
     }
 
     /// The scene's phase, from the chat: an open microphone is dropped as the scene goes, words
-    /// and all, unless the conversation carries it.
+    /// and all, unless the conversation carries it; a released press's decode finishes and sends
+    /// (`VoiceInput.drop`).
     func scene(_ phase: ScenePhase) {
         guard phase != .active, !carries() else { return }
-        voice.cancel(.chat)
+        voice.drop(.chat)
     }
 
     /// The call's moments, from the speaker (`Speaker.onCall`).

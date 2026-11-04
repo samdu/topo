@@ -410,11 +410,16 @@ final class AudioSession {
     func callPlaced() {
         call = .placed
         valid = false
+        // The mode the session is in, not the one wanted: a change of voice processing asked for
+        // while a hold or the microphone keeps the session waits for them (`deferredClaims`), and
+        // the call is placed only while a hold stands. From a session not in the record
+        // configuration no unit has a mode to keep, so the wanted one is set.
+        let mode = configuredRecord == true ? voiceProcessed : processed
         do {
-            try setCategory(true, processed)
+            try setCategory(true, mode)
             configuredRecord = true
-            voiceProcessed = processed
-            AudioLog.say("call placed: the record configuration is set (voice processing \(processed)); the system activates")
+            voiceProcessed = mode
+            AudioLog.say("call placed: the record configuration is set (voice processing \(mode), \(mode == processed ? "as wanted" : "as applied; \(processed) waits")); the system activates")
         } catch {
             AudioLog.say("call placed: the category did not set: \(error)")
         }

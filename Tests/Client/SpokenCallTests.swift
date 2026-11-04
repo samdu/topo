@@ -668,6 +668,52 @@ final class AudioSessionCallTests: XCTestCase {
         XCTAssertEqual(seams.deactivations, [])
     }
 
+    /// A change of voice processing asked for while a hold keeps the session waits for it, and
+    /// the call placed meanwhile sets the mode the session is in, not the one wanted: the wanted
+    /// one is applied when the call is over and nothing keeps the session.
+    func testACallIsPlacedWithTheModeAppliedNotTheOneWaiting() {
+        let seams = Seams()
+        let audio = audio(seams)
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .awaitingReply("turn"))
+        audio.wantVoiceProcessing(true)
+        seams.forget()
+        audio.callPlaced()
+        XCTAssertEqual(seams.categories.map { [$0.record, $0.processed] }, [[true, false]],
+                       "the call applied the voice processing that was waiting for the hold")
+        XCTAssertFalse(audio.voiceProcessed)
+        audio.callActivated()
+        audio.wantAlive(false, for: .awaitingReply("turn"))
+        audio.callOver()
+        XCTAssertEqual(seams.modes.last, true, "what waited was not applied once the call was over")
+        XCTAssertTrue(audio.voiceProcessed)
+    }
+
+    /// Two presses waiting on a closing call, each with its own bound: the first bound running
+    /// out answers the first alone, and the second waits on for the call's end.
+    func testEachSettlingWaitEndsAtItsOwnBound() async {
+        let seams = Seams()
+        let audio = audio(seams)
+        audio.wantRecord(true, for: .warm)
+        audio.callPlaced()
+        audio.callActivated()
+        audio.callClosing()
+        let first = ManualSleep(), second = ManualSleep()
+        var answers: [String: Bool] = [:]
+        let a = Task { @MainActor in answers["first"] = await audio.settled(within: .seconds(1), sleep: first.sleep) }
+        let b = Task { @MainActor in answers["second"] = await audio.settled(within: .seconds(3), sleep: second.sleep) }
+        for _ in 0..<200 where first.waiting + second.waiting < 2 { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(first.waiting + second.waiting, 2, "the two waits did not start")
+        first.fire()
+        await a.value
+        XCTAssertEqual(answers["first"], false, "the first bound answered as settled")
+        await Task.yield()
+        XCTAssertNil(answers["second"], "the first bound ended the second wait too")
+        audio.callOver()
+        await b.value
+        XCTAssertEqual(answers["second"], true)
+    }
+
     func testTheSessionIsLiveUnderAnActiveCallWhateverInvalidatedIt() {
         let seams = Seams()
         let audio = audio(seams)
