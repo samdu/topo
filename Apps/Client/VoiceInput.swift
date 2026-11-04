@@ -139,7 +139,7 @@ final class VoiceInput {
             // may be up and is not to be cancelled for it.
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            Task { @MainActor in self?.cancel() }
+            Task { @MainActor in self?.drop() }
         }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
@@ -214,6 +214,15 @@ final class VoiceInput {
     }
 
     /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
+    /// Drops a session still listening, as `cancel` does, and leaves one already ending to
+    /// finish: a released press has taken its audio and stopped its engine, and what is left is
+    /// the decode of words the person meant to send — a lock or an interruption landing during it
+    /// takes nothing from the microphone, which is no longer open.
+    func drop(_ gate: Gate? = nil) {
+        guard !ending else { return }
+        cancel(gate)
+    }
+
     func cancel(_ gate: Gate? = nil) {
         if let gate, owner != gate { return }
         generation += 1

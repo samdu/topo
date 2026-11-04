@@ -13,6 +13,7 @@ import XCTest
 final class StopWhileSpeakingTests: XCTestCase {
     /// The session the last `chat` was made over.
     private var audio: AudioSession!
+    private var center: NotificationCenter!
 
     override func tearDown() {
         UIApplication.shared.isIdleTimerDisabled = false
@@ -38,14 +39,14 @@ final class StopWhileSpeakingTests: XCTestCase {
     /// hears `heard`, sharing one audio session. The microphone prompt answers yes, so a press
     /// goes through `pressDown` and `pressUp` as the chat's does. The speaker asks the microphone
     /// whether it is open, as the app wires the two.
-    private func chat(heard: String = "",
+    private func chat(heard: String = "", ear: (any SpeechEngine)? = nil,
                       permission: @escaping @MainActor () async -> Bool = { true }) async -> (Speaker, VoiceInput, HeldVoice) {
         let held = HeldVoice()
-        let (speaker, input, _) = await chat(heard: heard, voice: held, permission: permission)
+        let (speaker, input, _) = await chat(heard: heard, voice: held, ear: ear, permission: permission)
         return (speaker, input, held)
     }
 
-    private func chat(heard: String, voice engine: any VoiceEngine,
+    private func chat(heard: String, voice engine: any VoiceEngine, ear earEngine: (any SpeechEngine)? = nil,
                       permission: @escaping @MainActor () async -> Bool) async -> (Speaker, VoiceInput, Seams) {
         let seams = Seams()
         let center = NotificationCenter()
@@ -57,10 +58,11 @@ final class StopWhileSpeakingTests: XCTestCase {
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
-                      engine: ScriptedEngine(bare: heard, boosted: heard))
+                      engine: earEngine ?? ScriptedEngine(bare: heard, boosted: heard))
         let nowhere = URL(fileURLWithPath: "/dev/null")
         ear.load(parakeet: nowhere, ctc: nowhere)
         await settle("the ear to load") { ear.ready }
+        self.center = center
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
@@ -472,7 +474,7 @@ final class StopWhileSpeakingTests: XCTestCase {
 
     /// The release of a spoken press holds the process from the thumb coming up, before the final
     /// transcription and the send, so a lock in between finds it held. The turn's own wait is
-    /// taken at the send, and the release lets go once the send is done, leaving that wait.
+    /// taken at the send, and the release lets go as that wait is taken.
     func testASpokenReleaseIsHeldUntilItsTurnsWaitIsTaken() async {
         let (speaker, voice, held) = await chat(heard: "purple elephants")
         defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
@@ -591,6 +593,70 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(speaker.awaiting, ["second"])
         speaker.endAwaiting("second", "the test is done")
         withExtendedLifetime(driver) {}
+    }
+
+    /// Sam's lock before the bubble turns blue: the scene going, or the interruption the lock
+    /// screen posts, lands while a released press's words are being decoded. The words are the
+    /// person's and are sent; only a microphone still listening is dropped.
+    func testALockDuringTheReleasesDecodeKeepsItsWords() async {
+        let decode = DecodeOnCue(heard: "purple elephants")
+        let (speaker, voice, held) = await chat(ear: decode)
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let sent = Sent()
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { text in
+            sent.add(text)
+            _ = speaker.awaitReply("turn", readAloud: true)
+        }
+        await settle("the release's decode to start") { decode.decoding }
+        voice.drop(.chat)
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        await drain()
+        XCTAssertTrue(audio.holding, "the release's hold went with the lock")
+        decode.finish()
+        await up?.value
+        XCTAssertEqual(sent.texts, ["purple elephants"], "the lock dropped the words being decoded")
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// A microphone still listening when the scene goes is dropped, words and all.
+    func testALockWithTheMicrophoneOpenDropsIt() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        await MicPress().gesture(true, drawn: Composer.MicState(voice, speaking: speaker.speaking),
+                                 speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertTrue(voice.listening)
+        voice.drop(.chat)
+        XCTAssertFalse(voice.listening)
+        XCTAssertNil(voice.owner)
+    }
+
+    /// A send that lands while the call is being placed, before the system activates its
+    /// session: the keeper is down until the activation, and the wait is held through it, so the
+    /// call it was placed for is not ended under it.
+    func testAWaitTakenWhileTheCallIsPlacedIsHeldThroughTheActivation() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        speaker.attach(call)
+        call.start()
+        call.provider(system.provider, perform: system.starts.last!)
+        XCTAssertEqual(audio.call, .placed)
+        XCTAssertFalse(speaker.keeping)
+        let wait = speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(wait.held, "a wait taken under the placed call was refused")
+        XCTAssertTrue(audio.holding)
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        await settle("the keeper to start at the activation") { speaker.keeping }
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        speaker.endAwaiting("turn", "the test is done")
     }
 
     /// A press as the call closes — the moment a reply ends, which is when a person answers —
@@ -776,4 +842,44 @@ private final class Prompt {
 private final class Sent {
     private(set) var texts: [String] = []
     func add(_ text: String) { texts.append(text) }
+}
+
+/// The ear's engine with a release's decode that waits to be let go, so a test can land a lock
+/// in the middle of it. Caption glances hear nothing.
+final class DecodeOnCue: SpeechEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: CheckedContinuation<Void, Never>?
+    private var started = false
+    private var finished = false
+    let heard: String
+
+    init(heard: String) { self.heard = heard }
+
+    var decoding: Bool { lock.withLock { started && !finished } }
+
+    func finish() {
+        let resume = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            finished = true
+            defer { waiting = nil }
+            return waiting
+        }
+        resume?.resume()
+    }
+
+    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+    func rebuild(terms: [String], version: Int) async throws {}
+
+    func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {
+        guard boosted else { return "" }
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock { () -> Bool in
+                started = true
+                if finished { return true }
+                waiting = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+        return heard
+    }
 }
