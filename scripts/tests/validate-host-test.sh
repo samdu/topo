@@ -70,12 +70,14 @@ settled() {
     perl -e 'select(undef,undef,undef,0.1)'; n=$((n + 1))
   done
 }
-# The holds this test started that still stand, counted from its own list: a Mac lent for real
-# runs a hold of the very same command, which is not this test's to count.
+# The holds this test started that still stand, counted from its own list: another copy of this
+# test, on a Mac lent for two, runs holds of the very same command, which are not this one's to
+# count. Each is let settle first, since one just started is still `nohup` for a moment.
 holds() {
   local pid n=0
   while IFS= read -r pid; do
-    [ "$(ps -o args= -p "$pid" 2>/dev/null)" = "/usr/bin/caffeinate -dimsu -t 3600" ] && n=$((n + 1))
+    settled "$pid"
+    [ "$(args "$pid")" = "/usr/bin/caffeinate -dimsu -t 3600" ] && n=$((n + 1))
   done < <(sort -u "$STARTED")
   echo "$n"
 }

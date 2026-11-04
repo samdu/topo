@@ -1168,35 +1168,51 @@ is "a suite's name changing hands: the run waits it out and exits 0" "$status" 0
 case "$out" in *"Waiting for a suite (topo_ui: one 0000012, "*) ok "a suite's name changing hands: it waited for the name" ;; *) fail "a suite's name changing hands: $out" ;; esac
 [ $((done_at - began_at)) -gt 6 ] && ok "a suite's name changing hands: it waited past twice the allowance" || fail "a suite's name changing hands: done in $((done_at - began_at)) s"
 is "a suite's name changing hands: its suite ran" "$(recorded suites)" "topo_ui"
-# And a suite's name held by one run that stands still runs the allowance out on time.
-lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" sh -c "echo \$\$ > '$q/../name-held'; exec sleep 60" &
+# The allowance is counted in looks, LOCK_POLL seconds each, so whether a run gave up on time
+# is counted the same way rather than read off the clock, which a loaded Mac's start-up alone
+# can outrun: a `sleep` that notes each look's wait, and ends the run at the tenth, so a run
+# that never gives up fails here rather than holding the test.
+mkdir -p "$work/pollbin"
+cat > "$work/pollbin/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+if [ "$*" = "$LOCK_POLL" ]; then
+  echo look >> "$POLLS"
+  [ "$(wc -l < "$POLLS")" -lt 10 ] || { kill -TERM "$PPID"; exit 1; }
+fi
+exec /bin/sleep "$@"
+SLEEP
+chmod +x "$work/pollbin/sleep"
+looks() { wc -l < "$POLLS" 2>/dev/null | tr -d ' '; }
+# And a suite's name held by one run that stands still runs the allowance out on time: its
+# three looks and no more. The holder outlasts any run here, and is ended by the test.
+lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_ui.lock" sh -c "echo \$\$ > '$q/../name-held'; exec sleep 600" &
 name_lock=$!
 until_true reached "$q/../name-held" || fail "a suite's name standing still: the name was never held"
 echo "one 0000012, pid 12, since 00:00" > "$TOPO_VALIDATE_CACHE/slots/1/holder"
-began_at=$SECONDS
-LOCK_WAIT=3 validate --suites topo_ui
-done_at=$SECONDS
+export POLLS="$work/standing.looks"; : > "$POLLS"
+PATH="$work/pollbin:$PATH" LOCK_WAIT=3 validate --suites topo_ui
 kill "$(cat "$q/../name-held")" 2>/dev/null; wait "$name_lock" 2>/dev/null; rm -f "$q/../name-held" "$TOPO_VALIDATE_CACHE/slots/1/holder"
 is "a suite's name standing still: exits 2" "$status" 2
-[ $((done_at - began_at)) -le 5 ] && ok "a suite's name standing still: gave up within the allowance" || fail "a suite's name standing still: gave up after $((done_at - began_at)) s"
+is "a suite's name standing still: gave up within the allowance" "$(looks)" 3
 is "a suite's name standing still: no suite ran" "$(recorded suites)" ""
 # A line that stands still while which of a ticket's names reads free flickers, as it does
 # when every run in the line asks those locks at each look: the same ticket ahead, the same
 # slot, and the allowance runs out on time.
-sleep 30 & still=$!
+# The run ahead and the flicker both last until the test ends them, however long the run takes
+# to reach its wait.
+sleep 600 & still=$!
 printf '%s\n%s\n%s\n%s\n' "$still" "$(began "$still")" "still 0000011" "topo_unit others" > "$q/0000000000000011-0000011"
-(for _ in 1 2 3 4 5 6 7 8; do
+(while :; do
    lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_unit.lock" perl -e 'select(undef,undef,undef,0.7)'
    lockf -k "$TOPO_VALIDATE_CACHE/suite-others.lock" perl -e 'select(undef,undef,undef,0.7)'
  done) 2>/dev/null &
 flicker=$!
-began_at=$SECONDS
-LOCK_WAIT=3 validate
-done_at=$SECONDS
+export POLLS="$work/flicker.looks"; : > "$POLLS"
+PATH="$work/pollbin:$PATH" LOCK_WAIT=3 validate
 kill "$flicker" "$still" 2>/dev/null; wait "$flicker" "$still" 2>/dev/null
 is "a flickering line that stands still: exits 2" "$status" 2
 case "$out" in *"the first still 0000011, pid $still, for "*) ok "a flickering line that stands still: it waited behind the one ahead" ;; *) fail "a flickering line that stands still: $out" ;; esac
-[ $((done_at - began_at)) -le 5 ] && ok "a flickering line that stands still: gave up within the allowance" || fail "a flickering line that stands still: gave up after $((done_at - began_at)) s"
+is "a flickering line that stands still: gave up within the allowance" "$(looks)" 3
 is "a flickering line that stands still: no suite ran" "$(recorded suites)" ""
 rm -f "$q/0000000000000011-0000011"
 
