@@ -160,9 +160,13 @@ final class SmartTurnRealTests: XCTestCase {
         try await SmartTurn().load(model: package, filterbank: filterbank, cache: cache)
         let compiled = try FileManager.default.contentsOfDirectory(atPath: cache.path)
         XCTAssertEqual(compiled, [try SmartTurn.digest(package) + ".mlmodelc"], "the compile is not kept under the package's name")
+        let data = cache.appendingPathComponent(compiled[0]).appendingPathComponent("coremldata.bin").path
+        let made = try FileManager.default.attributesOfItem(atPath: data)[.systemFileNumber] as? Int
         let judge = SmartTurn()
         try await judge.load(model: package, filterbank: filterbank, cache: cache)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cache.path), compiled, "a second load compiled again")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cache.path), compiled)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: data)[.systemFileNumber] as? Int, made,
+                       "a second load compiled again")
         let wav = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/purple-elephants.wav")
         let file = try AVAudioFile(forReading: wav)
