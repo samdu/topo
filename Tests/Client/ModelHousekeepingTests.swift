@@ -319,13 +319,37 @@ final class ModelHousekeepingTests: XCTestCase {
 
     // MARK: The compile cache
 
-    /// A first launch with nothing recorded clears; a relaunch on the same install does not; a
-    /// new install does; a removal that fails records nothing, so the next launch tries again.
-    /// Every sibling of the cache survives every case.
-    func testTheCompileCacheIsClearedOncePerInstall() throws {
+    /// With no clear asked for, nothing is removed on any launch: a new install keeps the cache
+    /// and is recorded once, and a relaunch of it does nothing.
+    func testTheCompileCacheIsKeptAcrossInstalls() throws {
         let caches = base.appendingPathComponent("Library/Caches", isDirectory: true)
         let cache = CompileCache.directory(caches: caches, bundleIdentifier: "zone.hexagon.topo")
         XCTAssertEqual(cache.path, caches.appendingPathComponent("zone.hexagon.topo/com.apple.e5rt.e5bundlecache").path)
+        let suite = "topo-compile-cache-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        try write(cache.appendingPathComponent("A/bundle.e5"))
+        var removals = 0
+        let launch = CompileCache(directory: cache, defaults: defaults) { url in
+            removals += 1
+            try FileManager.default.removeItem(at: url)
+        }
+
+        XCTAssertEqual(launch.launch(install: "A"), .kept, "a first launch with nothing recorded keeps the cache")
+        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "A")
+        XCTAssertEqual(launch.launch(install: "A"), .sameInstall, "a relaunch of the same install does nothing")
+        XCTAssertEqual(launch.launch(install: "B"), .kept, "a new install keeps the cache")
+        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "B")
+        XCTAssertTrue(exists(cache.appendingPathComponent("A/bundle.e5")), "nothing was removed")
+        XCTAssertEqual(removals, 0, "no removal was asked for")
+    }
+
+    /// A clear asked for removes the cache at the next launch, new install or not, and only the
+    /// cache; the request goes once the directory is gone or was never there; a removal that
+    /// fails leaves the request standing, so the launch after tries again.
+    func testACompileCacheClearAskedForRunsAtTheNextLaunch() throws {
+        let caches = base.appendingPathComponent("Library/Caches", isDirectory: true)
+        let cache = CompileCache.directory(caches: caches, bundleIdentifier: "zone.hexagon.topo")
         let siblings = [caches.appendingPathComponent("zone.hexagon.topo/Cache.db"),
                         caches.appendingPathComponent("zone.hexagon.topo/fsCachedData/ABCD"),
                         caches.appendingPathComponent("zone.hexagon.topo/com.apple.e5rt.e5bundlecache.old/x"),
@@ -336,36 +360,41 @@ final class ModelHousekeepingTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         func generation(_ name: String) throws { try write(cache.appendingPathComponent("\(name)/bundle.e5")) }
-        let clear = CompileCache(directory: cache, defaults: defaults)
+        let launch = CompileCache(directory: cache, defaults: defaults)
 
         try generation("16th")
         try generation("17th")
-        XCTAssertEqual(clear.clear(install: "A"), .cleared, "a first launch with no key recorded clears")
-        XCTAssertFalse(exists(cache))
-        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "A")
-
-        try generation("A")
-        XCTAssertEqual(clear.clear(install: "A"), .sameInstall, "a relaunch of the same install clears nothing")
-        XCTAssertTrue(exists(cache.appendingPathComponent("A/bundle.e5")))
+        XCTAssertEqual(launch.launch(install: "A"), .kept)
+        defaults.set(true, forKey: CompileCache.requested)
 
         struct Refused: Error {}
         let failing = CompileCache(directory: cache, defaults: defaults) { _ in throw Refused() }
-        guard case .failed = failing.clear(install: "B") else { return XCTFail("a refused removal is a failure") }
-        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "A", "a failed removal is not remembered as done")
+        guard case .failed = failing.launch(install: "A") else { return XCTFail("a refused removal is a failure") }
+        XCTAssertTrue(defaults.bool(forKey: CompileCache.requested), "a failed removal leaves the request standing")
         XCTAssertTrue(exists(cache))
 
-        XCTAssertEqual(clear.clear(install: "B"), .cleared, "the next launch tries again, and a new install clears")
+        XCTAssertEqual(launch.launch(install: "A"), .cleared, "the next launch, the same install, clears")
         XCTAssertFalse(exists(cache))
-        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "B")
+        XCTAssertFalse(defaults.bool(forKey: CompileCache.requested), "the request goes once it is done")
 
-        XCTAssertEqual(clear.clear(install: "C"), .absent, "a new install with no cache records its key")
-        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "C")
+        try generation("A")
+        XCTAssertEqual(launch.launch(install: "A"), .sameInstall, "with the request gone, nothing is removed")
+        XCTAssertTrue(exists(cache.appendingPathComponent("A/bundle.e5")))
+
+        defaults.set(true, forKey: CompileCache.requested)
+        XCTAssertEqual(launch.launch(install: "B"), .cleared, "a request is honoured on a new install too")
+        XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "B")
+        XCTAssertFalse(exists(cache))
+
+        defaults.set(true, forKey: CompileCache.requested)
+        XCTAssertEqual(launch.launch(install: "B"), .absent, "a request with no cache there is done")
+        XCTAssertFalse(defaults.bool(forKey: CompileCache.requested))
 
         for sibling in siblings { XCTAssertTrue(exists(sibling), "\(sibling.path) is not the compile cache") }
     }
 
     /// The cache's own folder under Caches a link to somewhere else: nothing behind it is
-    /// removed, and the key is not recorded, so a later launch looks again.
+    /// removed, and the request stands, so a later launch looks again.
     func testACacheReachedThroughALinkIsNotCleared() throws {
         let caches = base.appendingPathComponent("Library/Caches", isDirectory: true)
         let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
@@ -379,11 +408,12 @@ final class ModelHousekeepingTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let clear = CompileCache(directory: CompileCache.directory(caches: caches, bundleIdentifier: "zone.hexagon.topo"),
                                  defaults: defaults)
+        defaults.set(true, forKey: CompileCache.requested)
 
-        guard case .failed = clear.clear(install: "A") else { return XCTFail("a cache behind a link is refused") }
+        guard case .failed = clear.launch(install: "A") else { return XCTFail("a cache behind a link is refused") }
         XCTAssertTrue(exists(behind), "nothing behind the link is removed")
         XCTAssertTrue(exists(precious))
-        XCTAssertNil(defaults.string(forKey: CompileCache.recorded), "nothing is recorded")
+        XCTAssertTrue(defaults.bool(forKey: CompileCache.requested), "the request stands")
     }
 
     /// The key the app runs with is read off this image and this bundle, and is the same on
@@ -397,8 +427,8 @@ final class ModelHousekeepingTests: XCTestCase {
     }
 
     /// A byte-identical build installed over itself has the same UUID and a new bundle
-    /// container, and is a new install: it clears. The same UUID at the same path is a relaunch,
-    /// and does not.
+    /// container, and is a new install: it is logged as kept. The same UUID at the same path is a
+    /// relaunch, and is not.
     func testTheSameBuildInstalledAgainIsANewInstall() throws {
         let cache = base.appendingPathComponent("Library/Caches/zone.hexagon.topo/com.apple.e5rt.e5bundlecache")
         let suite = "topo-install-key-\(UUID().uuidString)"
@@ -410,14 +440,12 @@ final class ModelHousekeepingTests: XCTestCase {
         let second = URL(fileURLWithPath: "/containers/Bundle/Application/0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0/Topo.app")
 
         try write(cache.appendingPathComponent("first/bundle.e5"))
-        XCTAssertEqual(clear.clear(install: CompileCache.installKey(image: image, bundle: first)), .cleared)
-        try write(cache.appendingPathComponent("first/bundle.e5"))
-        XCTAssertEqual(clear.clear(install: CompileCache.installKey(image: image, bundle: first)), .sameInstall,
+        XCTAssertEqual(clear.launch(install: CompileCache.installKey(image: image, bundle: first)), .kept)
+        XCTAssertEqual(clear.launch(install: CompileCache.installKey(image: image, bundle: first)), .sameInstall,
                        "the same build at the same path is a relaunch")
-        XCTAssertTrue(exists(cache))
-        XCTAssertEqual(clear.clear(install: CompileCache.installKey(image: image, bundle: second)), .cleared,
+        XCTAssertEqual(clear.launch(install: CompileCache.installKey(image: image, bundle: second)), .kept,
                        "the same build in a new bundle container is a new install")
-        XCTAssertFalse(exists(cache))
+        XCTAssertTrue(exists(cache))
     }
 
     /// The launch clears before either the ear or the voice exists, since a debug build's start
