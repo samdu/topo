@@ -221,7 +221,7 @@ if [ "$check" = yes ] && [ "$builds" = yes ]; then
   for suite in "${asked[@]}"; do
     case "$suite" in
       others) has_simulator "$WATCHOS_SIMULATOR_RUNTIME" "Apple Watch" || { err "no Apple Watch simulator of $WATCHOS_SIMULATOR_RUNTIME on this Mac."; lacks=1; } ;;
-      topo_ui | topo_ui:mic) err "$suite runs on buddybox alone: its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
+      topo_ui | topo_ui:mic) err "$suite runs on buddybox alone (topo_ui:quiet runs on any Mac): its audio lane installs a driver and takes the Mac's default input and output."; lacks=1 ;;
     esac
   done
   stamp="Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
