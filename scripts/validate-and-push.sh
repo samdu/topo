@@ -695,6 +695,8 @@ run_here() {
   suite_started=$SECONDS
   keep start_suite "$suite"
   suite_status="$kept"
+  # Its name's lock is still this run's, so the holder removed is this run's own.
+  rm -f "$cache/suite-$2.holder"
   # mac-suite.sh starts its suites.txt afresh each call. The suite has a line, or it failed:
   # a call that died early wrote none.
   said="$(grep "^$suite=" "$logs/suites.txt" 2>/dev/null || true)"

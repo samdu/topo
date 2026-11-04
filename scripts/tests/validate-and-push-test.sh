@@ -246,6 +246,7 @@ is "app: no status on another commit" "$(posts_elsewhere)" 0
 is "app: no other Mac is asked anything" "$(wc -l < "$SSH_CALLS" | tr -d ' ')" 0
 is "app: origin's branch was at the commit as each status was posted" "$(sort -u "$GH_CALLS.origin")" "$sha"
 [ -d "$TOPO_VALIDATE_LOGS/$sha" ] && ok "app: the logs are kept under the commit" || fail "app: no $TOPO_VALIDATE_LOGS/$sha"
+is "app: no suite's or slot's holder is left behind it" "$(cd "$TOPO_VALIDATE_CACHE" && ls -1 suite-*.holder slots/*/holder 2>/dev/null)" ""
 # A second commit reuses the worktree, at the new commit.
 git -C "$repo" checkout -q -- Apps/Client/SettingsView.swift
 echo y > "$repo/Apps/Client/Other.swift"; g -C "$repo" add Apps; g -C "$repo" commit -qm more
