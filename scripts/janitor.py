@@ -418,7 +418,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
                             "text": f"reran {first['name']} of {title} (run {run['id']}) and the jobs that wait on it: {why}."})
             return out
         detail = ", ".join(red_names) or conclusion
-        report("red", f"{title}: red again on {short} after one rerun ({detail}); {why}.")
+        report("red", f"{title}: red on {short} with its one rerun spent ({detail}); {why}.")
         return out
 
     if age > IDLE:

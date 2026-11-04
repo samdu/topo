@@ -981,6 +981,9 @@ if tool == "gh":
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
+    if a[:2] == ["run", "rerun"] and S.get("state_at_rerun"):
+        at = open(S["state_at_rerun"]).read() if os.path.exists(S["state_at_rerun"]) else '{"rerun": {}}'
+        open(S["state_at_rerun"] + ".at-rerun", "w").write(at)
     if a[:2] == ["run", "rerun"] and S.get("rerun_refused"): print(S["rerun_refused"], file=sys.stderr); sys.exit(1)
     if a[:2] == ["pr", "merge"] or a[:2] == ["run", "rerun"]: sys.exit(0)
     if a[:2] == ["issue", "list"] and a[a.index("--repo") + 1] == "samdu/topo-link":
@@ -2136,7 +2139,7 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertNotIn("run rerun", calls)
         text = Bridge.received[-1]["body"]["text"]
-        self.assertIn("red again", text)
+        self.assertIn("with its one rerun spent", text)
         self.assertIn("(codex, reviewer_ran, review_gate)", text)
 
     def test_a_red_test_under_a_reviewer_that_never_ran_is_never_rerun(self):
@@ -2554,10 +2557,14 @@ class WholePass(unittest.TestCase):
         for j_ in ([], jobs(select="success", test="success", review_cap="success", codex="cancelled",
                             post_feedback="skipped", reviewer_ran="failure", review_gate="failure")):
             self.setUp()
-            s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j_, worktrees="", rerun_refused="HTTP 502")
+            s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j_, worktrees="", rerun_refused="HTTP 502",
+                              state_at_rerun=self.state)
             p, calls = self.run_pass(s)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn("gh run rerun", calls)
+            with open(self.state + ".at-rerun") as f:
+                at_ask = json.load(f).get("rerun", {})
+            self.assertEqual(len([k for k in at_ask if k.endswith(HEAD)]), 1, "saved before the ask")
             self.assertEqual(len([k for k in self.state_file()["rerun"] if k.endswith(HEAD)]), 1)
             self.assertIn("rerun refused, and not asked again at this head: ", self.texts())
             p, calls = self.run_pass(s)
