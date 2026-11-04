@@ -165,6 +165,11 @@ final class GuestProcessTests: XCTestCase {
             : > /tmp/topo-freeze-tick
             i=0; while :; do i=$((i+1)); echo $i >> /tmp/topo-freeze-tick; sleep 0.05; done
             """])
+        // A failure that leaves the test early still ends the ticker, stopped or not, so the next
+        // run of the test in the same guest does not find a second counter writing the file.
+        addTeardownBlock {
+            if !ticker.hasExited { _ = await ticker.terminate(within: .seconds(5)) }
+        }
         var lines = ticker.lines.makeAsyncIterator()
         _ = await lines.next()
         // Read by a fresh process, which a stopped guest still runs; bounded, so a reader that
@@ -182,10 +187,7 @@ final class GuestProcessTests: XCTestCase {
             bound.cancel()
             await eventually("the reader exited") { cat.hasExited }
             XCTAssertEqual(cat.exitStatus, 0, "the reader did not finish")
-            guard let line, let count = Int(line) else {
-                throw TickUnread(line: line)
-            }
-            return count
+            return try TickUnread.count(line)
         }
         try await Task.sleep(for: .milliseconds(200))
 
@@ -241,11 +243,28 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertFalse(GuestProcess.Termination(status: 137, signalled: 0, running: 0, pipesClosed: true, walked: false).confirmed,
                        "a tree that could not be walked was confirmed ended")
     }
+
+    func testATickReadAsNoCountIsAFailedRead() throws {
+        XCTAssertEqual(try TickUnread.count("42"), 42)
+        let unread: [(String?, String)] = [(nil, "nothing"), ("", "''"), ("invalid", "'invalid'"), ("4 2", "'4 2'")]
+        for (line, said) in unread {
+            XCTAssertThrowsError(try TickUnread.count(line), said) { error in
+                XCTAssertEqual("\(error)", "the tick read as \(said), not a count")
+            }
+        }
+    }
 }
 
 /// A read of the freeze test's tick that came back as no count: a failure of the read, said as
 /// one, rather than a number that fails the comparison after it.
 private struct TickUnread: Error, CustomStringConvertible {
     let line: String?
+
+    /// The count a read of the tick file's last line says, or this error.
+    static func count(_ line: String?) throws -> Int {
+        guard let line, let count = Int(line) else { throw TickUnread(line: line) }
+        return count
+    }
+
     var description: String { "the tick read as \(line.map { "'\($0)'" } ?? "nothing"), not a count" }
 }
