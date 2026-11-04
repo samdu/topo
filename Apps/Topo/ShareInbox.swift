@@ -139,6 +139,25 @@ final class ShareInbox {
         return queued
     }
 
+    /// The bytes of an image a turn names, from the guest's home on this phone: `shared/<nonce>/<name>`
+    /// opened through a descriptor beneath the home with no link followed anywhere along it, a
+    /// regular file of at most `Share.fileLimit`; nil otherwise. What a turn names is read from
+    /// the log, and the guest can make links in its home, so the path's words are not the judge.
+    nonisolated static func imageData(_ image: TurnImage, under home: URL = GuestResident.homeDirectory) -> Data? {
+        let base = open(home.resolvingSymlinksInPath().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard base >= 0 else { return nil }
+        defer { close(base) }
+        // Non-blocking, so a pipe the guest made at the name answers at once rather than holding
+        // the open until something writes it; the type is judged before anything is read.
+        let file = openat(base, [folder, image.nonce, image.name].joined(separator: "/"), O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC)
+        guard file >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+        var status = stat()
+        guard fstat(file, &status) == 0, status.st_mode & S_IFMT == S_IFREG, status.st_size <= Share.fileLimit,
+              let data = try? handle.read(upToCount: Share.fileLimit + 1), data.count <= Share.fileLimit else { return nil }
+        return data
+    }
+
     /// Takes a share's file back out of the home.
     nonisolated static func unplace(_ share: Share, under home: URL) {
         guard let name = share.file else { return }

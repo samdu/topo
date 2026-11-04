@@ -1016,13 +1016,13 @@ final class ShareTests: XCTestCase {
         try store.keep(waiting, attachment: try attachment("a.pdf", Data([1, 2, 3])))
         try store.keep(share(.text, text: "also waiting"))
         var drains: [Task<Void, Never>] = []
-        let signOut = SignOut(stopSpeaking: {}, forgetShares: { store.close() },
+        let signOut = SignOut(moveEpoch: {}, stopSpeaking: {}, forgetShares: { store.close() },
                               forgetHarness: {
                                   drains.append(Task { await inbox.drain() })
                                   await harness.forget()
                                   drains.append(Task { await inbox.drain() })
                               },
-                              forgetMemory: {}, forgetSurfaces: {}, forgetConnections: {}, forgetLogin: {})
+                              forgetMemory: {}, runTeardowns: {}, forgetSurfaces: {}, forgetConnections: {}, forgetLogin: {})
         drains.append(Task { await inbox.drain() })
         await Task.yield()
         await signOut.act()
