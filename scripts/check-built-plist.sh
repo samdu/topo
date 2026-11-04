@@ -138,7 +138,11 @@ for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescr
            NSAlarmKitUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
-        echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
+        if [ "$key" = NSAlarmKitUsageDescription ]; then
+            echo "$app/Info.plist has no $key; AlarmKit would schedule no alarm" >&2
+        else
+            echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
+        fi
         status=1
     fi
 done

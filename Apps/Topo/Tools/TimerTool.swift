@@ -54,8 +54,9 @@ struct TimerTool: Tool {
     let book: @MainActor () -> TimerBook
     let broker: PermissionBroker
     /// Where Topo stands: the system's prompt can be raised unless it is in the background. A
-    /// system alert, another tool's prompt among them, makes the app inactive and not backgrounded,
-    /// so a start made under one still asks, and waits on the prompt already up (`PermissionBroker`).
+    /// system alert makes the app inactive and not backgrounded, so a start made under one still
+    /// asks: under AlarmKit's own prompt it waits on that one (`PermissionBroker`), and under
+    /// another's its prompt follows.
     var state: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
     var now: @Sendable () -> Date = { Date() }
     var makeID: @Sendable () -> UUID = { UUID() }
