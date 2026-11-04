@@ -304,7 +304,8 @@ final class WidgetActions {
              await ControlRequest.perform($0, secrets: ControlSecrets())
          },
          read: @escaping @MainActor (SurfaceStore, String) -> WidgetDocument? = { $0.read(slot: $1)?.document },
-         changed: @escaping @MainActor (String) -> Void = { SurfaceSync.shared.changed(slot: $0) }) {
+         changed: @escaping @MainActor (String) -> Void = { SurfaceSync.shared.changed(slot: $0) },
+         login: LoginLife = .shared) {
         self.table = table
         self.store = store
         self.reloader = reloader
@@ -312,7 +313,7 @@ final class WidgetActions {
         self.perform = perform
         self.read = read
         self.changed = changed
-        reloader.onForget { [weak self] in self?.cancelAll() }
+        login.onEnd { [weak self] in self?.cancelAll() }
     }
 
     /// A sign-out: every run in flight is cancelled, so none takes its effect after the login

@@ -87,6 +87,18 @@ final class VoiceInput {
     /// Counts sessions; everything asynchronous checks it belongs to the current one. Readable
     /// so the suite can drive a press under the generation the object is on.
     private(set) var generation = 0
+    /// How long a press waits for the call's session to settle (`AudioSession.settled`): past
+    /// the call's closing grace, so a call only the grace finishes is waited out. Settable for
+    /// the suite.
+    var callSettle: Duration = .seconds(3)
+    /// The generation of the press waiting out the call's session (`begin`), and whether a
+    /// tap's release came meanwhile. A generation, so a press cancelled while it waited leaves
+    /// nothing that reads as the next press's.
+    private var settling: Int?
+    private var tappedWhileSettling = false
+    /// Presses `pressDown` ignored while a press waited out the call's session, whose releases
+    /// are owed nothing. Cleared at the next press that begins.
+    private var ignoredWhileSettling = 0
     /// True from the press until the microphone is running: the permission prompts, mainly.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
@@ -122,12 +134,13 @@ final class VoiceInput {
         interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
-            // A call or Siri took the session; whatever was being said is over. Only the start
+            // A call or Siri took the session; whatever was still being said is over, and words
+            // already released finish their decode and are sent (`drop`). Only the start
             // of an interruption: iOS posts its end seconds later, by which time a new session
             // may be up and is not to be cancelled for it.
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            Task { @MainActor in self?.cancel() }
+            Task { @MainActor in self?.drop() }
         }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
@@ -158,7 +171,12 @@ final class VoiceInput {
     /// when a permission is denied.
     func pressDown(as gate: Gate) async -> String? {
         if listening, owner == gate, handsFree { return await end(as: gate) }
-        guard !listening, !starting, !ending else { return nil }
+        guard !listening, !starting, !ending else {
+            // A press made while another waits out the call's session reaches nothing, and so
+            // does its release, whenever it comes.
+            if settling == generation { ignoredWhileSettling += 1 }
+            return nil
+        }
         pressedAt = Date()
         await begin(as: gate)
         return nil
@@ -166,9 +184,22 @@ final class VoiceInput {
 
     /// The thumb comes up for `gate`. A hold ends and returns what it heard, to be sent; a tap
     /// leaves the microphone open and returns nil. A release while the permission prompts are
-    /// still up cancels the press, so no microphone is left open with nobody holding it.
+    /// still up cancels the press, so no microphone is left open with nobody holding it; so does
+    /// a hold released while the press waits out a call's session (`begin`), and a tap released
+    /// there opens it hands-free once the session settles.
     func pressUp(as gate: Gate) async -> String? {
         releases += 1
+        if ignoredWhileSettling > 0 {
+            ignoredWhileSettling -= 1
+            return nil
+        }
+        // A tap while the press waits out the call's session is a tap, not a cancel: the
+        // microphone opens hands-free once the session settles.
+        if settling == generation, owner == gate, let pressedAt,
+           Date().timeIntervalSince(pressedAt) < Self.tapLimit {
+            tappedWhileSettling = true
+            return nil
+        }
         if starting, owner == gate {
             generation += 1
             starting = false
@@ -181,6 +212,15 @@ final class VoiceInput {
             return nil
         }
         return await end(as: gate)
+    }
+
+    /// Drops a session still listening, as `cancel` does, and leaves one already ending to
+    /// finish: a released press has taken its audio and stopped its engine, and what is left is
+    /// the decode of words the person meant to send — a lock or an interruption landing during it
+    /// takes nothing from the microphone, which is no longer open.
+    func drop(_ gate: Gate? = nil) {
+        guard !ending else { return }
+        cancel(gate)
     }
 
     /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
@@ -200,6 +240,7 @@ final class VoiceInput {
         #endif
         generation += 1
         let mine = generation
+        ignoredWhileSettling = 0
         starting = true
         owner = gate
         text = ""
@@ -213,7 +254,21 @@ final class VoiceInput {
         // Released or cancelled while the prompt was up: start nothing.
         guard generation == mine else { return }
         denied = false
+        // The call's session changing hands — closing as a reply ends, which is when a person
+        // answers — is waited out rather than refused: a tap put on a closing session is cut by
+        // its deactivation. Past the bound the press goes on and `ensureActive` refuses it.
+        var tapped = false
+        if audio.callChangingHands {
+            settling = mine
+            tappedWhileSettling = false
+            _ = await audio.settled(within: callSettle)
+            if settling == mine { settling = nil }
+            // Released or cancelled while it waited: start nothing.
+            guard generation == mine else { return }
+            tapped = tappedWhileSettling
+        }
         press(as: gate, mine: mine)
+        if tapped, listening, generation == mine { handsFree = true }
     }
 
     /// The microphone was refused at the prompt: the press is over, and the button stays dimmed

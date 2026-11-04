@@ -141,14 +141,17 @@ targets:
     # is declared here, where it lands in the bundle. A silent push wakes the primary when a limb
     # writes a turn (see TurnPush); `audio` is the reply to a spoken turn, heard behind the lock,
     # the process running while the play queue renders, which its keeper makes true from the
-    # release of the press (Apps/Client/Speaker.swift). Both modes and the push entitlement
+    # release of the press (Apps/Client/Speaker.swift); `voip` is what lets the app place the
+    # CallKit call a spoken exchange behind the lock is (Apps/Client/SpokenCall.swift): without
+    # it the system refuses `CXStartCallAction` as unentitled. No VoIP push goes with it, since
+    # the call is only ever placed by the app for itself. The three modes and the push entitlement
     # (`aps-environment`, in this target's own entitlements) are here for the answering loop and the
     # voice: the watch and the TV never answer and never speak. The watch carries `aps-environment`
     # alone for its own `Surface` push (below): watchOS delivers a background push with no mode declared.
     info:
       path: Apps/Topo/Info.plist
       properties:
-        UIBackgroundModes: [remote-notification, audio]
+        UIBackgroundModes: [remote-notification, audio, voip]
         # A turn sent in front asks for a continued-processing task under this prefix, which
         # keeps the app running behind another app until the turn ends (GuestLifecycle,
         # Apps/Topo/ContinuedTurn.swift). Not a key Xcode generates, so it is here, and
@@ -212,6 +215,7 @@ targets:
         INFOPLIST_KEY_NSContactsUsageDescription: Topo looks people up in your contacts when you ask about them.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Topo checks where you are when you ask something that depends on it.
         INFOPLIST_KEY_NSHomeKitUsageDescription: Topo reads and controls your home's accessories when you ask it to.
+        INFOPLIST_KEY_NSCameraUsageDescription: Topo takes a photo with the camera when you choose Take a photo beside the microphone.
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Topo finds and looks at your photos when you ask it to, and saves a picture when you ask for one.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Topo saves a picture to your photos when you ask it to.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Topo sends the requests your controls make to devices on your home network.
@@ -298,6 +302,7 @@ targets:
       - Apps/Shared/ShareStore.swift
       - Apps/Shared/ShareIntake.swift
       - Apps/Shared/ShareSheetModel.swift
+      - Apps/Shared/ShareSheet.swift
     info:
       path: Apps/Share/Info.plist
       properties:

@@ -336,7 +336,8 @@ final class DefaultSurfaceTests: XCTestCase {
         var everything = 0
         let surface = DefaultSurface(store: { store },
                                      reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: { everything += 1 },
-                                                               schedule: { _, body in body() }))
+                                                               schedule: { _, body in body() }),
+                                     login: LoginLife())
         try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
         surface.follow(from: .idle, to: .signedIn, latest: turn(2, .assistant, "Tonight."))
         XCTAssertNotNil(store.read(slot: SurfaceStore.defaultSlot))
@@ -379,10 +380,9 @@ final class DefaultSurfaceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = SurfaceStore(folder: folder)
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
-        let surface = DefaultSurface(store: { store }, reloader: reloader)
+        let surface = DefaultSurface(store: { store }, reloader: reloader, login: LoginLife())
         surface.launched(latest: nil)
-        reloader.forget(store)
-        surface.forget()
+        surface.follow(from: .signedIn, to: .idle, latest: nil)
         XCTAssertNil(store.read(slot: SurfaceStore.defaultSlot))
         surface.launched(latest: nil)
         XCTAssertNotNil(store.read(slot: SurfaceStore.defaultSlot), "signed back in, and the widgets still say to sign in")

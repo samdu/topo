@@ -89,7 +89,7 @@ final class SurfaceSync {
          demoted: (@Sendable (String) async throws -> Bool)? = nil,
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          runner: String = DeviceIdentity.current.rawValue, defaults: UserDefaults = .standard,
-         reloader: SurfaceReloader = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
+         login: LoginLife = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
         self.records = records
         self.ensureZone = ensureZone
         // The role records are read from `roles` unless a test answers for them: this phone's own
@@ -100,7 +100,7 @@ final class SurfaceSync {
         self.runner = runner
         self.defaults = defaults
         self.now = now
-        reloader.onForget { [weak self] in self?.forget() }
+        login.onEnd { [weak self] in self?.forget() }
     }
 
     /// The slots whose record is behind their file: a save or a delete not yet confirmed.

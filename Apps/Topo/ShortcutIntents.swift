@@ -80,7 +80,7 @@ struct ShortcutRefusal: Error, CustomLocalizedStringResourceConvertible {
         case .nothing: "There is nothing there to send Topo."
         case .tooLong: "That is more text than Topo takes at once."
         case .tooMany: "Topo is holding as much as it can. Open Topo so it can read it."
-        case .anotherPhone, .tooLarge, .failed: "Topo could not take that."
+        case .anotherPhone, .tooLarge, .failed, .noPicker: "Topo could not take that."
         }
     }
 }

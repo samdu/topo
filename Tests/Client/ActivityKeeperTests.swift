@@ -10,14 +10,17 @@ import XCTest
 final class ActivityKeeperTests: XCTestCase {
     private var host: FakeActivityHost!
     private var clock: FakeClock!
+    private var login: LoginLife!
 
     override func setUp() {
         host = FakeActivityHost()
         clock = FakeClock()
+        login = LoginLife()
     }
 
     private func keeper(_ fetcher: TrackerFetcher) -> ActivityKeeper {
-        ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date })
+        ActivityKeeper(host: host, fetcher: fetcher, sleep: { [clock] in try await clock!.sleep($0) }, now: { [clock] in clock!.date },
+                       login: login)
     }
 
     private func start(poll: Bool = true, until: Date? = nil) throws -> String {
@@ -135,10 +138,7 @@ final class ActivityKeeperTests: XCTestCase {
         let id = try start(until: clock.date.addingTimeInterval(600))
         keeper.keep(id)
         await tick()
-        XCTAssertEqual(fetcher.pending, 1)
-        await keeper.endAll()
-        fetcher.release(TrackerFixtures.wiki)
-        await settle()
+        await SigningOut.midFlight(login, reached: { fetcher.pending == 1 }) { fetcher.release(TrackerFixtures.wiki) }
         XCTAssertEqual(host.updates, 0)
         XCTAssertEqual(host.ends.count, 1)
         XCTAssertEqual(keeper.tasks, 0)
@@ -240,7 +240,7 @@ final class ActivityKeeperTests: XCTestCase {
         await settle()
         XCTAssertEqual(keeper.tasks, 2)
         await host.end(a, nil, dismissal: .standard)
-        await keeper.endAll()
+        await SigningOut.now(login)
         XCTAssertEqual(host.ends.count, 3, "the one ended with the default dismissal is still on the lock screen, and is taken off")
         guard case .end(a, nil, .now) = host.ends[1], case .end(b, nil, .now) = host.ends[2] else { return XCTFail("\(host.ends)") }
         XCTAssertEqual(keeper.tasks, 0, "no task survives")
@@ -364,7 +364,7 @@ final class ActivityKeeperTests: XCTestCase {
         keeper.forget(id)
     }
 
-    /// A resume whose turn for an activity comes after a sign-out has counted itself keeps
+    /// A resume whose turn for an activity comes after a sign-out has moved the epoch keeps
     /// nothing for it: the sign-out's end follows, and no until task outlives the login.
     func testAResumeAcrossASignOutKeepsNothing() async throws {
         let keeper = keeper(FakeTrackerFetcher([]))
@@ -376,12 +376,14 @@ final class ActivityKeeperTests: XCTestCase {
         await settle()
         XCTAssertEqual(gate.held, 1, "A's end is in the host")
         host.wait = nil
-        let signedOut = Task { await keeper.endAll() }
+        // The sign-out's end is parked at the gate behind the resume before the gate opens.
+        login.moveEpoch()
+        login.runTeardowns()
         await settle()
-        XCTAssertEqual(keeper.generation, 1)
+        XCTAssertEqual(host.ends.count, 1, "only the resume's end of A: the sign-out's waits behind it")
         gate.openUp()
+        await login.tornDown()
         await resumed.value
-        await signedOut.value
         XCTAssertEqual(keeper.tasks, 0, "B was not kept under the login that ended")
         XCTAssertTrue(host.records.allSatisfy(\.ended))
     }

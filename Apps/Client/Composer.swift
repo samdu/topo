@@ -49,6 +49,7 @@ struct Composer: View {
     /// nothing measured it, which is the look's lines alone and a row as tall as what it holds.
     var room: CGFloat?
     @Environment(\.look) private var look
+    @Environment(\.composerMenu) private var menu
     /// How tall one line of the field's words is, measured off the line the row is laid out
     /// round: what turns the room into a number of lines.
     @State private var textLine: CGFloat?
@@ -189,15 +190,31 @@ struct Composer: View {
     /// itself has taken that colour.
     private var ink: Color { mic.open ? look.composer.flank.openInk : look.composer.flank.ink }
 
-    /// The control for everything else, which opens nothing yet: in both forms, beside the well.
+    /// The control for everything else: in both forms, beside the well. It opens the system's
+    /// menu of what the screen offers (`ComposerMenu`, from the environment), one item for each
+    /// action the screen handed in, each under the mark the look names for it; a screen that
+    /// hands in nothing (a canvas) has a control with nothing to open.
     private var more: some View {
-        Button {} label: {
+        Menu {
+            if let attach = menu.attachFile {
+                Button("Attach a file", systemImage: look.composer.flank.file, action: attach)
+            }
+            if let choose = menu.choosePhoto {
+                Button("Choose a photo", systemImage: look.composer.flank.photo, action: choose)
+            }
+            if let take = menu.takePhoto {
+                Button("Take a photo", systemImage: look.composer.flank.camera, action: take)
+            }
+        } label: {
             // Laid out in the slot the plan gives it and no larger, so a mark larger than its
             // slot is cut at the slot's edge and stands over nothing.
             Cut { Image(systemName: look.composer.flank.more).font(look.composer.flank.font) }
                 .clipped()
                 .contentShape(Rectangle())
         }
+        // In the order written, top to bottom, whichever way the menu opens.
+        .menuOrder(.fixed)
+        .menuIndicator(.hidden)
         .accessibilityIdentifier("composer-more")
         .accessibilityLabel("More")
         .etched(look.composer.flank, ink: ink)
@@ -921,6 +938,29 @@ extension Look.Shadow {
         var faded = self
         faded.color = color.opacity(share)
         return faded
+    }
+}
+
+/// What the control for everything else offers, handed to the composer through the environment:
+/// each an action or nil where the screen has none for it, so the menu lists what the screen can
+/// do and a canvas lists nothing. The chat fills it from `ComposerAttachments`.
+struct ComposerMenu {
+    /// The phone's file picker.
+    var attachFile: (@MainActor () -> Void)?
+    /// The photo library's picker.
+    var choosePhoto: (@MainActor () -> Void)?
+    /// The camera, where the phone has one.
+    var takePhoto: (@MainActor () -> Void)?
+}
+
+private struct ComposerMenuKey: EnvironmentKey {
+    static let defaultValue = ComposerMenu()
+}
+
+extension EnvironmentValues {
+    var composerMenu: ComposerMenu {
+        get { self[ComposerMenuKey.self] }
+        set { self[ComposerMenuKey.self] = newValue }
     }
 }
 
