@@ -115,12 +115,17 @@ PACKAGE_PINS=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.res
 PACKAGES=(-clonedSourcePackagesDirPath build/packages)
 # kept_for_pins <dir>: keeps <dir> only if the copy of the pins in it names the pins the checkout
 # does, and otherwise removes it, then makes it and puts the pins in it. The pins are compared
-# without their originHash, which a resolution rewrites for the path it ran at, so a suite that
-# resolved does not take the state away from the next. The copy goes before the tree, so a
-# removal that is cut short is finished by the next run.
+# as JSON without their originHash field, which a resolution rewrites for the path it ran at, so a
+# suite that resolved does not take the state away from the next; a copy that is missing, empty
+# or not JSON names no pins. The copy goes before the tree, so a removal that is cut short is
+# finished by the next run.
+same_pins() {
+  local a b
+  a="$(jq -cS 'del(.originHash)' "$1" 2>/dev/null)" && b="$(jq -cS 'del(.originHash)' "$2" 2>/dev/null)" \
+    && [ -n "$a" ] && [ "$a" = "$b" ]
+}
 kept_for_pins() {
-  [ -f "$PACKAGE_PINS" ] && cmp -s <(grep -v '"originHash"' "$PACKAGE_PINS") <(grep -v '"originHash"' "$1/Package.resolved" 2>/dev/null) \
-    || { rm -f "$1/Package.resolved"; rm -rf "$1"; }
+  same_pins "$PACKAGE_PINS" "$1/Package.resolved" || { rm -f "$1/Package.resolved"; rm -rf "$1"; }
   mkdir -p "$1"
   cp "$PACKAGE_PINS" "$1/Package.resolved" 2>/dev/null || true
 }

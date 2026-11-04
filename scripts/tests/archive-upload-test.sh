@@ -24,7 +24,8 @@ chmod +x "$tree/scripts/build-ish.sh"
 touch "$tree/Distribution/ExportOptions.plist"
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 mkdir -p "$(dirname "$pins")"
-printf '{\n  "originHash" : "aaa",\npins: one\n' > "$pins"
+pin() { printf '{"originHash":"%s","pins":[{"identity":"fluidaudio","state":{"version":"%s"}}],"version":3}\n' "${2:-aaa}" "$1"; }
+pin one > "$pins"  # as Package.resolved is, JSON, here on one line
 git -C "$tree" init -q -b scratch
 git -C "$tree" config core.hooksPath /dev/null
 git -C "$tree" -c user.name=test -c user.email=test@example.com add -A
@@ -50,7 +51,7 @@ echo "xcodebuild [$state] $line" >> "$CALLS"
 packages=""; previous=""
 for argument in "$@"; do [ "$previous" = -clonedSourcePackagesDirPath ] && packages="$argument"; previous="$argument"; done
 if [ -n "$packages" ]; then
-  echo "packages: $([ -e "$packages/workspace-state.json" ] && echo kept || echo fresh) $(grep -v originHash "$packages/Package.resolved" 2>/dev/null | tail -n 1)" >> "$CALLS"
+  echo "packages: $([ -e "$packages/workspace-state.json" ] && echo kept || echo fresh) pins: $(jq -r '.pins[0].state.version' "$packages/Package.resolved" 2>/dev/null)" >> "$CALLS"
   touch "$packages/workspace-state.json"
 fi
 [ -z "$export" ] || { mkdir -p "$export"; touch "$export/Topo.ipa"; }
@@ -136,7 +137,7 @@ grep -qx 'packages: fresh pins: one' "$work/packages-first" || fail "a first arc
 sed -i '' 's/"aaa"/"bbb"/' "$tree/build/packages/Package.resolved"
 run "$work/packages-same" || fail "an archive failed: $(cat "$work/out")"
 grep -qx 'packages: kept pins: one' "$work/packages-same" || fail "the same pins under another originHash did not keep the state: $(cat "$work/packages-same")"
-printf '{\n  "originHash" : "aaa",\npins: two\n' > "$pins"
+pin two > "$pins"
 git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am pins
 git -C "$tree" update-ref refs/remotes/origin/main HEAD
 run "$work/packages-moved" || fail "an archive failed: $(cat "$work/out")"
