@@ -15,6 +15,11 @@ private final class AlarmPermission: Authorizer, @unchecked Sendable {
 
     /// Called as the prompt goes up: where a test makes the app inactive, as a system alert does.
     var onPrompt: @Sendable () async -> Void = {}
+    /// Called as the standing is read: where a test sends the app to the background after the
+    /// broker's read and before its prompt.
+    var onAccess: @Sendable () async -> Void = {}
+    /// Where set, the prompt stays up until the test opens it.
+    var gate: Gate?
 
     init(_ standing: Access, answer: Bool = true) {
         self.standing = standing
@@ -22,11 +27,20 @@ private final class AlarmPermission: Authorizer, @unchecked Sendable {
     }
 
     var prompts: Int { lock.withLock { _prompts } }
-    func access() async -> Access { lock.withLock { standing } }
+    var reads: Int { lock.withLock { _reads } }
+    private var _reads = 0
+    func access() async -> Access {
+        await onAccess()
+        return lock.withLock { _reads += 1; return standing }
+    }
     func request() async -> Bool {
         await onPrompt()
-        // A prompt stays up a moment, so a second call made meanwhile finds it up.
-        try? await Task.sleep(for: .milliseconds(50))
+        if let gate {
+            await gate.wait()
+        } else {
+            // A prompt stays up a moment, so a second call made meanwhile finds it up.
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         return lock.withLock {
             _prompts += 1
             standing = answer ? .granted : .denied
@@ -41,6 +55,8 @@ private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     private var scheduled: [(id: UUID, label: String, duration: TimeInterval)] = []
     /// A cancel AlarmKit refuses.
     var cancelFails = false
+    /// What a schedule throws, where set.
+    var scheduleThrows: (any Error)?
 
     init(_ permission: AlarmPermission?) { self.permission = permission }
 
@@ -49,6 +65,7 @@ private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     var last: (id: UUID, label: String, duration: TimeInterval)? { lock.withLock { scheduled.last } }
 
     func schedule(id: UUID, label: String, duration: TimeInterval) async throws {
+        if let scheduleThrows { throw scheduleThrows }
         lock.withLock { scheduled.append((id, label, duration)) }
     }
     func alarms() async throws -> [(id: UUID, state: String)] { lock.withLock { scheduled.map { ($0.id, "counting") } } }
@@ -73,18 +90,92 @@ final class TimerToolTests: XCTestCase {
     /// alert leaves it, and waits on that prompt rather than being told to open Topo.
     func testAStartUnderThePromptWaitsOnIt() async {
         let permission = AlarmPermission(.undetermined)
+        let gate = Gate()
+        permission.gate = gate
         let state = AppState(.active)
         let raised = Raised()
         permission.onPrompt = { @MainActor in state.value = .inactive; raised.up = true }
         let alarms = FakeAlarms(permission)
         let tool = tool(alarms, state: state)
+        let done = Raised()
         let first = Task { await tool.run(["1m"]) }
-        while !raised.up { await Task.yield() }
-        let second = await tool.run(["2m"])
-        let answered = await first.value
-        XCTAssertEqual([answered.status, second.status], [ToolReply.ok, ToolReply.ok], answered.text + second.text)
+        guard await within({ raised.up }) else { return XCTFail("no prompt went up") }
+        let second = Task { @MainActor in
+            let reply = await tool.run(["2m"])
+            done.up = true
+            return reply
+        }
+        // The second start has read the permission, so it is at the broker, under the prompt: it
+        // sets nothing and is not answered until the prompt is.
+        guard await within({ permission.reads >= 2 }) else { return XCTFail("the second start never read the permission") }
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(done.up)
+        XCTAssertEqual(alarms.count, 0)
+        await gate.open()
+        let replies = [await first.value, await second.value]
+        XCTAssertEqual(replies.map(\.status), [ToolReply.ok, ToolReply.ok], replies.map(\.text).joined())
         XCTAssertEqual(permission.prompts, 1)
         XCTAssertEqual(alarms.count, 2)
+    }
+
+    /// Codex on #592: the check is made where a new prompt would be raised, so Topo sent to the
+    /// background after the permission was read asks nothing; under an alert (inactive) or in front
+    /// it asks.
+    func testOnScreenRaisesNoPromptInTheBackground() async {
+        for (state, prompts) in [(UIApplication.State.background, 0), (.inactive, 1), (.active, 1)] {
+            let permission = AlarmPermission(.undetermined)
+            let declines = TimerTool.Declines()
+            let asked = await TimerTool.OnScreen(alarms: permission, state: { state }, declines: declines).request()
+            XCTAssertEqual(asked, prompts == 1, "\(state.rawValue)")
+            XCTAssertEqual(permission.prompts, prompts, "\(state.rawValue)")
+            XCTAssertEqual(declines.count, 1 - prompts, "\(state.rawValue)")
+        }
+        // Granted meanwhile by another call's prompt: a yes, with nothing declined.
+        let granted = TimerTool.Declines()
+        let yes = await TimerTool.OnScreen(alarms: AlarmPermission(.granted), state: { .background }, declines: granted).request()
+        XCTAssertTrue(yes)
+        XCTAssertEqual(granted.count, 0)
+    }
+
+    /// A prompt `OnScreen` declined is said as open Topo, not as a refusal.
+    func testADeclinedPromptIsSaidAsOffScreen() async {
+        let permission = AlarmPermission(.undetermined)
+        let state = AppState(.active)
+        permission.onAccess = { @MainActor in state.value = .background }
+        let alarms = FakeAlarms(permission)
+        let reply = await tool(alarms, state: state).run(["1m"])
+        XCTAssertEqual(reply, TimerTool.offScreen, reply.text)
+        XCTAssertEqual(permission.prompts, 0)
+        XCTAssertEqual(alarms.count, 0)
+    }
+
+    func testAScheduleFailureIsSaidAndNothingKept() async {
+        let alarms = FakeAlarms(AlarmPermission(.granted))
+        alarms.scheduleThrows = CocoaError(.featureUnsupported)
+        let book = TimerBook()
+        let reply = await tool(alarms, book: book).run(["5m"])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertTrue(reply.text.contains("did not set the timer"), reply.text)
+        XCTAssertNil(book.entry(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
+    }
+
+    func testTheAlarmLimitIsSaidAndNothingKept() async {
+        let alarms = FakeAlarms(AlarmPermission(.granted))
+        alarms.scheduleThrows = AlarmLimit()
+        let book = TimerBook()
+        let reply = await tool(alarms, book: book).run(["5m", "Tea"])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertTrue(reply.text.contains(AlarmLimit().reason), reply.text)
+        XCTAssertEqual(alarms.count, 0)
+        XCTAssertNil(book.entry(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
+    }
+
+    /// A countdown drawn past its fire date is at zero, never a reversed range.
+    func testTheCountdownRangeIsNeverReversed() {
+        let now = start
+        XCTAssertEqual(AlarmCountdown.range(now: now, fires: now.addingTimeInterval(-5)), now...now)
+        XCTAssertEqual(AlarmCountdown.range(now: now, fires: now), now...now)
+        XCTAssertEqual(AlarmCountdown.range(now: now, fires: now.addingTimeInterval(60)), now...now.addingTimeInterval(60))
     }
 
     func testACancelAlarmKitRefusesIsNotSaidAsNoSuchTimer() async {
@@ -113,7 +204,7 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.last?.label, "Tea")
         XCTAssertEqual(alarms.last?.duration, 900)
         XCTAssertTrue(reply.text.hasPrefix("set: 00000000-0000-0000-0000-000000000001"), reply.text)
-        XCTAssertTrue(reply.text.contains("sounds at"), reply.text)
+        XCTAssertTrue(reply.text.contains("sounds at " + ToolDates.write(start.addingTimeInterval(900))), reply.text)
     }
 
     func testANoLabelIsTimer() async {
@@ -137,13 +228,20 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.count, 2)
     }
 
+    /// Judged as written: a label that trimming or joining its lines would bring to 40 is still past it.
     func testALabelOver40IsRefusedNotCut() async {
         let alarms = FakeAlarms(AlarmPermission(.granted))
-        let reply = await tool(alarms).run(["5m", String(repeating: "x", count: 41)])
-        XCTAssertEqual(reply.status, ToolReply.usage, reply.text)
+        let x40 = String(repeating: "x", count: 40)
+        for label in [String(repeating: "x", count: 41), " " + x40, "x\n\n" + String(repeating: "x", count: 38)] {
+            let reply = await tool(alarms).run(["5m", label])
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(label.debugDescription): \(reply.text)")
+        }
         XCTAssertEqual(alarms.count, 0)
-        let fits = await tool(alarms).run(["5m", String(repeating: "x", count: 40)])
-        XCTAssertEqual(fits.status, ToolReply.ok, fits.text)
+        for label in [x40, " " + String(repeating: "x", count: 39)] {
+            let fits = await tool(alarms).run(["5m", label])
+            XCTAssertEqual(fits.status, ToolReply.ok, fits.text)
+        }
+        XCTAssertEqual(alarms.last?.label, String(repeating: "x", count: 39))
     }
 
     func testAuthorisationIsAskedAtTheCallAndOnce() async {
@@ -179,14 +277,19 @@ final class TimerToolTests: XCTestCase {
         let allowed = FakeAlarms(AlarmPermission(.granted))
         let set = await tool(allowed, state: AppState(.background)).run(["1m"])
         XCTAssertEqual(set.status, ToolReply.ok, set.text)
+        XCTAssertEqual(allowed.count, 1)
+        XCTAssertEqual(allowed.last?.duration, 60)
+        XCTAssertEqual(allowed.last?.label, "Timer")
     }
 
     /// Refused at the prompt or before (AlarmKit has no restricted state), nothing is set and nothing stands in for it: the reply
     /// says where alarms are allowed, which is not what a phone without AlarmKit says.
     func testARefusalSetsNothingAndSaysWhereToAllowIt() async {
-        for permission in [AlarmPermission(.denied), AlarmPermission(.undetermined, answer: false)] {
+        let cases = [(AlarmPermission(.denied), AppState(.active)), (AlarmPermission(.undetermined, answer: false), AppState(.active)),
+                     (AlarmPermission(.denied), AppState(.background))]
+        for (permission, state) in cases {
             let alarms = FakeAlarms(permission)
-            let reply = await tool(alarms).run(["1m"])
+            let reply = await tool(alarms, state: state).run(["1m"])
             XCTAssertEqual(reply.status, ToolReply.denied, reply.text)
             XCTAssertTrue(reply.text.contains("Apps › Topo › Alarms"), reply.text)
             XCTAssertFalse(reply.text.contains("sounds"), reply.text)
@@ -214,6 +317,8 @@ final class TimerToolTests: XCTestCase {
         let lines = list.text.split(separator: "\n")
         XCTAssertEqual(lines.count, 2, list.text)
         XCTAssertTrue(lines[0].contains("Tea") && lines[1].contains("Eggs"), "soonest first: \(list.text)")
+        XCTAssertTrue(lines[0].contains("sounds at " + ToolDates.write(start.addingTimeInterval(120))), list.text)
+        XCTAssertTrue(lines[1].contains("sounds at " + ToolDates.write(start.addingTimeInterval(600))), list.text)
         // A relaunch: a new book knows nothing, and the alarm is listed by id and state.
         let after = await self.tool(alarms, book: TimerBook()).run(["list"])
         XCTAssertTrue(after.text.contains("00000000-0000-0000-0000-000000000001"), after.text)
@@ -261,4 +366,30 @@ private final class AppState {
 @MainActor
 private final class Raised {
     var up = false
+}
+
+/// Whether `condition` holds within 5 s.
+@MainActor
+private func within(_ condition: @MainActor () -> Bool) async -> Bool {
+    let end = ContinuousClock.now + .seconds(5)
+    while !condition() {
+        if ContinuousClock.now > end { return false }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return true
+}
+
+/// A prompt held up until the test opens it.
+private actor Gate {
+    private var opened = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+    func open() {
+        opened = true
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
 }

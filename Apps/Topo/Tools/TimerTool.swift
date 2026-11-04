@@ -1,4 +1,5 @@
 import Foundation
+import os
 import TopoTools
 import UIKit
 
@@ -53,13 +54,15 @@ struct TimerTool: Tool {
     let scheduler: any AlarmScheduler
     let book: @MainActor () -> TimerBook
     let broker: PermissionBroker
-    /// Where Topo stands: the system's prompt can be raised unless it is in the background. A
-    /// system alert makes the app inactive and not backgrounded, so a start made under one still
-    /// asks: under AlarmKit's own prompt it waits on that one (`PermissionBroker`), and under
-    /// another's its prompt follows.
+    /// Where Topo stands, read at the moment a new prompt would go up (`OnScreen`): the system's
+    /// prompt can be raised unless Topo is in the background. A system alert makes the app inactive
+    /// and not backgrounded, so a start made under another app's alert still asks, its prompt
+    /// following; one made under AlarmKit's own prompt waits on that one (`PermissionBroker`).
     var state: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
     var now: @Sendable () -> Date = { Date() }
     var makeID: @Sendable () -> UUID = { UUID() }
+    /// The prompts `OnScreen` declined to raise, counted across calls.
+    let declines = Declines()
 
     static let labelLimit = 40
     static let longest: TimeInterval = 24 * 3600
@@ -102,11 +105,14 @@ struct TimerTool: Tool {
             guard seconds >= 1, seconds <= Self.longest else {
                 throw ToolFailure("a timer runs from 1s to 24h; \(span) is outside that", status: ToolReply.usage)
             }
-            let label = parsed.words.count == 2 ? PhoneTool.flat(parsed.words[1]).trimmingCharacters(in: .whitespaces) : "Timer"
-            guard !label.isEmpty else { throw ToolFailure("the label is empty", status: ToolReply.usage) }
-            guard label.count <= Self.labelLimit else {
-                throw ToolFailure("the label is \(label.count) characters, past \(Self.labelLimit)", status: ToolReply.usage)
+            // Judged as written, before its lines are joined and its ends trimmed, so a longer label
+            // is refused rather than cut to fit.
+            let given = parsed.words.count == 2 ? parsed.words[1] : "Timer"
+            guard given.count <= Self.labelLimit else {
+                throw ToolFailure("the label is \(given.count) characters, past \(Self.labelLimit)", status: ToolReply.usage)
             }
+            let label = PhoneTool.flat(given).trimmingCharacters(in: .whitespaces)
+            guard !label.isEmpty else { throw ToolFailure("the label is empty", status: ToolReply.usage) }
             return .start(span: seconds, label: label)
         default:
             throw Misuse("timer takes a span, list or cancel")
@@ -114,21 +120,51 @@ struct TimerTool: Tool {
     }
 
     func run(_ arguments: [String]) async -> ToolReply {
-        let authorizer = scheduler.authorizer
-        // The system's prompt needs Topo in front: a start that would raise it off the screen asks
-        // nothing. The parse is pure, so reading it here and again in the run costs nothing.
-        if case .start? = try? parse(arguments), let authorizer, await authorizer.access() == .undetermined, await state() == .background {
-            return Self.offScreen
-        }
+        let alarms = scheduler.authorizer
+        let asking = alarms.map { OnScreen(alarms: $0, state: state, declines: declines) }
+        let before = declines.count
         // Only a start needs the permission; one below iOS 26 has none to ask and is answered in `start`.
-        return await PhoneTool.run({ (call: Call) -> (any Authorizer)? in
-            if case .start = call { authorizer } else { nil }
+        let reply = await PhoneTool.run({ (call: Call) -> (any Authorizer)? in
+            if case .start = call { asking } else { nil }
         }, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
             switch call {
             case .list: await list()
             case let .cancel(id): await cancel(id)
             case let .start(span, label): await start(span: span, label: label)
             }
+        }
+        // A refusal while `OnScreen` declined a prompt, this call's or the one it waited on, is
+        // nobody asked; any other refusal is the person's, said as one.
+        if reply.status == ToolReply.denied, declines.count > before { return Self.offScreen }
+        return reply
+    }
+
+    /// A count of declined prompts, shared by every call of one tool.
+    final class Declines: Sendable {
+        private let value = OSAllocatedUnfairLock(initialState: 0)
+        var count: Int { value.withLock { $0 } }
+        func add() { value.withLock { $0 += 1 } }
+    }
+
+    /// AlarmKit's permission, asked only with Topo off the background: the system's prompt needs
+    /// Topo in front. Where it is in the background as the prompt would go up, nothing is asked and
+    /// the answer is no, which `run` says as `offScreen`. A call that finds a prompt already up
+    /// waits on it and never reaches `request`.
+    struct OnScreen: Authorizer {
+        let alarms: any Authorizer
+        let state: @MainActor () -> UIApplication.State
+        let declines: Declines
+        var name: String { alarms.name }
+        func access() async -> Access { await alarms.access() }
+        func request() async -> Bool {
+            guard await state() != .background else {
+                // Granted since the broker read it (another call's prompt answered meanwhile) is a
+                // yes that needs no prompt.
+                if await alarms.access() == .granted { return true }
+                declines.add()
+                return false
+            }
+            return await alarms.request()
         }
     }
 

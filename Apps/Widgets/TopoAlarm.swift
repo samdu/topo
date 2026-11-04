@@ -55,10 +55,7 @@ struct TopoAlarmWidget: Widget {
     static func remaining(_ mode: AlarmPresentationState.Mode) -> some View {
         switch mode {
         case let .countdown(countdown):
-            let now = Date.now
-            // A countdown drawn once its fire date has passed, before the alert's state lands, is
-            // at zero rather than a range whose end is before its start, which traps.
-            Text(timerInterval: now...max(now, countdown.fireDate), countsDown: true)
+            Text(timerInterval: AlarmCountdown.range(now: .now, fires: countdown.fireDate), countsDown: true)
                 .multilineTextAlignment(.trailing)
         case let .paused(paused):
             Text(Duration.seconds(paused.totalCountdownDuration - paused.previouslyElapsedDuration),
