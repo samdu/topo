@@ -39,13 +39,41 @@ final class VoiceToolTests: XCTestCase {
         for arguments in [[], ["status"], ["off"], ["noise-suppression", "maybe"], ["noise-suppression", "off", "now"],
                           ["noise", "off"], ["noise-suppression", "--off"], ["temperature", "0.3", "now"],
                           ["temperature", "warm"], ["temperature", "-0.1"], ["temperature", "1.01"],
-                          ["temperature", "nan"], ["temperature", "inf"], ["temp", "0.3"]] {
+                          ["temperature", "nan"], ["temperature", "inf"], ["temp", "0.3"],
+                          ["call", "maybe"], ["call", "on", "now"], ["calls", "on"]] {
             let reply = await tool.run(arguments)
             XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
             XCTAssertTrue(reply.text.contains("topo voice noise-suppression on"), "\(arguments)")
         }
         XCTAssertNil(defaults.object(forKey: NoiseSuppression.key))
         XCTAssertNil(defaults.object(forKey: VoiceTemperature.key))
+        XCTAssertNil(defaults.object(forKey: SpokenCallSetting.key))
+    }
+
+    func testAPhoneNeverAskedCallsForSpokenReplies() async {
+        let defaults = defaults()
+        XCTAssertTrue(SpokenCallSetting.enabled(defaults))
+        for arguments in [["call"], ["call", "status"]] {
+            let reply = await VoiceTool(defaults: defaults).run(arguments)
+            XCTAssertEqual(reply, .ok("call for spoken replies on\n"), "\(arguments)")
+        }
+        XCTAssertNil(defaults.object(forKey: SpokenCallSetting.key), "asking sets nothing")
+    }
+
+    func testTheCallIsKeptWhereTheDriverReadsIt() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        var reply = await tool.run(["call", "off"])
+        XCTAssertEqual(reply, .ok("call for spoken replies off, from the next spoken reply\n"))
+        XCTAssertFalse(SpokenCallSetting.enabled(defaults))
+        reply = await tool.run(["call", "status"])
+        XCTAssertEqual(reply, .ok("call for spoken replies off\n"))
+        reply = await tool.run(["call", "on"])
+        XCTAssertEqual(reply, .ok("call for spoken replies on, from the next spoken reply\n"))
+        XCTAssertTrue(SpokenCallSetting.enabled(defaults))
+        // The toggle's own value, kept as `@AppStorage` keeps a Bool, reads the same way.
+        defaults.set(false, forKey: SpokenCallSetting.key)
+        XCTAssertFalse(SpokenCallSetting.enabled(defaults))
     }
 
     func testAPhoneNeverAskedSpeaksAtTheStandardTemperature() async {
@@ -101,6 +129,7 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertTrue(usage.text.contains("topo voice noise-suppression off"), usage.text)
         XCTAssertNotNil(GuestResident.shared.toolTable.first { $0 is VoiceTool }, "the app's table has no voice tool")
         XCTAssertTrue(usage.text.contains("topo voice temperature VALUE"), usage.text)
+        XCTAssertTrue(usage.text.contains("topo voice call off"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice noise-suppression`"), "the mind is not told the tool exists")
         XCTAssertTrue(GuestTools.skill.contains("`topo voice temperature`"), "the mind is not told of the temperature")
         XCTAssertTrue(usage.text.contains("topo voice earcons off"), usage.text)

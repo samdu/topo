@@ -178,11 +178,11 @@ final class GuestToolScriptTests: XCTestCase {
     }
 
     func testTheShimsAreWrittenExecutable() async throws {
-        for path in [GuestTools.credentialHelperPath, GuestTools.ghPath] {
+        for path in [GuestTools.credentialHelperPath, GuestTools.ghPath, GuestTools.appleDocPath] {
             let exit = try await Guest.shared.run("/bin/sh", ["-c", "[ -x \(point!)/\(path) ] && head -1 \(point!)/\(path)"])
             XCTAssertEqual(exit.output, "#!/bin/bash\n", path)
         }
-        XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand])
+        XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand, GuestTools.appleDocCommand])
         // An empty helper first, which clears every helper configured before it, then this one.
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "2")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_0"], "credential.https://github.com.helper")
@@ -450,5 +450,17 @@ final class GuestToolScriptTests: XCTestCase {
         let exit = try await shell("gh api user", try await startedGitHub(token: "gho_x"))
         XCTAssertEqual(exit.status, 127)
         XCTAssertTrue(exit.errors.contains("apk add github-cli"), exit.errors)
+    }
+
+    /// `apple-doc` needs `jq`, the one thing the guest adds for it; without it the command says
+    /// what to install and runs nothing, as the `gh` wrapper does.
+    func testAppleDocWithNoJqSaysHowToInstallIt() async throws {
+        let present = try await Guest.shared.run("/bin/sh", ["-c", "command -v jq"])
+        try XCTSkipIf(present.status == 0, "this rootfs has jq")
+        let exit = try await Guest.shared.run("/bin/sh", ["-c", "\(point!)/\(GuestTools.appleDocPath) backgroundtasks"])
+        XCTAssertEqual(exit.status, 127)
+        XCTAssertTrue(exit.errors.contains("apk add jq"), exit.errors)
+        let usage = try await Guest.shared.run("/bin/sh", ["-c", "\(point!)/\(GuestTools.appleDocPath)"])
+        XCTAssertEqual(usage.status, 2, usage.errors)
     }
 }
