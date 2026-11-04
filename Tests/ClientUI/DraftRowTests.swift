@@ -78,6 +78,7 @@ final class DraftRowTests: XCTestCase {
         let file = app.buttons["Attach a file"], photo = app.buttons["Choose a photo"]
         XCTAssertTrue(file.waitForExistence(timeout: 5), "the control opened no menu with the file picker in it")
         XCTAssertTrue(photo.exists, "the menu has no photo picker")
+        XCTAssertFalse(app.buttons["Take a photo"].exists, "a simulator has no camera and offers one")
         XCTAssertLessThan(file.frame.midY, photo.frame.midY, "the file is not before the photo")
         shot(app, "menu")
         // A tap on the transcript, clear of the menu, puts it away and nothing else.
