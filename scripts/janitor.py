@@ -34,8 +34,8 @@ judgement:
      is never dropped;
   5. reports a ready PR that needs a person, once, and again only when the
      PR itself changes: a verdict that blocks, a green PR with Proof boxes
-     unticked, a ready PR with no validate run, a run cancelled with nothing
-     after it, and a PR nothing has touched for `IDLE` while no run is in
+     unticked, a ready PR with no validate run, a run cancelled
+     again after its rerun, and a PR nothing has touched for `IDLE` while no run is in
      progress. A draft is gate one's and is never read or reported by
      this step;
   6. reports each open issue that is untriaged — no `triaged` label and no
@@ -77,8 +77,10 @@ judgement:
      (`GATE`, the gate publish-topo.sh builds behind): a build never recut.
 
 Step 2 takes a run cancelled inside the reviewer chain alone (codex past its
-time limit) as a reviewer that never ran; step 5 also reports a ready PR
-that conflicts with main while no tmux session of its engineer stands.
+time limit) as a reviewer that never ran, and reruns any other cancelled run
+whole, once per head, when no run on the head is queued or in progress; step
+5 also reports a ready PR that conflicts with main while no tmux session of
+its engineer stands.
 
 What was last said of each PR and issue is kept as a fingerprint in the state
 file (`reported`), and an item whose fingerprint has not moved is silent
@@ -145,6 +147,8 @@ GRACE = timedelta(minutes=15)      # automerge's chance, a box's
 SETTLE = timedelta(minutes=10)     # a red run is left this long before a rerun
 IDLE = timedelta(minutes=45)       # nothing moving, nothing running
 REPEAT = timedelta(hours=24)       # a failed read, a refusal, a worktree left: said again after this
+POOL_WAIT = timedelta(minutes=30)  # a runnable vm-linux job waiting this long is a pool that is not serving
+POOL_LABEL = "vm-linux"
 DIGEST = timedelta(hours=24)       # one line naming what still stands, no oftener than this
 DIGEST_NAMES = 40                  # PRs, and issues, the digest names before it counts the rest
 SWEEP = timedelta(hours=24)        # a merged branch's worktree lives this long
@@ -283,6 +287,19 @@ def owners(branch):
     return {f"topo-{topic}", topic}
 
 
+def pick_run(runs, number):
+    """The run that speaks for a PR's head, from the head's pull_request
+    validate runs: only those GitHub ties to this PR, since two PRs can share a
+    head and one's green run is not the other's; a run still queued or in
+    progress first, since one event can start two runs in the same second and
+    the concurrency group cancels one of them, which may be the one with the
+    higher id; otherwise the newest. None when no run is this PR's. Pure."""
+    runs = [r for r in runs or [] if number in (r.get("prs") or [])]
+    live = [r for r in runs if r.get("status") != "completed"]
+    pool = live or runs
+    return max(pool, key=lambda r: (r["created_at"], r["id"])) if pool else None
+
+
 def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
     """What one open PR wants from this pass.
 
@@ -352,9 +369,20 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
     # limit, which GitHub concludes as cancelled — is a reviewer that did not
     # finish, and takes the rerun below; any other cancel is the run's.
     in_chain = "reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
+    # Any other cancel with no run live after it is a run nobody will restart
+    # — the pair one event starts, both cancelled by the concurrency group —
+    # so the run is rerun whole, once per head; cancelled again, it is said.
     if conclusion == "cancelled" and not in_chain:
-        if since > GRACE:
-            report("cancelled", f"{title}: its newest validate run was cancelled {minutes(since)} ago and nothing ran after it; a push starts one.")
+        run_key = f"{n}:run:{head}"
+        if run_key not in state.get("rerun", {}):
+            if since > SETTLE:
+                out.append({"kind": "rerun", "key": run_key, "run_id": run["id"], "job_id": None, "job": "run",
+                            "number": n,
+                            "text": f"reran {title}'s validate run {run['id']} whole: it was cancelled {minutes(since)} ago "
+                                    f"with no run after it on {short}."})
+        elif since > GRACE:
+            report("cancelled", f"{title}: its validate run on {short} is cancelled, {minutes(since)} ago, and its "
+                                f"one rerun is spent; nothing is running on it, and a push starts one.")
         return out
 
     # The verdict first. The review cap is the one way review_gate is red beside a green
@@ -392,7 +420,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
                             "text": f"reran {first['name']} of {title} (run {run['id']}) and the jobs that wait on it: {why}."})
             return out
         detail = ", ".join(red_names) or conclusion
-        report("red", f"{title}: red again on {short} after one rerun ({detail}); {why}.")
+        report("red", f"{title}: red on {short} with its one rerun spent ({detail}); {why}.")
         return out
 
     if age > IDLE:
@@ -899,6 +927,41 @@ def allowed_pr(argv):
             and argv[4:7] == ["--repo", REPO, "--body-file"])
 
 
+def decide_pool(runs, runners, now):
+    """The line for a vm-linux pool that is not serving, or None. `runs` are the
+    repo's queued and in-progress runs, each {id, name, prs, jobs: [{name,
+    status, labels, created_at, completed_at}]}; `runners` the repo's pool
+    runner records, [{status, busy}]. A job is waiting from the later of its
+    creation and the last end of a job in its run, since a job blocked on
+    `needs` can list as queued before it is runnable; a run with a job in
+    progress is moving and waits on nothing. Only `queued` counts: a job held by
+    a concurrency group is `pending` and holds no runner. Pure."""
+    waiting = []
+    for run in runs:
+        jobs = run.get("jobs") or []
+        if any(j.get("status") == "in_progress" for j in jobs):
+            continue
+        ended = [t for t in (parse_time(j.get("completed_at")) for j in jobs) if t]
+        for j in jobs:
+            if j.get("status") != "queued" or POOL_LABEL not in (j.get("labels") or []):
+                continue
+            since = max([parse_time(j.get("created_at")) or now, *ended])
+            if now - since > POOL_WAIT:
+                waiting.append((now - since, run, j))
+    if not waiting:
+        return None
+    waited, run, job = max(waiting, key=lambda w: w[0])
+    prs = ", ".join(f"#{n}" for n in run.get("prs") or []) or "no PR"
+    online = sum(1 for r in runners if r.get("status") == "online")
+    busy = sum(1 for r in runners if r.get("busy"))
+    offline = len(runners) - online
+    count = f"{len(waiting)} {POOL_LABEL} job{'s' if len(waiting) > 1 else ''}"
+    return (f"the {POOL_LABEL} pool is not serving: {count} queued and runnable over {minutes(POOL_WAIT)}, the oldest "
+            f"{run.get('name')}'s {job.get('name')} for {prs} (run {run.get('id')}), waiting {minutes(waited)}; "
+            f"pool runners now {online} online ({busy} busy), {offline} offline. Each Mac's "
+            f"~/Library/Logs/zone.hexagon.vm-runner.log says why its mints fail (memory wiki vm-runners).")
+
+
 def decide_slots(prs, slots):
     """The open PRs whose dev slot serves another commit than their head, as
     [(pr, the commit the slot serves)]. `slots` is slots.json: [{slot, commit, …}].
@@ -1039,17 +1102,39 @@ class Shell:
         return None
 
     def newest_run(self, head, number):
-        """The newest pull_request validate run for this head that GitHub ties to
-        this PR: two PRs can share a head, and one's green run is not the other's."""
+        """The run that speaks for this PR's head (`pick_run`)."""
         runs = self.gh_api(f"repos/{REPO}/actions/workflows/{WORKFLOW}/runs?head_sha={head}&event=pull_request&per_page=100",
                            "[.workflow_runs[] | {id, status, conclusion, created_at, updated_at, prs: [.pull_requests[].number]}]") or []
-        runs = [r for r in runs if number in (r.get("prs") or [])]
-        runs.sort(key=lambda r: (r["created_at"], r["id"]))
-        return runs[-1] if runs else None
+        return pick_run(runs, number)
 
     def jobs(self, run_id):
         return self.gh_api(f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
                            "[.jobs[] | {id, name, conclusion, steps: [.steps[] | {name, conclusion}]}]") or []
+
+    def whole(self, path, key, item_jq):
+        """One page of a list endpoint, refused rather than read as whole when
+        the endpoint holds more than the page carries."""
+        page = self.gh_api(f"{path}{'&' if '?' in path else '?'}per_page=100",
+                           f"{{total: .total_count, n: (.{key} | length), items: [.{key}[] | {item_jq}]}}") or {}
+        if (page.get("n") or 0) < (page.get("total") or 0):
+            raise RuntimeError(f"{path} holds {page['total']} {key}, more than one page of {page['n']}")
+        return page.get("items") or []
+
+    def pool_runs(self):
+        """The queued and in-progress runs, each once, with its newest attempt's jobs."""
+        runs = {}
+        for status in ("queued", "in_progress"):
+            for run in self.whole(f"repos/{REPO}/actions/runs?status={status}", "workflow_runs",
+                                  "{id, name, prs: [.pull_requests[].number]}"):
+                runs.setdefault(run["id"], run)
+        for run in runs.values():
+            run["jobs"] = self.whole(f"repos/{REPO}/actions/runs/{run['id']}/jobs", "jobs",
+                                     "{name, status, labels, created_at, completed_at}")
+        return list(runs.values())
+
+    def pool_runners(self):
+        return self.whole(f"repos/{REPO}/actions/runners", "runners",
+                          f'select(any(.labels[]; .name == "{POOL_LABEL}")) | {{status, busy}}')
 
     def merge(self, number, head):
         self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",
@@ -1058,6 +1143,10 @@ class Shell:
     def rerun(self, job_id):
         """One job of a run and the jobs that wait on it; never the run."""
         self.run(["gh", "run", "rerun", "--repo", REPO, "--job", str(job_id)], mutating=True)
+
+    def rerun_run(self, run_id):
+        """A whole run, every job: only for a run cancelled before its jobs ran."""
+        self.run(["gh", "run", "rerun", "--repo", REPO, str(run_id)], mutating=True)
 
     def open_issues(self):
         """The open issues, as GraphQL nodes: number, title, the two dates, labels
@@ -1515,13 +1604,20 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 except RuntimeError as ex:
                     say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
             elif w["kind"] == "rerun":
+                # The one rerun a head has is spent before it is asked for:
+                # GitHub may take the request and the pass end before an
+                # answer, and a refusal may have been taken all the same, so
+                # neither is a second chance.
+                state["rerun"][w["key"]] = {"run": w["run_id"], "job": w["job"], "at": now.isoformat()}
+                persist()
                 try:
-                    sh.rerun(w["job_id"])
-                    state["rerun"][w["key"]] = {"run": w["run_id"], "job": w["job"], "at": now.isoformat()}
+                    if w["job_id"] is None:
+                        sh.rerun_run(w["run_id"])
+                    else:
+                        sh.rerun(w["job_id"])
                     lines.append(w["text"])
-                    persist()
                 except RuntimeError as ex:
-                    say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused: {ex}")
+                    say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused, and not asked again at this head: {ex}")
         reports = [w for w in wants if w["kind"] == "report"]
         if reports:
             item = f"pr:{n}"
@@ -1622,6 +1718,18 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 state["fired"][key] = now.isoformat()
         except RuntimeError as ex:
             say("slots:read", f"could not read the dev slots: {ex}")
+
+    # 10: a vm-linux pool that is not serving. Said once while it stands,
+    # and again once it has cleared and stalls anew.
+    try:
+        line = decide_pool(sh.pool_runs(), sh.pool_runners(), now)
+        state["fired"].pop("pool:read", None)
+        if line:
+            say("pool:stalled", line)
+        else:
+            state["fired"].pop("pool:stalled", None)
+    except RuntimeError as ex:
+        say("pool:read", f"could not read the runs waiting on {POOL_LABEL}: {ex}")
 
     # 3: the install page.
     try:
@@ -1827,7 +1935,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         live = {pr["headRefOid"] for pr in prs}
         opened = {f"pr:{pr['number']}" for pr in prs}
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if k.startswith("issues:")
+                          if k.startswith(("issues:", "pool:"))
                           or (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
                           or k.endswith(":read") or k.rsplit(":", 1)[-1] in live}
         state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}

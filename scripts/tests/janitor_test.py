@@ -279,8 +279,48 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), [], "a review_gate red under a reviewer that never ran is no verdict")
 
-    def test_a_cancelled_run_with_nothing_after_it_is_reported(self):
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)), ["report:cancelled"])
+    def test_a_cancelled_run_with_nothing_after_it_is_rerun_whole_once(self):
+        w = janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)
+        self.assertEqual(kinds(w), ["rerun"])
+        self.assertEqual((w[0]["key"], w[0]["run_id"], w[0]["job_id"]), (f"7:run:{HEAD}", 99, None))
+        self.assertIn("reran #7 (buddy/x)'s validate run 99 whole", w[0]["text"])
+
+    def test_a_cancelled_run_inside_the_settle_waits(self):
+        self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=3)), [], {}, NOW), [])
+
+    def test_a_run_cancelled_again_after_its_rerun_is_reported_and_not_rerun(self):
+        done = {"rerun": {f"7:run:{HEAD}": {}}}
+        w = janitor.decide_pr(pr(), run("cancelled"), [], done, NOW)
+        self.assertEqual(kinds(w), ["report:cancelled"])
+        self.assertIn("its one rerun is spent", w[0]["text"])
+        self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=12)), [], done, NOW), [])
+
+    def test_a_new_head_has_its_cancelled_run_rerun_again(self):
+        w = janitor.decide_pr(pr(headRefOid="fff0000"), run("cancelled"), [], {"rerun": {f"7:run:{HEAD}": {}}}, NOW)
+        self.assertEqual(kinds(w), ["rerun"])
+
+    # The pick: #579, a pair of runs one event started in the same second, the
+    # concurrency group's cancelled one carrying the higher id.
+    def test_a_live_run_speaks_for_the_head_over_a_newer_cancelled_one(self):
+        at = ago(timedelta(minutes=30))
+        queued = {"id": 41788540595, "status": "queued", "conclusion": None, "created_at": at, "prs": [7]}
+        cancelled = {"id": 41788540673, "status": "completed", "conclusion": "cancelled", "created_at": at, "prs": [7]}
+        self.assertEqual(janitor.pick_run([queued, cancelled], 7)["id"], 41788540595)
+        self.assertEqual(janitor.pick_run([cancelled, queued], 7)["id"], 41788540595)
+
+    def test_with_no_live_run_the_newest_speaks(self):
+        old = {"id": 1, "status": "completed", "conclusion": "success", "created_at": ago(timedelta(hours=2)), "prs": [7]}
+        new = {"id": 2, "status": "completed", "conclusion": "cancelled", "created_at": ago(timedelta(hours=1)), "prs": [7]}
+        tie = {"id": 3, "status": "completed", "conclusion": "failure", "created_at": ago(timedelta(hours=1)), "prs": [7]}
+        self.assertEqual(janitor.pick_run([new, old], 7)["id"], 2)
+        self.assertEqual(janitor.pick_run([tie, new, old], 7)["id"], 3, "the higher id breaks a tie")
+
+    def test_another_prs_run_never_speaks_for_this_one(self):
+        theirs = {"id": 5, "status": "queued", "conclusion": None, "created_at": ago(timedelta(minutes=1)), "prs": [8]}
+        mine = {"id": 4, "status": "completed", "conclusion": "success", "created_at": ago(timedelta(hours=1)), "prs": [7]}
+        self.assertEqual(janitor.pick_run([theirs, mine], 7)["id"], 4)
+        self.assertIsNone(janitor.pick_run([theirs], 7))
+        self.assertIsNone(janitor.pick_run([], 7))
 
     def test_a_ready_pr_with_no_run_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), None, [], {}, NOW)), ["report:norun"])
@@ -507,6 +547,58 @@ class Decisions(unittest.TestCase):
             self.assertIsNone(janitor.peer_token(os.path.join(d, "absent")))
 
 
+class Pool(unittest.TestCase):
+    """A vm-linux job runnable and unserved past POOL_WAIT is said; one blocked
+    on `needs`, held by a concurrency group, or beside a job in progress is not."""
+
+    def prun(self, *js, prs=(578,)):
+        return {"id": 41790277897, "name": "PR validate", "prs": list(prs), "jobs": list(js)}
+
+    def pjob(self, name, status, created, completed=None, labels=("vm-linux",)):
+        return {"name": name, "status": status, "labels": list(labels),
+                "created_at": ago(created), "completed_at": ago(completed) if completed else None}
+
+    RUNNERS = [{"status": "offline", "busy": False}] * 4
+
+    def test_a_job_queued_past_the_wait_is_said(self):
+        line = janitor.decide_pool([self.prun(self.pjob("select", "queued", timedelta(minutes=41)))], self.RUNNERS, NOW)
+        self.assertIn("vm-linux pool is not serving", line)
+        self.assertIn("select for #578 (run 41790277897), waiting 41 min", line)
+        self.assertIn("0 online (0 busy), 4 offline", line)
+
+    def test_a_job_queued_inside_the_wait_is_not(self):
+        self.assertIsNone(janitor.decide_pool([self.prun(self.pjob("select", "queued", timedelta(minutes=20)))], [], NOW))
+
+    def test_the_wait_runs_from_the_last_job_ending(self):
+        # review_gate was created with the run, but only became runnable when reviewer_ran ended.
+        run = self.prun(self.pjob("reviewer_ran", "completed", timedelta(minutes=50), timedelta(minutes=5)),
+                        self.pjob("review_gate", "queued", timedelta(minutes=50)))
+        self.assertIsNone(janitor.decide_pool([run], [], NOW))
+
+    def test_a_job_runnable_since_its_predecessor_ended_waits_from_then(self):
+        run = self.prun(self.pjob("review_cap", "completed", timedelta(minutes=90), timedelta(minutes=60)),
+                        self.pjob("reviewer_ran", "completed", timedelta(minutes=90), timedelta(minutes=40)),
+                        self.pjob("review_gate", "queued", timedelta(minutes=90)))
+        self.assertIn("review_gate for #578 (run 41790277897), waiting 40 min", janitor.decide_pool([run], [], NOW))
+
+    def test_a_run_with_a_job_in_progress_waits_on_nothing(self):
+        run = self.prun(self.pjob("codex", "in_progress", timedelta(minutes=50)),
+                        self.pjob("post_feedback", "queued", timedelta(minutes=50)))
+        self.assertIsNone(janitor.decide_pool([run], [], NOW))
+
+    def test_pending_and_other_labels_are_not_the_pool(self):
+        runs = [self.prun(self.pjob("codex", "pending", timedelta(hours=2))),
+                self.prun(self.pjob("build", "queued", timedelta(hours=2), labels=("toolbox",)))]
+        self.assertIsNone(janitor.decide_pool(runs, [], NOW))
+
+    def test_the_oldest_is_named_and_all_are_counted(self):
+        runs = [self.prun(self.pjob("select", "queued", timedelta(minutes=35)), prs=(579,)),
+                self.prun(self.pjob("review_cap", "queued", timedelta(minutes=90)), prs=())]
+        line = janitor.decide_pool(runs, [], NOW)
+        self.assertIn("2 vm-linux jobs", line)
+        self.assertIn("review_cap for no PR", line)
+
+
 class Stuck(unittest.TestCase):
     """The PRs that wait on something nobody is going to do: a dev build never
     recut, a run cancelled inside the reviewer, a conflict with no engineer to
@@ -532,10 +624,12 @@ class Stuck(unittest.TestCase):
 
     def test_a_cancel_outside_the_reviewer_is_still_the_runs_own(self):
         j = jobs(select="success", test="cancelled", review_cap="success", codex="skipped", reviewer_ran="failure")
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)), ["report:cancelled"])
+        w = janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)
+        self.assertEqual((kinds(w), w[0]["job_id"]), (["rerun"], None), "the run whole, not codex")
         j = jobs(select="success", test="success", review_cap="success", codex="success", reviewer_ran="cancelled",
                  review_gate="cancelled", extra="cancelled")
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)), ["report:cancelled"])
+        w = janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)
+        self.assertEqual((kinds(w), w[0]["job_id"]), (["rerun"], None), "the run whole, not codex")
 
     def test_a_reviewer_cancelled_inside_the_settle_waits(self):
         self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=3)), self.chain_cancelled(), {}, NOW), [])
@@ -562,6 +656,10 @@ class Stuck(unittest.TestCase):
 
     def test_dirty_is_in_the_fingerprint_so_it_is_said_once_per_head(self):
         a = janitor.pr_fingerprint(pr(), None, [], ["dirty"])
+        # An engineer's session going away at the same head is a new line.
+        self.assertNotEqual(a, janitor.pr_fingerprint(pr(), None, [], []))
+        self.assertNotEqual(janitor.pr_fingerprint(pr(), None, [], ["dirty", "norun"]),
+                            janitor.pr_fingerprint(pr(), None, [], ["norun"]))
         self.assertEqual(a, janitor.pr_fingerprint(pr(updatedAt=ago(timedelta(minutes=1))), None, [], ["dirty"]))
         self.assertNotEqual(a, janitor.pr_fingerprint(pr(headRefOid="fff0000"), None, [], ["dirty"]))
 
@@ -936,9 +1034,21 @@ if tool == "gh":
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
+    def page(path, items):
+        # One page as the pool's reads ask for it; pool_totals says an endpoint holds more.
+        out({"total": S.get("pool_totals", {}).get(path, len(items)), "n": len(items), "items": items})
+    if a[0] == "api" and "/actions/runs?status=" in a[1]:
+        page("runs", S.get("pool_runs", {}).get(a[1].split("status=")[1].split("&")[0], []))
+    if a[0] == "api" and "/actions/runners?" in a[1]: page("runners", S.get("pool_runners", []))
+    if a[0] == "api" and "/jobs?" in a[1] and a[1].split("/runs/")[1].split("/")[0] in S.get("pool_jobs", {}):
+        page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
+    if a[:2] == ["run", "rerun"] and S.get("state_at_rerun"):
+        at = open(S["state_at_rerun"]).read() if os.path.exists(S["state_at_rerun"]) else '{"rerun": {}}'
+        open(S["state_at_rerun"] + ".at-rerun", "w").write(at)
+    if a[:2] == ["run", "rerun"] and S.get("rerun_refused"): print(S["rerun_refused"], file=sys.stderr); sys.exit(1)
     if a[:2] == ["pr", "merge"] or a[:2] == ["run", "rerun"]: sys.exit(0)
     if a[:2] == ["issue", "list"] and a[a.index("--repo") + 1] == "samdu/topo-link":
         if S.get("builds_error"): print(S["builds_error"], file=sys.stderr); sys.exit(1)
@@ -1144,6 +1254,44 @@ class WholePass(unittest.TestCase):
         self.assertIn("swept worktree topo-old", got["body"]["text"])
         self.assertIn("killed tmux topo-old", got["body"]["text"])
         self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
+
+    def test_a_stalled_pool_is_said_once_and_again_after_it_clears(self):
+        stalled = self.scripted(
+            pool_runs={"queued": [{"id": 900, "name": "PR validate", "prs": [7]}]},
+            pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                "created_at": ago(timedelta(hours=1)), "completed_at": None}]},
+            pool_runners=[{"status": "offline", "busy": False}])
+        said = lambda: sum("vm-linux pool is not serving" in r["body"]["text"] for r in Bridge.received)
+        for expected, script in ((1, stalled), (1, stalled), (1, self.scripted()), (2, stalled)):
+            p, _ = self.run_pass(script)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(said(), expected, [r["body"]["text"] for r in Bridge.received])
+        self.assertIn("select for #7 (run 900)", Bridge.received[-1]["body"]["text"])
+
+    def test_a_run_in_both_lists_is_counted_once(self):
+        # It started between the two reads: listed queued, then in progress, with one job still queued.
+        run = {"id": 900, "name": "PR validate", "prs": [7]}
+        p, _ = self.run_pass(self.scripted(
+            pool_runs={"queued": [run], "in_progress": [run]},
+            pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                "created_at": ago(timedelta(hours=1)), "completed_at": None}]}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("1 vm-linux job queued", Bridge.received[0]["body"]["text"])
+
+    def test_a_list_longer_than_its_page_is_said_unread_not_read_as_whole(self):
+        for path in ("runs", "jobs", "runners"):
+            Bridge.received.clear()
+            if os.path.exists(self.state):
+                os.remove(self.state)   # a fresh pass each time, so the read failure is not already said
+            p, _ = self.run_pass(self.scripted(
+                pool_runs={"queued": [{"id": 900, "name": "PR validate", "prs": [7]}]},
+                pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                    "created_at": ago(timedelta(minutes=5)), "completed_at": None}]},
+                pool_totals={path: 101}))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            text = " ".join(r["body"]["text"] for r in Bridge.received)
+            self.assertIn("could not read the runs waiting on vm-linux", text, path)
+            self.assertIn("more than one page", text, path)
 
     def test_a_worktree_with_uncommitted_changes_is_left_with_its_sessions_and_said_once(self):
         s = self.scripted(status={self.wt: " M file.swift"})
@@ -2093,7 +2241,7 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertNotIn("run rerun", calls)
         text = Bridge.received[-1]["body"]["text"]
-        self.assertIn("red again", text)
+        self.assertIn("with its one rerun spent", text)
         self.assertIn("(codex, reviewer_ran, review_gate)", text)
 
     def test_a_red_test_under_a_reviewer_that_never_ran_is_never_rerun(self):
@@ -2490,6 +2638,48 @@ class WholePass(unittest.TestCase):
         self.assertIn(f"gh run rerun --repo samdu/topo --job {job_id(j, 'codex')}", calls)
         self.assertNotIn("--failed", calls)
         self.assertIn("reran codex of #7", self.texts())
+
+    def test_a_run_cancelled_whole_is_rerun_whole_once_per_head(self):
+        j = jobs(select="cancelled", test="cancelled", review_cap="cancelled", codex="cancelled",
+                 post_feedback="cancelled", reviewer_ran="cancelled", review_gate="cancelled")
+        s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        reruns = [l for l in calls.splitlines() if l.startswith("gh run")]
+        self.assertEqual(reruns, ["gh run rerun --repo samdu/topo 99"], "the run, never a job")
+        self.assertEqual(self.state_file()["rerun"][f"7:run:{HEAD}"]["run"], 99)
+        self.assertIn("reran #7 (buddy/x)'s validate run 99 whole", self.texts())
+        p, calls = self.run_pass(s)
+        self.assertNotIn("run rerun", calls, "once per head")
+        self.assertIn("its one rerun is spent", self.texts())
+
+    def test_a_rerun_is_spent_before_it_is_asked_for_so_a_refusal_is_not_a_second_chance(self):
+        # GitHub may take a rerun and the pass end before it hears back: the
+        # record is written first, and a failed ask is as spent as an answered one.
+        for j_ in ([], jobs(select="success", test="success", review_cap="success", codex="cancelled",
+                            post_feedback="skipped", reviewer_ran="failure", review_gate="failure")):
+            self.setUp()
+            s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j_, worktrees="", rerun_refused="HTTP 502",
+                              state_at_rerun=self.state)
+            p, calls = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("gh run rerun", calls)
+            with open(self.state + ".at-rerun") as f:
+                at_ask = json.load(f).get("rerun", {})
+            self.assertEqual(len([k for k in at_ask if k.endswith(HEAD)]), 1, "saved before the ask")
+            self.assertEqual(len([k for k in self.state_file()["rerun"] if k.endswith(HEAD)]), 1)
+            self.assertIn("rerun refused, and not asked again at this head: ", self.texts())
+            p, calls = self.run_pass(s)
+            self.assertNotIn("run rerun", calls)
+
+    def test_a_queued_run_beside_a_cancelled_one_is_waited_on(self):
+        at = run("cancelled")["created_at"]
+        live = dict(run(status="queued", conclusion=None), id=98, created_at=at)
+        s = self.scripted(runs={HEAD: [run("cancelled"), live]}, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("run rerun", calls)
+        self.assertNotIn("/runs/99/jobs", calls)
 
     def test_a_merge_github_refuses_is_said_with_the_refusal(self):
         s = self.scripted(worktrees="", merge_refused="Pull request is not mergeable: the merge commit cannot be cleanly created")

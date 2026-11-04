@@ -37,8 +37,8 @@ Nothing else is needed for TestFlight. Screenshots, description and the rest are
 
 [Users and Access](https://appstoreconnect.apple.com/access/integrations/api) → **Integrations** → **App Store Connect API** → **Team Keys** → **+**.
 
-- **Name:** buddybox.
-- **Access:** App Manager.
+- **Name:** topo.
+- **Access:** Admin. App Manager is enough for uploads, but xcodebuild's cloud provisioning registers App IDs and profiles and needs Admin.
 
 Download the `.p8` when it appears — Apple gives it once and never again. Note the **Key ID** beside it and the **Issuer ID** above the list.
 
