@@ -17,12 +17,17 @@ final class AudioSession {
     enum RecordClaim: Hashable { case firstRun, chat, warm }
     /// `.profiling` is a run from a Mac (`--stay-awake`): a locked phone takes no launch and no copy.
     enum ScreenClaim: Hashable { case listening, speaking, profiling }
-    /// Who is keeping the process running behind the lock: the wait for a spoken turn's reply,
-    /// one claim per turn outstanding, and the reading of a reply. Counted like the other two, so
+    /// Who is keeping the process running behind the lock: a spoken press released and not yet
+    /// sent, the wait for a spoken turn's reply, one claim per turn outstanding, and the reading
+    /// of a reply. Counted like the other two, so
     /// the one letting go cannot cut what the other is still paying for — a reply handed to the
     /// speaker drops its own turn's wait with `.speaking` already taken, the keeper never stops
     /// between them, and a second thing said while the first is in flight is still held for.
     enum Hold: Hashable {
+        /// A spoken press released, its words still being finished and sent: from the thumb
+        /// coming up (or the press that closes a hands-free microphone) to the turn's own wait,
+        /// one per release, so a lock before the send still finds the process held.
+        case releasing(Int)
         case awaitingReply(String)
         case speaking
     }
@@ -405,11 +410,16 @@ final class AudioSession {
     func callPlaced() {
         call = .placed
         valid = false
+        // The mode the session is in, not the one wanted: a change of voice processing asked for
+        // while a hold or the microphone keeps the session waits for them (`deferredClaims`), and
+        // the call is placed only while a hold stands. From a session not in the record
+        // configuration no unit has a mode to keep, so the wanted one is set.
+        let mode = configuredRecord == true ? voiceProcessed : processed
         do {
-            try setCategory(true, processed)
+            try setCategory(true, mode)
             configuredRecord = true
-            voiceProcessed = processed
-            AudioLog.say("call placed: the record configuration is set (voice processing \(processed)); the system activates")
+            voiceProcessed = mode
+            AudioLog.say("call placed: the record configuration is set (voice processing \(mode), \(mode == processed ? "as wanted" : "as applied; \(processed) waits")); the system activates")
         } catch {
             AudioLog.say("call placed: the category did not set: \(error)")
         }

@@ -310,8 +310,8 @@ final class Speaker {
         return "type \(type), reason \(reason), wasSuspended \(suspended), options \(options)"
     }
 
-    /// The release of a spoken press: hold the process open for the reply that is coming, so the
-    /// turn is written, asked and answered behind the lock. Capped, and dropped the moment the
+    /// A spoken turn sent: hold the process open for the reply that is coming, so the turn is
+    /// written, asked and answered behind the lock, taking over from the release's hold. Capped, and dropped the moment the
     /// reply is being read, the turn fails, or anything ends the reply. Nothing is held for a
     /// reply that could not be heard anyway — replies muted, or a voice that is not
     /// resident at the release — since those turns make no audio to keep the phone awake for.
@@ -319,17 +319,26 @@ final class Speaker {
     /// The answer says both what was decided and what was achieved: `spoken` is whether the reply
     /// will be read aloud when it lands, which is what makes the turn a spoken one — the caller
     /// records the mark from it and states no condition of its own — and `held` is whether the
-    /// keeper is actually rendering for it. A keeper that would not start is a refusal, not a
-    /// hold, and is reported as one rather than left for the chat to believe in.
+    /// keeper is actually rendering for it, or will be at the activation of a call being placed.
+    /// A keeper that would not start is a refusal, not a hold, and is reported as one rather
+    /// than left for the chat to believe in.
     @discardableResult
     func awaitReply(_ nonce: String, readAloud: Bool) -> Wait {
+        // The release this turn was sent under is let go once its wait stands, or at once where
+        // none is taken: from here the wait is what holds the process for the turn.
+        defer { sending.map { released($0, "its turn's wait is taken") } }
         guard readAloud, voice.ready else {
             AudioLog.say("no wait held for \(nonce): \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
             return Wait(spoken: false, held: false)
         }
         waits[nonce]?.cancel()
         audio.wantAlive(true, for: .awaitingReply(nonce))
-        guard queue.keeping else {
+        // Under a call on its way — asked of the system or placed by it — the keeper may be down
+        // until the activation, whose resume starts it again for the holds standing: a wait taken
+        // then is held, or the call it is placed for would end with nothing holding it.
+        let placing = audio.call == .placed || call?.state == .starting
+        if placing { AudioLog.say("the wait for \(nonce) is held for the call's activation") }
+        guard queue.keeping || placing else {
             // The claim is one the process cannot honour: nothing is rendering, so nothing is
             // keeping it running, and saying otherwise would be a hold that exists only on paper.
             // The refusal itself is the queue's and is already logged there; what brought it down
@@ -384,6 +393,61 @@ final class Speaker {
         return line
     }
 
+    /// The releases of spoken presses still being finished and sent, each with the task that
+    /// lets it go at `releaseBound`.
+    private var releases: [Int: Task<Void, Never>] = [:]
+    private var releaseSerial = 0
+    /// The release whose words are being sent right now (`sending(under:)`): set by the press's
+    /// task just before its send, which reaches `awaitReply` before its first suspension, so the
+    /// wait taken there is that release's turn's.
+    private var sending: Int?
+    /// How long a release holds the process without its turn's wait: the final transcription
+    /// and the send's way to `awaitReply`, which take seconds, never this.
+    static let releaseBound: Duration = .seconds(30)
+
+    /// The thumb has come up on a spoken press: the process is held from here, before the final
+    /// transcription and the send, so a lock in between does not suspend it with the turn half
+    /// made. Answers the release's token, or nil where the voice is not resident or no keeper is
+    /// rendering. The token is let go by `awaitReply` once its turn's wait stands (the press's
+    /// task names it with `sending(under:)` before the send), and otherwise by the press's task
+    /// once its send returns, or at `releaseBound`. One per release, so two in flight are held
+    /// for each.
+    func releasing() -> Int? {
+        guard voice.ready else { return nil }
+        releaseSerial += 1
+        let token = releaseSerial
+        audio.wantAlive(true, for: .releasing(token))
+        guard queue.keeping else {
+            audio.wantAlive(false, for: .releasing(token))
+            AudioLog.say("release \(token) is not held: nothing is rendering")
+            return nil
+        }
+        releases[token] = Task { [weak self] in
+            try? await Task.sleep(for: Self.releaseBound)
+            guard !Task.isCancelled else { return }
+            self?.released(token, "its bound ran out")
+        }
+        AudioLog.say("release \(token): held while its words are finished and sent")
+        return token
+    }
+
+    /// Names the release whose words the next send carries, so `awaitReply` lets it go as the
+    /// turn's wait is taken.
+    func sending(under token: Int?) { sending = token }
+
+    /// The releases still held, for a test.
+    var releasesHeld: Int { releases.count }
+
+    /// Lets go of a release's hold: its turn's wait is taken, its send returned without one, or
+    /// its bound ran out. Free for one already let go.
+    func released(_ token: Int, _ why: String) {
+        if sending == token { sending = nil }
+        guard let bound = releases.removeValue(forKey: token) else { return }
+        bound.cancel()
+        AudioLog.say("release \(token) let go: \(why)")
+        audio.wantAlive(false, for: .releasing(token))
+    }
+
     /// Lets go of one turn's wait. Free when that turn holds none.
     func endAwaiting(_ nonce: String, _ why: String) {
         refusals[nonce] = nil
@@ -398,7 +462,7 @@ final class Speaker {
         waits.keys.forEach { endAwaiting($0, why) }
     }
 
-    /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
+    /// iOS reset the media server: the reply stops, every hold goes with it, and the play queue's
     /// nodes go too, since an engine that was running when the server went down will not start
     /// again. Nothing is built here; the next `speak` activates the session and the first frame
     /// builds the queue, which is how Say it again works after a reset with no press before it.
@@ -407,6 +471,8 @@ final class Speaker {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
         #endif
+        // Every release goes, so none outlives the queue the reset drops.
+        releases.keys.forEach { released($0, "the media server was reset") }
         stop()
         queue.reset()
     }
@@ -550,8 +616,9 @@ final class Speaker {
     }
 
     /// Ends things: a press, the Stop item, a sign-out, a reset, a reply that stopped making
-    /// progress. Both holds go, since whatever was being waited for is not going to be heard now
-    /// either.
+    /// progress. The waits and the reading's hold go, since whatever was being waited for is not
+    /// going to be heard now either; a release stands, since the words it is finishing are still
+    /// sent, and goes at its turn's wait.
     func stop() {
         cancel()
         endAllWaits("stopped")
