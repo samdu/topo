@@ -22,12 +22,12 @@ final class BadgeGestureTests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Diagnostics"].exists, "the tap also opened the diagnostics")
         // The rows the sheet is for. Their order is the screenshots' to show; that each is there
         // at all is cheap enough to hold here. The form builds a row as it nears the screen, so
-        // one below the sheet's foot is looked for again after a scroll.
+        // one below the sheet's foot is looked for again after a scroll or two.
         for row in ["Topo sits", "Vocabulary", "Memory", "Connections", "Context", "Noise suppression",
-                    "settings-voice-temperature", "settings-clear-compiled", "Diagnostics",
-                    "About Topo", "Sign out"] {
+                    "settings-earcons", "settings-voice-temperature", "settings-clear-compiled",
+                    "Diagnostics", "About Topo", "Sign out"] {
             let found = app.descendants(matching: .any)[row]
-            if !found.exists { app.swipeUp() }
+            for _ in 0..<3 where !found.exists { app.swipeUp() }
             XCTAssertTrue(found.exists, "the settings have no \(row)")
         }
         // A sheet put up again is a new view, with nothing of the last one's own state: what its
