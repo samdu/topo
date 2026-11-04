@@ -681,6 +681,7 @@ final class ConversationTests: XCTestCase {
         utterance(into: voice.sink)
         await quiet(3.5, into: voice.sink)
         await drain()
+        await settle("the detector reset") { !detector.silences.isEmpty }
         XCTAssertGreaterThan(judge.asks, 4, "the judge was not asked through the pause")
         XCTAssertEqual(sent, [], "a pause the judge called unfinished ended the turn")
         XCTAssertTrue(voice.listening)
@@ -728,7 +729,9 @@ final class ConversationTests: XCTestCase {
         utterance(into: voice.sink)
         await quiet(0.5, into: voice.sink)
         await settle("the first ask held") { judge.held == 1 }
-        await quiet(0.2, into: voice.sink)
+        // One frame more completes Silero's eighth chunk, and nothing after it reaches the next
+        // session's sink.
+        await quiet(0.1, into: voice.sink)
         await settle("Silero's end sent the turn") { self.sent.count == 1 }
         await settle("the microphone open again") { voice.listening }
         // The next utterance asks its first question, held too.
@@ -758,6 +761,7 @@ final class ConversationTests: XCTestCase {
         let detector = ScriptedDetector([0: .start(0)])
         let (conversation, voice, _) = await begun(detector)
         defer { conversation.stop("test", sending: false) }
+        await settle("the detector reset") { !detector.silences.isEmpty }
         XCTAssertEqual(detector.silences.first, Endpoint.silence(judged: false))
         XCTAssertEqual(Endpoint.silence(judged: false), 2.1)
         utterance(into: voice.sink)
