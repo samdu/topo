@@ -143,14 +143,15 @@ fi
 # the one stock speaker the voice asks for. `bos_before_voice.bin` is there so the loader finds its
 # cache complete: absent, it reaches for the network to backfill that one file.
 #
-# Smart Turn: Pipecat's v3.2 end-of-turn model, the int8 CPU export, one ONNX file that ONNX
-# Runtime loads as it is (`Apps/Client/SmartTurn.swift`).
+# Smart Turn: Topo's own Core ML package of Pipecat's v3.2 end-of-turn model, its fp32 weights
+# converted to an FP16 ML Program (the recipe is `smart-turn-coreml` in samdu/experiments), which
+# the phone compiles once it has it (`Apps/Client/SmartTurn.swift`).
 models="
 parakeet-tdt-0.6b-v2|FluidInference/parakeet-tdt-0.6b-v2-coreml|ee09c569f73759e6d44c9bd16766f477b2b36d39|Preprocessor.mlmodelc/ Encoder.mlmodelc/ Decoder.mlmodelc/ JointDecision.mlmodelc/ parakeet_vocab.json
 parakeet-ctc-110m-coreml|FluidInference/parakeet-ctc-110m-coreml|accdafd8cf8a2ff1cabe3c11e54416b405d409aa|MelSpectrogram.mlmodelc/ AudioEncoder.mlmodelc/ vocab.json tokenizer.json
 pocket-tts-coreml|samthehugenerd/Marius-Topo|0e896ab51092ac9ec3525688ee4918757e893983|v2.1/english/cond_prefill_ane.mlmodelc/ v2.1/english/flowlm_step_ane.mlmodelc/ v2.1/english/flow_decoder_fused.mlmodelc/ v2.1/english/mimi_decoder.mlmodelc/ v2.1/english/constants_bin/bos_emb.bin v2.1/english/constants_bin/bos_before_voice.bin v2.1/english/constants_bin/text_embed_table.bin v2.1/english/constants_bin/tokenizer.model v2.1/english/constants_bin/marius.safetensors
 silero-vad-coreml|FluidInference/silero-vad-coreml|b419383c55c110e2c9271fa6ee0ea83d03c70d96|silero-vad-unified-256ms-v6.2.1.mlmodelc/
-smart-turn-v3|pipecat-ai/smart-turn-v3|f766f81d3cfdf7737ac64aad813d91bbfd56bf93|smart-turn-v3.2-cpu.onnx
+smart-turn-v3|samthehugenerd/Smart-Turn-Topo|2f07bf86005994dd804d467d5008e1ce9a5eaf30|smart-turn-v3.2-fp16.mlpackage/
 "
 
 # id | base URL | files: entries that are not on the Hub, fetched from the base URL plus each file

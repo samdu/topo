@@ -335,13 +335,23 @@
     },
     {
       "id": "smart-turn-v3",
-      "repo": "pipecat-ai/smart-turn-v3",
-      "revision": "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
+      "repo": "samthehugenerd/Smart-Turn-Topo",
+      "revision": "2f07bf86005994dd804d467d5008e1ce9a5eaf30",
       "files": [
         {
-          "path": "smart-turn-v3.2-cpu.onnx",
-          "size": 8679182,
-          "sha256": "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f"
+          "path": "smart-turn-v3.2-fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "size": 50465,
+          "sha256": "d178340c5e7e8ad6458a117c31415298cf2824bfbb61a5dc0a6cd83d291592a7"
+        },
+        {
+          "path": "smart-turn-v3.2-fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "size": 16006592,
+          "sha256": "ae5c3eb8be60b25320fb2fbfa0914c13f02b9d71b3fedfaad59d691a8a914446"
+        },
+        {
+          "path": "smart-turn-v3.2-fp16.mlpackage/Manifest.json",
+          "size": 617,
+          "sha256": "4af5579bfb2fa82aa7914662d1708ac75fc9ae1824639578be11cbf4b8882a54"
         }
       ]
     },
