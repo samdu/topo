@@ -187,20 +187,19 @@ final class ActivityToolTests: XCTestCase {
     }
 
     /// A start received once the login's teardowns have run, before the keeper's end has
-    /// started or after it has finished, starts nothing: no epoch is current until the next
-    /// sign-in.
+    /// started or after it has finished, starts nothing and fetches nothing: no epoch is current
+    /// until the next sign-in.
     func testAStartReceivedAfterTheTeardownsStartsNothing() async throws {
         let gate = GatedTrackerFetcher()
         fetcher = gate
         let tool = self.tool
         login.end()
-        let started = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
-        await settle()
-        XCTAssertEqual(gate.pending, 1)
-        await login.tornDown()
-        gate.release(TrackerFixtures.wiki)
-        let reply = await started.value
+        // Received before the keeper's end has started: refused as it is received.
+        let reply = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertTrue(reply.text.contains("login has ended"), reply.text)
+        XCTAssertEqual(gate.fetched.count, 0, "a start after the login's end fetched")
+        await login.tornDown()
         XCTAssertEqual(host.starts, 0, "an activity started after the login's end")
         XCTAssertEqual(keeper.tasks, 0)
         // A start that awaits nothing is refused as it is received.
