@@ -962,6 +962,9 @@ until_true() { local n; for n in $(seq 100); do "$@" && return 0; perl -e 'selec
 has_ticket() { [ -n "$(ticket_of "$1")" ]; }
 no_ticket() { [ -z "$(ticket_of "$1")" ]; }
 reached() { [ -s "$1" ]; }
+# said <file> <words>: a waiting run takes its ticket before it says it waits, so what it says
+# is read once it has said it.
+said() { grep -q -- "$2" "$1"; }
 # waiter <directory> <name> [VAR=value...] — a run there in the background that will be held
 # in its suite once it has one; its pid in $run, its marker $work/line/<name>.hold.
 waiter() {
@@ -989,6 +992,7 @@ a_at="$((10#${a_ticket%%-*}))"
 waiter "$later" b LOCK_POLL=1; b=$run
 until_true has_ticket "$b" || fail "the line: a second run that waits has no ticket: $(cat "$work/line/b.out")"
 is "the line: in the order they came" "$(tickets)" "$a_ticket $(ticket_of "$b") "
+until_true said "$work/line/b.out" 'Waiting for a checkout' || true
 case "$(cat "$work/line/b.out")" in *"Waiting for a checkout (1 ahead in the line, the first theirs "*) ok "the line: the second says who is ahead" ;; *) fail "the line: $(cat "$work/line/b.out")" ;; esac
 # A run whose ticket was taken for dead puts it back, under its own name.
 rm -f "$TOPO_VALIDATE_CACHE/queue/$a_ticket"
@@ -1260,6 +1264,7 @@ begin "$repo" "$work/name-line/holder" "$work/name-line/holder.hold" TOPO_VALIDA
 waiter "$theirs" name-a LOCK_POLL=5 TOPO_VALIDATE_SLOTS=2; a=$run
 until_true has_ticket "$a" || fail "a run waiting for a name: it took no place: $(cat "$work/line/name-a.out")"
 is "a run waiting for a name: its ticket names it" "$(sed -n 4p "$TOPO_VALIDATE_CACHE/queue/$(ticket_of "$a")")" others
+until_true said "$work/line/name-a.out" 'Waiting for a suite' || true
 case "$(cat "$work/line/name-a.out")" in *"Waiting for a suite (others: topic "*) ok "a run waiting for a name: it says whose it is" ;; *) fail "a run waiting for a name: $(cat "$work/line/name-a.out")" ;; esac
 waiter "$later" name-b LOCK_POLL=1 TOPO_VALIDATE_SLOTS=2; b=$run
 until_true has_ticket "$b" || fail "a later run waiting for the name: it took no place: $(cat "$work/line/name-b.out")"
