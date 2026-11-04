@@ -255,6 +255,13 @@ final class SampleSink: @unchecked Sendable {
         }
     }
 
+    /// The last `count` samples, or everything when fewer have arrived: what the turn's judge is
+    /// asked about. Only the tail is copied, so asking five times a second costs eight seconds of
+    /// samples each time however long the utterance has run.
+    func tail(_ count: Int) -> [Float] {
+        lock.withLock { Array(samples.suffix(max(count, 0))) }
+    }
+
     /// Everything so far, emptied: the utterance.
     func take() -> [Float] {
         lock.withLock {
