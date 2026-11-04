@@ -1,11 +1,12 @@
 import Foundation
 import TopoTools
 
-/// `topo voice`: the mind's hand on how this phone hears and speaks. Three settings, each read and
+/// `topo voice`: the mind's hand on how this phone hears and speaks. Four settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
-/// and Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks.
+/// Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks,
+/// and Open mic waits (`QuietWait`), which the conversation's rule reads at each verdict.
 struct VoiceTool: Tool {
     /// The defaults are read and written from the service's own task; `UserDefaults` is safe there.
     private let defaults: Defaults
@@ -17,7 +18,7 @@ struct VoiceTool: Tool {
     private struct Defaults: @unchecked Sendable { let store: UserDefaults }
 
     let name = "voice"
-    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the call behind the lock"
+    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the call behind the lock, the open microphone's wait"
     let usage = """
     topo voice noise-suppression [status]   whether the microphone is cleaned up before it is heard
     topo voice noise-suppression on         clean it up: Apple's voice processing (noise suppression, echo
@@ -39,6 +40,12 @@ struct VoiceTool: Tool {
 
     On unless turned off. A change applies from the next spoken reply, on this phone only, and
     they can change it back in Settings.
+
+    topo voice wait [status]                how long a pause runs before Topo may decide you have finished
+    topo voice wait VALUE                   set it: seconds from \(QuietWait.said(QuietWait.range.lowerBound)) to \(QuietWait.said(QuietWait.range.upperBound)), in a conversation behind the lock
+
+    \(QuietWait.said(QuietWait.standard)) s unless changed. A pause that sounds unfinished is still waited through, up to 4 s. A
+    change applies from the next utterance, on this phone only, and they can change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -47,6 +54,7 @@ struct VoiceTool: Tool {
         case "noise-suppression": return noiseSuppression(arguments)
         case "temperature": return temperature(arguments)
         case "call": return call(arguments)
+        case "wait": return wait(arguments)
         default: return .usage(usage + "\n")
         }
     }
@@ -80,6 +88,16 @@ struct VoiceTool: Tool {
         default:
             return .usage(usage + "\n")
         }
+    }
+
+    private func wait(_ arguments: [String]) -> ToolReply {
+        guard arguments.count == 2, arguments[1] != "status" else {
+            return .ok("wait \(QuietWait.said(QuietWait.value(defaults.store))) s\n")
+        }
+        // Judged as the rule judges what it reads, so nothing is kept that it would not wait for.
+        guard let value = QuietWait.judged(Double(arguments[1])) else { return .usage(usage + "\n") }
+        defaults.store.set(value, forKey: QuietWait.key)
+        return .ok("wait \(QuietWait.said(value)) s, from the next utterance\n")
     }
 
     private func temperature(_ arguments: [String]) -> ToolReply {
