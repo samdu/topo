@@ -69,7 +69,7 @@ struct SettingsView: View {
                     .disabled(clearRequested)
                     .accessibilityIdentifier(SettingsView.clearCompiled)
                 } footer: {
-                    Text("What the ear and the voice were compiled to for the Neural Engine, kept across updates. A tap clears it at the next launch, which then compiles each again, half a minute or so apiece.")
+                    Text("What the ear and the voice were compiled to for the Neural Engine, kept across updates. A tap clears it at the next launch, which then compiles them again, the ear taking half a minute or so.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
