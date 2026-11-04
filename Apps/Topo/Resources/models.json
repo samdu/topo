@@ -338,9 +338,9 @@
       "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/",
       "files": [
         {
-          "path": "alpine-minirootfs-3.22.6-aarch64.tar.gz",
-          "size": 3969729,
-          "sha256": "821565fa8f3953eefd12497b166b4b50add2f7c57fb312e75862f5867e06fefe"
+          "path": "alpine-minirootfs-3.22.7-aarch64.tar.gz",
+          "size": 3971679,
+          "sha256": "7e9b34ff3304381909e566e2c93de450664ccc724191261423974fc121c11623"
         }
       ]
     },
@@ -372,31 +372,31 @@
     },
     {
       "id": "claude-code",
-      "version": "2.1.285",
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.285/linux-arm64-musl/",
+      "version": "2.1.316",
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.316/linux-arm64-musl/",
       "files": [
         {
           "path": "claude",
-          "size": 232077120,
-          "sha256": "31efc4136bc678575f4c6730e248d34f89dbfea0468be1c5d012af199cd62ee8"
+          "size": 311914480,
+          "sha256": "d774cb39055cff62af476af32702f1fc4f888a7e395a37434a95d6f5a98818a0"
         }
       ]
     },
     {
       "id": "op-cli",
-      "version": "2.39.0",
-      "url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/",
+      "version": "2.41.1",
+      "url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.41.1/",
       "files": [
         {
-          "path": "op_linux_arm64_v2.39.0.zip",
-          "size": 13935663,
-          "sha256": "829baeff1c07e055cfa132031b1d9f2282ccdf5076258e482caf2fda70aea5d0"
+          "path": "op_linux_arm64_v2.41.1.zip",
+          "size": 14993669,
+          "sha256": "89abd60c17d5c614066c20e6abed816449eb018c5e0679ed63d57071c7bee85e"
         }
       ],
       "binary": {
         "path": "op",
-        "size": 41025720,
-        "sha256": "86d9147108e615df1899c028cab683ae4eac421b797a9cff05299aea85ab06e9"
+        "size": 45220002,
+        "sha256": "5d5c03b7aed1537c23a4d4f58f379e59658b5eee8e7c6777e5859309590a2200"
       }
     }
   ]

@@ -53,7 +53,17 @@ packages:
   # speaks, and the models are the better part of a gigabyte.
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    exactVersion: "0.17.7"
+    exactVersion: "0.18.2"
+    # The package's default traits, named, so the set the voice is built with is the project's
+    # and not the package's default of the day. It is the default set at this pin, read again at
+    # every bump: a default trait a later version adds stays off until it is named here. TTS is
+    # the voice; Diarizer is nothing Topo calls, kept so the build is the package as released.
+    # Naming them does not cure a package state that last resolved another version: Xcode 27.2
+    # carries that resolution's trait set into the next and refuses a named trait the old
+    # version did not declare, which is why the validation keeps its package state per pin
+    # (scripts/mac-suite.sh, build/packages) and why a build elsewhere that moves this pin under
+    # a kept DerivedData wants its SourcePackages/workspace-state.json removed first.
+    traits: [NemoTextProcessing, TTS, Diarizer]
 targets:
   Topo:
     type: application
@@ -120,10 +130,10 @@ targets:
         # place.
         inputFiles:
           - $(SRCROOT)/scripts/strip-luxtts.sh
-          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_FluidAudio.bundle
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_LuxTtsG2pResources.bundle
         script: |
           set -e
-          "$SRCROOT/scripts/strip-luxtts.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_FluidAudio.bundle"
+          "$SRCROOT/scripts/strip-luxtts.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_LuxTtsG2pResources.bundle"
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -179,6 +189,10 @@ targets:
         # says so in its answer), without the system's own sheet for choosing more put up at the
         # first read of each launch. No setting generates this key.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
+        # The mind's Live Activities (`topo activity`, docs/widgets.md). Without the key
+        # `Activity.request` refuses every start; no setting generates it, and
+        # `scripts/check-built-plist.sh` reads it off the product.
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
@@ -218,6 +232,10 @@ targets:
       - Apps/Shared/WidgetDocument.swift
       - Apps/Shared/ControlDocument.swift
       - Apps/Shared/WidgetNodeView.swift
+      # The Live Activity's document, its tracker and the views that draw them (docs/widgets.md).
+      - Apps/Shared/ActivityDocument.swift
+      - Apps/Shared/ProgressTracker.swift
+      - Apps/Shared/TrackerView.swift
       - Apps/Shared/SurfaceStore.swift
       - Apps/Shared/Theme.swift
       - Apps/Shared/OctopusMark.swift

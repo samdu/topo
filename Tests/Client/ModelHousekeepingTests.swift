@@ -80,7 +80,7 @@ final class ModelHousekeepingTests: XCTestCase {
         try write(fakefs.appendingPathComponent("meta.db"))
         try write(fakefs.appendingPathComponent("data/bin/busybox"))
 
-        let rootfs = try filled(store, id: ModelManifest.rootfs, files: ["alpine-minirootfs-3.22.6-aarch64.tar.gz": "tarball"])
+        let rootfs = try filled(store, id: ModelManifest.rootfs, files: ["alpine-minirootfs-3.22.7-aarch64.tar.gz": "tarball"])
         let tarball = store.location(of: rootfs.files[0], in: rootfs)
         store.sweep(ModelManifest(models: voices.models + [rootfs]))
         XCTAssertTrue(store.isPresent(rootfs), "the rootfs was swept")
@@ -108,7 +108,7 @@ final class ModelHousekeepingTests: XCTestCase {
         XCTAssertEqual(store.directory(for: pinned), store.root.appendingPathComponent(ModelManifest.claudeCode, isDirectory: true))
         XCTAssertTrue(store.owns(pinned), "Claude Code's home is Topo's, under Models/")
 
-        // The shipped entry's id and path, with a file of the test's own in place of 226 MB.
+        // The shipped entry's id and path, with a file of the test's own in place of 312 MB.
         let claude = try filled(store, id: pinned.id, files: [pinned.files[0].path: "a binary"])
         let binary = store.location(of: claude.files[0], in: claude)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
