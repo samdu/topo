@@ -69,10 +69,14 @@ final class LoginLifeTests: XCTestCase {
         XCTAssertTrue(login.epoch.isCurrent)
     }
 
-    /// `SigningOut.midFlight` fails a test whose work never reached its gate.
+    /// `SigningOut.midFlight` fails a test whose work never reached its gate, and not one whose
+    /// work did.
     func testMidFlightFailsWhenTheWorkNeverReachedItsGate() async {
-        XCTExpectFailure("the work never reached its gate")
-        await SigningOut.midFlight(LoginLife(), reached: { false })
+        var failures: [String] = []
+        await SigningOut.midFlight(LoginLife(), reached: { false }, fail: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1, "a sign-out with nothing in flight passed")
+        await SigningOut.midFlight(LoginLife(), reached: { true }, fail: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1, "a sign-out with the work at its gate failed")
     }
 
     func testTeardownsRunInTheOrderRegisteredAtEveryEnd() {

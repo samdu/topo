@@ -20,10 +20,15 @@ import XCTest
 /// it ends (`ActivityKeeper.endAll` at the keeper's gate).
 @MainActor
 enum SigningOut {
+    /// `fail` hears work that never reached its gate; with none, the test fails. Only the
+    /// helper's own suite passes one.
     static func midFlight(_ login: LoginLife, reached: () -> Bool, release: () -> Void = {},
-                          file: StaticString = #filePath, line: UInt = #line) async {
+                          fail: ((String) -> Void)? = nil, file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<200 where !reached() { await Task.yield() }
-        XCTAssertTrue(reached(), "the work never reached its gate, so nothing was in flight at the sign-out", file: file, line: line)
+        if !reached() {
+            let why = "the work never reached its gate, so nothing was in flight at the sign-out"
+            if let fail { fail(why) } else { XCTFail(why, file: file, line: line) }
+        }
         login.moveEpoch()
         login.runTeardowns()
         release()
