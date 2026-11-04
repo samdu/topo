@@ -14,7 +14,8 @@
 #   - a checkout whose HEAD is not the pin;
 #   - a patch that does not apply (`git apply --check`), so a pin bump with a stale patch stops
 #     here rather than building the fork without it;
-#   - a meson configuration whose guest_arch, kernel and engine are not arm64, ish and asbestos;
+#   - a meson configuration whose guest_arch, kernel and engine are not arm64, ish and asbestos,
+#     or whose jit is on (the fork's native JIT needs executable memory the app does not ask for);
 #   - a populated deps/linux or deps/libapps: the Linux-kernel build and the terminal are GPL code
 #     iSH's App Store waiver (LICENSE.IOS) does not cover, so neither submodule is ever fetched;
 #   - a library that does not export `ish_mem_refresh_hook`, the brake patch's symbol, or
@@ -33,7 +34,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-pin=e1d579480fba88e8f0428e3cf23811bcdd05421f
+pin=c5c264da19148512167aa493d7bd4e50aae1b74e
 repo="${ISH_REPO:-https://github.com/OpenMinis/ish-arm64.git}"
 patches_dir="$root/patches/ish"
 glue="$root/Packages/TopoUserland/Guest"
@@ -41,7 +42,7 @@ out="$root/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
 work="${ISH_WORK:-$root/build/ish}"
 source_dir="$work/src"
 min_ios=17.0
-meson_options=(-Dguest_arch=arm64 -Dkernel=ish -Dengine=asbestos)
+meson_options=(-Dguest_arch=arm64 -Dkernel=ish -Dengine=asbestos -Djit=false)
 
 fail() { echo "build-ish: $*" >&2; exit 1; }
 
@@ -83,7 +84,7 @@ verify_options() {
   local build="$1" json
   json="$(meson introspect --buildoptions "$build")" || fail "meson cannot read $build"
   local name want got
-  for pair in guest_arch=arm64 kernel=ish engine=asbestos; do
+  for pair in guest_arch=arm64 kernel=ish engine=asbestos jit=False; do
     name="${pair%%=*}"; want="${pair#*=}"
     got="$(/usr/bin/python3 -c 'import json,sys; n=sys.argv[1]; print(next((str(o["value"]) for o in json.load(sys.stdin) if o["name"]==n), ""))' "$name" <<< "$json")"
     [ "$got" = "$want" ] || fail "$build is configured with $name=${got:-unset}, not $want"
@@ -92,7 +93,7 @@ verify_options() {
 
 case "${1:-}" in
   verify) verify_source "${2:?a checkout}"; echo "build-ish: $2 is the pin and takes every patch"; exit 0 ;;
-  verify-options) verify_options "${2:?a meson build directory}"; echo "build-ish: $2 is arm64, ish, asbestos"; exit 0 ;;
+  verify-options) verify_options "${2:?a meson build directory}"; echo "build-ish: $2 is arm64, ish, asbestos, no JIT"; exit 0 ;;
   inputs) inputs_digest; exit 0 ;;
   "") ;;
   *) echo "unknown argument: $1" >&2; exit 2 ;;

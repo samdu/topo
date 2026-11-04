@@ -261,6 +261,7 @@
 		691690ECA1BE1528C4C384F0 /* ShareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768E276CB343CAEE40B2CB79 /* ShareTests.swift */; };
 		69BD32B50A6166158C051F6B /* MemoryMoveDuringTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B32DA01FEA350247ACEF3A0E /* MemoryMoveDuringTurnTests.swift */; };
 		6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
+		6B124CA7118EDA86DE771108 /* GuestProcLinksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2604AC9B9EE1E884C8D6F72 /* GuestProcLinksTests.swift */; };
 		6B5E30F6D972C39EFEC872C9 /* ProgressTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C17BE688DD21C46E7D3630 /* ProgressTracker.swift */; };
 		6BA81614A5DAA60FB08C276F /* ClaudeCodeGuestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */; };
 		6BEDC69AF236E49BCFE7174A /* StubDNS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E03A32A1D62ABC801EE4BE /* StubDNS.swift */; };
@@ -471,6 +472,7 @@
 		B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */; };
 		B992585D5C4DDF8B56FBF510 /* PerfRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEDD5FD329B5A00DAD3FC0A8 /* PerfRunTests.swift */; };
 		B9EBA98B256F61BC975CEB51 /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 888EB21C6035A4B70F99A527 /* TopoCoreTesting */; };
+		BA8946F4A9817873F8B631B1 /* GuestSleepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C955455A14DE2782BF21F17 /* GuestSleepTests.swift */; };
 		BAD07508B0297B2D8F63A5C2 /* ReplyBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55264DCB2FD2D8A991D906E6 /* ReplyBlocksTests.swift */; };
 		BADDEA146BE40EC2D29BFC2D /* WidgetNodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9F578527FAA2BB3C84ACEA5 /* WidgetNodeView.swift */; };
 		BB968A50A8FC2BAB6F633AB2 /* ChatBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402DC40974C6C4DAF1B6B93F /* ChatBar.swift */; };
@@ -971,6 +973,7 @@
 		9B8C93F154A9636985BC8036 /* SigningOut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SigningOut.swift; sourceTree = "<group>"; };
 		9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlActionTests.swift; sourceTree = "<group>"; };
 		9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSessionTests.swift; sourceTree = "<group>"; };
+		9C955455A14DE2782BF21F17 /* GuestSleepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSleepTests.swift; sourceTree = "<group>"; };
 		9C9A782EE9118805036640C7 /* ReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayTests.swift; sourceTree = "<group>"; };
 		9E1559ACE3C45245A9A17244 /* TopoWidgetUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWidgetUITests.swift; sourceTree = "<group>"; };
 		9E270E681606D89AAEA041E6 /* VaultDownloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultDownloads.swift; sourceTree = "<group>"; };
@@ -1090,6 +1093,7 @@
 		E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTranscriptTests.swift; sourceTree = "<group>"; };
 		E1040C0C87BAF870E2D01ACC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E23900C549F79062FA7DB56B /* ScreenSampler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenSampler.swift; sourceTree = "<group>"; };
+		E2604AC9B9EE1E884C8D6F72 /* GuestProcLinksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestProcLinksTests.swift; sourceTree = "<group>"; };
 		E2DC2072C5D784DECA9AEAE0 /* Vocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Vocabulary.swift; sourceTree = "<group>"; };
 		E3F988BC655FF785C0ACBCFD /* TopoUserland */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoUserland; path = Packages/TopoUserland; sourceTree = SOURCE_ROOT; };
 		E44B79001708E10FB628518D /* ScreenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTests.swift; sourceTree = "<group>"; };
@@ -1366,9 +1370,11 @@
 				9E76FB1A1AE01CF01D39D057 /* GuestMountTests.swift */,
 				7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */,
 				ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */,
+				E2604AC9B9EE1E884C8D6F72 /* GuestProcLinksTests.swift */,
 				9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */,
 				D24B3DDCD3F8FF11D959BF0E /* GuestSignalFrameTests.swift */,
 				C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */,
+				9C955455A14DE2782BF21F17 /* GuestSleepTests.swift */,
 				A50B8CE04F7718914028BE64 /* GuestStreamOffsetTests.swift */,
 				EC5C273524C6EE9CB5783D8E /* GuestTests.swift */,
 				C451F4F8393DE072AF04D71A /* GuestToolScriptTests.swift */,
@@ -2666,10 +2672,12 @@
 				8010C73B33C821825010A793 /* GuestLifecycleTests.swift in Sources */,
 				8969FA455CA20EEC9FDE4171 /* GuestMountTests.swift in Sources */,
 				563AB75B91F1FE43E9036ABE /* GuestPidfdTests.swift in Sources */,
+				6B124CA7118EDA86DE771108 /* GuestProcLinksTests.swift in Sources */,
 				525CF069E985418F523B38D8 /* GuestProcessTests.swift in Sources */,
 				E596F876098F2B54AB0DD7C6 /* GuestSessionTests.swift in Sources */,
 				C3E6347E462D9C75916774DC /* GuestSignalFrameTests.swift in Sources */,
 				019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */,
+				BA8946F4A9817873F8B631B1 /* GuestSleepTests.swift in Sources */,
 				CBCC30BE8D45882DB19BF8F8 /* GuestStreamOffsetTests.swift in Sources */,
 				1BC59D44A4D7713252277BB6 /* GuestTests.swift in Sources */,
 				5640F3967B126752EA8C3B2F /* GuestToolScriptTests.swift in Sources */,
