@@ -379,8 +379,8 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
                             "text": f"reran {title}'s validate run {run['id']} whole: it was cancelled {minutes(since)} ago "
                                     f"with no run after it on {short}."})
         elif since > GRACE:
-            report("cancelled", f"{title}: its validate run on {short} was cancelled again after one rerun, "
-                                f"{minutes(since)} ago, and nothing ran after it; a push starts one.")
+            report("cancelled", f"{title}: its validate run on {short} is cancelled, {minutes(since)} ago, and its "
+                                f"one rerun is spent; nothing is running on it, and a push starts one.")
         return out
 
     # The verdict first. The review cap is the one way review_gate is red beside a green
@@ -1542,16 +1542,20 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 except RuntimeError as ex:
                     say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
             elif w["kind"] == "rerun":
+                # The one rerun a head has is spent before it is asked for:
+                # GitHub may take the request and the pass end before an
+                # answer, and a refusal may have been taken all the same, so
+                # neither is a second chance.
+                state["rerun"][w["key"]] = {"run": w["run_id"], "job": w["job"], "at": now.isoformat()}
+                persist()
                 try:
                     if w["job_id"] is None:
                         sh.rerun_run(w["run_id"])
                     else:
                         sh.rerun(w["job_id"])
-                    state["rerun"][w["key"]] = {"run": w["run_id"], "job": w["job"], "at": now.isoformat()}
                     lines.append(w["text"])
-                    persist()
                 except RuntimeError as ex:
-                    say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused: {ex}")
+                    say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused, and not asked again at this head: {ex}")
         reports = [w for w in wants if w["kind"] == "report"]
         if reports:
             item = f"pr:{n}"

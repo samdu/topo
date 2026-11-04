@@ -292,7 +292,7 @@ class Decisions(unittest.TestCase):
         done = {"rerun": {f"7:run:{HEAD}": {}}}
         w = janitor.decide_pr(pr(), run("cancelled"), [], done, NOW)
         self.assertEqual(kinds(w), ["report:cancelled"])
-        self.assertIn("cancelled again after one rerun", w[0]["text"])
+        self.assertIn("its one rerun is spent", w[0]["text"])
         self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=12)), [], done, NOW), [])
 
     def test_a_new_head_has_its_cancelled_run_rerun_again(self):
@@ -981,6 +981,7 @@ if tool == "gh":
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
+    if a[:2] == ["run", "rerun"] and S.get("rerun_refused"): print(S["rerun_refused"], file=sys.stderr); sys.exit(1)
     if a[:2] == ["pr", "merge"] or a[:2] == ["run", "rerun"]: sys.exit(0)
     if a[:2] == ["issue", "list"] and a[a.index("--repo") + 1] == "samdu/topo-link":
         if S.get("builds_error"): print(S["builds_error"], file=sys.stderr); sys.exit(1)
@@ -2545,7 +2546,22 @@ class WholePass(unittest.TestCase):
         self.assertIn("reran #7 (buddy/x)'s validate run 99 whole", self.texts())
         p, calls = self.run_pass(s)
         self.assertNotIn("run rerun", calls, "once per head")
-        self.assertIn("cancelled again after one rerun", self.texts())
+        self.assertIn("its one rerun is spent", self.texts())
+
+    def test_a_rerun_is_spent_before_it_is_asked_for_so_a_refusal_is_not_a_second_chance(self):
+        # GitHub may take a rerun and the pass end before it hears back: the
+        # record is written first, and a failed ask is as spent as an answered one.
+        for j_ in ([], jobs(select="success", test="success", review_cap="success", codex="cancelled",
+                            post_feedback="skipped", reviewer_ran="failure", review_gate="failure")):
+            self.setUp()
+            s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j_, worktrees="", rerun_refused="HTTP 502")
+            p, calls = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("gh run rerun", calls)
+            self.assertEqual(len([k for k in self.state_file()["rerun"] if k.endswith(HEAD)]), 1)
+            self.assertIn("rerun refused, and not asked again at this head: ", self.texts())
+            p, calls = self.run_pass(s)
+            self.assertNotIn("run rerun", calls)
 
     def test_a_queued_run_beside_a_cancelled_one_is_waited_on(self):
         at = run("cancelled")["created_at"]
