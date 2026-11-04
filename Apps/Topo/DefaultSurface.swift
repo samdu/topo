@@ -14,14 +14,17 @@ import TopoCore
 final class DefaultSurface {
     let store: @MainActor () -> SurfaceStore?
     let reloader: SurfaceReloader
+    let login: LoginLife
     /// The reply the default was last written for, so a read that brings the same reply writes
     /// nothing.
     private var written: TurnRef?
     private var wroteEmpty = false
 
-    init(store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() }, reloader: SurfaceReloader = .shared) {
+    init(store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() }, reloader: SurfaceReloader = .shared,
+         login: LoginLife = .shared) {
         self.store = store
         self.reloader = reloader
+        self.login = login
     }
 
     /// A reply the log brought: the default follows it when it is the newest in `turns`.
@@ -40,16 +43,25 @@ final class DefaultSurface {
         write(reply)
     }
 
-    /// The login's phase moving. Every way a login ends — the settings sheet, a demotion, a
-    /// viewer's takeover — ends here too, and a signed-out phone keeps no surface; only a login
-    /// ending: a launch that finds no token (the keychain unreadable before the first unlock
-    /// included) takes nothing away. Signed in, the default is written for the newest reply.
+    /// The login's phase moving. A refresh that finds the login gone (`SignIn.refresh`) has no
+    /// steps of its own, so it ends here: the login's epoch moves and its teardowns run
+    /// (`LoginLife.end`), and the surfaces go. The settings sheet, a takeover and a viewer's
+    /// arrival have already run both by the time their last step moves the phase
+    /// (`LoginLife.standing` is false), so they are not run a second time. Only a login ending: a
+    /// launch that finds no token (the keychain unreadable before the first unlock included)
+    /// takes nothing away. Signed in, the default is written for the newest reply.
     func follow(from was: SignIn.Phase, to phase: SignIn.Phase, latest reply: Turn?) {
         if was == .signedIn, phase != .signedIn {
-            reloader.forget(store())
+            if login.standing {
+                login.end()
+                reloader.forget(store())
+            }
             forget()
         }
-        if phase == .signedIn { launched(latest: reply) }
+        if phase == .signedIn {
+            if was != .signedIn { login.began() }
+            launched(latest: reply)
+        }
     }
 
     /// A login ended and the surfaces with it: the next sign-in writes the default afresh.

@@ -204,7 +204,7 @@ private extension Int64 {
 /// update and the help says so.
 @MainActor
 final class ActivityKeeper {
-    static let shared = ActivityKeeper(host: ActivityKitHost(), reloader: SurfaceReloader.shared)
+    static let shared = ActivityKeeper(host: ActivityKitHost())
     nonisolated static let interval: Duration = .seconds(20)
     /// How long a polled activity reads as current past its last update.
     nonisolated static let staleAfter: TimeInterval = 60
@@ -218,9 +218,10 @@ final class ActivityKeeper {
     private var ends: [String: Task<Void, Never>] = [:]
     /// Slots a start holds while it fetches its tracker, so two starts of one slot make one activity.
     private var reserved: Set<String> = []
-    /// Counts the logins' ends: a call that read the activities before an await compares it after,
-    /// since `endAll` may have run in between and nothing from before it may start or keep anything.
-    private(set) var generation = 0
+    /// The login the activities are kept under: a call that read the activities before an await
+    /// takes its `epoch` and checks it after, since the login may have ended in between and
+    /// nothing from before that may start or keep anything.
+    let login: LoginLife
     /// Counts the tool's updates of each activity: a poll that read the count before its fetch
     /// and finds it moved when its turn at the gate comes leaves that round to the next.
     private var revisions: [String: Int] = [:]
@@ -236,16 +237,17 @@ final class ActivityKeeper {
     private var takenDown: Set<String> = []
     private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
 
-    /// `reloader`: the sign-out, the takeover and the viewer's arrival reach the keeper through its
-    /// `onForget`, as they reach the widgets' runs; every activity is the login's.
+    /// `login`: every way a login ends reaches the keeper through its `onEnd`; every activity is
+    /// the login's.
     init(host: ActivityHost, fetcher: TrackerFetcher = URLTrackerFetcher(),
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-         now: @escaping @Sendable () -> Date = { Date() }, reloader: SurfaceReloader? = nil) {
+         now: @escaping @Sendable () -> Date = { Date() }, login: LoginLife = .shared) {
         self.host = host
         self.fetcher = fetcher
         self.sleep = sleep
         self.now = now
-        reloader?.onForget { [weak self] in Task { await self?.endAll() } }
+        self.login = login
+        login.onEnd(awaiting: { [weak self] in await self?.endAll() })
     }
 
     /// The stale date a notice carries: `until`, and for a polled activity no later than
@@ -315,7 +317,7 @@ final class ActivityKeeper {
         guard !resuming else { return }
         resuming = true
         defer { resuming = false }
-        let generation = generation
+        let epoch = login.epoch
         for id in host.running().map(\.id) {
             await changing(id, ended: true) { record in
                 if let until = record.state.until, until <= now() {
@@ -323,9 +325,9 @@ final class ActivityKeeper {
                     forget(id)
                     await end(id, nil, dismissal: .now)
                     log.info("activity \(id, privacy: .public) ended at its until")
-                } else if !record.ended, generation == self.generation {
+                } else if !record.ended, epoch.isCurrent {
                     // Kept only under the login that resumed: a sign-out queued behind this turn
-                    // has already counted itself, and its end follows.
+                    // has already moved the epoch, and its end follows.
                     keep(id)
                 }
             }
@@ -374,9 +376,9 @@ final class ActivityKeeper {
 
     /// A sign-out, a takeover or a viewer's arrival: the activities are the login's, the ones
     /// ended and still on the lock screen included, since a default dismissal leaves one shown
-    /// for hours. A start or an update in flight finds the generation moved and does nothing.
+    /// for hours. A start or an update in flight finds the epoch moved and does nothing; the
+    /// epoch has moved before this runs, since it is a teardown (`LoginLife`).
     func endAll() async {
-        generation += 1
         reserved = []
         for id in host.running().map(\.id) {
             forget(id)
@@ -401,10 +403,10 @@ final class ActivityKeeper {
                 forget(id)
                 return
             }
-            let generation = generation
+            let epoch = login.epoch
             let revision = revision(id)
             let fetched = await fetcher.fetch(url)
-            guard !Task.isCancelled, generation == self.generation else {
+            guard !Task.isCancelled, epoch.isCurrent else {
                 forget(id)
                 return
             }
@@ -415,7 +417,7 @@ final class ActivityKeeper {
             enum Round { case kept, gone, finished }
             // Read again at the gate: the activity may be ended, updated, or the login's gone.
             let round = await changing(id) { record -> Round in
-                guard !Task.isCancelled, generation == self.generation else { return .gone }
+                guard !Task.isCancelled, epoch.isCurrent else { return .gone }
                 // An update of the tool's since the fetch began has passed the gate before this
                 // round, or is the host's now: this round is left to the next, which reads it.
                 guard revision == self.revision(id) else { return .kept }

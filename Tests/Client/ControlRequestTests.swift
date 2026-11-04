@@ -157,14 +157,14 @@ final class ControlRequestTests: XCTestCase {
         return server
     }
 
-    private func actions(reloader: SurfaceReloader? = nil) -> WidgetActions {
+    private func actions(reloader: SurfaceReloader? = nil, login: LoginLife = LoginLife()) -> WidgetActions {
         let store = store
         let secrets = secrets!
         let leftBehind = leftBehind
         return WidgetActions(table: ToolTable([]), store: { store },
                              reloader: reloader ?? SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                                                    reloadEveryControl: {}, schedule: { _, _ in }),
-                             perform: { await ControlRequest.perform($0, secrets: secrets, leftBehind: leftBehind) })
+                             perform: { await ControlRequest.perform($0, secrets: secrets, leftBehind: leftBehind) }, login: login)
     }
 
     /// Writes `button-1` making `request`, as `topo control set` would, and answers its revision.
@@ -422,11 +422,13 @@ final class ControlRequestTests: XCTestCase {
         let server = try await server(.stall)
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                        reloadEveryControl: {}, schedule: { _, _ in })
-        let actions = actions(reloader: reloader)
+        let login = LoginLife()
+        let actions = actions(reloader: reloader, login: login)
         let revision = try set(["url": server.url("/api/stall"), "body": "{}"])
         let started = ContinuousClock.now
         let tapped = Task { await tap(actions, revision: revision) }
         while server.requests.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        login.end()
         reloader.forget(store)
         await tapped.value
         XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))

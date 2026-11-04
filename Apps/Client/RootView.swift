@@ -27,10 +27,12 @@ struct RootView: View {
             // puts what was waiting into the log as a limb's turns and drops the login.
             // A viewer holds no login, so it draws no picture from a home a login left behind.
             ViewerRootView().environment(\.turnImageFiles, nil).task {
-                await ViewerArrival(forgetShares: { ShareStore.shared()?.close() },
+                await ViewerArrival(moveEpoch: { LoginLife.shared.moveEpoch() },
+                                    forgetShares: { ShareStore.shared()?.close() },
                                     holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
                                     demoteHarness: { await harness.demote() },
                                     forgetMemory: { memory.forget() },
+                                    runTeardowns: { LoginLife.shared.runTeardowns() },
                                     forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                                     forgetConnections: { connections.forget() },
                                     forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) }).act()

@@ -23,14 +23,6 @@ final class SurfaceReloader {
     private let schedule: Schedule
     /// The kinds a reload is already scheduled for, a control's under its control kind.
     private var scheduled: Set<String> = []
-    /// What else a sign-out ends: the widget runs still in flight (`WidgetActions`).
-    private var forgetting: [@MainActor () -> Void] = []
-
-    /// Runs `body` on every `forget`, before the surfaces go.
-    func onForget(_ body: @escaping @MainActor () -> Void) {
-        forgetting.append(body)
-    }
-
     init(reloadKind: @escaping @MainActor (String) -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: $0) },
          reloadEverything: @escaping @MainActor () -> Void = { WidgetCenter.shared.reloadAllTimelines() },
          reloadControlKind: @escaping @MainActor (String) -> Void = { kind in
@@ -82,7 +74,6 @@ final class SurfaceReloader {
     /// A sign-out: every surface gone from the app group, and every timeline and control read
     /// again now, so each placed widget and control draws the signed-out state.
     func forget(_ store: SurfaceStore?) {
-        forgetting.forEach { $0() }
         try? store?.removeEverything()
         reloadAll()
     }

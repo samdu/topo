@@ -106,11 +106,20 @@ public actor VaultMirror {
     private let disk = FileManager.default
     private var writer: NoteWriter?
     private var synced: State?
+    /// Told of every coordinated access this mirror asks for, on the coordination queue and
+    /// before the coordinator is asked: the URL and whether it is a read. Nothing but a test
+    /// sets it, to know that a sync is parked behind another accessor rather than guess.
+    private let asking: (@Sendable (URL, Bool) -> Void)?
 
     public init(directory: URL, store: MemoryStore, device: DeviceID) {
+        self.init(directory: directory, store: store, device: device, asking: nil)
+    }
+
+    init(directory: URL, store: MemoryStore, device: DeviceID, asking: (@Sendable (URL, Bool) -> Void)?) {
         self.directory = directory
         self.store = store
         self.device = device
+        self.asking = asking
     }
 
     /// Pushes what changed on disk, then writes back what the store holds.
@@ -208,7 +217,7 @@ public actor VaultMirror {
         // next pass is made by that pass.
         guard !FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return }
         _ = try await Self.coordinated(directory, reading: false,
-                                       options: NSFileCoordinator.WritingOptions.forMerging.rawValue) { url, cancellation -> Bool in
+                                       options: NSFileCoordinator.WritingOptions.forMerging.rawValue, asking: asking) { url, cancellation -> Bool in
             try cancellation.check()
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             return true
@@ -222,7 +231,7 @@ public actor VaultMirror {
     /// else would ever take these away.
     private func sweepScratch() async throws {
         _ = try await Self.coordinated(directory, reading: false,
-                                       options: NSFileCoordinator.WritingOptions.forMerging.rawValue) { url, cancellation -> Bool in
+                                       options: NSFileCoordinator.WritingOptions.forMerging.rawValue, asking: asking) { url, cancellation -> Bool in
             guard let walk = FileManager.default.enumerator(at: url,
                                                             includingPropertiesForKeys: [.isDirectoryKey],
                                                             options: []) else { return true }
@@ -348,7 +357,7 @@ public actor VaultMirror {
     /// when the block opened it, not whatever a path lookup would find each time.
     private func coordinatedReplace(_ url: URL, expecting: String?, with text: String) async throws -> DiskOutcome {
         try await Self.coordinated(url, reading: false,
-                                   options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url, cancellation in
+                                   options: NSFileCoordinator.WritingOptions.forReplacing.rawValue, asking: asking) { url, cancellation in
             // Before the way down is made, which is a change to the person's folder like any
             // other: the coordinator's wait is unbounded and the sign-out may have happened
             // in it.
@@ -395,7 +404,7 @@ public actor VaultMirror {
     /// and the name is taken out of the folder this block opened rather than off a path.
     private func coordinatedRemove(_ url: URL, expecting: String?) async throws -> DiskOutcome {
         try await Self.coordinated(url, reading: false,
-                                   options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, cancellation in
+                                   options: NSFileCoordinator.WritingOptions.forDeleting.rawValue, asking: asking) { url, cancellation in
             guard let folder = try self.openFolder(of: url) else {
                 return DiskOutcome.blocked("the way down to it is not the vault's")
             }
@@ -719,7 +728,7 @@ public actor VaultMirror {
     /// announced to whoever has the file open.
     private nonisolated func coordinatedRead<T: Sendable>(_ url: URL,
                                                           _ body: @escaping @Sendable (URL) throws -> T) async throws -> T {
-        try await Self.coordinated(url, reading: true, options: 0) { url, _ in try body(url) }
+        try await Self.coordinated(url, reading: true, options: 0, asking: asking) { url, _ in try body(url) }
     }
 
     /// What a write lands through before it is renamed into place. Hidden, so no editor
@@ -776,13 +785,14 @@ public actor VaultMirror {
     }
 
     private nonisolated static func coordinated<T: Sendable>(
-        _ url: URL, reading: Bool, options: UInt,
+        _ url: URL, reading: Bool, options: UInt, asking: (@Sendable (URL, Bool) -> Void)? = nil,
         body: @escaping @Sendable (URL, Cancellation) throws -> T
     ) async throws -> T {
         let cancellation = Cancellation(Task.isCancelled)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
                 Self.coordinating.async {
+                    asking?(url, reading)
                     continuation.resume(with: Result {
                         try Self.coordinate(url, reading: reading, options: options) { url in
                             try body(url, cancellation)
@@ -955,7 +965,7 @@ public actor VaultMirror {
         // it is waited out and told of the replacement, and a name swapped for a link there
         // would otherwise put this state wherever it points.
         _ = try await Self.coordinated(stateURL, reading: false,
-                                       options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url, cancellation -> Bool in
+                                       options: NSFileCoordinator.WritingOptions.forReplacing.rawValue, asking: asking) { url, cancellation -> Bool in
             // Inside the coordination, like every other mutation: the wait for whoever holds
             // this file is as long as they like, and a baseline written after a sign-out says
             // this folder was shown things nobody will now put in it.

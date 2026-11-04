@@ -659,7 +659,8 @@ import TopoCoreTesting
             let w = try await store.writer(for: hub)
             let inside = VaultPath("notes/today.md")!
             try await w.write("today's note", to: inside, continuing: store.read(), at: t0)
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             try await mirror.sync(at: t0 + 1)
 
             // The folder's one file goes and a file takes its name, so the next sync's job
@@ -672,7 +673,7 @@ import TopoCoreTesting
             let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes"))
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 4) }
-            try await Task.sleep(for: .milliseconds(200))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             try Data("half a thought".utf8).write(to: directory.appendingPathComponent("notes/draft.md"))
             holder.release()
 
@@ -698,7 +699,8 @@ import TopoCoreTesting
                 let inside = VaultPath("notes/today.md")!
                 let w = try await store.writer(for: hub)
                 try await w.write("from the hub", to: inside, continuing: store.read(), at: t0)
-                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let watch = CoordinationWatch()
+                let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
                 try await mirror.sync(at: t0 + 1)
                 try await w.write("from the hub, again", to: inside, continuing: store.read(), at: t0 + 2)
 
@@ -707,7 +709,7 @@ import TopoCoreTesting
                 let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes/today.md"))
                 holder.take()
                 let sync = Task { try await mirror.sync(at: t0 + 3) }
-                try await Task.sleep(for: .milliseconds(200))
+                #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
                 try FileManager.default.removeItem(at: directory.appendingPathComponent("notes"))
                 try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("notes"),
                                                            withDestinationURL: elsewhere)
@@ -742,14 +744,15 @@ import TopoCoreTesting
                 let inside = VaultPath("sub/old.md")!
                 let w = try await store.writer(for: hub)
                 try await w.write("from the hub", to: inside, continuing: store.read(), at: t0)
-                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let watch = CoordinationWatch()
+                let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
                 try await mirror.sync(at: t0 + 1)
                 try await w.delete(inside, continuing: store.read(), at: t0 + 2)
 
                 let holder = CoordinatedHolder(url: directory.appendingPathComponent("sub/old.md"))
                 holder.take()
                 let sync = Task { try await mirror.sync(at: t0 + 3) }
-                try await Task.sleep(for: .milliseconds(200))
+                #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
                 try FileManager.default.removeItem(at: directory.appendingPathComponent("sub"))
                 try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("sub"),
                                                            withDestinationURL: elsewhere.appendingPathComponent("sub"))
@@ -776,9 +779,10 @@ import TopoCoreTesting
 
             let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes"))
             holder.take()
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             let sync = Task { try await mirror.sync(at: t0 + 1) }
-            try await Task.sleep(for: .milliseconds(300))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             try Data("half a thought".utf8).write(to: directory.appendingPathComponent("notes/draft.md"))
             holder.release()
 
@@ -803,9 +807,10 @@ import TopoCoreTesting
 
                 let holder = CoordinatedHolder(url: directory.appendingPathComponent("sub/notes"))
                 holder.take()
-                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let watch = CoordinationWatch()
+                let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
                 let sync = Task { try await mirror.sync(at: t0 + 1) }
-                try await Task.sleep(for: .milliseconds(300))
+                #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
                 try FileManager.default.removeItem(at: directory.appendingPathComponent("sub"))
                 try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("sub"),
                                                            withDestinationURL: elsewhere)
@@ -824,12 +829,13 @@ import TopoCoreTesting
             let directory = parent.appendingPathComponent("Vault", isDirectory: true)
             let w = try await store.writer(for: hub)
             try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
 
             let holder = CoordinatedHolder(url: directory)
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 1) }
-            try await Task.sleep(for: .milliseconds(200))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             #expect(FileManager.default.fileExists(atPath: directory.path) == false,
                     "the folder was made under somebody who was holding that name")
             holder.release()
@@ -845,7 +851,8 @@ import TopoCoreTesting
         try await inTemporaryDirectory { directory in
             let w = try await store.writer(for: hub)
             try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             _ = try await mirror.sync(at: t0 + 1)
 
             let scratch = ".topo-writing-\(UUID().uuidString)"
@@ -855,7 +862,7 @@ import TopoCoreTesting
             let holder = CoordinatedHolder(url: directory)
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 2) }
-            try await Task.sleep(for: .milliseconds(200))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             sync.cancel()
             holder.release()
 
@@ -921,7 +928,8 @@ import TopoCoreTesting
         try await inTemporaryDirectory { directory in
             let w = try await store.writer(for: hub)
             try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             try await mirror.sync(at: t0 + 1)
             try await w.write("from the hub, again", to: note, continuing: store.read(), at: t0 + 2)
 
@@ -929,7 +937,7 @@ import TopoCoreTesting
             let holder = CoordinatedHolder(url: directory.appendingPathComponent("Meeting notes.md"))
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 3) }
-            try await Task.sleep(for: .milliseconds(200))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             // Their save is a coordinated write of their own, made while the mirror waits for
             // the same file: an editor's save, not bytes dropped in behind the coordinator.
             holder.save("what I typed")
@@ -981,7 +989,8 @@ import TopoCoreTesting
         try await inTemporaryDirectory { directory in
             let w = try await store.writer(for: hub)
             try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             try await mirror.sync(at: t0 + 1)
             let before = read(".topo/mirror.json", in: directory)
             #expect(before?.contains("Meeting notes.md") == true)
@@ -993,7 +1002,7 @@ import TopoCoreTesting
             let holder = CoordinatedHolder(url: directory.appendingPathComponent(".topo/mirror.json"))
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 3) }
-            try await Task.sleep(for: .milliseconds(200))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             sync.cancel()
             holder.release()
 
@@ -1017,12 +1026,12 @@ import TopoCoreTesting
             holder.take()
             #expect(holder.isHolding)
 
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             let sync = Task { try await mirror.sync(at: t0 + 1) }
-            // Long enough for the sync to be past its fences and inside the coordinator,
-            // which is where this test wants it: nothing here waits on iCloud or on time,
-            // and the holder is what it is waiting for.
-            try await Task.sleep(for: .milliseconds(200))
+            // Past its fences and inside the coordinator, which is where this test wants it:
+            // nothing here waits on iCloud or on time, and the holder is what it is waiting for.
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             #expect(read("Meeting notes.md", in: directory) == nil, "the write is waiting, not done")
 
             sync.cancel()
@@ -1039,14 +1048,15 @@ import TopoCoreTesting
         try await inTemporaryDirectory { directory in
             let w = try await store.writer(for: hub)
             try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             _ = try await mirror.sync(at: t0 + 1)
             try await w.delete(note, continuing: store.read(), at: t0 + 2)
 
             let holder = CoordinatedHolder(url: directory.appendingPathComponent("Meeting notes.md"))
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 3) }
-            try await Task.sleep(for: .milliseconds(200))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             sync.cancel()
             holder.release()
 
@@ -1201,12 +1211,42 @@ actor InterruptedQueryDatabase: RecordDatabase {
     }
 }
 
+/// What a mirror has asked the coordinator to write, so a test acts once a sync is parked
+/// behind a holder rather than after a guess at how long the pass takes to get there. The
+/// mirror says so on its coordination queue before it asks. An ask made since the holder took
+/// its URL, for that URL or for anything beneath it, waits for the holder to let go, so from
+/// then until it does the sync is waiting, whatever the machine's load. Asks from before the
+/// take, the earlier syncs a test sets up with, are not counted.
+final class CoordinationWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var writes: [(path: String, at: ContinuousClock.Instant)] = []
+
+    var asking: @Sendable (URL, Bool) -> Void {
+        { [self] url, reading in
+            guard !reading else { return }
+            let now = ContinuousClock.now
+            lock.withLock { writes.append((url.standardizedFileURL.path, now)) }
+        }
+    }
+
+    func parked(behind holder: CoordinatedHolder) async -> Bool {
+        let held = holder.url.standardizedFileURL.path
+        guard let taken = holder.takenAt else { return false }
+        return await eventually {
+            self.lock.withLock {
+                self.writes.contains { $0.at >= taken && ($0.path == held || $0.path.hasPrefix(held + "/")) }
+            }
+        }
+    }
+}
+
 /// Holds a coordinated write on one file until it is let go, which is what another app
 /// editing that file looks like from here.
 final class CoordinatedHolder: @unchecked Sendable {
-    private let url: URL
+    let url: URL
     private let lock = NSLock()
     private var holding = false
+    private var taken: ContinuousClock.Instant?
     private var pending: [String] = []
     private var leaving = false
     private let entered = DispatchSemaphore(value: 0)
@@ -1216,12 +1256,14 @@ final class CoordinatedHolder: @unchecked Sendable {
     init(url: URL) { self.url = url }
 
     var isHolding: Bool { lock.withLock { holding } }
+    /// When the coordinated write was granted, which is from when another access waits for it.
+    var takenAt: ContinuousClock.Instant? { lock.withLock { taken } }
 
     func take() {
         DispatchQueue.global().async { [self] in
             var error: NSError?
             NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &error) { url in
-                lock.withLock { holding = true }
+                lock.withLock { holding = true; taken = .now }
                 entered.signal()
                 while true {
                     work.wait()
@@ -1365,9 +1407,10 @@ actor Gate {
 
             let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes"))
             holder.take()
-            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let watch = CoordinationWatch()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone, asking: watch.asking)
             let sync = Task { try await mirror.sync(at: t0 + 1) }
-            try await Task.sleep(for: .milliseconds(300))
+            #expect(await watch.parked(behind: holder), "the sync never reached the wait for the holder")
             sync.cancel()
             holder.release()
 

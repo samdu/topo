@@ -70,7 +70,20 @@ settled() {
     perl -e 'select(undef,undef,undef,0.1)'; n=$((n + 1))
   done
 }
-holds() { ps -axo args= | grep -c '^/usr/bin/caffeinate -dimsu -t 3600$' || true; }
+# The holds this test started that still stand, counted from its own list and from the records
+# `on` leaves: another copy of this test, on a Mac lent for two, runs holds of the very same
+# command, which are not this one's to count. The record is written before `on` returns and the
+# list by the hold itself as it starts, so a hold just started can be on the one and not yet on
+# the other. Each is let settle first, since one just started is still `nohup` for a moment.
+holds() {
+  local pid n=0
+  while IFS= read -r pid; do
+    settled "$pid"
+    [ "$(args "$pid")" = "/usr/bin/caffeinate -dimsu -t 3600" ] && n=$((n + 1))
+  done < <({ cat "$STARTED"; for record in "$FAKE_HOSTS"/*/Library/Caches/topo-validate/awake; do
+    [ -f "$record" ] && sed -n 1p "$record"; done; } | grep -E '^[0-9]+$' | sort -u)
+  echo "$n"
+}
 file() { tr '\n' '|' < "$TOPO_VALIDATE_CACHE/hosts" 2>/dev/null; }
 before="$(holds)"
 
