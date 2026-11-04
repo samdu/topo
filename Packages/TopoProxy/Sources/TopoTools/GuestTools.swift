@@ -286,9 +286,11 @@ public enum GuestTools {
         echo "jq is not installed in the guest: apk add jq" >&2
         exit 127
     fi
-    # The page's path, from a path or a URL: the host, `documentation/`, a slash either end and a
-    # `.json` are all taken off, so the same page is reached however it was named.
+    # The page's path, from a path or a URL: a fragment and a query (a section of the page, a
+    # language: the JSON holds every variant), the host, `documentation/`, a slash either end and
+    # a `.json` are all taken off, so the same page is reached however it was named.
     p=$1
+    p=${p%%#*}; p=${p%%\?*}
     p=${p#https://}; p=${p#http://}; p=${p#developer.apple.com}
     p=${p#/}; p=${p#documentation/}; p=${p#/}; p=${p%/}; p=${p%.json}
     url="https://developer.apple.com/tutorials/data/documentation/$p.json"
@@ -361,6 +363,10 @@ public enum GuestTools {
           else "" end
       end;
 
+    # A code listing's lines carry this mark until the end, so the blank lines between blocks are
+    # collapsed without touching a listing's own.
+    def code_mark: "\u0001";
+
     # Block content → markdown lines (array of strings). $d is the list depth.
     def blk($d):
       ("  " * $d) as $pad
@@ -370,14 +376,15 @@ public enum GuestTools {
           .type as $t
           | if   $t == "paragraph"   then [ (.inlineContent | inl) ]
             elif $t == "heading"     then [ ("#" * (.level // 2)) + " " + (.text // (.inlineContent | inl)) ]
-            elif $t == "codeListing" then [ "```" + (.syntax // "") ] + (.code // []) + [ "```" ]
+            elif $t == "codeListing" then [ "```" + (.syntax // "") ] + ((.code // []) | map(code_mark + .)) + [ "```" ]
             elif $t == "aside"       then
                    [ "> **" + (.name // (.style // "Note") | ascii_upcase[0:1] + .[1:]) + "**" ]
                    + ((.content // []) | blk(0) | map(select(. != "")) | map("> " + .))
             elif $t == "unorderedList" then
                    [ (.items // [])[] | (.content | blk($d + 1)) | (.[0] |= ($pad + "- " + .)) | .[1:] |= map(if . == "" then . else "  " + . end) | .[] ]
             elif $t == "orderedList" then
-                   [ (.items // []) | to_entries[] | .key as $i | (.value.content | blk($d + 1)) | (.[0] |= ($pad + (($i + 1) | tostring) + ". " + .)) | .[1:] |= map(if . == "" then . else "   " + . end) | .[] ]
+                   (.start // 1) as $start
+                   | [ (.items // []) | to_entries[] | .key as $i | (.value.content | blk($d + 1)) | (.[0] |= ($pad + (($start + $i) | tostring) + ". " + .)) | .[1:] |= map(if . == "" then . else "   " + . end) | .[] ]
             elif $t == "termList"    then
                    [ (.items // [])[] | "- **" + (.term.inlineContent | inl) + "**: " + ((.definition.content // []) | blk(0) | join(" ")) ]
             elif $t == "table"       then
@@ -415,7 +422,8 @@ public enum GuestTools {
       [ (.metadata.platforms // [])[]
         | .name + (if .introducedAt then " " + .introducedAt else "" end)
                + (if .beta then " beta" else "" end)
-               + (if .deprecatedAt then ", deprecated " + .deprecatedAt else "" end) ]
+               + (if .deprecatedAt then ", deprecated " + .deprecatedAt elif .deprecated then ", deprecated" else "" end)
+               + (if .unavailable then ", unavailable" else "" end) ]
       | if length > 0 then "Availability: " + join(" · ") else empty end;
 
     def declarations:
@@ -453,7 +461,7 @@ public enum GuestTools {
         (if .metadata.roleHeading then "*" + .metadata.roleHeading + "*" else empty end),
         (breadcrumb),
         (platforms),
-        "Source: " + base + ($page.variants[0].paths[0] // ($page.identifier.url // "" | sub("^doc://[^/]*/"; "") | ascii_downcase)),
+        "Source: " + base + ($page.variants[0].paths[0] // ($page.identifier.url // "" | sub("^doc://[^/]*"; "") | ascii_downcase)),
         "",
         (if (.abstract // []) | length > 0 then (.abstract | inl), "" else empty end)
       ]
@@ -464,11 +472,12 @@ public enum GuestTools {
       + named_section("possibleValues"; "Possible Values")
       + named_section("discussion"; "Discussion")
       + id_sections(.topicSections; "Topics")
-      + id_sections(.relationshipsSections; "Relationships")
+      + id_sections(.relationshipsSections // .relationshipSections; "Relationships")
       + id_sections(.seeAlsoSections; "See Also")
     | map(select(. != null))
+    | reduce .[] as $line ([]; if $line == "" and (length > 0) and (.[-1] == "") then . else . + [$line] end)
+    | map(gsub(code_mark; ""))
     | join("\n")
-    | gsub("\n{3,}"; "\n\n")
     """#
 
     /// The skill for `apple-doc`: its description names the questions Apple's documentation
