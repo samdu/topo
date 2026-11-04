@@ -60,7 +60,7 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 /// before the player starts, so that
 /// `done` behind the lock is heard out before the last hold goes and it is let
 /// go of; its caller plays it before dropping the hold it follows, so the process is never let
-/// go of between the two. With nothing held — a press in front — a cue holds nothing, so a claim
+/// go of between the two. With nothing held — `listening` at a press in front — a cue holds nothing, so a claim
 /// change waits on no cue; and under nothing but the cue before it, it lets that one's hold go,
 /// so cues cannot keep the process alive by themselves. Nothing but `listening` is played into
 /// an open microphone. The players are handles into mediaserverd: the speaker tells of a media

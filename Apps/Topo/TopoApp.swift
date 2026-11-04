@@ -165,7 +165,7 @@ struct TopoApp: App {
         let call = SpokenCall()
         speaker.attach(call)
         let callDriver = SpokenCallDriver(call: call)
-        speaker.onHold = { callDriver.holdChanged($0) }
+        speaker.onHold = { [weak audio] in callDriver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
         speaker.onMicrophone = { callDriver.microphoneChanged($0) }
         _callDriver = State(initialValue: callDriver)
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
