@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// The person's next turn, driven from outside the app: written in the glass's field while the
@@ -78,7 +79,11 @@ final class DraftRowTests: XCTestCase {
         let file = app.buttons["Attach a file"], photo = app.buttons["Choose a photo"]
         XCTAssertTrue(file.waitForExistence(timeout: 5), "the control opened no menu with the file picker in it")
         XCTAssertTrue(photo.exists, "the menu has no photo picker")
-        XCTAssertFalse(app.buttons["Take a photo"].exists, "a simulator has no camera and offers one")
+        // The camera is offered where the simulator has one: buddybox's has none, a lent laptop's
+        // passes its own camera through, and the app asks the same device this runner does.
+        let camera = UIImagePickerController.isSourceTypeAvailable(.camera)
+        XCTAssertEqual(app.buttons["Take a photo"].exists, camera,
+                       camera ? "a simulator with a camera does not offer it" : "a simulator with no camera offers one")
         let screen = app.buttons["Share your screen"]
         XCTAssertTrue(screen.exists, "the menu has no way to share the screen")
         XCTAssertLessThan(photo.frame.midY, screen.frame.midY, "the screen is not last")
