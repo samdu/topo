@@ -33,6 +33,9 @@ final class ComposerAttachments {
     private(set) var filePresses = 0
     /// The share sheet over what was picked, or its refusal, while it is up.
     private(set) var sheet: ShareSheetModel?
+    /// The login the door named when the picker went up: what it picks is kept under that login
+    /// or refused, never under one opened since (`ShareSheetModel.pickedUnder`).
+    private var pickedUnder: String?
 
     /// The file picker, held here rather than by a view: the chat's views come and go while the
     /// picker is up, and a picker whose holder went with them never hands back its pick.
@@ -79,6 +82,7 @@ final class ComposerAttachments {
         guard picking == nil, sheet == nil else { return }
         guard let store = store(), let door = store.door() else { return refuse(.signedOut) }
         guard door.files else { return refuse(.anotherPhone) }
+        pickedUnder = door.login
         picking = source
         if source == .file { filePresses += 1 }
     }
@@ -107,7 +111,7 @@ final class ComposerAttachments {
             ComposerAttachments.removePickerCopy(url)
             return refuse(.signedOut)
         }
-        let model = ShareSheetModel(store: store, via: .composer)
+        let model = ShareSheetModel(store: store, via: .composer, pickedUnder: pickedUnder)
         sheet = model
         Task.detached(priority: .userInitiated) {
             let outcome = ComposerAttachments.copy(url, as: .file, into: store)
@@ -145,7 +149,7 @@ final class ComposerAttachments {
         guard picking == .photo else { return }
         picking = nil
         guard let provider else { return }
-        let model = ShareSheetModel(store: store(), via: .composer)
+        let model = ShareSheetModel(store: store(), via: .composer, pickedUnder: pickedUnder)
         sheet = model
         Task { await model.read([provider]) }
     }
