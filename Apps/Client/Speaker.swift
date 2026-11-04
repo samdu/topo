@@ -391,6 +391,8 @@ final class Speaker {
     /// How long a release holds the process without its turn's wait: the final transcription
     /// and the send's way to `awaitReply`, which take seconds, never this.
     static let releaseBound: Duration = .seconds(30)
+    /// How a release waits out its bound; a test's clock in the suite.
+    var releaseSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
 
     /// The thumb has come up on a spoken press: the process is held from here, before the final
     /// transcription and the send, so a lock in between does not suspend it with the turn half
@@ -409,8 +411,9 @@ final class Speaker {
             AudioLog.say("release \(token) is not held: nothing is rendering")
             return nil
         }
+        let sleep = releaseSleep
         releases[token] = Task { [weak self] in
-            try? await Task.sleep(for: Self.releaseBound)
+            try? await sleep(Self.releaseBound)
             guard !Task.isCancelled else { return }
             self?.released(token, "its bound ran out")
         }

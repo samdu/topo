@@ -625,6 +625,34 @@ final class StopWhileSpeakingTests: XCTestCase {
         speaker.endAwaiting("turn", "the test is done")
     }
 
+    /// A release whose decode never finishes is let go at its bound, so a stalled decode does not
+    /// keep the phone awake; the words that come after it still go.
+    func testAReleaseWhoseDecodeStallsIsLetGoAtItsBound() async {
+        let decode = DecodeOnCue(heard: "purple elephants")
+        let (speaker, voice, held) = await chat(ear: decode)
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let clock = ManualSleep()
+        speaker.releaseSleep = clock.sleep
+        let press = MicPress()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let sent = Sent()
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { sent.add($0) }
+        await settle("the release's decode to start") { decode.decoding }
+        await settle("the release's bound to be waited on") { clock.waiting == 1 }
+        XCTAssertEqual(clock.asked, [Speaker.releaseBound])
+        XCTAssertEqual(speaker.releasesHeld, 1)
+        XCTAssertTrue(audio.holding)
+        clock.fire()
+        await settle("the release to go at its bound") { speaker.releasesHeld == 0 }
+        XCTAssertFalse(audio.holding, "a release past its bound kept the process held")
+        decode.finish()
+        await up?.value
+        XCTAssertEqual(sent.texts, ["purple elephants"])
+    }
+
     /// A microphone still listening when the scene goes is dropped, words and all.
     func testALockWithTheMicrophoneOpenDropsIt() async {
         let (speaker, voice, held) = await chat(heard: "purple elephants")
