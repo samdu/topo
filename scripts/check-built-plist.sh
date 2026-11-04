@@ -123,6 +123,14 @@ if [ "$value" != "true" ] && [ "$value" != "1" ]; then
     status=1
 fi
 
+# `topo activity`'s Live Activities: without the key the system refuses every start.
+key=NSSupportsLiveActivities
+value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+if [ "$value" != "true" ] && [ "$value" != "1" ]; then
+    echo "$app/Info.plist does not set $key ( ${value:-absent} ); the system would refuse every Live Activity" >&2
+    status=1
+fi
+
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
            NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \
            NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription; do
