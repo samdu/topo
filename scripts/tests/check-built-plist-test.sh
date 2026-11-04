@@ -36,6 +36,7 @@ make_app() {
     plutil -insert UIFileSharingEnabled -bool YES "$app/Info.plist"
     plutil -insert LSSupportsOpeningDocumentsInPlace -bool YES "$app/Info.plist"
     plutil -insert PHPhotoLibraryPreventAutomaticLimitedAccessAlert -bool YES "$app/Info.plist"
+    plutil -insert NSSupportsLiveActivities -bool YES "$app/Info.plist"
     plutil -insert CFBundleVersion -string 7 "$app/Info.plist"
     plutil -insert CFBundleShortVersionString -string 0.1 "$app/Info.plist"
     plutil -insert CFBundleIdentifier -string zone.hexagon.topo "$app/Info.plist"
@@ -105,6 +106,14 @@ if errors="$("$check" "$work/no-alert/Topo.app" 2>&1 >/dev/null)"; then
     fail "a product that lets the limited library's sheet come up passed"
 elif [[ "$errors" != *"PHPhotoLibraryPreventAutomaticLimitedAccessAlert"* ]]; then
     fail "the refusal of a product that lets the limited library's sheet come up does not name the key: $errors"
+fi
+
+make_app "$work/no-activities/Topo.app"
+plutil -remove NSSupportsLiveActivities "$work/no-activities/Topo.app/Info.plist"
+if errors="$("$check" "$work/no-activities/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product the system would refuse every Live Activity of passed"
+elif [[ "$errors" != *"NSSupportsLiveActivities"* ]]; then
+    fail "the refusal of a product with no Live Activities does not name the key: $errors"
 fi
 
 for permitted in absent '["zone.hexagon.topo.other.*"]'; do
@@ -344,7 +353,7 @@ for case in no-watch companion only dependent short version mode; do
     fi
 done
 
-for place in FluidAudio_FluidAudio.bundle FluidAudio_Renamed.bundle; do
+for place in FluidAudio_LuxTtsG2pResources.bundle FluidAudio_Renamed.bundle; do
     make_app "$work/luxtts-$place/Topo.app"
     mkdir -p "$work/luxtts-$place/Topo.app/$place"
     printf x > "$work/luxtts-$place/Topo.app/$place/luxtts_en_us_lexicon.tsv.zz"
