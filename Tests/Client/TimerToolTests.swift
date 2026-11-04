@@ -118,23 +118,35 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.count, 2)
     }
 
-    /// Codex on #592: the check is made where a new prompt would be raised, so Topo sent to the
-    /// background after the permission was read asks nothing; under an alert (inactive) or in front
-    /// it asks.
+    /// Where a new prompt would be raised, Topo in the background asks nothing; under an alert
+    /// (inactive) or in front it asks.
     func testOnScreenRaisesNoPromptInTheBackground() async {
         for (state, prompts) in [(UIApplication.State.background, 0), (.inactive, 1), (.active, 1)] {
             let permission = AlarmPermission(.undetermined)
-            let declines = TimerTool.Declines()
-            let asked = await TimerTool.OnScreen(alarms: permission, state: { state }, declines: declines).request()
+            let asked = await TimerTool.OnScreen(alarms: permission, state: { state }).request()
             XCTAssertEqual(asked, prompts == 1, "\(state.rawValue)")
             XCTAssertEqual(permission.prompts, prompts, "\(state.rawValue)")
-            XCTAssertEqual(declines.count, 1 - prompts, "\(state.rawValue)")
         }
-        // Granted meanwhile by another call's prompt: a yes, with nothing declined.
-        let granted = TimerTool.Declines()
-        let yes = await TimerTool.OnScreen(alarms: AlarmPermission(.granted), state: { .background }, declines: granted).request()
+        // Granted meanwhile by another call's prompt: a yes, asking nothing.
+        let granted = AlarmPermission(.granted)
+        let yes = await TimerTool.OnScreen(alarms: granted, state: { .background }).request()
         XCTAssertTrue(yes)
-        XCTAssertEqual(granted.count, 0)
+        XCTAssertEqual(granted.prompts, 0)
+    }
+
+    /// Starts in the background at once, some of which join another's declined prompt in the
+    /// broker (how many is the scheduler's), are each told to open Topo, never sent to Settings.
+    func testStartsInTheBackgroundAtOnceAreEachSaidAsOffScreen() async {
+        for _ in 0..<50 {
+            let permission = AlarmPermission(.undetermined)
+            let tool = tool(FakeAlarms(permission), state: AppState(.background))
+            async let a = tool.run(["1m"])
+            async let b = tool.run(["2m"])
+            async let c = tool.run(["3m"])
+            let replies = await [a, b, c]
+            XCTAssertEqual(replies, Array(repeating: TimerTool.offScreen, count: 3), replies.map(\.text).joined())
+            XCTAssertEqual(permission.prompts, 0)
+        }
     }
 
     /// A prompt `OnScreen` declined is said as open Topo, not as a refusal.

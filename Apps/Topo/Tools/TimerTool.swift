@@ -1,5 +1,4 @@
 import Foundation
-import os
 import TopoTools
 import UIKit
 
@@ -61,8 +60,6 @@ struct TimerTool: Tool {
     var state: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
     var now: @Sendable () -> Date = { Date() }
     var makeID: @Sendable () -> UUID = { UUID() }
-    /// The prompts `OnScreen` declined to raise, counted across calls.
-    let declines = Declines()
 
     static let labelLimit = 40
     static let longest: TimeInterval = 24 * 3600
@@ -121,8 +118,7 @@ struct TimerTool: Tool {
 
     func run(_ arguments: [String]) async -> ToolReply {
         let alarms = scheduler.authorizer
-        let asking = alarms.map { OnScreen(alarms: $0, state: state, declines: declines) }
-        let before = declines.count
+        let asking = alarms.map { OnScreen(alarms: $0, state: state) }
         // Only a start needs the permission; one below iOS 26 has none to ask and is answered in `start`.
         let reply = await PhoneTool.run({ (call: Call) -> (any Authorizer)? in
             if case .start = call { asking } else { nil }
@@ -133,37 +129,30 @@ struct TimerTool: Tool {
             case let .start(span, label): await start(span: span, label: label)
             }
         }
-        // A refusal while `OnScreen` declined a prompt, this call's or the one it waited on, is
-        // nobody asked; any other refusal is the person's, said as one.
-        if reply.status == ToolReply.denied, declines.count > before { return Self.offScreen }
+        // A refusal over a permission still undetermined is a prompt nobody was shown: `OnScreen`
+        // declined it, for this call or for the one whose prompt it joined. A refusal the person
+        // made is a standing of denied, said as one.
+        if reply.status == ToolReply.denied, let alarms, await alarms.access() == .undetermined { return Self.offScreen }
         return reply
     }
 
-    /// A count of declined prompts, shared by every call of one tool.
-    final class Declines: Sendable {
-        private let value = OSAllocatedUnfairLock(initialState: 0)
-        var count: Int { value.withLock { $0 } }
-        func add() { value.withLock { $0 += 1 } }
-    }
-
     /// AlarmKit's permission, asked only with Topo off the background: the system's prompt needs
-    /// Topo in front. Where it is in the background as the prompt would go up, nothing is asked and
-    /// the answer is no, which `run` says as `offScreen`. A call that finds a prompt already up
-    /// waits on it and never reaches `request`.
+    /// Topo in front. Where it is in the background as the prompt would go up, nothing is asked:
+    /// the answer is yes if another call's prompt was granted since the broker read the standing,
+    /// and otherwise no, which `run` says as `offScreen` because the standing is still undetermined.
+    /// A call that finds a prompt already up waits on it and never reaches `request`.
+    ///
+    /// Read off the standing, the answer is wrong only at edges no person reaches or no suite can:
+    /// a refusal made within microseconds of Topo leaving the front, an AlarmKit whose standing
+    /// lags its prompt's answer (said once as `offScreen`, then as the refusal it is), and a
+    /// request AlarmKit throws on (`AlarmAuthorizer`), which leaves the standing undetermined.
     struct OnScreen: Authorizer {
         let alarms: any Authorizer
         let state: @MainActor () -> UIApplication.State
-        let declines: Declines
         var name: String { alarms.name }
         func access() async -> Access { await alarms.access() }
         func request() async -> Bool {
-            guard await state() != .background else {
-                // Granted since the broker read it (another call's prompt answered meanwhile) is a
-                // yes that needs no prompt.
-                if await alarms.access() == .granted { return true }
-                declines.add()
-                return false
-            }
+            guard await state() != .background else { return await alarms.access() == .granted }
             return await alarms.request()
         }
     }
