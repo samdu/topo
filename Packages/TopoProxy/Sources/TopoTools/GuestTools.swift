@@ -274,7 +274,7 @@ public enum GuestTools {
     # apple-doc: a developer.apple.com page as Markdown, from Apple's own JSON.
     # Written by the app on every start; an edit here lasts until the next one.
     #   apple-doc backgroundtasks
-    #   apple-doc appintents/appschema/messagesintent
+    #   apple-doc widgetkit/widgetfamily
     #   apple-doc https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities
     #   apple-doc ios-ipados-release-notes/ios-ipados-27_2-release-notes
     # Exit: 0 printed; 1 the page was not there or could not be fetched; 2 usage; 127 no jq.
@@ -498,7 +498,7 @@ public enum GuestTools {
     - Release notes: `apple-doc ios-ipados-release-notes/ios-ipados-27_2-release-notes`; the same shape for `xcode-release-notes`, `watchos-release-notes`, `macos-release-notes`.
     - Start at a framework's page and follow its Topics links; the paths in the output are what to pass next. A page that is not there is status 1 with Apple's own 404, so a wrong guess costs one call.
     - The frameworks behind `topo`: reminders and calendar are EventKit; contacts, Contacts; home, HomeKit; photos, PhotoKit (`photokit`); location, Core Location (`corelocation`); maps, MapKit; notify, UserNotifications; widget, WidgetKit; control, WidgetKit's controls (`widgetkit/controls-and-the-action-button`); the share sheet, UIKit's activity view; Shortcuts, App Intents (`appintents`); the pill and background time, BackgroundTasks (`backgroundtasks`) and UIKit's `beginBackgroundTask`.
-    - Settled answers, each with the page to cite rather than argue: no app reads the person's iMessages or Mail on iOS (there is no framework for either; `appintents/appschema/messagesintent` is for apps that are messaging apps, exposing their own messages to Siri, not a query API). Siri's personal context is read by Siri, never offered to apps. `BGAppRefreshTask` is about 30 seconds, when iOS chooses, never on a timer; `BGProcessingTask` runs for minutes, mostly on charge. A widget has a timeline the system walks (`widgetkit/keeping-a-widget-up-to-date`); a Live Activity has none, is updated by the app while it runs or by a push (`activitykit/displaying-live-data-with-live-activities`), and its extension has no network. A Shortcuts automation can run an App Intent in the background without opening the app.
+    - Settled answers, each with the page to cite rather than argue: Siri's personal context is read by Siri, never offered to apps. `BGAppRefreshTask` is about 30 seconds, when iOS chooses, never on a timer; `BGProcessingTask` runs for minutes, mostly on charge. A widget has a timeline the system walks (`widgetkit/keeping-a-widget-up-to-date`); a Live Activity has none, is updated by the app while it runs or by a push (`activitykit/displaying-live-data-with-live-activities`), and its extension has no network. A Shortcuts automation can run an App Intent in the background without opening the app.
     - WWDC sessions are not documentation pages and `apple-doc` does not read them; link them instead (`developer.apple.com/videos/play/wwdc2026/NNN/`).
     """
 }
