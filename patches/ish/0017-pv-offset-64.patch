@@ -1,0 +1,91 @@
+diff --git a/kernel/calls.h b/kernel/calls.h
+index e2795f5..02d1522 100644
+--- a/kernel/calls.h
++++ b/kernel/calls.h
+@@ -102,13 +102,13 @@ qword_t sys_lseek64(fd_t f, sqword_t off, dword_t whence);
+ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t buf_size, off_t_ off);
+ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off);
+ dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                   dword_t pos_l, dword_t pos_h);
++                   addr_t pos_l, dword_t pos_h);
+ dword_t sys_pwritev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                    dword_t pos_l, dword_t pos_h);
++                    addr_t pos_l, dword_t pos_h);
+ dword_t sys_preadv2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                    dword_t pos_l, dword_t pos_h, dword_t flags);
++                    addr_t pos_l, dword_t pos_h, dword_t flags);
+ dword_t sys_pwritev2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                     dword_t pos_l, dword_t pos_h, dword_t flags);
++                     addr_t pos_l, dword_t pos_h, dword_t flags);
+ dword_t sys_ioctl(fd_t f, dword_t cmd, addr_t arg);
+ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg);
+ dword_t sys_fcntl32(fd_t fd, dword_t cmd, addr_t arg);
+diff --git a/kernel/fs.c b/kernel/fs.c
+index 554d822..26f6ec2 100644
+--- a/kernel/fs.c
++++ b/kernel/fs.c
+@@ -606,13 +606,25 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
+     return res;
+ }
+ 
+-// preadv/pwritev — ARM64 Linux ABI splits the loff_t offset into pos_l/pos_h
+-// registers (5-argument syscall form), consistent with what musl's
+-// src/unistd/pwritev.c emits. Combine them back into a 64-bit offset before
+-// doing the pread/pwrite loop under fd->lock (like readv/writev).
++// The offset of preadv, pwritev and their v2 forms, which the syscall splits
++// across two registers. A 64-bit kernel takes it whole from the low one and
++// ignores the high one (Linux's pos_from_hilo): musl passes the offset's top
++// half there, Zig's std, which Bun calls through, passes 0, so -1 (the current
++// position) is read from pos_l alone or a stream write becomes a positional one
++// at 4 GiB, which a pipe refuses.
++static off_t_ pos_from_hilo(addr_t pos_l, dword_t pos_h) {
++#if defined(GUEST_ARM64)
++    (void) pos_h;
++    return (off_t_) pos_l;
++#else
++    return ((qword_t) pos_h << 32) | (dword_t) pos_l;
++#endif
++}
++
++// preadv/pwritev: the pread/pwrite loop under fd->lock (like readv/writev).
+ dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                   dword_t pos_l, dword_t pos_h) {
+-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
++                   addr_t pos_l, dword_t pos_h) {
++    off_t_ off = pos_from_hilo(pos_l, pos_h);
+     STRACE("preadv(%d, %#x, %d, %lld)", fd_no, iovec_addr, iovec_count, (long long)off);
+     struct fd *fd = f_get(fd_no);
+     if (fd == NULL)
+@@ -664,8 +676,8 @@ error:
+ }
+ 
+ dword_t sys_pwritev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                    dword_t pos_l, dword_t pos_h) {
+-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
++                    addr_t pos_l, dword_t pos_h) {
++    off_t_ off = pos_from_hilo(pos_l, pos_h);
+     STRACE("pwritev(%d, %#x, %d, %lld)", fd_no, iovec_addr, iovec_count, (long long)off);
+     struct fd *fd = f_get(fd_no);
+     if (fd == NULL)
+@@ -724,8 +736,8 @@ error:
+ #define RWF_APPEND_ 0x10
+ 
+ dword_t sys_preadv2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                    dword_t pos_l, dword_t pos_h, dword_t flags) {
+-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
++                    addr_t pos_l, dword_t pos_h, dword_t flags) {
++    off_t_ off = pos_from_hilo(pos_l, pos_h);
+     STRACE("preadv2(%d, %#x, %d, %lld, %#x)", fd_no, iovec_addr, iovec_count, (long long)off, flags);
+     if (flags & ~(RWF_HIPRI_|RWF_NOWAIT_))
+         return _EOPNOTSUPP;
+@@ -744,8 +756,8 @@ dword_t sys_preadv2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+ }
+ 
+ dword_t sys_pwritev2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+-                     dword_t pos_l, dword_t pos_h, dword_t flags) {
+-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
++                     addr_t pos_l, dword_t pos_h, dword_t flags) {
++    off_t_ off = pos_from_hilo(pos_l, pos_h);
+     STRACE("pwritev2(%d, %#x, %d, %lld, %#x)", fd_no, iovec_addr, iovec_count, (long long)off, flags);
+     // DSYNC/SYNC are stronger durability than we provide anywhere else and
+     // HIPRI is a hint; treat them all as best-effort. APPEND with an explicit
