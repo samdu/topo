@@ -360,6 +360,20 @@ final class ShareTests: XCTestCase {
                        "the sheet left its scratch folder")
     }
 
+    /// The extension's sheet is made with nothing said of where its share came in, and its
+    /// record carries no `via`: only the composer's says so.
+    func testTheExtensionsShareRecordCarriesNoVia() async throws {
+        try store.open(files: true)
+        let model = ShareSheetModel(store: store)
+        await model.read([NSItemProvider(object: "some words" as NSString)])
+        XCTAssertTrue(model.keep())
+        let kept = try XCTUnwrap(store.shares().first)
+        XCTAssertNil(kept.via)
+        let record = try Data(contentsOf: store.folder.appendingPathComponent(kept.nonce).appendingPathComponent(ShareStore.record))
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: record) as? [String: Any])
+        XCTAssertNil(fields["via"], "the extension's record says where it came in")
+    }
+
     func testANoteOverTheLimitIsNeitherSentNorCut() async throws {
         try store.open(files: true)
         let model = ShareSheetModel(store: store)
@@ -447,6 +461,10 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(ShareInbox.text(read, path: "/p"), "[Shared with Topo from another app: a file, kept at /p (3 bytes)]")
         let again = try JSONDecoder().decode(Share.self, from: JSONEncoder().encode(attached))
         XCTAssertEqual(again.via, .composer)
+        let encoded = try JSONEncoder().encode(read)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(fields["via"], "a record with no via gained one written back")
+        XCTAssertEqual(try JSONDecoder().decode(Share.self, from: encoded), read)
     }
 
     // MARK: The composer's `+`
@@ -555,6 +573,73 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(drains, 1)
     }
 
+    /// What was picked under one login and lands after the door was opened under another, by a
+    /// sign-out and a sign-in between the press and the copy or the read, is the sheet's
+    /// refusal with its scratch taken away, and Send keeps nothing under the new login.
+    func testAPickLandingUnderAnotherLoginIsRefused() async throws {
+        try store.open(files: true)
+        let store = store
+        var drains = 0
+        let attachments = ComposerAttachments(store: { store }, drain: { drains += 1 })
+        let source = root.appendingPathComponent("a.pdf")
+        try Data(repeating: 1, count: 10).write(to: source)
+
+        attachments.pick(.file)
+        let first = try XCTUnwrap(store.door()?.login)
+        store.close()
+        try store.open(files: true)
+        XCTAssertNotEqual(store.door()?.login, first)
+        attachments.chose(file: source)
+        try await refused(attachments, .signedOut)
+        attachments.send()
+        XCTAssertEqual(store.shares(), [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"], "the copy was left behind")
+        attachments.cancel()
+
+        // The copy's own way, the login changed while it ran: the sheet refuses what lands.
+        let model = ShareSheetModel(store: store, via: .composer, pickedUnder: try XCTUnwrap(store.door()?.login))
+        let copy = ComposerAttachments.copy(source, as: .file, into: store)
+        store.close()
+        try store.open(files: true)
+        model.took(copy)
+        XCTAssertEqual(model.state, .refused(.signedOut))
+        XCTAssertFalse(model.keep())
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"], "the copy was left behind")
+
+        attachments.pick(.photo)
+        store.close()
+        try store.open(files: true)
+        attachments.chose(photo: try XCTUnwrap(NSItemProvider(contentsOf: source)))
+        try await refused(attachments, .signedOut)
+        attachments.send()
+        XCTAssertEqual(store.shares(), [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"])
+        XCTAssertEqual(drains, 0)
+    }
+
+    /// A file picker that cannot be put up is the sheet's refusal, not a silent nothing, and
+    /// the `+` is free again: after its Cancel the next press asks for the picker.
+    func testAFilePickerThatCannotBePutUpIsRefusedAndTheNextPressAsksAgain() throws {
+        try store.open(files: true)
+        let store = store
+        let picker = StandInPicker()
+        picker.refuses = true
+        let attachments = ComposerAttachments(store: { store }, drain: {}, files: picker)
+        attachments.pick(.file)
+        attachments.presentFilePicker()
+        XCTAssertEqual(picker.presents, 1)
+        XCTAssertNil(attachments.picking, "a picker that was never up is still counted up")
+        XCTAssertEqual(attachments.sheet?.state, .refused(.noPicker))
+        attachments.cancel()
+        picker.refuses = false
+        attachments.pick(.file)
+        XCTAssertEqual(attachments.picking, .file)
+        XCTAssertEqual(attachments.filePresses, 2)
+        attachments.presentFilePicker()
+        XCTAssertEqual(picker.presents, 2)
+        XCTAssertNil(attachments.sheet)
+    }
+
     /// A copy or a read that lands after its sheet was cancelled keeps nothing and takes its
     /// scratch away, and a sheet put up after it is untouched: the late file never reaches the
     /// sheet over the next pick.
@@ -645,6 +730,7 @@ final class ShareTests: XCTestCase {
     /// says it was left behind when the test says so.
     @MainActor private final class StandInPicker: FilePicking {
         var stuck = false
+        var refuses = false
         var presents = 0
         func abandoned(now: Date) -> Bool {
             defer { stuck = false }
@@ -652,7 +738,7 @@ final class ShareTests: XCTestCase {
         }
         func present(_ chosen: @escaping @MainActor (URL?) -> Void) -> Bool {
             presents += 1
-            return true
+            return !refuses
         }
     }
 
@@ -697,6 +783,15 @@ final class ShareTests: XCTestCase {
     /// Whether the phone has a camera, as the test turns it on and off.
     @MainActor private final class Camera {
         var available = true
+    }
+
+    /// Waits for the sheet to show `refusal`.
+    private func refused(_ attachments: ComposerAttachments, _ refusal: ShareRefusal) async throws {
+        for _ in 0..<200 {
+            if attachments.sheet?.state == .refused(refusal) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("the sheet is \(String(describing: attachments.sheet?.state)), not refused \(refusal)")
     }
 
     /// The sheet's item once the copy or the read has landed.
