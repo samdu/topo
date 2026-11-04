@@ -17,6 +17,7 @@ struct TopoApp: App {
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
+    @State private var callDriver: SpokenCallDriver
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
@@ -159,6 +160,14 @@ struct TopoApp: App {
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
         let speaker = Speaker(audio: audio, voice: spoken)
+        // A spoken exchange behind the lock is a call: placed while a hold stands with the
+        // app in the background, ended as the app comes forward (`SpokenCall`).
+        let call = SpokenCall()
+        speaker.attach(call)
+        let callDriver = SpokenCallDriver(call: call)
+        speaker.onHold = { callDriver.holdChanged($0) }
+        speaker.onMicrophone = { callDriver.microphoneChanged($0) }
+        _callDriver = State(initialValue: callDriver)
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
         // and goes when its compile ends. A debug stand-in ear, which may load for ever, holds
         // nothing back.
@@ -286,6 +295,9 @@ struct TopoApp: App {
                 if signIn.phase == .signedIn { shares.follow(from: .signedIn, to: .signedIn, guestIsHere: owner) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
+                // Said in the audio log beside the call driver's own source, UIKit's, so a run
+                // says which of the two the lock reached first.
+                AudioLog.say("scene \(phase)")
                 audio.warmRecord(phase == .active)
                 if phase == .active {
                     Perf.mark("scene.active")
