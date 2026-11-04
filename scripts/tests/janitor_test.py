@@ -1104,10 +1104,13 @@ if tool == "gh":
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
     def page(path, items):
-        # One page as the pool's reads ask for it; pool_totals says an endpoint holds more.
-        out({"total": S.get("pool_totals", {}).get(path, len(items)), "n": len(items), "items": items})
+        # One page as the pool's reads ask for it; pool_full says that endpoint's page came back full,
+        # and pool_total gives a total_count beside it, which the janitor does not read.
+        out({"n": 100 if path.split(":")[0] in S.get("pool_full", []) else len(items), "items": items,
+             "total": S.get("pool_total", {}).get(path, len(items))})
     if a[0] == "api" and "/actions/runs?status=" in a[1]:
-        page("runs", S.get("pool_runs", {}).get(a[1].split("status=")[1].split("&")[0], []))
+        status = a[1].split("status=")[1].split("&")[0]
+        page(f"runs:{status}", S.get("pool_runs", {}).get(status, []))
     if a[0] == "api" and "/actions/runners?" in a[1]: page("runners", S.get("pool_runners", []))
     if a[0] == "api" and "/jobs?" in a[1] and a[1].split("/runs/")[1].split("/")[0] in S.get("pool_jobs", {}):
         page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
@@ -1347,20 +1350,29 @@ class WholePass(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("1 vm-linux job queued", Bridge.received[0]["body"]["text"])
 
-    def test_a_list_longer_than_its_page_is_said_unread_not_read_as_whole(self):
+    def pool_pass(self, full=(), total=None):
+        if os.path.exists(self.state):
+            os.remove(self.state)   # a fresh pass each time, so a read failure is not already said
+        Bridge.received.clear()
+        p, _ = self.run_pass(self.scripted(
+            pool_runs={"queued": [{"id": 900, "name": "PR validate", "prs": [7]}]},
+            pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                "created_at": ago(timedelta(hours=1)), "completed_at": None}]},
+            pool_full=list(full), pool_total=total or {}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return " ".join(r["body"]["text"] for r in Bridge.received)
+
+    def test_a_one_run_page_is_read_as_whole(self):
+        # 18:19Z: status=in_progress answered an empty page with total_count 1, and the read was refused.
+        text = self.pool_pass(total={"runs:in_progress": 1})
+        self.assertNotIn("could not read the runs waiting on vm-linux", text)
+        self.assertIn("vm-linux pool is not serving", text)
+
+    def test_a_full_page_is_said_unread_not_read_as_whole(self):
         for path in ("runs", "jobs", "runners"):
-            Bridge.received.clear()
-            if os.path.exists(self.state):
-                os.remove(self.state)   # a fresh pass each time, so the read failure is not already said
-            p, _ = self.run_pass(self.scripted(
-                pool_runs={"queued": [{"id": 900, "name": "PR validate", "prs": [7]}]},
-                pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
-                                    "created_at": ago(timedelta(minutes=5)), "completed_at": None}]},
-                pool_totals={path: 101}))
-            self.assertEqual(p.returncode, 0, p.stderr)
-            text = " ".join(r["body"]["text"] for r in Bridge.received)
+            text = self.pool_pass(full=[path])
             self.assertIn("could not read the runs waiting on vm-linux", text, path)
-            self.assertIn("more than one page", text, path)
+            self.assertIn("a full page of 100", text, path)
 
     def test_a_worktree_with_uncommitted_changes_is_left_with_its_sessions_and_said_once(self):
         s = self.scripted(status={self.wt: " M file.swift"})
