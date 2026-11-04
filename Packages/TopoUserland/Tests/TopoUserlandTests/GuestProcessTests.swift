@@ -157,9 +157,12 @@ final class GuestProcessTests: XCTestCase {
     /// continued, and a stopped tree still ended by a terminate, which is the way out of a freeze.
     func testAStoppedGuestStaysStillUntilContinuedAndAStoppedTreeStillEnds() async throws {
         _ = try SharedGuest.booted()
+        // Each count is written aside and renamed over the last, so a reader finds a whole
+        // number whenever it looks: `>` empties the file before it writes, and a reader in that
+        // window, or a ticker stopped in it, reads nothing at all.
         let ticker = try await Guest.shared.spawn("/bin/sh", ["-c", """
             echo started
-            i=0; while :; do i=$((i+1)); echo $i > /tmp/topo-freeze-tick; sleep 0.05; done
+            i=0; while :; do i=$((i+1)); echo $i > /tmp/topo-freeze-tick.next; mv /tmp/topo-freeze-tick.next /tmp/topo-freeze-tick; sleep 0.05; done
             """])
         var lines = ticker.lines.makeAsyncIterator()
         _ = await lines.next()
@@ -178,7 +181,11 @@ final class GuestProcessTests: XCTestCase {
             bound.cancel()
             await eventually("the reader exited") { cat.hasExited }
             XCTAssertEqual(cat.exitStatus, 0, "the reader did not finish")
-            return Int(line ?? "") ?? -1
+            guard let line, let count = Int(line) else {
+                XCTFail("the tick read as \(line.map { "'\($0)'" } ?? "nothing"), not a count")
+                return -1
+            }
+            return count
         }
         try await Task.sleep(for: .milliseconds(200))
 
