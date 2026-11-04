@@ -136,7 +136,7 @@ fi
 # Pocket TTS: Topo's own pack of Kyutai's `english_2026-04` weights, which is
 # FluidInference's English v2.1 pack with its flow decoder replaced by one converted at one
 # step a frame in place of eight (the count is fixed at conversion; the recipe is
-# `topo-voice-pack` in samdu/experiments), in that pack's layout because FluidAudio reads `v2.1/english`. It holds
+# `topo-voice-pack` in samdu/experiments), in that pack's layout because FluidAudio reads `v2.1/english` for the April pack (`PocketTtsLanguage.english2026Apr`, the one the voice names; `.english` is Kyutai's October checkpoint at `v2.1/english_2026-10`). It holds
 # only what the `.ane` placement at fp16 loads —
 # `ModelNames.PocketTTS.requiredModels(precision:placement:)` names the four bundles, and
 # `PocketTtsConstantsLoader` the three files under `constants_bin/`, with `marius.safetensors`
@@ -154,7 +154,7 @@ pocket-tts-coreml|samthehugenerd/Marius-Topo|0e896ab51092ac9ec3525688ee4918757e8
 # CDN, so Topo distributes none of it; the fakefs is made from it on the phone
 # (Packages/TopoUserland).
 direct="
-alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|alpine-minirootfs-3.22.6-aarch64.tar.gz
+alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|alpine-minirootfs-3.22.7-aarch64.tar.gz
 "
 
 # id | repository URL | packages: Alpine's own packages for the guest, each `<name>-<version>.apk`
@@ -178,7 +178,7 @@ alpine-bash|https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/|bash-5.2.3
 # its own updater off, since the updater's TLS never completes a handshake under the emulator.
 releases="https://downloads.claude.ai/claude-code-releases"
 claude="
-claude-code|2.1.285|linux-arm64-musl
+claude-code|2.1.316|linux-arm64-musl
 "
 
 # id | version | platform: 1Password's CLI, `op`, as the zip 1Password's own install instructions
@@ -188,7 +188,7 @@ claude-code|2.1.285|linux-arm64-musl
 # ever handed a token. The platform is linux_arm64, a static Go build that runs in the guest.
 onepassword_cache="https://cache.agilebits.com/dist/1P/op2/pkg"
 onepassword="
-op-cli|2.39.0|linux_arm64
+op-cli|2.41.1|linux_arm64
 "
 
 tmp="$(mktemp -d)"

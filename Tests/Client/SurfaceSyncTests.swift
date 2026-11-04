@@ -48,6 +48,7 @@ final class SurfaceSyncTests: XCTestCase {
     private var store: SurfaceStore!
     private var database: Outage!
     private var reloader: SurfaceReloader!
+    private var login: LoginLife!
     private var sync: SurfaceSync!
 
     override func setUp() async throws {
@@ -55,6 +56,7 @@ final class SurfaceSyncTests: XCTestCase {
         store = SurfaceStore(folder: folder)
         database = Outage()
         reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
+        login = LoginLife()
         sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!)
     }
 
@@ -68,7 +70,7 @@ final class SurfaceSyncTests: XCTestCase {
         let database = database!, store = store ?? self.store!
         return SurfaceSync(records: { SurfaceRecords(database: database) }, ensureZone: { await database.makeZone() },
                            mayOwn: mayOwn, demoted: demoted, store: { store }, runner: runner,
-                           defaults: defaults, reloader: reloader, now: { Date(timeIntervalSince1970: 100) })
+                           defaults: defaults, login: login, now: { Date(timeIntervalSince1970: 100) })
     }
 
     private func write(_ slot: String, _ text: String = "Hi") throws -> Int {
@@ -372,6 +374,7 @@ final class SurfaceSyncTests: XCTestCase {
         sync.changed(slot: "weather")
         await sync.flush()
         await database.fail(saves: false, deletes: true)
+        login.end()
         reloader.forget(store)
         await sync.flush()
         XCTAssertTrue(sync.owesForget)
@@ -390,6 +393,7 @@ final class SurfaceSyncTests: XCTestCase {
         _ = try write("weather")
         sync.changed(slot: "weather")
         await sync.flush()
+        login.end()
         reloader.forget(store)
         await database.fail(saves: false, deletes: false)
         await sync.flush()
@@ -730,7 +734,7 @@ final class SurfaceSyncTests: XCTestCase {
         let store = store!
         let sync = SurfaceSync(records: { SurfaceRecords(database: cloud) }, ensureZone: {}, mayOwn: { true },
                                demoted: { _ in true }, store: { store }, runner: "phone-1",
-                               defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, reloader: reloader,
+                               defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, login: login,
                                now: { Date(timeIntervalSince1970: 100) })
         sync.sweep()
         let flushing = Task { await sync.flush() }
@@ -823,10 +827,10 @@ final class SurfaceSyncTests: XCTestCase {
     func testTheDefaultGateReadsThisPhonesRoleRecord() async throws {
         let roles = InMemoryRecordDatabase()
         let database = database!, store = store!
-        let make = { [reloader] in
+        let make = { [login] in
             SurfaceSync(records: { SurfaceRecords(database: database) }, ensureZone: {}, roles: { roles },
                         store: { store }, runner: "phone-A",
-                        defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, reloader: reloader!)
+                        defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, login: login!)
         }
         try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-B"))
         _ = try await roles.save(DeviceRole(device: DeviceID("phone-A"), role: .viewer, setBy: DeviceID("phone-B"), at: Date()).record(over: roles))
