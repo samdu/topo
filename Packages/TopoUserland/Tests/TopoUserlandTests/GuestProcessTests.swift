@@ -157,19 +157,20 @@ final class GuestProcessTests: XCTestCase {
     /// continued, and a stopped tree still ended by a terminate, which is the way out of a freeze.
     func testAStoppedGuestStaysStillUntilContinuedAndAStoppedTreeStillEnds() async throws {
         _ = try SharedGuest.booted()
-        // Each count is written aside and renamed over the last, so a reader finds a whole
-        // number whenever it looks: `>` empties the file before it writes, and a reader in that
-        // window, or a ticker stopped in it, reads nothing at all.
+        // Each count is appended in one write and the reader takes the last line, so a reader
+        // finds a whole number whenever it looks: `>` empties the file before it writes, and a
+        // reader in that window, or a ticker stopped in it, reads nothing at all.
         let ticker = try await Guest.shared.spawn("/bin/sh", ["-c", """
             echo started
-            i=0; while :; do i=$((i+1)); echo $i > /tmp/topo-freeze-tick.next; mv /tmp/topo-freeze-tick.next /tmp/topo-freeze-tick; sleep 0.05; done
+            : > /tmp/topo-freeze-tick
+            i=0; while :; do i=$((i+1)); echo $i >> /tmp/topo-freeze-tick; sleep 0.05; done
             """])
         var lines = ticker.lines.makeAsyncIterator()
         _ = await lines.next()
         // Read by a fresh process, which a stopped guest still runs; bounded, so a reader that
         // parks fails the test rather than holding the suite.
         let tick = { () async throws -> Int in
-            let cat = try await Guest.shared.spawn("/bin/cat", ["/tmp/topo-freeze-tick"])
+            let cat = try await Guest.shared.spawn("/usr/bin/tail", ["-n", "1", "/tmp/topo-freeze-tick"])
             let read = Task { () -> String? in
                 var out = cat.lines.makeAsyncIterator()
                 let line = await out.next()
@@ -182,8 +183,7 @@ final class GuestProcessTests: XCTestCase {
             await eventually("the reader exited") { cat.hasExited }
             XCTAssertEqual(cat.exitStatus, 0, "the reader did not finish")
             guard let line, let count = Int(line) else {
-                XCTFail("the tick read as \(line.map { "'\($0)'" } ?? "nothing"), not a count")
-                return -1
+                throw TickUnread(line: line)
             }
             return count
         }
@@ -241,4 +241,11 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertFalse(GuestProcess.Termination(status: 137, signalled: 0, running: 0, pipesClosed: true, walked: false).confirmed,
                        "a tree that could not be walked was confirmed ended")
     }
+}
+
+/// A read of the freeze test's tick that came back as no count: a failure of the read, said as
+/// one, rather than a number that fails the comparison after it.
+private struct TickUnread: Error, CustomStringConvertible {
+    let line: String?
+    var description: String { "the tick read as \(line.map { "'\($0)'" } ?? "nothing"), not a count" }
 }
