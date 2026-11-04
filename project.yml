@@ -85,6 +85,9 @@ targets:
       # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
       - path: Apps/Topo/Resources/models.json
         buildPhase: resources
+      # Smart Turn's mel filterbank (Apps/Client/SmartTurn.swift); scripts/smartturn-mel.py writes it.
+      - path: Apps/Topo/Resources/smartturn-mel.bin
+        buildPhase: resources
       # The mark itself, read at launch rather than copied into Swift.
       - path: Design/topo-mark.svg
         buildPhase: resources

@@ -270,6 +270,7 @@
 		7A8B1ADFEA35183A04493998 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		7B6542E14EB920F1A6FABB7D /* TopoPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */; };
 		7BAC7D2798BB548AB8789E45 /* TopoMascot in Frameworks */ = {isa = PBXBuildFile; productRef = CBD2D6444E070604419558E1 /* TopoMascot */; };
+		7BDA9DB9966A795F063C0FB0 /* smartturn-mel-chirp.bin in Resources */ = {isa = PBXBuildFile; fileRef = 27FF7B408897A4CE4190E33E /* smartturn-mel-chirp.bin */; };
 		7C378AC1792F1B90CA47F507 /* WatchRelevance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88A745D155637B885D24CB95 /* WatchRelevance.swift */; };
 		7C46879F024D724EE00472E2 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		7CA608BAC02829F2E58A6BA4 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
@@ -386,6 +387,7 @@
 		A80AAFDB7F75D142FA415516 /* TurnMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */; };
 		A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5781A49D54D87338285451F9 /* GuestClockTests.swift */; };
 		A84F4654C8C62B71D6789CF7 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
+		A85264CF73659A257A17CADC /* smartturn-mel.bin in Resources */ = {isa = PBXBuildFile; fileRef = 71F5E06A856671194323534F /* smartturn-mel.bin */; };
 		A861E04568B9169AD4FC67B0 /* MemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD2D48725224C0E601F432D /* MemoryTests.swift */; };
 		A8807AF0D00F928C12D256FA /* Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */; };
 		A8B35D602FE1B8434BF6C61B /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08FD9C8BEFD319CC8ED56DAC /* Conversation.swift */; };
@@ -754,6 +756,7 @@
 		2692590D1320E8D8078ECB31 /* Tuning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tuning.swift; sourceTree = "<group>"; };
 		26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctopusMark.swift; sourceTree = "<group>"; };
 		26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceSync.swift; sourceTree = "<group>"; };
+		27FF7B408897A4CE4190E33E /* smartturn-mel-chirp.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "smartturn-mel-chirp.bin"; sourceTree = "<group>"; };
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
 		297C1A9489C88545BA87293C /* SurfaceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceProvider.swift; sourceTree = "<group>"; };
 		298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuietLaneTests.swift; sourceTree = "<group>"; };
@@ -854,6 +857,7 @@
 		6CC10F86563FE12BC674EFBB /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		6D42B9802439D5A1AD7033D4 /* OnePasswordConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePasswordConnectionTests.swift; sourceTree = "<group>"; };
 		6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextToolTests.swift; sourceTree = "<group>"; };
+		71F5E06A856671194323534F /* smartturn-mel.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "smartturn-mel.bin"; sourceTree = "<group>"; };
 		72E95D2B23E2FF1B696F524C /* EndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointTests.swift; sourceTree = "<group>"; };
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		738BC8AD7B6AE57B9135A057 /* TopoWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TopoWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1151,6 +1155,7 @@
 			children = (
 				8D9560A4BB990698B0D1E786 /* capital-of-france.wav */,
 				D9BDDB4560950858CA3F4314 /* purple-elephants.wav */,
+				27FF7B408897A4CE4190E33E /* smartturn-mel-chirp.bin */,
 				EFC0373DB94E17A8274AD7F1 /* licences */,
 			);
 			path = Fixtures;
@@ -1428,6 +1433,7 @@
 			isa = PBXGroup;
 			children = (
 				D7E1A5F0E00768D69191A35A /* models.json */,
+				71F5E06A856671194323534F /* smartturn-mel.bin */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -2290,6 +2296,7 @@
 				6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */,
 				86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */,
 				3E0191DE9AE9C06EF5B40374 /* models.json in Resources */,
+				A85264CF73659A257A17CADC /* smartturn-mel.bin in Resources */,
 				11DB03A3B196E498EE9229BF /* topo-mark.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2314,6 +2321,7 @@
 				1E22AA5C9ED66B7FDDC7ECD9 /* licence-libarchive-xxhash.txt in Resources */,
 				77877FC67766FC00F446FC85 /* licence-mit-nom.txt in Resources */,
 				B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */,
+				7BDA9DB9966A795F063C0FB0 /* smartturn-mel-chirp.bin in Resources */,
 				E90E02B7E69E6EDFB83B8BA6 /* systemLarge.json in Resources */,
 				E80B5826F6CF3D408D7D7B05 /* systemMedium.json in Resources */,
 				68EFF6B437CBB2B98EF9D3D7 /* systemSmall.json in Resources */,
