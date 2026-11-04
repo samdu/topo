@@ -344,9 +344,18 @@ bounded() {
 }
 
 # new_simulator <label> <runtime> <name prefix> — a device of this run's own, of the type of the
-# first available device of that runtime by name, its udid in $udid. Deleted when the run ends.
+# first available device of that runtime by name, its udid in $udid. Deleted when the run ends,
+# by the EXIT trap, which a SIGKILL never runs: so first every device a run left behind is
+# deleted, one named for a run (`topo-validate-<label>-<pid>`) whose pid is not running.
 new_simulator() {
-  local type
+  local type stale name
+  while read -r stale name; do
+    ps -p "${name##*-}" >/dev/null 2>&1 && continue
+    echo "Simulator: deleting $name ($stale), left by a run that is gone"
+    xcrun simctl shutdown "$stale" >/dev/null 2>&1
+    xcrun simctl delete "$stale" >/dev/null 2>&1
+  done < <(xcrun simctl list devices --json 2>/dev/null | jq -r '
+    .devices[]? | .[]? | select((.name // "") | test("^topo-validate-[a-z]+-[0-9]+$")) | "\(.udid) \(.name)"' 2>/dev/null)
   type="$(xcrun simctl list devices available --json | jq -r --arg rt "$2" --arg p "$3" '
     [.devices[$rt] // [] | .[] | select(.name | startswith($p))]
     | sort_by(.name) | .[0] | if . then .deviceTypeIdentifier else empty end')"

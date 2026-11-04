@@ -695,6 +695,8 @@ run_here() {
   suite_started=$SECONDS
   keep start_suite "$suite"
   suite_status="$kept"
+  # Its name's lock is still this run's, so the holder removed is this run's own.
+  rm -f "$cache/suite-$2.holder"
   # mac-suite.sh starts its suites.txt afresh each call. The suite has a line, or it failed:
   # a call that died early wrote none.
   said="$(grep "^$suite=" "$logs/suites.txt" 2>/dev/null || true)"
@@ -846,6 +848,8 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     fi
   done
   trap - TERM INT HUP
+  # The lock on descriptor 8 is shared, so the holder is removed only while it names this run.
+  ! grep -q ", pid $$, " "$cache/holder" 2>/dev/null || rm -f "$cache/holder"
   exec 6>&- 7>&- 8>&-
   minutes=$(((SECONDS - started) / 60))
   # Every suite's result in the one file, as each call left its own.
