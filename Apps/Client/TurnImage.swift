@@ -143,6 +143,11 @@ enum TurnImages {
         cache.removeAllObjects()
     }
 
+    /// The pictures go with the login: a sign-out, a takeover, a viewer's arrival, a login lost.
+    static func endWith(_ login: LoginLife) {
+        login.onEnd { clear() }
+    }
+
     /// The picture in `data`, drawn upright at no more than `maxPixels` on its long side; nil for
     /// anything that is not an image.
     nonisolated static func decode(_ data: Data) -> CGImage? {

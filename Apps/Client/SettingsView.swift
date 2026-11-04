@@ -155,11 +155,14 @@ struct ContextSection: View {
     }
 }
 
-/// Letting go of the login, which is five things and not one. It is a value rather than a block
+/// Letting go of the login, which is several things and not one. It is a value rather than a block
 /// in the button so that what it ends, and the order it ends them in, is something a test can
 /// read: a call left out here is a reply still being read, or a memory still on disk, for an
 /// account the app has just let go of.
 struct SignOut {
+    /// The login's epoch moves first (`LoginLife`), so work that checks it and lands from here
+    /// on, while the harness below is waited on included, finds it gone and drops itself.
+    var moveEpoch: @MainActor () -> Void
     /// The reply in the ear goes with the login: one still being read would otherwise carry on,
     /// holding the process open.
     var stopSpeaking: @MainActor () -> Void
@@ -174,6 +177,9 @@ struct SignOut {
     /// The memory is the person's and stays in their iCloud; the copy of it on this phone goes
     /// with the login.
     var forgetMemory: @MainActor () -> Void
+    /// What features registered to end with the login (`LoginLife.onEnd`), started just before the
+    /// surfaces go, with the epoch moved once more for work begun since the first step.
+    var runTeardowns: @MainActor () -> Void
     /// The widgets' documents, images and pending taps, and every timeline read again at once, so
     /// no lock screen keeps the conversation of an account the phone no longer has.
     var forgetSurfaces: @MainActor () -> Void
@@ -184,10 +190,12 @@ struct SignOut {
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        moveEpoch()
         stopSpeaking()
         forgetShares()
         await forgetHarness()
         forgetMemory()
+        runTeardowns()
         forgetSurfaces()
         forgetConnections()
         forgetLogin()
@@ -199,6 +207,8 @@ struct SignOut {
 ///
 /// No step has a default, so a caller that leaves one out does not compile.
 struct Takeover {
+    /// The login's epoch, first, as at a sign-out.
+    var moveEpoch: @MainActor () -> Void
     /// What was shared and not yet sent goes, and its door shuts, before anything is waited for.
     var forgetShares: @MainActor () -> Void
     /// What was waiting goes into the log first, while the chat and its task still stand.
@@ -209,6 +219,8 @@ struct Takeover {
     var stopSpeaking: @MainActor () -> Void
     /// A viewer holds no login and keeps no memory.
     var forgetMemory: @MainActor () -> Void
+    /// What features registered to end with the login, just before the surfaces go.
+    var runTeardowns: @MainActor () -> Void
     /// Nor the widgets and controls the mind wrote, which would go on drawing and running.
     var forgetSurfaces: @MainActor () -> Void
     /// Nor any of its person's connections, and a connect in flight saves nothing after this.
@@ -217,11 +229,13 @@ struct Takeover {
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        moveEpoch()
         forgetShares()
         await demoteHarness()
         acceptDemotion()
         stopSpeaking()
         forgetMemory()
+        runTeardowns()
         forgetSurfaces()
         forgetConnections()
         forgetLogin()
@@ -232,23 +246,28 @@ struct Takeover {
 /// the lease or the role record names another device or says viewer, and a demotion decided at launch leaves an outbox on disk. What was waiting
 /// goes into the log as a limb's turns and the login and the memory go; the surfaces and a
 /// connection's token go whether or not there was a login, since the app group and the keychain
-/// item are their own and outlive one.
+/// item are their own and outlive one. The epoch and the registered teardowns run whether or
+/// not there was a login, as the surfaces do.
 struct ViewerArrival {
+    var moveEpoch: @MainActor () -> Void
     var forgetShares: @MainActor () -> Void
     var holdsLogin: @MainActor () -> Bool
     var demoteHarness: @MainActor () async -> Void
     var forgetMemory: @MainActor () -> Void
+    var runTeardowns: @MainActor () -> Void
     var forgetSurfaces: @MainActor () -> Void
     var forgetConnections: @MainActor () -> Void
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        moveEpoch()
         forgetShares()
         let held = holdsLogin()
         if held {
             await demoteHarness()
             forgetMemory()
         }
+        runTeardowns()
         forgetSurfaces()
         forgetConnections()
         if held { forgetLogin() }
