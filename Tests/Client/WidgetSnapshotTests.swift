@@ -149,6 +149,76 @@ final class WidgetSnapshotTests: XCTestCase {
         }
     }
 
+    // MARK: The tracker (the activity plan's Review Focus 1)
+
+    static let trackerForms: [(String, TrackerView.Form, CGSize, Bool)] = [
+        ("tracker-lock", .lockScreen, CGSize(width: 364, height: 104), false),
+        ("tracker-lock-stale", .lockScreen, CGSize(width: 364, height: 104), true),
+        ("tracker-expanded", .expanded, CGSize(width: 340, height: 104), false),
+        ("tracker-compact-leading", .compactLeading, CGSize(width: 28, height: 28), false),
+        ("tracker-compact-trailing", .compactTrailing, CGSize(width: 56, height: 20), false),
+        ("tracker-minimal", .minimal, CGSize(width: 28, height: 28), false),
+    ]
+
+    static func trackerCard() throws -> TrackerCard {
+        let url = try XCTUnwrap(Bundle(for: WidgetSnapshotTests.self).url(forResource: "tracker", withExtension: "json"), "no tracker fixture")
+        let reading = ProgressTracker.read(try Data(contentsOf: url))
+        XCTAssertEqual(reading.notes, [], "the tracker fixture is not read whole")
+        return TrackerCard(try XCTUnwrap(reading.tracker))
+    }
+
+    static func render(_ card: TrackerCard, form: TrackerView.Form, size: CGSize, dark: Bool, stale: Bool) throws -> CGImage {
+        let view = TrackerView(card: card, form: form, stale: stale, clock: Date(timeIntervalSince1970: 1_793_580_360))
+            .padding(form == .lockScreen || form == .expanded ? 12 : 0)
+            .frame(width: size.width, height: size.height)
+            .background(Theme.surface)
+            .environment(\.colorScheme, dark ? .dark : .light)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = scale
+        return try XCTUnwrap(renderer.cgImage, "\(form) rendered to nothing")
+    }
+
+    /// Each form of the tracker draws its reference, in light and dark; and the same picture with
+    /// one step's state changed, or drawn stale, is another picture, so the comparison can fail.
+    func testTrackerDrawsItsReferences() throws {
+        let card = try Self.trackerCard()
+        for (name, form, size, stale) in Self.trackerForms {
+            for dark in [false, true] {
+                let full = "\(name)-\(dark ? "dark" : "light")"
+                let drawn = try Self.render(card, form: form, size: size, dark: dark, stale: stale)
+                guard let expected = try reference(full, drawn) else { continue }
+                let changed = Self.changed(Self.pixels(drawn), expected)
+                XCTAssertLessThanOrEqual(changed, Self.changedTolerance, "\(full) drew another picture: \(Int(changed * 1000))‰ of it changed")
+            }
+        }
+        guard !recording else { return }
+        var moved = card
+        moved.steps[2].state = .failed
+        moved.state = .failed
+        for (name, form, size, stale) in Self.trackerForms where !stale {
+            let before = Self.pixels(try Self.render(card, form: form, size: size, dark: false, stale: false))
+            let after = Self.pixels(try Self.render(moved, form: form, size: size, dark: false, stale: false))
+            XCTAssertGreaterThan(Self.changed(before, after), Self.changedTolerance, "\(name): a failed step is not another picture")
+        }
+        let fresh = Self.pixels(try Self.render(card, form: .lockScreen, size: Self.trackerForms[0].2, dark: false, stale: false))
+        let stale = Self.pixels(try Self.render(card, form: .lockScreen, size: Self.trackerForms[0].2, dark: false, stale: true))
+        XCTAssertGreaterThan(Self.changed(fresh, stale), Self.changedTolerance, "stale is not another picture")
+    }
+
+    func testEstimatePicksTheSystemsWordFirst() throws {
+        var card = try Self.trackerCard()
+        XCTAssertEqual(TrackerView.estimate(card, stale: true), .stale(card.updated))
+        XCTAssertEqual(TrackerView.estimate(card, stale: false), .eta(try XCTUnwrap(card.eta)))
+        card.eta = nil
+        XCTAssertEqual(TrackerView.estimate(card, stale: false), .updated(card.updated))
+        card.ended = card.updated
+        card.state = .done
+        XCTAssertEqual(TrackerView.estimate(card, stale: false), .ended(failed: false, card.updated))
+        card.state = .failed
+        XCTAssertEqual(TrackerView.estimate(card, stale: false), .ended(failed: true, card.updated))
+        XCTAssertEqual(TrackerView.estimate(card, stale: true), .stale(card.updated))
+    }
+
     /// The fixtures hold every kind their family takes: all of them on the home screen.
     func testTheHomeScreenFixturesHoldEveryKind() throws {
         let every: Set<String> = ["vstack", "hstack", "zstack", "text", "glyph", "image", "gauge", "progress", "topo",
