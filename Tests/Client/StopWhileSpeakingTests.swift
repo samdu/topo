@@ -659,6 +659,31 @@ final class StopWhileSpeakingTests: XCTestCase {
         speaker.endAwaiting("turn", "the test is done")
     }
 
+    /// The moment before that: the call asked of the system and not yet placed, with the
+    /// session refused behind the lock. The wait is held for the call on its way, not refused.
+    func testAWaitTakenWhileTheCallIsOnItsWayIsHeldThroughTheActivation() async {
+        let held = HeldVoice()
+        let (speaker, voice, seams) = await chat(heard: "purple elephants", voice: held, permission: { true })
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        speaker.attach(call)
+        call.start()
+        XCTAssertEqual(call.state, .starting)
+        XCTAssertEqual(audio.call, AudioSession.CallPhase.none)
+        seams.activationError = NSError(domain: "behind the lock", code: 560557684)
+        let wait = speaker.awaitReply("turn", readAloud: true)
+        XCTAssertFalse(speaker.keeping)
+        XCTAssertTrue(wait.held, "a wait taken under a call on its way was refused")
+        XCTAssertTrue(audio.holding)
+        seams.activationError = nil
+        call.provider(system.provider, perform: system.starts.last!)
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        await settle("the keeper to start at the activation") { speaker.keeping }
+        XCTAssertEqual(speaker.awaiting, ["turn"])
+        speaker.endAwaiting("turn", "the test is done")
+    }
+
     /// A press as the call closes — the moment a reply ends, which is when a person answers —
     /// waits for the call's end and opens on the session that follows it, not on the one the
     /// system is about to deactivate.

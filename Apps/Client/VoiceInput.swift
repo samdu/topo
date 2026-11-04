@@ -134,7 +134,8 @@ final class VoiceInput {
         interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
-            // A call or Siri took the session; whatever was being said is over. Only the start
+            // A call or Siri took the session; whatever was still being said is over, and words
+            // already released finish their decode and are sent (`drop`). Only the start
             // of an interruption: iOS posts its end seconds later, by which time a new session
             // may be up and is not to be cancelled for it.
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -213,7 +214,6 @@ final class VoiceInput {
         return await end(as: gate)
     }
 
-    /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
     /// Drops a session still listening, as `cancel` does, and leaves one already ending to
     /// finish: a released press has taken its audio and stopped its engine, and what is left is
     /// the decode of words the person meant to send — a lock or an interruption landing during it
@@ -223,6 +223,7 @@ final class VoiceInput {
         cancel(gate)
     }
 
+    /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
     func cancel(_ gate: Gate? = nil) {
         if let gate, owner != gate { return }
         generation += 1

@@ -320,10 +320,10 @@ final class Speaker {
         }
         waits[nonce]?.cancel()
         audio.wantAlive(true, for: .awaitingReply(nonce))
-        // Under a call the system is placing, the keeper is down until the activation, whose
-        // resume starts it again for the holds standing: a wait taken then is held, or the call
-        // it is placed for would end with nothing holding it.
-        let placing = audio.call == .placed
+        // Under a call on its way — asked of the system or placed by it — the keeper may be down
+        // until the activation, whose resume starts it again for the holds standing: a wait taken
+        // then is held, or the call it is placed for would end with nothing holding it.
+        let placing = audio.call == .placed || call?.state == .starting
         if placing { AudioLog.say("the wait for \(nonce) is held for the call's activation") }
         guard queue.keeping || placing else {
             // The claim is one the process cannot honour: nothing is rendering, so nothing is
