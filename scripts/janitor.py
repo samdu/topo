@@ -71,7 +71,14 @@ judgement:
      Otherwise the box is unticked again and that is said
      (`tick_device_box`). A comment on the PR then cites the results;
      `allowed_pr()` is every write the step can make. It merges nothing:
-     the box is what automerge and step 1 were waiting on.
+     the box is what automerge and step 1 were waiting on;
+  9. reports, once per head, an open PR whose dev slot (slots.json) carries
+     another commit than its head while the head has passed its suites
+     (`GATE`, the gate publish-topo.sh builds behind): a build never recut.
+
+Step 2 takes a run cancelled inside the reviewer chain alone (codex past its
+time limit) as a reviewer that never ran; step 5 also reports a ready PR
+that conflicts with main while no tmux session of its engineer stands.
 
 What was last said of each PR and issue is kept as a fingerprint in the state
 file (`reported`), and an item whose fingerprint has not moved is silent
@@ -118,6 +125,11 @@ REPO = "samdu/topo"
 WORKFLOW = "pr-validate.yaml"
 INSTALL_PAGE = "https://experiments.hexagon.zone/ota/files/623f17f9f38db5b81d0b/version.json"
 PUBLISH = "~/github/experiments/ota/publish-topo.sh"
+# The dev slots the install page lists, one per PR (`pr-N`), each with the commit its build carries.
+DEV_SLOTS = "https://topo.hexagon.zone/files/dfb52de461975ddf6837/slots.json"
+DEV_TREES = "~/github/topo-ota-dev.pr"   # pr-N.lock stands there while that PR's build is being cut
+# Whether a head passed the suites its PR needs, as `test` concludes it, with or without a `test` run.
+GATE = "~/github/experiments/ota/topo-suites-gate.sh"
 CHECKOUT = "~/github/topo"
 MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", "http://192.168.1.201/mesh/buddy-prime/deliver")
 MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
@@ -264,12 +276,21 @@ def pr_fingerprint(pr, run, jobs, conds):
                        sorted(set(conds) - {"idle"}))
 
 
-def decide_pr(pr, run, jobs, state, now, require_label=False):
+def owners(branch):
+    """The tmux session names an engineer working `branch` goes by: a
+    `buddy/<topic>` branch is spawned as `topo-<topic>` (or `<topic>`)."""
+    topic = (branch or "").removeprefix("buddy/")
+    return {f"topo-{topic}", topic}
+
+
+def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
     """What one open PR wants from this pass.
 
     Returns a list of dicts: {"kind": merge|rerun|report, "key": ..., "text": ...}.
     `run` is the newest pull_request validate run for the PR's head, or None;
-    `jobs` its jobs as [{name, conclusion, id, steps}]. Pure: nothing is read or done.
+    `jobs` its jobs as [{name, conclusion, id, steps}]. `sessions` is the set of
+    tmux session names standing on this Mac, or None when they could not be
+    read. Pure: nothing is read or done.
     """
     n, head = pr["number"], pr["headRefOid"]
     short = head[:7]
@@ -285,9 +306,18 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     if pr["isDraft"]:
         return out
 
+    # A conflict with main stops every workflow on the PR, so nothing moves
+    # until somebody merges main in; with no session of its engineer standing,
+    # nobody will.
+    if pr.get("mergeStateStatus") == "DIRTY" and sessions is not None and not owners(pr["headRefName"]) & sessions:
+        report("dirty", f"{title}: conflicts with main at {short}, so no workflow runs on it, and no session "
+                        f"{' or '.join(sorted(owners(pr['headRefName'])))} stands to merge main in.")
+
     if run is None:
         if age > GRACE:
-            report("norun", f"{title}: ready with no validate run for {minutes(age)}; a push starts one.")
+            starts = ("none starts while it conflicts with main" if pr.get("mergeStateStatus") == "DIRTY"
+                      else "a push starts one")
+            report("norun", f"{title}: ready with no validate run for {minutes(age)}; {starts}.")
         return out
 
     if run["status"] != "completed":
@@ -316,13 +346,17 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
                         "text": f"merged {title}: validate green, no unchecked box, and automerge had not fired after {minutes(since)}."})
         return out
 
-    if conclusion == "cancelled":
+    red = [j for j in jobs if j.get("conclusion") in NOT_GREEN]
+    red_names = [j["name"] for j in red]
+    # A run cancelled inside the reviewer chain alone — codex past its time
+    # limit, which GitHub concludes as cancelled — is a reviewer that did not
+    # finish, and takes the rerun below; any other cancel is the run's.
+    in_chain = "reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
+    if conclusion == "cancelled" and not in_chain:
         if since > GRACE:
             report("cancelled", f"{title}: its newest validate run was cancelled {minutes(since)} ago and nothing ran after it; a push starts one.")
         return out
 
-    red = [j for j in jobs if j.get("conclusion") in NOT_GREEN]
-    red_names = [j["name"] for j in red]
     # The verdict first. The review cap is the one way review_gate is red beside a green
     # reviewer_ran with no verdict posted this run — codex skipped, or
     # post_feedback's recount holding the post: no finding to fix, a
@@ -341,10 +375,11 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     # `select` or `test` is the run's own failure, not the reviewer's, and a
     # red `test` is a suite status missing or failed on the head, which no
     # rerun of anything here supplies.
-    no_verdict = "reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
+    no_verdict = in_chain
     rerun_key = f"{n}:{head}"
     if no_verdict:
-        why = "the reviewer never ran (no verdict)"
+        why = ("the run was cancelled inside the reviewer (a time limit), so it has no verdict of its own"
+               if conclusion == "cancelled" else "the reviewer never ran (no verdict)")
         if rerun_key not in state.get("rerun", {}):
             if since > SETTLE:
                 # One job, the first red one of the chain, and what waits on
@@ -864,6 +899,19 @@ def allowed_pr(argv):
             and argv[4:7] == ["--repo", REPO, "--body-file"])
 
 
+def decide_slots(prs, slots):
+    """The open PRs whose dev slot serves another commit than their head, as
+    [(pr, the commit the slot serves)]. `slots` is slots.json: [{slot, commit, …}].
+    A PR with no slot is no build to be stale. Pure."""
+    served = {}
+    for v in slots if isinstance(slots, list) else []:
+        m = re.fullmatch(r"pr-(\d+)", str(v.get("slot") or "")) if isinstance(v, dict) else None
+        if m and isinstance(v.get("commit"), str) and re.fullmatch(r"[0-9a-f]{7,40}", v["commit"]):
+            served[int(m.group(1))] = v["commit"]
+    return [(pr, served[pr["number"]]) for pr in prs
+            if pr["number"] in served and not pr["headRefOid"].startswith(served[pr["number"]])]
+
+
 def decide_publish(published_commit, main_sha, state, now):
     """Whether to republish the install page. Returns a reason string or None."""
     if not main_sha:
@@ -978,7 +1026,7 @@ class Shell:
 
     def open_prs(self):
         return self.listed(200, "--state", "open", "--json",
-                           "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels,reviewDecision")
+                           "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels,reviewDecision,mergeStateStatus")
 
     def require_label(self):
         """automerge.yaml's label rule: True, False, or None when it cannot be read
@@ -1126,6 +1174,27 @@ class Shell:
             return json.loads(p.stdout).get("commit")
         except (ValueError, AttributeError):
             raise RuntimeError("the install page's version.json is not JSON")
+
+    def dev_slots(self):
+        """slots.json: the dev builds the install page serves, one per PR."""
+        p = self.run(["curl", "-sS", "-f", "-m", "20", DEV_SLOTS], check=False)
+        if p.returncode != 0:
+            raise RuntimeError(f"slots.json did not answer: {p.stderr.strip()[-200:]}")
+        try:
+            slots = json.loads(p.stdout)
+        except ValueError:
+            raise RuntimeError("slots.json is not JSON")
+        if not isinstance(slots, list):
+            raise RuntimeError("slots.json is not a list")
+        return slots
+
+    def suites_green(self, checkout, sha):
+        """The suites gate on one head: True when green, False when not, a
+        RuntimeError when it could not judge."""
+        p = self.run(["bash", os.path.expanduser(GATE), checkout, sha], timeout=180, check=False)
+        if p.returncode in (0, 1):
+            return p.returncode == 0
+        raise RuntimeError(f"the suites gate could not judge {sha[:7]}: {(p.stdout + p.stderr).strip()[-200:]}")
 
     def publish(self):
         script = os.path.expanduser(PUBLISH)
@@ -1413,6 +1482,13 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         say("prs:read", f"could not read the open PRs: {ex}")
         require_label = None
     prs_whole = prs_ok
+    # The engineers' sessions standing on this Mac, for a PR that conflicts with main.
+    try:
+        sessions = {name for name, _ in sh.tmux_panes()}
+        state["fired"].pop("sessions:read", None)
+    except RuntimeError as ex:
+        sessions = None
+        say("sessions:read", f"could not read the tmux sessions, so no conflicted PR is judged abandoned: {ex}")
     for pr in prs:
         n, head = pr["number"], pr["headRefOid"]
         try:
@@ -1420,7 +1496,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             if not pr["isDraft"]:
                 run = sh.newest_run(head, n)
                 jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
-            wants = decide_pr(pr, run, jobs or [], state, now, require_label)
+            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions)
         except RuntimeError as ex:
             say(f"{n}:read:{head}", f"#{n}: could not read its runs: {ex}")
             if "rate limit" in str(ex).lower():
@@ -1515,6 +1591,37 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             say("builds:read", f"could not read the build issues of {LINK}: {type(ex).__name__}: {str(ex)[:200]}")
     elif prs_ok:
         state["fired"] = {k: v for k, v in state["fired"].items() if not (k.startswith("build") and k.endswith(":read"))}
+
+    # 9: a dev build left behind its PR. A slot serving another commit than
+    # the head, while that head has passed its suites, is a build nobody recut:
+    # said once per head. A build being cut (its lock stands) is not yet one.
+    if prs_ok:
+        try:
+            stale = decide_slots(prs, sh.dev_slots())
+            state["fired"].pop("slots:read", None)
+            for pr, served in stale:
+                n, head = pr["number"], pr["headRefOid"]
+                key = f"{n}:slot:{head}"
+                if key in state["fired"]:
+                    quiet.append(f"#{n}: its stale dev build was said at this head")
+                    continue
+                if os.path.isdir(os.path.join(os.path.expanduser(DEV_TREES), f"pr-{n}.lock")):
+                    quiet.append(f"#{n}: its dev build is being cut")
+                    continue
+                try:
+                    green = sh.suites_green(checkout, head)
+                    state["fired"].pop(f"{n}:gate:{head}", None)
+                except RuntimeError as ex:
+                    say(f"{n}:gate:{head}", f"#{n}: its dev build carries {served}, not its head {head[:7]}, and {ex}")
+                    continue
+                if not green:
+                    quiet.append(f"#{n}: its dev build is behind, and {head[:7]} has not passed its suites")
+                    continue
+                lines.append(f"#{n} ({pr['headRefName']}): its dev build carries {served}, but its head is {head[:7]}, "
+                             f"which has passed its suites; the build was never recut (publish-topo.sh --dev {n}).")
+                state["fired"][key] = now.isoformat()
+        except RuntimeError as ex:
+            say("slots:read", f"could not read the dev slots: {ex}")
 
     # 3: the install page.
     try:

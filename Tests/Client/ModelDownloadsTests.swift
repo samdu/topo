@@ -45,9 +45,9 @@ final class ModelDownloadsTests: XCTestCase {
         // pinned release, and checked against its digest like every model file.
         let rootfs = try XCTUnwrap(manifest.model(ModelManifest.rootfs))
         XCTAssertNil(rootfs.repo)
-        XCTAssertEqual(rootfs.files.map(\.path), ["alpine-minirootfs-3.22.6-aarch64.tar.gz"])
+        XCTAssertEqual(rootfs.files.map(\.path), ["alpine-minirootfs-3.22.7-aarch64.tar.gz"])
         XCTAssertEqual(rootfs.url(for: rootfs.files[0]).absoluteString,
-                       "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz")
+                       "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.7-aarch64.tar.gz")
         XCTAssertEqual(rootfs.files[0].sha256.count, 64)
         XCTAssertGreaterThan(rootfs.files[0].size, 0)
         // bash for the guest: Alpine's own packages for the same branch and architecture, exactly

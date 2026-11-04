@@ -100,6 +100,7 @@ struct TopoApp: App {
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
+            ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),
@@ -129,6 +130,10 @@ struct TopoApp: App {
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
+        // Built now so its sign-out hook is registered in every process, scene or none.
+        _ = ActivityKeeper.shared
+        // The Live Activities are the login's: ended with the slots at a sign-out, a takeover or
+        // a viewer's arrival.
         _roleSelector = State(initialValue: RoleSelector(database: AppRecords.database(),
                                                          isSignedIn: { LoginCache.standard.isSignedIn },
                                                          ensureZone: AppRecords.ensureZone))
@@ -282,6 +287,8 @@ struct TopoApp: App {
                 if phase == .active {
                     Perf.mark("scene.active")
                     Task { await widgetCues.drain() }
+                    // An activity past its until goes; the rest are polled again.
+                    Task { await ActivityKeeper.shared.resume() }
                     // What was shared from another app while Topo was away becomes a turn now.
                     Task { await shares.drain() }
                     // A copy of a still whose ten minutes ran out while Topo was suspended goes now.
