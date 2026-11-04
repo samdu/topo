@@ -17,7 +17,7 @@
 #
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
 # the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location,
-# HomeKit or Photos with no string saying why, and nothing shows it until the first call that asks.
+# HomeKit, Photos or Alarms with no string saying why, and nothing shows it until the first call that asks.
 # `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is read beside them: without it a limited
 # photo library puts the system's sheet for choosing more up at a tool's call.
 #
@@ -133,7 +133,8 @@ fi
 
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
            NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \
-           NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription; do
+           NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription \
+           NSAlarmKitUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
         echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2

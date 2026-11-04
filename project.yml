@@ -190,6 +190,9 @@ targets:
         # `Activity.request` refuses every start; no setting generates it, and
         # `scripts/check-built-plist.sh` reads it off the product.
         NSSupportsLiveActivities: true
+        # `topo timer`'s alarms (docs/widgets.md, *Timers*). AlarmKit ends the process at the
+        # prompt without it; `scripts/check-built-plist.sh` reads it off the product.
+        NSAlarmKitUsageDescription: Topo sounds a timer you ask it for when it reaches zero, even with the phone locked or on silent.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
@@ -233,6 +236,8 @@ targets:
       - Apps/Shared/ActivityDocument.swift
       - Apps/Shared/ProgressTracker.swift
       - Apps/Shared/TrackerView.swift
+      # A timer's metadata, which the countdown is drawn from (docs/widgets.md, *Timers*).
+      - Apps/Shared/TopoAlarmMetadata.swift
       - Apps/Shared/SurfaceStore.swift
       - Apps/Shared/Theme.swift
       - Apps/Shared/OctopusMark.swift

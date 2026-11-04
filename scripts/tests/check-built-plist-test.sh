@@ -15,7 +15,8 @@ trap 'rm -rf "$work"' EXIT
 
 keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription
       NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription
-      NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription)
+      NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription
+      NSAlarmKitUsageDescription)
 
 make_watch() {
     local watch="$1"

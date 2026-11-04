@@ -13,7 +13,7 @@ struct ActivityTool: Tool {
     var now: @Sendable () -> Date = { Date() }
 
     let name = "activity"
-    let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, a timer, a countdown"
+    let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, or a countdown with no sound (a timer that sounds is topo timer)"
     var usage: String {
         """
         topo activity                            every activity running: id, slot, started, until, what it draws
@@ -25,7 +25,7 @@ struct ActivityTool: Tool {
                                                  lock screen a while, now takes it off, DATE (ISO 8601) at that time
                                                  or four hours after the end, whichever is sooner;
                                                  one ended and still shown is taken down with now or DATE and no document
-        topo activity example                    a tracker and a timer: the quickest way to the shape
+        topo activity example                    a tracker and a countdown: the quickest way to the shape
 
         A SLOT is [a-z0-9-], at most 32 characters, one activity a slot. The document is an object with any of:
           "tracker": the decisions pane's progress tracker JSON (title, steps[label, state, note], current, eta…),
@@ -37,7 +37,7 @@ struct ActivityTool: Tool {
           "families": a node tree per region, in topo widget's grammar: lockScreen, islandExpanded,
                      islandCompactLeading, islandCompactTrailing, islandMinimal. A region without one draws the
                      tracker, or Topo's mark. Text with "date" and "dateStyle": "timer" counts by itself, with no
-                     update, so a timer or a countdown needs none;
+                     update, so a countdown needs none; a timer that sounds at zero is topo timer, not an activity;
           "until": ISO 8601, at most 12 h ahead: the activity is taken off then while Topo runs, or when Topo
                      next comes to the screen, and reads stale past it meanwhile;
           "tint": a Theme token or #RRGGBB, the activity's background;  "relevance": 0–100, its order.
@@ -316,6 +316,6 @@ struct ActivityTool: Tool {
           "islandCompactTrailing": {"kind": "text", "date": "\(soon)", "dateStyle": "timer", "style": "caption"},
           "islandMinimal": {"kind": "glyph", "symbol": "cup.and.saucer.fill", "size": 14, "colour": "primary"}}}
         """
-        return [("a tracker given whole", tracker), ("a tracker polled from the pane", polled), ("a timer, which needs no update", timer)]
+        return [("a tracker given whole", tracker), ("a tracker polled from the pane", polled), ("a countdown, which needs no update and makes no sound (topo timer sounds)", timer)]
     }
 }
