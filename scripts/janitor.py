@@ -36,8 +36,8 @@ judgement:
      PR itself changes: a verdict that blocks, a green PR with Proof boxes
      unticked, a ready PR with no validate run, a run cancelled with nothing
      after it, and a PR nothing has touched for `IDLE` while no run is in
-     progress. A draft is gate one's and is never read or reported by
-     this step;
+     progress. A draft is gate one's: its runs are never read by this step,
+     and it is reported only for a ticked device box;
   6. reports each open issue that is untriaged — no `triaged` label and no
      comment — once it is older than `GRACE`, and again only when its labels
      or its updated-at change. A paged GraphQL read (at most `ISSUES_PAGES`
@@ -269,7 +269,10 @@ def pr_fingerprint(pr, run, jobs, conds):
     alone and is left out, so a PR already reported is not said again for
     having sat."""
     run = run or {}
-    return fingerprint(pr["headRefOid"], unchecked_boxes(pr.get("body")),
+    # A device box ticked since is said again; a PR with none keeps the
+    # fingerprint it had before the tick was part of it.
+    ticked = ("ticked",) if ticked_device(pr.get("body")) else ()
+    return fingerprint(*ticked, pr["headRefOid"], unchecked_boxes(pr.get("body")),
                        sorted(l["name"] for l in pr.get("labels") or []), pr.get("baseRefName"),
                        pr.get("reviewDecision") or "", run.get("status"), run.get("conclusion"),
                        sorted((j["name"], j.get("conclusion") or "") for j in jobs),
@@ -302,18 +305,25 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
     # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
-    # waits for ready, and nothing about its runs is the janitor's to say.
+    # waits for ready, and nothing about its runs is the janitor's to say. One
+    # with a ticked device box went back to draft after Sam tested it.
     if pr["isDraft"]:
+        if ticked_device(pr.get("body")):
+            report("draft", f"{title} is a draft at {short}, so nothing merges it.")
+            if pr.get("mergeStateStatus") == "DIRTY":
+                report("dirty", f"{title}: conflicts with main at {short}, so no workflow runs on it.")
         return out
 
     # A conflict with main stops every workflow on the PR, so nothing moves
     # until somebody merges main in; with no session of its engineer standing,
     # nobody will.
     # A ticked device box is Sam's test of this head: its conflict is said whoever stands.
-    if pr.get("mergeStateStatus") == "DIRTY" and (ticked_device(pr.get("body"))
-                                                   or (sessions is not None and not owners(pr["headRefName"]) & sessions)):
+    abandoned = sessions is not None and not owners(pr["headRefName"]) & sessions
+    if pr.get("mergeStateStatus") == "DIRTY" and abandoned:
         report("dirty", f"{title}: conflicts with main at {short}, so no workflow runs on it, and no session "
                         f"{' or '.join(sorted(owners(pr['headRefName'])))} stands to merge main in.")
+    elif pr.get("mergeStateStatus") == "DIRTY" and ticked_device(pr.get("body")):
+        report("dirty", f"{title}: conflicts with main at {short}, so no workflow runs on it.")
 
     if run is None:
         if age > GRACE:
@@ -592,6 +602,15 @@ def box_text(m):
 def ticked_device(body):
     """Whether a description carries a ticked device box: Sam's test, of a head that may not last."""
     return any(m.group(2) == "x" for m in DEVICE_BOX.finditer(body or ""))
+
+
+LEAD = "first, Sam's device test is ticked and it is not merging: "
+
+
+def leads(pr, conds):
+    """Whether a PR's report lines lead the report: a ticked device box, and
+    something holding the PR other than more boxes still to tick. Pure."""
+    return ticked_device(pr.get("body")) and bool(set(conds) - {"boxes"})
 
 
 def device_boxes(body):
@@ -1293,17 +1312,25 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
     state["pending"] = []
     if lines:
         queue.append({"id": str(uuid.uuid4()), "at": now.strftime("%Y-%m-%dT%H:%MZ"), "lines": lines})
-    dropped = 0
+    # Past PENDING_MAX the oldest lines go, never a leading one (`LEAD`): those
+    # of a message dropped whole are carried into the notice of the drop.
+    dropped, kept = 0, []
     while queue and sum(len(m["lines"]) for m in queue) > PENDING_MAX and len(queue) > 1:
-        dropped += len(queue.pop(0)["lines"])
+        gone = queue.pop(0)["lines"]
+        kept += [l for l in gone if l.startswith(LEAD)]
+        dropped += sum(not l.startswith(LEAD) for l in gone)
     if queue and len(queue[-1]["lines"]) > PENDING_MAX:
-        dropped += len(queue[-1]["lines"]) - PENDING_MAX
-        queue[-1]["lines"] = queue[-1]["lines"][-PENDING_MAX:]
-    if dropped:
+        last = queue[-1]["lines"]
+        first = [l for l in last if l.startswith(LEAD)]
+        rest = [l for l in last if not l.startswith(LEAD)]
+        room = max(PENDING_MAX - len(first), 0)
+        dropped += len(rest) - room
+        queue[-1]["lines"] = first + (rest[-room:] if room else [])
+    if dropped or kept:
         # Said in a message of its own: a message already sent once is never
         # re-sent with different text under its id.
-        queue.append({"id": str(uuid.uuid4()), "at": now.strftime("%Y-%m-%dT%H:%MZ"),
-                      "lines": [f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped."]})
+        note = [f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped."] if dropped else []
+        queue.append({"id": str(uuid.uuid4()), "at": now.strftime("%Y-%m-%dT%H:%MZ"), "lines": kept + note})
     state["undelivered"] = queue
     if not queue:
         return
@@ -1448,8 +1475,10 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     state.setdefault("publish", {})
     state.setdefault("pending", [])
     lines = state["pending"]
-    start = len(lines)   # where this pass's lines begin: a ticked PR that is not merging goes here
-    urgent = []
+    # Where the next leading line goes: after this pass's earlier leading lines
+    # and before everything else it says. They are on `lines`, so whatever
+    # saves the state from here saves them.
+    at = [len(lines)]
     reported = state.setdefault("reported", {})
     triaged = state.setdefault("triage", {})   # what triage answered of an issue, by number
     seeded = state.setdefault("seeded", {})   # the scopes, prs and issues, a pass has read whole
@@ -1458,11 +1487,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     def changed(item, fp):
         return reported.get(item, {}).get("fp") != fp
 
-    def leading(texts):
+    def lead(texts):
         """Lines that lead the report: a PR Sam has tested on a device that is not merging."""
-        return [f"first, Sam's device test is ticked and it is not merging: {t}" for t in texts]
+        lines[at[0]:at[0]] = [LEAD + t for t in texts]
+        at[0] += len(texts)
 
-    def tell(item, fp, texts, scope, lead=False):
+    def tell(item, fp, texts, scope, leading=False):
         """An item's lines, once per fingerprint. In a scope no pass has read
         whole the fingerprint is recorded and the lines are not said: the
         digest names the item instead."""
@@ -1471,7 +1501,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             return
         reported[item] = {"fp": fp, "at": now.isoformat()}
         if seeded.get(scope):
-            (urgent if lead else lines).extend(leading(texts) if lead else texts)
+            lead(texts) if leading else lines.extend(texts)
             said.add(item)
         else:
             first.add(item)
@@ -1528,7 +1558,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 except RuntimeError as ex:
                     text = f"#{n}: merge refused: {ex}"
                     if ticked_device(pr.get("body")) and due(state, f"{n}:merge-refused:{head}", now):
-                        urgent.extend(leading([text]))
+                        lead([text])
                         state["fired"][f"{n}:merge-refused:{head}"] = now.isoformat()
                     else:
                         say(f"{n}:merge-refused:{head}", text)
@@ -1547,16 +1577,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             standing[item] = ", ".join(conds)
             fp = pr_fingerprint(pr, run, jobs or [], conds)
             texts = [w["text"] for w in reports]
-            # Anything but other boxes still to tick is a PR not merging over Sam's test.
-            tell(item, fp, texts, "prs", lead=ticked_device(pr.get("body")) and set(conds) - {"boxes"})
-    # A draft with a ticked device box went back to draft after Sam tested it.
-    for pr in prs:
-        n, head = pr["number"], pr["headRefOid"]
-        key = f"{n}:ticked-draft:{head}"
-        if pr["isDraft"] and ticked_device(pr.get("body")) and key not in state["fired"]:
-            urgent.extend(leading([f"#{n} ({pr['headRefName']}) is a draft at {head[:7]}, so nothing merges it."]))
-            state["fired"][key] = now.isoformat()
-    lines[start:start] = urgent
+            tell(item, fp, texts, "prs", leading=leads(pr, conds))
     if prs_whole:
         seeded["prs"] = True
 

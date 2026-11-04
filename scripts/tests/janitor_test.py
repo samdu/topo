@@ -589,8 +589,62 @@ class TickedFirst(unittest.TestCase):
 
     def test_a_ticked_pr_that_conflicts_is_reported_even_with_its_session_standing(self):
         dirty = pr(mergeStateStatus="DIRTY", body=self.TICKED)
-        self.assertIn("report:dirty", kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions={"topo-x"})))
-        self.assertIn("report:dirty", kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions=None)))
+        for sessions in ({"topo-x"}, None):
+            w = [x for x in janitor.decide_pr(dirty, None, [], {}, NOW, sessions=sessions) if x["key"].startswith("7:dirty:")]
+            self.assertEqual(len(w), 1, sessions)
+            self.assertNotIn("no session", w[0]["text"], "a standing or unread session is not said to be gone")
+        w = [x for x in janitor.decide_pr(dirty, None, [], {}, NOW, sessions=set()) if x["key"].startswith("7:dirty:")]
+        self.assertIn("no session topo-x or x stands", w[0]["text"])
+
+    def test_every_hold_but_more_boxes_leads_and_only_with_a_ticked_box(self):
+        ticked, unticked = pr(body=self.TICKED), pr(body="- [x] suite\n- [ ] device: the phone")
+        for cond in ("verdict", "cap", "red", "cancelled", "norun", "idle", "dirty", "draft", "label"):
+            self.assertTrue(janitor.leads(ticked, [cond]), cond)
+            self.assertTrue(janitor.leads(ticked, ["boxes", cond]), cond)
+            self.assertFalse(janitor.leads(unticked, [cond]), cond)
+        self.assertFalse(janitor.leads(ticked, ["boxes"]))
+        self.assertFalse(janitor.leads(ticked, []))
+
+    def test_a_device_box_ticked_since_moves_the_fingerprint_at_the_same_count(self):
+        before = pr(body="- [x] suite\n- [ ] device: phone")
+        after = pr(body="- [ ] suite\n- [x] device: phone")
+        self.assertNotEqual(janitor.pr_fingerprint(before, None, [], ["verdict"]),
+                            janitor.pr_fingerprint(after, None, [], ["verdict"]))
+
+    def test_an_untouched_pr_keeps_the_fingerprint_it_had(self):
+        p_ = pr(body="- [ ] suite")
+        self.assertEqual(janitor.pr_fingerprint(p_, None, [], ["verdict"]),
+                         janitor.fingerprint(HEAD, 1, [], "main", "", None, None, [], ["verdict"]))
+
+    def test_a_ticked_draft_is_reported_and_its_conflict_with_it(self):
+        self.assertEqual(kinds(janitor.decide_pr(pr(isDraft=True, body=self.TICKED), None, [], {}, NOW)), ["report:draft"])
+        dirty = pr(isDraft=True, mergeStateStatus="DIRTY", body=self.TICKED)
+        self.assertEqual(kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions={"topo-x"})), ["report:draft", "report:dirty"])
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True, mergeStateStatus="DIRTY"), None, [], {}, NOW, sessions=set()), [])
+
+    def test_leading_lines_survive_the_delivery_cap(self):
+        lead = [janitor.LEAD + "#7 is a draft"]
+        state = {"pending": lead + [f"line {i}" for i in range(janitor.PENDING_MAX + 50)]}
+        janitor.deliver(None, state, NOW, dry=True, log=lambda t: None)
+        self.assertEqual(state["undelivered"], [])
+        state = {"pending": lead + [f"line {i}" for i in range(janitor.PENDING_MAX + 50)]}
+        sent = []
+        janitor.deliver(None, state, NOW, dry=True, log=sent.append)
+        text = "\n".join(sent)
+        self.assertIn("#7 is a draft", text)
+        self.assertIn(f"line {janitor.PENDING_MAX + 49}", text)
+        self.assertNotIn("- line 0\n", text)
+        self.assertIn("older lines not delivered in time were dropped", text)
+
+    def test_a_dropped_message_carries_its_leading_lines_on(self):
+        old = {"id": "a", "at": "x", "lines": [janitor.LEAD + "#7 is a draft"] + [f"old {i}" for i in range(10)]}
+        state = {"undelivered": [old], "pending": [f"new {i}" for i in range(janitor.PENDING_MAX)]}
+        sent = []
+        janitor.deliver(None, state, NOW, dry=True, log=sent.append)
+        text = "\n".join(sent)
+        self.assertIn("#7 is a draft", text)
+        self.assertNotIn("old 3", text)
+        self.assertIn("10 older lines", text)
 
     def test_a_ticked_device_box_is_told_apart_from_an_unticked_one(self):
         self.assertTrue(janitor.ticked_device(self.TICKED))
@@ -2551,6 +2605,38 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         self.assertEqual(sum("is a draft at" in l for l in self.report_lines()), 1)
         self.assertTrue(self.report_lines()[0].startswith("- first,"))
+        s = self.scripted(prs=[pr(isDraft=True, headRefOid="fff0000", body="- [x] device: the phone shows it")],
+                          runs={}, worktrees="")
+        self.run_pass(s)
+        self.assertEqual(sum("is a draft at fff0000" in l for l in self.report_lines()), 1, "a new head is said again")
+
+    def test_a_ticked_draft_that_comes_to_conflict_is_said_again(self):
+        body = "- [x] device: the phone shows it"
+        self.run_pass(self.scripted(prs=[pr(isDraft=True, body=body)], runs={}, worktrees=""))
+        n = len(Bridge.received)
+        self.run_pass(self.scripted(prs=[pr(isDraft=True, body=body, mergeStateStatus="DIRTY")], runs={}, worktrees=""))
+        self.assertTrue(any("conflicts with main" in l and l.startswith("- first,") for l in self.report_lines(n)))
+
+    def test_ticked_drafts_on_a_first_run_are_one_digest_line(self):
+        os.remove(self.state)
+        body = "- [x] device: the phone shows it"
+        drafts = [pr(number=k, isDraft=True, headRefOid=f"{k}" * 7, body=body) for k in (5, 6, 7, 8)]
+        self.run_pass(self.scripted(prs=drafts, runs={}, worktrees=""))
+        got = self.report_lines()
+        self.assertFalse(any(l.startswith("- first, Sam's") for l in got), got)
+        self.assertEqual(sum("first pass with no record" in l for l in got), 1, got)
+
+    def test_a_leading_line_is_saved_when_the_pass_stops_before_it_ends(self):
+        red = jobs(select="success", test="success", review_cap="success", codex="success", post_feedback="success",
+                   reviewer_ran="success", review_gate="failure")
+        ticked = pr(body="- [x] suite\n- [x] device: the phone shows it")
+        # The PR after it has no head: a KeyError, which nothing inside the pass expects.
+        p, _ = self.run_pass(self.scripted(prs=[ticked, {"number": 8, "isDraft": False}], runs={HEAD: [run("failure")]},
+                                           jobs=red, worktrees=""))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        got = self.report_lines()
+        self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7"), got)
+        self.assertIn("the pass stopped early: KeyError", "\n".join(got))
 
 
 if __name__ == "__main__":
