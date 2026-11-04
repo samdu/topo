@@ -28,6 +28,17 @@ struct Share: Codable, Equatable, Sendable {
     /// The name of the image or file kept beside the record.
     var file: String?
     var bytes: Int?
+    /// Where it came in: another app's share sheet, or the composer's own `+` on this phone (a
+    /// file picked, a photo chosen). Absent on a record the extension wrote before there was a
+    /// second way in, and on a Shortcut's; only the composer's says so.
+    var via: Via?
+
+    enum Via: String, Codable, Sendable {
+        case sheet, composer
+    }
+
+    /// Whether the person attached it in Topo rather than handing it over from another app.
+    var attached: Bool { via == .composer }
 
     /// The longest note, in characters.
     static let noteLimit = 4000
@@ -84,6 +95,8 @@ enum ShareRefusal: Error, Equatable {
     case tooLong
     case tooMany
     case failed
+    /// The composer's file picker could not be put up (the app between two screens).
+    case noPicker
 
     var words: String {
         switch self {
@@ -94,6 +107,7 @@ enum ShareRefusal: Error, Equatable {
         case .tooLong: "That is more text than Topo takes at once."
         case .tooMany: "Topo is holding as many shares as it can. Open Topo so it can read them."
         case .failed: "Topo could not keep that."
+        case .noPicker: "Topo could not open the file picker. Try again."
         }
     }
 }
