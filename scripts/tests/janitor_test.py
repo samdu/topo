@@ -564,7 +564,8 @@ class Stuck(unittest.TestCase):
         a = janitor.pr_fingerprint(pr(), None, [], ["dirty"])
         # An engineer's session going away at the same head is a new line.
         self.assertNotEqual(a, janitor.pr_fingerprint(pr(), None, [], []))
-        self.assertNotEqual(a, janitor.pr_fingerprint(pr(), None, [], ["norun"]))
+        self.assertNotEqual(janitor.pr_fingerprint(pr(), None, [], ["dirty", "norun"]),
+                            janitor.pr_fingerprint(pr(), None, [], ["norun"]))
         self.assertEqual(a, janitor.pr_fingerprint(pr(updatedAt=ago(timedelta(minutes=1))), None, [], ["dirty"]))
         self.assertNotEqual(a, janitor.pr_fingerprint(pr(headRefOid="fff0000"), None, [], ["dirty"]))
 
