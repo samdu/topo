@@ -666,26 +666,30 @@ is "in its turn: the later run of the script as it was went last" "$(tr '\n' ' '
 # One allowance for every wait: what a suite took of it is not there for a checkout.
 scratch budget Packages/TopoLink/Package.swift
 mkdir -p "$TOPO_VALIDATE_CACHE/slots/1"
-lockf -k "$TOPO_VALIDATE_CACHE/suite-others.lock" sleep 6 &
+lockf -k "$TOPO_VALIDATE_CACHE/suite-others.lock" sh -c "echo \$\$ > '$work/budget/suite-held'; exec sleep 600" &
 slot_holder=$!
+for _ in $(seq 100); do [ -s "$work/budget/suite-held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
 lockf -k "$TOPO_VALIDATE_CACHE/slots/1/lock" sh -c "echo \$\$ > '$work/budget/held'; exec sleep 60" &
 holder=$!
 for _ in $(seq 100); do [ -s "$work/budget/held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
 # The wait is counted in looks, LOCK_POLL apart, so the looks are what is counted here, by a
 # `sleep` that notes each one: a busy Mac stretches the wall clock, not the count. Ten seconds
 # at three a look is four looks in all; an allowance each would be four more after the suite.
+# The suite's name is let go at the second look, by the same count, so the wait for it comes
+# before the wait for the checkout however long the run takes to begin.
 mkdir -p "$work/budget/bin"
 printf '#!/bin/sh
 echo "$1" >> "%s"
+[ "$(grep -cx 3 "%s")" != 2 ] || kill "$(cat "%s")" 2>/dev/null
 exec /bin/sleep "$1"
-' "$work/budget/looks" > "$work/budget/bin/sleep"
+' "$work/budget/looks" "$work/budget/looks" "$work/budget/suite-held" > "$work/budget/bin/sleep"
 chmod +x "$work/budget/bin/sleep"
 : > "$work/budget/looks"
 PATH="$work/budget/bin:$PATH" LOCK_POLL=3 LOCK_WAIT=10 TOPO_VALIDATE_SLOTS=1 validate
 is "one allowance: exits 2" "$status" 2
 case "$out" in *"Waiting for a suite"*"Waiting for a checkout"*"gave up after waiting"*) ok "one allowance: it waited for a suite, then a checkout, then gave up" ;; *) fail "one allowance: $out" ;; esac
 is "one allowance: four looks in all, for the suite and the checkout together" "$(grep -cx 3 "$work/budget/looks")" 4
-kill "$(cat "$work/budget/held")" "$holder" "$slot_holder" 2>/dev/null; wait "$holder" "$slot_holder" 2>/dev/null
+kill "$(cat "$work/budget/held")" "$(cat "$work/budget/suite-held")" "$holder" "$slot_holder" 2>/dev/null; wait "$holder" "$slot_holder" 2>/dev/null
 # A commit whose logs a run is still writing keeps them, however many commits have run since.
 for n in 1 2 3 4 5 6 7 8 9 a b c; do
   mkdir -p "$TOPO_VALIDATE_LOGS/${n}0000000/20200101T000000Z-1"
