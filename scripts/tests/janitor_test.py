@@ -583,6 +583,21 @@ class Stuck(unittest.TestCase):
         self.assertEqual(janitor.decide_slots(prs, {"x": 1}), [])
 
 
+class TickedFirst(unittest.TestCase):
+    """Sam tests a PR once: a ticked device box over a PR that is not merging leads the report."""
+    TICKED = "- [x] suite\n- [x] device: the phone shows it"
+
+    def test_a_ticked_pr_that_conflicts_is_reported_even_with_its_session_standing(self):
+        dirty = pr(mergeStateStatus="DIRTY", body=self.TICKED)
+        self.assertIn("report:dirty", kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions={"topo-x"})))
+        self.assertIn("report:dirty", kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions=None)))
+
+    def test_a_ticked_device_box_is_told_apart_from_an_unticked_one(self):
+        self.assertTrue(janitor.ticked_device(self.TICKED))
+        self.assertFalse(janitor.ticked_device("- [x] suite\n- [ ] device: the phone"))
+        self.assertFalse(janitor.ticked_device("- [x] devices: not a box"))
+
+
 class DeviceBoxes(unittest.TestCase):
     """Step 8's counting: which results verify which box, and how many respondents they are."""
 
@@ -2496,6 +2511,46 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         self.assertIn("#7: merge refused", self.texts())
         self.assertIn("cannot be cleanly created", self.texts())
+
+
+    # Ticked device boxes over PRs that are not merging (class TickedFirst's) through a whole pass.
+    def report_lines(self, since=0):
+        return [l for r in Bridge.received[since:] for l in r["body"]["text"].split("\n")[1:]]
+
+    def test_a_ticked_pr_held_by_a_blocking_verdict_leads_the_report(self):
+        red = jobs(select="success", test="success", review_cap="success", codex="success", post_feedback="success",
+                   reviewer_ran="success", review_gate="failure")
+        other = pr(number=6, headRefOid="0ther00", updatedAt=ago(timedelta(hours=2)))
+        ticked = pr(body="- [x] suite\n- [x] device: the phone shows it")
+        s = self.scripted(prs=[other, ticked], runs={"0ther00": [run("failure", number=6)], HEAD: [run("failure")]},
+                          jobs=red, worktrees="")
+        p, _ = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        got = self.report_lines()
+        self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7"), got)
+        self.assertTrue(any(l.startswith("- #6") for l in got[1:]), got)
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertFalse(any("#7" in l for l in self.report_lines(n)), "said once while it stands")
+
+    def test_a_ticked_pr_waiting_only_on_another_box_does_not_lead(self):
+        s = self.scripted(prs=[pr(body="- [x] device: the phone shows it\n- [ ] the docs say so")], worktrees="")
+        self.run_pass(s)
+        self.assertFalse(any("first," in l for l in self.report_lines()))
+
+    def test_a_ticked_pr_whose_merge_is_refused_leads_with_the_refusal(self):
+        s = self.scripted(prs=[pr(body="- [x] suite\n- [x] device: the phone shows it")], worktrees="",
+                          merge_refused="the merge commit cannot be cleanly created")
+        self.run_pass(s)
+        got = self.report_lines()
+        self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7: merge refused"), got)
+
+    def test_a_ticked_draft_leads_once_per_head(self):
+        s = self.scripted(prs=[pr(isDraft=True, body="- [x] device: the phone shows it")], runs={}, worktrees="")
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(sum("is a draft at" in l for l in self.report_lines()), 1)
+        self.assertTrue(self.report_lines()[0].startswith("- first,"))
 
 
 if __name__ == "__main__":

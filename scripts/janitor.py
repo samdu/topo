@@ -309,7 +309,9 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
     # A conflict with main stops every workflow on the PR, so nothing moves
     # until somebody merges main in; with no session of its engineer standing,
     # nobody will.
-    if pr.get("mergeStateStatus") == "DIRTY" and sessions is not None and not owners(pr["headRefName"]) & sessions:
+    # A ticked device box is Sam's test of this head: its conflict is said whoever stands.
+    if pr.get("mergeStateStatus") == "DIRTY" and (ticked_device(pr.get("body"))
+                                                   or (sessions is not None and not owners(pr["headRefName"]) & sessions)):
         report("dirty", f"{title}: conflicts with main at {short}, so no workflow runs on it, and no session "
                         f"{' or '.join(sorted(owners(pr['headRefName'])))} stands to merge main in.")
 
@@ -585,6 +587,11 @@ def box_text(m):
     """A device box's text: everything after its colon to the line's end,
     spacing included, which is what a check's `box:` line is compared with."""
     return m.group(5).rstrip("\r")
+
+
+def ticked_device(body):
+    """Whether a description carries a ticked device box: Sam's test, of a head that may not last."""
+    return any(m.group(2) == "x" for m in DEVICE_BOX.finditer(body or ""))
 
 
 def device_boxes(body):
@@ -1441,6 +1448,8 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     state.setdefault("publish", {})
     state.setdefault("pending", [])
     lines = state["pending"]
+    start = len(lines)   # where this pass's lines begin: a ticked PR that is not merging goes here
+    urgent = []
     reported = state.setdefault("reported", {})
     triaged = state.setdefault("triage", {})   # what triage answered of an issue, by number
     seeded = state.setdefault("seeded", {})   # the scopes, prs and issues, a pass has read whole
@@ -1449,7 +1458,11 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     def changed(item, fp):
         return reported.get(item, {}).get("fp") != fp
 
-    def tell(item, fp, texts, scope):
+    def leading(texts):
+        """Lines that lead the report: a PR Sam has tested on a device that is not merging."""
+        return [f"first, Sam's device test is ticked and it is not merging: {t}" for t in texts]
+
+    def tell(item, fp, texts, scope, lead=False):
         """An item's lines, once per fingerprint. In a scope no pass has read
         whole the fingerprint is recorded and the lines are not said: the
         digest names the item instead."""
@@ -1458,7 +1471,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             return
         reported[item] = {"fp": fp, "at": now.isoformat()}
         if seeded.get(scope):
-            lines.extend(texts)
+            (urgent if lead else lines).extend(leading(texts) if lead else texts)
             said.add(item)
         else:
             first.add(item)
@@ -1513,7 +1526,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     lines.append(w["text"])
                     persist()
                 except RuntimeError as ex:
-                    say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
+                    text = f"#{n}: merge refused: {ex}"
+                    if ticked_device(pr.get("body")) and due(state, f"{n}:merge-refused:{head}", now):
+                        urgent.extend(leading([text]))
+                        state["fired"][f"{n}:merge-refused:{head}"] = now.isoformat()
+                    else:
+                        say(f"{n}:merge-refused:{head}", text)
             elif w["kind"] == "rerun":
                 try:
                     sh.rerun(w["job_id"])
@@ -1529,7 +1547,16 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             standing[item] = ", ".join(conds)
             fp = pr_fingerprint(pr, run, jobs or [], conds)
             texts = [w["text"] for w in reports]
-            tell(item, fp, texts, "prs")
+            # Anything but other boxes still to tick is a PR not merging over Sam's test.
+            tell(item, fp, texts, "prs", lead=ticked_device(pr.get("body")) and set(conds) - {"boxes"})
+    # A draft with a ticked device box went back to draft after Sam tested it.
+    for pr in prs:
+        n, head = pr["number"], pr["headRefOid"]
+        key = f"{n}:ticked-draft:{head}"
+        if pr["isDraft"] and ticked_device(pr.get("body")) and key not in state["fired"]:
+            urgent.extend(leading([f"#{n} ({pr['headRefName']}) is a draft at {head[:7]}, so nothing merges it."]))
+            state["fired"][key] = now.isoformat()
+    lines[start:start] = urgent
     if prs_whole:
         seeded["prs"] = True
 
