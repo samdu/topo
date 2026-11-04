@@ -111,6 +111,18 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(body="- [x] suite\n- [ ] device: the phone"), run(), [], {}, NOW)
         self.assertEqual(kinds(w), ["report:boxes"])
 
+    def test_a_pr_that_changes_its_own_validation_is_reported_and_never_merged(self):
+        for path in (".github/workflows/pr-validate.yaml", ".github/workflows/new.yaml",
+                     "scripts/review-prompt.sh", "scripts/ci-select-suites.sh"):
+            w = janitor.decide_pr(pr(), run(), [], {}, NOW, files=["Apps/x.swift", path])
+            self.assertEqual(kinds(w), ["report:own"], path)
+        w = janitor.decide_pr(pr(), run(), [], {}, NOW, files=["scripts/janitor.py", "docs/x.md"])
+        self.assertEqual(kinds(w), ["merge"])
+
+    def test_files_that_could_not_be_read_merge_nothing(self):
+        w = janitor.decide_pr(pr(), run(), [], {}, NOW, files=None)
+        self.assertEqual(kinds(w), ["report:files"])
+
     def test_a_pr_not_on_main_is_not_merged(self):
         self.assertEqual(janitor.decide_pr(pr(baseRefName="release"), run(), [], {}, NOW), [])
 

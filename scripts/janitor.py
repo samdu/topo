@@ -304,14 +304,21 @@ def pick_run(runs, number):
     return max(pool, key=lambda r: (r["created_at"], r["id"])) if pool else None
 
 
-def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
+# What PR validate runs from the PR's own copy: its workflow, and the scripts
+# its review jobs run from the checkout. A PR that changes one wrote its own
+# validation, so its green run proves nothing and automerge.yaml skips it.
+OWN_VALIDATION = re.compile(r"^(\.github/|scripts/review-|scripts/ci-select-)")
+
+
+def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, files=()):
     """What one open PR wants from this pass.
 
     Returns a list of dicts: {"kind": merge|rerun|report, "key": ..., "text": ...}.
     `run` is the newest pull_request validate run for the PR's head, or None;
     `jobs` its jobs as [{name, conclusion, id, steps}]. `sessions` is the set of
     tmux session names standing on this Mac, or None when they could not be
-    read. Pure: nothing is read or done.
+    read. `files` are the paths the PR changes at its head, or None when they
+    could not be read whole. Pure: nothing is read or done.
     """
     n, head = pr["number"], pr["headRefOid"]
     short = head[:7]
@@ -370,6 +377,16 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
         if require_label and "automerge" not in labels:
             return out
         if pr.get("baseRefName") != "main":
+            return out
+        if files is None:
+            if since > GRACE:
+                report("files", f"{title}: validate green, but the files it changes could not be read whole; not merged.")
+            return out
+        own = sorted(f for f in files if OWN_VALIDATION.match(f))
+        if own:
+            if since > GRACE:
+                report("own", f"{title}: validate green, but it changes {', '.join(own[:3])}{' …' if len(own) > 3 else ''}, "
+                              f"so its own copy validated it; the coordinator merges it after reading the review.")
             return out
         if since > GRACE:
             out.append({"kind": "merge", "key": f"{n}:merge:{head}", "head": head, "number": n,
@@ -1164,6 +1181,16 @@ class Shell:
         return self.whole(f"repos/{REPO}/actions/runners", "runners",
                           f'select(any(.labels[]; .name == "{POOL_LABEL}")) | {{status, busy}}')
 
+    def changed_files(self, head):
+        """The paths a PR changes at this head against main, renames' old paths
+        included. The compare lists at most 300 files, so a list that long is
+        refused rather than read as whole."""
+        files = self.gh_api(f"repos/{REPO}/compare/main...{head}",
+                            "[.files[] | .filename, (.previous_filename // empty)]") or []
+        if len(files) >= 300:
+            raise RuntimeError(f"the compare of main...{head} answered {len(files)} paths; the list may not be whole")
+        return files
+
     def merge(self, number, head):
         self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",
                   "--match-head-commit", head], mutating=True)
@@ -1630,7 +1657,13 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             if not pr["isDraft"]:
                 run = sh.newest_run(head, n)
                 jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
-            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions)
+            files = ()
+            if run and run["status"] == "completed" and run.get("conclusion") == "success":
+                try:
+                    files = sh.changed_files(head)
+                except RuntimeError:
+                    files = None
+            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions, files)
         except RuntimeError as ex:
             say(f"{n}:read:{head}", f"#{n}: could not read its runs: {ex}")
             if "rate limit" in str(ex).lower():

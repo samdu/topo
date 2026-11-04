@@ -9,14 +9,20 @@
 # rule is one `gh variable set AUTOMERGE_REQUIRE_LABEL --body true` away.
 #
 # One entry point, workflow_run on PR validate completing: GitHub runs the
-# default branch's copy of this file for it, so no PR can edit what merges
-# it. Opening, reopening, a push and marking a PR ready all start PR
+# default branch's copy of this file for it, so no PR can edit this job.
+# Opening, reopening, a push and marking a PR ready all start PR
 # validate, so its completion is when every condition can first hold. Each
 # is read then, the label included: one added after a green run merges
 # nothing until a push, or a re-run of this workflow's run for that head
 # (`gh run rerun <id>`). A Proof box ticked after a green run is the same,
 # and the janitor merges it on a later pass (docs/janitor.md, step 1). The
 # script is idempotent and no-ops unless every condition holds.
+#
+# PR validate runs the PR's own copy of its workflow, and its review jobs run
+# `scripts/review-*` and `scripts/ci-select-*` from the PR's checkout. A PR
+# that changes any of those, or anything under `.github/`, wrote its own
+# validation, so its green run is no evidence of tests or review: it is
+# skipped, and the coordinator merges it after reading the review.
 name: Auto-merge
 
 on:
@@ -75,6 +81,20 @@ jobs:
             fi
             if [ "$REQUIRE_LABEL" = "true" ] && [ "$labelled" != "true" ]; then
               echo "skip: AUTOMERGE_REQUIRE_LABEL is true and the PR has no automerge label"
+              echo "::endgroup::"; continue
+            fi
+
+            # The files the PR changes at this head, renames' old paths
+            # included. The compare lists at most 300 files, so a list that
+            # long, or one that cannot be read, is refused as unwhole.
+            if ! files="$(gh api "repos/$GH_REPO/compare/$base...$sha" \
+                    --jq '[.files[] | .filename, (.previous_filename // empty)]')" \
+               || [ "$(jq length <<<"$files")" -ge 300 ]; then
+              echo "skip: could not read every file the PR changes"
+              echo "::endgroup::"; continue
+            fi
+            if jq -e 'any(.[]; test("^(\\.github/|scripts/review-|scripts/ci-select-)"))' <<<"$files" >/dev/null; then
+              echo "skip: the PR changes .github/, scripts/review-* or scripts/ci-select-*, so its own copy validated it; the coordinator merges"
               echo "::endgroup::"; continue
             fi
 
