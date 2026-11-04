@@ -31,8 +31,9 @@ EOF
 # `simctl launch` prints what FAKE_LAUNCH names. The run id the script handed the app arrives as
 # SIMCTL_CHILD_TOPO_DEBUG_RUN, as it would reach the app itself. `exec sleep` is a launcher that,
 # like the real `--console-pty` one, never exits on its own. The bare `reply:` lines name no turn
-# and no run, so none of them may count as this run's answer. `launched` is the real launcher's
-# two behaviours: attached to the console it never exits, detached it returns once the app is up.
+# and no run, so none of them may count as this run's answer. `launched` is a launch with nothing
+# to wait for: detached it returns once the app is up, as the real one does; attached it fails at
+# once, since a real attached launcher would never return and the case would only be slower.
 cat >"$work/bin/xcrun" <<'EOF'
 #!/bin/bash
 [ "$1" = simctl ] || exit 1
@@ -70,7 +71,7 @@ case "$2" in
                           say "done"; exec sleep 600 ;;
       answered-old-format) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                            say "reply to phone/2 in run $run: hi"; say "done"; exec sleep 600 ;;
-      launched) case " $* " in *" --console-pty "*) exec sleep 30 ;; esac; exit 0 ;;
+      launched) case " $* " in *" --console-pty "*) echo "attached with nothing to wait for" >&2; exit 3 ;; esac; exit 0 ;;
       userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"
                         say "userland: claude code 2.1.278 fetched"; say "userland: booted"
                         say "userland: claude code 2.1.278 verified in 310 ms, mounted at /usr/local/bin/claude"

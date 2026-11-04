@@ -75,6 +75,7 @@
 		1D5A416568CC257DD6F51F1D /* HomeFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1331DD9A0C14E9AC8FDD78E /* HomeFile.swift */; };
 		1D73AAE6A762D9EB73E58C16 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		1E22AA5C9ED66B7FDDC7ECD9 /* licence-libarchive-xxhash.txt in Resources */ = {isa = PBXBuildFile; fileRef = 2C2027C9D3BD0D942AAE112C /* licence-libarchive-xxhash.txt */; };
+		1E455CAA4D14E15CD3181397 /* LoginLife.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72BB5D4CA1E963FD89A06953 /* LoginLife.swift */; };
 		1E6472BE7B0F51AC2B8B0D30 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		1E726715C9BE92C093BC2932 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
 		1F586CD39C25E23405D16ABA /* ActivityDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833FF800AF0B74BA2F57AC39 /* ActivityDocument.swift */; };
@@ -189,8 +190,10 @@
 		47A5DAA62699857838E4805C /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		47DA88C7114B9CA160E0D861 /* TurnImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8ABE048D225EE488FD18262 /* TurnImage.swift */; };
+		47EA9F00B16E3C13549E8466 /* LoginLife.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72BB5D4CA1E963FD89A06953 /* LoginLife.swift */; };
 		48A2E0A2B182818EAA56AD0F /* TopoWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 13ECC73FF9E6B054343D56C5 /* TopoWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		49678793151C98590A604A5B /* ActivityFakes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 036F2F6BC0F954DF2E0DB34D /* ActivityFakes.swift */; };
+		4A8670318766F2F320D2D086 /* LoginLifeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3012F68FA61C9EAA2605F38B /* LoginLifeTests.swift */; };
 		4D582BD93ED4F695D6DDE4A6 /* tracker-compact-trailing-light.png in Resources */ = {isa = PBXBuildFile; fileRef = C5233061FAB60F8DE0A06074 /* tracker-compact-trailing-light.png */; };
 		4D88E9331DE522CEEE98AB60 /* ProgressTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC96E006D9910233D695C0AB /* ProgressTrackerTests.swift */; };
 		4D8CA320675F3FC531E9132D /* Speakable.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF519B4570159A5CED371583 /* Speakable.swift */; };
@@ -253,6 +256,7 @@
 		669AB84BADAA72DF1DFA4564 /* ActivityKeeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B6B8A430213F1BC18FBD60 /* ActivityKeeperTests.swift */; };
 		6740826216EF8BDEAE176765 /* UserlandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4449A2BC546425D8D0480134 /* UserlandTests.swift */; };
 		676833E808D146C613D6C760 /* TimerTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED32033508A735AE5BA3E703 /* TimerTool.swift */; };
+		676A718B897B3DC0B05DF760 /* SigningOut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B8C93F154A9636985BC8036 /* SigningOut.swift */; };
 		67E38AABE488CED2DE145C40 /* ScreenWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996EA9E8F3A45CAAB86EE482 /* ScreenWatch.swift */; };
 		68EFF6B437CBB2B98EF9D3D7 /* systemSmall.json in Resources */ = {isa = PBXBuildFile; fileRef = C404AE7F18179442D89B4B50 /* systemSmall.json */; };
 		690E3C8230E79A06E5491FBC /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
@@ -289,6 +293,7 @@
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		777229898D028852579EC681 /* ActivityDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833FF800AF0B74BA2F57AC39 /* ActivityDocument.swift */; };
 		77877FC67766FC00F446FC85 /* licence-mit-nom.txt in Resources */ = {isa = PBXBuildFile; fileRef = 858B4313326A782140396AD3 /* licence-mit-nom.txt */; };
+		7795BF9860D868E43D85AE80 /* LoginLife.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72BB5D4CA1E963FD89A06953 /* LoginLife.swift */; };
 		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */; };
 		781FAAB36CCF9ED9BF2F1102 /* AccountAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9801627AE0B35D7A607D7634 /* AccountAlert.swift */; };
@@ -807,6 +812,7 @@
 		2E3F7EEC977B79E8BB72BBDC /* ComposerStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerStateTests.swift; sourceTree = "<group>"; };
 		2EE74C052C6AF9D170C3FDE3 /* TopoWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TopoWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */ = {isa = PBXFileReference; path = "THIRD-PARTY"; sourceTree = "<group>"; };
+		3012F68FA61C9EAA2605F38B /* LoginLifeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginLifeTests.swift; sourceTree = "<group>"; };
 		30ABD97C57CAB917AF17C994 /* tracker-lock-stale-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "tracker-lock-stale-light.png"; sourceTree = "<group>"; };
 		3103735350B8C5C4A6CE6F11 /* StreamJSONTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamJSONTests.swift; sourceTree = "<group>"; };
 		327323DA10D8649D7ED7A137 /* ComposerRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerRenderTests.swift; sourceTree = "<group>"; };
@@ -900,6 +906,7 @@
 		6CC10F86563FE12BC674EFBB /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		6D42B9802439D5A1AD7033D4 /* OnePasswordConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePasswordConnectionTests.swift; sourceTree = "<group>"; };
 		6F8897A76C6A1B74A1251915 /* ContextToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextToolTests.swift; sourceTree = "<group>"; };
+		72BB5D4CA1E963FD89A06953 /* LoginLife.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginLife.swift; sourceTree = "<group>"; };
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		738BC8AD7B6AE57B9135A057 /* TopoWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TopoWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettledSpeechTests.swift; sourceTree = "<group>"; };
@@ -964,6 +971,7 @@
 		99BDC10D89B3058B7BEDD787 /* ShareInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareInbox.swift; sourceTree = "<group>"; };
 		9A03F8DA19F37B857BA8F079 /* Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harness.swift; sourceTree = "<group>"; };
 		9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDocument.swift; sourceTree = "<group>"; };
+		9B8C93F154A9636985BC8036 /* SigningOut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SigningOut.swift; sourceTree = "<group>"; };
 		9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlActionTests.swift; sourceTree = "<group>"; };
 		9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSessionTests.swift; sourceTree = "<group>"; };
 		9C9A782EE9118805036640C7 /* ReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayTests.swift; sourceTree = "<group>"; };
@@ -1464,6 +1472,7 @@
 				DAA62817ACBB2D81A716AAF2 /* FirstRun.swift */,
 				402EB6E7D75092F33B78F15B /* GuestBridge.swift */,
 				9A03F8DA19F37B857BA8F079 /* Harness.swift */,
+				72BB5D4CA1E963FD89A06953 /* LoginLife.swift */,
 				4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */,
 				C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */,
 				F3F572EF397E4BF9E7FF6685 /* Mascot.swift */,
@@ -1626,6 +1635,7 @@
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
 				F38D6DA5F2D24CAB99BB2FA7 /* LaunchPortsTests.swift */,
 				834457A014E7809E1A052937 /* LicenceTests.swift */,
+				3012F68FA61C9EAA2605F38B /* LoginLifeTests.swift */,
 				01E2AA2FBC22C4A180D4E383 /* LogToolTests.swift */,
 				3B4AAF2BA51E20FAEF2AB1FA /* LookDocumentTests.swift */,
 				0364BEBF4B83A52C1E950A08 /* LookFixture.swift */,
@@ -1668,6 +1678,7 @@
 				75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */,
 				11C1C594B0D917FCB69C60EC /* SetupTests.swift */,
 				768E276CB343CAEE40B2CB79 /* ShareTests.swift */,
+				9B8C93F154A9636985BC8036 /* SigningOut.swift */,
 				1AF008F3C113182739CEB6D7 /* SignOutTests.swift */,
 				DE6988A9926AEFE077104598 /* SpeakableTests.swift */,
 				3900902B180055DC8BBE866B /* SpokenReplyTests.swift */,
@@ -2534,6 +2545,7 @@
 				20491C4B301D9C09A869B0F1 /* FirstRun.swift in Sources */,
 				D04AF66C6C9CC515FD607A73 /* GuestBridge.swift in Sources */,
 				043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */,
+				7795BF9860D868E43D85AE80 /* LoginLife.swift in Sources */,
 				2A8B0CBB3C5F5C7737F9B998 /* Look.swift in Sources */,
 				5266073D3EDF719493DE1B17 /* LookDocument.swift in Sources */,
 				98C8301B04A31D070F4CCB72 /* Markdown.swift in Sources */,
@@ -2719,6 +2731,7 @@
 				1B8DBB5A70457082D6843E1F /* FirstRun.swift in Sources */,
 				E855FBF41819F3010E5322B5 /* GuestBridge.swift in Sources */,
 				5ADB9E3D8ACFC40D15A2B63E /* Harness.swift in Sources */,
+				47EA9F00B16E3C13549E8466 /* LoginLife.swift in Sources */,
 				A8807AF0D00F928C12D256FA /* Look.swift in Sources */,
 				F179B6F2808ECFFAA6763959 /* LookDocument.swift in Sources */,
 				0A67EE7A352872D7F853A84C /* Markdown.swift in Sources */,
@@ -2818,6 +2831,7 @@
 				3DBFBA399C354755BB11316F /* LaunchPortsTests.swift in Sources */,
 				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
 				A5C08588714126ACE17E504A /* LogToolTests.swift in Sources */,
+				4A8670318766F2F320D2D086 /* LoginLifeTests.swift in Sources */,
 				2F2C24F4D930E90272D6ED1D /* LookDocumentTests.swift in Sources */,
 				D2F8B1E1223894485901C980 /* LookFixture.swift in Sources */,
 				2D6A036BCDB473F05062F65E /* LookLiveTests.swift in Sources */,
@@ -2860,6 +2874,7 @@
 				311B4AAC80BB0F1CF35C1313 /* SetupTests.swift in Sources */,
 				691690ECA1BE1528C4C384F0 /* ShareTests.swift in Sources */,
 				2DEF9C81428F08E13848D373 /* SignOutTests.swift in Sources */,
+				676A718B897B3DC0B05DF760 /* SigningOut.swift in Sources */,
 				E842D90B19FB83DA9860E903 /* SpeakableTests.swift in Sources */,
 				451D5461A5BC39C82450FAB4 /* SpokenReplyTests.swift in Sources */,
 				2FBBC319A56891113C7BB372 /* StoneRenderTests.swift in Sources */,
@@ -2976,6 +2991,7 @@
 				C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */,
 				DBF301F96AA4B4AB1BD70913 /* LocationTool.swift in Sources */,
 				46554CCDE1895C6F185EAA3F /* LogTool.swift in Sources */,
+				1E455CAA4D14E15CD3181397 /* LoginLife.swift in Sources */,
 				3823B3829FF33312ACBCE0B1 /* Look.swift in Sources */,
 				9107FEAD3FE82BD92D841883 /* LookDocument.swift in Sources */,
 				E2952F8F672806D95C01C341 /* LookTool.swift in Sources */,

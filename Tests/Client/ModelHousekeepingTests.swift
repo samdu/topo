@@ -337,11 +337,18 @@ final class ModelHousekeepingTests: XCTestCase {
 
         XCTAssertEqual(launch.launch(install: "A"), .kept, "a first launch with nothing recorded keeps the cache")
         XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "A")
-        XCTAssertEqual(launch.launch(install: "A"), .sameInstall, "a relaunch of the same install does nothing")
+        XCTAssertEqual(launch.launch(install: "A"), .sameInstall, "a relaunch of the same install keeps it too")
         XCTAssertEqual(launch.launch(install: "B"), .kept, "a new install keeps the cache")
         XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "B")
         XCTAssertTrue(exists(cache.appendingPathComponent("A/bundle.e5")), "nothing was removed")
         XCTAssertEqual(removals, 0, "no removal was asked for")
+    }
+
+    /// Every launch that keeps the cache says so, so a log read after any relaunch has the line,
+    /// and the first launch of an install says it was the first.
+    func testEveryLaunchThatKeepsTheCacheSaysSo() {
+        XCTAssertEqual(CompileCache.kept(install: "A", new: true), "compile cache: kept for install A (new install)")
+        XCTAssertEqual(CompileCache.kept(install: "A", new: false), "compile cache: kept for install A")
     }
 
     /// A clear asked for removes the cache at the next launch, new install or not, and only the

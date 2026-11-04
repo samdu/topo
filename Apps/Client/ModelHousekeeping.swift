@@ -162,16 +162,21 @@ struct CompileCache {
         case failed(String)
     }
 
+    /// What a launch that keeps the cache logs, once per process: so a log read after a relaunch
+    /// still says the cache was kept, and whether this launch was the install's first.
+    static func kept(install: String, new: Bool) -> String {
+        "compile cache: kept for install \(install)\(new ? " (new install)" : "")"
+    }
+
     /// The launch's word on the cache: removes it when a clear was asked for, and otherwise
-    /// leaves it, logging a new install once.
+    /// leaves it and says so.
     @discardableResult
     func launch(install: String) -> Outcome {
         let newInstall = defaults.string(forKey: Self.recorded) != install
         if newInstall { defaults.set(install, forKey: Self.recorded) }
         guard defaults.bool(forKey: Self.requested) else {
-            guard newInstall else { return .sameInstall }
-            log.notice("compile cache: kept for install \(install, privacy: .public)")
-            return .kept
+            log.notice("\(Self.kept(install: install, new: newInstall), privacy: .public)")
+            return newInstall ? .kept : .sameInstall
         }
         // Caches, and the app's folder in it, judged with `lstat`: a folder behind a link is
         // somewhere else's, so nothing is removed. The cache folder itself, were it a link, is
