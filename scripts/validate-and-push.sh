@@ -153,6 +153,9 @@ case "$lane_arg" in "" | full | fast) ;; *) echo "no such lane '$lane_arg': full
 case "$SLOTS" in "" | *[!0-9]* | 0) echo "TOPO_VALIDATE_SLOTS is '$SLOTS': a count of checkouts, one or more" >&2; exit 2 ;; esac
 
 die() { echo "error: $*" >&2; exit 2; }
+# The run's holder of the lock on descriptor 8, removed as the run exits: that lock is shared, so
+# only while the holder names this run.
+drop_holder() { [ -z "${cache-}" ] || ! grep -q ", pid $$, " "$cache/holder" 2>/dev/null || rm -f "$cache/holder"; }
 # When a pid began, as ps's lstart gives it in one zone and one locale whatever the caller's are,
 # so two runs from two sessions read the same words. Empty for a pid that is not running.
 began_of() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null || true; }
@@ -204,7 +207,7 @@ if [ "$hold" = no ]; then
   # in this worktree would choose here what the workflow does not.
   selectors="$(mktemp -d -t topo-validate-select)" || die "could not make a directory for the commit's selectors."
   # A run's mark on its logs stands until the run is over, its push and its statuses included.
-  trap 'rm -rf "$selectors"; [ -z "${logs-}" ] || rm -f "$logs/running"; [ -z "${ticket-}" ] || rm -f "$ticket"' EXIT
+  trap 'rm -rf "$selectors"; [ -z "${logs-}" ] || rm -f "$logs/running"; [ -z "${ticket-}" ] || rm -f "$ticket"; drop_holder' EXIT
   for selector in ci-select-suites.sh ci-select-lane.sh; do
     git show "$sha:scripts/$selector" > "$selectors/$selector" || die "$short has no scripts/$selector."
   done
@@ -712,7 +715,7 @@ run_here() {
 # one a SIGKILL of this script left running is on the slot's record for the next run to find.
 if [ "$hold" = yes ]; then
   mkdir -p "$cache/slots"
-  trap '[ -z "${ticket-}" ] || rm -f "$ticket"' EXIT
+  trap '[ -z "${ticket-}" ] || rm -f "$ticket"; drop_holder' EXIT
   trap 'exit 143' TERM INT HUP
   while [ -z "$slot" ]; do
     take_slot
@@ -848,8 +851,6 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     fi
   done
   trap - TERM INT HUP
-  # The lock on descriptor 8 is shared, so the holder is removed only while it names this run.
-  ! grep -q ", pid $$, " "$cache/holder" 2>/dev/null || rm -f "$cache/holder"
   exec 6>&- 7>&- 8>&-
   minutes=$(((SECONDS - started) / 60))
   # Every suite's result in the one file, as each call left its own.
