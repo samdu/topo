@@ -11,7 +11,7 @@ The format is the whole contract with the apps: a heading beginning `## ` opens 
 ## Daphne
 Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
 Where: samdu/daphne-assistant, `clients/ios`
-Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer, hold claims on the background), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` (the Pocket manager, its measured `.ane` placement and per-stage compute units, from `FluidPocketEngine`) and the frame-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `VoiceQueue`), with the silence keeper that holds the process open behind the lock screen and its counted owners (from `AudioIO.holdAlive` and `startKeeper`, and the cap on a wait in `TurnController.holdThroughLock`) and the rebuild of the queue on an audio engine configuration change (from `VoiceQueue.rebuild`), and the spoken exchange as an outgoing CallKit call in `Apps/Client/SpokenCall.swift` (the state machine, the activation and closing graces, the provider replaced on a reset, from `SessionCall` on the `ios-flic-standing-call` branch, PR #324), and the open microphone carried into the call in `Apps/Client/Conversation.swift` (engines rebuilt at the call's activation rather than carried across it, the call itself keeping the process alive, from `SessionCall` and `AudioIO` on the same branch).
+Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer, hold claims on the background), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` (the Pocket manager, its measured `.ane` placement and per-stage compute units, from `FluidPocketEngine`) and the frame-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `VoiceQueue`), with the silence keeper that holds the process open behind the lock screen and its counted owners (from `AudioIO.holdAlive` and `startKeeper`, and the cap on a wait in `TurnController.holdThroughLock`) and the rebuild of the queue on an audio engine configuration change (from `VoiceQueue.rebuild`), and the spoken exchange as an outgoing CallKit call in `Apps/Client/SpokenCall.swift` (the state machine, the activation and closing graces, the provider replaced on a reset, from `SessionCall` on the `ios-flic-standing-call` branch, PR #324), and the open microphone carried into the call in `Apps/Client/Conversation.swift` (engines rebuilt at the call's activation rather than carried across it, the call itself keeping the process alive, from `SessionCall` and `AudioIO` on the same branch), and the open microphone's end of turn: Smart Turn's session and Whisper's mel front end in `Apps/Client/SmartTurn.swift` (`SmartTurn` and `Mel`, from `SmartTurn.swift`, with its bundled filterbank `smartturn-mel.bin`) and the rule over its verdicts in `Apps/Client/Endpoint.swift` (`Endpoint.Judging`: the −38 dBFS quiet, the asks, the two votes over 0.85, the wait and the 4 s cap, from `ClaudeTurnController.sense` and `OpenMic.rmsDB`).
 
 ## Topo mascot engine
 Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
@@ -37,6 +37,21 @@ Use: FluidAudio's speaker clustering, compiled into the iOS app with it. Topo ca
 Licence: MIT, © Silero Team
 Where: https://huggingface.co/FluidInference/silero-vad-coreml at b419383c55c110e2c9271fa6ee0ea83d03c70d96 (`silero-vad-unified-256ms-v6.2.1.mlmodelc`), FluidInference's CoreML conversion of https://github.com/snakers4/silero-vad
 Use: The voice activity detector that hears the end of an utterance in a conversation behind the lock (`Apps/Client/Endpoint.swift`), run through FluidAudio's `VadManager`. Not in the bundle: Topo downloads it from FluidInference's repository at the pinned revision with the ear's models and keeps it in the app's Application Support.
+
+## Smart Turn v3.2
+Licence: BSD-2-Clause (text at the end of this file), © 2024–2025 Daily
+Where: https://huggingface.co/pipecat-ai/smart-turn-v3 at f766f81d3cfdf7737ac64aad813d91bbfd56bf93 (`smart-turn-v3.2-cpu.onnx`), from https://github.com/pipecat-ai/smart-turn, whose `LICENSE` at 24c720337e17befe0413bbc93b3504036c3a3bdc is the text below
+Use: Judges whether the speaker of an open microphone behind the lock has finished or only paused (`Apps/Client/SmartTurn.swift`), run through ONNX Runtime. Not in the bundle: Topo downloads it from Pipecat's repository at the pinned revision with the ear's models and keeps it in the app's Application Support.
+
+## pipecat's Whisper features
+Licence: BSD-2-Clause (text at the end of this file), © 2024–2026 Daily; its own header credits transformers' `WhisperFeatureExtractor` (huggingface/transformers, Apache-2.0), whose math it mirrors
+Where: `_whisper_features.py` of https://github.com/pipecat-ai/pipecat, as Daphne vendors it (samdu/daphne-assistant, `server/_whisper_features.py`), here unchanged at `scripts/vendor/whisper_features.py`
+Use: The source of Smart Turn's filterbank, which `scripts/smartturn-mel.py` writes from it as `Apps/Topo/Resources/smartturn-mel.bin` (80 Slaney mel filters, 64 KB, in the iOS app's bundle), and the reference `Mel` in `Apps/Client/SmartTurn.swift` is checked against (`Tests/Client/SmartTurnTests.swift`). The script itself is a build tool and does not ship.
+
+## ONNX Runtime
+Licence: MIT (text at the end of this file), © Microsoft Corporation. The static library carries pieces of others, which ONNX Runtime's `ThirdPartyNotices.txt` at v1.24.2 lists with their texts (the pod archive does not carry the file): among those linked into the iOS library are Eigen (MPL-2.0; its source is https://gitlab.com/libeigen/eigen), ONNX, Abseil, FlatBuffers and KleidiAI (Apache-2.0), Protocol Buffers, RE2 and XNNPACK (BSD-3-Clause), cpuinfo and pthreadpool (BSD-2-Clause), and Microsoft GSL, nlohmann/json, HowardHinnant/date and SafeInt (MIT). None of it is GPL
+Where: https://github.com/microsoft/onnxruntime-swift-package-manager at b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2 ("Update ORT to 1.24.2"), whose binary target is https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.24.2.zip (sha256 f7100a992d2a8135168c8afd831e6a58b465349101982aa58b3e11d36e600b54); the notices at https://github.com/microsoft/onnxruntime/blob/v1.24.2/ThirdPartyNotices.txt
+Use: Runs Smart Turn on the phone's CPU (`Apps/Client/SmartTurn.swift`). Linked into the iOS app only; the package has no watchOS or tvOS slice.
 
 ## Parakeet
 Licence: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/), © NVIDIA; converted to CoreML by FluidInference, and used here as converted
@@ -237,7 +252,7 @@ Text: Apache License
    END OF TERMS AND CONDITIONS
 
 ## Licence text: the MIT licence
-Licence: MIT, for simd-adler32, nom, ordered-float and generic-array, whose copyright lines are in the NemoTextProcessing entry, and in FluidAudio for the ports of polm/cutlet (© 2020 Paul O'Leary McCann), Greatdane/Convert-Numbers-to-Japanese (© 2018 David Wilson) and resemble-ai/chatterbox (© 2025 Resemble AI)
+Licence: MIT, for ONNX Runtime (© Microsoft Corporation), for simd-adler32, nom, ordered-float and generic-array, whose copyright lines are in the NemoTextProcessing entry, and in FluidAudio for the ports of polm/cutlet (© 2020 Paul O'Leary McCann), Greatdane/Convert-Numbers-to-Japanese (© 2018 David Wilson) and resemble-ai/chatterbox (© 2025 Resemble AI)
 Text: Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
 "Software"), to deal in the Software without restriction, including
@@ -481,3 +496,30 @@ toolkit's deterministic CoreMLSineGenV2 semantics.
 Retain this notice and mattmireles-LICENSE when distributing adapted
 artifacts. Underlying Kokoro weights: hexgrad/Kokoro-82M and
 hexgrad/Kokoro-82M-v1.1-zh, Apache License 2.0.
+
+## Licence text: BSD-2-Clause, Daily
+Licence: BSD-2-Clause, for Smart Turn v3.2 and pipecat's Whisper features, whose copyright lines are in their entries; this is the text with Smart Turn's
+Text: BSD 2-Clause License
+
+Copyright (c) 2024–2025, Daily
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
