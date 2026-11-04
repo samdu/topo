@@ -177,16 +177,32 @@ chmod +x "$work/bin/xcrun" "$work/bin/op-item" "$work/bin/xcodebuild"
 failures=0
 export FAKE_LAUNCHER_PID="$work/launcher.pid" FAKE_XCODEBUILD_CALLS="$work/xcodebuild.calls"
 
-# case <name> <expected: pass|fail> <scenario> <max seconds> [script args...]
+# What a case waits is counted in the script's looks, not read off the clock: the script waits
+# for its markers by looking once a second (`sleep 1` in wait_for, and no other `sleep 1` in it or
+# its fakes), so a `sleep` ahead of the real one on its path notes each look. A loaded Mac makes a
+# look take longer, never makes there be more of them.
+mkdir -p "$work/looks"
+printf '#!/bin/sh
+[ "$*" != 1 ] || echo look >> "$LOOKS"
+exec /bin/sleep "$@"
+' >"$work/looks/sleep"
+chmod +x "$work/looks/sleep"
+patience=30
+
+# case <name> <expected: pass|fail> <scenario> <quick|slow> [script args...]
+# A `quick` case has nothing to wait out: it runs with a timeout of $patience looks and ends
+# before its last, so one that waited the timeout out instead is caught by the count. A `slow`
+# case waits out the script's own timeout, `wait`, and takes exactly that many looks.
 case_() {
-  local name="$1" want="$2" scenario="$3" limit="$4"; shift 4
-  local out="$work/$name.out" start status elapsed got left=""
+  local name="$1" want="$2" scenario="$3" kind="$4"; shift 4
+  local out="$work/$name.out" status got left="" timeout looks
+  if [ "$kind" = slow ]; then timeout="$wait"; else timeout="$patience"; fi
   rm -f "$FAKE_LAUNCHER_PID"
-  start=$SECONDS
-  PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT="$wait" FAKE_LAUNCH="$scenario" \
-    "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null
+  : >"$work/$name.looks"
+  LOOKS="$work/$name.looks" PATH="$work/looks:$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT="$timeout" \
+    FAKE_LAUNCH="$scenario" "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null
   status=$?
-  elapsed=$((SECONDS - start))
+  looks="$(wc -l <"$work/$name.looks" | tr -d ' ')"
   if [ "$status" = 0 ]; then got=pass; else got=fail; fi
   # Whatever way a run ends, it leaves no launcher running and no pids file.
   if [ -s "$FAKE_LAUNCHER_PID" ] && kill -0 "$(cat "$FAKE_LAUNCHER_PID")" 2>/dev/null; then
@@ -204,12 +220,16 @@ case_() {
     echo "FAIL $name: wanted the script to $want, it exited $status"
     sed 's/^/    | /' "$out"
     failures=$((failures + 1))
-  elif [ "$elapsed" -gt "$limit" ]; then
-    echo "FAIL $name: exited $status as wanted, but after ${elapsed}s (limit ${limit}s)"
+  elif [ "$kind" = quick ] && [ "$looks" -ge "$timeout" ]; then
+    echo "FAIL $name: exited $status as wanted, but only after waiting out its timeout ($looks looks)"
+    sed 's/^/    | /' "$out"
+    failures=$((failures + 1))
+  elif [ "$kind" = slow ] && [ "$looks" != "$timeout" ]; then
+    echo "FAIL $name: exited $status as wanted, after $looks looks, not its timeout's $timeout"
     sed 's/^/    | /' "$out"
     failures=$((failures + 1))
   else
-    echo "ok   $name: exited $status in ${elapsed}s — $(grep '^==>' "$out" | tail -1)"
+    echo "ok   $name: exited $status after $looks looks — $(grep '^==>' "$out" | tail -1)"
   fi
 }
 
@@ -221,35 +241,33 @@ PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=6 FAKE_LAUNCH=exit
   "$work/root/scripts/simulator-run.sh" --no-build >/dev/null 2>&1 </dev/null
 
 # A second, warm run of the same scenario is what this machine takes to run the script through to
-# its exit with nothing to wait for. Every limit is that plus what the case itself may take, so a
-# loaded runner moves the limits with it: `quick` for a run that has nothing to wait out, `slow`
-# for one that waits out the script's own timeout, `wait`, which stays above `quick` so a run
-# that should have ended at once and instead timed out is over its limit.
+# its exit with nothing to wait for. The ended cases' limits are that plus what the case itself
+# may take, so a loaded runner moves them with it: `quick` for a run that has nothing to wait out;
+# and `wait` is the timeout of the cases that wait it out.
 start=$SECONDS
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=6 FAKE_LAUNCH=exits-42 \
   "$work/root/scripts/simulator-run.sh" --no-build >/dev/null 2>&1 </dev/null
 overhead=$((SECONDS - start))
 quick=$((5 + overhead))
 wait=$((quick + 1))
-slow=$((2 * wait))
 
-case_ no-send-launcher-exits-nonzero       fail exits-42             "$quick"
-case_ no-send-stale-reply-launcher-exits-42 fail stale-reply-exits-42 "$quick"
-case_ send-stale-reply-launcher-exits-42   fail stale-reply-exits-42 "$quick"  --send "new message"
-case_ send-launcher-dies-before-done       fail dies-before-done     "$quick"  --send hello
-case_ send-reply-without-done              fail reply-no-done        "$slow" --send hello
-case_ send-times-out-silent                fail silent               "$slow" --send hello
-case_ send-done-with-error                 fail error-then-done      "$quick"  --send hello
-case_ send-reply-to-another-run            fail other-run            "$quick"  --send hello
-case_ send-no-reply-to-this-turn           fail no-reply             "$quick"  --send hello
-case_ send-done-then-launcher-exits-1      fail done-then-exits-1    "$quick"  --send hello
-case_ send-answered                        pass answered             "$quick"  --send hello
-case_ send-answered-by-no-resident         fail answered-by-nobody   "$quick"  --send hello
-case_ send-answered-mascot-silent          fail answered-no-mascot   "$quick"  --send hello
-case_ send-answered-mascot-other-turn      fail answered-other-mascot "$quick" --send hello
-case_ send-answered-no-provenance          fail answered-old-format  "$quick"  --send hello
-case_ no-send-launched                     pass launched             "$quick"
-case_ press-mic-no-send-exits              pass launched             "$quick" --press-mic
+case_ no-send-launcher-exits-nonzero       fail exits-42             quick
+case_ no-send-stale-reply-launcher-exits-42 fail stale-reply-exits-42 quick
+case_ send-stale-reply-launcher-exits-42   fail stale-reply-exits-42 quick  --send "new message"
+case_ send-launcher-dies-before-done       fail dies-before-done     quick  --send hello
+case_ send-reply-without-done              fail reply-no-done        slow --send hello
+case_ send-times-out-silent                fail silent               slow --send hello
+case_ send-done-with-error                 fail error-then-done      quick  --send hello
+case_ send-reply-to-another-run            fail other-run            quick  --send hello
+case_ send-no-reply-to-this-turn           fail no-reply             quick  --send hello
+case_ send-done-then-launcher-exits-1      fail done-then-exits-1    quick  --send hello
+case_ send-answered                        pass answered             quick  --send hello
+case_ send-answered-by-no-resident         fail answered-by-nobody   quick  --send hello
+case_ send-answered-mascot-silent          fail answered-no-mascot   quick  --send hello
+case_ send-answered-mascot-other-turn      fail answered-other-mascot quick --send hello
+case_ send-answered-no-provenance          fail answered-old-format  quick  --send hello
+case_ no-send-launched                     pass launched             quick
+case_ press-mic-no-send-exits              pass launched             quick --press-mic
 # The suite ran, and before the launch: its line is in the run's output above the launch's.
 if ! grep -q -- '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS" 2>/dev/null \
   || [ "$(grep -n -m1 'TEST SUCCEEDED' "$work/press-mic-no-send-exits.out" | cut -d: -f1)" -ge \
@@ -257,41 +275,41 @@ if ! grep -q -- '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS" 2>/dev/null
   echo "FAIL press-mic-no-send-exits: the suite did not run before the launch"
   failures=$((failures + 1))
 fi
-case_ userland-ran                         pass userland-fetched     "$quick"  --userland "echo hi" --expect hi
-case_ userland-fetched-as-expected         pass userland-fetched     "$quick"  --userland "echo hi" --expect-rootfs fetched
-case_ userland-reused-as-expected          pass userland-reused      "$quick"  --userland "echo hi" --expect-rootfs reused
-case_ userland-fetched-when-reuse-expected fail userland-fetched     "$quick"  --userland "echo hi" --expect-rootfs reused
-case_ userland-reused-when-fetch-expected  fail userland-reused      "$quick"  --userland "echo hi" --expect-rootfs fetched
-case_ userland-error                       fail userland-error       "$quick"  --userland "echo hi"
-case_ userland-exit-nonzero                fail userland-exit-1      "$quick"  --userland "echo hi"
-case_ userland-other-output                fail userland-other-output "$quick" --userland "echo hi" --expect hi
-case_ userland-launcher-dies               fail userland-dies        "$quick"  --userland "echo hi"
-case_ userland-times-out-silent            fail silent               "$slow" --userland "echo hi"
-case_ userland-claude-fetched-as-expected  pass userland-fetched     "$quick"  --userland "claude --version" --expect-claude fetched
-case_ userland-claude-reused-as-expected   pass userland-reused      "$quick"  --userland "claude --version" --expect-claude reused
-case_ userland-claude-fetched-not-reused   fail userland-fetched     "$quick"  --userland "claude --version" --expect-claude reused
-case_ userland-claude-reused-not-fetched   fail userland-reused      "$quick"  --userland "claude --version" --expect-claude fetched
-case_ userland-claude-not-mounted          fail userland-unmounted   "$quick"  --userland "echo hi"
-case_ guest-turns-answered                 pass guest-answered       "$quick"  --guest-turn "a || b"
-case_ guest-turn-stderr-glued-on           pass guest-glued-stderr   "$quick"  --guest-turn "a"
-case_ guest-turn-failed                    fail guest-one-failed     "$quick"  --guest-turn "a || b"
-case_ guest-turn-abandoned                 fail guest-abandoned      "$quick"  --guest-turn "a || b"
-case_ guest-turns-two-processes           fail guest-two-processes  "$quick"  --guest-turn "a || b"
-case_ guest-turns-two-sessions            fail guest-two-sessions   "$quick"  --guest-turn "a || b"
-case_ guest-turns-no-process-named        fail guest-no-process     "$quick"  --guest-turn "a || b"
-case_ guest-turn-error                     fail guest-error          "$quick"  --guest-turn "a || b"
-case_ guest-turns-not-on-haiku             fail guest-opus           "$quick"  --guest-turn "a || b"
-case_ guest-turn-missing                   fail guest-one-short      "$quick"  --guest-turn "a || b"
-case_ guest-turn-ran-bash                  pass guest-bash           "$quick"  --guest-turn "a" --expect-bash topo-42
-case_ guest-turn-bash-no-call              fail guest-bash-no-call   "$quick"  --guest-turn "a" --expect-bash topo-42
-case_ guest-turn-bash-failed               fail guest-bash-failed    "$quick"  --guest-turn "a" --expect-bash topo-42
-case_ guest-turn-bash-other-output         fail guest-bash-other-output "$quick" --guest-turn "a" --expect-bash topo-42
-case_ guest-turn-bash-output-from-another  fail guest-bash-other-tool "$quick"  --guest-turn "a" --expect-bash topo-42
-case_ guest-turn-bash-reply-without-it     fail guest-bash-reply-silent "$quick" --guest-turn "a" --expect-bash topo-42
-case_ guest-turn-bash-ok-only-in-prefix    fail guest-bash-ok-only-in-prefix "$quick" --guest-turn "a" --expect-bash ok
-case_ guest-turn-bash-reply-prefix-only    fail guest-bash-in-reply-prefix-only "$quick" --guest-turn "a" --expect-bash answered
-case_ guest-turn-bash-result-echoed-in-sent fail guest-bash-result-echoed-in-sent "$quick" --guest-turn "a" --expect-bash topo-42
-case_ guest-turns-times-out-silent         fail silent               "$slow" --guest-turn "a || b"
+case_ userland-ran                         pass userland-fetched     quick  --userland "echo hi" --expect hi
+case_ userland-fetched-as-expected         pass userland-fetched     quick  --userland "echo hi" --expect-rootfs fetched
+case_ userland-reused-as-expected          pass userland-reused      quick  --userland "echo hi" --expect-rootfs reused
+case_ userland-fetched-when-reuse-expected fail userland-fetched     quick  --userland "echo hi" --expect-rootfs reused
+case_ userland-reused-when-fetch-expected  fail userland-reused      quick  --userland "echo hi" --expect-rootfs fetched
+case_ userland-error                       fail userland-error       quick  --userland "echo hi"
+case_ userland-exit-nonzero                fail userland-exit-1      quick  --userland "echo hi"
+case_ userland-other-output                fail userland-other-output quick --userland "echo hi" --expect hi
+case_ userland-launcher-dies               fail userland-dies        quick  --userland "echo hi"
+case_ userland-times-out-silent            fail silent               slow --userland "echo hi"
+case_ userland-claude-fetched-as-expected  pass userland-fetched     quick  --userland "claude --version" --expect-claude fetched
+case_ userland-claude-reused-as-expected   pass userland-reused      quick  --userland "claude --version" --expect-claude reused
+case_ userland-claude-fetched-not-reused   fail userland-fetched     quick  --userland "claude --version" --expect-claude reused
+case_ userland-claude-reused-not-fetched   fail userland-reused      quick  --userland "claude --version" --expect-claude fetched
+case_ userland-claude-not-mounted          fail userland-unmounted   quick  --userland "echo hi"
+case_ guest-turns-answered                 pass guest-answered       quick  --guest-turn "a || b"
+case_ guest-turn-stderr-glued-on           pass guest-glued-stderr   quick  --guest-turn "a"
+case_ guest-turn-failed                    fail guest-one-failed     quick  --guest-turn "a || b"
+case_ guest-turn-abandoned                 fail guest-abandoned      quick  --guest-turn "a || b"
+case_ guest-turns-two-processes           fail guest-two-processes  quick  --guest-turn "a || b"
+case_ guest-turns-two-sessions            fail guest-two-sessions   quick  --guest-turn "a || b"
+case_ guest-turns-no-process-named        fail guest-no-process     quick  --guest-turn "a || b"
+case_ guest-turn-error                     fail guest-error          quick  --guest-turn "a || b"
+case_ guest-turns-not-on-haiku             fail guest-opus           quick  --guest-turn "a || b"
+case_ guest-turn-missing                   fail guest-one-short      quick  --guest-turn "a || b"
+case_ guest-turn-ran-bash                  pass guest-bash           quick  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-no-call              fail guest-bash-no-call   quick  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-failed               fail guest-bash-failed    quick  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-other-output         fail guest-bash-other-output quick --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-output-from-another  fail guest-bash-other-tool quick  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-reply-without-it     fail guest-bash-reply-silent quick --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-ok-only-in-prefix    fail guest-bash-ok-only-in-prefix quick --guest-turn "a" --expect-bash ok
+case_ guest-turn-bash-reply-prefix-only    fail guest-bash-in-reply-prefix-only quick --guest-turn "a" --expect-bash answered
+case_ guest-turn-bash-result-echoed-in-sent fail guest-bash-result-echoed-in-sent quick --guest-turn "a" --expect-bash topo-42
+case_ guest-turns-times-out-silent         fail silent               slow --guest-turn "a || b"
 
 # The pids file names what a run started and the script ends exactly those. A run left waiting
 # is ended by SIGTERM to its first pid, the script's own, and takes its second, the child it was
