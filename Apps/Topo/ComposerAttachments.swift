@@ -173,7 +173,7 @@ final class ComposerAttachments {
         guard picking == .camera else { return }
         picking = nil
         guard let image, let store = store() else { return }
-        let model = ShareSheetModel(store: store, via: .composer)
+        let model = ShareSheetModel(store: store, via: .composer, pickedUnder: pickedUnder)
         sheet = model
         let time = Date()
         Task.detached(priority: .userInitiated) {

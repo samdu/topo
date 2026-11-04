@@ -896,6 +896,18 @@ final class ShareTests: XCTestCase {
         XCTAssertTrue(share.file?.hasPrefix("Photo ") == true, share.file ?? "")
         for _ in 0..<200 where sent == 0 { try await Task.sleep(for: .milliseconds(25)) }
         XCTAssertEqual(sent, 1, "Send did not drain once")
+        store.remove(nonce: share.nonce)
+
+        // A capture made under one login that lands after a sign-out and a sign-in is refused.
+        taking.pick(.camera)
+        store.close()
+        try store.open(files: true)
+        taking.chose(camera: held)
+        try await refused(taking, .signedOut)
+        taking.send()
+        XCTAssertEqual(store.shares(), [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"], "the capture was left behind")
+        XCTAssertEqual(sent, 1)
     }
 
     /// A picked file is copied into a scratch folder of the store's under the name the store
