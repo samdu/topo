@@ -265,6 +265,7 @@ final class Conversation {
         fedTo = 0
         framedTo = 0
         judgeThrew = false
+        judgedIn = nil
     }
 
     #if DEBUG
@@ -377,17 +378,19 @@ final class Conversation {
         Task { [weak self] in
             let verdict: Float?
             var trouble: String?
+            let clock = ContinuousClock(), asked = clock.now
             do { verdict = try await judge.complete(tail) } catch {
                 verdict = nil
                 trouble = error.localizedDescription
             }
-            self?.landed(verdict, ask: n, generation: generation, trouble: trouble)
+            self?.landed(verdict, ask: n, generation: generation, trouble: trouble, took: asked.duration(to: clock.now))
         }
     }
 
-    private func landed(_ verdict: Float?, ask n: Int, generation: Int, trouble: String?) {
+    private func landed(_ verdict: Float?, ask n: Int, generation: Int, trouble: String?, took: Duration) {
         // A verdict from an utterance that has ended, or a session that has, reaches nothing.
         guard on, voice.generation == generation, voice.listening, !endingUtterance else { return }
+        if verdict != nil { judgedIn = took }
         if let trouble, !judgeThrew {
             judgeThrew = true
             AudioLog.say("conversation: the judge failed (\(trouble)); the utterance ends on the quiet's cap")
@@ -410,15 +413,20 @@ final class Conversation {
     private func said(_ ending: Endpoint.Judging.Ending) -> String {
         switch ending {
         case .judged(let p, let quiet):
-            return String(format: "complete %.2f after %.1f s quiet", p, quiet)
+            return String(format: "complete %.2f after %.1f s quiet", p, quiet) + judged
         case .quiet(let quiet):
             return String(format: "%.1f s of quiet", quiet) + lastVerdict
         }
     }
 
     private var lastVerdict: String {
-        rule.lastVerdict.map { String(format: "; last verdict %.2f", $0) } ?? "; no verdict"
+        rule.lastVerdict.map { String(format: "; last verdict %.2f", $0) + judged } ?? "; no verdict"
     }
+
+    /// How long the last verdict took, from the ask to its answer: the judge's latency on this
+    /// phone, said on the end's line rather than a line per ask.
+    private var judgedIn: Duration?
+    private var judged: String { judgedIn.map { ", judged in \(SmartTurn.ms($0))" } ?? "" }
 
     /// Silero's end, in the log's words.
     private var sileroEnd: String {

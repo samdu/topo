@@ -103,11 +103,28 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
             }
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .cpuAndNeuralEngine
-            let loaded = try MLModel(contentsOf: Self.compiled(package, in: cache), configuration: configuration)
+            // Each step timed for the log, since the first compile and the Neural Engine's first
+            // run are what a device run is read for.
+            let clock = ContinuousClock()
+            var start = clock.now
+            let (url, fresh) = try Self.compiled(package, in: cache)
+            let compile = start.duration(to: clock.now)
+            start = clock.now
+            let loaded = try MLModel(contentsOf: url, configuration: configuration)
+            let open = start.duration(to: clock.now)
             filterbank = bank
+            start = clock.now
             _ = try Self.predict(loaded, Mel.features(Self.window([]), filterbank: bank))
+            let first = start.duration(to: clock.now)
             model = loaded
+            AudioLog.say("smart turn: \(fresh ? "compiled" : "the kept compile checked") in \(Self.ms(compile)), "
+                + "loaded in \(Self.ms(open)), its first prediction in \(Self.ms(first))")
         }
+    }
+
+    /// A duration in whole milliseconds, for the log.
+    static func ms(_ d: Duration) -> String {
+        "\(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000) ms"
     }
 
     func complete(_ tail: [Float]) async throws -> Float {
@@ -128,13 +145,14 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
     /// own bytes still match the digest kept beside it (`<name>.sha256`), or a fresh compile moved
     /// there with its digest written after it, with everything else in `cache` removed. A compile
     /// with no digest beside it, or one that differs, is never handed to Core ML. On `queue` only.
-    static func compiled(_ package: URL, in cache: URL) throws -> URL {
+    /// Answers whether it compiled.
+    static func compiled(_ package: URL, in cache: URL) throws -> (URL, compiled: Bool) {
         let fm = FileManager.default
         let name = try digest(package) + ".mlmodelc"
         let kept = cache.appendingPathComponent(name, isDirectory: true)
         let mark = cache.appendingPathComponent(name + ".sha256")
         if let wanted = try? String(contentsOf: mark, encoding: .utf8), (try? digest(kept)) == wanted {
-            return kept
+            return (kept, false)
         }
         let made = try MLModel.compileModel(at: package)
         try fm.createDirectory(at: cache, withIntermediateDirectories: true)
@@ -143,7 +161,7 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
         }
         try fm.moveItem(at: made, to: kept)
         try digest(kept).write(to: mark, atomically: true, encoding: .utf8)
-        return kept
+        return (kept, true)
     }
 
     /// The SHA-256 of every file under `folder`, in path order, each path and each file's bytes
