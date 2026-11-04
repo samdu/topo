@@ -981,10 +981,13 @@ out="$(cd "$same" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/same.rec
 is "the suite left going ended: its checkout and name are free there" "$status:$(ran_in "$work/host-two/same.record")" "0:$(cd "$there/checkout" && pwd -P)"
 [ ! -e "$there/logs/ghost" ] && ok "the suite left going ended: its results are pruned as any" || fail "the suite left going ended: its results are still kept"
 # A script killed as it starts its suite: the child it forked for that still has the script's
-# own arguments, the run's name last, and is the run still going.
-printf 'forked\nothers\n' > "$there/slots/1/run"
-bash -s -- "$sha" fast others forked <<<"perl -e 'sleep 120' & echo \$! > '$work/host-two/forked.child'; wait" & forked=$!
-for _ in $(seq 50); do ps -axww -o args= | grep -q -- "-s -- $sha fast others forked\$" && break; perl -e 'select(undef,undef,undef,0.1)'; done
+# own arguments, the run's name last, and is the run still going. The name is this test's own,
+# as a real run's is: the host looks for it among every process on the Mac, and a Mac lent for
+# two can be running another copy of this test, whose fork would otherwise be this one's.
+fork_run="forked-$$"
+printf '%s\nothers\n' "$fork_run" > "$there/slots/1/run"
+bash -s -- "$sha" fast others "$fork_run" <<<"perl -e 'sleep 120' & echo \$! > '$work/host-two/forked.child'; wait" & forked=$!
+for _ in $(seq 50); do ps -axww -o args= | grep -q -- "-s -- $sha fast others $fork_run\$" && break; perl -e 'select(undef,undef,undef,0.1)'; done
 git -C "$same" commit -q --allow-empty -m "beside a fork"
 out="$(cd "$same" && PATH="$work/bin:$PATH" FAKE_RECORD="$work/host-two/same.record" TOPO_VALIDATE_HOSTS=laptop LOCK_WAIT=5 scripts/validate-and-push.sh 2>&1)" && status=0 || status=$?
 is "a script killed as its suite starts: one of its name runs here" "$status:$(ran_in "$work/host-two/same.record")" "0:$(here_slot)"

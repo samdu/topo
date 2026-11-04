@@ -70,7 +70,15 @@ settled() {
     perl -e 'select(undef,undef,undef,0.1)'; n=$((n + 1))
   done
 }
-holds() { ps -axo args= | grep -c '^/usr/bin/caffeinate -dimsu -t 3600$' || true; }
+# The holds this test started that still stand, counted from its own list: a Mac lent for real
+# runs a hold of the very same command, which is not this test's to count.
+holds() {
+  local pid n=0
+  while IFS= read -r pid; do
+    [ "$(ps -o args= -p "$pid" 2>/dev/null)" = "/usr/bin/caffeinate -dimsu -t 3600" ] && n=$((n + 1))
+  done < <(sort -u "$STARTED")
+  echo "$n"
+}
 file() { tr '\n' '|' < "$TOPO_VALIDATE_CACHE/hosts" 2>/dev/null; }
 before="$(holds)"
 
