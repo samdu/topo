@@ -4,7 +4,8 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// microphone's noise suppression, the voice's temperature, the diagnostics, the acknowledgements, and the way out.
+/// microphone's noise suppression, the voice's temperature, the clear of the compiled models, the
+/// diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
@@ -18,11 +19,14 @@ struct SettingsView: View {
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
+    @AppStorage(CompileCache.requested) private var clearRequested = false
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
+    /// The clear button's identifier, for the UI suite, which finds it whichever label it wears.
+    static let clearCompiled = "settings-clear-compiled"
 
     var body: some View {
         NavigationStack {
@@ -57,6 +61,15 @@ struct SettingsView: View {
                         .accessibilityLabel("Voice temperature")
                 } footer: {
                     Text("How much chance Topo's voice is drawn with: lower is steadier, higher livelier. \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. Applies from the next reply. Kept on this device.")
+                }
+                Section {
+                    Button(clearRequested ? "Clears at the next launch" : "Clear compiled model cache") {
+                        clearRequested = true
+                    }
+                    .disabled(clearRequested)
+                    .accessibilityIdentifier(SettingsView.clearCompiled)
+                } footer: {
+                    Text("What the ear and the voice were compiled to for the Neural Engine, kept across updates. A tap clears it at the next launch, which then compiles each again, half a minute or so apiece.")
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
