@@ -494,6 +494,14 @@ jobs:
       cancel-in-progress: false
       queue: max
     runs-on: vm-linux
+    # Codex answers in one to five minutes and the steps before it in seconds,
+    # so what runs past the job's 30 minutes is a hang: Codex itself, or a
+    # checkout over a runner's failing network. A job past its limit is
+    # concluded cancelled, and so is the run, which redraft.yaml does not read
+    # and which leaves reviewer_ran and review_gate red after a verdict that
+    # may already be posted. So the steps that reach the network are bounded
+    # on their own, well inside the job's limit, and a hang fails its step
+    # instead; the login's write-back and deletion run `always()` either way.
     timeout-minutes: 30
     permissions:
       contents: read
@@ -533,6 +541,7 @@ jobs:
       # are separate ones, checking out scripts/ alone with no persisted
       # credential (review_cap, above).
       - uses: actions/checkout@v7
+        timeout-minutes: 5
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
 
@@ -557,6 +566,7 @@ jobs:
           echo "The merge ref merges the event's PR head, $HEAD_SHA."
 
       - name: Pre-fetch base and head refs for the PR
+        timeout-minutes: 5
         env:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -694,6 +704,7 @@ jobs:
 
       - name: Run Codex
         id: run_codex
+        timeout-minutes: 20
         env:
           CODEX_HOME: ${{ runner.temp }}/codex-home
           CODEX_MODEL: gpt-6.1-sol

@@ -25,6 +25,7 @@ struct TopoApp: App {
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
     @State private var shares: ShareInbox
+    @State private var attachments: ComposerAttachments
     @State private var defaultSurface: DefaultSurface
     @State private var controlDefaults = ControlDefaults()
     @Environment(\.scenePhase) private var scenePhase
@@ -127,8 +128,10 @@ struct TopoApp: App {
         _widgetCues = State(initialValue: widgetCues)
         let shares = ShareInbox(line: harness)
         _shares = State(initialValue: shares)
+        // What the composer's `+` attaches goes in by the share store and out by the same drain.
+        _attachments = State(initialValue: ComposerAttachments(drain: { await shares.drain() }))
         // A sign-out, a takeover or a viewer's arrival takes the pictures read for the bubbles.
-        SurfaceReloader.shared.onForget { TurnImages.clear() }
+        TurnImages.endWith(.shared)
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
@@ -147,7 +150,7 @@ struct TopoApp: App {
         }
         Perf.mark("app.housekeeping.begin")
         _audio = State(initialValue: audio)
-        // The compile cache a new install leaves behind is cleared before the ear and the voice
+        // A clear of the compile cache the person asked for runs before the ear and the voice
         // exist, so no model is loading while it goes. A debug build launched asking for a stub
         // ear gets one; every other launch, the real one.
         #if DEBUG
@@ -278,7 +281,7 @@ struct TopoApp: App {
     private var chat: some View {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
             .environment(voice).environment(speaker).environment(conversation).environment(memory).environment(mascot)
-            .environment(connections)
+            .environment(connections).environment(attachments)
             // An image a turn carries is drawn from the guest's home, which is on this phone; the
             // root hands it to the signed-in chat alone (`RootView`).
             .environment(\.turnImageFiles, TurnImageFiles(data: { ShareInbox.imageData($0) }))
