@@ -985,6 +985,8 @@ if tool == "gh":
     if a[0] == "api" and "/actions/runs?status=" in a[1]:
         out(S.get("pool_runs", {}).get(a[1].split("status=")[1].split("&")[0], []))
     if a[0] == "api" and "/actions/runners?" in a[1]: out(S.get("pool_runners", []))
+    if a[0] == "api" and "/jobs?" in a[1] and a[1].split("/runs/")[1].split("/")[0] in S.get("pool_jobs", {}):
+        out(S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
@@ -1193,6 +1195,19 @@ class WholePass(unittest.TestCase):
         self.assertIn("swept worktree topo-old", got["body"]["text"])
         self.assertIn("killed tmux topo-old", got["body"]["text"])
         self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
+
+    def test_a_stalled_pool_is_said_once_and_again_after_it_clears(self):
+        stalled = self.scripted(
+            pool_runs={"queued": [{"id": 900, "name": "PR validate", "prs": [7]}]},
+            pool_jobs={"900": [{"name": "select", "status": "queued", "labels": ["vm-linux"],
+                                "created_at": ago(timedelta(hours=1)), "completed_at": None}]},
+            pool_runners=[{"status": "offline", "busy": False}])
+        said = lambda: sum("vm-linux pool is not serving" in r["body"]["text"] for r in Bridge.received)
+        for expected, script in ((1, stalled), (1, stalled), (1, self.scripted()), (2, stalled)):
+            p, _ = self.run_pass(script)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(said(), expected, [r["body"]["text"] for r in Bridge.received])
+        self.assertIn("select for #7 (run 900)", Bridge.received[-1]["body"]["text"])
 
     def test_a_worktree_with_uncommitted_changes_is_left_with_its_sessions_and_said_once(self):
         s = self.scripted(status={self.wt: " M file.swift"})

@@ -1891,7 +1891,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         live = {pr["headRefOid"] for pr in prs}
         opened = {f"pr:{pr['number']}" for pr in prs}
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if k.startswith("issues:")
+                          if k.startswith(("issues:", "pool:"))
                           or (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
                           or k.endswith(":read") or k.rsplit(":", 1)[-1] in live}
         state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}
