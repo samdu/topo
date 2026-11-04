@@ -111,14 +111,25 @@ PACKAGE_PINS=Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.res
 # default stays off, and the code behind it is not there to compile) or, where the project
 # names a trait the old version did not declare, refuses the resolution, on every retry. So the
 # state is kept for the pins it was resolved from, a copy of which is in it, and made afresh for
-# any other: `fresh_packages`, before the first resolution of each suite. The copy goes before
-# the tree, so a removal that is cut short is finished by the next run.
+# any other: `fresh_packages`, before the first resolution of each suite.
 PACKAGES=(-clonedSourcePackagesDirPath build/packages)
-fresh_packages() {
-  cmp -s "$PACKAGE_PINS" build/packages/Package.resolved || { rm -f build/packages/Package.resolved; rm -rf build/packages; }
-  mkdir -p build/packages
-  cp "$PACKAGE_PINS" build/packages/Package.resolved 2>/dev/null || true
+# kept_for_pins <dir>: keeps <dir> only if the copy of the pins in it names the pins the checkout
+# does, and otherwise removes it, then makes it and puts the pins in it. The pins are compared
+# as JSON without their originHash field, which a resolution rewrites for the path it ran at, so a
+# suite that resolved does not take the state away from the next; a copy that is missing, empty
+# or not JSON names no pins. The copy goes before the tree, so a removal that is cut short is
+# finished by the next run.
+same_pins() {
+  local a b
+  a="$(jq -cS 'del(.originHash)' "$1" 2>/dev/null)" && b="$(jq -cS 'del(.originHash)' "$2" 2>/dev/null)" \
+    && [ -n "$a" ] && [ "$a" = "$b" ]
 }
+kept_for_pins() {
+  same_pins "$PACKAGE_PINS" "$1/Package.resolved" || { rm -f "$1/Package.resolved"; rm -rf "$1"; }
+  mkdir -p "$1"
+  cp "$PACKAGE_PINS" "$1/Package.resolved" 2>/dev/null || true
+}
+fresh_packages() { kept_for_pins build/packages; }
 cache="$HOME/Library/Caches/topo-validate"
 asked=()
 while [ $# -gt 0 ]; do
@@ -832,11 +843,8 @@ suite_others() {
   # The device build's derived data outlives the commit that made it, and what it keeps of a
   # package is wrong once the pins move: a Swift module scan still names the headers of the
   # version before, and a package whose headers moved fails the build. So it is kept only for
-  # the pins it was built from, a copy of which is in it, and is made afresh for any other; the
-  # copy goes before the tree, so a removal that is cut short is finished by the next run.
-  cmp -s "$PACKAGE_PINS" build/device/Package.resolved || { rm -f build/device/Package.resolved; rm -rf build/device; }
-  mkdir -p build/device
-  cp "$PACKAGE_PINS" build/device/Package.resolved 2>/dev/null || true
+  # the pins it was built from, a copy of which is in it, and is made afresh for any other.
+  kept_for_pins build/device
   run "$RESULTS/Topo-iOS-Release-build.log" xcodebuild build -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
     -configuration Release -destination 'generic/platform=iOS' \
     -derivedDataPath build/device \
