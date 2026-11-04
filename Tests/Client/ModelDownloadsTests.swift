@@ -161,7 +161,13 @@ final class ModelDownloadsTests: XCTestCase {
             handlers.keep(handler)
         }
         let events = Events()
-        relay.events = { events.add($0) }
+        // What the resume file holds at the moment each `.restarting` is said, not after.
+        let atRestart = Events.Kept()
+        let weightResume = store.resumeData(for: model.files[0], in: model)
+        relay.events = { event in
+            if case .restarting = event { atRestart.add(try? Data(contentsOf: weightResume)) }
+            events.add(event)
+        }
         let session = URLSession.shared
         func task(_ key: String = key) -> URLSessionDownloadTask {
             let task = session.downloadTask(with: URL(string: "https://example.invalid/weight.bin")!)
@@ -181,7 +187,7 @@ final class ModelDownloadsTests: XCTestCase {
         try handlers.take()(Data("resume".utf8))
         XCTAssertEqual(events.all, [.restarting(key)])
         XCTAssertFalse(relay.isRestarting(a))
-        XCTAssertEqual(try Data(contentsOf: resume(0)), Data("resume".utf8), "the handler wrote the resume data before saying so")
+        XCTAssertEqual(atRestart.all.last, Data("resume".utf8), "the handler wrote the resume data before saying so")
         try FileManager.default.removeItem(at: resume(0))
 
         // Handler first with none, then a completion whose error carries resume data: said at the
@@ -196,7 +202,7 @@ final class ModelDownloadsTests: XCTestCase {
                                userInfo: [NSURLSessionDownloadTaskResumeData: Data("late".utf8)])
         relay.urlSession(session, task: b, didCompleteWithError: carrying)
         XCTAssertEqual(events.all, [.restarting(key)], "one restart, no failure")
-        XCTAssertEqual(try Data(contentsOf: resume(0)), Data("late".utf8), "the completion's resume data is on disk when the restart is said")
+        XCTAssertEqual(atRestart.all.last, Data("late".utf8), "the completion's resume data is on disk when the restart is said")
         XCTAssertFalse(relay.isRestarting(b))
         try FileManager.default.removeItem(at: resume(0))
 
@@ -322,6 +328,14 @@ final class ModelDownloadsTests: XCTestCase {
         var all: [SessionRelay.Event] { lock.withLock { events } }
         func add(_ event: SessionRelay.Event) { lock.withLock { events.append(event) } }
         func clear() { lock.withLock { events = [] } }
+
+        /// What a sink saw of the disk as each event arrived.
+        final class Kept: @unchecked Sendable {
+            private let lock = NSLock()
+            private var kept: [Data?] = []
+            var all: [Data?] { lock.withLock { kept } }
+            func add(_ data: Data?) { lock.withLock { kept.append(data) } }
+        }
     }
 
     private func digest(_ data: Data) -> String {
@@ -506,13 +520,17 @@ final class ModelDownloadsGlueTests: XCTestCase {
         let downloads = downloads(manifest, store: store)
         let key = "ear|encoder.bin"
         let model = try XCTUnwrap(manifest.model("ear"))
+        downloads.relay.made(key, fromResume: true)
         downloads.start(["ear"])
         downloads.enqueue(manifest, excluding: [], retry: true)
+        XCTAssertFalse(downloads.relay.madeFromResume(key), "a task made from the URL clears the mark")
         downloads.handle(.progress(key, 36 * 1024))
         crawl(downloads, key)
         let resume = store.resumeData(for: model.files[0], in: model)
         try FileManager.default.createDirectory(at: resume.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("resume".utf8).write(to: resume)
+        // An empty binary property list: CFNetwork makes a task from it without throwing, where
+        // bytes that parse as anything but a dictionary raise inside `downloadTask(withResumeData:)`.
+        try PropertyListSerialization.data(fromPropertyList: [String: Any](), format: .binary, options: 0).write(to: resume)
         downloads.handle(.restarting(key))
         XCTAssertTrue(downloads.watchdog.restarting(key))
         XCTAssertFalse(downloads.live.contains(key))

@@ -152,7 +152,7 @@ final class DownloadWatchdog {
             // in) has no baseline: the span is not judged, since its rate is the comparison the
             // others are judged against. A count below the sample's is a counter the progress
             // did not sample (Foundation's agree, offset included; a guard, not a stall): not
-            // judged either. Both are judged after a window of foreground samples, as any task.
+            // judged either. Both are judged a window after the anchor the probe leaves them.
             guard let before = resignedAt.bytes[key] else { return [] }
             guard bytes >= before else { continue }
             rates[key] = Int64((Double(bytes - before) / elapsed).rounded(.down))

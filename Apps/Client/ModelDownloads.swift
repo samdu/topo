@@ -747,8 +747,8 @@ final class ModelDownloads {
         case .restarting(let key):
             // The watchdog's cancel is complete and its resume data, if any, is on disk: the
             // key stays in flight, with its bytes as last reported, until the replacement is
-            // made on a tick after this attempt's backoff. Not a failure anywhere. A task that
-            // finished as it was cancelled is verifying or verified, and gets no replacement.
+            // made on a tick after this attempt's backoff. Not a failure anywhere. A key that has
+            // since gone to verifying or out of flight gets no replacement.
             live.remove(key)
             guard !verifying.contains(key), inFlight[key] != nil else { watchdog.forget(key); break }
             watchdog.cancelled(key, at: clock.now)
@@ -849,8 +849,8 @@ struct ModelWaiters {
 /// The session's delegate, off the main actor: the callbacks arrive on the session's own queue,
 /// and the one that hands over a finished file has to deal with it before returning. It verifies
 /// and admits the file there and then, and reports everything else to `ModelDownloads` as events.
-/// Internal rather than private for one test: the branch of `didCompleteWithError` that decides
-/// between a failure and a restart.
+/// Internal rather than private for its tests: the restart's two callbacks, a stale status, and
+/// the resumed mark across a relaunch.
 final class SessionRelay: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     enum Event: Sendable, Equatable {
         case waiting(String)
@@ -879,7 +879,7 @@ final class SessionRelay: NSObject, URLSessionDownloadDelegate, @unchecked Senda
     /// two callbacks a cancel brings has come: the cancel's handler and the task's completion.
     /// The completion is a restart, not a failure, and `.restarting` is said once both have
     /// come, so whatever resume data either carried is on disk first. A task that finished as it
-    /// was cancelled is taken out at its finish, and its handler then writes and says nothing.
+    /// was cancelled is taken out at its finish, and its handler then writes nothing and says nothing.
     private var restarting: [Int: Restart] = [:]
     private struct Restart {
         let key: String

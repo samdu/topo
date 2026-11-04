@@ -211,7 +211,9 @@ final class DownloadWatchdogTests: XCTestCase {
         flow(dog, "m|c", rate: 36 * KB, from: 151, to: 170, start: 36 * KB * 21)
         XCTAssertEqual(dog.decisions(at: at(170)).map(\.key), ["m|c"])
         dog.resigned(at: at(171))
-        XCTAssertEqual(dog.probe(["m|c": 0, "m|e": 20 * MB * 20 + 20 * MB * 60], at: at(231)), [], "c is restarting; e flew")
+        XCTAssertEqual(dog.probe(["m|c": 36 * KB * 40, "m|e": 20 * MB * 20 + 20 * MB * 60], at: at(231)), [], "c is restarting; e flew")
+        XCTAssertEqual(dog.kept("m|c"), 0, "a key restarting is not anchored, whatever its count")
+        XCTAssertEqual(dog.kept("m|e"), 1)
     }
 
     func testAStallAfterAFastStartIsCancelledAWindowIn() {
