@@ -142,9 +142,9 @@ final class SampleSinkTests: XCTestCase {
 
 /// The real model through Core ML on the simulator: it compiles from the store's layout into a
 /// cache of its own, named for the package, loads again from that compile, and judges the
-/// fixture's phrase with a second of quiet after it complete. The same phrase cut after "seven"
-/// ("purple elephants juggle seven") scores as complete too (0.99 when measured), so the cut is
-/// logged and not judged here. The model comes from a directory `scripts/fetch-ear-models.sh`
+/// fixture's phrase with a second of quiet after it complete, and the phrase cut after "seven"
+/// ("purple elephants juggle seven") with no quiet after it unfinished; with a second of quiet
+/// the cut scores as complete too (0.99 when measured), the model saturating on digital silence. The model comes from a directory `scripts/fetch-ear-models.sh`
 /// filled (`TOPO_UITEST_EAR_MODELS`, the full lane's).
 final class SmartTurnRealTests: XCTestCase {
     func testTheRealModelLoadsAndJudgesTheFixtureComplete() async throws {
@@ -158,15 +158,31 @@ final class SmartTurnRealTests: XCTestCase {
             .appendingPathComponent("smart-turn-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: cache) }
         try await SmartTurn().load(model: package, filterbank: filterbank, cache: cache)
-        let compiled = try FileManager.default.contentsOfDirectory(atPath: cache.path)
-        XCTAssertEqual(compiled, [try SmartTurn.digest(package) + ".mlmodelc"], "the compile is not kept under the package's name")
-        let data = cache.appendingPathComponent(compiled[0]).appendingPathComponent("coremldata.bin").path
-        let made = try FileManager.default.attributesOfItem(atPath: data)[.systemFileNumber] as? Int
+        let fm = FileManager.default
+        let name = try SmartTurn.digest(package) + ".mlmodelc"
+        let compiled = try fm.contentsOfDirectory(atPath: cache.path).sorted()
+        XCTAssertEqual(compiled, [name, name + ".sha256"], "the compile is not kept under the package's name with its digest")
+        let kept = cache.appendingPathComponent(name)
+        XCTAssertEqual(try String(contentsOf: cache.appendingPathComponent(name + ".sha256"), encoding: .utf8),
+                       try SmartTurn.digest(kept), "the digest beside the compile is not the compile's")
+        let data = kept.appendingPathComponent("coremldata.bin").path
+        func inode() throws -> Int { try XCTUnwrap(fm.attributesOfItem(atPath: data)[.systemFileNumber] as? Int) }
+        let made = try inode()
         let judge = SmartTurn()
         try await judge.load(model: package, filterbank: filterbank, cache: cache)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cache.path), compiled)
-        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: data)[.systemFileNumber] as? Int, made,
-                       "a second load compiled again")
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: cache.path).sorted(), compiled)
+        XCTAssertEqual(try inode(), made, "a second load compiled again")
+        // A compile damaged in part — a weight file cut short, as a partial purge leaves one — is
+        // compiled again, never handed to Core ML, which crashes on it.
+        let weights = try XCTUnwrap(fm.enumerator(at: kept, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.first { $0.lastPathComponent == "weight.bin" })
+        let damaged = try FileHandle(forWritingTo: weights)
+        try damaged.truncate(atOffset: 1 << 20)
+        try damaged.close()
+        try await SmartTurn().load(model: package, filterbank: filterbank, cache: cache)
+        XCTAssertNotEqual(try inode(), made, "a damaged compile was loaded rather than compiled again")
+        XCTAssertEqual(try String(contentsOf: cache.appendingPathComponent(name + ".sha256"), encoding: .utf8),
+                       try SmartTurn.digest(kept))
         let wav = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/purple-elephants.wav")
         let file = try AVAudioFile(forReading: wav)
@@ -178,10 +194,11 @@ final class SmartTurnRealTests: XCTestCase {
         // "purple elephants juggle seven", where the energy dips before "lanterns".
         let cut = Array(phrase.prefix(Int(2.12 * Double(Ear.rate))))
         let complete = try await judge.complete(phrase + quiet)
-        let unfinished = try await judge.complete(cut + quiet)
+        // Cut with no quiet after it, the model hears a speaker mid-clause (0.02 when measured).
+        let unfinished = try await judge.complete(cut)
         print("smart turn: the fixture \(complete), cut after seven \(unfinished)")
         XCTAssertTrue(complete.isFinite && unfinished.isFinite)
         XCTAssertGreaterThan(complete, 0.85, "the whole phrase did not sound finished")
-        XCTAssertTrue((0...1).contains(unfinished), "the cut's verdict is not a probability")
+        XCTAssertLessThan(unfinished, 0.5, "the phrase cut after \"seven\", with no quiet after it, sounded finished")
     }
 }

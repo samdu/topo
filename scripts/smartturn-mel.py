@@ -13,7 +13,7 @@ numpy. `scripts/tests/smartturn-mel-test.sh` regenerates it and compares the byt
 pinned because the fixture below is compared bit for bit, and its FFT is numpy's.
 
 `--fixture PATH` writes instead what pipecat's numpy reference computes for the test signal
-(`chirp`, written by the same formula in `Tests/Client/MelTests.swift`): every tenth of the 800
+(`chirp`, written by the same formula in `Tests/Client/SmartTurnTests.swift`): every tenth of the 800
 frames of the `[80][800]` features, `[80][80]` little-endian float32, mel-major.
 
     scripts/smartturn-mel.py                     # the bundled filterbank

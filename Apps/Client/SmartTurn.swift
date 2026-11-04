@@ -30,9 +30,13 @@ protocol TurnJudge: AnyObject, Sendable {
 /// Four things differ from Daphne's, each because Topo's surroundings do:
 ///
 /// - **Core ML.** Daphne runs pipecat's int8 ONNX export through ONNX Runtime; the phone runs the
-///   fp32 model as Core ML with compute units `.all`. The package is compiled on the phone the
-///   first time it is loaded and the compiled model kept in Caches (`compiled(_:)`), keyed by the
-///   package's bytes, so a new package compiles afresh and a purged cache only costs a compile.
+///   FP16 package as Core ML on the CPU and the Neural Engine (`.cpuAndNeuralEngine`: the model
+///   runs behind the lock, and iOS ends a background process that submits GPU work). The package
+///   is compiled on the phone the first time it is loaded and the compiled model kept in Caches
+///   (`compiled(_:in:)`), keyed by the package's bytes, so a new package compiles afresh and a
+///   purged cache only costs a compile. A kept compile is loaded only once its own bytes match
+///   the digest written beside it after the compile: Core ML crashes, past any `catch`, on a
+///   compile missing or damaged in part, so one the system half-purged is compiled again instead.
 /// - **Off the pool.** Compiling, loading, the prediction and the mel's three `sgemm`s are
 ///   synchronous work, so none of it runs on the cooperative pool or the main actor: `load` and
 ///   `complete` each run as one block on `queue`, a serial queue of this class's own, and every
@@ -98,7 +102,7 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
                 throw Trouble.runtime("the filterbank is \(bank.count) floats")
             }
             let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
+            configuration.computeUnits = .cpuAndNeuralEngine
             let loaded = try MLModel(contentsOf: Self.compiled(package, in: cache), configuration: configuration)
             filterbank = bank
             _ = try Self.predict(loaded, Mel.features(Self.window([]), filterbank: bank))
@@ -120,24 +124,33 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
             .appendingPathComponent("smart-turn", isDirectory: true)
     }
 
-    /// The compiled model for `package`: the one in `cache` named for the package's bytes, or a
-    /// fresh compile moved there, with any other compile in `cache` removed. On `queue` only.
+    /// The compiled model for `package`: the one in `cache` named for the package's bytes, if its
+    /// own bytes still match the digest kept beside it (`<name>.sha256`), or a fresh compile moved
+    /// there with its digest written after it, with everything else in `cache` removed. A compile
+    /// with no digest beside it, or one that differs, is never handed to Core ML. On `queue` only.
     static func compiled(_ package: URL, in cache: URL) throws -> URL {
         let fm = FileManager.default
-        let kept = cache.appendingPathComponent(try digest(package) + ".mlmodelc", isDirectory: true)
-        if fm.fileExists(atPath: kept.appendingPathComponent("coremldata.bin").path) { return kept }
+        let name = try digest(package) + ".mlmodelc"
+        let kept = cache.appendingPathComponent(name, isDirectory: true)
+        let mark = cache.appendingPathComponent(name + ".sha256")
+        if let wanted = try? String(contentsOf: mark, encoding: .utf8), (try? digest(kept)) == wanted {
+            return kept
+        }
         let made = try MLModel.compileModel(at: package)
         try fm.createDirectory(at: cache, withIntermediateDirectories: true)
         for old in (try? fm.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)) ?? [] {
             try? fm.removeItem(at: old)
         }
         try fm.moveItem(at: made, to: kept)
+        try digest(kept).write(to: mark, atomically: true, encoding: .utf8)
         return kept
     }
 
-    /// The SHA-256 of every file in the package, in path order, with each path: the compiled
-    /// copy's name.
-    static func digest(_ package: URL) throws -> String {
+    /// The SHA-256 of every file under `folder`, in path order, each path and each file's bytes
+    /// preceded by its length, so no two packages share one: the compiled copy's name, and the
+    /// check of the compiled copy itself.
+    static func digest(_ folder: URL) throws -> String {
+        let package = folder
         let root = package.standardizedFileURL.path
         guard let walk = FileManager.default.enumerator(at: package, includingPropertiesForKeys: [.isRegularFileKey]) else {
             throw Trouble.missing("the model")
@@ -149,8 +162,11 @@ final class SmartTurn: TurnJudge, @unchecked Sendable {
         guard !files.isEmpty else { throw Trouble.missing("the model") }
         var hash = SHA256()
         for (path, url) in files.sorted(by: { $0.0 < $1.0 }) {
-            hash.update(data: Data(path.utf8))
-            hash.update(data: try Data(contentsOf: url, options: .alwaysMapped))
+            let name = Data(path.utf8), bytes = try Data(contentsOf: url, options: .alwaysMapped)
+            withUnsafeBytes(of: UInt64(name.count).littleEndian) { hash.update(bufferPointer: $0) }
+            hash.update(data: name)
+            withUnsafeBytes(of: UInt64(bytes.count).littleEndian) { hash.update(bufferPointer: $0) }
+            hash.update(data: bytes)
         }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }

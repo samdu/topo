@@ -103,6 +103,7 @@ case "$*" in
     exit "${UI_TEST:-0}" ;;
   *test-without-building*-skip-testing:TopoUITests*)
     echo "unit port53=${TEST_RUNNER_TOPO_PORT53_SOCKET-}" >> "$CALLS"
+    case "$*" in *-skip-testing:TopoTests/SmartTurnRealTests*) echo "unit turn: deselected" ;; *) echo "unit turn: models=${TEST_RUNNER_TOPO_UITEST_EAR_MODELS-}" ;; esac >> "$CALLS"
     exit 0 ;;
   *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
@@ -165,6 +166,7 @@ results() { tr '\n' ' ' < "$RESULTS_DIR/suites.txt"; }
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
 is "green: no port 53 holder here, none handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53="
+is "green: the fast lane leaves the real Smart Turn test out by name" "$(grep '^unit turn' "$CALLS")" "unit turn: deselected"
 is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
@@ -222,6 +224,11 @@ ui_source() {  # ui_source [lines of the quiet class]
 }
 ui_source
 ear=TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
+LANE=full suite unit-full topo_unit
+is "unit, full lane: exits 0" "$status" 0
+is "unit, full lane: Smart Turn's model fetched once" "$(calls fetch-ear-models.sh)" 1
+is "unit, full lane: the models handed to the real Smart Turn test" "$(grep '^unit turn' "$CALLS")" "unit turn: models=$work/cache/ear-models"
+
 LANE=full suite quiet topo_ui:quiet
 is "the quiet part: exits 0" "$status" 0
 is "the quiet part: a result of its own name" "$(results)" "topo_ui:quiet=success "

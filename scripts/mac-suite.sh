@@ -81,6 +81,8 @@ WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
+# The unit suite's one test the full lane alone runs: the real Smart Turn judging the fixture.
+REAL_TURN_TEST="TopoTests/SmartTurnRealTests"
 SUITES=(topo_unit topo_ui others scripts)
 # The class the audio lane exists for, and the order everything asked for runs in: the parts of
 # `topo_ui` are suites by their own names.
@@ -377,12 +379,22 @@ prepare() {
 # The app targets' own suite (TopoTests), hosted by the iOS app and covering the code the watch
 # and TV builds share with the phone, and the userland package's two bundles.
 suite_topo_unit() {
-  local status=0 udid rootfs shell claude
+  local status=0 udid rootfs shell claude models=() select=()
   unit_steps() {
     say "The rootfs, bash and Claude Code for the userland suites"
     rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$cache/rootfs")" || return 1
     shell="$(scripts/fetch-pinned.sh alpine-bash "$cache/alpine-bash")" || return 1
     claude="$(scripts/fetch-pinned.sh claude-code "$cache/claude-code")" || return 1
+    # Smart Turn's model, from the manifest's pinned revision and verified, for its real test:
+    # the full lane only, and the fast lane leaves the test out by name rather than skip it.
+    if [ "$lane" = full ]; then
+      say "Smart Turn's model for its real test"
+      scripts/fetch-ear-models.sh "$cache/ear-models" || return 1
+      models=("TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$cache/ear-models")
+    else
+      select=("-skip-testing:$REAL_TURN_TEST")
+      echo "Fast lane: $REAL_TURN_TEST is deselected."
+    fi
     new_simulator unit "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
 
     say "xcodebuild build-for-testing (Topo)"
@@ -418,14 +430,14 @@ suite_topo_unit() {
     local port53=() holder="${TOPO_PORT53_HOLDER:-$HOME/Library/Caches/port53-holder/socket}"
     [ -S "$holder" ] && port53=("TEST_RUNNER_TOPO_PORT53_SOCKET=$holder")
     rm -rf "$RESULTS/Topo-unit.xcresult"
-    run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} \
+    run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} ${models[@]+"${models[@]}"} \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
       "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
       "${NO_DIAGNOSE[@]}" \
-      -skip-testing:TopoUITests \
+      -skip-testing:TopoUITests ${select[@]+"${select[@]}"} \
       -resultBundlePath "$RESULTS/Topo-unit.xcresult"
   }
   unit_steps || status=1

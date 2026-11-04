@@ -45,7 +45,7 @@ struct VoiceTool: Tool {
     topo voice wait VALUE                   set it: seconds from \(QuietWait.said(QuietWait.range.lowerBound)) to \(QuietWait.said(QuietWait.range.upperBound)), in a conversation behind the lock
 
     \(QuietWait.said(QuietWait.standard)) s unless changed. A pause that sounds unfinished is still waited through, up to 4 s. A
-    change applies from the next utterance, on this phone only, and they can change it back in Settings.
+    change applies from the judge's next verdict, on this phone only, and they can change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -97,7 +97,7 @@ struct VoiceTool: Tool {
         // Judged as the rule judges what it reads, so nothing is kept that it would not wait for.
         guard let value = QuietWait.judged(Double(arguments[1])) else { return .usage(usage + "\n") }
         defaults.store.set(value, forKey: QuietWait.key)
-        return .ok("wait \(QuietWait.said(value)) s, from the next utterance\n")
+        return .ok("wait \(QuietWait.said(value)) s, from the next verdict\n")
     }
 
     private func temperature(_ arguments: [String]) -> ToolReply {

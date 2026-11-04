@@ -67,7 +67,7 @@ final class VoiceToolTests: XCTestCase {
         let tool = VoiceTool(defaults: defaults)
         for (asked, said) in [("2", "2.0"), ("0.6", "0.6"), ("3.0", "3.0"), ("1.4", "1.4")] {
             var reply = await tool.run(["wait", asked])
-            XCTAssertEqual(reply, .ok("wait \(said) s, from the next utterance\n"))
+            XCTAssertEqual(reply, .ok("wait \(said) s, from the next verdict\n"))
             XCTAssertEqual(QuietWait.value(defaults), Double(said))
             reply = await tool.run(["wait", "status"])
             XCTAssertEqual(reply, .ok("wait \(said) s\n"))
