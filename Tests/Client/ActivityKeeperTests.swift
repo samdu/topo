@@ -380,7 +380,7 @@ final class ActivityKeeperTests: XCTestCase {
         login.moveEpoch()
         login.runTeardowns()
         await settle()
-        XCTAssertEqual(host.ends.count, 0, "the sign-out's end waits behind the resume's")
+        XCTAssertEqual(host.ends.count, 1, "only the resume's end of A: the sign-out's waits behind it")
         gate.openUp()
         await login.tornDown()
         await resumed.value

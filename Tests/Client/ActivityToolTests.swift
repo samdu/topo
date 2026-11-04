@@ -243,7 +243,7 @@ final class ActivityToolTests: XCTestCase {
         let ended = Task { await tool.run(["end", "A1", #"{"relevance": 7}"#]) }
         await settle()
         let keeper = self.keeper!
-        await SigningOut.midFlight(login, release: { gate.openUp() })
+        await SigningOut.midFlight(login, reached: { gate.held == 1 }, release: { gate.openUp() })
         _ = await first.value
         let update = await queued.value
         let end = await ended.value

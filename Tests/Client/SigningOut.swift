@@ -20,7 +20,7 @@ import XCTest
 /// it ends (`ActivityKeeper.endAll` at the keeper's gate).
 @MainActor
 enum SigningOut {
-    static func midFlight(_ login: LoginLife, reached: () -> Bool = { true }, release: () -> Void = {},
+    static func midFlight(_ login: LoginLife, reached: () -> Bool, release: () -> Void = {},
                           file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<200 where !reached() { await Task.yield() }
         XCTAssertTrue(reached(), "the work never reached its gate, so nothing was in flight at the sign-out", file: file, line: line)
