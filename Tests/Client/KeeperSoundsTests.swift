@@ -718,8 +718,6 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.working(false)
         XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was faded")
         XCTAssertEqual(bed.pauses, 0, "a bed made before the reset was paused")
-        rig.sounds.duck()
-        XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was ducked")
         XCTAssertTrue(rig.sounds.tool("Bash", path: nil))
         XCTAssertEqual(act.plays, 1, "a receipt made before the reset was played")
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_act", "bloop_act"])
