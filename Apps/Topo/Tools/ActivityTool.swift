@@ -104,6 +104,10 @@ struct ActivityTool: Tool {
             return .failed("topo: slot \(slot) is running as \(running.id); update or end it\n")
         }
         let keeper = keeper()
+        // Between a login's end and the next sign-in no epoch is current, and nothing starts.
+        guard keeper.login.epoch.isCurrent else {
+            return .failed("topo: the login has ended; nothing started\n")
+        }
         // Held from here until the reply: a second start of the slot while this one fetches is refused.
         guard keeper.reserve(slot) else {
             return .failed("topo: slot \(slot) is starting; wait for it\n")

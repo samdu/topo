@@ -21,14 +21,16 @@ final class LoginLife {
         fileprivate let value: Int
         fileprivate let life: LoginLife
 
-        /// Whether the login this was taken under still stands.
-        var isCurrent: Bool { life.count == value }
+        /// Whether the login this was taken under still stands: none does once a login's
+        /// teardowns have run, until the next sign-in, so work begun in between — after a
+        /// sign-out's last step, or while a teardown's task has yet to start — keeps nothing.
+        var isCurrent: Bool { life.standing && life.count == value }
     }
 
     private var count = 0
     /// Whether the login's end has yet to run its teardowns: false from a sign-out's teardowns
-    /// until the phase is next signed in, so the phase leaving signed in at that sign-out's last
-    /// step does not end the login a second time.
+    /// until the phase is next signed in. No epoch is current meanwhile, and the phase leaving
+    /// signed in at that sign-out's last step does not end the login a second time.
     private(set) var standing = true
     private var teardowns: [@MainActor () -> Void] = []
     private var ending: [Task<Void, Never>] = []
@@ -69,8 +71,10 @@ final class LoginLife {
         runTeardowns()
     }
 
-    /// The phase is signed in again: the next leaving of it is a login's end to run.
+    /// The phase is signed in again: the next leaving of it is a login's end to run. The epoch
+    /// moves too, so nothing taken while no login stood becomes current with this one.
     func began() {
+        moveEpoch()
         standing = true
     }
 

@@ -57,6 +57,24 @@ final class LoginLifeTests: XCTestCase {
         XCTAssertFalse(held.isCurrent)
     }
 
+    /// Once a login's teardowns have run, no epoch is current until the next sign-in, and one
+    /// taken in between does not become current with it.
+    func testNoEpochIsCurrentBetweenALoginsEndAndTheNextSignIn() {
+        let login = LoginLife()
+        login.end()
+        let between = login.epoch
+        XCTAssertFalse(between.isCurrent, "work begun after the teardowns would keep what it made")
+        login.began()
+        XCTAssertFalse(between.isCurrent, "work begun with no login became the next login's")
+        XCTAssertTrue(login.epoch.isCurrent)
+    }
+
+    /// `SigningOut.midFlight` fails a test whose work never reached its gate.
+    func testMidFlightFailsWhenTheWorkNeverReachedItsGate() async {
+        XCTExpectFailure("the work never reached its gate")
+        await SigningOut.midFlight(LoginLife(), reached: { false })
+    }
+
     func testTeardownsRunInTheOrderRegisteredAtEveryEnd() {
         let login = LoginLife()
         var ran: [String] = []

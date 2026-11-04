@@ -134,6 +134,8 @@ final class ActivityToolTests: XCTestCase {
         let tool = self.tool
         let first = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
         await SigningOut.midFlight(login, reached: { gate.pending == 1 })
+        // Signed in again: the second start is the next login's.
+        login.began()
         let second = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
         await settle()
         XCTAssertEqual(gate.pending, 2)
@@ -182,6 +184,30 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
         XCTAssertEqual(host.starts, 0, "an activity started after the sign-out's end")
         XCTAssertEqual(keeper.tasks, 0)
+    }
+
+    /// A start received once the login's teardowns have run, before the keeper's end has
+    /// started or after it has finished, starts nothing: no epoch is current until the next
+    /// sign-in.
+    func testAStartReceivedAfterTheTeardownsStartsNothing() async throws {
+        let gate = GatedTrackerFetcher()
+        fetcher = gate
+        let tool = self.tool
+        login.end()
+        let started = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        await settle()
+        XCTAssertEqual(gate.pending, 1)
+        await login.tornDown()
+        gate.release(TrackerFixtures.wiki)
+        let reply = await started.value
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(host.starts, 0, "an activity started after the login's end")
+        XCTAssertEqual(keeper.tasks, 0)
+        // A start that awaits nothing is refused as it is received.
+        let timed = await tool.run(["start", "tea", timer])
+        XCTAssertEqual(timed.status, ToolReply.failed, timed.text)
+        XCTAssertEqual(host.starts, 0, "an activity started after the login's end")
+        XCTAssertFalse(keeper.isReserved("tea"))
     }
 
     func testTwoStartsOfOneSlotMakeOneActivity() async throws {
