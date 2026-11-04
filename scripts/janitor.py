@@ -34,8 +34,8 @@ judgement:
      is never dropped;
   5. reports a ready PR that needs a person, once, and again only when the
      PR itself changes: a verdict that blocks, a green PR with Proof boxes
-     unticked, a ready PR with no validate run, a run cancelled with nothing
-     after it, and a PR nothing has touched for `IDLE` while no run is in
+     unticked, a ready PR with no validate run, a run cancelled
+     again after its rerun, and a PR nothing has touched for `IDLE` while no run is in
      progress. A draft is gate one's and is never read or reported by
      this step;
   6. reports each open issue that is untriaged — no `triaged` label and no
@@ -77,8 +77,10 @@ judgement:
      (`GATE`, the gate publish-topo.sh builds behind): a build never recut.
 
 Step 2 takes a run cancelled inside the reviewer chain alone (codex past its
-time limit) as a reviewer that never ran; step 5 also reports a ready PR
-that conflicts with main while no tmux session of its engineer stands.
+time limit) as a reviewer that never ran, and reruns any other cancelled run
+whole, once per head, when no run on the head is queued or in progress; step
+5 also reports a ready PR that conflicts with main while no tmux session of
+its engineer stands.
 
 What was last said of each PR and issue is kept as a fingerprint in the state
 file (`reported`), and an item whose fingerprint has not moved is silent
@@ -283,6 +285,19 @@ def owners(branch):
     return {f"topo-{topic}", topic}
 
 
+def pick_run(runs, number):
+    """The run that speaks for a PR's head, from the head's pull_request
+    validate runs: only those GitHub ties to this PR, since two PRs can share a
+    head and one's green run is not the other's; a run still queued or in
+    progress first, since one event can start two runs in the same second and
+    the concurrency group cancels one of them, which may be the one with the
+    higher id; otherwise the newest. None when no run is this PR's. Pure."""
+    runs = [r for r in runs or [] if number in (r.get("prs") or [])]
+    live = [r for r in runs if r.get("status") != "completed"]
+    pool = live or runs
+    return max(pool, key=lambda r: (r["created_at"], r["id"])) if pool else None
+
+
 def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
     """What one open PR wants from this pass.
 
@@ -352,9 +367,20 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
     # limit, which GitHub concludes as cancelled — is a reviewer that did not
     # finish, and takes the rerun below; any other cancel is the run's.
     in_chain = "reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
+    # Any other cancel with no run live after it is a run nobody will restart
+    # — the pair one event starts, both cancelled by the concurrency group —
+    # so the run is rerun whole, once per head; cancelled again, it is said.
     if conclusion == "cancelled" and not in_chain:
-        if since > GRACE:
-            report("cancelled", f"{title}: its newest validate run was cancelled {minutes(since)} ago and nothing ran after it; a push starts one.")
+        run_key = f"{n}:run:{head}"
+        if run_key not in state.get("rerun", {}):
+            if since > SETTLE:
+                out.append({"kind": "rerun", "key": run_key, "run_id": run["id"], "job_id": None, "job": "run",
+                            "number": n,
+                            "text": f"reran {title}'s validate run {run['id']} whole: it was cancelled {minutes(since)} ago "
+                                    f"with no run after it on {short}."})
+        elif since > GRACE:
+            report("cancelled", f"{title}: its validate run on {short} was cancelled again after one rerun, "
+                                f"{minutes(since)} ago, and nothing ran after it; a push starts one.")
         return out
 
     # The verdict first. The review cap is the one way review_gate is red beside a green
@@ -1039,13 +1065,10 @@ class Shell:
         return None
 
     def newest_run(self, head, number):
-        """The newest pull_request validate run for this head that GitHub ties to
-        this PR: two PRs can share a head, and one's green run is not the other's."""
+        """The run that speaks for this PR's head (`pick_run`)."""
         runs = self.gh_api(f"repos/{REPO}/actions/workflows/{WORKFLOW}/runs?head_sha={head}&event=pull_request&per_page=100",
                            "[.workflow_runs[] | {id, status, conclusion, created_at, updated_at, prs: [.pull_requests[].number]}]") or []
-        runs = [r for r in runs if number in (r.get("prs") or [])]
-        runs.sort(key=lambda r: (r["created_at"], r["id"]))
-        return runs[-1] if runs else None
+        return pick_run(runs, number)
 
     def jobs(self, run_id):
         return self.gh_api(f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
@@ -1058,6 +1081,10 @@ class Shell:
     def rerun(self, job_id):
         """One job of a run and the jobs that wait on it; never the run."""
         self.run(["gh", "run", "rerun", "--repo", REPO, "--job", str(job_id)], mutating=True)
+
+    def rerun_run(self, run_id):
+        """A whole run, every job: only for a run cancelled before its jobs ran."""
+        self.run(["gh", "run", "rerun", "--repo", REPO, str(run_id)], mutating=True)
 
     def open_issues(self):
         """The open issues, as GraphQL nodes: number, title, the two dates, labels
@@ -1516,7 +1543,10 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
             elif w["kind"] == "rerun":
                 try:
-                    sh.rerun(w["job_id"])
+                    if w["job_id"] is None:
+                        sh.rerun_run(w["run_id"])
+                    else:
+                        sh.rerun(w["job_id"])
                     state["rerun"][w["key"]] = {"run": w["run_id"], "job": w["job"], "at": now.isoformat()}
                     lines.append(w["text"])
                     persist()

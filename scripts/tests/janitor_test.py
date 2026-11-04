@@ -279,8 +279,48 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), [], "a review_gate red under a reviewer that never ran is no verdict")
 
-    def test_a_cancelled_run_with_nothing_after_it_is_reported(self):
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)), ["report:cancelled"])
+    def test_a_cancelled_run_with_nothing_after_it_is_rerun_whole_once(self):
+        w = janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)
+        self.assertEqual(kinds(w), ["rerun"])
+        self.assertEqual((w[0]["key"], w[0]["run_id"], w[0]["job_id"]), (f"7:run:{HEAD}", 99, None))
+        self.assertIn("reran #7 (buddy/x)'s validate run 99 whole", w[0]["text"])
+
+    def test_a_cancelled_run_inside_the_settle_waits(self):
+        self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=3)), [], {}, NOW), [])
+
+    def test_a_run_cancelled_again_after_its_rerun_is_reported_and_not_rerun(self):
+        done = {"rerun": {f"7:run:{HEAD}": {}}}
+        w = janitor.decide_pr(pr(), run("cancelled"), [], done, NOW)
+        self.assertEqual(kinds(w), ["report:cancelled"])
+        self.assertIn("cancelled again after one rerun", w[0]["text"])
+        self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=12)), [], done, NOW), [])
+
+    def test_a_new_head_has_its_cancelled_run_rerun_again(self):
+        w = janitor.decide_pr(pr(headRefOid="fff0000"), run("cancelled"), [], {"rerun": {f"7:run:{HEAD}": {}}}, NOW)
+        self.assertEqual(kinds(w), ["rerun"])
+
+    # The pick: #579, a pair of runs one event started in the same second, the
+    # concurrency group's cancelled one carrying the higher id.
+    def test_a_live_run_speaks_for_the_head_over_a_newer_cancelled_one(self):
+        at = ago(timedelta(minutes=30))
+        queued = {"id": 41788540595, "status": "queued", "conclusion": None, "created_at": at, "prs": [7]}
+        cancelled = {"id": 41788540673, "status": "completed", "conclusion": "cancelled", "created_at": at, "prs": [7]}
+        self.assertEqual(janitor.pick_run([queued, cancelled], 7)["id"], 41788540595)
+        self.assertEqual(janitor.pick_run([cancelled, queued], 7)["id"], 41788540595)
+
+    def test_with_no_live_run_the_newest_speaks(self):
+        old = {"id": 1, "status": "completed", "conclusion": "success", "created_at": ago(timedelta(hours=2)), "prs": [7]}
+        new = {"id": 2, "status": "completed", "conclusion": "cancelled", "created_at": ago(timedelta(hours=1)), "prs": [7]}
+        tie = {"id": 3, "status": "completed", "conclusion": "failure", "created_at": ago(timedelta(hours=1)), "prs": [7]}
+        self.assertEqual(janitor.pick_run([new, old], 7)["id"], 2)
+        self.assertEqual(janitor.pick_run([tie, new, old], 7)["id"], 3, "the higher id breaks a tie")
+
+    def test_another_prs_run_never_speaks_for_this_one(self):
+        theirs = {"id": 5, "status": "queued", "conclusion": None, "created_at": ago(timedelta(minutes=1)), "prs": [8]}
+        mine = {"id": 4, "status": "completed", "conclusion": "success", "created_at": ago(timedelta(hours=1)), "prs": [7]}
+        self.assertEqual(janitor.pick_run([theirs, mine], 7)["id"], 4)
+        self.assertIsNone(janitor.pick_run([theirs], 7))
+        self.assertIsNone(janitor.pick_run([], 7))
 
     def test_a_ready_pr_with_no_run_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), None, [], {}, NOW)), ["report:norun"])
@@ -532,10 +572,12 @@ class Stuck(unittest.TestCase):
 
     def test_a_cancel_outside_the_reviewer_is_still_the_runs_own(self):
         j = jobs(select="success", test="cancelled", review_cap="success", codex="skipped", reviewer_ran="failure")
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)), ["report:cancelled"])
+        w = janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)
+        self.assertEqual((kinds(w), w[0]["job_id"]), (["rerun"], None), "the run whole, not codex")
         j = jobs(select="success", test="success", review_cap="success", codex="success", reviewer_ran="cancelled",
                  review_gate="cancelled", extra="cancelled")
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)), ["report:cancelled"])
+        w = janitor.decide_pr(pr(), run("cancelled"), j, {}, NOW)
+        self.assertEqual((kinds(w), w[0]["job_id"]), (["rerun"], None), "the run whole, not codex")
 
     def test_a_reviewer_cancelled_inside_the_settle_waits(self):
         self.assertEqual(janitor.decide_pr(pr(), run("cancelled", since=timedelta(minutes=3)), self.chain_cancelled(), {}, NOW), [])
@@ -2490,6 +2532,29 @@ class WholePass(unittest.TestCase):
         self.assertIn(f"gh run rerun --repo samdu/topo --job {job_id(j, 'codex')}", calls)
         self.assertNotIn("--failed", calls)
         self.assertIn("reran codex of #7", self.texts())
+
+    def test_a_run_cancelled_whole_is_rerun_whole_once_per_head(self):
+        j = jobs(select="cancelled", test="cancelled", review_cap="cancelled", codex="cancelled",
+                 post_feedback="cancelled", reviewer_ran="cancelled", review_gate="cancelled")
+        s = self.scripted(runs={HEAD: [run("cancelled")]}, jobs=j, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        reruns = [l for l in calls.splitlines() if l.startswith("gh run")]
+        self.assertEqual(reruns, ["gh run rerun --repo samdu/topo 99"], "the run, never a job")
+        self.assertEqual(self.state_file()["rerun"][f"7:run:{HEAD}"]["run"], 99)
+        self.assertIn("reran #7 (buddy/x)'s validate run 99 whole", self.texts())
+        p, calls = self.run_pass(s)
+        self.assertNotIn("run rerun", calls, "once per head")
+        self.assertIn("cancelled again after one rerun", self.texts())
+
+    def test_a_queued_run_beside_a_cancelled_one_is_waited_on(self):
+        at = run("cancelled")["created_at"]
+        live = dict(run(status="queued", conclusion=None), id=98, created_at=at)
+        s = self.scripted(runs={HEAD: [run("cancelled"), live]}, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("run rerun", calls)
+        self.assertNotIn("/runs/99/jobs", calls)
 
     def test_a_merge_github_refuses_is_said_with_the_refusal(self):
         s = self.scripted(worktrees="", merge_refused="Pull request is not mergeable: the merge commit cannot be cleanly created")
