@@ -36,6 +36,7 @@
 		0C53C4EE08987A6A0555C32E /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
 		0CB7A7CF45352A0C90878229 /* ModelDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */; };
 		0CB9C6F0BF69A4125ADF0F51 /* Memory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AECABE45D12B711410A2ED /* Memory.swift */; };
+		0D0A5BDC2F2B2F1BD734492C /* licence-bsd-2-clause-daily.txt in Resources */ = {isa = PBXBuildFile; fileRef = 654B51AFE386B93FAE966734 /* licence-bsd-2-clause-daily.txt */; };
 		0ECA84ECF98B4AF429B6B600 /* ScreenWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996EA9E8F3A45CAAB86EE482 /* ScreenWatch.swift */; };
 		0FEE95E130EFDE926BB8CB0F /* GuestDNSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE4006DA9780D0A37EBCACB7 /* GuestDNSTests.swift */; };
 		10356762FE3EC781DA7DB5B8 /* SurfaceTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */; };
@@ -88,6 +89,7 @@
 		250B656BBEC3CA81673470FE /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = B3BA0E084B64DA5739DA87CC /* FluidAudio */; };
 		263E7336197C616811DD2E21 /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
 		272B2E4D2267C793BDE47110 /* TopoBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 594F7C6A041FCD7F623CEA79 /* TopoBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2730DEB2CE76A49BAFA5BF46 /* licence-bsd-2-clause-daily.txt in Resources */ = {isa = PBXBuildFile; fileRef = 654B51AFE386B93FAE966734 /* licence-bsd-2-clause-daily.txt */; };
 		27485C4D8AD306F226B648E3 /* ControlDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2D998B2B0A1A14F93BC1BD /* ControlDocument.swift */; };
 		2908E979E18FAFFBCBBA3F5C /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		29A3D120B4B66455DFDF5E21 /* NotePush.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4CB88ED3E53A495B415761 /* NotePush.swift */; };
@@ -848,6 +850,7 @@
 		631F54F3CC1F646736B81799 /* SurfacePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacePages.swift; sourceTree = "<group>"; };
 		639E8B56AE56DB4807D9EFA0 /* PlacesDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacesDocument.swift; sourceTree = "<group>"; };
 		649A32DB00E91758914258B0 /* WatchSurfaceSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSurfaceSyncTests.swift; sourceTree = "<group>"; };
+		654B51AFE386B93FAE966734 /* licence-bsd-2-clause-daily.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "licence-bsd-2-clause-daily.txt"; sourceTree = "<group>"; };
 		654D33CC62A8C821EACD662C /* TopoHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoHubApp.swift; sourceTree = "<group>"; };
 		6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheetModel.swift; sourceTree = "<group>"; };
 		667A80E4EEE18FB3F1494035 /* ControlTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlTool.swift; sourceTree = "<group>"; };
@@ -1754,6 +1757,7 @@
 			isa = PBXGroup;
 			children = (
 				3D72844A55F06897475F5B93 /* licence-apache-2.0.txt */,
+				654B51AFE386B93FAE966734 /* licence-bsd-2-clause-daily.txt */,
 				376BCEC5903C9EB286BCE9E1 /* licence-fastcluster.txt */,
 				982C233854D42AF9103300EB /* licence-kokoroane-v3-notice.txt */,
 				E8C6CC8012D2FC546AB11D7D /* licence-libarchive-freebsd.txt */,
@@ -2262,6 +2266,7 @@
 				830E3862905FF4A78D5EA5B5 /* crossing-up.json in Resources */,
 				5167C9D8F2469979498A1DE8 /* fling.json in Resources */,
 				C47E853635A68FEE83A9C5F4 /* licence-apache-2.0.txt in Resources */,
+				0D0A5BDC2F2B2F1BD734492C /* licence-bsd-2-clause-daily.txt in Resources */,
 				55C0A45D2305E29F10162062 /* licence-fastcluster.txt in Resources */,
 				1265B8E7A0882A6A70185A7C /* licence-kokoroane-v3-notice.txt in Resources */,
 				EFAE4A40212024ABC52EB7D1 /* licence-libarchive-freebsd.txt in Resources */,
@@ -2318,6 +2323,7 @@
 				E42BB8C3B4B9D5F09895B354 /* accessoryRectangular.json in Resources */,
 				DB34E4B8FA07C21A5EF33159 /* capital-of-france.wav in Resources */,
 				B0B4C28BFEA0ACC0380FA9DB /* licence-apache-2.0.txt in Resources */,
+				2730DEB2CE76A49BAFA5BF46 /* licence-bsd-2-clause-daily.txt in Resources */,
 				78E24FE04F378EB661F776F2 /* licence-fastcluster.txt in Resources */,
 				FC876B9B0F2570C3E7BDD99E /* licence-kokoroane-v3-notice.txt in Resources */,
 				249A82C20C430A4001D3E983 /* licence-libarchive-freebsd.txt in Resources */,
