@@ -121,7 +121,7 @@ final class PressRefusalTests: XCTestCase {
         for (name, ear) in [("cold", cold), ("loading", loading), ("failed", failed)] {
             let seams = Seams()
             let center = NotificationCenter()
-            let audio = AudioSession(center: center, configure: seams.configure)
+            let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
             let voice = voiceInput(seams, audio, center, ear: ear)
             voice.press(as: .chat, mine: 1)
             XCTAssertEqual(voice.refusal, ear.summary, "\(name): the refusal is the ear's own words")
@@ -141,7 +141,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         voice.press(as: .chat, mine: 1)
         XCTAssertNil(voice.refusal)
@@ -160,7 +160,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is loading") { ear.state == .loading }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         XCTAssertFalse(voice.canListen, "a loading ear dims the microphone before any press")
         XCTAssertNil(voice.refusal, "nothing has been pressed")
@@ -174,7 +174,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         XCTAssertTrue(voice.canListen)
         voice.microphoneDenied()
@@ -188,7 +188,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         voice.press(as: .chat, mine: voice.generation)
         utterance(into: voice.sink)
@@ -204,7 +204,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         voice.press(as: .chat, mine: voice.generation)
         utterance(into: voice.sink)
