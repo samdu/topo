@@ -583,9 +583,23 @@ final class WidgetReader {
     /// control and nothing else.
     private var ids: [String: WidgetControl] = [:]
     private var idsInFamily: Set<String> = []
+    /// Reading a Live Activity's region (`ActivityDocument`): the lock screen's text budget, and
+    /// no control and no image, since an activity's tap hands on nothing and it has no slot of
+    /// images.
+    private var activity = false
 
     init(source: WidgetDocument.Source) {
         self.source = source
+    }
+
+    /// One tree for a Live Activity's region, read with the lock screen's budget: it shows on a
+    /// locked phone whichever region it is. A control or an image in it is refused with a note.
+    func region(_ tree: [String: Any], _ path: String) -> WidgetNode? {
+        activity = true
+        family = .accessoryRectangular
+        controls = 0
+        idsInFamily = []
+        return node(tree, path, depth: 1)
     }
 
     nonisolated(unsafe) static let dates: ISO8601DateFormatter = {
@@ -599,7 +613,9 @@ final class WidgetReader {
         return formatter
     }()
 
-    private func note(_ path: String, _ why: String) { notes.append("\(path) \(why)") }
+    func note(_ path: String, _ why: String) { notes.append("\(path) \(why)") }
+    /// Another reader's notes, taken as this one's (a tracker's, read inside an activity).
+    func append(notes more: [String]) { notes += more }
 
     // MARK: The top level
 
@@ -857,6 +873,11 @@ final class WidgetReader {
     }
 
     private func image(_ fields: Fields) -> WidgetNode? {
+        guard !activity else {
+            fields.note("kind", "is image, and an activity has no images, so it was dropped")
+            fields.skip(["name", "fit", "corner"])
+            return nil
+        }
         guard let name = fields.string("name"), WidgetDocument.isName(name) else {
             fields.note("name", "is not the name of an image topo widget image put in this slot, and the image was dropped")
             return nil
@@ -907,6 +928,11 @@ final class WidgetReader {
     // MARK: Controls
 
     private func control(_ kind: WidgetControl.Kind, _ fields: Fields, depth: Int) -> WidgetNode? {
+        guard !activity else {
+            fields.note("kind", "is \(kind.rawValue), and an activity draws no control, so it was dropped")
+            fields.skip(["id", "label", "action", "on"])
+            return nil
+        }
         guard let id = fields.string("id"), WidgetDocument.isName(id) else {
             fields.note("id", "is not a control id ([a-z0-9-], 1 to 32 characters), and the \(kind.rawValue) was dropped")
             fields.skip(["label", "action", "on"])
@@ -1041,18 +1067,18 @@ final class WidgetReader {
     static let notAColour = "is not a colour: a Theme token (\(WidgetColour.Token.allCases.map(\.rawValue).joined(separator: ", "))), \"#RRGGBB\", or a pair of them for light and dark"
     static let notADate = "is not an ISO 8601 date and time"
 
-    fileprivate func date(_ raw: Any) -> Date? {
+    func date(_ raw: Any) -> Date? {
         guard let text = raw as? String else { return nil }
         return Self.dates.date(from: text) ?? Self.fractionalDates.date(from: text)
     }
 
-    fileprivate func finite(_ value: Any) -> Double? {
+    func finite(_ value: Any) -> Double? {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         let double = number.doubleValue
         return double.isFinite ? double : nil
     }
 
-    fileprivate func integer(_ value: Any) -> Int? {
+    func integer(_ value: Any) -> Int? {
         guard let number = finite(value), number == number.rounded(), abs(number) < 1e15 else { return nil }
         return Int(number)
     }

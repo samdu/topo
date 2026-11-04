@@ -1,7 +1,7 @@
 import Foundation
 
 /// When the mind's context is compacted by itself: Claude Code's own threshold, or a share of the
-/// window the person or the mind chose. The arithmetic is Claude Code's at its pin (2.1.285), kept
+/// window the person or the mind chose. The arithmetic is Claude Code's at its pin (2.1.316), kept
 /// here so the app's scale and the resident's are one.
 public enum Compaction {
     public enum Setting: Sendable, Equatable {
