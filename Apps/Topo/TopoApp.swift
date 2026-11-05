@@ -103,6 +103,7 @@ struct TopoApp: App {
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
             ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
+            TimerTool(scheduler: TimerBook.scheduler, book: { TimerBook.shared }, broker: broker),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),

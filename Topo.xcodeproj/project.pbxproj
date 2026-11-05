@@ -135,8 +135,10 @@
 		323FA9D3B79284E910375220 /* ProgressTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C17BE688DD21C46E7D3630 /* ProgressTracker.swift */; };
 		32830F67E46628FB06BD9EC0 /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
 		32A8232D7FDF934BB5928D81 /* ContextTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D69A78FA2EC3C07AC87C2955 /* ContextTool.swift */; };
+		331768992D55D95FADCE2B3B /* AlarmKitScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE3F8893AE0658B5AFD3928C /* AlarmKitScheduler.swift */; };
 		33FADCED655202CC03DA3DE0 /* VaultDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E270E681606D89AAEA041E6 /* VaultDownloads.swift */; };
 		3437864E6AD2F3E01FA3D8B7 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
+		346669CC3EA1309F1E3A20EE /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
 		3535E85112598C5CFC84FDF5 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
 		35A13060991707C182C92CE6 /* ActivityDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833FF800AF0B74BA2F57AC39 /* ActivityDocument.swift */; };
 		366808E32D484A6F8AB966CE /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
@@ -147,6 +149,7 @@
 		390AF266B4889AC3039F0FD6 /* TurnImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8ABE048D225EE488FD18262 /* TurnImage.swift */; };
 		39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B5621388A948B9C5F0BD7B /* EventKitTools.swift */; };
 		394011352BE04F68F30E3B98 /* MascotRoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6904A480352F2D00E38BFD6F /* MascotRoost.swift */; };
+		39A7F5C1A583CD0706F83AD6 /* TimerToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDB28FD2CE691449A6664BD /* TimerToolTests.swift */; };
 		39DD8E0131A9E3A312E554E5 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		3AD1BB89870BB3C677E7F2E4 /* TopoWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C273B9B05389AA1C5777F528 /* TopoWidgets.swift */; };
@@ -257,6 +260,7 @@
 		65656C23B2597F40CC306216 /* MascotRoamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09968228612928D31AB9FA84 /* MascotRoamTests.swift */; };
 		669AB84BADAA72DF1DFA4564 /* ActivityKeeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B6B8A430213F1BC18FBD60 /* ActivityKeeperTests.swift */; };
 		6740826216EF8BDEAE176765 /* UserlandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4449A2BC546425D8D0480134 /* UserlandTests.swift */; };
+		676833E808D146C613D6C760 /* TimerTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED32033508A735AE5BA3E703 /* TimerTool.swift */; };
 		676A718B897B3DC0B05DF760 /* SigningOut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B8C93F154A9636985BC8036 /* SigningOut.swift */; };
 		67E38AABE488CED2DE145C40 /* ScreenWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996EA9E8F3A45CAAB86EE482 /* ScreenWatch.swift */; };
 		68EFF6B437CBB2B98EF9D3D7 /* systemSmall.json in Resources */ = {isa = PBXBuildFile; fileRef = C404AE7F18179442D89B4B50 /* systemSmall.json */; };
@@ -330,6 +334,7 @@
 		826779FB38E9EDF80785009F /* HubModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8809A0CAEB64B3D22525D3DD /* HubModel.swift */; };
 		830E3862905FF4A78D5EA5B5 /* crossing-up.json in Resources */ = {isa = PBXBuildFile; fileRef = 3EC5770ED2DCA16F30AA7C93 /* crossing-up.json */; };
 		8341A7CD7D47109F26126BD6 /* Vocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2DC2072C5D784DECA9AEAE0 /* Vocabulary.swift */; };
+		83EF96EC207170E156E5616C /* TopoAlarm.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5590AD65A1F511E4AD99193 /* TopoAlarm.swift */; };
 		843B8C0DD0B51288A54C3D7D /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		84CE3B4140640A9E25A88D50 /* VaultHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E8447D928AACA5D0B36ABD /* VaultHome.swift */; };
 		850223B04226B34EC2311541 /* TopoUserland in Frameworks */ = {isa = PBXBuildFile; productRef = 602A0BE4393DC060CB5ABB82 /* TopoUserland */; };
@@ -404,6 +409,7 @@
 		A0298613747D4395827C0E40 /* NextTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168BFCB3EC9C31AD43D68959 /* NextTurn.swift */; };
 		A03A91385AAB3873EC901FF3 /* VaultMount.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6BCB70D375EC37F314FCB10 /* VaultMount.swift */; };
 		A0CB70E9F5876CDC83B84D04 /* ComposerStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E3F7EEC977B79E8BB72BBDC /* ComposerStateTests.swift */; };
+		A10BCD35B7F11E5E75D790B7 /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
 		A10FFE217C7B37F36B501F07 /* DeviceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDC74A1818899420B9F821E /* DeviceIdentityTests.swift */; };
 		A114674D0988C85DD51AB003 /* VaultHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E8447D928AACA5D0B36ABD /* VaultHome.swift */; };
 		A1523B7B13C19AA18D223D3A /* TrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000D0D9322C088B22C4A18C6 /* TrackerView.swift */; };
@@ -457,6 +463,7 @@
 		B0B4C28BFEA0ACC0380FA9DB /* licence-apache-2.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 3D72844A55F06897475F5B93 /* licence-apache-2.0.txt */; };
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
 		B0D200AEF5BD31A4AFD5B092 /* tracker-expanded-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = C1D6CD240513C20BBE4EC29E /* tracker-expanded-dark.png */; };
+		B0F2F082982133C9C13D50E7 /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
 		B106BEB8C12E88B983DCB512 /* EnergyPulseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 893F3E3722F73D5670BE74E7 /* EnergyPulseTests.swift */; };
 		B12BFB923BAD7447CF7FB88F /* WatchCueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7FF54A6D05E5954E13EE7E2 /* WatchCueTests.swift */; };
 		B15EA92763AE1DC3A0B80DA0 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
@@ -545,6 +552,8 @@
 		D376D05DBF93FC051675810E /* BadgeGestureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CCA9A5FEFF96C67A16956F /* BadgeGestureTests.swift */; };
 		D4300DFFE3F68B8ECE262852 /* PlacesDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 639E8B56AE56DB4807D9EFA0 /* PlacesDocument.swift */; };
 		D4813369C6BE1682D0651573 /* GitHubTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FFBCB76953EE398AF63FB9D /* GitHubTool.swift */; };
+		D4EDBC7EA7275D68061A3573 /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
+		D5ABF6BBD4B99DF1AE998453 /* TopoAlarm.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5590AD65A1F511E4AD99193 /* TopoAlarm.swift */; };
 		D615BDA21A8233CB73577A95 /* GuestImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF58534E47D3EBCB68EFD2FA /* GuestImages.swift */; };
 		D616142B4D2005BE5105B280 /* NextTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C5D5EA3AC974059B62B6B47 /* NextTurnTests.swift */; };
 		D646F6475CADF57C0793D37B /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
@@ -617,6 +626,7 @@
 		F1573B90E421C2BA529308C9 /* SecretTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38D69076CBD5D984124A297F /* SecretTool.swift */; };
 		F1658B67DBE624653FE6611D /* FirstRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAA62817ACBB2D81A716AAF2 /* FirstRun.swift */; };
 		F179B6F2808ECFFAA6763959 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
+		F3531D84B904269CC46D9B27 /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
 		F35756204F3DEB498BF30D91 /* accessoryCircular.json in Resources */ = {isa = PBXBuildFile; fileRef = 1FBDF863613C6427982D813B /* accessoryCircular.json */; };
 		F4010B6C30D29D40FE5B6DF3 /* WidgetDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */; };
 		F44AD65B7607EE255C10D21E /* DownloadWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE401C13B7D8F3D497875DFC /* DownloadWatchdog.swift */; };
@@ -1101,6 +1111,7 @@
 		DEC7918EC84D993DA25BD251 /* TrackerFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackerFetcherTests.swift; sourceTree = "<group>"; };
 		DEF0C378213C9A0018F5BC0B /* TopoLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoLink; path = Packages/TopoLink; sourceTree = SOURCE_ROOT; };
 		DFD4F34ACF1BC2A1F5010F79 /* PhoneToolsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneToolsTests.swift; sourceTree = "<group>"; };
+		DFDB28FD2CE691449A6664BD /* TimerToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerToolTests.swift; sourceTree = "<group>"; };
 		E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTranscriptTests.swift; sourceTree = "<group>"; };
 		E1040C0C87BAF870E2D01ACC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E23900C549F79062FA7DB56B /* ScreenSampler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenSampler.swift; sourceTree = "<group>"; };
@@ -1111,6 +1122,7 @@
 		E4E0F75855123C685AAD8ED1 /* TopoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoApp.swift; sourceTree = "<group>"; };
 		E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectedGlyph.swift; sourceTree = "<group>"; };
 		E5386B9F1DB4B3204F476074 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E5590AD65A1F511E4AD99193 /* TopoAlarm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAlarm.swift; sourceTree = "<group>"; };
 		E657338C47DD5C2996280F04 /* TurnPushTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPushTests.swift; sourceTree = "<group>"; };
 		E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloads.swift; sourceTree = "<group>"; };
 		E8BC4617024AD72D114DF8C7 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -1121,6 +1133,7 @@
 		EADCB3AFEFCD27C555352C53 /* ComposerAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerAttachments.swift; sourceTree = "<group>"; };
 		EB40574A451BCD56247E1E50 /* HomeTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeTool.swift; sourceTree = "<group>"; };
 		EC5C273524C6EE9CB5783D8E /* GuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTests.swift; sourceTree = "<group>"; };
+		ED32033508A735AE5BA3E703 /* TimerTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerTool.swift; sourceTree = "<group>"; };
 		EEBEFF5C7F46518920264AC9 /* tracker-minimal-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "tracker-minimal-dark.png"; sourceTree = "<group>"; };
 		EEFE19D8F26717B2747C2185 /* WebAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuthTests.swift; sourceTree = "<group>"; };
 		EFC4DEFA1DE3ED504C31746F /* LookStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookStage.swift; sourceTree = "<group>"; };
@@ -1136,6 +1149,7 @@
 		F3D543E552C5A46713503953 /* DebugRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRunTests.swift; sourceTree = "<group>"; };
 		F3F572EF397E4BF9E7FF6685 /* Mascot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mascot.swift; sourceTree = "<group>"; };
 		F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptStoreTests.swift; sourceTree = "<group>"; };
+		F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAlarmMetadata.swift; sourceTree = "<group>"; };
 		F59AA6D01DD8D8703F00072C /* LookScreenshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookScreenshots.swift; sourceTree = "<group>"; };
 		F5A13FD41A080E7B11883AD6 /* StatusNoticeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusNoticeTests.swift; sourceTree = "<group>"; };
 		F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesToolTests.swift; sourceTree = "<group>"; };
@@ -1143,6 +1157,7 @@
 		FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSession.swift; sourceTree = "<group>"; };
 		FC96E006D9910233D695C0AB /* ProgressTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressTrackerTests.swift; sourceTree = "<group>"; };
 		FDE1B5AC935DE7F86F1C6126 /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
+		FE3F8893AE0658B5AFD3928C /* AlarmKitScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmKitScheduler.swift; sourceTree = "<group>"; };
 		FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessTests.swift; sourceTree = "<group>"; };
 		FEC48E94648977786C921A1C /* VaultMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMigrationTests.swift; sourceTree = "<group>"; };
 		FF1945CD92E7D90DE491BDDB /* TopoTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TopoTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1258,6 +1273,7 @@
 				06A2FA216D752FD653BA35F6 /* Info.plist */,
 				297C1A9489C88545BA87293C /* SurfaceProvider.swift */,
 				ADFE0A9203042F6BCAA43134 /* TopoActivity.swift */,
+				E5590AD65A1F511E4AD99193 /* TopoAlarm.swift */,
 				90EBB1BE1833BA552EC766A5 /* TopoControls.swift */,
 				3EA598B0990C965B7E3F0F6A /* TopoMoment.swift */,
 				9E773E285B12C717E7007D29 /* TopoWidgets.entitlements */,
@@ -1272,6 +1288,7 @@
 			isa = PBXGroup;
 			children = (
 				812584BC461473D31058017B /* ActivityKeeper.swift */,
+				FE3F8893AE0658B5AFD3928C /* AlarmKitScheduler.swift */,
 				B47094841EAC83FE03AD69D6 /* AppRecords.swift */,
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				EADCB3AFEFCD27C555352C53 /* ComposerAttachments.swift */,
@@ -1590,6 +1607,7 @@
 				12F58195D812623D0E6E9353 /* PhotosTool.swift */,
 				A69D3F0D29AF2F1F3DF4686E /* ScreenTool.swift */,
 				38D69076CBD5D984124A297F /* SecretTool.swift */,
+				ED32033508A735AE5BA3E703 /* TimerTool.swift */,
 				C2C0260B37135051458D45D8 /* VoiceTool.swift */,
 				1D550B30D535A628FF48FCC4 /* WidgetTool.swift */,
 			);
@@ -1699,6 +1717,7 @@
 				B88BFBBC5F6FD505DCD58B15 /* StopWhileSpeakingTests.swift */,
 				AD15A5AEE33677DF707FA651 /* SurfaceSyncTests.swift */,
 				8B7F8C14868F6151C38208F7 /* ThemeTests.swift */,
+				DFDB28FD2CE691449A6664BD /* TimerToolTests.swift */,
 				DEC7918EC84D993DA25BD251 /* TrackerFetcherTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
 				37C72071D6B88AB32EF3BBFD /* TuningTests.swift */,
@@ -1826,6 +1845,7 @@
 				0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */,
 				7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */,
 				6B5D9DE746B7D268AD71B7A2 /* Theme.swift */,
+				F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */,
 				94DA9AB030655FE57E305922 /* TopoCloudKit.swift */,
 				000D0D9322C088B22C4A18C6 /* TrackerView.swift */,
 				3C73B06423A3D15D5A7B7093 /* WebAuth.swift */,
@@ -2594,6 +2614,7 @@
 				EAE0C0F7581E1A71FFC17FFF /* SurfaceProvider.swift in Sources */,
 				615E59F985CDA51D5372AD55 /* SurfaceStore.swift in Sources */,
 				3437864E6AD2F3E01FA3D8B7 /* Theme.swift in Sources */,
+				F3531D84B904269CC46D9B27 /* TopoAlarmMetadata.swift in Sources */,
 				1D140B525C65657092DF3B10 /* TopoBadge.swift in Sources */,
 				C4C29C331E4637FB8D17A037 /* TopoCloudKit.swift in Sources */,
 				211FFF11B3472C4D1A3F4EC1 /* TopoMoment.swift in Sources */,
@@ -2631,6 +2652,7 @@
 				E816EA6D1AF56F9EE47927CE /* SurfaceStore.swift in Sources */,
 				E81D3B01992F870C1F684790 /* Theme.swift in Sources */,
 				22402F3797C48FD29144A8E8 /* TopoActivity.swift in Sources */,
+				D5ABF6BBD4B99DF1AE998453 /* TopoAlarm.swift in Sources */,
 				F75D792DC2DD86483B13581A /* TopoMoment.swift in Sources */,
 				AD4A6EEB4D4C51B787EDB813 /* TopoWidgets.swift in Sources */,
 				7C378AC1792F1B90CA47F507 /* WatchRelevance.swift in Sources */,
@@ -2666,6 +2688,7 @@
 				10356762FE3EC781DA7DB5B8 /* SurfaceTokens.swift in Sources */,
 				0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */,
 				F4974068046E34EB0AB10E96 /* Theme.swift in Sources */,
+				A10BCD35B7F11E5E75D790B7 /* TopoAlarmMetadata.swift in Sources */,
 				D7D4A4D582A7379655220F68 /* TopoCloudKit.swift in Sources */,
 				B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */,
 				9A6A272C199B9F948A772E1B /* TrackerView.swift in Sources */,
@@ -2783,6 +2806,7 @@
 				E0D7810D8F2A07C996AA2E01 /* SurfaceStore.swift in Sources */,
 				510B82888095A483E442BA47 /* TVRootView.swift in Sources */,
 				50B378B1C1B86503B32F9583 /* Theme.swift in Sources */,
+				346669CC3EA1309F1E3A20EE /* TopoAlarmMetadata.swift in Sources */,
 				1D4C9A77699BCA4EBD01C452 /* TopoBadge.swift in Sources */,
 				47A5DAA62699857838E4805C /* TopoCloudKit.swift in Sources */,
 				CFF0361D936128D236BEE661 /* TopoTVApp.swift in Sources */,
@@ -2900,6 +2924,7 @@
 				A976187A8375E84B67FD0E1E /* StopWhileSpeakingTests.swift in Sources */,
 				58F4A446C15FEFC415A6A93E /* SurfaceSyncTests.swift in Sources */,
 				F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */,
+				39A7F5C1A583CD0706F83AD6 /* TimerToolTests.swift in Sources */,
 				3B448DB8338390018A1988ED /* TrackerFetcherTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
 				E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */,
@@ -2948,6 +2973,8 @@
 				32830F67E46628FB06BD9EC0 /* SurfaceStore.swift in Sources */,
 				B726E5CF08D5C371DF03508F /* Theme.swift in Sources */,
 				2FBA361F9B554B61F8D8DAA2 /* TopoActivity.swift in Sources */,
+				83EF96EC207170E156E5616C /* TopoAlarm.swift in Sources */,
+				B0F2F082982133C9C13D50E7 /* TopoAlarmMetadata.swift in Sources */,
 				09D03775629325E5961A91C5 /* TopoControls.swift in Sources */,
 				BE642E4234ABD3EA2E3ED8B4 /* TopoMoment.swift in Sources */,
 				3AD1BB89870BB3C677E7F2E4 /* TopoWidgets.swift in Sources */,
@@ -2968,6 +2995,7 @@
 				35A13060991707C182C92CE6 /* ActivityDocument.swift in Sources */,
 				035913A8EBB44FBF8920D19B /* ActivityKeeper.swift in Sources */,
 				024A47069F24037C2E29B510 /* ActivityTool.swift in Sources */,
+				331768992D55D95FADCE2B3B /* AlarmKitScheduler.swift in Sources */,
 				C17B5E21DA727774B32167C1 /* AppRecords.swift in Sources */,
 				99B40888DAC3C3C3D6159522 /* AudioLog.swift in Sources */,
 				BDAC31A885ADB3E134011054 /* AudioSession.swift in Sources */,
@@ -3062,6 +3090,8 @@
 				3E4DF9BB0BB232BB35382935 /* SurfaceStore.swift in Sources */,
 				90196FA3DBC09D571DC00283 /* SurfaceSync.swift in Sources */,
 				FEE6786314BBF06C3CF8A7B8 /* Theme.swift in Sources */,
+				676833E808D146C613D6C760 /* TimerTool.swift in Sources */,
+				D4EDBC7EA7275D68061A3573 /* TopoAlarmMetadata.swift in Sources */,
 				5848F2221D988D4F93698E6A /* TopoApp.swift in Sources */,
 				454E7BD87EC59EA7652916BC /* TopoAppDelegate.swift in Sources */,
 				991ADA7B5521CE31F21F6C22 /* TopoBadge.swift in Sources */,
