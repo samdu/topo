@@ -47,7 +47,7 @@ Struck through: shipped, then removed, with the reason.
 
 **The chat and Topo**
 
-- The look as a document the mind writes (#106); the glass composer and the cabochon (#104, #110, #113); the composer as one row of glass (#333); the `+` on the glass opens the menu of what the phone attaches, a file, a photo or a capture from the camera, kept and sent as a share is (#537, #538, #539)
+- The look as a document the mind writes (#106); the glass composer and the cabochon (#104, #110, #113); the composer as one row of glass (#333); the `+` on the glass opens the menu of what the phone attaches, a file, a photo or a capture from the camera, kept and sent as a share is, and the way to share the screen (#537, #538, #539, #540)
 - The mute and the model's brain in the bar, the model's slider under it, models sent as aliases (#319, #347, #366)
 - Topo on the glass: idle and yoga, roaming, facing, placement by long-press drag, never undrawn for want of a clear spot (#140, #155, #157, #162, #165, #172); thinking from a turn's start to its end (#305)
 - A reply drawn as markdown from Foundation's parser: code, quotes, lists, tables, links, the words before a tool call, images (#173, #182, #324)
@@ -112,7 +112,7 @@ Struck through: shipped, then removed, with the reason.
 - **A hidden terminal onto the guest's Claude Code (#133)**, an escape hatch for a prompt the app does not draw, once the headless path has settled.
 - **Topo as a mesh peer (#277).** The topo-link issue mailbox carries device checks today; an addressable peer with an allowlist of what it runs unasked is not built.
 - **On-device storage (#309, #117, #87).** The ANE compile cache, tmp at launch, the model housekeeping residue and the voice pack's ten-minute download start from a fresh measurement on the phone: `scripts/perf-run.sh --fresh` and the first-run marks (#487).
-- **Ideas with no code yet:** a Topo menu the agent populates, on a long-press of the octopus (which conflicts with dragging him); the composer's `+` starting a screen share (#540); Maps results as a card (#358); a contact sheet of the screen share's stills (#378); Topo walking the person through the first run himself in place of the iCloud Drive offer card (#395).
+- **Ideas with no code yet:** a Topo menu the agent populates, on a long-press of the octopus (which conflicts with dragging him); Maps results as a card (#358); a contact sheet of the screen share's stills (#378); Topo walking the person through the first run himself in place of the iCloud Drive offer card (#395).
 - **Small ones**, hardening with nothing failing today: a claim change attempted from the background (#90); an empty parents list left off the wire (#96); the same-folder guard compares URLs (#103); a query of mostly digits read as a number (#240); a package added to the manifest never reaches an existing fakefs (#254); a zone change while the app is in front reaches the resident only at its next launch (#256); a look with `composer.flank.font` at 400 draws the resting keyboard mark past the pane (#337); guest transcripts under the guest's home outlive sign-out (no issue).
 - **Proof gaps** a review left non-blocking, each against the PR it came from: #147, #149 (items 3 and 4), #153, #160, #211, #213 (three findings, and the vault mountable after sign-out), #221, #286, #292, #338.
 

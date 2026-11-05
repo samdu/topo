@@ -71,6 +71,8 @@ struct ChatView: View {
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
     @State private var showMemory = false
+    /// The sheet the `+` puts up to share the screen from, holding the system's own button.
+    @State private var showScreenShare = false
     /// The offer card's answer, once and for good: Choose folder or Not now. It is the chat's
     /// rather than the sheet's, because the card it answers is drawn here.
     @AppStorage("memoryOfferAnswered") private var memoryOfferAnswered = false
@@ -244,6 +246,7 @@ struct ChatView: View {
             // The memory screen is the sheet's Memory section, and also what the offer card
             // above the composer opens, so the chat presents it too.
             .sheet(isPresented: $showMemory) { MemoryView() }
+            .sheet(isPresented: $showScreenShare) { ScreenShareSheet() }
             // The pickers the `+` puts up and the sheet over what was picked, on a view of
             // their own so the chat's own sheets and theirs never share one presentation.
             .background {
@@ -610,11 +613,13 @@ struct ChatView: View {
     }
 
     /// What the composer's `+` offers: a file and a photo where the app made the attachments, the
-    /// camera where the phone has one, and nothing where the app made none.
+    /// camera where the phone has one, the way to share the screen (the chat's own sheet), and
+    /// nothing where the app made none.
     private var composerMenu: ComposerMenu {
         guard let attachments else { return ComposerMenu() }
         var menu = ComposerMenu(attachFile: { attachments.pick(.file) }, choosePhoto: { attachments.pick(.photo) })
         if attachments.hasCamera { menu.takePhoto = { attachments.pick(.camera) } }
+        menu.shareScreen = { showScreenShare = true }
         return menu
     }
 

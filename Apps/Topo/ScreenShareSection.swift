@@ -20,6 +20,26 @@ struct ScreenShareSection: View {
     }
 }
 
+/// The sheet the composer's `+` puts up to share the screen from: the settings row and its
+/// words, with the system's own button to press, and nothing of the app's that presses it.
+struct ScreenShareSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form { ScreenShareSection() }
+                .navigationTitle("Share your screen")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }.accessibilityIdentifier("screen-share-done")
+                    }
+                }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
 /// `RPSystemBroadcastPickerView`, offering Topo's broadcast alone and no microphone.
 struct BroadcastButton: UIViewRepresentable {
     var tint: Color
