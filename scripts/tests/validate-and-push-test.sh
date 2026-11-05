@@ -631,7 +631,7 @@ for n in 1 2 3 4 5 6 7 8 9 a b c; do
   mkdir -p "$TOPO_VALIDATE_LOGS/${n}0000000/20200101T000000Z-1"
   touch -t 202001010000 "$TOPO_VALIDATE_LOGS/${n}0000000"
 done
-printf '%s\n%s\n' "$$" "$(LC_ALL=C TZ=UTC ps -o lstart= -p $$)" > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
+printf '%s\n%s\n' "$$" "$(env LC_ALL=C TZ=UTC ps -o lstart= -p $$)" > "$TOPO_VALIDATE_LOGS/10000000/20200101T000000Z-1/running"
 touch -t 201901010000 "$TOPO_VALIDATE_LOGS/10000000"   # the oldest of them: the first the prune would take
 echo x > "$repo/x"; g -C "$repo" add -A; g -C "$repo" commit -qm x; sha="$(git -C "$repo" rev-parse HEAD)"
 validate
@@ -956,7 +956,7 @@ is "detached: exits 2" "$status" 2
 # has waited longest: the second run here looks five times as often as the first, and would
 # have the checkout nearly every time were it only a matter of who asks first.
 export TOPO_VALIDATE_SLOTS=1
-tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{16}-[0-9]{7}$' | LC_ALL=C sort | tr '\n' ' '; }
+tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{16}-[0-9]{7}$' | env LC_ALL=C sort | tr '\n' ' '; }
 ticket_of() { tickets | tr ' ' '\n' | grep -- "-0*$1\$" || true; }
 until_true() { local n; for n in $(seq 100); do "$@" && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
 has_ticket() { [ -n "$(ticket_of "$1")" ]; }
@@ -1013,7 +1013,7 @@ is "the line: empty when all are done" "$(tickets)" ""
 # each removed; a file of another name is left; and a ticket of a live process ahead is
 # waited behind, by name, until that process ends.
 q="$TOPO_VALIDATE_CACHE/queue"
-began() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1"; }
+began() { env LC_ALL=C TZ=UTC ps -o lstart= -p "$1"; }
 sleep 30 & gone=$!; gone_began="$(began "$gone")"; kill "$gone"; wait "$gone" 2>/dev/null
 sleep 30 & alive=$!
 printf '%s\n%s\n%s\n' "$gone" "$gone_began" "ended 0000001" > "$q/0000000000000001-0000001"
@@ -1024,7 +1024,7 @@ echo keep > "$q/notes"; echo keep > "$q/.new.99999"; echo keep > "$q/00000000000
 LOCK_WAIT=0 validate
 is "dead tickets ahead: the run waits for nothing" "$status" 0
 is "dead tickets ahead: each is removed" "$(tickets)" ""
-is "dead tickets ahead: what is not a ticket is left" "$(ls -A "$q" | LC_ALL=C sort | tr '\n' ' ')" ".new.99999 0000000000000005-5 notes "
+is "dead tickets ahead: what is not a ticket is left" "$(ls -A "$q" | env LC_ALL=C sort | tr '\n' ' ')" ".new.99999 0000000000000005-5 notes "
 printf '%s\n%s\n%s\n' "$alive" "$(began "$alive")" "ahead 0000006" > "$q/0000000000000006-0000006"
 LOCK_WAIT=2 validate
 is "a live ticket ahead: exits 2" "$status" 2
