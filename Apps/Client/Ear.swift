@@ -251,6 +251,15 @@ final class SampleSink: @unchecked Sendable {
     /// Everything so far, for a caption glance; the session keeps recording.
     func peek() -> [Float] { lock.withLock { samples } }
 
+    /// What has arrived from sample `start` on, and where the stream now ends: what the
+    /// voice detector is fed, without copying the utterance from its start each time.
+    func peek(from start: Int) -> (samples: [Float], end: Int) {
+        lock.withLock {
+            let from = min(max(start, 0), samples.count)
+            return (Array(samples[from...]), samples.count)
+        }
+    }
+
     /// Everything so far, emptied: the utterance.
     func take() -> [Float] {
         lock.withLock {

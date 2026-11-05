@@ -138,6 +138,31 @@ final class EarTests: XCTestCase {
         let model = ModelManifest.Model(id: ModelManifest.ctc, repo: "x/y", revision: "", files: [])
         XCTAssertEqual(store.directory(for: model), home)
     }
+
+    /// The detector is kept where `VadManager` reads it, `<support>/Models/silero-vad`, not under
+    /// its manifest id; one fetched under the id before this home is moved there, not fetched again.
+    func testTheDetectorIsHomedWhereFluidAudioReadsIt() throws {
+        let support = FileManager.default.temporaryDirectory.appendingPathComponent("topo-vad-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: support) }
+        let root = support.appendingPathComponent("Models")
+        let home = ModelStore.vadHome(under: support)
+        XCTAssertEqual(home.standardizedFileURL.path, root.appendingPathComponent("silero-vad").standardizedFileURL.path)
+        let old = root.appendingPathComponent(ModelManifest.vad)
+        let bundle = "silero-vad-unified-256ms-v6.2.1.mlmodelc"
+        try FileManager.default.createDirectory(at: old.appendingPathComponent(bundle), withIntermediateDirectories: true)
+        try Data("bin".utf8).write(to: old.appendingPathComponent("\(bundle)/coremldata.bin"))
+
+        let store = ModelStore(root: root, homes: [ModelManifest.vad: home])
+        store.rehome()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("\(bundle)/coremldata.bin").path))
+        // What the loader is handed, two above the store's directory, is the base it appends
+        // `Models/silero-vad` to.
+        let model = ModelManifest.Model(id: ModelManifest.vad, repo: "x/y", revision: "", files: [])
+        let base = store.directory(for: model).deletingLastPathComponent().deletingLastPathComponent()
+        XCTAssertEqual(base.standardizedFileURL.path, support.standardizedFileURL.path)
+    }
 }
 
 /// A count a `@Sendable` closure can bump.
