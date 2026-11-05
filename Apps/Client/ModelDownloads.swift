@@ -123,13 +123,15 @@ enum ModelStoreError: LocalizedError {
 /// anything less is a set to finish, file by file, not to start again.
 struct ModelStore: Sendable {
     let root: URL
-    /// The entries that live somewhere other than under `root`, by id, because the library that
-    /// reads them reads one path and no other. Two: the CTC spotter, whose tokenizer
+    /// The entries kept somewhere other than at `root/<id>`, by id, because the library that
+    /// reads them reads one path and no other. Three: the CTC spotter, whose tokenizer
     /// `VocabularyBoostingSession` reads from `CtcModels.defaultCacheDirectory` whatever
-    /// directory the models were loaded from; and the voice's pack, which `PocketTtsManager`
-    /// reads from `<base>/Models/pocket-tts` beneath the base directory it is given. One copy
-    /// each, agreed on by both sides. The ledger and the resume data sit beside the files
-    /// wherever the entry lives.
+    /// directory the models were loaded from; the voice's pack, which `PocketTtsManager` reads
+    /// from `<base>/Models/pocket-tts` beneath the base directory it is given; and the voice
+    /// activity detector, which `VadManager` reads from `<base>/Models/silero-vad`
+    /// (`Repo.vad.folderName`, with `-coreml` dropped), so under its id it is present and never
+    /// found. One copy each, agreed on by both sides. The ledger and the resume data sit beside
+    /// the files wherever the entry lives.
     let homes: [String: URL]
 
     init(root: URL, homes: [String: URL] = [:]) {
@@ -138,11 +140,17 @@ struct ModelStore: Sendable {
     }
 
     static func standard() -> ModelStore {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        standard(support: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+    }
+
+    /// The app's store under a support directory, with every home it keeps (the spotter's is
+    /// FluidAudio's own, outside it), and a copy kept under an id moved to that id's home.
+    static func standard(support: URL) -> ModelStore {
         var homes: [String: URL] = [:]
         #if canImport(FluidAudio)
         homes[ModelManifest.ctc] = CtcModels.defaultCacheDirectory(for: .ctc110m)
         homes[ModelManifest.pocket] = Self.pocketHome(under: support)
+        homes[ModelManifest.vad] = Self.vadHome(under: support)
         #endif
         let store = ModelStore(root: support.appendingPathComponent("Models", isDirectory: true), homes: homes)
         store.rehome()
@@ -159,6 +167,13 @@ struct ModelStore: Sendable {
     static func pocketHome(under base: URL) -> URL {
         base.appendingPathComponent(PocketTtsConstants.defaultModelsSubdirectory, isDirectory: true)
             .appendingPathComponent(Repo.pocketTts.folderName, isDirectory: true)
+    }
+
+    /// Where the voice activity detector lives under a base directory, in FluidAudio's own
+    /// terms: `VadManager(modelDirectory: base)` reads `<base>/Models/<Repo.vad.folderName>`.
+    static func vadHome(under base: URL) -> URL {
+        base.appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent(Repo.vad.folderName, isDirectory: true)
     }
     #endif
 
