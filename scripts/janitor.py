@@ -1185,11 +1185,11 @@ class Shell:
         """The paths a PR changes at this head against main, renames' old paths
         included. The compare lists at most 300 files, so a list that long is
         refused rather than read as whole."""
-        files = self.gh_api(f"repos/{REPO}/compare/main...{head}",
-                            "[.files[] | .filename, (.previous_filename // empty)]") or []
-        if len(files) >= 300:
-            raise RuntimeError(f"the compare of main...{head} answered {len(files)} paths; the list may not be whole")
-        return files
+        listed = self.gh_api(f"repos/{REPO}/compare/main...{head}",
+                             "[.files[] | {filename, previous_filename}]") or []
+        if len(listed) >= 300:
+            raise RuntimeError(f"the compare of main...{head} answered {len(listed)} files; the list may not be whole")
+        return [p for f in listed for p in (f.get("filename"), f.get("previous_filename")) if p]
 
     def merge(self, number, head):
         self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",

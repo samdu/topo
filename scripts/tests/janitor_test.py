@@ -1128,7 +1128,7 @@ if tool == "gh":
         page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
     if a[0] == "api" and "/compare/main..." in a[1]:
         if S.get("files_error"): print(S["files_error"], file=sys.stderr); sys.exit(1)
-        out(S.get("files", {}).get(a[1].split("...")[1], ["Apps/Client/x.swift"]))
+        out(S.get("files", {}).get(a[1].split("...")[1], [{"filename": "Apps/Client/x.swift", "previous_filename": None}]))
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
@@ -2778,11 +2778,21 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("/runs/99/jobs", calls)
 
     def test_a_pass_merges_nothing_that_changes_its_own_validation_or_whose_files_it_cannot_read(self):
-        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: ["Apps/x.swift", "scripts/review-prompt.sh"]}))
+        f = lambda name, was=None: {"filename": name, "previous_filename": was}
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f("Apps/x.swift"), f("scripts/review-prompt.sh")]}))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f"compare/main...{HEAD}", calls)
         self.assertNotIn("pr merge", calls)
         self.assertIn("so its own copy validated it", self.texts())
+        # A rename out of a protected path is caught by the path it had.
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f("scripts/ordinary.sh", "scripts/review-prompt.sh")]}))
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("scripts/review-prompt.sh", self.texts())
+        # A compare at its 300-file limit is not read as whole.
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f(f"Apps/f{i}.swift") for i in range(300)]}))
+        self.assertNotIn("pr merge", calls)
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f(f"Apps/f{i}.swift") for i in range(299)]}))
+        self.assertIn("pr merge 7", calls)
         p, calls = self.run_pass(self.scripted(worktrees="", files_error="HTTP 502"))
         self.assertNotIn("pr merge", calls)
         self.assertIn("could not be read whole", self.texts())
