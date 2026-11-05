@@ -597,6 +597,8 @@ struct TimerTool: Tool {
 
     /// A start's copy, schedule and record, run alone (`TimerRecords.alone`).
     private func place(_ plan: TimerPlan, tell: String?, onStop: String?, soundPath: String?, login: String?) async -> ToolReply {
+        // A call the service answered at its bound while this one waited its turn sets nothing.
+        guard !Task.isCancelled else { return PhoneTool.late }
         var plan = plan
         let id = makeID()
         let set = now()
@@ -735,6 +737,7 @@ struct TimerTool: Tool {
     }
 
     private func acting(_ act: Act, _ id: String) async -> ToolReply {
+        guard !Task.isCancelled else { return PhoneTool.late }
         let missing = ToolReply(status: ToolReply.failed, text: "topo: no timer of Topo's with the id \(id)\n")
         guard let uuid = UUID(uuidString: id) else { return missing }
         // Asked of the list first, so an act AlarmKit refused is not said as no such timer, and an

@@ -77,6 +77,9 @@ private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     /// Where set, a schedule waits here, having said so in `scheduling`.
     var scheduleGate: Gate?
     private(set) var scheduling = false
+    /// Where set, a list read waits here once it has read, having said so in `listing`.
+    var alarmsGate: Gate?
+    private(set) var listing = false
     /// What the Live Activity says, per alarm.
     var fires: [UUID: Date] = [:]
     var left: [UUID: TimeInterval] = [:]
@@ -110,6 +113,14 @@ private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
         }
     }
     func alarms() async throws -> [TimerStatus] {
+        let read = read()
+        if let alarmsGate {
+            lock.withLock { listing = true }
+            await alarmsGate.wait()
+        }
+        return read
+    }
+    private func read() -> [TimerStatus] {
         lock.withLock {
             scheduled.map { alarm in
                 var when: TimerPlan.When?
@@ -704,16 +715,20 @@ extension TimerToolTests {
     /// of an alarm set beside it.
     func testAListBesideAStartKeepsItsRecord() async throws {
         let alarms = granted
-        let gate = Gate()
-        alarms.scheduleGate = gate
+        let scheduling = Gate(), listing = Gate()
+        alarms.scheduleGate = scheduling
+        alarms.alarmsGate = listing
         let tool = tool(alarms)
         let start = Task { await tool.run(["5m", "Plank", "--tell", "next"]) }
         let reached = await within { alarms.scheduling }
         XCTAssertTrue(reached)
+        // Unordered, the list reads AlarmKit now, without the new alarm, and sweeps after the
+        // start has written its record.
         let list = Task { await tool.run(["list"]) }
-        try? await Task.sleep(for: .milliseconds(50))
-        await gate.open()
+        try? await Task.sleep(for: .milliseconds(100))
+        await scheduling.open()
         _ = await start.value
+        await listing.open()
         let listed = await list.value
         XCTAssertEqual(records.read(first)?.tell, "next")
         XCTAssertTrue(listed.text.contains("Plank"), listed.text)
