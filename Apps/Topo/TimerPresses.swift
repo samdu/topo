@@ -23,18 +23,22 @@ struct TimerPressIntent: LiveActivityIntent {
 
     @Parameter(title: "Alarm") var alarm: String
     @Parameter(title: "Button") var button: String
+    /// Whether the button also starts the next countdown (AlarmKit's `.countdown`), which the app
+    /// then leaves to AlarmKit; one that does not (`.custom`) leaves the alarm sounding.
+    @Parameter(title: "Restarts") var restarts: Bool
 
     init() {}
 
-    init(alarm: UUID, button: TimerButton) {
+    init(alarm: UUID, button: TimerButton, restarts: Bool = false) {
         self.alarm = alarm.uuidString
         self.button = button.rawValue
+        self.restarts = restarts
     }
 
     @MainActor
     func perform() async throws -> some IntentResult {
         if let id = UUID(uuidString: alarm), let button = TimerButton(rawValue: button) {
-            await TimerPresses.press(id, button)
+            await TimerPresses.press(id, button, restarts: restarts)
         }
         return .result()
     }
@@ -54,11 +58,18 @@ enum TimerPresses {
         case kept(nonce: String)
         /// No record, or none of words for that button.
         case nothing
+        /// Stop's intent run by the app's own stop of a `.custom` press, which is that press's turn.
+        case echo
         case refused(ShareRefusal)
     }
 
+    /// When the app last stopped an alarm for a `.custom` press, so a Stop intent that stop sets
+    /// off is not taken for the person's own press of Stop.
+    private static var stopping: [UUID: ContinuousClock.Instant] = [:]
+    static let echoWindow: Duration = .seconds(10)
+
     @discardableResult
-    static func press(_ id: UUID, _ button: TimerButton, records: TimerRecords = .shared,
+    static func press(_ id: UUID, _ button: TimerButton, restarts: Bool = false, records: TimerRecords = .shared,
                       scheduler: any AlarmScheduler = TimerRecords.scheduler, store: ShareStore? = ShareStore.shared(),
                       drain: (@MainActor () async -> Void)? = ShortcutIntents.drain,
                       landed: (@MainActor (String) -> Bool)? = ShortcutIntents.landed,
@@ -67,9 +78,14 @@ enum TimerPresses {
         // `.custom` leaves the alarm sounding, so a button that only tells Topo stops it while it
         // still sounds; one that also starts the next countdown (`.countdown`) is AlarmKit's to
         // restart, and a stop would end the countdown it started.
-        if button == .second, record?.again == nil {
+        if button == .stop, let stopped = stopping[id], ContinuousClock.now - stopped < echoWindow {
+            stopping[id] = nil
+            return .echo
+        }
+        if button == .second, !restarts {
             do {
                 if try await scheduler.alarms().first(where: { $0.id == id })?.state == .sounding {
+                    stopping[id] = .now
                     try await scheduler.stop(id: id)
                 }
             } catch {

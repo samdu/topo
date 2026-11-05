@@ -20,6 +20,7 @@ struct TimerSounds: Sendable {
     static let longest: TimeInterval = 30
     static let formats: Set<AudioFormatID> = [kAudioFormatLinearPCM, kAudioFormatAppleIMA4, kAudioFormatULaw, kAudioFormatALaw]
     static let prefix = "topo-timer-"
+    static let partial = ".partial-"
 
     /// The path's own words: beneath the guest's home, no `.` or `..`, a type the system plays.
     static func judgePath(_ path: String) throws {
@@ -41,16 +42,35 @@ struct TimerSounds: Sendable {
         try await Task.detached(priority: .userInitiated) {
             let data = try Self.read(path, under: home)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let target = folder.appendingPathComponent(name)
-            try data.write(to: target, options: [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication])
+            // Written and judged under a name of its own first, then moved to the alarm's, which a
+            // move refuses to write over: the alarm's name only ever holds a whole, judged copy.
+            let partial = folder.appendingPathComponent(Self.partial + name)
+            try data.write(to: partial, options: [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication])
             do {
-                try Self.judge(target, path)
+                try Self.judge(partial, path)
+                try FileManager.default.moveItem(at: partial, to: folder.appendingPathComponent(name))
             } catch {
-                try? FileManager.default.removeItem(at: target)
+                try? FileManager.default.removeItem(at: partial)
                 throw error
             }
         }.value
         return name
+    }
+
+    /// Removes every copy whose alarm AlarmKit no longer lists, by the id in its name, and every
+    /// partial copy a killed start left. Called alone (`TimerRecords.alone`), so no copy is in flight.
+    func sweep(keeping alarms: Set<UUID>) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names {
+            if name.hasPrefix(Self.partial + Self.prefix) {
+                try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+                continue
+            }
+            guard name.hasPrefix(Self.prefix) else { continue }
+            let id = UUID(uuidString: String((name.dropFirst(Self.prefix.count) as Substring).prefix(36)))
+            if let id, alarms.contains(id) { continue }
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
     }
 
     func remove(_ name: String) {

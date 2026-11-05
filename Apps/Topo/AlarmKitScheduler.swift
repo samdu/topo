@@ -30,7 +30,7 @@ struct AlarmKitScheduler: AlarmScheduler {
         return AlarmManager.AlarmConfiguration(
             countdownDuration: timing.duration, schedule: timing.schedule, attributes: attributes(plan),
             stopIntent: plan.tellsOnStop ? TimerPressIntent(alarm: id, button: .stop) : nil,
-            secondaryIntent: plan.tells ? TimerPressIntent(alarm: id, button: .second) : nil,
+            secondaryIntent: plan.tells ? TimerPressIntent(alarm: id, button: .second, restarts: plan.again != nil) : nil,
             sound: plan.sound.map { .named($0) } ?? .default)
     }
 

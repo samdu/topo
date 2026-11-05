@@ -64,7 +64,7 @@ private final class AlarmPermission: ThrowingPrompt, @unchecked Sendable {
     }
 }
 
-final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
+private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     private let lock = NSLock()
     let permission: (any Authorizer)?
     private var scheduled: [(id: UUID, plan: TimerPlan)] = []
@@ -74,6 +74,9 @@ final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     var actFails = false
     /// What a schedule throws, where set.
     var scheduleThrows: (any Error)?
+    /// Where set, a schedule waits here, having said so in `scheduling`.
+    var scheduleGate: Gate?
+    private(set) var scheduling = false
     /// What the Live Activity says, per alarm.
     var fires: [UUID: Date] = [:]
     var left: [UUID: TimeInterval] = [:]
@@ -97,6 +100,10 @@ final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
 
     func schedule(id: UUID, plan: TimerPlan) async throws {
         if let scheduleThrows { throw scheduleThrows }
+        if let scheduleGate {
+            lock.withLock { scheduling = true }
+            await scheduleGate.wait()
+        }
         lock.withLock {
             scheduled.append((id, plan))
             if case .after = plan.when { states[id] = .counting } else { states[id] = .set }
@@ -594,6 +601,8 @@ extension TimerToolTests {
             (["at", "7"], "not a time"),
             (["at", "2026-10-26T07:00:00Z"], "has passed"),
             (["at", "2026-10-27"], "not a time"),
+            (["at", "2026-11-31T07:30"], "not a date and time that exists"),
+            (["at", "2026-11-05T24:00"], "not a date and time that exists"),
             (["at", "2026-10-27T07:00:00Z", "--every", "daily"], "repeats a time of day"),
             (["at", "07:30", "--every", "mon,funday"], "funday is not a day"),
             (["5m", "--every", "daily"], "--every repeats an alarm"),
@@ -667,21 +676,57 @@ extension TimerToolTests {
         XCTAssertTrue(missing.text.contains("no timer of Topo's"), missing.text)
     }
 
-    /// A cancel takes the record with it; a sweep spares a record written after the list it judges by.
-    func testRecordsGoWithTheirAlarms() async throws {
+    /// A cancel takes the record and the sound with it; a list drops what AlarmKit no longer
+    /// holds, a sound with no record included.
+    func testRecordsAndSoundsGoWithTheirAlarms() async throws {
         let alarms = granted
         let tool = tool(alarms)
         _ = await tool.run(["5m", "--tell", "words"])
         XCTAssertNotNil(records.read(first))
+        let sounds = root.appendingPathComponent("Sounds")
+        try FileManager.default.createDirectory(at: sounds, withIntermediateDirectories: true)
+        for name in ["topo-timer-\(first.uuidString.lowercased()).caf", "topo-timer-\(UUID().uuidString.lowercased()).wav",
+                     ".partial-topo-timer-\(UUID().uuidString.lowercased()).caf", "someone-elses.caf"] {
+            try Data("x".utf8).write(to: sounds.appendingPathComponent(name))
+        }
+        let gone = UUID()
+        try records.write(.init(label: "gone"), for: gone)
+        _ = await tool.run(["list"])
+        XCTAssertNil(records.read(gone))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: sounds.path)),
+                       ["topo-timer-\(first.uuidString.lowercased()).caf", "someone-elses.caf"])
         _ = await tool.run(["cancel", first.uuidString])
         XCTAssertNil(records.read(first))
-        let late = UUID()
-        try records.write(.init(label: "late", made: start.addingTimeInterval(1)), for: late)
-        let gone = UUID()
-        try records.write(.init(label: "gone", made: start.addingTimeInterval(-1)), for: gone)
-        _ = await tool.run(["list"])
-        XCTAssertNotNil(records.read(late))
-        XCTAssertNil(records.read(gone))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sounds.path), ["someone-elses.caf"])
+    }
+
+    /// A list that begins while a start is scheduling waits for it, so it never sweeps the record
+    /// of an alarm set beside it.
+    func testAListBesideAStartKeepsItsRecord() async throws {
+        let alarms = granted
+        let gate = Gate()
+        alarms.scheduleGate = gate
+        let tool = tool(alarms)
+        let start = Task { await tool.run(["5m", "Plank", "--tell", "next"]) }
+        let reached = await within { alarms.scheduling }
+        XCTAssertTrue(reached)
+        let list = Task { await tool.run(["list"]) }
+        try? await Task.sleep(for: .milliseconds(50))
+        await gate.open()
+        _ = await start.value
+        let listed = await list.value
+        XCTAssertEqual(records.read(first)?.tell, "next")
+        XCTAssertTrue(listed.text.contains("Plank"), listed.text)
+    }
+
+    func testAgainOnAnAlarmWithNoAgainIsRefused() async {
+        let alarms = granted
+        let tool = tool(alarms)
+        _ = await tool.run(["at", "07:30", "Wake"])
+        alarms.set(first, .sounding)
+        let reply = await tool.run(["again", first.uuidString])
+        XCTAssertTrue(reply.text.contains("set with no --again"), reply.text)
+        XCTAssertTrue(alarms.acts.isEmpty)
     }
 
     func testListSaysTheShapeOfEachAlarm() async {
@@ -712,15 +757,15 @@ final class TimerPressTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func press(_ button: TimerButton, _ alarms: FakeAlarms) async -> TimerPresses.Outcome {
-        await TimerPresses.press(id, button, records: records, scheduler: alarms, store: store, drain: nil, landed: nil,
+    private func press(_ button: TimerButton, _ alarms: FakeAlarms, restarts: Bool = false) async -> TimerPresses.Outcome {
+        await TimerPresses.press(id, button, restarts: restarts, records: records, scheduler: alarms, store: store, drain: nil, landed: nil,
                                  nonce: "00000000-0000-0000-0000-0000000000aa")
     }
 
     func testAPressKeepsOneMarkedTurnUnderItsLogin() async throws {
         try store.open(files: false)
         let login = try XCTUnwrap(store.door()?.login)
-        try records.write(.init(label: "Plank", made: Date(), tell: "start the other side", onStop: "log the session",
+        try records.write(.init(label: "Plank", tell: "start the other side", onStop: "log the session",
                                 second: "Next", login: login), for: id)
         let alarms = FakeAlarms(nil)
         alarms.holds(id, .sounding)
@@ -740,9 +785,10 @@ final class TimerPressTests: XCTestCase {
     func testStopsWordsAndAButtonThatAlsoRestartsLeaveTheAlarmBe() async throws {
         try store.open(files: false)
         let login = try XCTUnwrap(store.door()?.login)
-        try records.write(.init(label: "Plank", made: Date(), again: 60, tell: "next", onStop: "log it", second: "Again", login: login), for: id)
+        try records.write(.init(label: "Plank", again: 60, tell: "next", onStop: "log it", second: "Again", login: login), for: id)
         let alarms = FakeAlarms(nil)
-        _ = await press(.second, alarms)
+        alarms.holds(id, .sounding)
+        _ = await press(.second, alarms, restarts: true)
         XCTAssertTrue(alarms.acts.isEmpty)
         try FileManager.default.removeItem(at: root.appendingPathComponent("Shares/00000000-0000-0000-0000-0000000000aa"))
         _ = await press(.stop, alarms)
@@ -751,7 +797,7 @@ final class TimerPressTests: XCTestCase {
     }
 
     func testAPressAfterASignOutOrAnotherLoginSendsNothing() async throws {
-        try records.write(.init(label: "Plank", made: Date(), tell: "next", login: "old-login"), for: id)
+        try records.write(.init(label: "Plank", tell: "next", login: "old-login"), for: id)
         let alarms = FakeAlarms(nil)
         alarms.holds(id, .sounding)
         let signedOut = await press(.second, alarms)
@@ -773,12 +819,26 @@ final class TimerPressTests: XCTestCase {
         XCTAssertTrue(alarms.acts.isEmpty)
     }
 
+    /// The app's own stop of a `.custom` press may set off Stop's intent: that is the press's turn,
+    /// not a second one.
+    func testStopsIntentAfterTheAppsOwnStopIsNoSecondTurn() async throws {
+        try store.open(files: false)
+        try records.write(.init(label: "Plank", tell: "next", onStop: "log it", login: store.door()?.login), for: id)
+        let alarms = FakeAlarms(nil)
+        alarms.holds(id, .sounding)
+        _ = await press(.second, alarms)
+        let echo = await TimerPresses.press(id, .stop, records: records, scheduler: alarms, store: store, drain: nil, landed: nil,
+                                            nonce: "00000000-0000-0000-0000-0000000000bb")
+        XCTAssertEqual(echo, .echo)
+        XCTAssertEqual(store.shares().count, 1)
+    }
+
     func testAPressWithNoWordsSendsNothing() async throws {
         try store.open(files: false)
         let alarms = FakeAlarms(nil)
         let none = await press(.stop, alarms)
         XCTAssertEqual(none, .nothing)
-        try records.write(.init(label: "Plank", made: Date(), tell: "next", login: store.door()?.login), for: id)
+        try records.write(.init(label: "Plank", tell: "next", login: store.door()?.login), for: id)
         let noStop = await press(.stop, alarms)
         XCTAssertEqual(noStop, .nothing)
         XCTAssertTrue(store.shares().isEmpty)
