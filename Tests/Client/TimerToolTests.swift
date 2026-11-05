@@ -799,6 +799,19 @@ extension TimerToolTests {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sounds.path), [])
     }
 
+    /// Every act whose list read sweeps, not only cancel.
+    func testAPauseSweepsWhatAlarmKitNoLongerHolds() async throws {
+        let alarms = granted
+        let tool = tool(alarms)
+        _ = await tool.run(["5m", "Plank"])
+        let gone = UUID()
+        try records.write(.init(label: "Gone"), for: gone)
+        let paused = await tool.run(["pause", first.uuidString])
+        XCTAssertEqual(paused.status, ToolReply.ok, paused.text)
+        XCTAssertNil(records.read(gone))
+        XCTAssertNotNil(records.read(first))
+    }
+
     /// A list AlarmKit fails is said as that, and drops no record or sound.
     func testAFailedListKeepsEveryRecordAndSound() async throws {
         let alarms = granted

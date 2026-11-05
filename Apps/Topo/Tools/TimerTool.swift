@@ -791,12 +791,11 @@ struct TimerTool: Tool {
         } catch {
             return .failed("topo: AlarmKit did not list its alarms, so \(id) was not asked to \(act.rawValue): \(error.localizedDescription)\n")
         }
+        // What AlarmKit has already removed leaves its record and sound to the sweep, the target's
+        // included.
+        sweep(keeping: alarms)
         do {
-            guard let alarm = alarms.first(where: { $0.id == uuid }) else {
-                // What AlarmKit has already removed leaves its record and sound to the sweep.
-                sweep(keeping: alarms)
-                return missing
-            }
+            guard let alarm = alarms.first(where: { $0.id == uuid }) else { return missing }
             if let needs = Self.needs(act), !needs.contains(alarm.state) {
                 return .failed("topo: \(id) is \(alarm.state.rawValue): \(Self.why(act))\n")
             }
