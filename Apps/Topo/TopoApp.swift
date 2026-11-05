@@ -102,7 +102,7 @@ struct TopoApp: App {
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
             ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
-            TimerTool(scheduler: TimerBook.scheduler, book: { TimerBook.shared }, broker: broker),
+            TimerTool(scheduler: TimerRecords.scheduler, records: .shared, broker: broker),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),
@@ -132,6 +132,7 @@ struct TopoApp: App {
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
+        TimerIntents.control = { await TimerControls.act($0, $1) }
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
         // Built now so its sign-out hook is registered in every process, scene or none.

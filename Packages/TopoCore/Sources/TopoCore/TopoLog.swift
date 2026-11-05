@@ -5,7 +5,7 @@ import os
 /// The app's categories in the unified log, each with a level the mind can switch
 /// (`topo log level`). One list, so the switch, the listing and every writer name the same ones.
 public enum LogCategory: String, CaseIterable, Sendable {
-    case activity, audio, auth, bridge, cloud, dns, models, perf, proxy, resident, tools
+    case activity, audio, auth, bridge, cloud, dns, models, perf, proxy, resident, timer, tools
 }
 
 /// How much a category writes. `default` is what it writes unasked; `debug` adds its detail

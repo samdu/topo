@@ -242,6 +242,19 @@ enum WidgetColour: Equatable, Sendable {
         }
     }
 
+    /// As a tool's option writes it: a token, a hex, or `LIGHT/DARK`.
+    init?(option text: String) {
+        let pair = text.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        self.init(pair.count == 2 ? pair : text as Any)
+    }
+
+    var option: String {
+        switch self {
+        case .token(let token): token.rawValue
+        case .hex(let light, let dark): light == dark ? light : "\(light)/\(dark)"
+        }
+    }
+
     /// As a document writes it.
     var json: Any {
         switch self {
