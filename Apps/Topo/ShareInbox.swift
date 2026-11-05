@@ -193,6 +193,11 @@ final class ShareInbox {
             guard let text = share.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             // No note goes ahead of the line that says a Shortcut sent it.
             return "[Sent to Topo by a Shortcut]\n\(text)"
+        case .timer:
+            guard let text = share.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let from = share.from else { return nil }
+            // The mind's own words from the turn that set the timer, marked as that, so it reads
+            // them back as its instruction for this press rather than as the person's.
+            return "[A press of the \(from) button, on the lock screen or in Topo; these are the words Topo kept for it when it set the timer]\n\(text)"
         case .task:
             // The app's own words, so nothing marks them.
             return share.text.flatMap(QuickTask.init(rawValue:))?.words

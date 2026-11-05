@@ -12,6 +12,9 @@ struct Share: Codable, Equatable, Sendable {
         /// A quick task a Shortcut asked for, its `QuickTask` name in `text`: the words are the
         /// app's own.
         case task
+        /// A press of a button on one of Topo's timers (`TimerPresses`): in `text` the words the
+        /// mind kept for that press when it set the timer, in `from` the timer and the button.
+        case timer
     }
 
     /// The nonce the share's turn goes under, minted by the extension or the intent that kept it, so a share drained twice
@@ -32,6 +35,8 @@ struct Share: Codable, Equatable, Sendable {
     /// file picked, a photo chosen or taken). Absent on a record the extension wrote before there was a
     /// second way in, and on a Shortcut's; only the composer's says so.
     var via: Via?
+    /// A timer's turn: the timer's label and the button pressed, as `"Plank" timer's Again`.
+    var from: String?
 
     enum Via: String, Codable, Sendable {
         case sheet, composer
@@ -237,6 +242,9 @@ struct ShareStore: Sendable {
         case .task:
             guard attachment == nil, share.file == nil, share.note.isEmpty,
                   share.text.flatMap(QuickTask.init(rawValue:)) != nil else { throw .nothing }
+        case .timer:
+            guard attachment == nil, share.file == nil, share.note.isEmpty, share.from?.isEmpty == false,
+                  share.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { throw .nothing }
         case .image, .file:
             guard door.files else { throw .anotherPhone }
             guard let attachment, let name = share.file, name == Share.name(name),

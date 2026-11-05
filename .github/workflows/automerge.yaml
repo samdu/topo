@@ -8,19 +8,24 @@
 # that passes review merges unattended — the fleet's label-as-authorization
 # rule is one `gh variable set AUTOMERGE_REQUIRE_LABEL --body true` away.
 #
-# Two entry points:
-#   - pull_request (labeled/opened/reopened/synchronize/ready_for_review/edited):
-#     merges immediately if validation is already green. `edited` is the
-#     description changing, which is how a Proof box gets ticked after the
-#     run went green.
-#   - workflow_run (PR validate completed): merges the PR that just went green.
-# Both paths funnel through the same idempotent script, which no-ops unless
-# every condition holds.
+# One entry point, workflow_run on PR validate completing: GitHub runs the
+# default branch's copy of this file for it, so no PR can edit this job.
+# Opening, reopening, a push and marking a PR ready all start PR
+# validate, so its completion is when every condition can first hold. Each
+# is read then, the label included: one added after a green run merges
+# nothing until a push, or a re-run of this workflow's run for that head
+# (`gh run rerun <id>`). A Proof box ticked after a green run is the same,
+# and the janitor merges it on a later pass (docs/janitor.md, step 1). The
+# script is idempotent and no-ops unless every condition holds.
+#
+# PR validate runs the PR's own copy of its workflow, and its review jobs run
+# `scripts/review-*` and `scripts/ci-select-*` from the PR's checkout. A PR
+# that changes any of those, or anything under `.github/`, wrote its own
+# validation, so its green run is no evidence of tests or review: it is
+# skipped, and the coordinator merges it after reading the review.
 name: Auto-merge
 
 on:
-  pull_request:
-    types: [labeled, opened, reopened, synchronize, ready_for_review, edited]
   workflow_run:
     workflows: ["PR validate"]
     types: [completed]
@@ -41,21 +46,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Resolve candidate PR numbers from whichever event fired.
-          case "${{ github.event_name }}" in
-            pull_request)
-              prs="${{ github.event.pull_request.number }}"
-              ;;
-            workflow_run)
-              prs="$(jq -r '.workflow_run.pull_requests[]?.number // empty' "$GITHUB_EVENT_PATH")"
-              if [ -z "$prs" ]; then
-                sha="${{ github.event.workflow_run.head_sha }}"
-                prs="$(gh pr list --state open --json number,headRefOid \
-                        --jq ".[] | select(.headRefOid==\"$sha\") | .number")"
-              fi
-              ;;
-            *) prs="" ;;
-          esac
+          # Resolve the PR the completed run was for.
+          prs="$(jq -r '.workflow_run.pull_requests[]?.number // empty' "$GITHUB_EVENT_PATH")"
+          if [ -z "$prs" ]; then
+            sha="${{ github.event.workflow_run.head_sha }}"
+            prs="$(gh pr list --state open --json number,headRefOid \
+                    --jq ".[] | select(.headRefOid==\"$sha\") | .number")"
+          fi
 
           [ -n "$prs" ] || { echo "No candidate PR; nothing to do."; exit 0; }
 
@@ -84,6 +81,20 @@ jobs:
             fi
             if [ "$REQUIRE_LABEL" = "true" ] && [ "$labelled" != "true" ]; then
               echo "skip: AUTOMERGE_REQUIRE_LABEL is true and the PR has no automerge label"
+              echo "::endgroup::"; continue
+            fi
+
+            # The files the PR changes at this head, renames' old paths
+            # included. The compare lists at most 300 files, so a list that
+            # long, or one that cannot be read, is refused as unwhole.
+            if ! files="$(gh api "repos/$GH_REPO/compare/$base...$sha" \
+                    --jq '[.files[] | .filename, (.previous_filename // empty)]')" \
+               || [ "$(jq length <<<"$files")" -ge 300 ]; then
+              echo "skip: could not read every file the PR changes"
+              echo "::endgroup::"; continue
+            fi
+            if jq -e 'any(.[]; test("^(\\.github/|scripts/review-|scripts/ci-select-)"))' <<<"$files" >/dev/null; then
+              echo "skip: the PR changes .github/, scripts/review-* or scripts/ci-select-*, so its own copy validated it; the coordinator merges"
               echo "::endgroup::"; continue
             fi
 

@@ -1,11 +1,12 @@
 import Foundation
 import TopoTools
 
-/// `topo voice`: the mind's hand on how this phone hears and speaks. Three settings, each read and
+/// `topo voice`: the mind's hand on how this phone hears and speaks. Four settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
-/// and Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks.
+/// Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks,
+/// and Earcons (`EarconsSetting`), which each cue reads as it sounds.
 struct VoiceTool: Tool {
     /// The defaults are read and written from the service's own task; `UserDefaults` is safe there.
     private let defaults: Defaults
@@ -17,7 +18,7 @@ struct VoiceTool: Tool {
     private struct Defaults: @unchecked Sendable { let store: UserDefaults }
 
     let name = "voice"
-    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the call behind the lock"
+    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the call behind the lock, the earcons"
     let usage = """
     topo voice noise-suppression [status]   whether the microphone is cleaned up before it is heard
     topo voice noise-suppression on         clean it up: Apple's voice processing (noise suppression, echo
@@ -39,6 +40,14 @@ struct VoiceTool: Tool {
 
     On unless turned off. A change applies from the next spoken reply, on this phone only, and
     they can change it back in Settings.
+
+    topo voice earcons [status]             whether the spoken exchange sounds its cues
+    topo voice earcons on                   it does: a tone as the microphone opens, as the words go,
+                                            as a reply read aloud ends, and when a spoken turn fails
+    topo voice earcons off                  no cues
+
+    On unless turned off. A change applies from the next cue, on this phone only, and they can
+    change it back in Settings.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -47,6 +56,7 @@ struct VoiceTool: Tool {
         case "noise-suppression": return noiseSuppression(arguments)
         case "temperature": return temperature(arguments)
         case "call": return call(arguments)
+        case "earcons": return earcons(arguments)
         default: return .usage(usage + "\n")
         }
     }
@@ -77,6 +87,19 @@ struct VoiceTool: Tool {
             let on = arguments[1] == "on"
             defaults.store.set(on, forKey: SpokenCallSetting.key)
             return .ok("call for spoken replies \(on ? "on" : "off"), from the next spoken reply\n")
+        default:
+            return .usage(usage + "\n")
+        }
+    }
+
+    private func earcons(_ arguments: [String]) -> ToolReply {
+        switch arguments.count == 2 ? arguments[1] : "status" {
+        case "status":
+            return .ok("earcons \(EarconsSetting.enabled(defaults.store) ? "on" : "off")\n")
+        case "on", "off":
+            let on = arguments[1] == "on"
+            defaults.store.set(on, forKey: EarconsSetting.key)
+            return .ok("earcons \(on ? "on" : "off"), from the next cue\n")
         default:
             return .usage(usage + "\n")
         }
