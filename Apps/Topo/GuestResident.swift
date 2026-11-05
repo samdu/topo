@@ -52,6 +52,9 @@ final class GuestResident {
     var toolTable: [any Tool] = []
     /// Asked once the guest is up and before any process starts: the sign-in's `refresh`.
     var booted: (@MainActor () async -> Void)?
+    /// Whether a conversation behind the lock holds the resident up (`GuestLifecycle.conversing`):
+    /// the app's `Conversation`, set before the first start (`TopoApp`).
+    var conversing: @MainActor (_ beginning: Bool) -> Bool = { _ in false }
     private var observers: [NSObjectProtocol] = []
 
     /// What a debug build launched with a developer's token (`TOPO_CLAUDE_SETUP_TOKEN`, which CI
@@ -169,6 +172,7 @@ final class GuestResident {
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
+            lifecycle.conversing = { [weak self] beginning in self?.conversing(beginning) ?? false }
             self.lifecycle = lifecycle
             self.follow(lifecycle)
             Perf.mark("guest.proxy.up")
@@ -264,6 +268,11 @@ final class GuestResident {
         let turn = lifecycle.turnBegan()
         ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.note)
         return lifecycle.carry(updates, turn: turn)
+    }
+
+    /// The conversation behind the lock has ended: the background it spared runs now.
+    func conversationEnded() {
+        lifecycle?.conversationEnded()
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {

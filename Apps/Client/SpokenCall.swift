@@ -33,6 +33,8 @@ final class SpokenCall: NSObject {
     var onInactive: () -> Void = {}
     /// Ended from outside the app: the call card, the Lock Screen, the watch.
     var onHangUp: () -> Void = {}
+    /// The card's mute, true muted.
+    var onMute: (Bool) -> Void = { _ in }
     /// Ended, by `end` or from the card: the session is still the system's and goes with the
     /// deactivation, so nothing new is put on it.
     var onClosing: () -> Void = {}
@@ -263,14 +265,19 @@ final class SpokenCall: NSObject {
         AudioLog.say("call: hung up from the card")
         close(action.callUUID)
         onHangUp()
+        // A hang-up wants no call behind it: what the hang-up's own effects asked for as they
+        // ran (a dropped hold or a conversation's end, told while the open microphone still kept
+        // the closing call) is not placed at its finish.
+        again = false
     }
 
-    /// The card's mute. Topo holds no microphone open between turns, so there is nothing to
-    /// mute; the action is fulfilled, so the card stays consistent, and changes nothing. The
-    /// hang-up is the control.
+    /// The card's mute: told to `onMute`, which closes the microphone a conversation behind the
+    /// lock holds open and keeps it closed until the unmute (`Conversation`). Always fulfilled,
+    /// never refused, so the card stays consistent.
     fileprivate func perform(mute action: CXSetMutedCallAction) {
-        AudioLog.say("call: \(action.isMuted ? "muted" : "unmuted") from the card; nothing to mute")
+        AudioLog.say("call: \(action.isMuted ? "muted" : "unmuted") from the card")
         system.fulfill(action)
+        onMute(action.isMuted)
     }
 
     fileprivate func perform(held action: CXSetHeldCallAction) {
@@ -403,8 +410,10 @@ enum SpokenCallSetting {
 }
 
 /// Places the call and ends it: a call is placed while a turn's hold stands
-/// (`AudioSession.heldForATurn`) and kept while any hold does (`AudioSession.holding`, a cue's
-/// included, so the `done` a reply ends with is heard on its call), both told through
+/// (`AudioSession.heldForATurn`) or an open microphone is carried behind the lock
+/// (`Conversation`, told through `conversingChanged`, which keeps the call between an utterance's
+/// end and its wait's hold), and kept while any hold does (`AudioSession.holding`, a cue's
+/// included, so the `done` a reply ends with is heard on its call), the holds told through
 /// `Speaker.onHold` after the speaker has dealt with the keeper, the app is in the background and
 /// the setting is on. A cue's hold alone places none: a lock as a reply's `done` sounds in front
 /// is no exchange to put on the Lock Screen. The background is UIKit's (`applicationState` at the start,
@@ -416,12 +425,15 @@ enum SpokenCallSetting {
 /// at every unlock and placing it again at every lock hands the session back and forth under
 /// the reply, and takes it back from whatever other audio was told it could resume. Resigning
 /// active — Control Center, a notification pulled down, the app switcher — is not the
-/// background, and places none.
+/// background, and places none. A call up is also kept while the chat's microphone is open or
+/// opening (`microphoneChanged`), so a press in front under it does not end it under the session
+/// the microphone opens on.
 @MainActor
 final class SpokenCallDriver {
     private let call: SpokenCall
     private let enabled: () -> Bool
     private var holding = false
+    private var conversing = false
     /// A hold stands that is a turn's and not only a cue's: what places a call.
     private var turn = false
     /// The chat's microphone is open or opening: a call up is kept for it.
@@ -452,12 +464,14 @@ final class SpokenCallDriver {
     }
 
     /// The whole rule, as a function of the facts: placed in the background for a turn's hold
-    /// (`turn`, which is `holding` when not given), and kept while it is up for any hold or an
-    /// open microphone, so a press in front under the call does not end it under the session the
-    /// microphone opens on.
-    nonisolated static func wants(holding: Bool, turn: Bool? = nil, phase: ScenePhase, enabled: Bool,
-                                  up: Bool = false, microphone: Bool = false) -> Bool {
-        enabled && ((turn ?? holding) && phase == .background || up && (holding || microphone))
+    /// (`turn`, which is `holding` when not given) or a conversation, and kept while it is up for
+    /// any hold, a conversation or an open microphone, so a press in front under the call does not
+    /// end it under the session the microphone opens on.
+    nonisolated static func wants(holding: Bool, turn: Bool? = nil, conversing: Bool = false, phase: ScenePhase,
+                                  enabled: Bool, up: Bool = false, microphone: Bool = false) -> Bool {
+        let places = (turn ?? holding) || conversing
+        let keeps = holding || conversing || microphone
+        return enabled && (places && phase == .background || up && keeps)
     }
 
     func microphoneChanged(_ open: Bool) {
@@ -473,6 +487,11 @@ final class SpokenCallDriver {
         decide()
     }
 
+    func conversingChanged(_ conversing: Bool) {
+        self.conversing = conversing
+        decide()
+    }
+
     func scene(_ phase: ScenePhase) {
         self.phase = phase
         decide()
@@ -480,13 +499,14 @@ final class SpokenCallDriver {
 
     private func decide() {
         let enabled = enabled()
-        let wanted = Self.wants(holding: holding, turn: turn, phase: phase, enabled: enabled, up: call.up, microphone: microphone)
+        let wanted = Self.wants(holding: holding, turn: turn, conversing: conversing, phase: phase, enabled: enabled,
+                                up: call.up, microphone: microphone)
         // Each decision with its facts, so a run says why a lock placed no call.
         if wanted != call.up {
-            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), a turn's \(turn), microphone \(microphone), app \(phase), setting \(enabled))")
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), a turn's \(turn), conversing \(conversing), microphone \(microphone), app \(phase), setting \(enabled))")
         } else if wanted, phase != .background, call.state == .up {
-            AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), microphone \(microphone), app \(phase))")
-        } else if holding, !wanted {
+            AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), conversing \(conversing), microphone \(microphone), app \(phase))")
+        } else if holding || conversing, !wanted {
             AudioLog.say("call driver: no call (app \(phase), setting \(enabled))")
         }
         if wanted { call.start() } else { call.end() }

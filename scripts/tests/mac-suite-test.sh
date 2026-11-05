@@ -105,6 +105,7 @@ case "$*" in
     exit "${UI_TEST:-0}" ;;
   *test-without-building*-skip-testing:TopoUITests*)
     echo "unit port53=${TEST_RUNNER_TOPO_PORT53_SOCKET-}" >> "$CALLS"
+    echo "unit models=${TEST_RUNNER_TOPO_UNIT_EAR_MODELS-}" >> "$CALLS"
     exit 0 ;;
   *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
@@ -453,6 +454,8 @@ is "unit suite: exits 0" "$status" 0
 is "unit suite: its simulator is booted once" "$(calls 'xcrun simctl boot ')" 1
 is "unit suite: and shut down once, as the run deletes it" "$(calls 'xcrun simctl shutdown')" 1
 is "unit suite: the shutdown is after the tests" "$(grep -E '^xcrun simctl shutdown|^xcodebuild test-without-building' "$CALLS" | cut -d' ' -f1-3 | tr '\n' '|')" "xcodebuild test-without-building -project|xcrun simctl shutdown|"
+is "unit suite: Silero's detector alone is fetched, into the ear's cache" "$(grep '^fetch-ear-models.sh' "$CALLS" | sed "s|$work/cache|<cache>|")" "fetch-ear-models.sh <cache>/ear-models silero-vad-coreml"
+is "unit suite: and handed to the tests" "$(grep '^unit models' "$CALLS" | sed "s|$work/cache|<cache>|")" "unit models=<cache>/ear-models"
 
 # A photos grant that is not full access would put a prompt up under the tests: no test runs.
 PHOTOS_GRANT="2|1" suite photos-grant topo_unit
