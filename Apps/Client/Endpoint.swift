@@ -83,9 +83,12 @@ final class Endpoint {
     }
 
     /// FluidAudio's loader, from the store's directory: it reads `<base>/Models/<repo folder>`,
-    /// so it is handed the directory two above the one the store keeps the files in.
+    /// so it is handed the directory two above the one the store keeps the files in. Offline
+    /// first, as `Ear` and `Voice` load, so a file not where the loader reads is a load failure
+    /// rather than a download over a session of the library's own.
     nonisolated static func silero(_ directory: URL) async throws -> any VoiceDetector {
         #if canImport(FluidAudio)
+        ModelHub.offlineMode = true
         let base = directory.deletingLastPathComponent().deletingLastPathComponent()
         return SileroDetector(try await VadManager(modelDirectory: base))
         #else

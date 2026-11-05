@@ -420,6 +420,10 @@ suite_topo_unit() {
     rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$cache/rootfs")" || return 1
     shell="$(scripts/fetch-pinned.sh alpine-bash "$cache/alpine-bash")" || return 1
     claude="$(scripts/fetch-pinned.sh claude-code "$cache/claude-code")" || return 1
+    # Silero's detector alone (1 MB), which SileroLoadTests loads as the app does, in the cache
+    # the full lane's microphone test reads the rest of the ear's models from.
+    say "Silero's detector for its load"
+    scripts/fetch-ear-models.sh "$cache/ear-models" silero-vad-coreml || return 1
     new_simulator unit "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
 
     say "xcodebuild build-for-testing (Topo)"
@@ -457,7 +461,8 @@ suite_topo_unit() {
     rm -rf "$RESULTS/Topo-unit.xcresult"
     run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
-      "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
+      "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" "TEST_RUNNER_TOPO_UNIT_EAR_MODELS=$cache/ear-models" \
+      TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" \

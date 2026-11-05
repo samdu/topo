@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
-# Fetches the ear's models (Parakeet and the CTC spotter) into a directory, file by file from
-# the pinned revisions in Apps/Topo/Resources/models.json, and admits each only when its size
-# and sha256 match the manifest. A file already there and matching is kept, so a restored cache
-# costs only the hashing. The directory is what `TOPO_DEBUG_EAR` and the UI test's
-# `TOPO_UITEST_EAR_MODELS` take.
+# Fetches the ear's models (Parakeet, the CTC spotter and Silero's voice detector), or only the
+# ones named, into a directory, file by file from the pinned revisions in
+# Apps/Topo/Resources/models.json, and admits each only when its size and sha256 match the
+# manifest. A file already there and matching is kept, so a restored cache costs only the
+# hashing. The directory is what `TOPO_DEBUG_EAR`, the UI test's `TOPO_UITEST_EAR_MODELS` and
+# the unit suite's `TOPO_UNIT_EAR_MODELS` take.
 #
-#   scripts/fetch-ear-models.sh <directory>
+#   scripts/fetch-ear-models.sh <directory> [<id>...]
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 manifest="$root/Apps/Topo/Resources/models.json"
-dest="${1:?usage: scripts/fetch-ear-models.sh <directory>}"
+dest="${1:?usage: scripts/fetch-ear-models.sh <directory> [<id>...]}"
+shift
 mkdir -p "$dest"
+ear='["parakeet-tdt-0.6b-v2", "parakeet-ctc-110m-coreml", "silero-vad-coreml"]'
+if [ "$#" -gt 0 ]; then
+  wanted="$(jq -cn '$ARGS.positional' --args "$@")"
+  bad="$(jq -rn --argjson w "$wanted" --argjson e "$ear" '$w - $e | join(" ")')"
+  [ -z "$bad" ] || { echo "error: not one of the ear's models: $bad" >&2; exit 1; }
+else
+  wanted="$ear"
+fi
 
-jq -r '.models[] | select(.id == "parakeet-tdt-0.6b-v2" or .id == "parakeet-ctc-110m-coreml")
+jq -r --argjson wanted "$wanted" '.models[] | select(.id as $id | $wanted | index($id))
        | . as $m | .files[] | [$m.id, $m.repo, $m.revision, .path, (.size|tostring), .sha256] | @tsv' "$manifest" |
 while IFS=$'\t' read -r id repo revision path size sha; do
   file="$dest/$id/$path"
@@ -31,4 +41,4 @@ while IFS=$'\t' read -r id repo revision path size sha; do
   fi
   mv "$file.part" "$file"
 done
-echo "ear models verified in $dest"
+echo "ear models ($(jq -rn --argjson w "$wanted" '$w | join(", ")')) verified in $dest"

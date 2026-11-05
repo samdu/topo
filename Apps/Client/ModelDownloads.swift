@@ -140,7 +140,12 @@ struct ModelStore: Sendable {
     }
 
     static func standard() -> ModelStore {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        standard(support: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+    }
+
+    /// The app's store under a support directory, with every home it keeps (the spotter's is
+    /// FluidAudio's own, outside it), and a copy kept under an id moved to that id's home.
+    static func standard(support: URL) -> ModelStore {
         var homes: [String: URL] = [:]
         #if canImport(FluidAudio)
         homes[ModelManifest.ctc] = CtcModels.defaultCacheDirectory(for: .ctc110m)
