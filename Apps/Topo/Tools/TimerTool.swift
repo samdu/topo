@@ -53,10 +53,11 @@ struct TimerTool: Tool {
     let scheduler: any AlarmScheduler
     let book: @MainActor () -> TimerBook
     let broker: PermissionBroker
-    /// Where Topo stands, read at the moment a new prompt would go up (`OnScreen`): the system's
-    /// prompt can be raised unless Topo is in the background. A system alert makes the app inactive
-    /// and not backgrounded, so a start made under another app's alert still asks, its prompt
-    /// following; one made under AlarmKit's own prompt waits on that one (`PermissionBroker`).
+    /// Where Topo stands, read as a call begins (to tell `leftBeforeThePrompt` from `offScreen`) and
+    /// at the moment a new prompt would go up (`OnScreen`): the system's prompt can be raised unless
+    /// Topo is in the background. A system alert over Topo leaves it inactive and not backgrounded,
+    /// so a start made under one still asks; one made under AlarmKit's own prompt joins that one
+    /// in `PermissionBroker`.
     var state: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
     var now: @Sendable () -> Date = { Date() }
     var makeID: @Sendable () -> UUID = { UUID() }
@@ -144,13 +145,14 @@ struct TimerTool: Tool {
     /// AlarmKit's permission, asked only with Topo off the background: the system's prompt needs
     /// Topo in front. Where it is in the background as the prompt would go up, nothing is asked:
     /// the answer is yes if another call's prompt was granted since the broker read the standing,
-    /// and otherwise no, which `run` says as `offScreen` because the standing is still undetermined.
-    /// A call that finds a prompt already up waits on it and never reaches `request`.
+    /// and otherwise no, which `run` says as `offScreen`, or as `leftBeforeThePrompt` for a call
+    /// begun with Topo out of the background, because the standing is still undetermined. A call
+    /// that finds a prompt already up waits on it and never reaches `request`.
     ///
-    /// Read off the standing, the answer is wrong only at edges no person reaches or no suite can:
-    /// a refusal made within microseconds of Topo leaving the front, an AlarmKit whose standing
-    /// lags its prompt's answer (said once as `offScreen`, then as the refusal it is), and a
-    /// request AlarmKit throws on (`AlarmAuthorizer`), which leaves the standing undetermined.
+    /// Read off the standing, the cause said is wrong only at edges no suite can reach: an
+    /// AlarmKit whose standing lags its prompt's answer (said once as `leftBeforeThePrompt`, then
+    /// as the refusal it is), and a request AlarmKit throws on (`AlarmAuthorizer`), which leaves
+    /// the standing undetermined. Either way the advice, to ask again with Topo in front, holds.
     struct OnScreen: Authorizer {
         let alarms: any Authorizer
         let state: @MainActor () -> UIApplication.State
@@ -168,7 +170,7 @@ struct TimerTool: Tool {
         "topo: no timer was set: Topo asks once to allow alarms, and can ask only while it is on the screen. Ask the person to open Topo, then set the timer again.\n")
 
     static let leftBeforeThePrompt = ToolReply(status: ToolReply.failed, text:
-        "topo: no timer was set: it was asked for with Topo in front, but Topo went to the background before it could put up the prompt to allow alarms. Tell the person that, and ask them to set it again a moment slower, with Topo on the screen; the prompt is asked only once, so this does not happen again.\n")
+        "topo: no timer was set: it was asked for with Topo in front, but Topo went to the background before it could put up the prompt to allow alarms. Tell the person that, and ask them to set it again a moment slower, with Topo on the screen; once the prompt is answered it is not asked again.\n")
 
     private func start(span: TimeInterval, label: String) async -> ToolReply {
         guard scheduler.authorizer != nil else { return Self.noAlarmKit }

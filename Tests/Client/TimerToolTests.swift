@@ -86,8 +86,8 @@ final class TimerToolTests: XCTestCase {
                          now: { start }, makeID: { counter.next() })
     }
 
-    /// A second start made while the first one's prompt is up finds Topo inactive, as a system
-    /// alert leaves it, and waits on that prompt rather than being told to open Topo.
+    /// A second start made while the first one's prompt is up, with Topo inactive under it as a
+    /// system alert leaves it, joins that prompt in the broker and waits on it.
     func testAStartUnderThePromptWaitsOnIt() async {
         let permission = AlarmPermission(.undetermined)
         let gate = Gate()
