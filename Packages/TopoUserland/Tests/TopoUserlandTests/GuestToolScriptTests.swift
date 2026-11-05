@@ -184,7 +184,7 @@ final class GuestToolScriptTests: XCTestCase {
         }
         XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand, GuestTools.appleDocCommand])
         // An empty helper first, which clears every helper configured before it, then this one.
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "6")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "8")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_0"], "credential.https://github.com.helper")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_0"], "")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_1"], "credential.https://github.com.helper")
@@ -196,6 +196,10 @@ final class GuestToolScriptTests: XCTestCase {
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_4"], GuestTools.commitName)
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_5"], "user.email")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_5"], GuestTools.commitEmail)
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_6"], "author.name")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_6"], GuestTools.commitName)
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_7"], "author.email")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_7"], GuestTools.commitEmail)
         XCTAssertFalse(GuestTools.environment.keys.contains { $0.hasPrefix("GH_") || $0.hasPrefix("GITHUB_") },
                        "no GitHub token rides the environment the resident is given")
     }
@@ -366,9 +370,27 @@ final class GuestToolScriptTests: XCTestCase {
             ("gh pr comment 1 --body \(shellQuoted(signed("again") + "\n"))", argv("pr", "comment", "1", "--body", signed("again") + "\n")),
             ("gh issue create -t x -- -b y", argv("issue", "create", "-t", "x", "--", "-b", "y")),
             ("gh pr new --body x", argv("pr", "new", "--body", signed("x"))),
+            ("gh issue new --body x", argv("issue", "new", "--body", signed("x"))),
             ("gh issue create --attach -b -b x", argv("issue", "create", "--attach", "-b", "--body", signed("x"))),
-            // An empty body stays empty, for gh to refuse, rather than becoming a comment of only the mark.
+            // A mark anywhere in the body is the mark: the body is not signed twice.
+            ("gh pr comment 1 --body 'a <!-- topo --> b'", argv("pr", "comment", "1", "--body", "a <!-- topo --> b")),
+            // gh's own flags before or between the two words do not hide the command.
+            ("gh --repo a/b pr comment 5 --body x", argv("--repo", "a/b", "pr", "comment", "5", "--body", signed("x"))),
+            ("gh pr --repo a/b comment 5 -b x", argv("pr", "--repo", "a/b", "comment", "5", "--body", signed("x"))),
+            ("gh pr create -dt --body --body y", argv("pr", "create", "-dt", "--body", "--body", signed("y"))),
+            // A body file with attachments goes as given, unsigned: gh finds its images from the file's directory.
+            ("printf 'see ./a.png\\n' > /tmp/b.md && gh issue create -F /tmp/b.md --attach a.png; rm -f /tmp/b.md",
+             argv("issue", "create", "-F", "/tmp/b.md", "--attach", "a.png")),
+            // An empty body that creates an issue or PR is the mark alone: it is still Topo's.
+            ("gh issue create --title t --body ''", argv("issue", "create", "--title", "t", "--body", GuestTools.bodyMark)),
+            ("printf '\\n' > /tmp/b.md && gh pr create -F /tmp/b.md; rm -f /tmp/b.md", argv("pr", "create", "--body", GuestTools.bodyMark)),
+            // An empty comment stays empty, for gh to judge, rather than becoming a comment of only the mark.
             ("gh pr comment 1 --body ''", argv("pr", "comment", "1", "--body", "")),
+            // No body, or one in a joined short form, reaches gh as given, unsigned.
+            ("gh pr create --fill", argv("pr", "create", "--fill")),
+            ("gh pr comment 1 -bTEXT", argv("pr", "comment", "1", "-bTEXT")),
+            ("gh pr comment 1 -FFILE", argv("pr", "comment", "1", "-FFILE")),
+            ("gh pr create -db x", argv("pr", "create", "-db", "x")),
             // A flag left without its value reaches gh as it was, for gh to refuse.
             ("gh pr comment 1 --body", argv("pr", "comment", "1", "--body")),
             ("gh pr comment 1 -F", argv("pr", "comment", "1", "-F")),
@@ -387,6 +409,12 @@ final class GuestToolScriptTests: XCTestCase {
         let unreadable = try await shell("gh pr comment 1 -F /tmp/no-such-body.md; echo \"status=$?\"", environment)
         XCTAssertEqual(unreadable.output, "status=1\n", "gh ran with a body it could not read")
         XCTAssertTrue(unreadable.errors.contains("/tmp/no-such-body.md"), unreadable.errors)
+        // An inline body with a body file is refused, as gh refuses it, in every spelling.
+        for both in ["gh pr comment 1 --body x --body-file /tmp/b.md", "gh issue create -bX -F /tmp/b.md", "gh pr create --body-file=- --body=y"] {
+            let refused = try await shell("echo z > /tmp/b.md; \(both) < /dev/null; echo \"status=$?\"; rm -f /tmp/b.md", environment)
+            XCTAssertEqual(refused.output, "status=1\n", both)
+            XCTAssertTrue(refused.errors.contains("specify only one of"), both + "\n" + refused.errors)
+        }
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
     }
 

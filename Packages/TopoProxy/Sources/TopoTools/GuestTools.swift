@@ -55,12 +55,12 @@ public enum GuestTools {
     /// and a `store` would write the token to `~/.git-credentials` and answer from it after a
     /// disconnect. And git's identity, `Topo` (`commitName`, `commitEmail`), as committer and
     /// author: every commit the guest makes is the mind on the phone's, whatever a repository's
-    /// config says, since configuration from the environment outranks every file's. The
-    /// `committer.*` keys are the ones that hold — a file's `committer.name` beats any
-    /// `user.name` — and the committer is what the githubpr channel reads; `user.*` makes the
-    /// author Topo too, so the guest's commits are linked to no person's account.
+    /// config says, since configuration from the environment outranks every file's. A file's
+    /// `committer.*` or `author.*` beats any `user.*`, so all three are set: the committer is what
+    /// the githubpr channel reads, and the author is Topo too, so the guest's commits are linked
+    /// to no person's account.
     public static let environment: [String: String] = [
-        "GIT_CONFIG_COUNT": "6",
+        "GIT_CONFIG_COUNT": "8",
         "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
         "GIT_CONFIG_VALUE_0": "",
         "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
@@ -73,6 +73,10 @@ public enum GuestTools {
         "GIT_CONFIG_VALUE_4": commitName,
         "GIT_CONFIG_KEY_5": "user.email",
         "GIT_CONFIG_VALUE_5": commitEmail,
+        "GIT_CONFIG_KEY_6": "author.name",
+        "GIT_CONFIG_VALUE_6": commitName,
+        "GIT_CONFIG_KEY_7": "author.email",
+        "GIT_CONFIG_VALUE_7": commitEmail,
     ]
 
     /// The name and address the guest's commits carry: an address on no domain, so it names no
@@ -80,7 +84,7 @@ public enum GuestTools {
     public static let commitName = "Topo"
     public static let commitEmail = "topo@topo.invalid"
 
-    /// The mark the `gh` wrapper puts at the end of a body the guest writes on GitHub — an
+    /// The mark the `gh` wrapper adds to the end of a body the guest writes on GitHub — an
     /// HTML comment, which GitHub does not render — so a reader can tell the mind on the phone
     /// from the person whose login it writes with.
     public static let bodyMark = "<!-- topo -->"
@@ -222,9 +226,12 @@ public enum GuestTools {
     /// `gh` with GitHub's token from the app in that one process's environment, never the
     /// resident's. A `GH_TOKEN` or `GITHUB_TOKEN` already set is left to `gh`; when the app has no
     /// token to give it says why, as `topo` said, and runs `gh` as it is. A body given to
-    /// `issue create`, `issue comment`, `pr create` or `pr comment` — `--body`, `-b`, `--body=`, or
+    /// `issue create`, `issue comment`, `pr create` or `pr comment` (or `new` for `create`),
+    /// wherever gh's own flags put the two words — `--body`, `-b`, `--body=`, or
     /// `--body-file`/`--body-file=`/`-F` (`-` for standard input), read whole and passed as
-    /// `--body` — ends with `bodyMark`, once; a body file that cannot be read posts nothing.
+    /// `--body` — carries `bodyMark`, once; a body file that cannot be read posts nothing, and an
+    /// inline body with a body file is refused, as gh refuses it. A body file with `--attach` goes
+    /// unsigned, since gh finds its images from the file's directory.
     public static let gh = #"""
     #!/bin/bash
     # gh: GitHub's CLI with the token from the Topo app, for this one command.
@@ -236,20 +243,51 @@ public enum GuestTools {
         echo "gh is not installed in the guest: apk add github-cli" >&2
         exit 127
     fi
-    # What the guest writes on GitHub is signed: a mark at the end of the body, which GitHub does
-    # not render, so a reader can tell the mind on the phone from the person it writes as. Four
-    # subcommands only; every other call reaches gh as it was given.
+    # What the guest writes on GitHub is signed: a mark added to the end of the body, which GitHub
+    # does not render, so a reader can tell the mind on the phone from the person it writes as.
+    # Four subcommands only; every other call reaches gh as it was given.
     mark='\#(bodyMark)'
-    sign() {
-        # A body that already ends with the mark (a retry) keeps the one it has, and an empty
-        # one stays empty: gh refuses it rather than posting a comment that is only the mark.
-        local trimmed="$1"
-        while [[ "$trimmed" == *[$'\n\r'] ]]; do trimmed="${trimmed%[$'\n\r']}"; done
-        case "$trimmed" in
-            "") signed="$1" ;;
-            *"$mark") signed="$1" ;;
-            *) signed="$1"$'\n\n'"$mark" ;;
+    # Flags whose value is the next word, whatever it looks like (`--title -b`); the short ones
+    # among them, in a run of short flags (`-dt Title`), take the rest of the run instead.
+    valued=" -t --title -B --base -H --head -a --assignee -l --label -m --milestone -p --project -r --reviewer -R --repo -T --template --recover --attach --type --parent --blocked-by --blocking -b --body -F --body-file "
+    shortvalued=tBHalmprRTbF
+    # One flag: whether it takes the next word as its value, and which body it gives.
+    flag() {
+        local run c
+        takes=0
+        case "$1" in
+            --body|--body=*) inline=1 ;;
+            --body-file|--body-file=*) file=1 ;;
+            --attach|--attach=*) attach=1 ;;
         esac
+        case "$1" in
+            --*=*) ;;
+            --*) [[ "$valued" == *" $1 "* ]] && takes=1 ;;
+            -?*)
+                run="${1#-}"
+                while [ -n "$run" ]; do
+                    c="${run:0:1}"; run="${run:1}"
+                    case "$c" in b) inline=1 ;; F) file=1 ;; esac
+                    if [[ "$shortvalued" == *"$c"* ]]; then
+                        [ -z "$run" ] && takes=1
+                        break
+                    fi
+                done ;;
+        esac
+    }
+    sign() {
+        # A body that already carries the mark (a retry) keeps the one it has. An empty one
+        # becomes the mark alone when it creates an issue or PR, which is still Topo's; on a
+        # comment it stays empty, for gh to judge, so no comment is ever only the mark.
+        local trimmed="$1"
+        while [[ "$trimmed" == *[[:space:]] ]]; do trimmed="${trimmed%[[:space:]]}"; done
+        if [[ "$1" == *"$mark"* ]]; then
+            signed="$1"
+        elif [ -z "$trimmed" ]; then
+            if [ "$verb" = create ]; then signed="$mark"; else signed="$1"; fi
+        else
+            signed="$1"$'\n\n'"$mark"
+        fi
     }
     readbody() {
         # Read whole, trailing newlines kept (a substitution strips them; the x keeps them), and
@@ -262,37 +300,59 @@ public enum GuestTools {
         fi
         body="${body%x}"
     }
-    args=("$@")
-    case "${1:-} ${2:-}" in
-        "issue create"|"issue new"|"issue comment"|"pr create"|"pr new"|"pr comment")
-            args=("$1" "$2")
-            shift 2
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --)
-                        args+=("$@"); break ;;
-                    -t|--title|-B|--base|-H|--head|-a|--assignee|-l|--label|-m|--milestone|-p|--project|-r|--reviewer|-R|--repo|-T|--template|--recover|--attach|--type|--parent|--blocked-by|--blocking)
-                        # A flag's value is its value, whatever it looks like (`--title -b`).
-                        args+=("$1"); shift
-                        [ $# -gt 0 ] && { args+=("$1"); shift; }
-                        continue ;;
-                    --body|-b)
-                        if [ $# -lt 2 ]; then args+=("$1"); shift; continue; fi
-                        sign "$2"; args+=(--body "$signed"); shift 2; continue ;;
-                    --body=*)
-                        sign "${1#--body=}"; args+=(--body "$signed") ;;
-                    --body-file|-F)
-                        if [ $# -lt 2 ]; then args+=("$1"); shift; continue; fi
-                        readbody "$2"; sign "$body"; args+=(--body "$signed"); shift 2; continue ;;
-                    --body-file=*)
-                        readbody "${1#--body-file=}"; sign "$body"; args+=(--body "$signed") ;;
-                    *)
-                        args+=("$1") ;;
-                esac
-                shift
-            done
-            ;;
+    argv=("$@")
+    n=$#
+    # The command is its first two words, past any of gh's flags before or between them.
+    words=() inline=0 file=0 attach=0 i=0
+    while [ $i -lt $n ]; do
+        a="${argv[$i]}"
+        [ "$a" = -- ] && break
+        case "$a" in
+            -?*) flag "$a"; i=$((i + takes)) ;;
+            *) words+=("$a") ;;
+        esac
+        i=$((i + 1))
+    done
+    case "${words[0]:-} ${words[1]:-}" in
+        "issue create"|"issue new"|"pr create"|"pr new") verb=create ;;
+        "issue comment"|"pr comment") verb=comment ;;
+        *) verb= ;;
     esac
+    if [ -n "$verb" ] && [ $inline = 1 ] && [ $file = 1 ]; then
+        # gh's own refusal: rewritten to one --body, the two would no longer reach it to refuse.
+        echo 'specify only one of `--body` or `--body-file`' >&2
+        exit 1
+    fi
+    # A body file with attachments goes as given, unsigned: gh finds the images the file names
+    # from the file's own directory, which a body passed inline would lose.
+    [ $file = 1 ] && [ $attach = 1 ] && verb=
+    args=("$@")
+    if [ -n "$verb" ]; then
+        args=() i=0
+        while [ $i -lt $n ]; do
+            a="${argv[$i]}"
+            case "$a" in
+                --)
+                    args+=("${argv[@]:$i}"); break ;;
+                --body|-b|--body-file|-F)
+                    if [ $((i + 1)) -ge $n ]; then args+=("$a"); break; fi
+                    v="${argv[$((i + 1))]}"
+                    case "$a" in --body-file|-F) readbody "$v"; v="$body" ;; esac
+                    sign "$v"; args+=(--body "$signed"); i=$((i + 2)); continue ;;
+                --body=*)
+                    sign "${a#--body=}"; args+=(--body "$signed") ;;
+                --body-file=*)
+                    readbody "${a#--body-file=}"; sign "$body"; args+=(--body "$signed") ;;
+                -?*)
+                    # Any other flag, its value with it; a run of short flags goes as written.
+                    flag "$a"; args+=("$a")
+                    if [ $takes = 1 ] && [ $((i + 1)) -lt $n ]; then args+=("${argv[$((i + 1))]}"); i=$((i + 1)); fi ;;
+                *)
+                    args+=("$a") ;;
+            esac
+            i=$((i + 1))
+        done
+    fi
     if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
         exec "$real" "${args[@]}"
     fi

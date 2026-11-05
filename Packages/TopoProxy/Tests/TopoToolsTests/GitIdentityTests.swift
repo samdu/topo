@@ -6,12 +6,12 @@ import XCTest
 /// simulator the guest's script tests run in. The environment is `GuestTools.environment` as the
 /// app hands it to the guest, and the commit's committer is what the githubpr channel reads.
 final class GitIdentityTests: XCTestCase {
-    /// A repository whose own config names someone else, by `user.*` and by `committer.*`, still
+    /// A repository whose own config names someone else, by `user.*`, `committer.*` or `author.*`, still
     /// commits as Topo: configuration from the environment outranks the repository's.
     func testTheGuestCommitsAsTopoWhateverTheRepositorySays() throws {
         let git = "/usr/bin/git"
         guard FileManager.default.isExecutableFile(atPath: git) else { throw XCTSkip("no git on this Mac") }
-        for keys in [["user.name", "user.email"], ["committer.name", "committer.email"]] {
+        for keys in [["user.name", "user.email"], ["committer.name", "committer.email"], ["author.name", "author.email"]] {
             let repo = FileManager.default.temporaryDirectory.appendingPathComponent("git-identity-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: repo) }
