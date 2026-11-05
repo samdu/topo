@@ -642,6 +642,10 @@ final class Speaker {
             return false
         }
         progressed()
+        // Where and how loud the reply is about to be heard, so a run that sounded quiet says
+        // which of the session's states it was read under: the call's or not, its mode, the
+        // voice processing the session is configured for, the route and the system's volume.
+        AudioLog.say("the reply begins (\(audio.describeOutput()))")
         nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG

@@ -18,6 +18,7 @@ final class FakeCallSystem: CallSystem {
     private(set) var fulfilled: [CXAction] = []
     private(set) var failed: [CXAction] = []
     private(set) var replaced = 0
+    private(set) var introductions = 0
 
     struct Refused: Error {}
 
@@ -32,6 +33,7 @@ final class FakeCallSystem: CallSystem {
     }
 
     func setDelegate(_ delegate: CXProviderDelegate) { self.delegate = delegate }
+    func introduce(completion: @escaping @MainActor (Error?) -> Void) { introductions += 1 }
 
     /// Records the request and, as CallKit does for the app's own end, performs its end action
     /// on the delegate before the completion is answered.
@@ -433,6 +435,26 @@ final class CallWantTests: XCTestCase {
         driver.holdChanged(false)
         driver.scene(.background)
         XCTAssertEqual(system.starts.count, 1, "nothing held places none")
+    }
+
+    /// The call service looks an app up the first time it is asked anything, and a placing it
+    /// judges after the app has stopped being visible is refused: so the driver introduces Topo
+    /// in front, when it is made there and at each coming to the front, and never away.
+    @MainActor
+    func testTheDriverIntroducesTopoToTheCallServiceInFront() {
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let center = NotificationCenter()
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: center, initial: .active)
+        XCTAssertEqual(system.introductions, 1, "made in front")
+        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        XCTAssertEqual(system.introductions, 1, "the background and the way to the front introduce nothing")
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        XCTAssertEqual(system.introductions, 2, "each coming to the front")
+        let away = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        XCTAssertEqual(system.introductions, 2, "a driver made in the background introduces nothing")
+        withExtendedLifetime((driver, away)) {}
     }
 
     /// A cue's hold alone places no call behind the lock, and keeps one already up: a lock as a

@@ -432,6 +432,15 @@ final class AudioSession {
         }
     }
 
+    /// The session as a reply about to be read finds it: the call's phase, the mode, the voice
+    /// processing it is configured for, the route and the system's output volume. Read only.
+    func describeOutput() -> String {
+        let session = AVAudioSession.sharedInstance()
+        let route = outputs().map(\.rawValue).joined(separator: ", ")
+        return "call \(call), mode \(session.mode.rawValue), voice processing \(voiceProcessed), "
+            + "route \(route.isEmpty ? "none" : route), overridden \(overridden), volume \(String(format: "%.2f", session.outputVolume))"
+    }
+
     /// The system activated the session for the call: it is live, at the call's priority, and
     /// stays so until `callDeactivated` or `callOver`.
     func callActivated() {
