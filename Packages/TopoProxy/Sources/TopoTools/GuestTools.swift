@@ -53,19 +53,26 @@ public enum GuestTools {
     /// value first clears every helper configured before it (a `credential.helper store` in the
     /// home's config included), since git hands an answer to every helper on its list to keep,
     /// and a `store` would write the token to `~/.git-credentials` and answer from it after a
-    /// disconnect. And git's identity, `Topo` (`commitName`, `commitEmail`): every commit the
-    /// guest makes says the mind on the phone made it, whatever the mind set in a config of its
-    /// own, since configuration from the environment outranks every file's.
+    /// disconnect. And git's identity, `Topo` (`commitName`, `commitEmail`), as the committer and
+    /// as the identity a repository with none of its own falls back on: every commit the guest
+    /// makes is committed by the mind on the phone, whatever a repository's config or the mind's
+    /// says, since configuration from the environment outranks every file's. The `committer.*`
+    /// keys are the ones that hold — a file's `committer.name` beats any `user.name` — and the
+    /// committer is what the githubpr channel reads.
     public static let environment: [String: String] = [
-        "GIT_CONFIG_COUNT": "4",
+        "GIT_CONFIG_COUNT": "6",
         "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
         "GIT_CONFIG_VALUE_0": "",
         "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
         "GIT_CONFIG_VALUE_1": "topo",
-        "GIT_CONFIG_KEY_2": "user.name",
+        "GIT_CONFIG_KEY_2": "committer.name",
         "GIT_CONFIG_VALUE_2": commitName,
-        "GIT_CONFIG_KEY_3": "user.email",
+        "GIT_CONFIG_KEY_3": "committer.email",
         "GIT_CONFIG_VALUE_3": commitEmail,
+        "GIT_CONFIG_KEY_4": "user.name",
+        "GIT_CONFIG_VALUE_4": commitName,
+        "GIT_CONFIG_KEY_5": "user.email",
+        "GIT_CONFIG_VALUE_5": commitEmail,
     ]
 
     /// The name and address the guest's commits carry: an address on no domain, so it names no
@@ -216,8 +223,8 @@ public enum GuestTools {
     /// resident's. A `GH_TOKEN` or `GITHUB_TOKEN` already set is left to `gh`; when the app has no
     /// token to give it says why, as `topo` said, and runs `gh` as it is. A body given to
     /// `issue create`, `issue comment`, `pr create` or `pr comment` — `--body`, `-b`, `--body=`, or
-    /// `--body-file`/`-F` (`-` for standard input), which is read and passed as `--body` — ends with
-    /// `bodyMark`.
+    /// `--body-file`/`--body-file=`/`-F` (`-` for standard input), read whole and passed as
+    /// `--body` — ends with `bodyMark`, once; a body file that cannot be read posts nothing.
     public static let gh = #"""
     #!/bin/bash
     # gh: GitHub's CLI with the token from the Topo app, for this one command.
@@ -230,27 +237,53 @@ public enum GuestTools {
         exit 127
     fi
     # What the guest writes on GitHub is signed: a mark at the end of the body, which GitHub does
-    # not render, so a reader can tell the mind on the phone from the person it writes as.
+    # not render, so a reader can tell the mind on the phone from the person it writes as. Four
+    # subcommands only; every other call reaches gh as it was given.
     mark='\#(bodyMark)'
+    sign() {
+        # A body that already ends with the mark (a retry) keeps the one it has.
+        local trimmed="$1"
+        while [[ "$trimmed" == *$'\n' ]]; do trimmed="${trimmed%$'\n'}"; done
+        case "$trimmed" in
+            *"$mark") signed="$1" ;;
+            *) signed="$1"$'\n\n'"$mark" ;;
+        esac
+    }
+    readbody() {
+        # Read whole, trailing newlines kept (a substitution strips them; the x keeps them), and
+        # never staged in a file: a body is the person's words.
+        if [ "$1" = - ]; then
+            body="$(cat; printf x)"
+        elif ! body="$(cat -- "$1" && printf x)"; then
+            echo "gh: the body file $1 could not be read; nothing was posted" >&2
+            exit 1
+        fi
+        body="${body%x}"
+    }
     args=("$@")
     case "${1:-} ${2:-}" in
         "issue create"|"issue comment"|"pr create"|"pr comment")
-            args=()
+            args=("$1" "$2")
+            shift 2
             while [ $# -gt 0 ]; do
                 case "$1" in
+                    --)
+                        args+=("$@"); break ;;
+                    -t|--title|-B|--base|-H|--head|-a|--assignee|-l|--label|-m|--milestone|-p|--project|-r|--reviewer|-R|--repo|-T|--template|--recover)
+                        # A flag's value is its value, whatever it looks like (`--title -b`).
+                        args+=("$1"); shift
+                        [ $# -gt 0 ] && { args+=("$1"); shift; }
+                        continue ;;
                     --body|-b)
-                        [ $# -ge 2 ] || { args+=("$1"); shift; continue; }
-                        args+=("$1" "$2"$'\n\n'"$mark"); shift 2; continue ;;
+                        if [ $# -lt 2 ]; then args+=("$1"); shift; continue; fi
+                        sign "$2"; args+=(--body "$signed"); shift 2; continue ;;
                     --body=*)
-                        args+=("$1"$'\n\n'"$mark") ;;
+                        sign "${1#--body=}"; args+=(--body "$signed") ;;
                     --body-file|-F)
-                        [ $# -ge 2 ] || { args+=("$1"); shift; continue; }
-                        if [ "$2" = - ]; then body="$(cat)"; else body="$(cat -- "$2")" || exit 1; fi
-                        args+=(--body "$body"$'\n\n'"$mark"); shift 2; continue ;;
+                        if [ $# -lt 2 ]; then args+=("$1"); shift; continue; fi
+                        readbody "$2"; sign "$body"; args+=(--body "$signed"); shift 2; continue ;;
                     --body-file=*)
-                        file="${1#--body-file=}"
-                        if [ "$file" = - ]; then body="$(cat)"; else body="$(cat -- "$file")" || exit 1; fi
-                        args+=(--body "$body"$'\n\n'"$mark") ;;
+                        readbody "${1#--body-file=}"; sign "$body"; args+=(--body "$signed") ;;
                     *)
                         args+=("$1") ;;
                 esac

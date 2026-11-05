@@ -184,16 +184,14 @@ final class GuestToolScriptTests: XCTestCase {
         }
         XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand, GuestTools.appleDocCommand])
         // An empty helper first, which clears every helper configured before it, then this one.
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "4")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "6")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_0"], "credential.https://github.com.helper")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_0"], "")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_1"], "credential.https://github.com.helper")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_1"], "topo")
-        // The guest's commits say Topo made them: the githubpr channel reads the committer.
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_2"], "user.name")
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_2"], "Topo")
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_3"], "user.email")
-        XCTAssertTrue(GuestTools.environment["GIT_CONFIG_VALUE_3"]?.hasPrefix("topo@") == true)
+        // The guest's commits are committed by Topo (GitIdentityTests runs git against them).
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_2"], "committer.name")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_3"], "committer.email")
         XCTAssertFalse(GuestTools.environment.keys.contains { $0.hasPrefix("GH_") || $0.hasPrefix("GITHUB_") },
                        "no GitHub token rides the environment the resident is given")
     }
@@ -329,29 +327,58 @@ final class GuestToolScriptTests: XCTestCase {
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
     }
 
-    /// A body the guest writes on GitHub ends with the mark, however it was given; anything else
-    /// gh is asked reaches it as it was.
+    /// A body the guest writes on GitHub ends with the mark, once, however it was given, and every
+    /// other argument reaches gh as it was; anything but the four subcommands reaches it whole.
+    /// The stand-in replaces the wrapper's `/usr/bin/gh` and writes each argument with its length,
+    /// so a newline inside one argument and two arguments read differently.
     func testTheGhWrapperSignsWhatItWrites() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
-        let fake = try await Guest.shared.run("/bin/sh", ["-c", "printf '#!/bin/sh\\nfor a; do printf \"[%s]\\\\n\" \"$a\"; done\\n' > /usr/bin/gh && chmod +x /usr/bin/gh"])
+        let fake = try await Guest.shared.run("/bin/sh", ["-c", """
+        cat > /usr/bin/gh <<'EOF'
+        #!/bin/bash
+        export LC_ALL=C
+        for a; do printf '%d:%s;' "${#a}" "$a"; done
+        EOF
+        chmod +x /usr/bin/gh
+        """])
         XCTAssertEqual(fake.status, 0, fake.errors)
         let environment = try await startedGitHub(token: "gho_test")
-        let signed = "\n\n\(GuestTools.bodyMark)"
+        func argv(_ arguments: String...) -> String { arguments.map { "\($0.utf8.count):\($0);" }.joined() }
+        func signed(_ body: String) -> String { body + "\n\n" + GuestTools.bodyMark }
+        let awkward = #"a "q" $x \\ 'single' -lead"#
         let cases: [(String, String)] = [
-            ("gh pr comment 5 --body 'it held'", "[pr]\n[comment]\n[5]\n[--body]\n[it held\(signed)]\n"),
-            ("gh issue create --title t -b x", "[issue]\n[create]\n[--title]\n[t]\n[-b]\n[x\(signed)]\n"),
-            ("gh issue comment 3 --body=yo", "[issue]\n[comment]\n[3]\n[--body=yo\(signed)]\n"),
-            ("printf 'from a file\\n' > /tmp/b.md && gh pr create -F /tmp/b.md; rm -f /tmp/b.md",
-             "[pr]\n[create]\n[--body]\n[from a file\(signed)]\n"),
-            ("echo piped | gh pr comment 1 --body-file -", "[pr]\n[comment]\n[1]\n[--body]\n[piped\(signed)]\n"),
-            ("gh api repos/a/b/issues -f body=x", "[api]\n[repos/a/b/issues]\n[-f]\n[body=x]\n"),
+            ("gh pr comment 5 --body 'it held'", argv("pr", "comment", "5", "--body", signed("it held"))),
+            ("gh issue create --title t -b x", argv("issue", "create", "--title", "t", "--body", signed("x"))),
+            ("gh issue comment 3 --body=yo", argv("issue", "comment", "3", "--body", signed("yo"))),
+            ("gh pr create --title -b --body \(shellQuoted(awkward)) --base main",
+             argv("pr", "create", "--title", "-b", "--body", signed(awkward), "--base", "main")),
+            ("gh pr comment 5 --body $'one\\ntwo'", argv("pr", "comment", "5", "--body", signed("one\ntwo"))),
+            ("printf 'kept\\n\\n' > /tmp/b.md && gh pr create -F /tmp/b.md; rm -f /tmp/b.md",
+             argv("pr", "create", "--body", signed("kept\n\n"))),
+            ("printf 'kept\\n' > /tmp/b.md && gh issue comment 2 --body-file=/tmp/b.md; rm -f /tmp/b.md",
+             argv("issue", "comment", "2", "--body", signed("kept\n"))),
+            ("printf 'piped\\n\\n' | gh pr comment 1 --body-file -", argv("pr", "comment", "1", "--body", signed("piped\n\n"))),
+            ("gh pr comment 1 --body \(shellQuoted(signed("again") + "\n"))", argv("pr", "comment", "1", "--body", signed("again") + "\n")),
+            ("gh issue create -t x -- -b y", argv("issue", "create", "-t", "x", "--", "-b", "y")),
+            // Not one of the four: the same flags mean other things there, and nothing is added.
+            ("gh pr edit 1 --body x", argv("pr", "edit", "1", "--body", "x")),
+            ("gh pr review 1 -b x", argv("pr", "review", "1", "-b", "x")),
+            ("gh release create v1 -F notes.md", argv("release", "create", "v1", "-F", "notes.md")),
+            ("gh api repos/a/b/issues -F body=x", argv("api", "repos/a/b/issues", "-F", "body=x")),
         ]
         for (command, expected) in cases {
             let exit = try await shell(command, environment)
             XCTAssertEqual(exit.output, expected, command + "\n" + exit.errors)
         }
+        let unreadable = try await shell("gh pr comment 1 -F /tmp/no-such-body.md; echo \"status=$?\"", environment)
+        XCTAssertEqual(unreadable.output, "status=1\n", "gh ran with a body it could not read")
+        XCTAssertTrue(unreadable.errors.contains("/tmp/no-such-body.md"), unreadable.errors)
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
+    }
+
+    private func shellQuoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// The wrapper and the helper say which of the three it was — not connected, the keychain
