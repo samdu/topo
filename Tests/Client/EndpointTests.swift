@@ -30,8 +30,23 @@ final class EndpointTests: XCTestCase {
         XCTAssertEqual(policy.take(.end(20_000 + quarter * 4)), .ended)
     }
 
+    /// The promised numbers as literals, so a change to any of them is a change to this test.
+    /// FluidAudio's segmentation itself needs Silero's model, which the unit suite does not
+    /// load: that a 1.5 s pause does not split a sentence is the device check's.
     func testTheSilenceWindowSitsPastTheTwoSecondsThatCutSpeakersOff() {
-        XCTAssertGreaterThan(Endpoint.silence, 2.0)
-        XCTAssertEqual(Endpoint.chunk, Ear.rate * 256 / 1000)
+        XCTAssertEqual(Endpoint.silence, 2.1)
+        XCTAssertEqual(Endpoint.minSpeech, 0.25)
+        XCTAssertEqual(Endpoint.chunk, 4_096)
+        #if canImport(FluidAudio)
+        XCTAssertEqual(SileroDetector.silenceWindow, 2.1, "the detector segments on a window other than the promised one")
+        #endif
+    }
+
+    func testAQuarterSecondAtTheEarsRateIsFourThousandSamples() {
+        var policy = Endpoint.Policy()
+        XCTAssertEqual(policy.take(.start(0)), .speech)
+        XCTAssertNil(policy.take(.end(3_999)), "under a quarter second ended an utterance")
+        XCTAssertEqual(policy.take(.start(10_000)), .speech)
+        XCTAssertEqual(policy.take(.end(14_000)), .ended, "a quarter second was not an utterance")
     }
 }
