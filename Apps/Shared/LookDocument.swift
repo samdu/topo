@@ -398,6 +398,7 @@ enum LookDocument {
         r.symbol("file", &value.file)
         r.symbol("photo", &value.photo)
         r.symbol("camera", &value.camera)
+        r.symbol("screen", &value.screen)
         r.symbol("keyboard", &value.keyboard)
         r.retired("keyboardDown")
         r.symbol("speaking", &value.speaking)
