@@ -249,7 +249,12 @@ final class LogToolTests: XCTestCase {
         let base = ISO8601DateFormatter().date(from: "2026-09-26T18:59:50Z")!
         let ms = LogTool.ms(base) + 123
         XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.1239Z"), LogTool.Cursor(ms: ms, count: nil))
+        XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.1239995Z"), LogTool.Cursor(ms: ms, count: nil))
+        XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.999999999Z"), LogTool.Cursor(ms: ms + 876, count: nil))
         XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.123Z"), LogTool.Cursor(ms: ms, count: nil))
+        XCTAssertEqual(LogTool.cursor("2026-09-26T11:59:50.1-07:00"), LogTool.Cursor(ms: ms - 23, count: nil))
+        XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50Z"), LogTool.Cursor(ms: ms - 123, count: nil))
+        XCTAssertNil(LogTool.cursor("2026-09-26T18:59:50.Z"))
         XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.123Z#2"), LogTool.Cursor(ms: ms, count: 2))
     }
 

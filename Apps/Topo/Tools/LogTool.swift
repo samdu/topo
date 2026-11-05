@@ -235,12 +235,17 @@ struct LogTool: Tool {
         let parts = text.split(separator: "#", omittingEmptySubsequences: false)
         guard (1...2).contains(parts.count) else { return nil }
         let time = String(parts[0])
-        let strategy = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-        guard let date = (try? strategy.parse(time)) ?? (try? Date.ISO8601FormatStyle().parse(time)) else { return nil }
-        // The millisecond the time falls in: one written to the millisecond is that one exactly,
-        // which a float a hair under it must not floor to the one before; a finer one is floored.
-        let exact = date.timeIntervalSince1970 * 1000
-        let ms = Int64(abs(exact - exact.rounded()) < 0.001 ? exact.rounded() : exact.rounded(.down))
+        // The millisecond the time falls in, read off its digits: the first three of the fraction,
+        // whatever follows them, so a finer time is never rounded into the next millisecond.
+        var whole = time, fraction = ""
+        if let dot = time.firstIndex(of: ".") {
+            let digits = time[time.index(after: dot)...].prefix(while: { $0.isASCII && $0.isNumber })
+            guard !digits.isEmpty else { return nil }
+            fraction = String(digits)
+            whole = String(time[..<dot]) + String(time[digits.endIndex...])
+        }
+        guard let date = try? Date.ISO8601FormatStyle().parse(whole) else { return nil }
+        let ms = Int64(date.timeIntervalSince1970.rounded()) * 1000 + Int64(String((fraction + "000").prefix(3)))!
         guard parts.count == 2 else { return Cursor(ms: ms, count: nil) }
         let digits = parts[1]
         guard !digits.isEmpty, digits.count <= 6, digits.allSatisfy({ $0.isASCII && $0.isNumber }), let count = Int(digits) else { return nil }
