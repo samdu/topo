@@ -57,7 +57,7 @@ final class Conversation {
         didSet {
             // The chat gone behind the lock (a sign-out, a takeover): nothing heard can be sent.
             guard send == nil else { return }
-            if handingOff { dropHandoff = true }
+            dropWhatIsDecoding()
             stop("the chat stopped answering", sending: false)
         }
     }
@@ -75,8 +75,13 @@ final class Conversation {
     private var callUp = false
     private var policy = Endpoint.Policy()
     private var fedTo = 0
-    /// True while a chunk counted in `fedTo` is with the detector: its verdict is not in yet.
-    private var judging = false
+    /// The feeder whose chunk is with the detector, by its serial: that chunk is past `fedTo`
+    /// until its verdict is in. Set and cleared by that feeder alone, so a cancelled one still
+    /// waiting on its verdict says nothing of the feeder after it.
+    private var judgingBy: Int?
+    private var feederSerial = 0
+    /// Whether the current feeder is waiting on a verdict.
+    private var judging: Bool { judgingBy != nil && judgingBy == feederSerial }
     private var feeder: Task<Void, Never>?
     private var idleTimer: Task<Void, Never>?
     private var reopening = false
@@ -196,20 +201,19 @@ final class Conversation {
             if on, voice.listening { voice.suspend("the call's session was taken") }
         case .hungUp:
             callUp = false
-            if handingOff { dropHandoff = true }
+            dropWhatIsDecoding()
             stop("hung up from the call", sending: false)
         case .over:
             callUp = false
             stop("the call is over", sending: true)
         case .muted(let isMuted):
             muted = isMuted
-            if isMuted, handingOff { dropHandoff = true }
+            if isMuted { dropWhatIsDecoding() }
             guard on else { return }
             if isMuted {
                 // What is open goes unsent: the person muted it.
                 feeder?.cancel()
                 feeder = nil
-                if endingUtterance { dropDecoded = true }
                 // Opening counts: a cancel moves the generation, so a reopen waiting on its
                 // permission opens nothing.
                 if voice.owner == .chat, !endingUtterance { voice.cancel(.chat) }
@@ -220,6 +224,14 @@ final class Conversation {
                 react()
             }
         }
+    }
+
+    /// The person ended it (a hang-up, a mute, the chat gone): whatever is being decoded to be
+    /// sent goes nowhere — an utterance's own end, or the handoff of a stop that sends — whether
+    /// or not the conversation is still on.
+    private func dropWhatIsDecoding() {
+        if endingUtterance { dropDecoded = true }
+        if handingOff { dropHandoff = true }
     }
 
     private func resumeOnTheCall() {
@@ -262,6 +274,8 @@ final class Conversation {
     private func startFeeding(reset: Bool = false) {
         feeder?.cancel()
         guard let detector = endpoint.detector else { return }
+        feederSerial += 1
+        let serial = feederSerial
         let mine = voice.generation
         let sink = voice.sink
         let now = now
@@ -288,9 +302,9 @@ final class Conversation {
                     let chunk = Array(samples[offset..<offset + Endpoint.chunk])
                     offset += Endpoint.chunk
                     let event: Endpoint.Event?
-                    self.judging = true
+                    self.judgingBy = serial
                     do { event = try await detector.feed(chunk) } catch {
-                        self.judging = false
+                        if self.judgingBy == serial { self.judgingBy = nil }
                         guard !Task.isCancelled, self.on, self.voice.generation == mine else { return }
                         self.failures += 1
                         AudioLog.say("conversation: the detector failed on a chunk (\(self.failures) in a row): \(error.localizedDescription)")
@@ -300,7 +314,7 @@ final class Conversation {
                         }
                         break
                     }
-                    self.judging = false
+                    if self.judgingBy == serial { self.judgingBy = nil }
                     guard !Task.isCancelled, self.on, self.voice.generation == mine else { return }
                     // Counted fed only with its verdict in: a chunk whose verdict was lost is one
                     // a stop still decodes.
