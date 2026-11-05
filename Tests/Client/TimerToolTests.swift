@@ -6,7 +6,7 @@ import XCTest
 @testable import Topo
 
 /// AlarmKit's permission where the test puts it, counting its prompts.
-private final class AlarmPermission: Authorizer, @unchecked Sendable {
+private final class AlarmPermission: ThrowingPrompt, @unchecked Sendable {
     let name = "Alarms"
     private let lock = NSLock()
     private var standing: Access
@@ -20,6 +20,10 @@ private final class AlarmPermission: Authorizer, @unchecked Sendable {
     var onAccess: @Sendable () async -> Void = {}
     /// Where set, the prompt stays up until the test opens it.
     var gate: Gate?
+    /// Where set, the request throws this with the standing left as it was.
+    var failure: (any Error)?
+    /// Where set, a no at the prompt leaves the standing undetermined.
+    var keepsNothing = false
 
     init(_ standing: Access, answer: Bool = true) {
         self.standing = standing
@@ -43,9 +47,16 @@ private final class AlarmPermission: Authorizer, @unchecked Sendable {
         }
         return lock.withLock {
             _prompts += 1
-            standing = answer ? .granted : .denied
+            if answer || !keepsNothing { standing = answer ? .granted : .denied }
             return answer
         }
+    }
+    func prompt() async throws -> Bool {
+        if let failure {
+            lock.withLock { _prompts += 1 }
+            throw failure
+        }
+        return await request()
     }
 }
 
@@ -123,13 +134,13 @@ final class TimerToolTests: XCTestCase {
     func testOnScreenRaisesNoPromptInTheBackground() async {
         for (state, prompts) in [(UIApplication.State.background, 0), (.inactive, 1), (.active, 1)] {
             let permission = AlarmPermission(.undetermined)
-            let asked = await TimerTool.OnScreen(alarms: permission, state: { state }).request()
+            let asked = await TimerTool.OnScreen(alarms: permission, state: { state }, asked: TimerTool.Asked()).request()
             XCTAssertEqual(asked, prompts == 1, "\(state.rawValue)")
             XCTAssertEqual(permission.prompts, prompts, "\(state.rawValue)")
         }
         // Granted meanwhile by another call's prompt: a yes, asking nothing.
         let granted = AlarmPermission(.granted)
-        let yes = await TimerTool.OnScreen(alarms: granted, state: { .background }).request()
+        let yes = await TimerTool.OnScreen(alarms: granted, state: { .background }, asked: TimerTool.Asked()).request()
         XCTAssertTrue(yes)
         XCTAssertEqual(granted.prompts, 0)
     }
@@ -160,6 +171,32 @@ final class TimerToolTests: XCTestCase {
         let reply = await tool(alarms, state: state).run(["1m"])
         XCTAssertEqual(reply, TimerTool.leftBeforeThePrompt, reply.text)
         XCTAssertEqual(permission.prompts, 0)
+        XCTAssertEqual(alarms.count, 0)
+    }
+
+    /// Codex on #592: with Topo in front throughout, a request AlarmKit throws on is said as that
+    /// failure, never as Topo having gone to the background, nor as a refusal.
+    func testAPromptThatThrowsIsSaidAsItsFailure() async {
+        let permission = AlarmPermission(.undetermined)
+        permission.failure = CocoaError(.featureUnsupported)
+        let alarms = FakeAlarms(permission)
+        let reply = await tool(alarms).run(["1m"])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertTrue(reply.text.contains("request to allow alarms failed"), reply.text)
+        XCTAssertTrue(reply.text.contains(CocoaError(.featureUnsupported).localizedDescription), reply.text)
+        XCTAssertFalse(reply.text.contains("background"), reply.text)
+        XCTAssertEqual(alarms.count, 0)
+    }
+
+    /// A no that leaves the standing undetermined, with Topo in front throughout, is said as a
+    /// prompt that kept no answer, never as the background or a refusal.
+    func testAPromptThatKeepsNoAnswerIsSaidAsThat() async {
+        let permission = AlarmPermission(.undetermined, answer: false)
+        permission.keepsNothing = true
+        let alarms = FakeAlarms(permission)
+        let reply = await tool(alarms).run(["1m"])
+        XCTAssertEqual(reply, TimerTool.promptUnanswered, reply.text)
+        XCTAssertEqual(permission.prompts, 1)
         XCTAssertEqual(alarms.count, 0)
     }
 

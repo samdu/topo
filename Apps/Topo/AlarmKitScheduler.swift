@@ -47,7 +47,7 @@ struct AlarmKitScheduler: AlarmScheduler {
 
 /// AlarmKit's permission, asked at a timer's start and nowhere else (`PermissionBroker`).
 @available(iOS 26, *)
-struct AlarmAuthorizer: Authorizer {
+struct AlarmAuthorizer: ThrowingPrompt {
     let name = "Alarms"
 
     func access() async -> Access {
@@ -59,7 +59,7 @@ struct AlarmAuthorizer: Authorizer {
         }
     }
 
-    func request() async -> Bool {
-        (try? await AlarmManager.shared.requestAuthorization()) == .authorized
-    }
+    func request() async -> Bool { (try? await prompt()) ?? false }
+
+    func prompt() async throws -> Bool { try await AlarmManager.shared.requestAuthorization() == .authorized }
 }
