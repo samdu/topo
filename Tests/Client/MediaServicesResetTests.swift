@@ -281,15 +281,19 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var released = false
     private var delivered = false
+    private var asked = 0
 
     /// True once the second frame has been yielded.
     var yieldedTheHeldFrame: Bool { lock.withLock { delivered } }
+    /// The sentences asked for: one per sentence read.
+    var streams: Int { lock.withLock { asked } }
     func releaseTheHeldFrame() { lock.withLock { released = true } }
 
     func load(base: URL) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
-        AsyncThrowingStream { continuation in
+        lock.withLock { asked += 1 }
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
                 while !self.lock.withLock({ self.released }) {
