@@ -422,7 +422,8 @@ final class SpokenCallDriver {
     private let call: SpokenCall
     private let enabled: () -> Bool
     private var holding = false
-    /// A hold stands that is a turn's and not only a cue's: what places a call.
+    /// A hold stands that is a turn's and not only a cue's or the keeper's sound's: what places a
+    /// call.
     private var turn = false
     /// The chat's microphone is open or opening: a call up is kept for it.
     private var microphone = false

@@ -64,8 +64,8 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 ///
 /// A cue is a moment, not a reply. It is played on the session as it stands — live
 /// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing and
-/// activates nothing, in the background under a hold least of all. Where a hold that is not a cue's
-/// own already stands it holds the process for its own length too (`AudioSession.Hold.cue`, let go
+/// activates nothing, in the background under a hold least of all. Where a turn's hold already
+/// stands (`AudioSession.heldForATurn`: neither a cue's nor the keeper's sound's) it holds the process for its own length too (`AudioSession.Hold.cue`, let go
 /// when the player has finished and the route's tail has passed, or at `bound`), taken before the
 /// player starts, so that `done` behind the lock is heard out before the last hold goes and it is
 /// let go of; its caller plays it before dropping the hold it follows, so the process is never let
@@ -166,7 +166,7 @@ final class Earcons {
         playing = mine
         playingCue = cue
         // The hold before the player, so the process is held from the cue's first frame; only
-        // where a hold that is not a cue's own stands, since in front nothing suspends and a cue
+        // where a turn's hold stands (neither a cue's nor the keeper's sound's), since in front nothing suspends and a cue
         // that held alone would keep a claim change waiting for nothing. Under nothing but the
         // cue before it, that one's hold goes now: it was taken for a turn that is over.
         if audio.heldForATurn {

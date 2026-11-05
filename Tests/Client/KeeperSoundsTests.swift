@@ -110,13 +110,15 @@ final class KeeperSoundsTests: XCTestCase {
 
     /// `speakerCenter` puts the speaker's notifications on a center of their own, so a test posts
     /// a reset to the session's handler and the speaker's one at a time, in the order it chooses.
-    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true,
+    private func rig(mode: WorkingSounds.Mode? = nil, earcons: Bool = false, isActive: Bool = true,
                      heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
                      speakerCenter: NotificationCenter? = nil) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = makeDefaults()
         if let mode { defaults.set(mode.rawValue, forKey: WorkingSounds.key) }
+        // The keeper's sounds alone unless a test asks: the earcons' own failure cue is theirs.
+        defaults.set(earcons, forKey: EarconsSetting.key)
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { isActive })
         let players = WorkingRecorder()
         let clock = PausedSleep()
@@ -195,6 +197,16 @@ final class KeeperSoundsTests: XCTestCase {
             XCTAssertEqual(rig.sounds.played, [], "\(mode)")
             XCTAssertTrue(rig.players.players.isEmpty, "\(mode): a player was made for a turn nothing waits for")
         }
+    }
+
+    /// With the earcons on, a failed turn is theirs to sound (`failed`): the error receipt gives
+    /// way, so one failure is one tone.
+    func testWithTheEarconsOnAFailedTurnSoundsNoErrorReceipt() async {
+        let rig = await rig(earcons: true)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.follow(toolUse("WebSearch"))
+        rig.sounds.follow(.update(.ended(.failed(.exited("exit 1")))))
+        XCTAssertEqual(rig.sounds.played, [.read], "the error receipt sounded beside the earcons' failed")
     }
 
     /// The guest's turn failing sounds the error, once, before the wait ends; the wait ending
@@ -466,11 +478,13 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.bedVolume, 0], "the bed faded at more than one frame")
         XCTAssertEqual(bed.fades.last?.over, KeeperSounds.fadeOut)
         XCTAssertTrue(bed.isPlaying, "the bed was stopped before its fade")
-        XCTAssertEqual(rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count, 2, "the fade's hold and its pause, once each")
+        XCTAssertEqual(rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count, 1, "the pause asked for other than once")
+        XCTAssertTrue(rig.clock.asked.contains(KeeperSounds.bound), "the fade's hold has no bound")
         bed.currentTime = 3.2
         rig.clock.fire()
         await settle("the bed to be paused") { bed.pauses == 1 }
         XCTAssertFalse(bed.isPlaying)
+        XCTAssertFalse(rig.sounds.holdingASound, "the fade's hold outlived the pause")
 
         // The next wait: the same player plays on from where it was paused.
         _ = rig.speaker.awaitReply("second", readAloud: true)

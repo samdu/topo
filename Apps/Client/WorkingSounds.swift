@@ -243,9 +243,16 @@ final class KeeperSounds {
         return play(tone)
     }
 
-    /// The guest's turn failed and nothing is coming.
+    /// The guest's turn failed and nothing is coming. With the earcons on, the speaker's `failed`
+    /// cue says it, and a second tone would say it twice (Daphne's rule), so this gives way.
     @discardableResult
-    func failed() -> Bool { play(.error) }
+    func failed() -> Bool {
+        if EarconsSetting.enabled(defaults) {
+            AudioLog.say("receipt error not played: the earcons say a failed turn")
+            return false
+        }
+        return play(.error)
+    }
 
     private func play(_ tone: Tone) -> Bool {
         guard WorkingSounds.mode(defaults) != .off else { return false }
@@ -350,7 +357,9 @@ final class KeeperSounds {
             // is a sound's and asks the same of the session: on one that is not live (the
             // lock screen's interruption, with the player somehow still going) it would be a
             // hold whose keeper reconfigures the session from the background, so none is taken.
-            if activate(for: "the working bed's fade") { holdUntil(Self.parkAfter) }
+            // Let go once the bed is paused (`park`), and at the sounds' bound at the latest: a
+            // hold let go with the player still running is a session handed back under live I/O.
+            if activate(for: "the working bed's fade") { holdUntil(Self.bound) }
             bed.setVolume(0, fadeDuration: Self.fadeOut)
             AudioLog.say("the working bed fades out")
             parking = Task { [sleep] in
@@ -367,6 +376,7 @@ final class KeeperSounds {
         guard !bedWanted else { return }
         bed?.pause()
         AudioLog.say("the working bed is paused")
+        letGo("the working bed is paused")
     }
 
     /// The speaker's engine is back after an interruption: a bed still wanted and not playing
