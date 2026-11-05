@@ -65,7 +65,9 @@ struct LogTool: Tool {
     running: its starts and exits and each trip to the background. --category keeps one category
     and --grep the lines whose message holds TEXT, whatever its case. The lines are this launch's
     only, since the app reads them from its own process, and the widgets' and controls' are not
-    among them: those run in processes of their own. No line holds what was said, a secret or a token.
+    among them: those run in processes of their own. A detail line carries no mark of its own: it is
+written at notice, and is one that appears only while its category is at debug. No line holds what
+was said, a secret or a token.
     """
 
     enum Call: Equatable {

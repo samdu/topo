@@ -33,14 +33,12 @@ public final class LogLevels: Sendable {
     private let now: @Sendable () -> Date
     private let settings = OSAllocatedUnfairLock<[LogCategory: Setting]>(initialState: [:])
     /// Told once of each level that ran out, at the first moment it was looked at after.
-    private let expired: @Sendable (LogCategory, LogLevel) -> Void
+    private let expired: (@Sendable (LogCategory, LogLevel) -> Void)?
 
     /// `expired` is told of a level that ran out; unless given, the category says so in its own line.
     public init(now: @escaping @Sendable () -> Date = { Date() }, expired: (@Sendable (LogCategory, LogLevel) -> Void)? = nil) {
         self.now = now
-        self.expired = expired ?? { category, level in
-            TopoLog.logger(category).notice("level \(level.rawValue, privacy: .public) ended at its expiry")
-        }
+        self.expired = expired
     }
 
     /// The category's setting now; one past its expiry is put back to `default` here.
@@ -54,7 +52,10 @@ public final class LogLevels: Sendable {
             }
             return (kept, nil)
         }
-        if let ran { expired(category, ran) }
+        if let ran {
+            // Written once the level is back at default, so the line goes out whatever it was.
+            if let expired { expired(category, ran) } else { TopoLog(category, levels: self).notice("level \(ran.rawValue) ended at its expiry") }
+        }
         return current
     }
 
