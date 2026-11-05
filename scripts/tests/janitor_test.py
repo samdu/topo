@@ -1126,6 +1126,9 @@ if tool == "gh":
     if a[0] == "api" and "/actions/runners?" in a[1]: page("runners", S.get("pool_runners", []))
     if a[0] == "api" and "/jobs?" in a[1] and a[1].split("/runs/")[1].split("/")[0] in S.get("pool_jobs", {}):
         page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
+    if a[0] == "api" and "/compare/main..." in a[1]:
+        if S.get("files_error"): print(S["files_error"], file=sys.stderr); sys.exit(1)
+        out(S.get("files", {}).get(a[1].split("...")[1], ["Apps/Client/x.swift"]))
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
@@ -2773,6 +2776,16 @@ class WholePass(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("run rerun", calls)
         self.assertNotIn("/runs/99/jobs", calls)
+
+    def test_a_pass_merges_nothing_that_changes_its_own_validation_or_whose_files_it_cannot_read(self):
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: ["Apps/x.swift", "scripts/review-prompt.sh"]}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"compare/main...{HEAD}", calls)
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("so its own copy validated it", self.texts())
+        p, calls = self.run_pass(self.scripted(worktrees="", files_error="HTTP 502"))
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("could not be read whole", self.texts())
 
     def test_a_merge_github_refuses_is_said_with_the_refusal(self):
         s = self.scripted(worktrees="", merge_refused="Pull request is not mergeable: the merge commit cannot be cleanly created")
