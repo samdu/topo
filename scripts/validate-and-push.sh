@@ -146,7 +146,11 @@ case "$SLOTS" in "" | *[!0-9]* | 0) echo "TOPO_VALIDATE_SLOTS is '$SLOTS': a cou
 die() { echo "error: $*" >&2; exit 2; }
 # When a pid began, as ps's lstart gives it in one zone and one locale whatever the caller's are,
 # so two runs from two sessions read the same words. Empty for a pid that is not running.
-began_of() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null || true; }
+# A command is given its locale through env, never as an assignment of the shell's own: bash
+# sets its own locale again after such an assignment, and a Homebrew bash (5.3.15) linked to
+# gettext asks CoreFoundation for the preferred languages to do it, which in a forked subshell
+# can segfault the subshell (a keeper that dies reads as a red suite).
+began_of() { env LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null || true; }
 # A run's mark on its logs, its pid and when that began: true while that run is going. A pid
 # alone can be another process's by then.
 live_run() {
@@ -279,14 +283,14 @@ holders_was=""   # and the slots' holders then
 looked=""
 waiting() {  # waiting <for what> <who holds it> [seconds already waited, in place of the wait]
   local line_now holders_now
-  line_now="$(LC_ALL=C ls -1 "$queue" 2>/dev/null | LC_ALL=C sort | while IFS= read -r name; do
+  line_now="$(env LC_ALL=C ls -1 "$queue" 2>/dev/null | env LC_ALL=C sort | while IFS= read -r name; do
     [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
     [ "$queue/$name" != "$ticket" ] || break
     echo "$name"
   done)"
   holders_now="$(cat "$cache"/slots/*/holder 2>/dev/null || true)"
   if [ -n "$looked" ] && { [ "$holders_now" != "$holders_was" ] \
-    || [ -n "$(LC_ALL=C comm -23 <(echo "$line_was") <(echo "$line_now") | grep . || true)" ]; }; then
+    || [ -n "$(env LC_ALL=C comm -23 <(echo "$line_was") <(echo "$line_now") | grep . || true)" ]; }; then
     waited=0 say_at=0
   fi
   line_was="$line_now" holders_was="$holders_now" looked=yes
@@ -512,7 +516,7 @@ ahead() {
   for dir in "$cache"/slots/*/; do
     if found="$(orphan_in "$dir")"; then found="${found#* }"; left="$left ${found%%:*}"; fi
   done
-  LC_ALL=C ls -1 "$queue" | LC_ALL=C sort | while IFS= read -r name; do
+  env LC_ALL=C ls -1 "$queue" | env LC_ALL=C sort | while IFS= read -r name; do
     [[ "$name" =~ ^[0-9]{16}-[0-9]{7}$ ]] || continue
     [ "$queue/$name" != "$ticket" ] || break
     pid="$(sed -n 1p "$queue/$name" 2>/dev/null)" began="$(sed -n 2p "$queue/$name" 2>/dev/null)" who="$(sed -n 3p "$queue/$name" 2>/dev/null)"
