@@ -59,7 +59,14 @@ struct AlarmAuthorizer: ThrowingPrompt {
         }
     }
 
-    func request() async -> Bool { (try? await prompt()) ?? false }
+    func request() async -> Bool { (try? await prompt()) == .granted }
 
-    func prompt() async throws -> Bool { try await AlarmManager.shared.requestAuthorization() == .authorized }
+    func prompt() async throws -> Access {
+        switch try await AlarmManager.shared.requestAuthorization() {
+        case .notDetermined: .undetermined
+        case .authorized: .granted
+        case .denied: .denied
+        @unknown default: .denied
+        }
+    }
 }

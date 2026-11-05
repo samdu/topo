@@ -17,8 +17,9 @@ protocol AlarmScheduler: Sendable {
 
 /// A permission whose prompt says why it failed, where the system's request throws: AlarmKit's.
 protocol ThrowingPrompt: Authorizer {
-    /// Raises the prompt; true when granted. Throws what the system's request throws.
-    func prompt() async throws -> Bool
+    /// Raises the prompt and answers the standing the system's request returned, which can be
+    /// ahead of what `access()` reads. Throws what the request throws.
+    func prompt() async throws -> Access
 }
 
 /// AlarmKit's refusal of one alarm more than it holds, said so the mind can ask which to drop.
@@ -144,11 +145,15 @@ struct TimerTool: Tool {
         // still undetermined is no answer from the person, and is said as what the prompt this
         // call made or joined came to (`OnScreen`): declined in the background, the request
         // failing, or closing with nothing kept.
+        // The outcome is taken before the standing is read again, so a prompt begun meanwhile
+        // cannot write over it.
+        let outcome = asked.last
         if reply.status == ToolReply.denied, let alarms, await alarms.access() == .undetermined {
-            switch asked.last {
+            switch outcome {
             case .declined: return inFront ? Self.leftBeforeThePrompt : Self.offScreen
             case let .failed(reason): return Self.promptFailed(reason)
-            case .answered, nil: return Self.promptUnanswered
+            case .unanswered: return Self.promptUnanswered
+            case .granted, .refused, nil: return reply
             }
         }
         return reply
@@ -160,8 +165,12 @@ struct TimerTool: Tool {
         case declined
         /// Raised, and AlarmKit's request threw this.
         case failed(String)
-        /// Raised and answered.
-        case answered
+        /// Raised, and the request returned granted.
+        case granted
+        /// Raised, and the request returned a refusal: the person's no, said as one (status 5).
+        case refused
+        /// Raised, and the request returned the standing still undetermined.
+        case unanswered
     }
 
     /// The last prompt's outcome, written before its answer reaches the broker, so a call that
@@ -179,9 +188,10 @@ struct TimerTool: Tool {
     /// begun with Topo out of the background, because the standing is still undetermined. A call
     /// that finds a prompt already up waits on it and never reaches `request`.
     ///
-    /// Each prompt records what it came to (`Asked`), so `run` says the cause: a request AlarmKit
-    /// threw on by its error, and one that answered no while leaving the standing undetermined
-    /// (an AlarmKit whose standing lags its answer) as a prompt that kept no answer.
+    /// Each prompt records what it came to (`Asked`), from what AlarmKit's request returned rather
+    /// than what its standing reads after, so `run` says the cause: a request AlarmKit threw on by
+    /// its error, a refusal as the refusal it is however the standing lags, and a request that
+    /// returned the standing undetermined as a prompt that kept no answer.
     struct OnScreen: Authorizer {
         let alarms: any Authorizer
         let state: @MainActor () -> UIApplication.State
@@ -196,13 +206,21 @@ struct TimerTool: Tool {
             }
             guard let throwing = alarms as? any ThrowingPrompt else {
                 let granted = await alarms.request()
-                asked.record(.answered)
+                asked.record(granted ? .granted : .refused)
                 return granted
             }
             do {
-                let granted = try await throwing.prompt()
-                asked.record(.answered)
-                return granted
+                switch try await throwing.prompt() {
+                case .granted:
+                    asked.record(.granted)
+                    return true
+                case .denied, .restricted:
+                    asked.record(.refused)
+                    return false
+                case .undetermined:
+                    asked.record(.unanswered)
+                    return false
+                }
             } catch {
                 asked.record(.failed(error.localizedDescription))
                 return false

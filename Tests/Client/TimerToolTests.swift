@@ -22,8 +22,10 @@ private final class AlarmPermission: ThrowingPrompt, @unchecked Sendable {
     var gate: Gate?
     /// Where set, the request throws this with the standing left as it was.
     var failure: (any Error)?
-    /// Where set, a no at the prompt leaves the standing undetermined.
+    /// Where set, a no at the prompt leaves the standing undetermined and the request returns it so.
     var keepsNothing = false
+    /// Where set, the request returns its answer while the standing still reads undetermined.
+    var lags = false
 
     init(_ standing: Access, answer: Bool = true) {
         self.standing = standing
@@ -47,16 +49,17 @@ private final class AlarmPermission: ThrowingPrompt, @unchecked Sendable {
         }
         return lock.withLock {
             _prompts += 1
-            if answer || !keepsNothing { standing = answer ? .granted : .denied }
+            if !lags, answer || !keepsNothing { standing = answer ? .granted : .denied }
             return answer
         }
     }
-    func prompt() async throws -> Bool {
+    func prompt() async throws -> Access {
         if let failure {
             lock.withLock { _prompts += 1 }
             throw failure
         }
-        return await request()
+        let granted = await request()
+        return granted ? .granted : (keepsNothing ? .undetermined : .denied)
     }
 }
 
@@ -197,6 +200,18 @@ final class TimerToolTests: XCTestCase {
         let reply = await tool(alarms).run(["1m"])
         XCTAssertEqual(reply, TimerTool.promptUnanswered, reply.text)
         XCTAssertEqual(permission.prompts, 1)
+        XCTAssertEqual(alarms.count, 0)
+    }
+
+    /// A refusal whose standing still reads undetermined after the prompt is the person's no, said
+    /// as a refusal (status 5), never as a prompt that kept no answer.
+    func testARefusalTheStandingLagsIsStillARefusal() async {
+        let permission = AlarmPermission(.undetermined, answer: false)
+        permission.lags = true
+        let alarms = FakeAlarms(permission)
+        let reply = await tool(alarms).run(["1m"])
+        XCTAssertEqual(reply.status, ToolReply.denied, reply.text)
+        XCTAssertTrue(reply.text.contains("Apps › Topo › Alarms"), reply.text)
         XCTAssertEqual(alarms.count, 0)
     }
 
