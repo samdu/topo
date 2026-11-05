@@ -1,0 +1,38 @@
+diff --git a/kernel/time.c b/kernel/time.c
+index 6dee9ac5..8be26984 100644
+--- a/kernel/time.c
++++ b/kernel/time.c
+@@ -287,12 +287,23 @@ static dword_t nanosleep_interruptible(struct timespec *req, addr_t rem_addr) {
+     return err == _EINTR ? _EINTR : 0;
+ }
+ 
++// Linux refuses a sleep of a negative second or a nanosecond outside [0, 1e9)
++// with EINVAL. Both sleeps wait by a duration in nanoseconds, which would make
++// -1 s nothing to wait for and {0, 1e9} a second, so they check the guest's
++// timespec first.
++static bool timespec_valid_(struct timespec_ ts) {
++    return (long long) ts.sec >= 0 && (long long) ts.nsec >= 0 && (long long) ts.nsec < 1000000000LL;
++}
++
+ dword_t sys_nanosleep(addr_t req_addr, addr_t rem_addr) {
+     struct timespec_ req_ts;
+     if (user_get(req_addr, req_ts))
+         return _EFAULT;
+     STRACE("nanosleep({%lld, %lld}, 0x%x", (long long)req_ts.sec, (long long)req_ts.nsec, rem_addr);
+ 
++    if (!timespec_valid_(req_ts))
++        return _EINVAL;
++
+     // Short-circuit only truly tiny sleeps (<=50us: Go's usleep(3..20) inside
+     // scheduler spin loops) into a yield. This used to be <=1ms, which turned
+     // every Go timer / sysmon back-off sleep into a spin — the twin of the
+@@ -322,6 +333,9 @@ dword_t sys_clock_nanosleep(dword_t clock, dword_t flags, addr_t req_addr, addr_
+     STRACE("clock_nanosleep(%d, %d, {%lld, %lld}, 0x%x)", clock, flags,
+            (long long)req_ts.sec, (long long)req_ts.nsec, rem_addr);
+ 
++    if (!timespec_valid_(req_ts))
++        return _EINVAL;
++
+     clockid_t real_clock;
+     if (clockid_to_real(clock, &real_clock))
+         return _EINVAL;

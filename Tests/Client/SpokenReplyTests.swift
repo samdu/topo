@@ -33,7 +33,7 @@ final class SpokenReplyTests: XCTestCase {
         let heard = Heard()
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: ScriptedVoice(frames: { sentence in
             heard.append(sentence)
             return [toneFrame(0.5)]
