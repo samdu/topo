@@ -49,25 +49,28 @@ struct LogTool: Tool {
     topo log level                      each category's level, and when one set for a time ends
     topo log level CATEGORY debug|default|off [--for 30m]
                                         sets a category's level: debug adds its detail lines, off
-                                        keeps its errors alone; debug lasts 30m unless given, and
-                                        no level lasts past 2h or this launch
+                                        keeps its error lines alone; debug lasts 30m unless given
+                                        and never past 2h, off lasts this launch unless given a
+                                        time, and no level outlasts the launch
 
-    Every answer ends with "cursor: TIME#N", where it got to: N lines at TIME's millisecond are read.
-    --after takes that cursor, or a bare ISO time to read the lines after it; a page that stopped
-    short says "more:" with the cursor to carry on from, and so a loop of --after reads keeps every
-    line once, with the last second's lines held back until they have settled. --since shows the
-    newest lines that fit and its cursor is at the last one, so the lines of its last second can come
-    again in the next --after. "… the store no longer holds" says lines before the page were lost.
+    An answer of lines ends with "cursor: TIME#N", where it got to: every line before TIME's
+    millisecond and N lines in it are read. --after takes that cursor, or a bare ISO time to read the
+    lines after its millisecond; a page that stopped short ends "more: --after CURSOR" instead, and so
+    a loop of --after reads keeps every line once, with the last second's lines held back until they
+    have settled. --since shows the newest lines that fit, the last second's among them, and its
+    cursor is before that second, so those lines come again in the next --after. "… the store no
+    longer holds" says lines before the page were lost.
 
     The categories are \(LogCategory.allCases.map(\.rawValue).joined(separator: ", ")). cloud is iCloud's: each
     call that failed, with its mapped case and CloudKit's code, and the chat's failure line put up and
-    taken down; at debug, every call with its time and the records it named. resident is the guest's own
+    taken down; at debug, every call with its time and the records it named. A failed call is an error
+    line, which off keeps. resident is the guest's own
     running: its starts and exits and each trip to the background. --category keeps one category
     and --grep the lines whose message holds TEXT, whatever its case. The lines are this launch's
     only, since the app reads them from its own process, and the widgets' and controls' are not
     among them: those run in processes of their own. A detail line carries no mark of its own: it is
-written at notice, and is one that appears only while its category is at debug. No line holds what
-was said, a secret or a token.
+    written at notice, and is one that appears only while its category is at debug. No line holds
+    what was said, a secret or a token.
     """
 
     enum Call: Equatable {
@@ -111,12 +114,15 @@ was said, a secret or a token.
         let at = now()
         // A paged read starts a millisecond before its cursor's, so a stamp's float can put no line
         // of that millisecond outside it and every line there is counted from the first.
-        let since = call.after.map { Date(timeIntervalSince1970: Double($0.ms - 1) / 1000) }
+        let since = call.after.map { Date(timeIntervalSince1970: Double($0.ms) / 1000) }
             ?? at.addingTimeInterval(-Double(call.minutes) * 60)
+        // The read starts a millisecond before the one `since` falls in, so every line of that
+        // millisecond is counted from its first.
+        let from = Date(timeIntervalSince1970: Double(Self.ms(since) - 1) / 1000)
         let reader = reader
         // The store's read blocks, so it has a thread of its own and never one of the pool's.
         let read: [LogLine] = try await withCheckedThrowingContinuation { continuation in
-            Self.queue.async { continuation.resume(with: Result { try reader.lines(since: since) }) }
+            Self.queue.async { continuation.resume(with: Result { try reader.lines(since: from) }) }
         }
         try Task.checkCancellation()
         let placed = Self.place(read)
@@ -124,14 +130,21 @@ was said, a secret or a token.
             (call.category.map { line.category.compare($0, options: [.caseInsensitive]) == .orderedSame } ?? true)
                 && (call.grep.map { line.message.range(of: $0, options: [.caseInsensitive]) != nil } ?? true)
         }
+        let settled = Self.ms(at.addingTimeInterval(-Self.settle))
         guard let after = call.after else {
             let window = placed.filter { $0.line.at >= since }
-            let end = window.last.map { Cursor(ms: $0.ms, count: $0.index) } ?? Self.cursor(at)
+            // The cursor stops short of the last second, as a page does: a line still on its way to
+            // the store comes again at the next --after rather than being passed over.
+            let end = window.last { $0.ms <= settled }.map { Cursor(ms: $0.ms, count: $0.index) }
+                ?? Self.cursor(max(since, at.addingTimeInterval(-Self.settle)))
             return .ok(Self.fit(window.filter { keeps($0.line) }, none: "no log lines in the last \(call.minutes) min", end: end))
         }
-        let settled = Self.ms(at.addingTimeInterval(-Self.settle))
         let unread = placed.filter { after.precedes($0) && $0.ms <= settled }
-        let lost = after.count.map { count in count > 0 && !placed.contains { $0.ms == after.ms && $0.index >= count } } ?? false
+        // Lost only when the store has gone on past the cursor without the lines it counted: a
+        // cursor in the future has nothing after it yet, and nothing was lost.
+        let lost = after.count.map { count in
+            count > 0 && !placed.contains { $0.ms == after.ms && $0.index >= count } && placed.contains { $0.ms > after.ms }
+        } ?? false
         return .ok(Self.page(unread, keeping: keeps, from: after, lost: lost))
     }
 
@@ -231,8 +244,10 @@ was said, a secret or a token.
         return Cursor(ms: ms, count: count)
     }
 
+    /// A cursor as it is written: a bare time, which has read its whole millisecond, says so again.
     static func say(_ cursor: Cursor) -> String {
-        "\(stamp(Date(timeIntervalSince1970: Double(cursor.ms) / 1000)))#\(cursor.count ?? 0)"
+        let time = stamp(Date(timeIntervalSince1970: Double(cursor.ms) / 1000))
+        return cursor.count.map { "\(time)#\($0)" } ?? time
     }
 
     static func line(_ line: LogLine) -> String {
@@ -271,7 +286,7 @@ was said, a secret or a token.
         if left > 0 {
             // The place before the oldest line left out, so --after reads from it on.
             let from = lines[0]
-            first = ["… \(left) lines left out, cut at 24 KB; read them with --after \(say(Cursor(ms: from.ms, count: from.index - 1)))"]
+            first = ["… \(left) lines left out, cut at 24 KB; read them and those after with --after \(say(Cursor(ms: from.ms, count: from.index - 1)))"]
         }
         return (first + kept.reversed() + [last]).joined(separator: "\n") + "\n"
     }

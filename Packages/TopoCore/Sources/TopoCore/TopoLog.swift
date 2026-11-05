@@ -16,7 +16,8 @@ public enum LogLevel: String, CaseIterable, Sendable {
 
 /// Each category's level, in this process's memory alone: a launch starts every category at
 /// `default`, and a level other than `default` holds until its expiry, after which it reads as
-/// `default` again. Detail is bounded so a switch nobody turns off costs nothing behind the lock.
+/// `default` again. Debug is bounded, at most `longest`, so a switch nobody turns off costs nothing
+/// behind the lock; `off` given no time holds until the launch ends.
 public final class LogLevels: Sendable {
     public struct Setting: Equatable, Sendable {
         public var level: LogLevel
@@ -53,16 +54,16 @@ public final class LogLevels: Sendable {
             return (kept, nil)
         }
         if let ran {
-            // Written once the level is back at default, so the line goes out whatever it was.
-            if let expired { expired(category, ran) } else { TopoLog(category, levels: self).notice("level \(ran.rawValue) ended at its expiry") }
+            // Written whatever level a call set meanwhile: the line is the switch's own.
+            if let expired { expired(category, ran) } else { TopoLog(category, levels: self).always("level \(ran.rawValue) ended at its expiry") }
         }
         return current
     }
 
     public func level(_ category: LogCategory) -> LogLevel { setting(category).level }
 
-    /// Sets a level for `duration` seconds. `debug` takes `debugDefault` when given none, and no
-    /// level is held past `longest`; `default` takes no time, being where every level ends.
+    /// Sets a level for `duration` seconds, held to `longest`. `debug` takes `debugDefault` when given
+    /// none and `off` the rest of the launch; `default` takes no time, being where every level ends.
     @discardableResult
     public func set(_ category: LogCategory, _ level: LogLevel, for duration: TimeInterval? = nil) -> Setting {
         let span: TimeInterval? = switch level {
@@ -118,6 +119,11 @@ public struct TopoLog: Sendable {
     public func notice(_ line: @autoclosure () -> String) {
         guard levels.level(category) != .off else { return }
         let line = line()
+        logger.notice("\(line, privacy: .public)")
+    }
+
+    /// The switch's own line, at `notice` whatever the level.
+    func always(_ line: String) {
         logger.notice("\(line, privacy: .public)")
     }
 

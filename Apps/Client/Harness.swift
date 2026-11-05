@@ -1486,7 +1486,7 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
                 Self.log.detail("\(what()) lost in \(took()): \(CloudLog.describe(error))")
             default:
                 lock.withLock { _lastError = Failure(at: Date(), message: Self.describe(error)) }
-                Self.log.notice("\(what()) failed in \(took()): \(CloudLog.describe(error))")
+                Self.log.error("\(what()) failed in \(took()): \(CloudLog.describe(error))")
             }
             throw error
         }

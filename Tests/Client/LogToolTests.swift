@@ -67,9 +67,9 @@ final class LogToolTests: XCTestCase {
         XCTAssertEqual(messages(minute), ["run maps", "keeper started"])
     }
 
-    func testNoLinesSaysSoWithACursorAtNow() async {
+    func testNoLinesSaysSoWithACursorASecondBeforeNow() async {
         let reply = await tool([]).run(["--since", "5"])
-        XCTAssertEqual(reply, .ok("no log lines in the last 5 min\n\(cursor(0, 0))\n"))
+        XCTAssertEqual(reply, .ok("no log lines in the last 5 min\n\(cursor(1, 0))\n"))
     }
 
     func testRefusesWhatItDoesNotTake() async {
@@ -98,10 +98,11 @@ final class LogToolTests: XCTestCase {
         XCTAssertLessThanOrEqual(reply.text.utf8.count, LogTool.budget)
         let written = reply.text.split(separator: "\n").map(String.init)
         let kept = written.count - 2
-        XCTAssertEqual(written.first, "… \(1000 - kept) lines left out, cut at 24 KB; read them with --after \(LogTool.stamp(Self.noon.addingTimeInterval(-500)))#0")
+        XCTAssertEqual(written.first, "… \(1000 - kept) lines left out, cut at 24 KB; read them and those after with --after \(LogTool.stamp(Self.noon.addingTimeInterval(-500)))#0")
         XCTAssertLessThanOrEqual(written[0].utf8.count + 1, LogTool.firstLineRoom)
         XCTAssertTrue(written[written.count - 2].contains("| line 999 "), written[written.count - 2])
-        XCTAssertEqual(written.last, cursor(0.5, 1))
+        // The newest line is inside the last second, so the cursor is before it.
+        XCTAssertEqual(written.last, cursor(1, 1))
         XCTAssertTrue(written[1].contains("| line \(1000 - kept) "), written[1])
         XCTAssertGreaterThan(kept, 150)
         // One more line would not have fitted.
@@ -118,7 +119,7 @@ final class LogToolTests: XCTestCase {
         let tool = tool([line(30, "audio", "older"), line(20, "audio", huge), line(10, "audio", "newest")])
         let reply = await tool.run([])
         XCTAssertEqual(messages(reply), ["older", "newest"])
-        XCTAssertTrue(reply.text.hasPrefix("… 1 lines left out, cut at 24 KB; read them with --after \(LogTool.stamp(Self.noon.addingTimeInterval(-30)))#0\n"), reply.text)
+        XCTAssertTrue(reply.text.hasPrefix("… 1 lines left out, cut at 24 KB; read them and those after with --after \(LogTool.stamp(Self.noon.addingTimeInterval(-30)))#0\n"), reply.text)
         let page = await tool.run(["--after", LogTool.stamp(Self.noon.addingTimeInterval(-60))])
         XCTAssertEqual(messages(page), ["older", "newest"])
         XCTAssertTrue(page.text.hasPrefix("… 1 lines left out, each longer than the 24 KB an answer holds\n"), page.text)
@@ -165,6 +166,11 @@ final class LogToolTests: XCTestCase {
         XCTAssertTrue(filtered.text.hasSuffix(cursor(9.999, 1) + "\n"), filtered.text)
         let bare = await tool.run(["--after", stamp])
         XCTAssertEqual(messages(bare), ["d"])
+        // A bare time with nothing after it is said back bare, so the next read does not take its
+        // millisecond again.
+        let later = LogTool.stamp(Self.noon.addingTimeInterval(-9))
+        let empty = await tool.run(["--after", later])
+        XCTAssertEqual(empty, .ok("no log lines after \(later)\ncursor: \(later)\n"))
         let utc = await tool.run(["--after", "2026-09-26T18:59:50.000Z#2"])
         XCTAssertEqual(messages(utc), ["c", "d"])
     }
@@ -181,6 +187,23 @@ final class LogToolTests: XCTestCase {
         \(cursor(5, 1))
 
         """))
+    }
+
+    /// A cursor ahead of every line has lost nothing: there is nothing after it yet.
+    func testACursorAheadOfTheStoreLostNothing() async {
+        let tool = tool([line(5, "audio", "earlier")])
+        let stamp = LogTool.stamp(Self.noon.addingTimeInterval(-3))
+        let reply = await tool.run(["--after", stamp + "#4"])
+        XCTAssertEqual(reply, .ok("no log lines after \(stamp)#4\ncursor: \(stamp)#4\n"))
+    }
+
+    /// --since's cursor is before the last second, as a page's is: a line of that second is shown
+    /// and comes again at the next --after, rather than one still on its way being passed over.
+    func testSincesCursorStopsShortOfTheLastSecond() async {
+        let tool = tool([line(5, "audio", "settled"), line(0.5, "audio", "fresh")])
+        let reply = await tool.run([])
+        XCTAssertEqual(messages(reply), ["settled", "fresh"])
+        XCTAssertTrue(reply.text.hasSuffix(cursor(5, 1) + "\n"), reply.text)
     }
 
     /// A paged read holds back the last second, which a line can still be on its way to the
