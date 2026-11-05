@@ -161,6 +161,15 @@ final class Harness {
     /// written: nothing more is coming to wait for. Not called for a turn another primary is
     /// answering, whose reply is still on its way.
     var onTurnFailed: (@MainActor (String) -> Void)?
+    /// Told the nonce of a turn that failed for the person — the attempt threw, or saving their
+    /// words did — before what was drawn of its reply is dropped (`onWriting` with nil) and
+    /// before `onTurnFailed`, so whoever reads the reply aloud knows the end it is hearing is a
+    /// failure's; and told it once more, earlier, when the guest's turn ends with an error
+    /// result while its reply is being read, before that reading is told the words have stopped
+    /// (a guest that exited or went silent is not that end: its transcript may hold the reply).
+    /// Not told of a turn another device answered (displaced, or not this device's to answer)
+    /// or one the guest finished with iCloud behind, which end the same wait and are no failure.
+    var onTurnFailure: (@MainActor (String) -> Void)?
     /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
     /// owed, and what the install above reads the newest of.
     private var owedAloud: [Turn] {
@@ -982,6 +991,9 @@ final class Harness {
             } else {
                 handedBack = false
             }
+            // The failure is told before what was drawn of the reply goes, so a reading of it ends
+            // as a failure's; a displaced turn is another device's to answer, and no failure.
+            if !handedBack { onTurnFailure?(attempt.nonce) }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
@@ -1018,12 +1030,14 @@ final class Harness {
                 guard inFlight == generation else { return false }
                 turnOpen = false
                 failure = Failure(words: Self.describe(error))
+                onTurnFailure?(attempt.nonce)
                 onTurnFailed?(attempt.nonce)
             }
         } catch {
             guard inFlight == generation else { return false }
             turnOpen = false
             failure = Failure(words: Self.describe(error))
+            onTurnFailure?(attempt.nonce)
             onTurnFailed?(attempt.nonce)
             await refresh()
         }
@@ -1133,6 +1147,12 @@ final class Harness {
             if case .answered(let result) = end {
                 if let window = result.window { self.window = window }
             } else {
+                // A reply being read aloud when the guest's turn ends with an error result is a
+                // failure's: told so before the reading hears the words have stopped, and again,
+                // once, by the attempt. The result is the one end the bridge recovers nothing
+                // from; a process that exited or went silent has its transcript read, and a
+                // reply found there is the turn answered, not failed.
+                if let writingSpoken, case .failed(.result) = end { onTurnFailure?(writingSpoken) }
                 dropWriting()
             }
         case .update, .gone:

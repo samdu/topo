@@ -174,6 +174,8 @@ final class TuningSliderTests: XCTestCase {
                 .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.3)))
         }
         XCTAssertTrue(slider.isHittable, "the settings have no clearance slider")
+        XCTAssertTrue(slider.centred(in: form, window: app.windows.firstMatch),
+                      "the clearance slider would not come away from the sheet's edge")
         return slider
     }
 
