@@ -475,8 +475,9 @@ final class Conversation {
         guard on else { return }
         on = false
         firstOff = nil
-        // Read before the feeder goes: a chunk with the detector or not yet fed is unjudged.
-        let unjudged = !caughtUp
+        // Read before the feeder goes: a chunk with the detector, or any sample not yet fed — a
+        // word shorter than a chunk included — is unjudged.
+        let unjudged = judging || voice.sink.peek(from: .max).end > fedTo
         feeder?.cancel()
         feeder = nil
         idleTimer?.cancel()

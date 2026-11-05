@@ -127,6 +127,7 @@ final class ConversationTests: XCTestCase {
     private var gate = GatedEngine("turn the lights off")
     private var seams: Seams!
     private var permission = PermissionGate()
+    private var spoken = HeldVoice()
 
     override func tearDown() {
         UIApplication.shared.isIdleTimerDisabled = false
@@ -154,7 +155,9 @@ final class ConversationTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
                                  deactivate: seams.deactivate, isActive: { true })
         self.audio = audio
-        let voice = Voice(engine: HeldVoice())
+        let spoken = HeldVoice()
+        self.spoken = spoken
+        let voice = Voice(engine: spoken)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
@@ -199,9 +202,9 @@ final class ConversationTests: XCTestCase {
     }
 
     /// A second and a half of tone at the ear's rate, as the tap would have delivered it: six chunks.
-    private func utterance(into sink: SampleSink) {
+    private func utterance(into sink: SampleSink, seconds: Double = 1.5) {
         let format = sink.format
-        let frames = AVAudioFrameCount(format.sampleRate * 1.5)
+        let frames = AVAudioFrameCount(format.sampleRate * seconds)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
               let channel = buffer.floatChannelData else { return XCTFail("no buffer at the ear's rate") }
         buffer.frameLength = frames
@@ -495,6 +498,7 @@ final class ConversationTests: XCTestCase {
         conversation.call(.taken)
         XCTAssertTrue(voice.suspended)
         CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
         XCTAssertTrue(speaker.speak("The lights are off."), "the reply was refused rather than kept")
         XCTAssertTrue(speaker.waitingForMicrophone, "a reply was read into a suspended microphone")
         XCTAssertEqual(CapturingPlayerNode.scheduled, [], "a reply was played into a suspended microphone")
@@ -505,14 +509,18 @@ final class ConversationTests: XCTestCase {
     }
 
     /// The reply played, and played once: its wait over is not proof, since a close that threw
-    /// the reply away ends the wait too.
+    /// the reply away ends the wait too. Its one sentence is asked of the voice once, and the
+    /// voice's first frame — all it gives before the suite lets the rest go — is the one buffer
+    /// with sound in it.
     private func assertReadOnce(_ speaker: Speaker, file: StaticString = #filePath, line: UInt = #line) async {
         await settle("the reply read", file: file, line: line) {
             !speaker.waitingForMicrophone && !CapturingPlayerNode.scheduled.isEmpty
         }
-        let played = CapturingPlayerNode.scheduled.count
         await drain()
-        XCTAssertEqual(CapturingPlayerNode.scheduled.count, played, "the reply was read twice", file: file, line: line)
+        XCTAssertEqual(spoken.streams, 1, "the reply's sentence was asked for other than once", file: file, line: line)
+        // A lead of silence may go ahead of the first frame; only the frame carries sound.
+        XCTAssertEqual(CapturingPlayerNode.peaks.filter { $0 > 0 }.count, 1, "the reply was played other than once",
+                       file: file, line: line)
     }
 
     /// Words said into the microphone before a reply landed are judged before the reply closes
@@ -524,6 +532,7 @@ final class ConversationTests: XCTestCase {
         audio.callDeactivated()
         conversation.call(.taken)
         CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
         XCTAssertTrue(speaker.speak("The lights are off."))
         utterance(into: voice.sink)
         audio.callActivated()
@@ -562,6 +571,7 @@ final class ConversationTests: XCTestCase {
         audio.callDeactivated()
         conversation.call(.taken)
         CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
         XCTAssertTrue(speaker.speak("The lights are off."))
         utterance(into: voice.sink)
         audio.callActivated()
@@ -695,6 +705,19 @@ final class ConversationTests: XCTestCase {
         await settle("sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
         XCTAssertEqual(detector.chunks, 0, "the test meant to land before any chunk was fed")
+    }
+
+    /// A word shorter than one of the detector's chunks, the unlock landing before more arrives:
+    /// nothing has been fed, and it is sent rather than taken for silence.
+    func testComingToTheFrontWithLessThanAChunkUnfedSendsTheWord() async {
+        let (_, voice, _) = await begun()
+        await drain()
+        utterance(into: voice.sink, seconds: 0.25)
+        XCTAssertLessThan(voice.sink.peek(from: 0).end, Endpoint.chunk, "the test meant less than a chunk")
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await settle("sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
     }
 
     /// A detector that fails on every chunk after speech starts: the conversation ends within
