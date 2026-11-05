@@ -516,11 +516,6 @@ final class SpokenCallDriver {
         decide()
     }
 
-    func conversingChanged(_ conversing: Bool) {
-        self.conversing = conversing
-        decide()
-    }
-
     func scene(_ phase: ScenePhase) {
         self.phase = phase
         decide()
