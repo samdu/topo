@@ -18,12 +18,14 @@ struct SettingsView: View {
     @State private var showConnections = false
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+    @AppStorage(EarconsSetting.key) private var earcons = true
     @AppStorage(SpokenCallSetting.key) private var spokenCall = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
     @AppStorage(CompileCache.requested) private var clearRequested = false
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
+    static let earcons = "settings-earcons"
     static let spokenCall = "settings-spoken-call"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
@@ -50,6 +52,12 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
                     Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
+                }
+                Section {
+                    Toggle("Earcons", isOn: $earcons)
+                        .accessibilityIdentifier(SettingsView.earcons)
+                } footer: {
+                    Text("A short tone as the microphone opens, as your words go, as a reply read aloud ends, and when a spoken turn fails. Kept on this device.")
                 }
                 Section {
                     Toggle("Call for spoken replies", isOn: $spokenCall)
