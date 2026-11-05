@@ -422,6 +422,27 @@ final class CallWantTests: XCTestCase {
         XCTAssertEqual(system.starts.count, 1, "nothing held places none")
     }
 
+    /// A cue's hold alone places no call behind the lock, and keeps one already up: a lock as a
+    /// reply's `done` sounds in front puts nothing on the Lock Screen, and the `done` that ends a
+    /// reply read on the call is heard on it.
+    @MainActor
+    func testACuesHoldAlonePlacesNoCallAndKeepsOneUp() {
+        XCTAssertFalse(SpokenCallDriver.wants(holding: true, turn: false, phase: .background, enabled: true))
+        XCTAssertTrue(SpokenCallDriver.wants(holding: true, turn: false, phase: .background, enabled: true, up: true))
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
+        driver.holdChanged(true, forATurn: false)
+        driver.scene(.background)
+        XCTAssertEqual(system.starts.count, 0, "a cue's hold placed a call")
+        driver.holdChanged(true, forATurn: true)
+        XCTAssertEqual(system.starts.count, 1, "a turn's hold in the background placed none")
+        driver.holdChanged(true, forATurn: false)
+        XCTAssertEqual(system.ends.count, 0, "the call ended under the cue that ends its reply")
+        driver.holdChanged(false, forATurn: false)
+        XCTAssertEqual(system.ends.count, 1, "the cue's end left the call up")
+    }
+
     @MainActor
     func testTheDriverFollowsUIKitsBackground() {
         let system = FakeCallSystem()

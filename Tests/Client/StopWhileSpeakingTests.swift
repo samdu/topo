@@ -566,7 +566,9 @@ final class StopWhileSpeakingTests: XCTestCase {
         let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
         speaker.attach(call)
         let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
-        speaker.onHold = { driver.holdChanged($0) }
+        // As the app wires it (`TopoApp`): a turn's hold places the call, any hold keeps it.
+        let audio = self.audio!
+        speaker.onHold = { driver.holdChanged($0, forATurn: audio.heldForATurn) }
         speaker.onMicrophone = { driver.microphoneChanged($0) }
         _ = speaker.awaitReply("first", readAloud: true)
         driver.scene(.background)

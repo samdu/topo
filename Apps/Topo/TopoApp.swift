@@ -160,13 +160,13 @@ struct TopoApp: App {
         #endif
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
-        let speaker = Speaker(audio: audio, voice: spoken)
+        let speaker = Speaker(audio: audio, voice: spoken, earcons: Earcons(audio: audio))
         // A spoken exchange behind the lock is a call: placed while a hold stands with the
         // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
         speaker.attach(call)
         let callDriver = SpokenCallDriver(call: call)
-        speaker.onHold = { callDriver.holdChanged($0) }
+        speaker.onHold = { [weak audio] in callDriver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
         speaker.onMicrophone = { callDriver.microphoneChanged($0) }
         _callDriver = State(initialValue: callDriver)
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
