@@ -1,7 +1,7 @@
 import Foundation
 import TopoTools
 
-/// `topo voice`: the mind's hand on how this phone hears and speaks. Four settings, each read and
+/// `topo voice`: the mind's hand on how this phone hears and speaks. Five settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
