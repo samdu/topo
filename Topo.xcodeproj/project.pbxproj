@@ -18,6 +18,7 @@
 		036B6CB589587A4D2BC8FF69 /* WidgetToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37FFE301CDB57C54D6E76A8E /* WidgetToolTests.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */; };
+		04C8BDBBBBB219644AC8A97C /* TimerSounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 493ED317D54C1A244657A97E /* TimerSounds.swift */; };
 		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		058F742FA066C36924ACE096 /* tracker-expanded-light.png in Resources */ = {isa = PBXBuildFile; fileRef = F0F95364AE3F08AD67EF9E7C /* tracker-expanded-light.png */; };
 		05C48F859FA1C2DDAAB4C44D /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */; };
@@ -149,6 +150,7 @@
 		38F810AC2EF777EFFB0E6085 /* systemLarge.json in Resources */ = {isa = PBXBuildFile; fileRef = DEB56D7DF3C5A859477E8F6B /* systemLarge.json */; };
 		390AF266B4889AC3039F0FD6 /* TurnImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8ABE048D225EE488FD18262 /* TurnImage.swift */; };
 		39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B5621388A948B9C5F0BD7B /* EventKitTools.swift */; };
+		393AE846EA8014BDC69D67D2 /* TimerPresses.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83ED5646D1BCC4F5F427233 /* TimerPresses.swift */; };
 		394011352BE04F68F30E3B98 /* MascotRoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6904A480352F2D00E38BFD6F /* MascotRoost.swift */; };
 		39A7F5C1A583CD0706F83AD6 /* TimerToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFDB28FD2CE691449A6664BD /* TimerToolTests.swift */; };
 		39DD8E0131A9E3A312E554E5 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
@@ -883,6 +885,7 @@
 		46BD20A1ECCC4FB62E362291 /* PlacesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacesTests.swift; sourceTree = "<group>"; };
 		4768AAF3DF2F75692350C8E5 /* DictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationTests.swift; sourceTree = "<group>"; };
 		48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		493ED317D54C1A244657A97E /* TimerSounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerSounds.swift; sourceTree = "<group>"; };
 		49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResolverTests.swift; sourceTree = "<group>"; };
 		4ABF635B64045B47B8BE4C0C /* accessoryCircular-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "accessoryCircular-dark.png"; sourceTree = "<group>"; };
 		4E69B0388B87CE831F4A1713 /* ReplyWordsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyWordsTests.swift; sourceTree = "<group>"; };
@@ -1137,6 +1140,7 @@
 		E5590AD65A1F511E4AD99193 /* TopoAlarm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAlarm.swift; sourceTree = "<group>"; };
 		E657338C47DD5C2996280F04 /* TurnPushTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPushTests.swift; sourceTree = "<group>"; };
 		E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloads.swift; sourceTree = "<group>"; };
+		E83ED5646D1BCC4F5F427233 /* TimerPresses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimerPresses.swift; sourceTree = "<group>"; };
 		E8BC4617024AD72D114DF8C7 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		E8C6CC8012D2FC546AB11D7D /* licence-libarchive-freebsd.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "licence-libarchive-freebsd.txt"; sourceTree = "<group>"; };
 		E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeToolTests.swift; sourceTree = "<group>"; };
@@ -1327,6 +1331,7 @@
 				C6F7B81335EA2A24DA1EBA7C /* ShortcutIntents.swift */,
 				DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */,
 				26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */,
+				E83ED5646D1BCC4F5F427233 /* TimerPresses.swift */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
 				768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */,
 				80D8ACCA9AB1382E8130057F /* TurnPush.swift */,
@@ -1634,6 +1639,7 @@
 				12F58195D812623D0E6E9353 /* PhotosTool.swift */,
 				A69D3F0D29AF2F1F3DF4686E /* ScreenTool.swift */,
 				38D69076CBD5D984124A297F /* SecretTool.swift */,
+				493ED317D54C1A244657A97E /* TimerSounds.swift */,
 				ED32033508A735AE5BA3E703 /* TimerTool.swift */,
 				C2C0260B37135051458D45D8 /* VoiceTool.swift */,
 				1D550B30D535A628FF48FCC4 /* WidgetTool.swift */,
@@ -3126,6 +3132,8 @@
 				3E4DF9BB0BB232BB35382935 /* SurfaceStore.swift in Sources */,
 				90196FA3DBC09D571DC00283 /* SurfaceSync.swift in Sources */,
 				FEE6786314BBF06C3CF8A7B8 /* Theme.swift in Sources */,
+				393AE846EA8014BDC69D67D2 /* TimerPresses.swift in Sources */,
+				04C8BDBBBBB219644AC8A97C /* TimerSounds.swift in Sources */,
 				676833E808D146C613D6C760 /* TimerTool.swift in Sources */,
 				D4EDBC7EA7275D68061A3573 /* TopoAlarmMetadata.swift in Sources */,
 				5848F2221D988D4F93698E6A /* TopoApp.swift in Sources */,
