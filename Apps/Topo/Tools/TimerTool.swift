@@ -119,6 +119,7 @@ struct TimerTool: Tool {
     func run(_ arguments: [String]) async -> ToolReply {
         let alarms = scheduler.authorizer
         let asking = alarms.map { OnScreen(alarms: $0, state: state) }
+        let inFront = await state() != .background
         // Only a start needs the permission; one below iOS 26 has none to ask and is answered in `start`.
         let reply = await PhoneTool.run({ (call: Call) -> (any Authorizer)? in
             if case .start = call { asking } else { nil }
@@ -132,7 +133,11 @@ struct TimerTool: Tool {
         // A refusal over a permission still undetermined is a prompt nobody was shown: `OnScreen`
         // declined it, for this call or for the one whose prompt it joined. A refusal the person
         // made is a standing of denied, said as one.
-        if reply.status == ToolReply.denied, let alarms, await alarms.access() == .undetermined { return Self.offScreen }
+        // One asked for in front and sent to the background before its prompt could go up is said
+        // as that, so the person knows to ask again with Topo in front.
+        if reply.status == ToolReply.denied, let alarms, await alarms.access() == .undetermined {
+            return inFront ? Self.leftBeforeThePrompt : Self.offScreen
+        }
         return reply
     }
 
@@ -161,6 +166,9 @@ struct TimerTool: Tool {
         "topo: no timer was set: this phone's iOS has no AlarmKit (it needs iOS 26), so Topo cannot set an alarm here. Ask the person what the timer was for.\n")
     static let offScreen = ToolReply(status: ToolReply.failed, text:
         "topo: no timer was set: Topo asks once to allow alarms, and can ask only while it is on the screen. Ask the person to open Topo, then set the timer again.\n")
+
+    static let leftBeforeThePrompt = ToolReply(status: ToolReply.failed, text:
+        "topo: no timer was set: it was asked for with Topo in front, but Topo went to the background before it could put up the prompt to allow alarms. Tell the person that, and ask them to set it again a moment slower, with Topo on the screen; the prompt is asked only once, so this does not happen again.\n")
 
     private func start(span: TimeInterval, label: String) async -> ToolReply {
         guard scheduler.authorizer != nil else { return Self.noAlarmKit }

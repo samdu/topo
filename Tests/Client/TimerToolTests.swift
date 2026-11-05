@@ -149,14 +149,16 @@ final class TimerToolTests: XCTestCase {
         }
     }
 
-    /// A prompt `OnScreen` declined is said as open Topo, not as a refusal.
-    func testADeclinedPromptIsSaidAsOffScreen() async {
+    /// Codex on #592, as Sam ruled it: a start asked for in front whose Topo went to the background
+    /// before its prompt could go up asks nothing and says so, not as a refusal and not as a start
+    /// made in the background.
+    func testAStartBackgroundedBeforeItsPromptSaysSo() async {
         let permission = AlarmPermission(.undetermined)
         let state = AppState(.active)
         permission.onAccess = { @MainActor in state.value = .background }
         let alarms = FakeAlarms(permission)
         let reply = await tool(alarms, state: state).run(["1m"])
-        XCTAssertEqual(reply, TimerTool.offScreen, reply.text)
+        XCTAssertEqual(reply, TimerTool.leftBeforeThePrompt, reply.text)
         XCTAssertEqual(permission.prompts, 0)
         XCTAssertEqual(alarms.count, 0)
     }
