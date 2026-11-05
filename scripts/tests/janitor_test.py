@@ -1128,7 +1128,16 @@ if tool == "gh":
         page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
     if a[0] == "api" and "/compare/main..." in a[1]:
         if S.get("files_error"): print(S["files_error"], file=sys.stderr); sys.exit(1)
-        out(S.get("files", {}).get(a[1].split("...")[1], [{"filename": "Apps/Client/x.swift", "previous_filename": None}]))
+        # The compare's raw file objects, previous_filename only on a rename as GitHub sends it,
+        # with the janitor's own --jq applied by jq itself, so the test reads what its query keeps.
+        listed = S.get("files", {}).get(a[1].split("...")[1], [{"filename": "Apps/Client/x.swift"}])
+        raw = {"files": [dict({"sha": "0" * 40, "status": "renamed" if f.get("previous_filename") else "modified",
+                               "additions": 1, "deletions": 0, "changes": 1},
+                              **{k: v for k, v in f.items() if v is not None}) for f in listed]}
+        import subprocess
+        q = subprocess.run(["jq", "-c", a[a.index("--jq") + 1]], input=json.dumps(raw), capture_output=True, text=True)
+        if q.returncode: print(q.stderr, file=sys.stderr); sys.exit(1)
+        out(q.stdout.strip())
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
