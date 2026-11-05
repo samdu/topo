@@ -140,7 +140,7 @@ fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleK
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
-  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-2\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-2\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
+  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; stale=""; for pid in ${FAKE_LEFT_PIDS-}; do stale="$stale{\"name\":\"topo-validate-unit-$pid\",\"udid\":\"LEFT-$pid\",\"deviceTypeIdentifier\":\"type.iPhone\"},"; done; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-2\":[$stale{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-2\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
   "simctl get_app_container") [ -z "${FAKE_NO_CONTAINER-}" ] || exit 2; mkdir -p "$CALLS.container"; echo "$CALLS.container" ;;
 esac'
@@ -193,41 +193,62 @@ is "green: four test actions, each without xcodebuild's diagnostics" \
 is "green: every build and test of the project resolves its packages into build/packages" \
   "$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj ' "$CALLS"):$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj .*-clonedSourcePackagesDirPath build/packages( |$)' "$CALLS")" "9:9"
 
+# A device a SIGKILLed run left behind, named for a pid no longer running, is deleted before a
+# new one is made; one named for a running pid is another run's and is left alone.
+sleep 0 & dead=$!; wait "$dead"
+FAKE_LEFT_PIDS="$dead $$" suite left-behind topo_unit
+is "left behind: the dead run's device is shut down and deleted before the first is made" \
+  "$(grep -E "^xcrun simctl (shutdown LEFT-$dead|delete LEFT-$dead|create)" "$CALLS" | head -n 3 | cut -d' ' -f1-3 | tr '\n' '|')" \
+  "xcrun simctl shutdown|xcrun simctl delete|xcrun simctl create|"
+is "left behind: a running pid's device is left alone" "$(calls "xcrun simctl delete LEFT-$$")" 0
+
 # The device build's directory and the package state are kept for the pins they were built
-# from, and no others.
+# from, and no others. The pins are written as Package.resolved is, JSON, here on one line, so a
+# comparison that drops lines rather than the field finds two different pins the same.
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
-mkdir -p "$(dirname "$pins")" && echo "pins: one" > "$pins"
+resolved() { grep -cxF "packages=$1" "$CALLS"; }  # the resolutions that saw these pins
+pin() { printf '{"originHash":"%s","pins":[{"identity":"fluidaudio","state":{"version":"%s"}}],"version":3}\n' "${2:-aaa}" "$1"; }
+mkdir -p "$(dirname "$pins")" && pin one > "$pins"
 rm -rf "$tree/build/device" "$tree/build/packages"
 suite device-first others
 is "a first device build: exits 0" "$status" 0
-is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "pins: one"
-is "a first device build: the package state names the pins it was resolved from" "$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "pins: one"
+is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "$(pin one)"
+is "a first device build: the package state names the pins it was resolved from" "$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "$(pin one)"
 : > "$tree/build/packages/workspace-state.json"
 suite device-same others
 is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
 is "the same pins: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
-echo "pins: two" > "$pins"
+# A resolution rewrites the pins' originHash for the path it ran at; the same pins under another
+# hash are the same pins, for the device build's directory as for the package state.
+pin one bbb > "$pins"
+suite device-rehashed others
+is "the same pins under another originHash: the device build is built over what was there" "$(calls 'device-build over what was there')" 1
+is "the same pins under another originHash: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
+pin two bbb > "$pins"
 suite device-moved others
 is "pins that moved: exits 0" "$status" 0
 is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
-is "pins that moved: the package state is made afresh" "$([ -e "$tree/build/packages/workspace-state.json" ] || echo afresh):$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "afresh:pins: two"
-is "pins that moved: every resolution of the suite came after the state was made afresh" "$(calls 'packages=pins: two'):$(calls 'packages=')" "5:5"
+is "pins that moved: the package state is made afresh" "$([ -e "$tree/build/packages/workspace-state.json" ] || echo afresh):$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "afresh:$(pin two bbb)"
+is "pins that moved: every resolution of the suite came after the state was made afresh" "$(resolved "$(pin two bbb)"):$(calls 'packages=')" "5:5"
 # The same in each suite that resolves on its own: the state is fresh before its first resolution.
-echo "pins: three" > "$pins"
+pin three > "$pins"
 suite packages-unit topo_unit
-is "pins that moved, topo_unit: every resolution came after the state was made afresh" "$(calls 'packages=pins: three'):$(calls 'packages=')" "2:2"
-echo "pins: four" > "$pins"
+is "pins that moved, topo_unit: every resolution came after the state was made afresh" "$(resolved "$(pin three)"):$(calls 'packages=')" "2:2"
+pin four > "$pins"
 suite packages-ui topo_ui
-is "pins that moved, topo_ui: every resolution came after the state was made afresh" "$(calls 'packages=pins: four'):$(calls 'packages=')" "2:2"
-is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
+is "pins that moved, topo_ui: every resolution came after the state was made afresh" "$(resolved "$(pin four)"):$(calls 'packages=')" "2:2"
+is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "$(pin two bbb)"
 rm -f "$tree/build/device/Package.resolved"
 suite device-unknown others
 is "a directory that says no pins: made afresh" "$(calls 'device-build over what was there')" 0
+echo "not json" > "$tree/build/device/Package.resolved"; echo "not json" > "$pins"
+suite device-not-json others
+is "pins that are not JSON: made afresh" "$(calls 'device-build over what was there')" 0
 rm -f "$pins"
 suite device-no-pins others
 is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
 is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -clonedSourcePackagesDirPath build/packages -configuration Release')" 1
-echo "pins: one" > "$pins"
+pin one > "$pins"
 
 # The quiet part of topo_ui: every UI class but the microphone's, with no lane, no hold, no
 # models, no grants cleared and neither flag, in results of its own, which are held to have

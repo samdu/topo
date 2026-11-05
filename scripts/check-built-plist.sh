@@ -18,6 +18,7 @@
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
 # the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location,
 # HomeKit or Photos with no string saying why, and nothing shows it until the first call that asks.
+# AlarmKit's is read beside them: without it AlarmKit schedules no alarm.
 # `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is read beside them: without it a limited
 # photo library puts the system's sheet for choosing more up at a tool's call.
 #
@@ -98,7 +99,7 @@ fi
 
 modes="$(plutil -extract UIBackgroundModes json -o - -- "$plist" 2>/dev/null || true)"
 status=0
-for mode in remote-notification audio; do
+for mode in remote-notification audio voip; do
     case "$modes" in
         *"\"$mode\""*) ;;
         *)
@@ -133,10 +134,15 @@ fi
 
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
            NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \
-           NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription; do
+           NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription \
+           NSAlarmKitUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
-        echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
+        if [ "$key" = NSAlarmKitUsageDescription ]; then
+            echo "$app/Info.plist has no $key; AlarmKit would schedule no alarm" >&2
+        else
+            echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
+        fi
         status=1
     fi
 done

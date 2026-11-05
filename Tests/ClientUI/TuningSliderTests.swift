@@ -26,6 +26,16 @@ final class TuningSliderTests: XCTestCase {
 
         let slider = try openTuning(app, badge: badge)
         slider.adjust(toNormalizedSliderPosition: 0.5)
+        // A drag reaching an app whose main thread is held can be lost, leaving the slider where it
+        // was: the app has been seen setting its audio session up again on the main thread mid-drag,
+        // on a lent Mac just after a Bluetooth audio device there dropped and came back. This is a
+        // retry, not a wait for readiness: the drag is made again only while the slider still
+        // reads the shipped value, twice more at most, and each one is logged; what the chat wears
+        // is still held below.
+        for _ in 0..<2 where !reads(slider, otherThan: shipped) {
+            print("adjusted the clearance slider again: it still read \(shipped)")
+            slider.adjust(toNormalizedSliderPosition: 0.5)
+        }
         // The slider's value is its field's, in points; halfway along 0...64 is 32.
         let moved = try XCTUnwrap((slider.value as? String).flatMap(Double.init), "the slider has no value")
         XCTAssertNotEqual(moved, shipped, "the slider did not move")
@@ -164,7 +174,19 @@ final class TuningSliderTests: XCTestCase {
                 .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.3)))
         }
         XCTAssertTrue(slider.isHittable, "the settings have no clearance slider")
+        XCTAssertTrue(slider.centred(in: form, window: app.windows.firstMatch),
+                      "the clearance slider would not come away from the sheet's edge")
         return slider
+    }
+
+    /// Waits, bounded, for `slider` to read a value other than `value`.
+    private func reads(_ slider: XCUIElement, otherThan value: Double, timeout: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let now = (slider.value as? String).flatMap(Double.init), now != value { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        return false
     }
 
     private func clearance(in app: TopoApplication) -> Double? {

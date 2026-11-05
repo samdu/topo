@@ -427,6 +427,46 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertFalse(harness.turnOpen)
     }
 
+    /// A failure for the person is told as one (`onTurnFailure`), once, before the turn is told
+    /// over (`onTurnFailed`), on the attempt's own catch: a zone that cannot be made.
+    func testAnAttemptThatThrowsTellsTheFailureOnceBeforeTheTurnIsOver() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("never"))),
+                              ensureZone: { throw Unexpected() })
+        let told = Said()
+        harness.onTurnFailure = { told.add("failure \($0)") }
+        harness.onTurnFailed = { told.add("over \($0)") }
+        let nonce = harness.willSend("When are the bins?")
+        await harness.retry()
+        XCTAssertNotNil(harness.error)
+        XCTAssertEqual(told.texts, ["failure \(nonce)", "over \(nonce)"])
+    }
+
+    /// The same of a turn this device is not primary for, whose words could not be saved into
+    /// the log: the phone answered once as primary, yielded to the hub's claim, and its next
+    /// turn's words are refused by the store. No model was asked for it, and the failure is the
+    /// person's.
+    func testALimbsTurnWhoseWordsCannotBeSavedTellsTheFailureOnceBeforeTheTurnIsOver() async throws {
+        let db = InMemoryRecordDatabase()
+        let refusing = RefusingSaves(db)
+        let transport = ScriptedTransport((200, reply("one back")))
+        let harness = harness(refusing, defaults: makeDefaults(), transport: transport)
+        await harness.send("one")
+        _ = try await claim(db, as: "hub")
+        let told = Said()
+        harness.onTurnFailure = { told.add("failure \($0)") }
+        harness.onTurnFailed = { told.add("over \($0)") }
+        await refusing.refuse()
+        let nonce = harness.willSend("two")
+        await harness.retry()
+        XCTAssertEqual(transport.sent.count, 1, "a device that is not primary asked the model")
+        XCTAssertNotNil(harness.error)
+        XCTAssertEqual(told.texts, ["failure \(nonce)", "over \(nonce)"])
+        XCTAssertNil(harness.info, "the refused words were said saved for the hub")
+        let turns = try await log(db).map(\.text)
+        XCTAssertEqual(turns, ["one", "one back"], "the refused words reached the log after all")
+    }
+
     /// A sign-out during a turn closes it.
     func testASignOutClosesAnOpenTurn() async throws {
         let db = InMemoryRecordDatabase()
@@ -1597,7 +1637,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         // Wired as the chat wires them, and muted after the release.
@@ -1641,7 +1681,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         var readsAloud = false
@@ -1669,7 +1709,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("One sentence. Two of them. Three."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         var readsAloud = true
@@ -1712,7 +1752,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(harness, speaker, said)
@@ -1749,7 +1789,7 @@ final class HarnessIntegrationTests: XCTestCase {
         await after.refresh()
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(after, speaker, said)
@@ -1771,7 +1811,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(db, defaults: defaults, transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()),
                       engine: ScriptedEngine(bare: "and of Italy", boosted: "and of Italy"))
@@ -1845,7 +1885,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(harness, speaker, said)
@@ -1876,7 +1916,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Rome."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(harness, speaker, said)
@@ -1899,7 +1939,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: ScriptedVoice())
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
@@ -1952,7 +1992,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = Voice(engine: ScriptedVoice())
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
@@ -2094,6 +2134,22 @@ private actor ReadFailingDatabase: RecordDatabase {
         try check()
         return try await wrapped.records(ofType: type)
     }
+}
+
+/// A database whose saves are refused once `refuse()` is called, its reads still answered.
+private actor RefusingSaves: RecordDatabase {
+    struct Down: Error {}
+    let wrapped: InMemoryRecordDatabase
+    private var refusing = false
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+    func refuse() { refusing = true }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if refusing { throw RecordDatabaseError.unavailable(underlying: Down()) }
+        return try await wrapped.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 /// What the reply handler was given, in order.

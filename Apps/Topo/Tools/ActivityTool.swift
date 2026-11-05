@@ -13,7 +13,7 @@ struct ActivityTool: Tool {
     var now: @Sendable () -> Date = { Date() }
 
     let name = "activity"
-    let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, a timer, a countdown"
+    let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, or a countdown with no sound (a timer that sounds is topo timer)"
     var usage: String {
         """
         topo activity                            every activity running: id, slot, started, until, what it draws
@@ -25,7 +25,7 @@ struct ActivityTool: Tool {
                                                  lock screen a while, now takes it off, DATE (ISO 8601) at that time
                                                  or four hours after the end, whichever is sooner;
                                                  one ended and still shown is taken down with now or DATE and no document
-        topo activity example                    a tracker and a timer: the quickest way to the shape
+        topo activity example                    a tracker and a countdown: the quickest way to the shape
 
         A SLOT is [a-z0-9-], at most 32 characters, one activity a slot. The document is an object with any of:
           "tracker": the decisions pane's progress tracker JSON (title, steps[label, state, note], current, eta…),
@@ -37,7 +37,7 @@ struct ActivityTool: Tool {
           "families": a node tree per region, in topo widget's grammar: lockScreen, islandExpanded,
                      islandCompactLeading, islandCompactTrailing, islandMinimal. A region without one draws the
                      tracker, or Topo's mark. Text with "date" and "dateStyle": "timer" counts by itself, with no
-                     update, so a timer or a countdown needs none;
+                     update, so a countdown needs none; a timer that sounds at zero is topo timer, not an activity;
           "until": ISO 8601, at most 12 h ahead: the activity is taken off then while Topo runs, or when Topo
                      next comes to the screen, and reads stale past it meanwhile;
           "tint": a Theme token or #RRGGBB, the activity's background;  "relevance": 0–100, its order.
@@ -104,14 +104,18 @@ struct ActivityTool: Tool {
             return .failed("topo: slot \(slot) is running as \(running.id); update or end it\n")
         }
         let keeper = keeper()
+        // Between a login's end and the next sign-in no epoch is current, and nothing starts.
+        guard keeper.login.epoch.isCurrent else {
+            return .failed("topo: the login has ended; nothing started\n")
+        }
         // Held from here until the reply: a second start of the slot while this one fetches is refused.
         guard keeper.reserve(slot) else {
             return .failed("topo: slot \(slot) is starting; wait for it\n")
         }
-        // Released only under the login that reserved it: after an `endAll` the slot is another
+        // Released only under the login that reserved it: after the login ends the slot is another
         // start's to hold, and this one lets go of nothing.
-        let reserved = keeper.generation
-        defer { if keeper.generation == reserved { keeper.release(slot) } }
+        let reserved = keeper.login.epoch
+        defer { if reserved.isCurrent { keeper.release(slot) } }
         let reading = ActivityDocument.read(json, now: now())
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
@@ -123,9 +127,9 @@ struct ActivityTool: Tool {
         // is the tracker drawn: it is what every later round draws too.
         if let poll = document.poll {
             if tracker != nil { notes.append(Self.trackerSetAside) }
-            let generation = keeper.generation
+            let epoch = keeper.login.epoch
             let data = await fetcher.fetch(poll)
-            guard keeper.generation == generation else {
+            guard epoch.isCurrent else {
                 return .failed("topo: the login ended while the tracker was fetched; nothing started\n")
             }
             guard let data else {
@@ -168,7 +172,7 @@ struct ActivityTool: Tool {
         var notes = reading.notes
         if reading.document.poll != nil { notes.append(Self.pollStands) }
         let keeper = keeper()
-        let generation = keeper.generation
+        let epoch = keeper.login.epoch
         // Merged over the state the host holds when the gate opens, not as it was before the
         // wait, so a poll's round that passed first keeps its card.
         let reply = await keeper.changing(id) { record -> ToolReply in
@@ -178,13 +182,13 @@ struct ActivityTool: Tool {
                 return Self.overBudget(fitted.note, notes, "nothing changed")
             }
             if let note = fitted.note { notes.append(note) }
-            // A sign-out that counted itself while this waited at the gate ends the activity next.
-            guard keeper.generation == generation else { return .failed("topo: the login ended while the update waited; nothing changed\n") }
+            // A sign-out that moved the epoch while this waited at the gate ends the activity next.
+            guard epoch.isCurrent else { return .failed("topo: the login ended while the update waited; nothing changed\n") }
             keeper.touch(id)
             let updated = await host().update(id, keeper.notice(state, polled: record.attributes.poll != nil))
             guard updated else { return .failed("topo: no activity \(id) running\n") }
             // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
-            if keeper.generation == generation { keeper.keep(id) }
+            if epoch.isCurrent { keeper.keep(id) }
             let text = "updated \(id)\n" + Self.notes(notes)
             return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
         }
@@ -225,7 +229,7 @@ struct ActivityTool: Tool {
         // else: a last document or the default dismissal is for one still running.
         let takesDown = reading == nil && dismissal != .standard
         let keeper = keeper()
-        let generation = keeper.generation
+        let epoch = keeper.login.epoch
         // Judged at the gate as the host then holds it: another end that passed first leaves this
         // one ended, and no second end is sent.
         let reply = await keeper.changing(id, ended: takesDown) { record -> ToolReply in
@@ -241,8 +245,8 @@ struct ActivityTool: Tool {
                 if let note = fitted.note { notes.append(note) }
                 state = fit
             }
-            // A sign-out that counted itself while this waited at the gate ends the activity next.
-            guard keeper.generation == generation else { return .failed("topo: the login ended while the end waited; the sign-out ends it\n") }
+            // A sign-out that moved the epoch while this waited at the gate ends the activity next.
+            guard epoch.isCurrent else { return .failed("topo: the login ended while the end waited; the sign-out ends it\n") }
             keeper.forget(id)
             guard await keeper.end(id, state, dismissal: dismissal) else { return .failed("topo: no activity \(id) running\n") }
             let said: String
@@ -316,6 +320,6 @@ struct ActivityTool: Tool {
           "islandCompactTrailing": {"kind": "text", "date": "\(soon)", "dateStyle": "timer", "style": "caption"},
           "islandMinimal": {"kind": "glyph", "symbol": "cup.and.saucer.fill", "size": 14, "colour": "primary"}}}
         """
-        return [("a tracker given whole", tracker), ("a tracker polled from the pane", polled), ("a timer, which needs no update", timer)]
+        return [("a tracker given whole", tracker), ("a tracker polled from the pane", polled), ("a countdown, which needs no update and makes no sound (topo timer sounds)", timer)]
     }
 }

@@ -270,7 +270,7 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.microphoneOpen = { open }
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         open = true
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: false)
         rig.sounds.follow(toolUse("WebSearch"))
         XCTAssertEqual(rig.sounds.played, [], "a receipt was played into an open microphone")
         XCTAssertTrue(rig.players.players.isEmpty)
@@ -287,7 +287,7 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertFalse(rig.audio.heldForATurn)
         // The press opened nothing (a refusal, say): the microphone is closed again, and a tool
         // reached for now meets only the receipt's own hold.
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: true)
         rig.sounds.follow(toolUse("Bash"))
         XCTAssertEqual(rig.sounds.played, [.act], "a receipt sounded under nothing but a receipt's hold")
         await settle("the hold's length to be asked for") { rig.clock.asked.contains(KeeperSounds.toneLength) }
@@ -332,7 +332,7 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.microphoneOpening()
         XCTAssertFalse(act.isPlaying, "a receipt played on into a microphone a press is opening")
         XCTAssertEqual(act.pauses, 1)
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: true)
 
         _ = rig.speaker.awaitReply("again", readAloud: true)
         rig.sounds.follow(toolUse("Bash"))
@@ -530,7 +530,7 @@ final class KeeperSoundsTests: XCTestCase {
         let rig = await rig(mode: .sounds)
         var open = true
         rig.speaker.microphoneOpen = { open }
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: false)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         let bed = try XCTUnwrap(rig.players.bed)
         XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.duckedVolume], "the bed came in at full volume under an open microphone")
@@ -540,9 +540,9 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.microphoneClosed()
         XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.duckedVolume, KeeperSounds.bedVolume])
         open = true
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: false)
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.duckedVolume)
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: false)
         XCTAssertEqual(bed.fades.count, 3, "the open microphone dipped the bed twice")
         open = false
         rig.speaker.microphoneClosed()
@@ -555,7 +555,7 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertFalse(rig.audio.heldForATurn)
         rig.sounds.working(true)
         XCTAssertEqual(bed.fades.last?.to, 0, "the bed came back under a sound's own hold")
-        rig.speaker.microphoneOpened()
+        rig.speaker.microphoneOpened(counted: true)
     }
 
     /// The lock screen's interruption stops the bed under a wait that still wants it; where the

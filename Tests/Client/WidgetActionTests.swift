@@ -386,17 +386,20 @@ final class WidgetActionTests: XCTestCase {
     }
 
     /// A run still in flight when the login ends is cancelled before its effect, and writes no
-    /// tap and no outcome once it answers, so the next login sees nothing of it.
+    /// tap and no outcome once it answers, so the next login sees nothing of it. The login here is
+    /// lost to the phase leaving signed in (`SignIn.refresh` finding it gone), which reaches the
+    /// runs through `DefaultSurface.follow`.
     func testARunInFlightAtSignOutLeavesNothing() async throws {
         let notify = CountingTool("notify")
         notify.delay = .milliseconds(600)
         let revision = try set(["notify", "Bins"])
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
-        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader, changed: { _ in })
+        let login = LoginLife()
+        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader, changed: { _ in }, login: login)
         let tap = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
         try await Task.sleep(for: .milliseconds(150))
-        reloader.forget(store)
+        DefaultSurface(store: { store }, reloader: reloader, login: login).follow(from: .signedIn, to: .idle, latest: nil)
         await tap.value
         try await Task.sleep(for: .milliseconds(800))
         XCTAssertEqual(notify.effects, 0, "the run took its effect after the sign-out")
@@ -421,10 +424,12 @@ final class WidgetActionTests: XCTestCase {
         let revision = try set(["notify", "Bins"])
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
-        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader, changed: { _ in })
+        let login = LoginLife()
+        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader, changed: { _ in }, login: login)
         let first = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
         let second = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
         try await Task.sleep(for: .milliseconds(150))
+        login.end()
         reloader.forget(store)
         await first.value
         await second.value

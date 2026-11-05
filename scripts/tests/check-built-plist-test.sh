@@ -15,7 +15,8 @@ trap 'rm -rf "$work"' EXIT
 
 keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription
       NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription
-      NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription)
+      NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription
+      NSAlarmKitUsageDescription)
 
 make_watch() {
     local watch="$1"
@@ -32,7 +33,7 @@ make_app() {
     local app="$1" usage
     mkdir -p "$app"
     plutil -create xml1 "$app/Info.plist"
-    plutil -insert UIBackgroundModes -json '["remote-notification","audio"]' "$app/Info.plist"
+    plutil -insert UIBackgroundModes -json '["remote-notification","audio","voip"]' "$app/Info.plist"
     plutil -insert UIFileSharingEnabled -bool YES "$app/Info.plist"
     plutil -insert LSSupportsOpeningDocumentsInPlace -bool YES "$app/Info.plist"
     plutil -insert PHPhotoLibraryPreventAutomaticLimitedAccessAlert -bool YES "$app/Info.plist"
@@ -175,6 +176,15 @@ for case in no-broadcast broadcast-kind broadcast-mode broadcast-no-program broa
         fail "the refusal of $case does not name TopoBroadcast.appex: $errors"
     fi
 done
+
+# A product declaring two of the three background modes: the call behind the lock needs `voip`.
+make_app "$work/no-voip/Topo.app"
+plutil -replace UIBackgroundModes -json '["remote-notification","audio"]' "$work/no-voip/Topo.app/Info.plist"
+if errors="$("$check" "$work/no-voip/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product without the voip background mode passed"
+elif [[ "$errors" != *"'voip' background mode"* ]]; then
+    fail "the refusal of no-voip does not name the mode: $errors"
+fi
 
 make_app "$work/no-share/Topo.app"
 rm -rf "$work/no-share/Topo.app/PlugIns/TopoShare.appex"
@@ -369,4 +379,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension or the topo URL scheme, or declaring the remote-notification background mode, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the voip background mode, the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension or the topo URL scheme, or declaring the remote-notification background mode, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"

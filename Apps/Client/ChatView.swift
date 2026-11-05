@@ -18,6 +18,9 @@ struct ChatView: View {
     @State private var setupStood = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
+    /// What the composer's `+` attaches, where the app made one; a canvas or a screen made
+    /// without it offers nothing there.
+    @Environment(ComposerAttachments.self) private var attachments: ComposerAttachments?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
@@ -68,6 +71,8 @@ struct ChatView: View {
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
     @State private var showMemory = false
+    /// The sheet the `+` puts up to share the screen from, holding the system's own button.
+    @State private var showScreenShare = false
     /// The offer card's answer, once and for good: Choose folder or Not now. It is the chat's
     /// rather than the sheet's, because the card it answers is drawn here.
     @AppStorage("memoryOfferAnswered") private var memoryOfferAnswered = false
@@ -241,6 +246,15 @@ struct ChatView: View {
             // The memory screen is the sheet's Memory section, and also what the offer card
             // above the composer opens, so the chat presents it too.
             .sheet(isPresented: $showMemory) { MemoryView() }
+            .sheet(isPresented: $showScreenShare) { ScreenShareSheet() }
+            // The pickers the `+` puts up and the sheet over what was picked, on a view of
+            // their own so the chat's own sheets and theirs never share one presentation.
+            .background {
+                if let attachments {
+                    Color.clear.modifier(ComposerPickers(attachments: attachments,
+                                                         marks: ShareSheet.Marks(image: look.composer.flank.photo, file: look.composer.flank.file)))
+                }
+            }
         }
         .task {
             #if DEBUG && os(iOS)
@@ -293,6 +307,7 @@ struct ChatView: View {
                 harness.onReply = nil
                 harness.onWriting = nil
                 harness.onTurnFailed = nil
+                harness.onTurnFailure = nil
                 speaker.settled = nil
                 speaker.endAllWaits("the chat stopped answering")
             }
@@ -351,9 +366,11 @@ struct ChatView: View {
         .onChange(of: look.mind, initial: true) { _, mind in harness.mind = mind }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
-            // it, so nothing said into it was meant. A reply plays on — that is what the hold is
-            // for — and the press that starts the next one is what stops it.
-            if phase != .active { voice.cancel(.chat) }
+            // it, so nothing said into it was meant. One already released is not: its words are
+            // being decoded to be sent, and the release's hold carries them behind the lock
+            // (`VoiceInput.drop`). A reply plays on — that is what the hold is for — and the press
+            // that starts the next one is what stops it.
+            if phase != .active { voice.drop(.chat) }
         }
         .onDisappear { voice.cancel(.chat) }
     }
@@ -472,19 +489,20 @@ struct ChatView: View {
 
     /// The far end of a takeover, built here for the same reason as the way out below.
     private var takeover: Takeover {
-        Takeover(forgetShares: { ShareStore.shared()?.close() }, demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
+        Takeover(moveEpoch: { LoginLife.shared.moveEpoch() }, forgetShares: { ShareStore.shared()?.close() }, demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
                  stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
+                 runTeardowns: { LoginLife.shared.runTeardowns() },
                  forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                  forgetConnections: { connections.forget() },
                  forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 
-    /// The way out, built here because this is where the five things it ends are in scope, and
+    /// The way out, built here because this is where the things it ends are in scope, and
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
-        SignOut(stopSpeaking: { speaker.stop() }, forgetShares: { ShareStore.shared()?.close() }, forgetHarness: { await harness.forget() },
-                forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
+        SignOut(moveEpoch: { LoginLife.shared.moveEpoch() }, stopSpeaking: { speaker.stop() }, forgetShares: { ShareStore.shared()?.close() }, forgetHarness: { await harness.forget() },
+                forgetMemory: { memory.forget() }, runTeardowns: { LoginLife.shared.runTeardowns() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                 forgetConnections: { connections.forget() },
                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
@@ -516,9 +534,10 @@ struct ChatView: View {
             return
         }
         #endif
-        // The reply to this will be read aloud, so the process is held open from here: the turn
-        // is written, asked and answered behind the lock. Nothing is held for a reply that could
-        // not be heard anyway — the setting off, or a voice that is not resident.
+        // The reply to this will be read aloud, so the process is held open from here, the wait
+        // taking over from the release's hold: the turn is written, asked and answered behind
+        // the lock. Nothing is held for a reply that could not be heard anyway — the setting
+        // off, or a voice that is not resident.
         // The wait says whether the reply will be read aloud, which is what marks the turn as
         // spoken; whether the process is being kept running for it is its own answer, and this
         // screen states no condition of its own either way.
@@ -593,6 +612,17 @@ struct ChatView: View {
                                holdsTopo: look.mascot.placement == .glass)
     }
 
+    /// What the composer's `+` offers: a file and a photo where the app made the attachments, the
+    /// camera where the phone has one, the way to share the screen (the chat's own sheet), and
+    /// nothing where the app made none.
+    private var composerMenu: ComposerMenu {
+        guard let attachments else { return ComposerMenu() }
+        var menu = ComposerMenu(attachFile: { attachments.pick(.file) }, choosePhoto: { attachments.pick(.photo) })
+        if attachments.hasCamera { menu.takePhoto = { attachments.pick(.camera) } }
+        menu.shareScreen = { showScreenShare = true }
+        return menu
+    }
+
     /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
     private var micState: Composer.MicState {
         Composer.MicState(voice, speaking: speaker.speaking)
@@ -624,11 +654,14 @@ struct ChatView: View {
                                     dictation = going
                                 }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
+                                                 dictating: !going.sends,
+                                                 speaks: going.sends && readAloud,
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
                             focused: { focused = $0 },
                             room: room)
+            .environment(\.composerMenu, composerMenu)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {
@@ -937,6 +970,9 @@ enum SpokenReply {
     /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
     static func follow(_ harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
         wire(harness: harness, speaker: speaker, readsAloud: readsAloud)
+        // A spoken turn that failed for the person sounds so: the speaker cues `failed` for a
+        // wait standing for it, before the wait ends, and ends a reply it was reading with it.
+        harness.onTurnFailure = { nonce in speaker.turnFailed(nonce) }
         // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
         // is owed no reply from the log, so nothing waits for one.
         harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
@@ -1013,19 +1049,33 @@ final class MicPress {
     /// The gesture's own call, as the finger lands or lifts, with the state the composer drew
     /// the button in: the press is what the person saw, not what the speaker says by the time
     /// the callback runs. Answers the task carrying the press to `VoiceInput`, and nil for a stop
-    /// and its release, which reach nothing. What a release heard is handed to `send`.
+    /// and its release, which reach nothing. What a release heard is handed to `send`; with
+    /// `dictating`, `send` writes it into the row rather than sending it, so the release sounds
+    /// no cue — nothing went — and only the microphone's own `listening` is heard.
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
+                 dictating: Bool = false, speaks: Bool = false,
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
                 stopping = false
                 return nil
             }
+            // A release whose words will be read a reply is held from the thumb coming up, not
+            // from the send after the final transcription: a lock in between would otherwise
+            // suspend the process with the turn half made. Taken here, in the gesture's callback,
+            // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
+            // a send that took none returns.
+            let release = speaks ? speaker.releasing() : nil
             return Task {
+                defer { release.map { speaker.released($0, "its send took no wait") } }
                 let heard = await voice.pressUp(as: .chat)
                 speaker.microphoneClosed()
+                // Nil is a tap that left the microphone open, or a release that reached no
+                // session: neither sends, and neither sounds.
                 guard let heard else { return }
+                if !dictating { speaker.earcons?.play(.sending(heard)) }
+                speaker.sending(under: release)
                 await send(heard)
             }
         }
@@ -1033,17 +1083,32 @@ final class MicPress {
         // A press on a closed microphone stops what is being read, so the mic does not hear it.
         // One on the open microphone leaves the speaker alone: nothing is read while it is open,
         // and a reply waiting for it to close is read once this press closes it.
+        let opens = !stopping && !drawn.open
         if stopping {
             speaker.stop()
-        } else if !drawn.open {
+        } else if opens {
             // From here to `pressDown`'s answer the microphone is opening, and nothing is read.
             speaker.microphoneOpening()
         }
         if stopping { return nil }
+        // A press on the open microphone closes it and sends what it heard, so it is that send's
+        // release and is held the same way.
+        let release = speaks && drawn.open ? speaker.releasing() : nil
         return Task {
+            defer { release.map { speaker.released($0, "its send took no wait") } }
             let heard = await voice.pressDown(as: .chat)
-            speaker.microphoneOpened()
-            guard let heard else { return }
+            speaker.microphoneOpened(counted: opens)
+            guard let heard else {
+                // Nil is a session begun or a press refused, and only the chat holding the
+                // microphone (`owner`, which every refusal that begins no session clears), on a press that found it
+                // closed, tells the two apart. The cue follows `VoiceInput`'s decision and never
+                // makes it.
+                if !drawn.open, voice.owner == .chat { speaker.earcons?.play(.listening) }
+                return
+            }
+            // The press on the open microphone's waveform, which sends what it heard.
+            if !dictating { speaker.earcons?.play(.sending(heard)) }
+            speaker.sending(under: release)
             await send(heard)
         }
     }

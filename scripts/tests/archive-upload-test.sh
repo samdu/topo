@@ -2,7 +2,9 @@
 # scripts/archive-upload.sh against a fake xcodebuild, altool and keychain, in a repository made
 # here: with a key, kept as the hex `security -w` prints, the archive and the export are each
 # handed it as a .p8 openssl reads, altool finds it, and it is gone afterwards; with no key the
-# archive runs without one and an upload is refused before anything is built.
+# archive runs without one and an upload is refused before anything is built; the archive resolves
+# its packages into build/packages, kept for the pins they were resolved from and made afresh for
+# any other.
 #
 #   scripts/tests/archive-upload-test.sh
 set -uo pipefail
@@ -20,6 +22,10 @@ cp "$here/../archive-upload.sh" "$here/../asc-pem.sh" "$tree/scripts/"
 printf '#!/bin/sh\nexit 0\n' > "$tree/scripts/build-ish.sh"
 chmod +x "$tree/scripts/build-ish.sh"
 touch "$tree/Distribution/ExportOptions.plist"
+pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+mkdir -p "$(dirname "$pins")"
+pin() { printf '{"originHash":"%s","pins":[{"identity":"fluidaudio","state":{"version":"%s"}}],"version":3}\n' "${2:-aaa}" "$1"; }
+pin one > "$pins"  # as Package.resolved is, JSON, here on one line
 git -C "$tree" init -q -b scratch
 git -C "$tree" config core.hooksPath /dev/null
 git -C "$tree" -c user.name=test -c user.email=test@example.com add -A
@@ -41,6 +47,13 @@ if [ -n "$key" ]; then
   if openssl pkey -in "$key" -noout 2>/dev/null; then state=key; else state=not-a-key; fi
 fi
 echo "xcodebuild [$state] $line" >> "$CALLS"
+# What package state a resolution would run against, and a state left behind as Xcode leaves one.
+packages=""; previous=""
+for argument in "$@"; do [ "$previous" = -clonedSourcePackagesDirPath ] && packages="$argument"; previous="$argument"; done
+if [ -n "$packages" ]; then
+  echo "packages: $([ -e "$packages/workspace-state.json" ] && echo kept || echo fresh) pins: $(jq -r '.pins[0].state.version' "$packages/Package.resolved" 2>/dev/null)" >> "$CALLS"
+  touch "$packages/workspace-state.json"
+fi
 [ -z "$export" ] || { mkdir -p "$export"; touch "$export/Topo.ipa"; }
 FAKE
 cat > "$work/bin/xcrun" <<'FAKE'
@@ -114,5 +127,21 @@ if run "$work/unasked" --validate; then fail "a validation with no key was not r
 [ ! -s "$work/unasked" ] || fail "a validation with no key built something first: $(cat "$work/unasked")"
 grep -q 'No App Store Connect API key' "$work/out" || fail "the refusal of a validation does not say there is no key: $(cat "$work/out")"
 
+# The packages resolve into build/packages, kept for the pins they were resolved from, under
+# whatever originHash, and made afresh for any other.
+rm -rf "$tree/build/packages"
+run "$work/packages-first" || fail "an archive failed: $(cat "$work/out")"
+grep '^xcodebuild \[none\] archive ' "$work/packages-first" | grep -q -- "-clonedSourcePackagesDirPath $tree/build/packages " \
+    || fail "the archive does not resolve into build/packages: $(cat "$work/packages-first")"
+grep -qx 'packages: fresh pins: one' "$work/packages-first" || fail "a first archive did not resolve against a fresh state naming its pins: $(cat "$work/packages-first")"
+sed -i '' 's/"aaa"/"bbb"/' "$tree/build/packages/Package.resolved"
+run "$work/packages-same" || fail "an archive failed: $(cat "$work/out")"
+grep -qx 'packages: kept pins: one' "$work/packages-same" || fail "the same pins under another originHash did not keep the state: $(cat "$work/packages-same")"
+pin two > "$pins"
+git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am pins
+git -C "$tree" update-ref refs/remotes/origin/main HEAD
+run "$work/packages-moved" || fail "an archive failed: $(cat "$work/out")"
+grep -qx 'packages: fresh pins: two' "$work/packages-moved" || fail "pins that moved did not make the state afresh: $(cat "$work/packages-moved")"
+
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed" >&2; exit 1; }
-echo "archive-upload.sh: with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built"
+echo "archive-upload.sh: with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"
