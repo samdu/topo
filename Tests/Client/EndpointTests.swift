@@ -251,6 +251,29 @@ final class SileroLoadTests: XCTestCase {
         }
     }
 
+    /// The silence a stream is reset with is the one the real detector segments on: the cap with a
+    /// judge, the end without.
+    func testTheRealDetectorSegmentsOnTheSilenceItWasResetWith() async throws {
+        let fetched = try XCTUnwrap(
+            ProcessInfo.processInfo.environment["TOPO_UNIT_EAR_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
+            "Silero's model in TEST_RUNNER_TOPO_UNIT_EAR_MODELS")
+        let model = try vad()
+        let directory = ModelStore.standard(support: support).directory(for: model)
+        let source = URL(fileURLWithPath: fetched).appendingPathComponent(ModelManifest.vad)
+        for file in model.files {
+            let to = directory.appendingPathComponent(file.path)
+            try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: source.appendingPathComponent(file.path), to: to)
+        }
+        let loaded = try await Endpoint.silero(directory)
+        let detector = try XCTUnwrap(loaded as? SileroDetector)
+        for judged in [true, false] {
+            await detector.reset(silence: Endpoint.silence(judged: judged))
+            let silence = await detector.silence
+            XCTAssertEqual(silence, Endpoint.silence(judged: judged))
+        }
+    }
+
     /// With nothing where the store keeps the model, the load fails rather than fetching the
     /// model over a session of FluidAudio's own.
     func testADetectorNotInTheStoreIsAFailureAndNotAFetch() async throws {

@@ -23,9 +23,10 @@ final class Conversation {
     /// How often what has arrived is taken: the detector fed its whole chunks, and the quiet
     /// counted in 100 ms frames, which is the turn's rule's own tick.
     static let feedEvery: Duration = .milliseconds(100)
-    /// Chunks in a row the detector may fail on before the conversation ends with what was
-    /// heard: about a second, since an utterance it cannot judge would otherwise never end.
-    static let failuresTolerated = 4
+    /// Feeds in a row the detector may fail on before the conversation ends with what was heard:
+    /// each retries the same chunk a `feedEvery` later, so about a second, since an utterance it
+    /// cannot judge would otherwise never end.
+    static let failuresTolerated = 9
     /// Listening this long with no samples arriving is a dead engine (a route change stops it
     /// under the call): the session is suspended and rebuilt, and a second time running ends
     /// the conversation.

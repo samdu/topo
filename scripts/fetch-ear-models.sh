@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetches the ear's models (Parakeet and the CTC spotter), or the ones named of those, Silero's
-# voice detector and Smart Turn, the open microphone's judge of a finished turn, into a
+# Fetches the ear's models (Parakeet and the CTC spotter), or the ones named of those and of
+# Silero's voice detector and Smart Turn (the open microphone's judge of a finished turn), into a
 # directory, file by file from the pinned revisions in Apps/Topo/Resources/models.json, and
 # admits each only when its size and sha256 match the manifest. A file already there and
 # matching is kept, so a restored cache costs only the hashing. The directory is what

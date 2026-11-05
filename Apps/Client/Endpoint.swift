@@ -335,6 +335,9 @@ actor SileroDetector: VoiceDetector {
         config = VadSegmentationConfig(minSilenceDuration: silence)
     }
 
+    /// The silence the segmentation waits for now, read off its configuration.
+    var silence: TimeInterval { config.minSilenceDuration }
+
     func feed(_ chunk: [Float]) async throws -> Endpoint.Event? {
         let result = try await manager.processStreamingChunk(chunk, state: stream, config: config)
         stream = result.state
