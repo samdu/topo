@@ -25,6 +25,8 @@ final class Seams {
     /// The client format the reader last handed over, which is the object the tap must carry.
     private(set) var lastClient: AVAudioFormat?
     private(set) var engines: [AVAudioEngine] = []
+    /// The microphone's engines made, play engines left out.
+    var inputEngines: Int { engines.filter { $0 is CapturingEngine }.count }
     private(set) var formatReads = 0
     /// Each voice processing a press asked its engine for, with the format reads, whether the
     /// engine was running and how many configures the session had been asked for at that moment: the offline engine has no voice unit to turn on.

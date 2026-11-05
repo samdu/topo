@@ -23,6 +23,8 @@ final class ScriptedDetector: VoiceDetector, @unchecked Sendable {
     private var holdAt: Int?
     private var held: CheckedContinuation<Void, Never>?
     func hold(at chunk: Int) { lock.withLock { holdAt = chunk } }
+    /// No chunk after this one waits; the one waiting still does, until `release`.
+    func holdNoMore() { lock.withLock { holdAt = nil } }
     var holding: Bool { lock.withLock { held != nil } }
     func release() {
         let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
@@ -33,17 +35,43 @@ final class ScriptedDetector: VoiceDetector, @unchecked Sendable {
         waiting?.resume()
     }
 
+    /// The first chunk every feed from on throws at.
+    private var failFrom: Int?
+    func fail(from chunk: Int) { lock.withLock { failFrom = chunk } }
+    struct Failed: Error {}
+
     func feed(_ chunk: [Float]) async throws -> Endpoint.Event? {
-        let (event, waits) = lock.withLock { () -> (Endpoint.Event?, Bool) in
+        let (event, waits, fails) = lock.withLock { () -> (Endpoint.Event?, Bool, Bool) in
             defer { fed += 1 }
-            return (events[fed], holdAt == fed)
+            return (events[fed], holdAt == fed, failFrom.map { fed >= $0 } ?? false)
         }
+        if fails { throw Failed() }
         if waits {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 lock.withLock { held = continuation }
             }
         }
         return event
+    }
+}
+
+/// The microphone permission's answer, held while armed so a test can land something while a
+/// press waits on it.
+@MainActor
+final class PermissionGate {
+    private var armed = false
+    private var held: CheckedContinuation<Void, Never>?
+    func arm() { armed = true }
+    var waiting: Bool { held != nil }
+    func release() {
+        armed = false
+        let waiting = held
+        held = nil
+        waiting?.resume()
+    }
+    func ask() async -> Bool {
+        if armed { await withCheckedContinuation { held = $0 } }
+        return true
     }
 }
 
@@ -97,6 +125,8 @@ final class ConversationTests: XCTestCase {
     private var other = false
     private var audio: AudioSession!
     private var gate = GatedEngine("turn the lights off")
+    private var seams: Seams!
+    private var permission = PermissionGate()
 
     override func tearDown() {
         UIApplication.shared.isIdleTimerDisabled = false
@@ -116,9 +146,11 @@ final class ConversationTests: XCTestCase {
 
     /// The app's wiring over the seams: the speaker tells the conversation the call's moments,
     /// the microphone asks it at an interruption, and the chat's send is installed.
-    private func make(detector: ScriptedDetector = ScriptedDetector(),
+    private func make(detector: ScriptedDetector = ScriptedDetector(), endpoint: Endpoint? = nil,
                       sends: Bool = true, deafAfter: TimeInterval = 3_600) async -> (Conversation, VoiceInput, Speaker) {
         let seams = Seams()
+        self.seams = seams
+        let permission = permission
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
                                  deactivate: seams.deactivate, isActive: { true })
         self.audio = audio
@@ -135,11 +167,11 @@ final class ConversationTests: XCTestCase {
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
-                               permission: { true }, permitted: { true },
+                               permission: { await permission.ask() }, permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) })
         speaker.microphoneOpen = { input.listening }
         MicrophoneWatch.start(input, speaker)
-        let conversation = Conversation(voice: input, speaker: speaker, endpoint: Endpoint(detector: detector),
+        let conversation = Conversation(voice: input, speaker: speaker, endpoint: endpoint ?? Endpoint(detector: detector),
                                         enabled: { [unowned self] in enabled },
                                         appActive: { [unowned self] in active },
                                         holding: { [unowned self] in holding },
@@ -215,6 +247,16 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(conversation.carries(), "a session was carried with no chat to send through")
         conversation.send = send
         XCTAssertTrue(conversation.carries())
+    }
+
+    func testNothingIsCarriedUntilTheDetectorHasLoaded() async {
+        let (conversation, voice, _) = await make(endpoint: Endpoint())
+        defer { voice.cancel() }
+        await tap(voice)
+        active = false
+        XCTAssertFalse(conversation.carries(), "a session was carried with no detector to end its utterances")
+        leave()
+        XCTAssertFalse(conversation.on)
     }
 
     func testAHeldPressIsNotCarried() async {
@@ -435,8 +477,10 @@ final class ConversationTests: XCTestCase {
         defer { conversation.stop("test", sending: false) }
         XCTAssertTrue(voice.listening && !voice.suspended)
         let starts = voice.sessions
+        let engines = seams.inputEngines
         beganInterruption()
-        await settle("suspended and rebuilt") { voice.listening && !voice.suspended }
+        await settle("the engine replaced") { self.seams.inputEngines == engines + 1 }
+        await settle("resumed on it") { voice.listening && !voice.suspended }
         XCTAssertTrue(conversation.on)
         XCTAssertEqual(voice.sessions, starts, "a rebuild counted as a new session")
     }
@@ -450,12 +494,25 @@ final class ConversationTests: XCTestCase {
         audio.callDeactivated()
         conversation.call(.taken)
         XCTAssertTrue(voice.suspended)
+        CapturingPlayerNode.scheduled = []
         XCTAssertTrue(speaker.speak("The lights are off."), "the reply was refused rather than kept")
         XCTAssertTrue(speaker.waitingForMicrophone, "a reply was read into a suspended microphone")
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [], "a reply was played into a suspended microphone")
         audio.callActivated()
         conversation.call(.active)
         await settle("the microphone closed for the reply") { !voice.listening }
-        await settle("the reply read") { !speaker.waitingForMicrophone }
+        await assertReadOnce(speaker)
+    }
+
+    /// The reply played, and played once: its wait over is not proof, since a close that threw
+    /// the reply away ends the wait too.
+    private func assertReadOnce(_ speaker: Speaker, file: StaticString = #filePath, line: UInt = #line) async {
+        await settle("the reply read", file: file, line: line) {
+            !speaker.waitingForMicrophone && !CapturingPlayerNode.scheduled.isEmpty
+        }
+        let played = CapturingPlayerNode.scheduled.count
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, played, "the reply was read twice", file: file, line: line)
     }
 
     /// Words said into the microphone before a reply landed are judged before the reply closes
@@ -466,13 +523,14 @@ final class ConversationTests: XCTestCase {
         defer { conversation.stop("test", sending: false) }
         audio.callDeactivated()
         conversation.call(.taken)
+        CapturingPlayerNode.scheduled = []
         XCTAssertTrue(speaker.speak("The lights are off."))
         utterance(into: voice.sink)
         audio.callActivated()
         conversation.call(.active)
         await settle("the words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"], "words heard before the reply were dropped for it")
-        await settle("the reply read") { !speaker.waitingForMicrophone }
+        await assertReadOnce(speaker)
     }
 
     /// A reply landing while the detector is judging the chunk speech starts in waits for the
@@ -503,13 +561,14 @@ final class ConversationTests: XCTestCase {
         defer { conversation.stop("test", sending: false) }
         audio.callDeactivated()
         conversation.call(.taken)
+        CapturingPlayerNode.scheduled = []
         XCTAssertTrue(speaker.speak("The lights are off."))
         utterance(into: voice.sink)
         audio.callActivated()
         conversation.call(.active)
         await settle("the silence judged") { detector.chunks >= 5 }
         await settle("the microphone closed for the reply") { !voice.listening }
-        await settle("the reply read") { !speaker.waitingForMicrophone }
+        await assertReadOnce(speaker)
         XCTAssertEqual(sent, [])
     }
 
@@ -518,8 +577,10 @@ final class ConversationTests: XCTestCase {
     func testADeafMicrophoneIsRebuiltOnceThenEndsTheConversationWithItsWords() async {
         let detector = ScriptedDetector([0: .start(0)])
         let (conversation, voice, _) = await begun(detector, deafAfter: 0.5)
+        let engines = seams.inputEngines
         utterance(into: voice.sink)
         await settle("ended") { !conversation.on }
+        XCTAssertEqual(seams.inputEngines, engines + 1, "the deaf microphone was not rebuilt exactly once before the end")
         XCTAssertEqual(ends, 1)
         await settle("what was kept sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
@@ -531,11 +592,223 @@ final class ConversationTests: XCTestCase {
         defer { conversation.stop("test", sending: false) }
         conversation.call(.muted(true))
         XCTAssertFalse(voice.listening)
-        voice.cancel()
+        // The unmute's reopen held at its permission, and the mute landing while it waits.
+        permission.arm()
+        conversation.call(.muted(false))
+        await settle("the reopen waiting on its permission") { self.permission.waiting }
+        let engines = seams.inputEngines
+        conversation.call(.muted(true))
+        permission.release()
         await drain()
         XCTAssertFalse(voice.listening, "the microphone opened under the mute")
+        XCTAssertEqual(seams.inputEngines, engines, "a reopen under the mute made an engine")
         conversation.call(.muted(false))
         await settle("open at the unmute") { voice.listening }
+    }
+
+    // MARK: - The second round's blockers
+
+    /// A hang-up while the foreground's handoff is decoding: the person ended it, and nothing is
+    /// sent after the call's waits are gone.
+    func testAHangUpDuringTheForegroundsHandoffSendsNothing() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let (conversation, voice, _) = await begun(detector)
+        utterance(into: voice.sink)
+        await settle("the start judged") { detector.chunks >= 2 }
+        gate.close()
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await settle("the handoff decoding") { self.gate.held == 1 }
+        conversation.call(.hungUp)
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, [], "a handoff decoded across a hang-up was sent")
+        XCTAssertEqual(ends, 1)
+    }
+
+    /// The same handoff with nothing ending it is sent once: the drop is the hang-up's alone.
+    func testTheForegroundsHandoffIsSentOnce() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let (_, voice, _) = await begun(detector)
+        utterance(into: voice.sink)
+        await settle("the start judged") { detector.chunks >= 2 }
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await settle("sent") { self.sent.count == 1 }
+        await drain()
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// The call's session taken and given back while a verdict is with the detector: the
+    /// verdict is kept, whichever it was, and the utterance ends and is sent.
+    private func assertAVerdictHeldAcrossAHandoffIsKept(holding chunk: Int, file: StaticString = #filePath,
+                                                        line: UInt = #line) async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        detector.hold(at: chunk)
+        let (conversation, voice, _) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        utterance(into: voice.sink)
+        await settle("the verdict pending", file: file, line: line) { detector.holding }
+        audio.callDeactivated()
+        conversation.call(.taken)
+        XCTAssertTrue(voice.suspended, file: file, line: line)
+        audio.callActivated()
+        conversation.call(.active)
+        XCTAssertTrue(voice.listening && !voice.suspended, file: file, line: line)
+        detector.release()
+        await settle("the words sent", file: file, line: line) { self.sent.count == 1 }
+        await drain()
+        XCTAssertEqual(sent, ["turn the lights off"], file: file, line: line)
+    }
+
+    func testASpeechStartHeldAcrossTheCallsSessionChangingHandsIsKept() async {
+        await assertAVerdictHeldAcrossAHandoffIsKept(holding: 0)
+    }
+
+    func testASpeechEndHeldAcrossTheCallsSessionChangingHandsIsKept() async {
+        await assertAVerdictHeldAcrossAHandoffIsKept(holding: 4)
+    }
+
+    /// Coming to the front with the speech's first verdict still with the detector: the words
+    /// are not judged silent, and are sent.
+    func testComingToTheFrontMidVerdictSendsTheWords() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        detector.hold(at: 0)
+        let (_, voice, _) = await begun(detector)
+        utterance(into: voice.sink)
+        await settle("the verdict pending") { detector.holding }
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        detector.release()
+        await settle("sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// Coming to the front with speech the detector has not been fed at all: sent, not dropped.
+    func testComingToTheFrontBeforeTheDetectorIsFedSendsTheWords() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let (_, voice, _) = await begun(detector)
+        await drain()
+        utterance(into: voice.sink)
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await settle("sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+        XCTAssertEqual(detector.chunks, 0, "the test meant to land before any chunk was fed")
+    }
+
+    /// A detector that fails on every chunk after speech starts: the conversation ends within
+    /// its bound, sending the words, rather than running with speech that never ends.
+    func testADetectorThatKeepsFailingEndsTheConversationWithTheWords() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        detector.fail(from: 1)
+        let (conversation, voice, _) = await begun(detector)
+        utterance(into: voice.sink)
+        await settle("ended") { !conversation.on }
+        XCTAssertEqual(detector.chunks, 1 + Conversation.failuresTolerated + 1,
+                       "it ended other than at the first failure past its bound")
+        XCTAssertEqual(ends, 1)
+        await settle("sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+        XCTAssertFalse(voice.listening)
+    }
+
+    /// Every way the person ends it while the decode of a stop that sends is under way drops the
+    /// words: the hang-up and the mute from the card, and the chat going.
+    private func assertTheForegroundsHandoffIsDropped(by end: (Conversation) -> Void,
+                                                      file: StaticString = #filePath, line: UInt = #line) async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let (conversation, voice, _) = await begun(detector)
+        utterance(into: voice.sink)
+        await settle("the start judged", file: file, line: line) { detector.chunks >= 2 }
+        gate.close()
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await settle("the handoff decoding", file: file, line: line) { self.gate.held == 1 }
+        end(conversation)
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, [], "a handoff decoded across the person's end was sent", file: file, line: line)
+    }
+
+    func testAMuteDuringTheForegroundsHandoffSendsNothing() async {
+        await assertTheForegroundsHandoffIsDropped { $0.call(.muted(true)) }
+    }
+
+    func testTheChatGoingDuringTheForegroundsHandoffSendsNothing() async {
+        await assertTheForegroundsHandoffIsDropped { $0.send = nil }
+    }
+
+    /// The detector's own end being decoded as Topo comes to the front, then the person ends it:
+    /// the stop that sent left that decode to send, and the hang-up or mute after it drops it.
+    private func assertAnUtterancesDecodeAfterTheUnlockIsDropped(by end: (Conversation) -> Void,
+                                                               file: StaticString = #filePath, line: UInt = #line) async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, _) = await begun(detector)
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the utterance decoding", file: file, line: line) { self.gate.held == 1 }
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        XCTAssertFalse(conversation.on, file: file, line: line)
+        end(conversation)
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, [], "an utterance decoded across the person's end was sent", file: file, line: line)
+    }
+
+    func testAHangUpAfterTheUnlockDropsTheUtteranceBeingDecoded() async {
+        await assertAnUtterancesDecodeAfterTheUnlockIsDropped { $0.call(.hungUp) }
+    }
+
+    func testAMuteAfterTheUnlockDropsTheUtteranceBeingDecoded() async {
+        await assertAnUtterancesDecodeAfterTheUnlockIsDropped { $0.call(.muted(true)) }
+    }
+
+    /// A verdict still with the detector for a feeder the mute cancelled says nothing of the
+    /// feeders after it: a resume past the unmute's reopen feeds the detector again.
+    func testACancelledFeedersVerdictDoesNotKeepTheNextResumeFromFeeding() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        detector.hold(at: 0)
+        let (conversation, voice, _) = await begun(detector)
+        defer { conversation.stop("test", sending: false); detector.release() }
+        utterance(into: voice.sink)
+        await settle("the first feeder's verdict pending") { detector.holding }
+        detector.holdNoMore()
+        conversation.call(.muted(true))
+        conversation.call(.muted(false))
+        await settle("open again at the unmute") { voice.listening && !voice.suspended }
+        detector.script([0: .start(0), 4: .end(16_000)])
+        audio.callDeactivated()
+        conversation.call(.taken)
+        XCTAssertTrue(voice.suspended)
+        // Long past the unmute's feeder's 256 ms sleep, so it has seen the suspension and gone.
+        try? await Task.sleep(for: .milliseconds(800))
+        audio.callActivated()
+        conversation.call(.active)
+        XCTAssertTrue(voice.listening && !voice.suspended)
+        utterance(into: voice.sink)
+        await settle("the words sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// A reopen whose permission answers after the call's session began changing hands refuses,
+    /// rather than waiting the change out behind the lock.
+    func testAReopenWhosePermissionLandsWhileTheSessionChangesHandsRefuses() async {
+        let (conversation, voice, _) = await begun()
+        voice.callSettle = .seconds(30)
+        permission.arm()
+        conversation.call(.muted(true))
+        conversation.call(.muted(false))
+        await settle("the reopen waiting on its permission") { self.permission.waiting }
+        let engines = seams.inputEngines
+        audio.callDeactivated()
+        permission.release()
+        await settle("refused") { voice.refusal == "the call's session is changing hands" }
+        await drain()
+        XCTAssertFalse(voice.listening)
+        XCTAssertEqual(seams.inputEngines, engines, "the reopen opened on a session changing hands")
+        XCTAssertFalse(conversation.on, "a refused reopen left the conversation on")
     }
 
     /// A phone call takes the session and never gives it back: the idle clock ends the

@@ -145,7 +145,10 @@ protocol VoiceDetector: AnyObject, Sendable {
 actor SileroDetector: VoiceDetector {
     private let manager: VadManager
     private var stream: VadStreamState
-    private let config = VadSegmentationConfig(minSilenceDuration: Endpoint.silence)
+    /// The segmentation every chunk is judged under: an end only after `Endpoint.silence`.
+    static let segmentation = VadSegmentationConfig(minSilenceDuration: Endpoint.silence)
+    /// The silence the segmentation waits for, read off the configuration itself for the suite.
+    nonisolated static var silenceWindow: TimeInterval { segmentation.minSilenceDuration }
 
     init(_ manager: VadManager) {
         self.manager = manager
@@ -155,7 +158,7 @@ actor SileroDetector: VoiceDetector {
     func reset() async { stream = VadStreamState.initial() }
 
     func feed(_ chunk: [Float]) async throws -> Endpoint.Event? {
-        let result = try await manager.processStreamingChunk(chunk, state: stream, config: config)
+        let result = try await manager.processStreamingChunk(chunk, state: stream, config: Self.segmentation)
         stream = result.state
         guard let event = result.event else { return nil }
         switch event.kind {

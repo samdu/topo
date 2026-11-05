@@ -306,13 +306,15 @@ final class VoiceInput {
             refusal = "the call's session is changing hands"
             return false
         }
-        await begin(as: gate)
+        await begin(as: gate, settling: false)
         guard listening, owner == gate else { return false }
         handsFree = true
         return true
     }
 
-    private func begin(as gate: Gate) async {
+    /// `settling` false refuses a call's session changing hands rather than waiting it out, as
+    /// `reopen` does, however long the permission took to answer.
+    private func begin(as gate: Gate, settling waits: Bool = true) async {
         presses += 1
         refusal = nil
         #if DEBUG
@@ -339,6 +341,11 @@ final class VoiceInput {
         // answers — is waited out rather than refused: a tap put on a closing session is cut by
         // its deactivation. Past the bound the press goes on and `ensureActive` refuses it.
         var tapped = false
+        if audio.callChangingHands, !waits {
+            refusal = "the call's session is changing hands"
+            owner = nil
+            return
+        }
         if audio.callChangingHands {
             settling = mine
             tappedWhileSettling = false
