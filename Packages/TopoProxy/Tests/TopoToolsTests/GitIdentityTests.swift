@@ -16,6 +16,11 @@ final class GitIdentityTests: XCTestCase {
             try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: repo) }
             var environment = ProcessInfo.processInfo.environment
+            // Hermetic: nothing of the runner's own that would outrank the guest's environment.
+            for name in ["GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                         "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"] {
+                environment[name] = nil
+            }
             // None of the Mac's person's configuration: a signing key there would be asked for.
             environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
             environment["GIT_CONFIG_NOSYSTEM"] = "1"
@@ -24,8 +29,9 @@ final class GitIdentityTests: XCTestCase {
             try run(git, ["-C", repo.path, "config", keys[1], "someone@example.invalid"], environment)
             environment.merge(GuestTools.environment) { _, guest in guest }
             try run(git, ["-C", repo.path, "commit", "-q", "--allow-empty", "-m", "x"], environment)
-            let committer = try run(git, ["-C", repo.path, "log", "-1", "--format=%cn %ce"], environment)
-            XCTAssertEqual(committer, "\(GuestTools.commitName) \(GuestTools.commitEmail)\n", keys.joined(separator: ", "))
+            let identity = try run(git, ["-C", repo.path, "log", "-1", "--format=%cn %ce|%an %ae"], environment)
+            let topo = "\(GuestTools.commitName) \(GuestTools.commitEmail)"
+            XCTAssertEqual(identity, "\(topo)|\(topo)\n", keys.joined(separator: ", "))
         }
         XCTAssertEqual(GuestTools.commitName, "Topo")
         XCTAssertTrue(GuestTools.commitEmail.hasPrefix("topo@"))

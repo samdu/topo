@@ -53,12 +53,12 @@ public enum GuestTools {
     /// value first clears every helper configured before it (a `credential.helper store` in the
     /// home's config included), since git hands an answer to every helper on its list to keep,
     /// and a `store` would write the token to `~/.git-credentials` and answer from it after a
-    /// disconnect. And git's identity, `Topo` (`commitName`, `commitEmail`), as the committer and
-    /// as the identity a repository with none of its own falls back on: every commit the guest
-    /// makes is committed by the mind on the phone, whatever a repository's config or the mind's
-    /// says, since configuration from the environment outranks every file's. The `committer.*`
-    /// keys are the ones that hold — a file's `committer.name` beats any `user.name` — and the
-    /// committer is what the githubpr channel reads.
+    /// disconnect. And git's identity, `Topo` (`commitName`, `commitEmail`), as committer and
+    /// author: every commit the guest makes is the mind on the phone's, whatever a repository's
+    /// config says, since configuration from the environment outranks every file's. The
+    /// `committer.*` keys are the ones that hold — a file's `committer.name` beats any
+    /// `user.name` — and the committer is what the githubpr channel reads; `user.*` makes the
+    /// author Topo too, so the guest's commits are linked to no person's account.
     public static let environment: [String: String] = [
         "GIT_CONFIG_COUNT": "6",
         "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
@@ -241,10 +241,12 @@ public enum GuestTools {
     # subcommands only; every other call reaches gh as it was given.
     mark='\#(bodyMark)'
     sign() {
-        # A body that already ends with the mark (a retry) keeps the one it has.
+        # A body that already ends with the mark (a retry) keeps the one it has, and an empty
+        # one stays empty: gh refuses it rather than posting a comment that is only the mark.
         local trimmed="$1"
-        while [[ "$trimmed" == *$'\n' ]]; do trimmed="${trimmed%$'\n'}"; done
+        while [[ "$trimmed" == *[$'\n\r'] ]]; do trimmed="${trimmed%[$'\n\r']}"; done
         case "$trimmed" in
+            "") signed="$1" ;;
             *"$mark") signed="$1" ;;
             *) signed="$1"$'\n\n'"$mark" ;;
         esac
@@ -262,14 +264,14 @@ public enum GuestTools {
     }
     args=("$@")
     case "${1:-} ${2:-}" in
-        "issue create"|"issue comment"|"pr create"|"pr comment")
+        "issue create"|"issue new"|"issue comment"|"pr create"|"pr new"|"pr comment")
             args=("$1" "$2")
             shift 2
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --)
                         args+=("$@"); break ;;
-                    -t|--title|-B|--base|-H|--head|-a|--assignee|-l|--label|-m|--milestone|-p|--project|-r|--reviewer|-R|--repo|-T|--template|--recover)
+                    -t|--title|-B|--base|-H|--head|-a|--assignee|-l|--label|-m|--milestone|-p|--project|-r|--reviewer|-R|--repo|-T|--template|--recover|--attach|--type|--parent|--blocked-by|--blocking)
                         # A flag's value is its value, whatever it looks like (`--title -b`).
                         args+=("$1"); shift
                         [ $# -gt 0 ] && { args+=("$1"); shift; }

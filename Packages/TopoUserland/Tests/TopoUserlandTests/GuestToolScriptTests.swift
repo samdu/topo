@@ -192,6 +192,10 @@ final class GuestToolScriptTests: XCTestCase {
         // The guest's commits are committed by Topo (GitIdentityTests runs git against them).
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_2"], "committer.name")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_3"], "committer.email")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_4"], "user.name")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_4"], GuestTools.commitName)
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_5"], "user.email")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_5"], GuestTools.commitEmail)
         XCTAssertFalse(GuestTools.environment.keys.contains { $0.hasPrefix("GH_") || $0.hasPrefix("GITHUB_") },
                        "no GitHub token rides the environment the resident is given")
     }
@@ -361,6 +365,15 @@ final class GuestToolScriptTests: XCTestCase {
             ("printf 'piped\\n\\n' | gh pr comment 1 --body-file -", argv("pr", "comment", "1", "--body", signed("piped\n\n"))),
             ("gh pr comment 1 --body \(shellQuoted(signed("again") + "\n"))", argv("pr", "comment", "1", "--body", signed("again") + "\n")),
             ("gh issue create -t x -- -b y", argv("issue", "create", "-t", "x", "--", "-b", "y")),
+            ("gh pr new --body x", argv("pr", "new", "--body", signed("x"))),
+            ("gh issue create --attach -b -b x", argv("issue", "create", "--attach", "-b", "--body", signed("x"))),
+            // An empty body stays empty, for gh to refuse, rather than becoming a comment of only the mark.
+            ("gh pr comment 1 --body ''", argv("pr", "comment", "1", "--body", "")),
+            // A flag left without its value reaches gh as it was, for gh to refuse.
+            ("gh pr comment 1 --body", argv("pr", "comment", "1", "--body")),
+            ("gh pr comment 1 -F", argv("pr", "comment", "1", "-F")),
+            // A token the caller set is honoured, and what it writes is signed all the same.
+            ("GH_TOKEN=mine gh pr comment 1 --body x", argv("pr", "comment", "1", "--body", signed("x"))),
             // Not one of the four: the same flags mean other things there, and nothing is added.
             ("gh pr edit 1 --body x", argv("pr", "edit", "1", "--body", "x")),
             ("gh pr review 1 -b x", argv("pr", "review", "1", "-b", "x")),
