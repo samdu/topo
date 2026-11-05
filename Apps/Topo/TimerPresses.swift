@@ -1,0 +1,99 @@
+import AlarmKit
+import AppIntents
+import Foundation
+import os
+
+/// Which of a timer's buttons hands Topo a turn.
+enum TimerButton: String, Sendable {
+    /// The alert's second button (`--tell`).
+    case second
+    /// The system's Stop (`--on-stop`).
+    case stop
+}
+
+/// What AlarmKit runs when a timer's `--tell` button or its Stop is pressed: the alarm's id and
+/// which button, never the words, which the app reads from the alarm's record. A
+/// `LiveActivityIntent`, so it runs in the app's process, launched into the background when it is
+/// not running, and with the default authentication policy, so a press on the lock screen asks
+/// for no Face ID: the words are the mind's own, kept when it set the timer, and a press can only
+/// send them.
+struct TimerPressIntent: LiveActivityIntent {
+    static let title: LocalizedStringResource = "Press a button on Topo's timer"
+    static let isDiscoverable = false
+
+    @Parameter(title: "Alarm") var alarm: String
+    @Parameter(title: "Button") var button: String
+
+    init() {}
+
+    init(alarm: UUID, button: TimerButton) {
+        self.alarm = alarm.uuidString
+        self.button = button.rawValue
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        if let id = UUID(uuidString: alarm), let button = TimerButton(rawValue: button) {
+            await TimerPresses.press(id, button)
+        }
+        return .result()
+    }
+}
+
+/// A timer's button handing Topo its turn. The words go the way a Shortcut's do: kept in
+/// `ShareStore` under a nonce minted here and the login the alarm was set under, which the store
+/// refuses unless it is the login its door names, and put on the line by the drain, so one press
+/// is one turn however often it is drained, and a press after a sign-out sends nothing. The press
+/// waits for its turn to reach the log, bounded, as a background Shortcut does.
+@MainActor
+enum TimerPresses {
+    private static let log = Logger(subsystem: "zone.hexagon.topo", category: "timer")
+
+    /// What a press came to, for the suites.
+    enum Outcome: Equatable {
+        case kept(nonce: String)
+        /// No record, or none of words for that button.
+        case nothing
+        case refused(ShareRefusal)
+    }
+
+    @discardableResult
+    static func press(_ id: UUID, _ button: TimerButton, records: TimerRecords = .shared,
+                      scheduler: any AlarmScheduler = TimerRecords.scheduler, store: ShareStore? = ShareStore.shared(),
+                      drain: (@MainActor () async -> Void)? = ShortcutIntents.drain,
+                      landed: (@MainActor (String) -> Bool)? = ShortcutIntents.landed,
+                      bound: Duration = ShortcutIntents.bound, nonce: String = UUID().uuidString, at time: Date = Date()) async -> Outcome {
+        let record = records.read(id)
+        // `.custom` leaves the alarm sounding, so a button that only tells Topo stops it; one that
+        // also starts the next countdown (`.countdown`) has already done so.
+        if button == .second, record?.again == nil {
+            do { try await scheduler.stop(id: id) } catch {
+                log.error("a timer's button could not stop its alarm: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        guard let record, let words = button == .second ? record.tell : record.onStop, let login = record.login else {
+            log.error("a timer's \(button.rawValue, privacy: .public) button has no words kept: nothing sent")
+            return .nothing
+        }
+        guard let store else { return .refused(.failed) }
+        let name = button == .second ? record.second ?? "second" : "Stop"
+        let share = Share(nonce: nonce, login: login, time: time, kind: .timer, note: "", text: words,
+                          from: "\"\(record.label)\" timer's \(name)")
+        do {
+            try store.keep(share)
+        } catch {
+            // Signed out, or another login since: the words were kept for that one.
+            log.error("a timer's press was not kept: \(String(describing: error), privacy: .public)")
+            return .refused(error)
+        }
+        if let drain { Task { await drain() } }
+        if let landed {
+            let clock = ContinuousClock()
+            let deadline = clock.now + bound
+            while !landed(nonce), clock.now < deadline {
+                try? await Task.sleep(for: ShortcutIntents.glance)
+            }
+        }
+        return .kept(nonce: nonce)
+    }
+}

@@ -71,7 +71,7 @@ make_app() {
     plutil -insert CFBundleIdentifier -string zone.hexagon.topo.share "$app/PlugIns/TopoShare.appex/Info.plist"
     plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.share-services","NSExtensionPrincipalClass":"TopoShare.ShareViewController","NSExtensionAttributes":{"NSExtensionActivationRule":{"NSExtensionActivationSupportsText":true,"NSExtensionActivationSupportsWebURLWithMaxCount":1,"NSExtensionActivationSupportsImageWithMaxCount":1,"NSExtensionActivationSupportsFileWithMaxCount":1}}}' "$app/PlugIns/TopoShare.appex/Info.plist"
     mkdir -p "$app/Metadata.appintents"
-    printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent","openAppWhenRun":true,"authenticationPolicy":1},"FollowUpIntent":{"identifier":"FollowUpIntent","openAppWhenRun":false,"authenticationPolicy":1},"QuickTaskIntent":{"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":1}},"autoShortcuts":[{"actionIdentifier":"AskTopoIntent"},{"actionIdentifier":"FollowUpIntent"},{"actionIdentifier":"QuickTaskIntent"}]}' \
+    printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent","openAppWhenRun":true,"authenticationPolicy":1},"FollowUpIntent":{"identifier":"FollowUpIntent","openAppWhenRun":false,"authenticationPolicy":1},"QuickTaskIntent":{"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":1},"TimerPressIntent":{"identifier":"TimerPressIntent"},"TimerControlIntent":{"identifier":"TimerControlIntent"}},"autoShortcuts":[{"actionIdentifier":"AskTopoIntent"},{"actionIdentifier":"FollowUpIntent"},{"actionIdentifier":"QuickTaskIntent"}]}' \
         > "$app/Metadata.appintents/extract.actionsdata"
     printf '                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n' > "$app/LICENSE"
 }
@@ -225,7 +225,8 @@ for case in $cases; do
 done
 
 # The Shortcuts actions: metadata the build did not make, one that leaves an action out, one whose
-# Ask does not open Topo or whose Follow up does, one that runs on a locked phone, and App
+# Ask does not open Topo or whose Follow up does, one that runs on a locked phone, one without a
+# timer's intent, and App
 # Shortcuts that are short or name one action twice.
 make_app "$work/no-intents/Topo.app"
 rm -r "$work/no-intents/Topo.app/Metadata.appintents"
@@ -242,6 +243,7 @@ intents intent-short '"FollowUpIntent":{[^}]*},' ''
 intents ask-stays '"identifier":"AskTopoIntent","openAppWhenRun":true' '"identifier":"AskTopoIntent","openAppWhenRun":false'
 intents follow-up-opens '"identifier":"FollowUpIntent","openAppWhenRun":false' '"identifier":"FollowUpIntent","openAppWhenRun":true'
 intents task-locked '"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":1' '"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":0'
+intents timer-press-missing ',"TimerPressIntent":{"identifier":"TimerPressIntent"}' ''
 intents shortcut-short ',{"actionIdentifier":"QuickTaskIntent"}' ''
 intents shortcut-twice '{"actionIdentifier":"FollowUpIntent"}' '{"actionIdentifier":"AskTopoIntent"}'
 for case in $cases; do
@@ -379,4 +381,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the voip background mode, the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension or the topo URL scheme, or declaring the remote-notification background mode, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the voip background mode, the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex, TopoBroadcast.appex or TopoShare.appex fails, as does a broadcast extension of another kind, handed no sample buffers, with no program or principal class, or signed without the app group, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, does not name the timer's two intents, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension or the topo URL scheme, or declaring the remote-notification background mode, fails; a product carrying a luxtts_ file in any bundle fails; and a product that does not embed Watch/TopoWatch.app, or whose watch app names another companion, is watch-only, does not run on its own, has another version than the phone app's or fails the watch's own checks, fails"

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import TopoTools
 import UIKit
@@ -63,41 +64,86 @@ private final class AlarmPermission: ThrowingPrompt, @unchecked Sendable {
     }
 }
 
-private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
+final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     private let lock = NSLock()
-    let permission: AlarmPermission?
-    private var scheduled: [(id: UUID, label: String, duration: TimeInterval)] = []
-    /// A cancel AlarmKit refuses.
-    var cancelFails = false
+    let permission: (any Authorizer)?
+    private var scheduled: [(id: UUID, plan: TimerPlan)] = []
+    private var states: [UUID: TimerStatus.State] = [:]
+    private(set) var acts: [(TimerTool.Act, UUID)] = []
+    /// An act AlarmKit refuses.
+    var actFails = false
     /// What a schedule throws, where set.
     var scheduleThrows: (any Error)?
+    /// What the Live Activity says, per alarm.
+    var fires: [UUID: Date] = [:]
+    var left: [UUID: TimeInterval] = [:]
 
-    init(_ permission: AlarmPermission?) { self.permission = permission }
+    init(_ permission: (any Authorizer)?) { self.permission = permission }
 
     var authorizer: (any Authorizer)? { permission }
     var count: Int { lock.withLock { scheduled.count } }
-    var last: (id: UUID, label: String, duration: TimeInterval)? { lock.withLock { scheduled.last } }
+    var last: TimerPlan? { lock.withLock { scheduled.last?.plan } }
+    func set(_ id: UUID, _ state: TimerStatus.State) { lock.withLock { states[id] = state } }
 
-    func schedule(id: UUID, label: String, duration: TimeInterval) async throws {
+    func schedule(id: UUID, plan: TimerPlan) async throws {
         if let scheduleThrows { throw scheduleThrows }
-        lock.withLock { scheduled.append((id, label, duration)) }
+        lock.withLock {
+            scheduled.append((id, plan))
+            if case .after = plan.when { states[id] = .counting } else { states[id] = .set }
+        }
     }
-    func alarms() async throws -> [(id: UUID, state: String)] { lock.withLock { scheduled.map { ($0.id, "counting") } } }
-    func cancel(id: UUID) async throws {
-        if cancelFails { throw CocoaError(.featureUnsupported) }
-        lock.withLock { scheduled.removeAll { $0.id == id } }
+    func alarms() async throws -> [TimerStatus] {
+        lock.withLock {
+            scheduled.map { alarm in
+                var when: TimerPlan.When?
+                if case .after = alarm.plan.when {} else { when = alarm.plan.when }
+                return TimerStatus(id: alarm.id, state: states[alarm.id] ?? .unknown, when: when, fires: fires[alarm.id], left: left[alarm.id])
+            }
+        }
     }
+    private func act(_ act: TimerTool.Act, _ id: UUID, _ change: () -> Void) throws {
+        if actFails { throw CocoaError(.featureUnsupported) }
+        lock.withLock {
+            acts.append((act, id))
+            change()
+        }
+    }
+    func pause(id: UUID) async throws { try act(.pause, id) { states[id] = .paused } }
+    func resume(id: UUID) async throws { try act(.resume, id) { states[id] = .counting } }
+    func again(id: UUID) async throws { try act(.again, id) { states[id] = .counting } }
+    func stop(id: UUID) async throws { try act(.stop, id) { states[id] = .set } }
+    func cancel(id: UUID) async throws { try act(.cancel, id) { scheduled.removeAll { $0.id == id } } }
 }
 
 @MainActor
 final class TimerToolTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_793_000_000)
 
-    private func tool(_ alarms: FakeAlarms, state: AppState = AppState(.active), book: TimerBook = TimerBook()) -> TimerTool {
-        let start = start
+    private var root: URL!
+    private var records: TimerRecords { TimerRecords(folder: root.appendingPathComponent("Timers")) }
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("timers-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private static let utc = TimeZone(identifier: "UTC")!
+
+    private func tool(_ alarms: FakeAlarms, state: AppState = AppState(.active), records: TimerRecords? = nil,
+                      login: String? = "login-1", now: Date? = nil) -> TimerTool {
+        let start = now ?? start
         let counter = Counter()
-        return TimerTool(scheduler: alarms, book: { book }, broker: PermissionBroker(), state: { state.value },
-                         now: { start }, makeID: { counter.next() })
+        var tool = TimerTool(scheduler: alarms, records: records ?? self.records, broker: PermissionBroker(), state: { state.value },
+                             now: { start }, makeID: { counter.next() })
+        tool.zone = Self.utc
+        tool.login = { login }
+        tool.hasSymbol = { !$0.hasPrefix("no.") }
+        tool.sounds = TimerSounds(home: root.appendingPathComponent("home"), folder: root.appendingPathComponent("Sounds"))
+        return tool
     }
 
     /// A second start made while the first one's prompt is up, with Topo inactive under it as a
@@ -218,22 +264,20 @@ final class TimerToolTests: XCTestCase {
     func testAScheduleFailureIsSaidAndNothingKept() async {
         let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.scheduleThrows = CocoaError(.featureUnsupported)
-        let book = TimerBook()
-        let reply = await tool(alarms, book: book).run(["5m"])
+        let reply = await tool(alarms).run(["5m"])
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
-        XCTAssertTrue(reply.text.contains("did not set the timer"), reply.text)
-        XCTAssertNil(book.entry(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
+        XCTAssertTrue(reply.text.contains("did not set it"), reply.text)
+        XCTAssertNil(records.read(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
     }
 
     func testTheAlarmLimitIsSaidAndNothingKept() async {
         let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.scheduleThrows = AlarmLimit()
-        let book = TimerBook()
-        let reply = await tool(alarms, book: book).run(["5m", "Tea"])
+        let reply = await tool(alarms).run(["5m", "Tea"])
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
         XCTAssertTrue(reply.text.contains(AlarmLimit().reason), reply.text)
         XCTAssertEqual(alarms.count, 0)
-        XCTAssertNil(book.entry(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
+        XCTAssertNil(records.read(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!))
     }
 
     /// A countdown drawn past its fire date is at zero, never a reversed range.
@@ -248,7 +292,7 @@ final class TimerToolTests: XCTestCase {
         let alarms = FakeAlarms(AlarmPermission(.granted))
         let tool = tool(alarms)
         _ = await tool.run(["10m"])
-        alarms.cancelFails = true
+        alarms.actFails = true
         let reply = await tool.run(["cancel", "00000000-0000-0000-0000-000000000001"])
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
         XCTAssertTrue(reply.text.contains("may still sound"), reply.text)
@@ -268,7 +312,7 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
         XCTAssertEqual(alarms.count, 1)
         XCTAssertEqual(alarms.last?.label, "Tea")
-        XCTAssertEqual(alarms.last?.duration, 900)
+        XCTAssertEqual(alarms.last?.when, .after(900))
         XCTAssertTrue(reply.text.hasPrefix("set: 00000000-0000-0000-0000-000000000001"), reply.text)
         XCTAssertTrue(reply.text.contains("sounds at " + ToolDates.write(start.addingTimeInterval(900))), reply.text)
     }
@@ -344,7 +388,7 @@ final class TimerToolTests: XCTestCase {
         let set = await tool(allowed, state: AppState(.background)).run(["1m"])
         XCTAssertEqual(set.status, ToolReply.ok, set.text)
         XCTAssertEqual(allowed.count, 1)
-        XCTAssertEqual(allowed.last?.duration, 60)
+        XCTAssertEqual(allowed.last?.when, .after(60))
         XCTAssertEqual(allowed.last?.label, "Timer")
     }
 
@@ -372,10 +416,11 @@ final class TimerToolTests: XCTestCase {
         XCTAssertFalse(reply.text.contains("Settings"), reply.text)
     }
 
-    func testListSaysLabelAndTimeWhileTopoRunsAndTheIdAfter() async {
+    /// The label and the time are the record's, on disk, so a relaunch still lists them; the
+    /// Live Activity's time wins where AlarmKit has one.
+    func testListSaysLabelAndTimeAcrossARelaunch() async {
         let alarms = FakeAlarms(AlarmPermission(.granted))
-        let book = TimerBook()
-        let tool = tool(alarms, book: book)
+        let tool = tool(alarms)
         _ = await tool.run(["10m", "Eggs"])
         _ = await tool.run(["2m", "Tea"])
         let list = await tool.run(["list"])
@@ -383,13 +428,17 @@ final class TimerToolTests: XCTestCase {
         let lines = list.text.split(separator: "\n")
         XCTAssertEqual(lines.count, 2, list.text)
         XCTAssertTrue(lines[0].contains("Tea") && lines[1].contains("Eggs"), "soonest first: \(list.text)")
-        XCTAssertTrue(lines[0].contains("sounds at " + ToolDates.write(start.addingTimeInterval(120))), list.text)
-        XCTAssertTrue(lines[1].contains("sounds at " + ToolDates.write(start.addingTimeInterval(600))), list.text)
-        // A relaunch: a new book knows nothing, and the alarm is listed by id and state.
-        let after = await self.tool(alarms, book: TimerBook()).run(["list"])
-        XCTAssertTrue(after.text.contains("00000000-0000-0000-0000-000000000001"), after.text)
-        XCTAssertFalse(after.text.contains("Eggs"), after.text)
-        XCTAssertTrue(after.text.contains("counting"), after.text)
+        XCTAssertTrue(lines[0].contains("a 2m timer"), list.text)
+        XCTAssertTrue(lines[0].contains("counting, sounds at " + ToolDates.write(start.addingTimeInterval(120), in: Self.utc)), list.text)
+        // A relaunch: a new store over the same folder.
+        let after = await self.tool(alarms, records: TimerRecords(folder: root.appendingPathComponent("Timers"))).run(["list"])
+        XCTAssertTrue(after.text.contains("Eggs"), after.text)
+        // A pause from the lock screen: the activity's time left.
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        alarms.set(id, .paused)
+        alarms.left[id] = 95
+        let paused = await tool.run(["list"])
+        XCTAssertTrue(paused.text.contains("paused, 1m35s left"), paused.text)
         let none = await self.tool(FakeAlarms(AlarmPermission(.granted))).run(["list"])
         XCTAssertTrue(none.text.contains("no timers"), none.text)
     }
@@ -457,5 +506,369 @@ private actor Gate {
         opened = true
         waiting.forEach { $0.resume() }
         waiting = []
+    }
+}
+
+/// Every control AlarmKit offers, as the mind composes it with `topo timer`'s options.
+extension TimerToolTests {
+    private var granted: FakeAlarms { FakeAlarms(AlarmPermission(.granted)) }
+    private var first: UUID { UUID(uuidString: "00000000-0000-0000-0000-000000000001")! }
+
+    private func plan(_ arguments: [String], _ alarms: FakeAlarms? = nil) async -> (ToolReply, TimerPlan?) {
+        let alarms = alarms ?? granted
+        let reply = await tool(alarms).run(arguments)
+        return (reply, alarms.last)
+    }
+
+    func testEveryOptionReachesThePlan() async {
+        let (reply, plan) = await plan(["3m", "Plank", "--title", "Switch sides", "--again", "same", "--tell", "next pose please",
+                                        "--button-text", "Next", "--button-icon", "forward.fill", "--on-stop", "done for today",
+                                        "--pause", "--pause-text", "Hold", "--resume-icon", "play.circle", "--paused-title", "Resting",
+                                        "--cancel", "--cancel-text", "Skip", "--tint", "#112233/#445566", "--button-color", "text"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertEqual(plan, TimerPlan(when: .after(180), label: "Plank", title: "Switch sides",
+                                       pause: .init(text: "Hold", icon: "pause.fill"), resume: .init(text: "Resume", icon: "play.circle"),
+                                       pausedTitle: "Resting", cancel: .init(text: "Skip", icon: "xmark"),
+                                       second: .init(text: "Next", icon: "forward.fill"), again: 180, tells: true, tellsOnStop: true,
+                                       buttonColor: .token(.text), tint: .hex(light: "#112233", dark: "#445566")))
+        let record = records.read(first)
+        XCTAssertEqual(record?.tell, "next pose please")
+        XCTAssertEqual(record?.onStop, "done for today")
+        XCTAssertEqual(record?.login, "login-1")
+        XCTAssertEqual(record?.second, "Next")
+        XCTAssertEqual(record?.again, 180)
+    }
+
+    func testABareTimerHasNoButtonsAndTheThemesColours() async {
+        let (_, plan) = await plan(["5m"])
+        XCTAssertEqual(plan, TimerPlan(when: .after(300), label: "Timer", title: "Timer", pausedTitle: "Timer",
+                                       buttonColor: .token(.onPrimary), tint: .token(.primary)))
+        XCTAssertNil(plan?.second)
+    }
+
+    /// Again alone is AlarmKit's countdown; Tell alone a custom button; both a countdown that also tells.
+    func testTheSecondButtonsShapes() async {
+        let again = await plan(["90s", "--again", "45s"]).1
+        XCTAssertEqual(again?.second, .init(text: "Again", icon: "repeat"))
+        XCTAssertEqual(again?.again, 45)
+        XCTAssertEqual(again?.tells, false)
+        let tell = await plan(["90s", "--tell", "start the next one"]).1
+        XCTAssertEqual(tell?.second, .init(text: "Tell Topo", icon: "bubble.left"))
+        XCTAssertNil(tell?.again)
+        XCTAssertEqual(tell?.tells, true)
+        let snooze = await plan(["at", "07:30", "Wake", "--again", "9m"]).1
+        XCTAssertEqual(snooze?.second, .init(text: "Snooze", icon: "zzz"))
+        XCTAssertEqual(snooze?.countsDown, true)
+    }
+
+    func testAlarmsAtATimeAMomentAndOnDays() async {
+        let now = start // 2026-10-26T07:33:20Z, a Monday
+        let once = await plan(["at", "07:30", "Wake"])
+        XCTAssertEqual(once.1?.when, .at(hour: 7, minute: 30, days: []))
+        XCTAssertTrue(once.0.text.contains("sounds at 2026-10-27T07:30:00Z"), once.0.text)
+        let days = await plan(["at", "6:05", "--every", "mon,wed,mon"])
+        XCTAssertEqual(days.1?.when, .at(hour: 6, minute: 5, days: [.monday, .wednesday]))
+        XCTAssertTrue(days.0.text.contains("at 06:05 every mon,wed, next 2026-10-28T06:05:00Z"), days.0.text)
+        let daily = await plan(["at", "23:59", "--every", "daily"]).1
+        XCTAssertEqual(daily?.when, .at(hour: 23, minute: 59, days: [.monday, .tuesday, .wednesday, .thursday, .friday, .saturday, .sunday]))
+        let weekends = await plan(["at", "09:00", "--every", "weekends"]).1
+        XCTAssertEqual(weekends?.when, .at(hour: 9, minute: 0, days: [.saturday, .sunday]))
+        let moment = await plan(["at", "2026-10-26T09:00:00Z", "Call"])
+        XCTAssertEqual(moment.1?.when, .on(now.addingTimeInterval(5200)))
+    }
+
+    /// Each refusal names its condition, and nothing is set.
+    func testRefusalsAreSaidAndSetNothing() async {
+        let cases: [([String], String)] = [
+            (["at", "24:00"], "not a time of day"),
+            (["at", "7"], "not a time"),
+            (["at", "2026-10-26T07:00:00Z"], "has passed"),
+            (["at", "2026-10-27"], "not a time"),
+            (["at", "2026-10-27T07:00:00Z", "--every", "daily"], "repeats a time of day"),
+            (["at", "07:30", "--every", "mon,funday"], "funday is not a day"),
+            (["5m", "--every", "daily"], "--every repeats an alarm"),
+            (["at", "07:30", "--again", "same"], "an alarm has none"),
+            (["5m", "--again", "0s"], "not a span"),
+            (["at", "07:30", "--pause"], "--pause sits on a countdown"),
+            (["at", "07:30", "--cancel-text", "No"], "--cancel sits on a countdown"),
+            (["5m", "--button-text", "Go"], "which --again or --tell makes"),
+            (["5m", "--pause", "--pause-icon", "no.such"], "not a symbol"),
+            (["5m", "--tint", "teal"], "not a colour"),
+            (["5m", "--pause", "--pause-text", String(repeating: "p", count: 21)], "past 20"),
+            (["5m", "--tell", String(repeating: "w", count: 501)], "past 500"),
+            (["5m", "--title", "  "], "--title is empty"),
+            (["5m", "--sound", "/etc/alarm.caf"], "not under /home/topo"),
+            (["5m", "--sound", "/home/topo/../x.caf"], "climbs"),
+            (["5m", "--sound", "/home/topo/song.mp3"], "not a .caf"),
+            (["list", "--pause"], "takes no --pause"),
+            (["pause", "x", "--tint", "text"], "takes no --tint"),
+            (["5m", "--snooze", "1m"], "no option --snooze"),
+        ]
+        for (arguments, words) in cases {
+            let alarms = granted
+            let reply = await tool(alarms).run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
+            XCTAssertTrue(reply.text.contains(words), "\(arguments): \(reply.text)")
+            XCTAssertEqual(alarms.count, 0, "\(arguments)")
+        }
+    }
+
+    func testATurnButtonWhileSignedOutSetsNothing() async {
+        for option in ["--tell", "--on-stop"] {
+            let alarms = granted
+            let reply = await tool(alarms, login: nil).run(["5m", option, "words"])
+            XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+            XCTAssertTrue(reply.text.contains("signed out"), reply.text)
+            XCTAssertEqual(alarms.count, 0)
+        }
+        let plain = granted
+        let reply = await tool(plain, login: nil).run(["5m"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+    }
+
+    /// Each act asks the list first, so the wrong state is said as that state and AlarmKit is not asked.
+    func testActsAskTheStateFirst() async {
+        let alarms = granted
+        let tool = tool(alarms)
+        _ = await tool.run(["5m", "Plank", "--pause"])
+        let id = first.uuidString.lowercased()
+        let early = await tool.run(["resume", id])
+        XCTAssertEqual(early.status, ToolReply.failed)
+        XCTAssertTrue(early.text.contains("is counting: only a paused timer resumes"), early.text)
+        for (verb, said) in [("pause", "paused"), ("resume", "resumed")] {
+            let reply = await tool.run([verb, id])
+            XCTAssertEqual(reply.text, "\(said): \(id)\n")
+        }
+        let again = await tool.run(["again", id])
+        XCTAssertTrue(again.text.contains("again starts the next countdown only while it sounds"), again.text)
+        alarms.set(first, .sounding)
+        let restarted = await tool.run(["again", id])
+        XCTAssertEqual(restarted.text, "counting again: \(id)\n")
+        alarms.set(first, .sounding)
+        let stopped = await tool.run(["stop", id])
+        XCTAssertEqual(stopped.text, "stopped: \(id)\n")
+        XCTAssertEqual(alarms.acts.map(\.0), [.pause, .resume, .again, .stop])
+        alarms.actFails = true
+        alarms.set(first, .counting)
+        let refused = await tool.run(["pause", id])
+        XCTAssertTrue(refused.text.contains("AlarmKit did not pause"), refused.text)
+        XCTAssertFalse(refused.text.contains("may still sound"), refused.text)
+        let missing = await tool.run(["pause", "00000000-0000-0000-0000-000000000009"])
+        XCTAssertTrue(missing.text.contains("no timer of Topo's"), missing.text)
+    }
+
+    /// A cancel takes the record with it; a sweep spares a record written after the list it judges by.
+    func testRecordsGoWithTheirAlarms() async throws {
+        let alarms = granted
+        let tool = tool(alarms)
+        _ = await tool.run(["5m", "--tell", "words"])
+        XCTAssertNotNil(records.read(first))
+        _ = await tool.run(["cancel", first.uuidString])
+        XCTAssertNil(records.read(first))
+        let late = UUID()
+        try records.write(.init(label: "late", made: start.addingTimeInterval(1)), for: late)
+        let gone = UUID()
+        try records.write(.init(label: "gone", made: start.addingTimeInterval(-1)), for: gone)
+        _ = await tool.run(["list"])
+        XCTAssertNotNil(records.read(late))
+        XCTAssertNil(records.read(gone))
+    }
+
+    func testListSaysTheShapeOfEachAlarm() async {
+        let alarms = granted
+        let tool = tool(alarms)
+        _ = await tool.run(["at", "06:00", "Run", "--every", "weekdays", "--again", "10m", "--tell", "go", "--button-text", "Later"])
+        let list = await tool.run(["list"])
+        XCTAssertTrue(list.text.contains("Run | at 06:00 every mon,tue,wed,thu,fri, next 2026-10-27T06:00:00Z | set | again 10m | tells Topo at Later"),
+                      list.text)
+    }
+}
+
+/// A press of a timer's button: one turn, under the login the timer was set under, with the mind's
+/// words marked as the mind's.
+@MainActor
+final class TimerPressTests: XCTestCase {
+    private var root: URL!
+    private var records: TimerRecords { TimerRecords(folder: root.appendingPathComponent("Timers")) }
+    private var store: ShareStore { ShareStore(folder: root.appendingPathComponent("Shares")) }
+    private let id = UUID()
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("presses-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func press(_ button: TimerButton, _ alarms: FakeAlarms) async -> TimerPresses.Outcome {
+        await TimerPresses.press(id, button, records: records, scheduler: alarms, store: store, drain: nil, landed: nil,
+                                 nonce: "00000000-0000-0000-0000-0000000000aa")
+    }
+
+    func testAPressKeepsOneMarkedTurnUnderItsLogin() async throws {
+        try store.open(files: false)
+        let login = try XCTUnwrap(store.door()?.login)
+        try records.write(.init(label: "Plank", made: Date(), tell: "start the other side", onStop: "log the session",
+                                second: "Next", login: login), for: id)
+        let alarms = FakeAlarms(nil)
+        let outcome = await press(.second, alarms)
+        XCTAssertEqual(outcome, .kept(nonce: "00000000-0000-0000-0000-0000000000aa"))
+        let shares = store.shares()
+        XCTAssertEqual(shares.count, 1)
+        XCTAssertEqual(ShareInbox.text(shares[0], path: nil),
+                       "[A press of the \"Plank\" timer's Next button, on the lock screen or in Topo; these are the words Topo kept for it when it set the timer]\nstart the other side")
+        // `.custom` leaves the alarm sounding, so the press stops it.
+        XCTAssertEqual(alarms.acts.map(\.0), [.stop])
+        // The same press again is the same nonce: one turn.
+        _ = await press(.second, alarms)
+        XCTAssertEqual(store.shares().count, 1)
+    }
+
+    func testStopsWordsAndAButtonThatAlsoRestartsLeaveTheAlarmBe() async throws {
+        try store.open(files: false)
+        let login = try XCTUnwrap(store.door()?.login)
+        try records.write(.init(label: "Plank", made: Date(), again: 60, tell: "next", onStop: "log it", second: "Again", login: login), for: id)
+        let alarms = FakeAlarms(nil)
+        _ = await press(.second, alarms)
+        XCTAssertTrue(alarms.acts.isEmpty)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Shares/00000000-0000-0000-0000-0000000000aa"))
+        _ = await press(.stop, alarms)
+        let text = store.shares().first.flatMap { ShareInbox.text($0, path: nil) }
+        XCTAssertTrue(text?.contains("timer's Stop button") == true && text?.hasSuffix("\nlog it") == true, text ?? "nil")
+    }
+
+    func testAPressAfterASignOutOrAnotherLoginSendsNothing() async throws {
+        try records.write(.init(label: "Plank", made: Date(), tell: "next", login: "old-login"), for: id)
+        let alarms = FakeAlarms(nil)
+        let signedOut = await press(.second, alarms)
+        XCTAssertEqual(signedOut, .refused(.signedOut))
+        try store.open(files: false)
+        let another = await press(.second, alarms)
+        XCTAssertEqual(another, .refused(.signedOut))
+        XCTAssertTrue(store.shares().isEmpty)
+        // The alarm is stopped all the same: the person pressed it.
+        XCTAssertEqual(alarms.acts.map(\.0), [.stop, .stop])
+    }
+
+    func testAPressWithNoWordsSendsNothing() async throws {
+        try store.open(files: false)
+        let alarms = FakeAlarms(nil)
+        let none = await press(.stop, alarms)
+        XCTAssertEqual(none, .nothing)
+        try records.write(.init(label: "Plank", made: Date(), tell: "next", login: store.door()?.login), for: id)
+        let noStop = await press(.stop, alarms)
+        XCTAssertEqual(noStop, .nothing)
+        XCTAssertTrue(store.shares().isEmpty)
+    }
+}
+
+/// A sound file from the guest's home, judged as the system plays it.
+final class TimerSoundTests: XCTestCase {
+    private var root: URL!
+    private var sounds: TimerSounds { TimerSounds(home: root.appendingPathComponent("home"), folder: root.appendingPathComponent("Sounds")) }
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("sounds-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("home"), withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    /// A linear PCM file of `seconds` at `name` under the home.
+    private func tone(_ name: String, seconds: Double) throws {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1)!
+        let file = try AVAudioFile(forWriting: root.appendingPathComponent("home/\(name)"),
+                                   settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 8000, AVNumberOfChannelsKey: 1,
+                                              AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false])
+        let frames = AVAudioFrameCount(seconds * 8000)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        try file.write(from: buffer)
+    }
+
+    func testAShortPCMSoundIsCopiedUnderTheAlarmsName() async throws {
+        try tone("bell.caf", seconds: 2)
+        let id = UUID()
+        let name = try await sounds.copy("/home/topo/bell.caf", for: id)
+        XCTAssertEqual(name, "topo-timer-\(id.uuidString.lowercased()).caf")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Sounds/\(name)").path))
+        sounds.remove(name)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Sounds/\(name)").path))
+    }
+
+    func testRefusals() async throws {
+        try tone("long.wav", seconds: 31)
+        try Data("not a sound".utf8).write(to: root.appendingPathComponent("home/fake.caf"))
+        try FileManager.default.createSymbolicLink(atPath: root.appendingPathComponent("home/link.caf").path,
+                                                   withDestinationPath: root.appendingPathComponent("home/long.wav").path)
+        for (path, words) in [("/home/topo/long.wav", "runs 31 seconds"), ("/home/topo/fake.caf", "not a sound the phone can read"),
+                              ("/home/topo/link.caf", "goes through a link"), ("/home/topo/none.caf", "cannot be opened")] {
+            do {
+                _ = try await sounds.copy(path, for: UUID())
+                XCTFail("\(path) was copied")
+            } catch let failure as ToolFailure {
+                XCTAssertTrue(failure.text.contains(words), "\(path): \(failure.text)")
+            }
+        }
+        let left = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Sounds").path)) ?? []
+        XCTAssertTrue(left.isEmpty, "\(left)")
+    }
+}
+
+/// The plan as AlarmKit's attributes and timing, which the widget and the system draw from.
+@available(iOS 26, *)
+final class AlarmKitPlanTests: XCTestCase {
+    private func plan(_ when: TimerPlan.When) -> TimerPlan {
+        TimerPlan(when: when, label: "Plank", title: "Done", pausedTitle: "Held", buttonColor: .token(.text), tint: .token(.primary))
+    }
+
+    func testTheSecondButtonsBehaviour() {
+        var plan = plan(.after(60))
+        XCTAssertNil(AlarmKitScheduler.attributes(plan).presentation.alert.secondaryButtonBehavior)
+        plan.second = .init(text: "Next", icon: "forward.fill")
+        plan.tells = true
+        XCTAssertEqual(AlarmKitScheduler.attributes(plan).presentation.alert.secondaryButtonBehavior, .custom)
+        plan.again = 60
+        XCTAssertEqual(AlarmKitScheduler.attributes(plan).presentation.alert.secondaryButtonBehavior, .countdown)
+    }
+
+    func testPresentationsFollowThePlan() {
+        var plan = plan(.at(hour: 7, minute: 0, days: []))
+        var presentation = AlarmKitScheduler.attributes(plan).presentation
+        XCTAssertNil(presentation.countdown, "an alarm with no again never counts down")
+        XCTAssertNil(presentation.paused)
+        plan = self.plan(.after(60))
+        plan.pause = .init(text: "Hold", icon: "pause.fill")
+        plan.resume = .init(text: "Go", icon: "play.fill")
+        plan.cancel = .init(text: "Skip", icon: "xmark")
+        let attributes = AlarmKitScheduler.attributes(plan)
+        presentation = attributes.presentation
+        XCTAssertEqual(presentation.countdown?.pauseButton?.systemImageName, "pause.fill")
+        XCTAssertEqual(presentation.paused?.resumeButton.systemImageName, "play.fill")
+        XCTAssertEqual(String(localized: presentation.paused!.title), "Held")
+        XCTAssertEqual(String(localized: presentation.alert.title), "Done")
+        XCTAssertEqual(attributes.metadata?.cancel, .init(text: "Skip", icon: "xmark", colour: "text"))
+    }
+
+    func testTiming() {
+        var plan = plan(.after(90))
+        XCTAssertEqual(AlarmKitScheduler.timing(plan).duration, .init(preAlert: 90, postAlert: nil))
+        XCTAssertNil(AlarmKitScheduler.timing(plan).schedule)
+        plan.again = 30
+        XCTAssertEqual(AlarmKitScheduler.timing(plan).duration, .init(preAlert: 90, postAlert: 30))
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        plan = self.plan(.on(date))
+        XCTAssertNil(AlarmKitScheduler.timing(plan).duration)
+        XCTAssertEqual(AlarmKitScheduler.timing(plan).schedule, .fixed(date))
+        plan = self.plan(.at(hour: 6, minute: 5, days: [.monday]))
+        plan.again = 540
+        XCTAssertEqual(AlarmKitScheduler.timing(plan).duration, .init(preAlert: nil, postAlert: 540))
+        XCTAssertEqual(AlarmKitScheduler.timing(plan).schedule, .relative(.init(time: .init(hour: 6, minute: 5), repeats: .weekly([.monday]))))
+        XCTAssertEqual(AlarmKitScheduler.when(.relative(.init(time: .init(hour: 6, minute: 5), repeats: .weekly([.monday])))),
+                       .at(hour: 6, minute: 5, days: [.monday]))
     }
 }

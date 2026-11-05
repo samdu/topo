@@ -58,8 +58,8 @@ enum ShareIntake {
             return Item(kind: .link, text: url.absoluteString)
         case .image, .file:
             return try await file(from: provider, as: kind, into: scratch)
-        case .prompt, .task:
-            // A Shortcut's, never a provider's (`kind(of:)`).
+        case .prompt, .task, .timer:
+            // A Shortcut's or a timer's, never a provider's (`kind(of:)`).
             throw .nothing
         }
     }
