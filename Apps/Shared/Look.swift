@@ -621,6 +621,15 @@ struct Look: Equatable, Sendable {
             /// The marks: everything else, and the way to the keyboard, on the glass; and in the
             /// navigation bar, replies read aloud and muted, and the model. SF Symbol names.
             var more = "plus"
+            /// The marks of what the control for everything else offers: a file from the
+            /// phone's file picker, a photo from the library and one taken with the camera. Drawn
+            /// in the system's own menu, and the file's and the photo's beside the thing in the
+            /// sheet (a capture is an image there), so only the names are the look's.
+            var file = "doc"
+            var photo = "photo"
+            var camera = "camera"
+            /// The way to share the screen, in the same menu.
+            var screen = "rectangle.dashed.badge.record"
             var keyboard = "keyboard"
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"

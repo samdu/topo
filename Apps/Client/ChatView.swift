@@ -19,6 +19,9 @@ struct ChatView: View {
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
     @Environment(Conversation.self) private var conversation
+    /// What the composer's `+` attaches, where the app made one; a canvas or a screen made
+    /// without it offers nothing there.
+    @Environment(ComposerAttachments.self) private var attachments: ComposerAttachments?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
@@ -69,6 +72,8 @@ struct ChatView: View {
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
     @State private var showMemory = false
+    /// The sheet the `+` puts up to share the screen from, holding the system's own button.
+    @State private var showScreenShare = false
     /// The offer card's answer, once and for good: Choose folder or Not now. It is the chat's
     /// rather than the sheet's, because the card it answers is drawn here.
     @AppStorage("memoryOfferAnswered") private var memoryOfferAnswered = false
@@ -242,6 +247,15 @@ struct ChatView: View {
             // The memory screen is the sheet's Memory section, and also what the offer card
             // above the composer opens, so the chat presents it too.
             .sheet(isPresented: $showMemory) { MemoryView() }
+            .sheet(isPresented: $showScreenShare) { ScreenShareSheet() }
+            // The pickers the `+` puts up and the sheet over what was picked, on a view of
+            // their own so the chat's own sheets and theirs never share one presentation.
+            .background {
+                if let attachments {
+                    Color.clear.modifier(ComposerPickers(attachments: attachments,
+                                                         marks: ShareSheet.Marks(image: look.composer.flank.photo, file: look.composer.flank.file)))
+                }
+            }
         }
         .task {
             #if DEBUG && os(iOS)
@@ -360,9 +374,11 @@ struct ChatView: View {
         .onChange(of: look.mind, initial: true) { _, mind in harness.mind = mind }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
-            // it, so nothing said into it was meant. A reply plays on — that is what the hold is
-            // for — and the press that starts the next one is what stops it. A hands-free spoken
-            // turn the lock carries into a call is the exception (`Conversation.scene`).
+            // it, so nothing said into it was meant. One already released is not: its words are
+            // being decoded to be sent, and the release's hold carries them behind the lock
+            // (`VoiceInput.drop`). A reply plays on — that is what the hold is for — and the press
+            // that starts the next one is what stops it. A hands-free spoken turn the lock carries
+            // into a call is the exception (`Conversation.scene`).
             conversation.scene(phase)
         }
         .onDisappear { if !conversation.on { voice.cancel(.chat) } }
@@ -482,19 +498,20 @@ struct ChatView: View {
 
     /// The far end of a takeover, built here for the same reason as the way out below.
     private var takeover: Takeover {
-        Takeover(forgetShares: { ShareStore.shared()?.close() }, demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
+        Takeover(moveEpoch: { LoginLife.shared.moveEpoch() }, forgetShares: { ShareStore.shared()?.close() }, demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
                  stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
+                 runTeardowns: { LoginLife.shared.runTeardowns() },
                  forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                  forgetConnections: { connections.forget() },
                  forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 
-    /// The way out, built here because this is where the five things it ends are in scope, and
+    /// The way out, built here because this is where the things it ends are in scope, and
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
-        SignOut(stopSpeaking: { speaker.stop() }, forgetShares: { ShareStore.shared()?.close() }, forgetHarness: { await harness.forget() },
-                forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
+        SignOut(moveEpoch: { LoginLife.shared.moveEpoch() }, stopSpeaking: { speaker.stop() }, forgetShares: { ShareStore.shared()?.close() }, forgetHarness: { await harness.forget() },
+                forgetMemory: { memory.forget() }, runTeardowns: { LoginLife.shared.runTeardowns() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                 forgetConnections: { connections.forget() },
                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
@@ -526,9 +543,10 @@ struct ChatView: View {
             return
         }
         #endif
-        // The reply to this will be read aloud, so the process is held open from here: the turn
-        // is written, asked and answered behind the lock. Nothing is held for a reply that could
-        // not be heard anyway — the setting off, or a voice that is not resident.
+        // The reply to this will be read aloud, so the process is held open from here, the wait
+        // taking over from the release's hold: the turn is written, asked and answered behind
+        // the lock. Nothing is held for a reply that could not be heard anyway — the setting
+        // off, or a voice that is not resident.
         // The wait says whether the reply will be read aloud, which is what marks the turn as
         // spoken; whether the process is being kept running for it is its own answer, and this
         // screen states no condition of its own either way.
@@ -603,6 +621,17 @@ struct ChatView: View {
                                holdsTopo: look.mascot.placement == .glass)
     }
 
+    /// What the composer's `+` offers: a file and a photo where the app made the attachments, the
+    /// camera where the phone has one, the way to share the screen (the chat's own sheet), and
+    /// nothing where the app made none.
+    private var composerMenu: ComposerMenu {
+        guard let attachments else { return ComposerMenu() }
+        var menu = ComposerMenu(attachFile: { attachments.pick(.file) }, choosePhoto: { attachments.pick(.photo) })
+        if attachments.hasCamera { menu.takePhoto = { attachments.pick(.camera) } }
+        menu.shareScreen = { showScreenShare = true }
+        return menu
+    }
+
     /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
     private var micState: Composer.MicState {
         Composer.MicState(voice, speaking: speaker.speaking)
@@ -640,6 +669,7 @@ struct ChatView: View {
                             micReport: micReport,
                             focused: { focused = $0 },
                             room: room)
+            .environment(\.composerMenu, composerMenu)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {

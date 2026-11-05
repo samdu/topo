@@ -149,7 +149,8 @@ final class VoiceInput {
         interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
-            // A call or Siri took the session; whatever was being said is over. Only the start
+            // A call or Siri took the session; whatever was still being said is over, and words
+            // already released finish their decode and are sent (`drop`). Only the start
             // of an interruption: iOS posts its end seconds later, by which time a new session
             // may be up and is not to be cancelled for it.
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -159,7 +160,7 @@ final class VoiceInput {
                 // A session the conversation carries is suspended, never carried across the
                 // event on its engine: under the call's live session it is rebuilt at once
                 // (`Conversation`), otherwise at the call's activation.
-                if self.carries?() == true { self.suspend("the interruption's start") } else { self.cancel() }
+                if self.carries?() == true { self.suspend("the interruption's start") } else { self.drop() }
             }
         }
         resetObserver = center.addObserver(
@@ -234,6 +235,15 @@ final class VoiceInput {
         return await end(as: gate)
     }
 
+    /// Drops a session still listening, as `cancel` does, and leaves one already ending to
+    /// finish: a released press has taken its audio and stopped its engine, and what is left is
+    /// the decode of words the person meant to send — a lock or an interruption landing during it
+    /// takes nothing from the microphone, which is no longer open.
+    func drop(_ gate: Gate? = nil) {
+        guard !ending else { return }
+        cancel(gate)
+    }
+
     /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
     func cancel(_ gate: Gate? = nil) {
         if let gate, owner != gate { return }
@@ -296,13 +306,15 @@ final class VoiceInput {
             refusal = "the call's session is changing hands"
             return false
         }
-        await begin(as: gate)
+        await begin(as: gate, settling: false)
         guard listening, owner == gate else { return false }
         handsFree = true
         return true
     }
 
-    private func begin(as gate: Gate) async {
+    /// `settling` false refuses a call's session changing hands rather than waiting it out, as
+    /// `reopen` does, however long the permission took to answer.
+    private func begin(as gate: Gate, settling waits: Bool = true) async {
         presses += 1
         refusal = nil
         #if DEBUG
@@ -329,6 +341,11 @@ final class VoiceInput {
         // answers — is waited out rather than refused: a tap put on a closing session is cut by
         // its deactivation. Past the bound the press goes on and `ensureActive` refuses it.
         var tapped = false
+        if audio.callChangingHands, !waits {
+            refusal = "the call's session is changing hands"
+            owner = nil
+            return
+        }
         if audio.callChangingHands {
             settling = mine
             tappedWhileSettling = false

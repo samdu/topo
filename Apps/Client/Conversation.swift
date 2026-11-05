@@ -23,6 +23,9 @@ final class Conversation {
     /// How often what has arrived is taken: the detector fed its whole chunks, and the quiet
     /// counted in 100 ms frames, which is the turn's rule's own tick.
     static let feedEvery: Duration = .milliseconds(100)
+    /// Chunks in a row the detector may fail on before the conversation ends with what was
+    /// heard: about a second, since an utterance it cannot judge would otherwise never end.
+    static let failuresTolerated = 4
     /// Listening this long with no samples arriving is a dead engine (a route change stops it
     /// under the call): the session is suspended and rebuilt, and a second time running ends
     /// the conversation.
@@ -42,6 +45,8 @@ final class Conversation {
     @ObservationIgnored private let deafLimit: TimeInterval
     /// Times running the microphone was found deaf with no samples since: the second ends it.
     private var deafStrikes = 0
+    /// Chunks in a row the detector has failed on; a verdict clears it.
+    private var failures = 0
     /// The idle clock's sleep, a seam for the suite.
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private let now: @MainActor () -> Date
@@ -52,7 +57,9 @@ final class Conversation {
     var send: (@MainActor (String) async -> Void)? {
         didSet {
             // The chat gone behind the lock (a sign-out, a takeover): nothing heard can be sent.
-            if send == nil { stop("the chat stopped answering", sending: false) }
+            guard send == nil else { return }
+            dropWhatIsDecoding()
+            stop("the chat stopped answering", sending: false)
         }
     }
     /// The chat's answer to whether the open session's own destination is a send
@@ -69,8 +76,13 @@ final class Conversation {
     private var callUp = false
     private var policy = Endpoint.Policy()
     private var fedTo = 0
-    /// True while a chunk counted in `fedTo` is with the detector: its verdict is not in yet.
-    private var detecting = false
+    /// The feeder whose chunk is with the detector, by its serial: that chunk is past `fedTo`
+    /// until its verdict is in. Set and cleared by that feeder alone, so a cancelled one still
+    /// waiting on its verdict says nothing of the feeder after it.
+    private var detectingBy: Int?
+    private var feederSerial = 0
+    /// Whether the current feeder is waiting on a verdict.
+    private var detecting: Bool { detectingBy != nil && detectingBy == feederSerial }
     /// The judge this conversation's utterances end by, taken as it begins: none when Smart Turn
     /// was not loaded, and then the utterances end on Silero's silence alone.
     @ObservationIgnored private var judge: (any TurnJudge)?
@@ -92,6 +104,8 @@ final class Conversation {
     /// From a stop that sends what is open until that send has decoded it: the session is the
     /// stop's, and nothing else drops it.
     private var handingOff = false
+    /// Set by a hang-up or a mute while that send is decoding: its words go nowhere.
+    private var dropHandoff = false
     /// The card's mute: the microphone closed and kept closed until the unmute.
     private var muted = false
     private var lastEnd: Date?
@@ -161,6 +175,9 @@ final class Conversation {
         freshUtterance()
         muted = false
         deafStrikes = 0
+        failures = 0
+        // A feeder of the last conversation still waiting on a verdict is not this one's.
+        feederSerial += 1
         restartIdle()
         conversingChanged(true)
         // Suspended at the interruption's start, it waits for the call's activation; still
@@ -174,10 +191,11 @@ final class Conversation {
     }
 
     /// The scene's phase, from the chat: an open microphone is dropped as the scene goes, words
-    /// and all, unless the conversation carries it.
+    /// and all, unless the conversation carries it; a released press's decode finishes and sends
+    /// (`VoiceInput.drop`).
     func scene(_ phase: ScenePhase) {
         guard phase != .active, !carries() else { return }
-        voice.cancel(.chat)
+        voice.drop(.chat)
     }
 
     /// The call's moments, from the speaker (`Speaker.onCall`).
@@ -200,18 +218,19 @@ final class Conversation {
             if on, voice.listening { voice.suspend("the call's session was taken") }
         case .hungUp:
             callUp = false
+            dropWhatIsDecoding()
             stop("hung up from the call", sending: false)
         case .over:
             callUp = false
             stop("the call is over", sending: true)
         case .muted(let isMuted):
             muted = isMuted
+            if isMuted { dropWhatIsDecoding() }
             guard on else { return }
             if isMuted {
                 // What is open goes unsent: the person muted it.
                 feeder?.cancel()
                 feeder = nil
-                if endingUtterance { dropDecoded = true }
                 // Opening counts: a cancel moves the generation, so a reopen waiting on its
                 // permission opens nothing.
                 if voice.owner == .chat, !endingUtterance { voice.cancel(.chat) }
@@ -224,13 +243,23 @@ final class Conversation {
         }
     }
 
+    /// The person ended it (a hang-up, a mute, the chat gone): whatever is being decoded to be
+    /// sent goes nowhere — an utterance's own end, or the handoff of a stop that sends — whether
+    /// or not the conversation is still on.
+    private func dropWhatIsDecoding() {
+        if endingUtterance { dropDecoded = true }
+        if handingOff { dropHandoff = true }
+    }
+
     private func resumeOnTheCall() {
         guard voice.resume() else {
             AudioLog.say("conversation: the microphone did not resume; what was heard is sent")
             return stop("the microphone did not resume", sending: true)
         }
         AudioLog.say("conversation: resumed on the call's session")
-        startFeeding(reset: fedTo == 0)
+        // A feeder waiting on a verdict carries on once it has it: replaced, the verdict would be
+        // lost, and the detector, which has already judged that chunk, would not give it again.
+        if !detecting { startFeeding(reset: fedTo == 0) }
         // A reply that waited while the microphone was suspended is judged now: `listening`
         // did not change, so nothing observed fires for it.
         react()
@@ -279,6 +308,8 @@ final class Conversation {
     private func startFeeding(reset: Bool = false) {
         feeder?.cancel()
         guard let detector = endpoint.detector else { return }
+        feederSerial += 1
+        let serial = feederSerial
         let mine = voice.generation
         let sink = voice.sink
         let now = now
@@ -305,15 +336,25 @@ final class Conversation {
                 while samples.count - offset >= Endpoint.chunk {
                     let chunk = Array(samples[offset..<offset + Endpoint.chunk])
                     offset += Endpoint.chunk
-                    self.fedTo += Endpoint.chunk
                     let event: Endpoint.Event?
-                    self.detecting = true
+                    self.detectingBy = serial
                     do { event = try await detector.feed(chunk) } catch {
-                        AudioLog.say("conversation: the detector failed on a chunk: \(error.localizedDescription)")
-                        event = nil
+                        if self.detectingBy == serial { self.detectingBy = nil }
+                        guard !Task.isCancelled, self.on, self.voice.generation == mine else { return }
+                        self.failures += 1
+                        AudioLog.say("conversation: the detector failed on a chunk (\(self.failures) in a row): \(error.localizedDescription)")
+                        // The chunk stays unjudged, so it is tried again and a stop decodes it.
+                        if self.failures > Self.failuresTolerated {
+                            return self.stop("the detector kept failing", sending: true)
+                        }
+                        break
                     }
-                    self.detecting = false
+                    if self.detectingBy == serial { self.detectingBy = nil }
                     guard !Task.isCancelled, self.on, self.voice.generation == mine else { return }
+                    // Counted fed only with its verdict in: a chunk whose verdict was lost is one
+                    // a stop still decodes.
+                    self.fedTo += Endpoint.chunk
+                    self.failures = 0
                     guard let event, let heard = self.policy.take(event) else { continue }
                     switch heard {
                     case .speech:
@@ -570,6 +611,9 @@ final class Conversation {
         guard on else { return }
         on = false
         firstOff = nil
+        // Read before the feeder goes: a chunk with the detector, or any sample not yet fed — a
+        // word shorter than a chunk included — is unjudged.
+        let unjudged = detecting || voice.sink.peek(from: .max).end > fedTo
         feeder?.cancel()
         feeder = nil
         idleTimer?.cancel()
@@ -581,14 +625,22 @@ final class Conversation {
             // The decode under way finishes the open utterance: sent, or dropped with the end.
             if !sending { dropDecoded = true }
         } else if voice.owner == .chat {
-            // A suspended session was never judged by the detector: what it kept is decoded,
-            // and silence decodes to nothing.
-            if voice.listening, sending, !muted, policy.speaking || voice.suspended {
+            // Samples the detector has not judged — a suspended session's, a chunk with it or
+            // not yet fed — are decoded, and silence decodes to nothing.
+            if voice.listening, sending, !muted, policy.speaking || voice.suspended || unjudged {
                 handingOff = true
+                dropHandoff = false
                 Task {
                     let heard = await voice.end(as: .chat)
                     handingOff = false
-                    if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send { await send(heard) }
+                    // A hang-up or a mute while it decoded: the person ended it, unsent.
+                    let dropped = dropHandoff
+                    dropHandoff = false
+                    if dropped {
+                        AudioLog.say("conversation: the handoff being decoded was dropped (hung up or muted)")
+                    } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
+                        await send(heard)
+                    }
                 }
             } else {
                 voice.cancel(.chat)

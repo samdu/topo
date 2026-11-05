@@ -25,11 +25,14 @@ struct RootView: View {
             // outlives a delete of the app while the lease or the role record names another
             // device or says viewer; a demotion decided at launch leaves an outbox on disk)
             // puts what was waiting into the log as a limb's turns and drops the login.
-            ViewerRootView().task {
-                await ViewerArrival(forgetShares: { ShareStore.shared()?.close() },
+            // A viewer holds no login, so it draws no picture from a home a login left behind.
+            ViewerRootView().environment(\.turnImageFiles, nil).task {
+                await ViewerArrival(moveEpoch: { LoginLife.shared.moveEpoch() },
+                                    forgetShares: { ShareStore.shared()?.close() },
                                     holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
                                     demoteHarness: { await harness.demote() },
                                     forgetMemory: { memory.forget() },
+                                    runTeardowns: { LoginLife.shared.runTeardowns() },
                                     forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                                     forgetConnections: { connections.forget() },
                                     forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) }).act()
@@ -39,7 +42,7 @@ struct RootView: View {
             // has been read and holds nothing (`FirstRun.asks`): a returning person's log has
             // turns, and nothing here knows that before the read.
             if signIn.phase != .signedIn {
-                SignInView()
+                SignInView().environment(\.turnImageFiles, nil)
             } else {
                 ChatView()
             }

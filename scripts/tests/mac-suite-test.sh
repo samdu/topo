@@ -19,7 +19,8 @@
 # being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
 # and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
 # build's directory is built over for the pins it was built from and made afresh for any
-# other; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
+# other, and so is the package state every build and test of the project resolves into,
+# before any of a suite resolves; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
 # pid and is running from before its lane starts to after it stops: one that did not start or
 # took no assertion starts no lane, one that ended before the tests runs none, and one that
 # ended under the tests is red; and `topo_ui:quiet` hands the runner its marker
@@ -94,6 +95,7 @@ fake "$tree/scripts/model-manifest.sh" 'exit 0'
 # DEVELOPER_DIR it ran under in $CALLS.developer.
 pin="$(sed -n 's/^XCODE_VERSION="\(.*\)"$/\1/p' "$root/scripts/mac-suite.sh")"
 fake "$work/bin/xcodebuild" '
+case "$*" in *"-clonedSourcePackagesDirPath build/packages"*) echo "packages=$(cat build/packages/Package.resolved 2>/dev/null)" >> "$CALLS" ;; esac
 case "$*" in
   -version) [ ! -e "${DEVELOPER_DIR:-/nonexistent}/broken" ] || exit 1
     if [ -n "${DEVELOPER_DIR-}" ]; then echo "Xcode $(plutil -extract CFBundleShortVersionString raw -o - "$DEVELOPER_DIR/../version.plist")"; else echo "Xcode ${FAKE_XCODE:-'"$pin"'}"; fi; echo "Build version 1" ;;
@@ -103,7 +105,8 @@ case "$*" in
     exit "${UI_TEST:-0}" ;;
   *test-without-building*-skip-testing:TopoUITests*)
     echo "unit port53=${TEST_RUNNER_TOPO_PORT53_SOCKET-}" >> "$CALLS"
-    case "$*" in *-skip-testing:TopoTests/SmartTurnRealTests*) echo "unit turn: deselected" ;; *) echo "unit turn: models=${TEST_RUNNER_TOPO_UITEST_EAR_MODELS-}" ;; esac >> "$CALLS"
+    case "$*" in *-skip-testing:TopoTests/SmartTurnRealTests*) echo "unit turn: deselected" ;; *) echo "unit turn: run" ;; esac >> "$CALLS"
+    echo "unit models=${TEST_RUNNER_TOPO_UNIT_EAR_MODELS-}" >> "$CALLS"
     exit 0 ;;
   *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
   *) exit 0 ;;
@@ -139,7 +142,7 @@ fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleK
 fake "$work/bin/brew" 'echo "${FAKE_BREW:-/nonexistent}"'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
-  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-0\":[{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-0\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
+  "simctl list") [ -z "${FAKE_NO_RUNTIMES-}" ] || { echo "{\"devices\":{}}"; exit 0; }; stale=""; for pid in ${FAKE_LEFT_PIDS-}; do stale="$stale{\"name\":\"topo-validate-unit-$pid\",\"udid\":\"LEFT-$pid\",\"deviceTypeIdentifier\":\"type.iPhone\"},"; done; echo "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-27-2\":[$stale{\"name\":\"iPhone 1\",\"deviceTypeIdentifier\":\"type.iPhone\"}],\"com.apple.CoreSimulator.SimRuntime.watchOS-27-2\":[{\"name\":\"Apple Watch 1\",\"deviceTypeIdentifier\":\"type.Watch\"}]}}" ;;
   "simctl create") echo "UDID-$3" ;;
   "simctl get_app_container") [ -z "${FAKE_NO_CONTAINER-}" ] || exit 2; mkdir -p "$CALLS.container"; echo "$CALLS.container" ;;
 esac'
@@ -187,28 +190,68 @@ is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(
 is "green: four test actions, each without xcodebuild's diagnostics" \
   "$(grep -cE '^xcodebuild test(-without-building)? ' "$CALLS"):$(grep -cE '^xcodebuild test(-without-building)? .* -collect-test-diagnostics never ' "$CALLS")" "4:4"
 
-# The device build's directory is kept for the pins it was built from, and no others.
+# Every build and test of the project resolves its packages into build/packages, which is kept
+# for the pins it was resolved from and made afresh for any other, since Xcode 27.2 carries the
+# trait set of the last resolution into the next.
+is "green: every build and test of the project resolves its packages into build/packages" \
+  "$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj ' "$CALLS"):$(grep -cE '^xcodebuild (build|build-for-testing|test|test-without-building) -project Topo.xcodeproj .*-clonedSourcePackagesDirPath build/packages( |$)' "$CALLS")" "9:9"
+
+# A device a SIGKILLed run left behind, named for a pid no longer running, is deleted before a
+# new one is made; one named for a running pid is another run's and is left alone.
+sleep 0 & dead=$!; wait "$dead"
+FAKE_LEFT_PIDS="$dead $$" suite left-behind topo_unit
+is "left behind: the dead run's device is shut down and deleted before the first is made" \
+  "$(grep -E "^xcrun simctl (shutdown LEFT-$dead|delete LEFT-$dead|create)" "$CALLS" | head -n 3 | cut -d' ' -f1-3 | tr '\n' '|')" \
+  "xcrun simctl shutdown|xcrun simctl delete|xcrun simctl create|"
+is "left behind: a running pid's device is left alone" "$(calls "xcrun simctl delete LEFT-$$")" 0
+
+# The device build's directory and the package state are kept for the pins they were built
+# from, and no others. The pins are written as Package.resolved is, JSON, here on one line, so a
+# comparison that drops lines rather than the field finds two different pins the same.
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
-mkdir -p "$(dirname "$pins")" && echo "pins: one" > "$pins"
-rm -rf "$tree/build/device"
+resolved() { grep -cxF "packages=$1" "$CALLS"; }  # the resolutions that saw these pins
+pin() { printf '{"originHash":"%s","pins":[{"identity":"fluidaudio","state":{"version":"%s"}}],"version":3}\n' "${2:-aaa}" "$1"; }
+mkdir -p "$(dirname "$pins")" && pin one > "$pins"
+rm -rf "$tree/build/device" "$tree/build/packages"
 suite device-first others
 is "a first device build: exits 0" "$status" 0
-is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "pins: one"
+is "a first device build: the pins it was built from are in it" "$(cat "$tree/build/device/Package.resolved" 2>/dev/null)" "$(pin one)"
+is "a first device build: the package state names the pins it was resolved from" "$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "$(pin one)"
+: > "$tree/build/packages/workspace-state.json"
 suite device-same others
 is "the same pins: built over what was there" "$(calls 'device-build over what was there')" 1
-echo "pins: two" > "$pins"
+is "the same pins: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
+# A resolution rewrites the pins' originHash for the path it ran at; the same pins under another
+# hash are the same pins, for the device build's directory as for the package state.
+pin one bbb > "$pins"
+suite device-rehashed others
+is "the same pins under another originHash: the device build is built over what was there" "$(calls 'device-build over what was there')" 1
+is "the same pins under another originHash: the package state is kept" "$([ -e "$tree/build/packages/workspace-state.json" ] && echo kept)" kept
+pin two bbb > "$pins"
 suite device-moved others
 is "pins that moved: exits 0" "$status" 0
 is "pins that moved: built in a directory made afresh" "$(calls 'device-build over what was there')" 0
-is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "pins: two"
+is "pins that moved: the package state is made afresh" "$([ -e "$tree/build/packages/workspace-state.json" ] || echo afresh):$(cat "$tree/build/packages/Package.resolved" 2>/dev/null)" "afresh:$(pin two bbb)"
+is "pins that moved: every resolution of the suite came after the state was made afresh" "$(resolved "$(pin two bbb)"):$(calls 'packages=')" "5:5"
+# The same in each suite that resolves on its own: the state is fresh before its first resolution.
+pin three > "$pins"
+suite packages-unit topo_unit
+is "pins that moved, topo_unit: every resolution came after the state was made afresh" "$(resolved "$(pin three)"):$(calls 'packages=')" "2:2"
+pin four > "$pins"
+suite packages-ui topo_ui
+is "pins that moved, topo_ui: every resolution came after the state was made afresh" "$(resolved "$(pin four)"):$(calls 'packages=')" "2:2"
+is "pins that moved: the new ones are in it" "$(cat "$tree/build/device/Package.resolved")" "$(pin two bbb)"
 rm -f "$tree/build/device/Package.resolved"
 suite device-unknown others
 is "a directory that says no pins: made afresh" "$(calls 'device-build over what was there')" 0
+echo "not json" > "$tree/build/device/Package.resolved"; echo "not json" > "$pins"
+suite device-not-json others
+is "pins that are not JSON: made afresh" "$(calls 'device-build over what was there')" 0
 rm -f "$pins"
 suite device-no-pins others
 is "no pins in the tree: made afresh every time" "$(calls 'device-build over what was there')" 0
-is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -configuration Release')" 1
-echo "pins: one" > "$pins"
+is "no pins in the tree: the build still runs" "$(calls 'xcodebuild build -project Topo.xcodeproj -scheme Topo -clonedSourcePackagesDirPath build/packages -configuration Release')" 1
+pin one > "$pins"
 
 # The quiet part of topo_ui: every UI class but the microphone's, with no lane, no hold, no
 # models, no grants cleared and neither flag, in results of its own, which are held to have
@@ -226,8 +269,10 @@ ui_source
 ear=TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 LANE=full suite unit-full topo_unit
 is "unit, full lane: exits 0" "$status" 0
-is "unit, full lane: Smart Turn's model fetched once" "$(calls fetch-ear-models.sh)" 1
-is "unit, full lane: the models handed to the real Smart Turn test" "$(grep '^unit turn' "$CALLS")" "unit turn: models=$work/cache/ear-models"
+is "unit, full lane: the models fetched once" "$(calls fetch-ear-models.sh)" 1
+is "unit, full lane: Silero's detector and Smart Turn, into the ear's cache" "$(grep '^fetch-ear-models.sh' "$CALLS" | sed "s|$work/cache|<cache>|")" "fetch-ear-models.sh <cache>/ear-models silero-vad-coreml smart-turn-v3"
+is "unit, full lane: the real Smart Turn test runs" "$(grep '^unit turn' "$CALLS")" "unit turn: run"
+is "unit, full lane: the models handed to the tests" "$(grep '^unit models' "$CALLS" | sed "s|$work/cache|<cache>|")" "unit models=<cache>/ear-models"
 
 LANE=full suite quiet topo_ui:quiet
 is "the quiet part: exits 0" "$status" 0
@@ -418,6 +463,8 @@ is "unit suite: exits 0" "$status" 0
 is "unit suite: its simulator is booted once" "$(calls 'xcrun simctl boot ')" 1
 is "unit suite: and shut down once, as the run deletes it" "$(calls 'xcrun simctl shutdown')" 1
 is "unit suite: the shutdown is after the tests" "$(grep -E '^xcrun simctl shutdown|^xcodebuild test-without-building' "$CALLS" | cut -d' ' -f1-3 | tr '\n' '|')" "xcodebuild test-without-building -project|xcrun simctl shutdown|"
+is "unit suite: Silero's detector alone is fetched, into the ear's cache" "$(grep '^fetch-ear-models.sh' "$CALLS" | sed "s|$work/cache|<cache>|")" "fetch-ear-models.sh <cache>/ear-models silero-vad-coreml"
+is "unit suite: and handed to the tests" "$(grep '^unit models' "$CALLS" | sed "s|$work/cache|<cache>|")" "unit models=<cache>/ear-models"
 
 # A photos grant that is not full access would put a prompt up under the tests: no test runs.
 PHOTOS_GRANT="2|1" suite photos-grant topo_unit
@@ -663,8 +710,8 @@ names "check, no pinned Xcode: what was found is named" "(found: Xcode-99.app 99
 FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
 names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
 is "check, no pinned runtime: exits 1" "$status" 1
-names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
+names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-2"
+names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-2"
 FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
 case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
 FAKE_FREE=9 check disk topo_unit

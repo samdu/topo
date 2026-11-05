@@ -145,11 +145,11 @@ final class SampleSinkTests: XCTestCase {
 /// fixture's phrase with a second of quiet after it complete, and the phrase cut after "seven"
 /// ("purple elephants juggle seven") with no quiet after it unfinished; with a second of quiet
 /// the cut scores as complete too (0.99 when measured), the model saturating on digital silence. The model comes from a directory `scripts/fetch-ear-models.sh`
-/// filled (`TOPO_UITEST_EAR_MODELS`, the full lane's).
+/// filled (`TOPO_UNIT_EAR_MODELS`, on the full lane).
 final class SmartTurnRealTests: XCTestCase {
     func testTheRealModelLoadsAndJudgesTheFixtureComplete() async throws {
-        guard let models = ProcessInfo.processInfo.environment["TOPO_UITEST_EAR_MODELS"], !models.isEmpty else {
-            throw XCTSkip("missing coverage: no models directory (TOPO_UITEST_EAR_MODELS), so the real Smart Turn did not judge the fixture")
+        guard let models = ProcessInfo.processInfo.environment["TOPO_UNIT_EAR_MODELS"], !models.isEmpty else {
+            throw XCTSkip("missing coverage: no models directory (TOPO_UNIT_EAR_MODELS), so the real Smart Turn did not judge the fixture")
         }
         let package = URL(fileURLWithPath: models).appendingPathComponent(ModelManifest.smartTurn)
             .appendingPathComponent(SmartTurn.package, isDirectory: true)

@@ -25,6 +25,7 @@ struct TopoApp: App {
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
     @State private var shares: ShareInbox
+    @State private var attachments: ComposerAttachments
     @State private var defaultSurface: DefaultSurface
     @State private var controlDefaults = ControlDefaults()
     @Environment(\.scenePhase) private var scenePhase
@@ -104,6 +105,8 @@ struct TopoApp: App {
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
+            ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
+            TimerTool(scheduler: TimerBook.scheduler, book: { TimerBook.shared }, broker: broker),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),
@@ -126,11 +129,19 @@ struct TopoApp: App {
         _widgetCues = State(initialValue: widgetCues)
         let shares = ShareInbox(line: harness)
         _shares = State(initialValue: shares)
+        // What the composer's `+` attaches goes in by the share store and out by the same drain.
+        _attachments = State(initialValue: ComposerAttachments(drain: { await shares.drain() }))
+        // A sign-out, a takeover or a viewer's arrival takes the pictures read for the bubbles.
+        TurnImages.endWith(.shared)
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
+        // Built now so its sign-out hook is registered in every process, scene or none.
+        _ = ActivityKeeper.shared
+        // The Live Activities are the login's: ended with the slots at a sign-out, a takeover or
+        // a viewer's arrival.
         _roleSelector = State(initialValue: RoleSelector(database: AppRecords.database(),
                                                          isSignedIn: { LoginCache.standard.isSignedIn },
                                                          ensureZone: AppRecords.ensureZone))
@@ -140,7 +151,7 @@ struct TopoApp: App {
         }
         Perf.mark("app.housekeeping.begin")
         _audio = State(initialValue: audio)
-        // The compile cache a new install leaves behind is cleared before the ear and the voice
+        // A clear of the compile cache the person asked for runs before the ear and the voice
         // exist, so no model is loading while it goes. A debug build launched asking for a stub
         // ear gets one; every other launch, the real one.
         #if DEBUG
@@ -271,7 +282,10 @@ struct TopoApp: App {
     private var chat: some View {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
             .environment(voice).environment(speaker).environment(conversation).environment(memory).environment(mascot)
-            .environment(connections)
+            .environment(connections).environment(attachments)
+            // An image a turn carries is drawn from the guest's home, which is on this phone; the
+            // root hands it to the signed-in chat alone (`RootView`).
+            .environment(\.turnImageFiles, TurnImageFiles(data: { ShareInbox.imageData($0) }))
             // What every view draws with, which is the vault's `look.json` read onto the
             // compiled look. It is worn here rather than on the chat so that the first run,
             // the sign-in and the viewer screen are drawn by the same document; the memory
@@ -315,6 +329,8 @@ struct TopoApp: App {
                 if phase == .active {
                     Perf.mark("scene.active")
                     Task { await widgetCues.drain() }
+                    // An activity past its until goes; the rest are polled again.
+                    Task { await ActivityKeeper.shared.resume() }
                     // What was shared from another app while Topo was away becomes a turn now.
                     Task { await shares.drain() }
                     // A copy of a still whose ten minutes ran out while Topo was suspended goes now.

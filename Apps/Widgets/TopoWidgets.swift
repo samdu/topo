@@ -39,6 +39,8 @@ struct TopoMomentWidget: Widget {
 struct TopoWidgetBundle: WidgetBundle {
     var body: some Widget {
         TopoSurfaceWidget()
+        TopoActivityWidget()
+        if #available(iOS 26, *) { TopoAlarmWidget() }
         if #available(iOS 18, *) {
             TopoButtonControl()
             TopoToggleControl()

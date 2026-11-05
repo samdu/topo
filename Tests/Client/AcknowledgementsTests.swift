@@ -50,7 +50,7 @@ final class AcknowledgementsTests: XCTestCase {
     }
 
     /// The licence texts are what the permissive licences ask to travel with the binary, so each
-    /// entry is read whole against a copy of its source in `Tests/Fixtures/licences` (FluidAudio 0.17.7's
+    /// entry is read whole against a copy of its source in `Tests/Fixtures/licences` (FluidAudio 0.18.2's
     /// `LICENSE` and `ThirdPartyLicenses/`, nom 7.1.3's `LICENSE`, pipecat-ai/smart-turn's `LICENSE` at `24c7203`, and the notices of the libarchive
     /// files at `fc6563f`, one fixture per wording): its fields are the ones written (a line of the
     /// text read as a key would split it), and each field, with its whitespace folded as the parser

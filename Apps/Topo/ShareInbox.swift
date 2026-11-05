@@ -15,14 +15,14 @@ protocol ShareLine: AnyObject {
 extension Harness: ShareLine {}
 
 /// What the person shared from another app's share sheet (`ShareStore`, written by the share
-/// extension), made into turns: each share is put on the harness's line under the nonce the
-/// extension or the intent minted, and nothing for a nonce already there, so a drain run twice (before a
+/// extension) or attached through the composer's `+` (`ComposerAttachments`), made into turns: each share is put on the harness's line under the nonce the
+/// sheet, the intent or the composer's sheet minted, and nothing for a nonce already there, so a drain run twice (before a
 /// removal, after a crash) is one turn. A harness that has not read the log reads it first, since
 /// before it the harness cannot know what the log holds.
 ///
 /// The extension cannot bring Topo forward, so a share waits in the app group until the app next
-/// drains: when it comes to the front, when the harness first reads the log, and when a
-/// Shortcut's intent runs. The turn's text is written here, never by the
+/// drains: when it comes to the front, when the harness first reads the log, when a
+/// Shortcut's intent runs, and when the composer's sheet sends one. The turn's text is written here, never by the
 /// extension: the person's note and then what was shared under a line that says it was shared,
 /// each as it was kept, so nothing another app handed over reads as the person's own words. An image or a
 /// file is put in the guest's home first (`HomeFile`), under `shared/<the share's nonce>/`,
@@ -139,6 +139,25 @@ final class ShareInbox {
         return queued
     }
 
+    /// The bytes of an image a turn names, from the guest's home on this phone: `shared/<nonce>/<name>`
+    /// opened through a descriptor beneath the home with no link followed anywhere along it, a
+    /// regular file of at most `Share.fileLimit`; nil otherwise. What a turn names is read from
+    /// the log, and the guest can make links in its home, so the path's words are not the judge.
+    nonisolated static func imageData(_ image: TurnImage, under home: URL = GuestResident.homeDirectory) -> Data? {
+        let base = open(home.resolvingSymlinksInPath().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard base >= 0 else { return nil }
+        defer { close(base) }
+        // Non-blocking, so a pipe the guest made at the name answers at once rather than holding
+        // the open until something writes it; the type is judged before anything is read.
+        let file = openat(base, [folder, image.nonce, image.name].joined(separator: "/"), O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC)
+        guard file >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+        var status = stat()
+        guard fstat(file, &status) == 0, status.st_mode & S_IFMT == S_IFREG, status.st_size <= Share.fileLimit,
+              let data = try? handle.read(upToCount: Share.fileLimit + 1), data.count <= Share.fileLimit else { return nil }
+        return data
+    }
+
     /// Takes a share's file back out of the home.
     nonisolated static func unplace(_ share: Share, under home: URL) {
         guard let name = share.file else { return }
@@ -180,7 +199,10 @@ final class ShareInbox {
         case .image, .file:
             guard let path else { return nil }
             let what = share.kind == .image ? "an image" : "a file"
-            shared = "[Shared with Topo from another app: \(what), kept at \(path) (\(share.bytes ?? 0) bytes)]"
+            // Picked on this phone through the composer's `+`, or handed over by another app:
+            // the line says which, and the mind reads what is at the path either way.
+            let how = share.attached ? "Attached in Topo from this phone" : "Shared with Topo from another app"
+            shared = "[\(how): \(what), kept at \(path) (\(share.bytes ?? 0) bytes)]"
         }
         let none = share.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return none ? shared : "\(share.note)\n\n\(shared)"

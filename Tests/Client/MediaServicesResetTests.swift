@@ -25,6 +25,8 @@ final class Seams {
     /// The client format the reader last handed over, which is the object the tap must carry.
     private(set) var lastClient: AVAudioFormat?
     private(set) var engines: [AVAudioEngine] = []
+    /// The microphone's engines made, play engines left out.
+    var inputEngines: Int { engines.filter { $0 is CapturingEngine }.count }
     private(set) var formatReads = 0
     /// Each voice processing a press asked its engine for, with the format reads, whether the
     /// engine was running and how many configures the session had been asked for at that moment: the offline engine has no voice unit to turn on.
@@ -279,15 +281,19 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var released = false
     private var delivered = false
+    private var asked = 0
 
     /// True once the second frame has been yielded.
     var yieldedTheHeldFrame: Bool { lock.withLock { delivered } }
+    /// The sentences asked for: one per sentence read.
+    var streams: Int { lock.withLock { asked } }
     func releaseTheHeldFrame() { lock.withLock { released = true } }
 
     func load(base: URL) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
-        AsyncThrowingStream { continuation in
+        lock.withLock { asked += 1 }
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
                 while !self.lock.withLock({ self.released }) {
