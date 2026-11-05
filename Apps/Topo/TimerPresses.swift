@@ -64,10 +64,15 @@ enum TimerPresses {
                       landed: (@MainActor (String) -> Bool)? = ShortcutIntents.landed,
                       bound: Duration = ShortcutIntents.bound, nonce: String = UUID().uuidString, at time: Date = Date()) async -> Outcome {
         let record = records.read(id)
-        // `.custom` leaves the alarm sounding, so a button that only tells Topo stops it; one that
-        // also starts the next countdown (`.countdown`) has already done so.
+        // `.custom` leaves the alarm sounding, so a button that only tells Topo stops it while it
+        // still sounds; one that also starts the next countdown (`.countdown`) is AlarmKit's to
+        // restart, and a stop would end the countdown it started.
         if button == .second, record?.again == nil {
-            do { try await scheduler.stop(id: id) } catch {
+            do {
+                if try await scheduler.alarms().first(where: { $0.id == id })?.state == .sounding {
+                    try await scheduler.stop(id: id)
+                }
+            } catch {
                 log.error("a timer's button could not stop its alarm: \(error.localizedDescription, privacy: .public)")
             }
         }

@@ -693,7 +693,11 @@ struct TimerTool: Tool {
             case .stop: try await scheduler.stop(id: uuid)
             case .cancel: try await scheduler.cancel(id: uuid)
             }
-            if act == .cancel { sweep(keeping: alarms.filter { $0.id != uuid }, readAt: read) }
+            if act == .cancel {
+                if let sound = records.read(uuid)?.sound { sounds.remove(sound) }
+                records.drop(uuid)
+                sweep(keeping: alarms, readAt: read)
+            }
         } catch {
             let still = act == .cancel || act == .stop ? ", which may still sound" : ""
             return .failed("topo: AlarmKit did not \(act.rawValue) \(id)\(still): \(error.localizedDescription)\n")

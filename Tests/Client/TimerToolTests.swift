@@ -84,6 +84,16 @@ final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     var count: Int { lock.withLock { scheduled.count } }
     var last: TimerPlan? { lock.withLock { scheduled.last?.plan } }
     func set(_ id: UUID, _ state: TimerStatus.State) { lock.withLock { states[id] = state } }
+    /// An alarm AlarmKit holds in `state`, set by no tool.
+    func holds(_ id: UUID, _ state: TimerStatus.State) {
+        lock.withLock {
+            if !scheduled.contains(where: { $0.id == id }) {
+                scheduled.append((id, TimerPlan(when: .after(60), label: "Timer", title: "Timer", pausedTitle: "Timer",
+                                                buttonColor: .token(.onPrimary), tint: .token(.primary))))
+            }
+            states[id] = state
+        }
+    }
 
     func schedule(id: UUID, plan: TimerPlan) async throws {
         if let scheduleThrows { throw scheduleThrows }
@@ -314,7 +324,7 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.last?.label, "Tea")
         XCTAssertEqual(alarms.last?.when, .after(900))
         XCTAssertTrue(reply.text.hasPrefix("set: 00000000-0000-0000-0000-000000000001"), reply.text)
-        XCTAssertTrue(reply.text.contains("sounds at " + ToolDates.write(start.addingTimeInterval(900))), reply.text)
+        XCTAssertTrue(reply.text.contains("sounds at " + ToolDates.write(start.addingTimeInterval(900), in: Self.utc)), reply.text)
     }
 
     func testANoLabelIsTimer() async {
@@ -713,6 +723,7 @@ final class TimerPressTests: XCTestCase {
         try records.write(.init(label: "Plank", made: Date(), tell: "start the other side", onStop: "log the session",
                                 second: "Next", login: login), for: id)
         let alarms = FakeAlarms(nil)
+        alarms.holds(id, .sounding)
         let outcome = await press(.second, alarms)
         XCTAssertEqual(outcome, .kept(nonce: "00000000-0000-0000-0000-0000000000aa"))
         let shares = store.shares()
@@ -742,14 +753,24 @@ final class TimerPressTests: XCTestCase {
     func testAPressAfterASignOutOrAnotherLoginSendsNothing() async throws {
         try records.write(.init(label: "Plank", made: Date(), tell: "next", login: "old-login"), for: id)
         let alarms = FakeAlarms(nil)
+        alarms.holds(id, .sounding)
         let signedOut = await press(.second, alarms)
         XCTAssertEqual(signedOut, .refused(.signedOut))
         try store.open(files: false)
+        alarms.holds(id, .sounding)
         let another = await press(.second, alarms)
         XCTAssertEqual(another, .refused(.signedOut))
         XCTAssertTrue(store.shares().isEmpty)
         // The alarm is stopped all the same: the person pressed it.
         XCTAssertEqual(alarms.acts.map(\.0), [.stop, .stop])
+    }
+
+    /// A press whose alarm is no longer sounding (AlarmKit restarted it, or the person stopped it) stops nothing.
+    func testAPressStopsOnlyASoundingAlarm() async throws {
+        let alarms = FakeAlarms(nil)
+        alarms.holds(id, .counting)
+        _ = await press(.second, alarms)
+        XCTAssertTrue(alarms.acts.isEmpty)
     }
 
     func testAPressWithNoWordsSendsNothing() async throws {
