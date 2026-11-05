@@ -1537,6 +1537,92 @@ final class HarnessIntegrationTests: XCTestCase {
                        "a read that got through took down the failure of a turn it was not about")
     }
 
+    // MARK: The pass's failure (#615)
+
+    /// The answering loop, driven a pass at a time: `passes` finished so far.
+    private struct Looping {
+        let phone: Harness
+        let beats: Beats
+        let open: Task<Void, Never>
+        func next(_ pass: Int) async throws {
+            await beats.tick()
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+        }
+        func stop() async {
+            open.cancel()
+            await open.value
+        }
+    }
+
+    /// A phone whose loop has run one pass online, so its runner is made and every later pass
+    /// that reads the log whole with nothing to answer takes the idle path.
+    private func looping(_ db: FailingDatabase) async throws -> Looping {
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("pass 1") { await beats.passes >= 1 }
+        XCTAssertNil(phone.failure, "the first pass, online, put up a failure")
+        return Looping(phone: phone, beats: beats, open: open)
+    }
+
+    /// Sam's run of build 444616: iCloud out of reach, a pass of the loop fails and its failure
+    /// is the last up; iCloud back, every pass reads the log whole and has nothing to answer, so
+    /// no pass reaches the runner. The line comes down on the first of them, and says so.
+    func testAPassesFailureComesDownOnTheLoopsFirstIdleReadOnceICloudIsBack() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let loop = try await looping(db)
+        let lines = try await cloudLines(after: {
+            await db.refuseReads(true, with: CKError(.networkUnavailable))
+            try await loop.next(2)
+            XCTAssertEqual(loop.phone.failure?.source, .pass, "the pass's failure is not the last one up")
+            await db.refuseReads(false)
+            try await loop.next(3)
+        }, until: { $0.message.hasPrefix("failure down:") }).map(\.message).filter { $0.hasPrefix("failure ") }
+        await loop.stop()
+        XCTAssertNil(loop.phone.failure, "iCloud is back and the red line stands")
+        XCTAssertEqual(lines.first, "failure up: read")
+        XCTAssertEqual(lines.last.map { $0.hasPrefix("failure down: pass after ") }, true, "\(lines)")
+    }
+
+    /// A pass that completes takes down its own failure and no other: a turn iCloud would not
+    /// take is still owed (the guest has it, so its failure is iCloud behind), and that failure
+    /// stays up through passes that read the log and complete.
+    func testAPassThatCompletesLeavesATurnsFailureStanding() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let loop = try await looping(db)
+        await db.refuseWrites(true)
+        await loop.phone.send("water the plants")
+        XCTAssertEqual(loop.phone.waiting, ["water the plants"])
+        let owed = try XCTUnwrap(loop.phone.failure, "the turn iCloud would not take put nothing up")
+        XCTAssertNotEqual(owed.source, .pass)
+        for pass in 2...4 { try await loop.next(pass) }
+        await loop.stop()
+        XCTAssertEqual(loop.phone.waiting, ["water the plants"], "the turn went with writes refused")
+        XCTAssertEqual(loop.phone.failure, owed, "a pass took down the failure of a turn still owed")
+    }
+
+    /// The race #615 names: offline, a read and a pass both fail, in either order, and the last
+    /// one up is whichever failed last. Once iCloud is back, one pass of the loop leaves nothing
+    /// standing either way.
+    func testAReadAndAPassFailingInEitherOrderLeaveNothingOnceICloudIsBack() async throws {
+        for readLast in [false, true] {
+            let db = FailingDatabase(InMemoryRecordDatabase())
+            let loop = try await looping(db)
+            await db.refuseReads(true)
+            // The loop's own pass reads first and then runs the pass, so the pass fails last.
+            try await loop.next(2)
+            XCTAssertEqual(loop.phone.failure?.source, .pass)
+            if readLast {
+                await loop.phone.refresh()
+                XCTAssertEqual(loop.phone.failure?.source, .read)
+            }
+            await db.refuseReads(false)
+            try await loop.next(3)
+            await loop.stop()
+            XCTAssertNil(loop.phone.failure, readLast ? "the read failed last and its line stands" : "the pass failed last and its line stands")
+        }
+    }
+
     // MARK: The reply that is read aloud
 
     /// A reply written by another primary — the hub, or a phone holding the lease.
