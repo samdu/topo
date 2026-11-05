@@ -130,16 +130,18 @@ struct LogTool: Tool {
             (call.category.map { line.category.compare($0, options: [.caseInsensitive]) == .orderedSame } ?? true)
                 && (call.grep.map { line.message.range(of: $0, options: [.caseInsensitive]) != nil } ?? true)
         }
+        // The millisecond the second's edge falls in is held back whole: a line of it may still be
+        // on its way, and a millisecond is counted only once every line of it has settled.
         let settled = Self.ms(at.addingTimeInterval(-Self.settle))
         guard let after = call.after else {
             let window = placed.filter { $0.line.at >= since }
             // The cursor stops short of the last second, as a page does: a line still on its way to
             // the store comes again at the next --after rather than being passed over.
-            let end = window.last { $0.ms <= settled }.map { Cursor(ms: $0.ms, count: $0.index) }
+            let end = window.last { $0.ms < settled }.map { Cursor(ms: $0.ms, count: $0.index) }
                 ?? Self.cursor(max(since, at.addingTimeInterval(-Self.settle)))
             return .ok(Self.fit(window.filter { keeps($0.line) }, none: "no log lines in the last \(call.minutes) min", end: end))
         }
-        let unread = placed.filter { after.precedes($0) && $0.ms <= settled }
+        let unread = placed.filter { after.precedes($0) && $0.ms < settled }
         // Lost only when the store has gone on past the cursor without the lines it counted: a
         // cursor in the future has nothing after it yet, and nothing was lost.
         let lost = after.count.map { count in
@@ -235,9 +237,10 @@ struct LogTool: Tool {
         let time = String(parts[0])
         let strategy = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
         guard let date = (try? strategy.parse(time)) ?? (try? Date.ISO8601FormatStyle().parse(time)) else { return nil }
-        // A written time has at most milliseconds, so it is rounded to its own and never floored
-        // to the one before.
-        let ms = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        // The millisecond the time falls in: one written to the millisecond is that one exactly,
+        // which a float a hair under it must not floor to the one before; a finer one is floored.
+        let exact = date.timeIntervalSince1970 * 1000
+        let ms = Int64(abs(exact - exact.rounded()) < 0.001 ? exact.rounded() : exact.rounded(.down))
         guard parts.count == 2 else { return Cursor(ms: ms, count: nil) }
         let digits = parts[1]
         guard !digits.isEmpty, digits.count <= 6, digits.allSatisfy({ $0.isASCII && $0.isNumber }), let count = Int(digits) else { return nil }

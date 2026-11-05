@@ -47,6 +47,16 @@ import CloudKit
         #expect(long.until == clock.at.withLock { $0 }.addingTimeInterval(LogLevels.longest))
     }
 
+    /// A category that writes only errors still has its level end, and says so.
+    @Test func anErrorAloneEndsALevelPastItsExpiry() {
+        let clock = Clock(), told = Told()
+        let levels = levels(clock, told)
+        levels.set(.auth, .debug, for: 60)
+        clock.advance(61)
+        TopoLog(.auth, levels: levels).error("keychain refused")
+        #expect(told.ended.withLock { $0 } == ["auth debug"])
+    }
+
     @Test func offHoldsUntilTheLaunchUnlessGivenATimeAndDefaultClears() {
         let clock = Clock()
         let levels = levels(clock)

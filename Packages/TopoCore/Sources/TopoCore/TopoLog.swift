@@ -129,6 +129,8 @@ public struct TopoLog: Sendable {
 
     /// Written at every level, `off` included.
     public func error(_ line: @autoclosure () -> String) {
+        // Read for its expiry alone: a category that writes only errors still has its level end.
+        _ = levels.setting(category)
         let line = line()
         logger.error("\(line, privacy: .public)")
     }

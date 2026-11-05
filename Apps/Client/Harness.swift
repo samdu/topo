@@ -37,7 +37,7 @@ final class Harness {
     /// When the chat's failure line was put up and taken down, in the `cloud` category, by what
     /// it came from: what iCloud answered is the line `RecordingDatabase` wrote before it. Never
     /// the line's words, which can carry what an error said.
-    private static func noteFailure(from old: Failure?, to new: Failure?, since: inout ContinuousClock.Instant?) {
+    static func noteFailure(from old: Failure?, to new: Failure?, since: inout ContinuousClock.Instant?) {
         guard old?.source != new?.source || (old == nil) != (new == nil) else { return }
         let now = ContinuousClock.now
         let held = since.map { " after \(Int(($0.duration(to: now)) / .seconds(1))) s" } ?? ""

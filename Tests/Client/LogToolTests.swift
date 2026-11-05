@@ -44,7 +44,7 @@ final class LogToolTests: XCTestCase {
         \(LogTool.stamp(Self.noon.addingTimeInterval(-599))) | notice | audio | hold taken
         \(LogTool.stamp(Self.noon.addingTimeInterval(-30))) | info | tools | run maps: status 0
         \(LogTool.stamp(Self.noon.addingTimeInterval(-1))) | error | perf | mark t=1 turn.sent second line
-        \(cursor(1, 1))
+        \(cursor(30, 1))
 
         """))
         XCTAssertEqual(LogTool.stamp(Self.noon, in: TimeZone(identifier: "America/Los_Angeles")!), "2026-09-26T12:00:00.000-07:00")
@@ -101,8 +101,8 @@ final class LogToolTests: XCTestCase {
         XCTAssertEqual(written.first, "… \(1000 - kept) lines left out, cut at 24 KB; read them and those after with --after \(LogTool.stamp(Self.noon.addingTimeInterval(-500)))#0")
         XCTAssertLessThanOrEqual(written[0].utf8.count + 1, LogTool.firstLineRoom)
         XCTAssertTrue(written[written.count - 2].contains("| line 999 "), written[written.count - 2])
-        // The newest line is inside the last second, so the cursor is before it.
-        XCTAssertEqual(written.last, cursor(1, 1))
+        // The newest lines are in the last second or the millisecond at its edge, so the cursor is before them.
+        XCTAssertEqual(written.last, cursor(1.5, 1))
         XCTAssertTrue(written[1].contains("| line \(1000 - kept) "), written[1])
         XCTAssertGreaterThan(kept, 150)
         // One more line would not have fitted.
@@ -204,6 +204,53 @@ final class LogToolTests: XCTestCase {
         let reply = await tool.run([])
         XCTAssertEqual(messages(reply), ["settled", "fresh"])
         XCTAssertTrue(reply.text.hasSuffix(cursor(5, 1) + "\n"), reply.text)
+    }
+
+    /// A store whose lines change between reads, read at a clock the test moves.
+    private final class Arriving: LogReading, @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: [LogLine] = []
+        var at = Date()
+        func set(_ lines: [LogLine], at: Date) { lock.withLock { held = lines; self.at = at } }
+        func now() -> Date { lock.withLock { at } }
+        func lines(since: Date) throws -> [LogLine] { lock.withLock { held } }
+    }
+
+    /// The millisecond the settle's edge falls in is held back whole. A line of it read while a
+    /// line stamped earlier in that same millisecond is still on its way would otherwise be
+    /// counted as the first, and the late one skipped while the counted one came again.
+    func testTheMillisecondAtTheSettlesEdgeIsHeldBackWhole() async {
+        let store = Arriving()
+        let tool = LogTool(reader: store, now: { store.now() })
+        let edge = Self.noon.addingTimeInterval(-1)
+        let late = LogLine(at: edge.addingTimeInterval(0.0008), level: "notice", category: "audio", message: "late")
+        let early = LogLine(at: edge.addingTimeInterval(0.0009), level: "notice", category: "audio", message: "early")
+        let before = line(5, "audio", "before")
+        // At 0.1 ms past noon the edge is in the millisecond both lines are stamped in, and only
+        // the second has reached the store.
+        store.set([before, early], at: Self.noon.addingTimeInterval(0.0001))
+        let first = await tool.run(["--after", LogTool.stamp(Self.noon.addingTimeInterval(-60))])
+        XCTAssertEqual(messages(first), ["before"])
+        let cursor = String(first.text.split(separator: "\n").last!.dropFirst("cursor: ".count))
+        XCTAssertEqual(cursor, LogTool.stamp(Self.noon.addingTimeInterval(-5)) + "#1")
+        store.set([before, late, early], at: Self.noon.addingTimeInterval(5))
+        let second = await tool.run(["--after", cursor])
+        XCTAssertEqual(messages(second), ["late", "early"])
+        // --since stops its cursor short of the same millisecond.
+        store.set([before, early], at: Self.noon.addingTimeInterval(0.0001))
+        let since = await tool.run([])
+        XCTAssertTrue(since.text.hasSuffix(self.cursor(5, 1) + "\n"), since.text)
+    }
+
+    /// A time written finer than a millisecond is in the millisecond it falls in, not the next:
+    /// a line later in that millisecond is still after it. One written to the millisecond is
+    /// that millisecond exactly.
+    func testATimeFinerThanAMillisecondIsTheMillisecondItFallsIn() async {
+        let base = ISO8601DateFormatter().date(from: "2026-09-26T18:59:50Z")!
+        let ms = LogTool.ms(base) + 123
+        XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.1239Z"), LogTool.Cursor(ms: ms, count: nil))
+        XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.123Z"), LogTool.Cursor(ms: ms, count: nil))
+        XCTAssertEqual(LogTool.cursor("2026-09-26T18:59:50.123Z#2"), LogTool.Cursor(ms: ms, count: 2))
     }
 
     /// A paged read holds back the last second, which a line can still be on its way to the
