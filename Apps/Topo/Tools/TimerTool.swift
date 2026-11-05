@@ -132,6 +132,13 @@ final class TimerRecords: Sendable {
         var login: String?
         /// The file in `Library/Sounds` the alert plays.
         var sound: String?
+        /// The words on the countdown's Pause and Cancel and the paused Resume, for `list`.
+        var pause: String?
+        var resume: String?
+        var cancel: String?
+        /// When a sweep first found AlarmKit no longer listing the alarm, for a record whose words
+        /// a Stop's intent may still be on its way to read.
+        var gone: Date?
     }
 
     static let shared = TimerRecords(folder: URL.applicationSupportDirectory.appendingPathComponent("Timers", isDirectory: true))
@@ -174,13 +181,29 @@ final class TimerRecords: Sendable {
         lock.withLock { try? FileManager.default.removeItem(at: file(id)) }
     }
 
-    /// Drops every record of an alarm AlarmKit no longer lists. Called inside `alone`.
-    func sweep(keeping alarms: Set<UUID>) {
+    /// How long a record with words outlives its alarm. A Stop removes a one-shot alarm before
+    /// its intent runs, which then reads the words here.
+    static let grace: TimeInterval = 300
+
+    /// Drops every record of an alarm AlarmKit no longer lists. One with words a button hands
+    /// is marked gone at the first such sweep and dropped once `grace` has passed since.
+    /// Called inside `alone`.
+    func sweep(keeping alarms: Set<UUID>, now: Date) {
         lock.withLock {
             let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
             for name in names where name.hasSuffix(".json") {
                 guard let id = UUID(uuidString: String(name.dropLast(5))), !alarms.contains(id) else { continue }
-                try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+                let url = folder.appendingPathComponent(name)
+                if var record = (try? Data(contentsOf: url)).flatMap({ try? JSONDecoder().decode(Record.self, from: $0) }),
+                   record.tell != nil || record.onStop != nil {
+                    guard let gone = record.gone else {
+                        record.gone = now
+                        try? JSONEncoder().encode(record).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                        continue
+                    }
+                    if now.timeIntervalSince(gone) < Self.grace { continue }
+                }
+                try? FileManager.default.removeItem(at: url)
             }
         }
     }
@@ -231,6 +254,8 @@ struct TimerTool: Tool {
     var hasSymbol: @Sendable (String) -> Bool = { UIImage(systemName: $0) != nil }
     /// Copies a sound file from the guest's home into `Library/Sounds` under the name given.
     var sounds: TimerSounds = TimerSounds()
+    /// The copy itself, which the suites hold up.
+    var copy: @Sendable (TimerSounds, String, UUID) async throws -> String = { try await $0.copy($1, for: $2) }
     /// What the last prompt `OnScreen` was asked for came to, kept for every call that waited on it.
     let asked = Asked()
 
@@ -245,7 +270,7 @@ struct TimerTool: Tool {
     topo timer SPAN [LABEL] [OPTIONS]      a countdown of SPAN (90s, 15m, 2h; 1s to 24h) that sounds at zero
     topo timer at TIME [LABEL] [OPTIONS]   an alarm at TIME: HH:MM (24-hour, the next one; with --every, those days)
                                            or a moment, 2026-11-05T07:30
-    topo timer list                        Topo's timers and alarms, id first, with their state
+    topo timer list                        Topo's timers and alarms, id first, with their state and buttons
     topo timer pause ID | resume ID        hold a counting timer, or set a held one counting again
     topo timer again ID                    one sounding: start its next countdown (the --again span)
     topo timer stop ID                     one sounding: stop it (one with --every waits for its next day)
@@ -601,16 +626,22 @@ struct TimerTool: Tool {
         guard !Task.isCancelled else { return PhoneTool.late }
         var plan = plan
         let id = makeID()
-        let set = now()
         if let soundPath {
             do {
-                plan.sound = try await sounds.copy(soundPath, for: id)
+                plan.sound = try await copy(sounds, soundPath, id)
             } catch let failure as ToolFailure {
                 return ToolReply(status: failure.status, text: "topo: nothing was set: \(failure.text)\n")
             } catch {
                 return .failed("topo: nothing was set: the sound could not be copied: \(error.localizedDescription)\n")
             }
+            // The copy runs detached, so the service may have answered at its bound meanwhile.
+            guard !Task.isCancelled else {
+                if let sound = plan.sound { sounds.remove(sound) }
+                return PhoneTool.late
+            }
         }
+        // The countdown starts at the schedule, after the sound's copy.
+        let set = now()
         do {
             try await scheduler.schedule(id: id, plan: plan)
         } catch {
@@ -627,7 +658,8 @@ struct TimerTool: Tool {
             fires = set.addingTimeInterval(seconds)
         }
         let record = TimerRecords.Record(label: plan.label, fires: fires, span: span, again: plan.again, tell: tell,
-                                         onStop: onStop, second: plan.second?.text, login: login, sound: plan.sound)
+                                         onStop: onStop, second: plan.second?.text, login: login, sound: plan.sound,
+                                         pause: plan.pause?.text, resume: plan.resume?.text, cancel: plan.cancel?.text)
         var kept = ""
         do {
             try records.write(record, for: id)
@@ -704,21 +736,32 @@ struct TimerTool: Tool {
             }
             if case let .on(date) = alarm.when { order = min(order, date) }
             if case let .at(hour, minute, days) = alarm.when { order = min(order, next(hour: hour, minute: minute, days: days)) }
-            var extras: [String] = []
-            if let again = record?.again { extras.append("again \(Self.span(again))") }
-            if record?.tell != nil { extras.append("tells Topo at \(record?.second ?? "its button")") }
-            if record?.onStop != nil { extras.append("tells Topo at Stop") }
-            lines.append((order, PhoneTool.line([alarm.id.uuidString.lowercased(), record?.label, shape, state] + extras)))
+            lines.append((order, PhoneTool.line([alarm.id.uuidString.lowercased(), record?.label, shape, state] + Self.buttons(record))))
         }
         let text = lines.sorted { $0.order < $1.order }.map(\.line)
         return .ok(PhoneTool.lines(text, none: "no timers"))
+    }
+
+    /// What each of an alarm's buttons says and does, as its record keeps them.
+    static func buttons(_ record: TimerRecords.Record?) -> [String] {
+        guard let record else { return [] }
+        var buttons: [String] = []
+        if let pause = record.pause { buttons.append("button \"\(pause)\" pauses") }
+        if let resume = record.resume { buttons.append("button \"\(resume)\" resumes") }
+        if let cancel = record.cancel { buttons.append("button \"\(cancel)\" cancels") }
+        if let second = record.second {
+            let does = [record.again.map { "starts \(Self.span($0)) again" }, record.tell.map { _ in "tells Topo" }].compactMap { $0 }
+            buttons.append("button \"\(second)\" " + does.joined(separator: " and "))
+        }
+        if record.onStop != nil { buttons.append("Stop tells Topo") }
+        return buttons
     }
 
     /// Drops the records and sounds of alarms AlarmKit no longer lists: sounds by the id in their
     /// names, so a copy whose record was never kept goes too.
     private func sweep(keeping alarms: [TimerStatus]) {
         let ids = Set(alarms.map(\.id))
-        records.sweep(keeping: ids)
+        records.sweep(keeping: ids, now: now())
         sounds.sweep(keeping: ids)
     }
 
@@ -749,7 +792,11 @@ struct TimerTool: Tool {
             return .failed("topo: AlarmKit did not list its alarms, so \(id) was not asked to \(act.rawValue): \(error.localizedDescription)\n")
         }
         do {
-            guard let alarm = alarms.first(where: { $0.id == uuid }) else { return missing }
+            guard let alarm = alarms.first(where: { $0.id == uuid }) else {
+                // What AlarmKit has already removed leaves its record and sound to the sweep.
+                sweep(keeping: alarms)
+                return missing
+            }
             if let needs = Self.needs(act), !needs.contains(alarm.state) {
                 return .failed("topo: \(id) is \(alarm.state.rawValue): \(Self.why(act))\n")
             }

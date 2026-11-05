@@ -89,6 +89,8 @@ enum TimerPresses {
                     try await scheduler.stop(id: id)
                 }
             } catch {
+                // A stop that failed sets off no Stop intent, so the person's own Stop is theirs.
+                stopping[id] = nil
                 log.error("a timer's button could not stop its alarm: \(error.localizedDescription, privacy: .public)")
             }
         }

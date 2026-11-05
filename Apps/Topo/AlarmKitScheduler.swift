@@ -27,11 +27,20 @@ struct AlarmKitScheduler: AlarmScheduler {
     /// schedule, the intents a press runs, and the sound.
     static func configuration(id: UUID, plan: TimerPlan) -> AlarmManager.AlarmConfiguration<TopoAlarmMetadata> {
         let timing = timing(plan)
+        let intents = intents(id: id, plan: plan)
         return AlarmManager.AlarmConfiguration(
             countdownDuration: timing.duration, schedule: timing.schedule, attributes: attributes(plan),
-            stopIntent: plan.tellsOnStop ? TimerPressIntent(alarm: id, button: .stop) : nil,
-            secondaryIntent: plan.tells ? TimerPressIntent(alarm: id, button: .second, restarts: plan.again != nil) : nil,
-            sound: plan.sound.map { .named($0) } ?? .default)
+            stopIntent: intents.stop, secondaryIntent: intents.second,
+            sound: sound(plan))
+    }
+
+    /// The alert's sound: the copy in `Library/Sounds` the plan names, or the system's.
+    static func sound(_ plan: TimerPlan) -> AlertConfiguration.AlertSound { plan.sound.map { .named($0) } ?? .default }
+
+    /// What Stop and the second button run: a press of either hands Topo its words.
+    static func intents(id: UUID, plan: TimerPlan) -> (stop: TimerPressIntent?, second: TimerPressIntent?) {
+        (plan.tellsOnStop ? TimerPressIntent(alarm: id, button: .stop) : nil,
+         plan.tells ? TimerPressIntent(alarm: id, button: .second, restarts: plan.again != nil) : nil)
     }
 
     static func attributes(_ plan: TimerPlan) -> AlarmAttributes<TopoAlarmMetadata> {

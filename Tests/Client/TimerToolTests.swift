@@ -112,7 +112,10 @@ private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
             if case .after = plan.when { states[id] = .counting } else { states[id] = .set }
         }
     }
+    /// What a list throws, where set.
+    var alarmsThrow: (any Error)?
     func alarms() async throws -> [TimerStatus] {
+        if let alarmsThrow { throw alarmsThrow }
         let read = read()
         if let alarmsGate {
             lock.withLock { listing = true }
@@ -749,8 +752,121 @@ extension TimerToolTests {
         let tool = tool(alarms)
         _ = await tool.run(["at", "06:00", "Run", "--every", "weekdays", "--again", "10m", "--tell", "go", "--button-text", "Later"])
         let list = await tool.run(["list"])
-        XCTAssertTrue(list.text.contains("Run | at 06:00 every mon,tue,wed,thu,fri, next 2026-10-27T06:00:00Z | set | again 10m | tells Topo at Later"),
+        XCTAssertTrue(list.text.contains("Run | at 06:00 every mon,tue,wed,thu,fri, next 2026-10-27T06:00:00Z | set | button \"Later\" starts 10m again and tells Topo"),
                       list.text)
+    }
+}
+
+/// What Codex's first round on #607 found: records kept for a Stop on its way, cleanup on a cancel
+/// of what AlarmKit already removed, a failed list, the copy of a sound and the bound.
+extension TimerToolTests {
+    func testListSaysEachButtonAcrossARelaunch() async {
+        let alarms = granted
+        _ = await tool(alarms).run(["5m", "Plank", "--pause", "--pause-text", "Hold", "--cancel", "--cancel-text", "Skip",
+                                    "--again", "same", "--button-text", "Next"])
+        let list = await tool(alarms, records: TimerRecords(folder: root.appendingPathComponent("Timers"))).run(["list"])
+        XCTAssertTrue(list.text.contains(#"button "Hold" pauses | button "Resume" resumes | button "Skip" cancels | button "Next" starts 5m again"#),
+                      list.text)
+    }
+
+    /// A Stop removes a one-shot alarm before its intent reads the words, so a list between the
+    /// two keeps a record with words until the grace has passed.
+    func testARecordWithWordsOutlivesItsAlarmByTheGrace() async throws {
+        let alarms = granted
+        let stopped = UUID(), plain = UUID()
+        try records.write(.init(label: "Plank", onStop: "log it", login: "login-1"), for: stopped)
+        try records.write(.init(label: "Plain"), for: plain)
+        _ = await tool(alarms).run(["list"])
+        XCTAssertEqual(records.read(stopped)?.onStop, "log it")
+        XCTAssertEqual(records.read(stopped)?.gone, start)
+        XCTAssertNil(records.read(plain))
+        _ = await tool(alarms, now: start.addingTimeInterval(TimerRecords.grace - 1)).run(["list"])
+        XCTAssertEqual(records.read(stopped)?.gone, start, "the first sweep's mark stands")
+        _ = await tool(alarms, now: start.addingTimeInterval(TimerRecords.grace)).run(["list"])
+        XCTAssertNil(records.read(stopped))
+    }
+
+    func testCancelOfAnAlarmAlreadyGoneTakesItsRecordAndSound() async throws {
+        let alarms = granted
+        let gone = UUID()
+        try records.write(.init(label: "Gone", sound: "topo-timer-\(gone.uuidString.lowercased()).caf"), for: gone)
+        let sounds = root.appendingPathComponent("Sounds")
+        try FileManager.default.createDirectory(at: sounds, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: sounds.appendingPathComponent("topo-timer-\(gone.uuidString.lowercased()).caf"))
+        let reply = await tool(alarms).run(["cancel", gone.uuidString])
+        XCTAssertTrue(reply.text.contains("no timer of Topo's"), reply.text)
+        XCTAssertNil(records.read(gone))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sounds.path), [])
+    }
+
+    /// A list AlarmKit fails is said as that, and drops no record or sound.
+    func testAFailedListKeepsEveryRecordAndSound() async throws {
+        let alarms = granted
+        let tool = tool(alarms)
+        _ = await tool.run(["5m", "Plank", "--tell", "next"])
+        let sounds = root.appendingPathComponent("Sounds")
+        try FileManager.default.createDirectory(at: sounds, withIntermediateDirectories: true)
+        let sound = "topo-timer-\(first.uuidString.lowercased()).caf"
+        try Data("x".utf8).write(to: sounds.appendingPathComponent(sound))
+        alarms.alarmsThrow = CocoaError(.featureUnsupported)
+        let list = await tool.run(["list"])
+        XCTAssertEqual(list.status, ToolReply.failed)
+        XCTAssertTrue(list.text.contains("AlarmKit did not list them"), list.text)
+        for act in ["pause", "cancel"] {
+            let reply = await tool.run([act, first.uuidString])
+            XCTAssertTrue(reply.text.contains("AlarmKit did not list its alarms, so \(first.uuidString) was not asked to \(act)"), reply.text)
+        }
+        XCTAssertTrue(alarms.acts.isEmpty)
+        XCTAssertEqual(records.read(first)?.tell, "next")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sounds.path), [sound])
+    }
+
+    /// A sound reaches the plan under the alarm's name, and the countdown is counted from after
+    /// its copy, which is when AlarmKit starts it.
+    func testASoundReachesThePlanAndTheCountdownStartsAfterItsCopy() async throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("home"), withIntermediateDirectories: true)
+        try writeTone(root.appendingPathComponent("home/bell.caf"), seconds: 1)
+        let alarms = granted
+        let clock = LockedBox(start)
+        var tool = tool(alarms)
+        tool.now = { clock.with { $0 } }
+        tool.copy = { sounds, path, id in
+            clock.with { $0 = $0.addingTimeInterval(2) }
+            return try await sounds.copy(path, for: id)
+        }
+        let reply = await tool.run(["10s", "Bell", "--sound", "/home/topo/bell.caf"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        let name = "topo-timer-\(first.uuidString.lowercased()).caf"
+        XCTAssertEqual(alarms.last?.sound, name)
+        XCTAssertEqual(records.read(first)?.sound, name)
+        XCTAssertEqual(records.read(first)?.fires, start.addingTimeInterval(12))
+        XCTAssertTrue(reply.text.contains("sounds at " + ToolDates.write(start.addingTimeInterval(12), in: Self.utc)), reply.text)
+    }
+
+    /// A call the service answered at its bound while the sound was copying sets nothing, and
+    /// leaves no copy.
+    func testACallCancelledDuringTheCopySetsNothing() async throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("home"), withIntermediateDirectories: true)
+        try writeTone(root.appendingPathComponent("home/bell.caf"), seconds: 1)
+        let alarms = granted
+        let copying = Gate()
+        let entered = Raised()
+        var tool = tool(alarms)
+        tool.copy = { sounds, path, id in
+            await MainActor.run { entered.up = true }
+            await copying.wait()
+            return try await sounds.copy(path, for: id)
+        }
+        let call = Task { await tool.run(["10s", "Bell", "--sound", "/home/topo/bell.caf"]) }
+        guard await within({ entered.up }) else { return XCTFail("the copy never began") }
+        call.cancel()
+        await copying.open()
+        let reply = await call.value
+        XCTAssertEqual(reply.status, ToolReply.timedOut, reply.text)
+        XCTAssertEqual(alarms.count, 0)
+        XCTAssertNil(records.read(first))
+        let left = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Sounds").path)) ?? []
+        XCTAssertTrue(left.isEmpty, "\(left)")
     }
 }
 
@@ -848,6 +964,21 @@ final class TimerPressTests: XCTestCase {
         XCTAssertEqual(store.shares().count, 1)
     }
 
+    /// A stop AlarmKit refused set off no Stop intent, so the person's own Stop within the
+    /// window is their turn.
+    func testAFailedStopLeavesThePersonsStopTheirs() async throws {
+        try store.open(files: false)
+        try records.write(.init(label: "Plank", tell: "next", onStop: "log it", login: store.door()?.login), for: id)
+        let alarms = FakeAlarms(nil)
+        alarms.holds(id, .sounding)
+        alarms.actFails = true
+        _ = await press(.second, alarms)
+        let stop = await TimerPresses.press(id, .stop, records: records, scheduler: alarms, store: store, drain: nil, landed: nil,
+                                            nonce: "00000000-0000-0000-0000-0000000000cc")
+        XCTAssertEqual(stop, .kept(nonce: "00000000-0000-0000-0000-0000000000cc"))
+        XCTAssertEqual(store.shares().count, 2)
+    }
+
     func testAPressWithNoWordsSendsNothing() async throws {
         try store.open(files: false)
         let alarms = FakeAlarms(nil)
@@ -874,17 +1005,24 @@ final class TimerSoundTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    /// A linear PCM file of `seconds` at `name` under the home.
     private func tone(_ name: String, seconds: Double) throws {
+        try writeTone(root.appendingPathComponent("home/\(name)"), seconds: seconds)
+    }
+}
+
+/// A linear PCM file of `seconds` at `url`.
+private func writeTone(_ url: URL, seconds: Double) throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1)!
-        let file = try AVAudioFile(forWriting: root.appendingPathComponent("home/\(name)"),
+        let file = try AVAudioFile(forWriting: url,
                                    settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 8000, AVNumberOfChannelsKey: 1,
                                               AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false])
         let frames = AVAudioFrameCount(seconds * 8000)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
         buffer.frameLength = frames
         try file.write(from: buffer)
-    }
+}
+
+extension TimerSoundTests {
 
     func testAShortPCMSoundIsCopiedUnderTheAlarmsName() async throws {
         try tone("bell.caf", seconds: 2)
@@ -948,6 +1086,28 @@ final class AlarmKitPlanTests: XCTestCase {
         XCTAssertEqual(String(localized: presentation.paused!.title), "Held")
         XCTAssertEqual(String(localized: presentation.alert.title), "Done")
         XCTAssertEqual(attributes.metadata?.cancel, .init(text: "Skip", icon: "xmark", colour: "text"))
+    }
+
+    /// What Stop and the second button run, and the sound, as the configuration is given them.
+    func testIntentsAndSound() {
+        let id = UUID()
+        var plan = plan(.after(60))
+        XCTAssertNil(AlarmKitScheduler.intents(id: id, plan: plan).stop)
+        XCTAssertNil(AlarmKitScheduler.intents(id: id, plan: plan).second)
+        XCTAssertEqual(AlarmKitScheduler.sound(plan), .default)
+        plan.tells = true
+        plan.tellsOnStop = true
+        plan.sound = "topo-timer-x.caf"
+        var intents = AlarmKitScheduler.intents(id: id, plan: plan)
+        XCTAssertEqual(intents.stop?.alarm, id.uuidString)
+        XCTAssertEqual(intents.stop?.button, "stop")
+        XCTAssertEqual(intents.second?.alarm, id.uuidString)
+        XCTAssertEqual(intents.second?.button, "second")
+        XCTAssertEqual(intents.second?.restarts, false)
+        XCTAssertEqual(AlarmKitScheduler.sound(plan), .named("topo-timer-x.caf"))
+        plan.again = 30
+        intents = AlarmKitScheduler.intents(id: id, plan: plan)
+        XCTAssertEqual(intents.second?.restarts, true)
     }
 
     func testTiming() {
