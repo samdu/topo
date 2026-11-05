@@ -527,7 +527,7 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.working(false)
         XCTAssertEqual(bed.fades.last?.to, 0, "off did not stop the bed")
         // Wanted again before the pause lands: the pause is cancelled and the bed plays on.
-        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
         rig.defaults.set(WorkingSounds.Mode.sounds.rawValue, forKey: WorkingSounds.key)
         rig.sounds.working(true)
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
@@ -626,7 +626,7 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertTrue(rig.audio.holding, "the process was let go of with the fade unheard")
         XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"), "the keeper stopped between the wait's hold and the fade's")
         XCTAssertEqual(rig.seams.records, [], "the deferred claim applied between the wait's hold and the fade's")
-        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
         rig.clock.fire()
         await settle("the fade's hold to go") { !rig.audio.holding }
         // Away, the last hold's going applies nothing either: the session is marked for the
@@ -643,7 +643,7 @@ final class KeeperSoundsTests: XCTestCase {
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.sounds.working(false)
         XCTAssertTrue(rig.sounds.holdingASound)
-        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
         rig.sounds.working(true)
         await drain()
         XCTAssertTrue(rig.sounds.holdingASound, "cancelling the pause let go of the fade's hold")
@@ -657,7 +657,7 @@ final class KeeperSoundsTests: XCTestCase {
         let rig = await rig(mode: .sounds)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.speaker.endAwaiting("turn", "the test is done")
-        await settle("the fade's sleeps to be asked for") { rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count == 2 }
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
         rig.clock.fire()
         await settle("the fade's hold to go") { !rig.audio.holding }
         // Nothing held: a receipt is the keeper's and is not played; the bed is not either.
