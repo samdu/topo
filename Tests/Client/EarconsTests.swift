@@ -25,6 +25,12 @@ final class FakeCuePlayer: CuePlayer {
         return true
     }
 
+    private(set) var stops = 0
+    func stop() {
+        stops += 1
+        whenDone = nil
+    }
+
     /// Whether a play is still being heard out.
     var sounding: Bool { whenDone != nil }
 
@@ -34,6 +40,19 @@ final class FakeCuePlayer: CuePlayer {
         whenDone = nil
         done?()
     }
+}
+
+/// An `AVAudioPlayer` whose sounding the suite states: `play` starts it, and the test says when
+/// it falls silent, as the hardware would.
+final class StatedPlayer: AVAudioPlayer {
+    var sounding = false
+    override var isPlaying: Bool { sounding }
+    override func play() -> Bool {
+        sounding = true
+        return true
+    }
+    override func stop() { sounding = false }
+    override func prepareToPlay() -> Bool { true }
 }
 
 /// Every player `Earcons` asked for, in order, and the file each was made over.
@@ -439,6 +458,19 @@ final class EarconsTests: XCTestCase {
         }
     }
 
+    /// A reply marked failed and stopped before it drained leaves nothing behind: the next reply,
+    /// read to its end, sounds `done`. The mark is the reading's, not the speaker's.
+    func testAReplyAfterAFailedOneStoppedMidwayEndsDone() async throws {
+        let rig = await rig(heard: .dataRendered)
+        rig.speaker.speak(writing: "The lights are", answering: "turn")
+        rig.speaker.turnFailed("turn")
+        rig.speaker.stop()
+        XCTAssertEqual(rig.earcons.played, [], "a stop sounded a cue")
+        XCTAssertTrue(rig.speaker.speak("The lights are off."))
+        try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
+        XCTAssertEqual(rig.earcons.played, [.done], "the reply after a failed one stopped midway did not end done")
+    }
+
     /// A guest that exits before its turn's end is not a failure: the bridge reads its transcript
     /// and a reply found there answers the turn, so the reading-under-way site tells no failure
     /// for that end — only for an error result, the one end nothing is recovered from. Through the
@@ -474,24 +506,63 @@ final class EarconsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
-    /// The real player's finish names the play it is for: a finish posted for one play and
-    /// delivered after the next has begun ends nothing, and the next play's own finish ends it.
+    /// The real player's finish ends a play only if the player is silent when it arrives: the
+    /// first play ends, the cue begins again on the same player before the first's finish is
+    /// posted, and that finish, arriving with the second sounding, ends nothing; the second's own
+    /// ends it. Over a player whose sounding the suite states.
     func testAStaleFinishOfTheRealPlayerEndsNothing() async throws {
         let url = try XCTUnwrap(Bundle(for: Earcons.self).url(forResource: "earcon_listening", withExtension: "mp3"))
-        let player = try EarconPlayer(url: url)
-        let poster = try AVAudioPlayer(contentsOf: url)
+        let stated = try StatedPlayer(contentsOf: url)
+        let player = EarconPlayer(player: stated)
         var first = 0
         var second = 0
         _ = player.play { first += 1 }
-        player.audioPlayerDidFinishPlaying(poster, successfully: true)
+        stated.sounding = false
         _ = player.play { second += 1 }
+        player.audioPlayerDidFinishPlaying(stated, successfully: true)
         await drain()
         XCTAssertEqual(first, 0, "the first play's finish was delivered to a play started again")
-        XCTAssertEqual(second, 0, "the first play's finish ended the second")
-        player.audioPlayerDidFinishPlaying(poster, successfully: true)
+        XCTAssertEqual(second, 0, "the first play's finish ended the second while it sounded")
+        stated.sounding = false
+        player.audioPlayerDidFinishPlaying(stated, successfully: true)
         await drain()
         XCTAssertEqual(second, 1)
         XCTAssertEqual(first, 0)
+    }
+
+    /// A finish posted while a play sounds, then the player falling silent before the hop: the
+    /// hop finds it silent and ends that play, which is over.
+    func testAFinishArrivingOnceThePlayerIsSilentEndsThePlayStanding() async throws {
+        let url = try XCTUnwrap(Bundle(for: Earcons.self).url(forResource: "earcon_listening", withExtension: "mp3"))
+        let stated = try StatedPlayer(contentsOf: url)
+        let player = EarconPlayer(player: stated)
+        var ends = 0
+        _ = player.play { ends += 1 }
+        stated.sounding = false
+        player.audioPlayerDidFinishPlaying(stated, successfully: true)
+        await drain()
+        XCTAssertEqual(ends, 1)
+        player.audioPlayerDidFinishPlaying(stated, successfully: true)
+        await drain()
+        XCTAssertEqual(ends, 1, "a second finish ended the play twice")
+    }
+
+    /// A cue still sounding as a press opens the microphone is stopped there, and its hold goes:
+    /// `done` is not heard by the microphone, and `listening` is the one that sounds.
+    func testACueSoundingAsAPressOpensTheMicrophoneIsStopped() async {
+        let rig = await rig()
+        let sent = Sent()
+        defer { rig.voice.cancel() }
+        XCTAssertTrue(rig.earcons.play(.done))
+        let done = try? XCTUnwrap(rig.cues.players.last)
+        XCTAssertEqual(done?.sounding, true)
+        await press(rig, true, sent)
+        XCTAssertTrue(rig.voice.listening)
+        XCTAssertEqual(done?.stops, 1, "the cue sounding went on into the open microphone")
+        XCTAssertEqual(rig.earcons.played, [.done, .listening])
+        let listening = rig.cues.players.last
+        XCTAssertEqual(listening?.stops, 0, "the press stopped its own cue")
+        XCTAssertEqual(rig.earcons.playingForATest, rig.earcons.serialForATest, "the listening cue is not the one playing")
     }
 
     /// The failure's cue is not played into an open microphone: a second press while the first
@@ -651,6 +722,37 @@ final class EarconsTests: XCTestCase {
         await drain()
         XCTAssertEqual(clock.asked.count, 2)
         XCTAssertTrue(clock.cancelled, "the bound was left running after the cue was heard out")
+    }
+
+    /// The whole of the lock's end, wired as the app wires it (`speaker.onHold` into the call
+    /// driver with `heldForATurn`): a reply read behind the lock on the call, then `done` under
+    /// it, and the call is ended — the session handed back — only once the cue is heard out and
+    /// the route's tail has passed, never at the reply's end or the player's.
+    func testTheCallEndsOnlyOnceDoneAndItsTailAreOver() async throws {
+        let clock = CueSleep()
+        let tail: Duration = .milliseconds(300)
+        let rig = await rig(isActive: false, heard: .dataRendered, sleep: { try await clock.sleep($0) }, tail: tail)
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        rig.speaker.onHold = { [audio = rig.audio] in driver.holdChanged($0, forATurn: audio.heldForATurn) }
+        defer { withExtendedLifetime(driver) {} }
+
+        XCTAssertTrue(rig.speaker.speak("Hi."))
+        await settle("the reply to start") { rig.speaker.report.started }
+        XCTAssertEqual(system.starts.count, 1, "the reply's hold behind the lock placed no call")
+        try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
+        XCTAssertEqual(rig.earcons.played, [.done])
+        XCTAssertEqual(system.ends.count, 0, "the call ended at the reply's end, under its done")
+
+        rig.cues.players.last?.finish()
+        await settle("the tail to be asked for") { clock.asked.contains(tail) }
+        XCTAssertTrue(rig.audio.holding, "the cue's hold went at the player's finish, before the tail")
+        XCTAssertEqual(system.ends.count, 0, "the call ended inside the route's tail")
+
+        clock.fire()
+        await settle("the hold to go") { !rig.audio.holding }
+        XCTAssertEqual(system.ends.count, 1, "the call outlived the cue and its tail")
     }
 
     /// A cue the player has finished is still in the route: the hold stands for the route's tail,

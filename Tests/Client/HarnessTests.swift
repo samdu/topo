@@ -427,6 +427,42 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertFalse(harness.turnOpen)
     }
 
+    /// A failure for the person is told as one (`onTurnFailure`), once, before the turn is told
+    /// over (`onTurnFailed`), on the attempt's own catch: a zone that cannot be made.
+    func testAnAttemptThatThrowsTellsTheFailureOnceBeforeTheTurnIsOver() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("never"))),
+                              ensureZone: { throw Unexpected() })
+        let told = Said()
+        harness.onTurnFailure = { told.add("failure \($0)") }
+        harness.onTurnFailed = { told.add("over \($0)") }
+        let nonce = harness.willSend("When are the bins?")
+        await harness.retry()
+        XCTAssertNotNil(harness.error)
+        XCTAssertEqual(told.texts, ["failure \(nonce)", "over \(nonce)"])
+    }
+
+    /// The same of a turn this device is not primary for, whose words could not be saved into
+    /// the log: no model was asked, and the failure is the person's.
+    func testALimbsTurnWhoseWordsCannotBeSavedTellsTheFailureOnceBeforeTheTurnIsOver() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await claim(db, as: "hub")
+        let refusing = RefusingSaves(db)
+        let transport = ScriptedTransport((200, reply("never")))
+        let harness = harness(refusing, defaults: makeDefaults(), transport: transport)
+        let told = Said()
+        harness.onTurnFailure = { told.add("failure \($0)") }
+        harness.onTurnFailed = { told.add("over \($0)") }
+        await refusing.refuse()
+        let nonce = harness.willSend("hello")
+        await harness.retry()
+        XCTAssertEqual(transport.sent, [], "a device that is not primary asked the model")
+        XCTAssertNotNil(harness.error)
+        XCTAssertEqual(told.texts, ["failure \(nonce)", "over \(nonce)"])
+        let turns = try await log(db).map(\.text)
+        XCTAssertEqual(turns, [], "the words reached the log after all")
+    }
+
     /// A sign-out during a turn closes it.
     func testASignOutClosesAnOpenTurn() async throws {
         let db = InMemoryRecordDatabase()
@@ -2097,6 +2133,23 @@ private actor ReadFailingDatabase: RecordDatabase {
 }
 
 /// What the reply handler was given, in order.
+/// A database whose saves are refused once `refuse()` is called, its reads still answered: the
+/// log read and a lease's own record, then the person's words refused.
+private actor RefusingSaves: RecordDatabase {
+    struct Down: Error {}
+    let wrapped: InMemoryRecordDatabase
+    private var refusing = false
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+    func refuse() { refusing = true }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if refusing { throw RecordDatabaseError.unavailable(underlying: Down()) }
+        return try await wrapped.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
+}
+
 @MainActor
 private final class Said {
     private(set) var texts: [String] = []

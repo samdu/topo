@@ -708,6 +708,8 @@ final class Speaker {
     /// this one closes.
     func microphoneOpening() {
         onMicrophone?(true)
+        // A cue sounding as the microphone opens is not heard by it.
+        earcons?.microphoneOpening()
         let waiting = deferred
         deferred = nil
         cancel()

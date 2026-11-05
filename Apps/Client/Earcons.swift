@@ -1,7 +1,6 @@
 #if os(iOS)
 import AVFoundation
 import Foundation
-import os
 
 /// A player for one cue: `AVAudioPlayer` in the app (`EarconPlayer`), a recorder in the suite.
 @MainActor
@@ -10,20 +9,27 @@ protocol CuePlayer: AnyObject {
     /// main actor once the cue has been heard out, and not for a play that was started again
     /// before then.
     func play(whenDone: @escaping @MainActor () -> Void) -> Bool
+    /// Stops the cue where it is; its `whenDone` is not called.
+    func stop()
 }
 
 /// `AVAudioPlayer` as a `CuePlayer`, its own delegate: the player's finish is posted on whatever
-/// thread the system chooses, and reaches the main actor here. Each play has a generation, read
-/// as the finish is posted and not in the hop, so a play begun between the two is not ended by
-/// the finish of the one before it.
+/// thread the system chooses, and reaches the main actor here. A finish says only that some play
+/// of this player ended, not which, and a play begun after it ended and before the finish arrives
+/// is the same player sounding again: so the finish ends the play standing only if the player is
+/// silent when it arrives, which is every play's end and never the next one's middle.
 @MainActor
 final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
     private let player: AVAudioPlayer
     private var whenDone: (@MainActor () -> Void)?
-    private let generation = OSAllocatedUnfairLock(initialState: 0)
 
-    init(url: URL) throws {
-        player = try AVAudioPlayer(contentsOf: url)
+    convenience init(url: URL) throws {
+        try self.init(player: AVAudioPlayer(contentsOf: url))
+    }
+
+    /// Over a player made elsewhere: the suite's, whose play and finish it states.
+    init(player: AVAudioPlayer) {
+        self.player = player
         super.init()
         player.delegate = self
         player.prepareToPlay()
@@ -31,15 +37,18 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 
     func play(whenDone: @escaping @MainActor () -> Void) -> Bool {
         self.whenDone = whenDone
-        generation.withLock { $0 += 1 }
         player.currentTime = 0
         return player.play()
     }
 
+    func stop() {
+        whenDone = nil
+        player.stop()
+    }
+
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        let finished = generation.withLock { $0 }
         Task { @MainActor in
-            guard self.generation.withLock({ $0 }) == finished, let done = self.whenDone else { return }
+            guard !self.player.isPlaying, let done = self.whenDone else { return }
             self.whenDone = nil
             done()
         }
@@ -63,7 +72,7 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 /// go of between the two. With nothing held — `listening` at a press in front — a cue holds nothing, so a claim
 /// change waits on no cue; and under nothing but the cue before it, it lets that one's hold go,
 /// so cues cannot keep the process alive by themselves. Nothing but `listening` is played into
-/// an open microphone. The players are handles into mediaserverd: the speaker tells of a media
+/// an open microphone, and a cue still sounding as one opens is stopped (`microphoneOpening`). The players are handles into mediaserverd: the speaker tells of a media
 /// services reset (`mediaServicesWereReset`), after it has dropped its own queue, and they are
 /// dropped and nothing built, so the next cue makes its own afresh. Lifted from Daphne's
 /// `Earcons`, per `THIRD-PARTY`. Main only.
@@ -95,6 +104,8 @@ final class Earcons {
     private var players: [Cue: any CuePlayer] = [:]
     /// The cue being played, by serial, so a finish or a bound of an earlier one moves nothing.
     private var playing: Int?
+    /// Which cue that is, so a microphone opening stops anything but its own.
+    private var playingCue: Cue?
     /// Whether the cue holds the process (`AudioSession.Hold.cue`), which it does only when a
     /// hold already stood as it began: a cue extends a held reply or wait and never holds alone.
     private var holding = false
@@ -152,6 +163,7 @@ final class Earcons {
         let mine = serial
         bounding?.cancel()
         playing = mine
+        playingCue = cue
         // The hold before the player, so the process is held from the cue's first frame; only
         // where a hold that is not a cue's own stands, since in front nothing suspends and a cue
         // that held alone would keep a claim change waiting for nothing. Under nothing but the
@@ -180,6 +192,15 @@ final class Earcons {
             self.ended(mine, "its bound passed")
         }
         return true
+    }
+
+    /// A microphone is opening (`Speaker.microphoneOpening`): a cue still sounding is stopped,
+    /// so it is not heard by the microphone — `listening` excepted, which is the microphone's
+    /// own — and its hold goes with it.
+    func microphoneOpening() {
+        guard let playing, let cue = playingCue, cue != .listening else { return }
+        players[cue]?.stop()
+        ended(playing, "the microphone is opening")
     }
 
     /// The player has handed the cue's last frame to the route, which is not the person having
@@ -220,6 +241,7 @@ final class Earcons {
     private func ended(_ mine: Int, _ why: String) {
         guard playing == mine else { return }
         playing = nil
+        playingCue = nil
         bounding?.cancel()
         bounding = nil
         AudioLog.say("earcon over: \(why)")
