@@ -35,6 +35,8 @@ final class BadgeGestureTests: XCTestCase {
         let temperature = app.sliders["settings-voice-temperature"]
         for end in ["100%", "0%"] {
             for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
+            XCTAssertTrue(temperature.centred(in: app.collectionViews.firstMatch, window: app.windows.firstMatch),
+                          "the temperature slider would not come away from the sheet's edge")
             temperature.adjust(toNormalizedSliderPosition: end == "100%" ? 1 : 0)
             XCTAssertEqual(temperature.value as? String, end, "the slider did not move to \(end)")
             app.navigationBars["Settings"].buttons["Done"].tap()
