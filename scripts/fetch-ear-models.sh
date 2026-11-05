@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Fetches the ear's models (Parakeet, the CTC spotter and Silero's voice detector), or only the
-# ones named, into a directory, file by file from the pinned revisions in
+# Fetches the ear's models (Parakeet and the CTC spotter), or the ones named of those and
+# Silero's voice detector, into a directory, file by file from the pinned revisions in
 # Apps/Topo/Resources/models.json, and admits each only when its size and sha256 match the
 # manifest. A file already there and matching is kept, so a restored cache costs only the
-# hashing. The directory is what `TOPO_DEBUG_EAR`, the UI test's `TOPO_UITEST_EAR_MODELS` and
-# the unit suite's `TOPO_UNIT_EAR_MODELS` take.
+# hashing. The directory is what `TOPO_DEBUG_EAR` and the UI test's `TOPO_UITEST_EAR_MODELS`
+# take, and, with the detector named, the unit suite's `TOPO_UNIT_EAR_MODELS`. The detector is
+# fetched only when named: the unit suite and the microphone's part can run at once, and two
+# fetches of one file into one cache collide on its `.part`.
 #
 #   scripts/fetch-ear-models.sh <directory> [<id>...]
 set -euo pipefail
@@ -14,10 +16,10 @@ manifest="$root/Apps/Topo/Resources/models.json"
 dest="${1:?usage: scripts/fetch-ear-models.sh <directory> [<id>...]}"
 shift
 mkdir -p "$dest"
-ear='["parakeet-tdt-0.6b-v2", "parakeet-ctc-110m-coreml", "silero-vad-coreml"]'
+ear='["parakeet-tdt-0.6b-v2", "parakeet-ctc-110m-coreml"]'
 if [ "$#" -gt 0 ]; then
   wanted="$(jq -cn '$ARGS.positional' --args "$@")"
-  bad="$(jq -rn --argjson w "$wanted" --argjson e "$ear" '$w - $e | join(" ")')"
+  bad="$(jq -rn --argjson w "$wanted" --argjson e "$ear" '$w - $e - ["silero-vad-coreml"] | join(" ")')"
   [ -z "$bad" ] || { echo "error: not one of the ear's models: $bad" >&2; exit 1; }
 else
   wanted="$ear"

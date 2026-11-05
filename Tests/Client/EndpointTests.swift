@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FluidAudio)
+import FluidAudio
+#endif
 
 @testable import Topo
 
@@ -31,8 +34,8 @@ final class EndpointTests: XCTestCase {
     }
 
     /// The promised numbers as literals, so a change to any of them is a change to this test.
-    /// FluidAudio's segmentation itself needs Silero's model, which the unit suite does not
-    /// load: that a 1.5 s pause does not split a sentence is the device check's.
+    /// That a 1.5 s pause does not split a sentence is FluidAudio's segmentation on speech,
+    /// which is the device check's: `SileroLoadTests` loads the model and feeds it silence alone.
     func testTheSilenceWindowSitsPastTheTwoSecondsThatCutSpeakersOff() {
         XCTAssertEqual(Endpoint.silence, 2.1)
         XCTAssertEqual(Endpoint.minSpeech, 0.25)
@@ -101,7 +104,12 @@ final class SileroLoadTests: XCTestCase {
         do {
             _ = try await Endpoint.silero(directory)
             XCTFail("loaded a detector the store does not have")
-        } catch {}
+        } catch DownloadError.modelMissing {
+            // Offline, the missing file is said as missing; online it would have been fetched,
+            // or failed as the network's.
+        } catch {
+            XCTFail("not refused as missing: \(error)")
+        }
         let models = support.appendingPathComponent("Models")
         let left = (try? FileManager.default.subpathsOfDirectory(atPath: models.path)) ?? []
         XCTAssertFalse(left.contains { $0.hasSuffix(".mlmodelc") }, "fetched \(left)")

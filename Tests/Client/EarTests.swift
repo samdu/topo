@@ -146,7 +146,7 @@ final class EarTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: support) }
         let root = support.appendingPathComponent("Models")
         let home = ModelStore.vadHome(under: support)
-        XCTAssertEqual(home.standardizedFileURL, root.appendingPathComponent("silero-vad").standardizedFileURL)
+        XCTAssertEqual(home.standardizedFileURL.path, root.appendingPathComponent("silero-vad").standardizedFileURL.path)
         let old = root.appendingPathComponent(ModelManifest.vad)
         let bundle = "silero-vad-unified-256ms-v6.2.1.mlmodelc"
         try FileManager.default.createDirectory(at: old.appendingPathComponent(bundle), withIntermediateDirectories: true)
@@ -161,7 +161,7 @@ final class EarTests: XCTestCase {
         // `Models/silero-vad` to.
         let model = ModelManifest.Model(id: ModelManifest.vad, repo: "x/y", revision: "", files: [])
         let base = store.directory(for: model).deletingLastPathComponent().deletingLastPathComponent()
-        XCTAssertEqual(base.standardizedFileURL, support.standardizedFileURL)
+        XCTAssertEqual(base.standardizedFileURL.path, support.standardizedFileURL.path)
     }
 }
 

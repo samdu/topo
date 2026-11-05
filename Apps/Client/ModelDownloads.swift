@@ -123,15 +123,15 @@ enum ModelStoreError: LocalizedError {
 /// anything less is a set to finish, file by file, not to start again.
 struct ModelStore: Sendable {
     let root: URL
-    /// The entries that live somewhere other than under `root`, by id, because the library that
-    /// reads them reads one path and no other. Two: the CTC spotter, whose tokenizer
+    /// The entries kept somewhere other than at `root/<id>`, by id, because the library that
+    /// reads them reads one path and no other. Three: the CTC spotter, whose tokenizer
     /// `VocabularyBoostingSession` reads from `CtcModels.defaultCacheDirectory` whatever
-    /// directory the models were loaded from; and the voice's pack, which `PocketTtsManager`
-    /// reads from `<base>/Models/pocket-tts` beneath the base directory it is given. One copy
-    /// each, agreed on by both sides. The ledger and the resume data sit beside the files
-    /// wherever the entry lives. And the voice activity detector, which `VadManager` reads from
-    /// `<base>/Models/silero-vad` (`Repo.vad.folderName`, with `-coreml` dropped) and not from
-    /// a directory named for the manifest's id, where the model is present and not found.
+    /// directory the models were loaded from; the voice's pack, which `PocketTtsManager` reads
+    /// from `<base>/Models/pocket-tts` beneath the base directory it is given; and the voice
+    /// activity detector, which `VadManager` reads from `<base>/Models/silero-vad`
+    /// (`Repo.vad.folderName`, with `-coreml` dropped), so under its id it is present and never
+    /// found. One copy each, agreed on by both sides. The ledger and the resume data sit beside
+    /// the files wherever the entry lives.
     let homes: [String: URL]
 
     init(root: URL, homes: [String: URL] = [:]) {
