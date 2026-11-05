@@ -23,6 +23,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 
 ## Invariants
 
+- **Daphne is the proving ground; Topo ships what Daphne proved, whole.** A design is tried and lived with in samdu/daphne-assistant first. Once it works there daily it comes to Topo as it stands, in one PR, changed only where Topo's architecture forces a change. Its tests and device checks confirm the design still works in this implementation; they do not re-ask whether the design is fit for purpose, Daphne answered that.
 - **CloudKit is truth, sockets are speed.** State (transcript log, pairing record, primary lease) lives in the private CloudKit database; the push that wakes the primary, direct sockets and the punched tunnel only make live turns fast. With no socket the app still works off the records, just slower.
 - One container, `iCloud.zone.hexagon.topo`, private database, custom zone `Topo`. Every bundle reads and writes that one, so the identifiers are a contract between them and not a per-target setting.
 - A debug build only ever talks to Haiku 5.5, because every debug build here is signed into a real subscription: the pin is in the resident's launch (`ClaudeModel.effective`, its `--model`) and at the wire in the guest's proxy (`APIProxy.pinnedModel`), never only at the model slider (`docs/simulator.md`, *The one rule*).
