@@ -508,6 +508,20 @@ final class EarconsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
+    /// The microphone opening is what lets the stopped cue's hold go, not the `listening` played
+    /// after it: held at the opening alone, with no press to sound anything.
+    func testTheMicrophoneOpeningLetsTheStoppedCuesHoldGo() async {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.earcons.play(.failed))
+        rig.speaker.endAwaiting("turn", "the turn failed")
+        XCTAssertTrue(rig.audio.holding, "the cue's hold did not outlast the wait's")
+        rig.speaker.microphoneOpening()
+        XCTAssertFalse(rig.audio.holding, "the stopped cue's hold outlived it")
+        XCTAssertEqual(rig.cues.players.last?.stops, 1)
+        rig.speaker.microphoneOpened(counted: true)
+    }
+
     /// The real player's finish ends a play only if the player is silent when it arrives: the
     /// first play ends, the cue begins again on the same player before the first's finish is
     /// posted, and that finish, arriving with the second sounding, ends nothing; the second's own

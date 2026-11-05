@@ -15,9 +15,9 @@ protocol CuePlayer: AnyObject {
 
 /// `AVAudioPlayer` as a `CuePlayer`, its own delegate: the player's finish is posted on whatever
 /// thread the system chooses, and reaches the main actor here. A finish says only that some play
-/// of this player ended, not which, and a play begun after it ended and before the finish arrives
-/// is the same player sounding again: so the finish ends the play standing only if the player is
-/// silent when it arrives, which is every play's end and never the next one's middle.
+/// of this player ended, not which: so it ends the play standing only if the player is silent
+/// when it arrives. A player sounding then is a later play's, mid-cue; a silent one has nothing
+/// left to finish, a play begun in the finish's window included, which does not sound.
 @MainActor
 final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
     private let player: AVAudioPlayer
