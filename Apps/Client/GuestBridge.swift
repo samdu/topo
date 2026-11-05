@@ -1224,7 +1224,7 @@ actor GuestBridge: Brain {
     /// kind of end the turn came to, never what was said: an error result's text and a process's
     /// last words can hold the person's words or the reply's.
     static let notice: @Sendable (String) -> Void = { line in
-        Logger(subsystem: "zone.hexagon.topo", category: "bridge").notice("\(line, privacy: .public)")
+        TopoLog(.bridge).notice(line)
     }
 
     static func kind(of error: GuestBridgeError) -> String {

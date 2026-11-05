@@ -36,8 +36,7 @@ struct TopoApp: App {
         // The Claude.ai tokens a build before Claude Code's own login kept in the keychain go
         // before anything asks whether this phone is signed in: it signs in once more.
         let migrated = LoginMigration.run { item, error in
-            Logger(subsystem: "zone.hexagon.topo", category: "auth")
-                .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
+            TopoLog(.auth).error("login migration: the keychain kept \(item.account) (\(String(describing: error))); tried again next launch")
         }
         let signInAgain = migrated || UserDefaults.standard.bool(forKey: LoginMigration.signInAgainKey)
         // A debug build launched with a developer's token in its environment is signed in by it,

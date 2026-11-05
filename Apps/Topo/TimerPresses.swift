@@ -2,6 +2,7 @@ import AlarmKit
 import AppIntents
 import Foundation
 import os
+import TopoCore
 
 /// Which of a timer's buttons hands Topo a turn.
 enum TimerButton: String, Sendable {
@@ -51,7 +52,7 @@ struct TimerPressIntent: LiveActivityIntent {
 /// waits for its turn to reach the log, bounded, as a background Shortcut does.
 @MainActor
 enum TimerPresses {
-    private static let log = Logger(subsystem: "zone.hexagon.topo", category: "timer")
+    private static let log = TopoLog(.timer)
 
     /// What a press came to, for the suites.
     enum Outcome: Equatable {
@@ -91,11 +92,11 @@ enum TimerPresses {
             } catch {
                 // A stop that failed sets off no Stop intent, so the person's own Stop is theirs.
                 stopping[id] = nil
-                log.error("a timer's button could not stop its alarm: \(error.localizedDescription, privacy: .public)")
+                log.error("a timer's button could not stop its alarm: \(error.localizedDescription)")
             }
         }
         guard let record, let words = button == .second ? record.tell : record.onStop, let login = record.login else {
-            log.error("a timer's \(button.rawValue, privacy: .public) button has no words kept: nothing sent")
+            log.error("a timer's \(button.rawValue) button has no words kept: nothing sent")
             return .nothing
         }
         guard let store else { return .refused(.failed) }
@@ -106,7 +107,7 @@ enum TimerPresses {
             try store.keep(share)
         } catch {
             // Signed out, or another login since: the words were kept for that one.
-            log.error("a timer's press was not kept: \(String(describing: error), privacy: .public)")
+            log.error("a timer's press was not kept: \(String(describing: error))")
             return .refused(error)
         }
         if let drain { Task { await drain() } }
