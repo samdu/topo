@@ -191,8 +191,8 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.count, 0)
     }
 
-    /// A no that leaves the standing undetermined, with Topo in front throughout, is said as a
-    /// prompt that kept no answer, never as the background or a refusal.
+    /// A request that returns the standing undetermined, with Topo in front throughout, is said as
+    /// a prompt that kept no answer, never as the background or a refusal.
     func testAPromptThatKeepsNoAnswerIsSaidAsThat() async {
         let permission = AlarmPermission(.undetermined, answer: false)
         permission.keepsNothing = true

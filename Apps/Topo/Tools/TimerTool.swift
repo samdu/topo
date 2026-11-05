@@ -142,9 +142,9 @@ struct TimerTool: Tool {
             }
         }
         // A refusal the person made is a standing of denied, said as one. A no over a standing
-        // still undetermined is no answer from the person, and is said as what the prompt this
-        // call made or joined came to (`OnScreen`): declined in the background, the request
-        // failing, or closing with nothing kept.
+        // still undetermined is said as what the request of the prompt this call made or joined
+        // returned (`OnScreen`): a refusal as one, however the standing lags; otherwise declined
+        // in the background, the request failing, or closing with nothing kept.
         // The outcome is taken before the standing is read again, so a prompt begun meanwhile
         // cannot write over it.
         let outcome = asked.last
@@ -152,8 +152,8 @@ struct TimerTool: Tool {
             switch outcome {
             case .declined: return inFront ? Self.leftBeforeThePrompt : Self.offScreen
             case let .failed(reason): return Self.promptFailed(reason)
-            case .unanswered: return Self.promptUnanswered
-            case .granted, .refused, nil: return reply
+            case .unanswered, nil: return Self.promptUnanswered
+            case .granted, .refused: return reply
             }
         }
         return reply
