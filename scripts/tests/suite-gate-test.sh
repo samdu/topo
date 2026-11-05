@@ -75,8 +75,16 @@ check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly
 # that joins the tailnet as tag:ci reaches what that tag grants), and nothing but a pull_request starts a run.
 hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
 check.(hosts.empty?, "every job runs on vm-linux#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
-# automerge.yaml's jobs run on a pull_request too, so they are on the same pool.
-merge_jobs = YAML.load_file(automerge).fetch("jobs")
+# automerge.yaml holds a write token, so only workflow_run starts it: GitHub runs main's copy
+# for that, where a pull_request would run the PR's own. Its jobs are on the same pool.
+merge_doc = YAML.load_file(automerge)
+merge_triggers = merge_doc.fetch(true) { merge_doc.fetch("on") }
+check.(merge_triggers.keys == %w[workflow_run], "only workflow_run starts automerge.yaml (#{merge_triggers.keys.join(', ')})")
+merge_jobs = merge_doc.fetch("jobs")
+# The step's file check, cut from "The files the PR changes" to the blank line after it, for the runs below.
+merge_run = merge_jobs.fetch("automerge").fetch("steps").last.fetch("run")
+files_check = merge_run[/^ *# The files the PR changes.*?\n\s*\n/m] or abort "no file check in automerge.yaml's merge step"
+File.write(File.join(work, "files.sh"), "for pr in 7; do\n#{files_check}echo MERGES\ndone\n")
 merge_hosts = merge_jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "vm-linux" }
 check.(!merge_jobs.empty? && merge_hosts.empty?, "every job of automerge.yaml runs on vm-linux#{merge_hosts.empty? ? '' : " (not: #{merge_hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
 triggers = workflow.fetch(true) { workflow.fetch("on") }
@@ -315,6 +323,33 @@ for said in "" null "true false" fail; do
   if [ "$status" != 0 ] && [ -z "$out" ]; then echo "ok   review_cap: an API answer of '${said:-nothing}' fails the step and writes no output"
   else fail "review_cap: an API answer of '${said:-nothing}' exited $status and wrote '$out'"; fi
 done
+
+# automerge.yaml's file check. The fake gh answers the compare with FAKE_COMPARE, the API's
+# own object, through the step's own --jq, so the extraction runs as well as the filter.
+mkdir -p "$work/cmp"
+cat > "$work/cmp/gh" <<'GH'
+#!/usr/bin/env bash
+[ "$1 $2" = "api repos/samdu/topo/compare/main...$FAKE_HEAD" ] && [ "$3" = --jq ] || { echo "unexpected: $*" >&2; exit 64; }
+[ "$FAKE_COMPARE" != fail ] || exit 1
+jq -c "$4" <<<"$FAKE_COMPARE"
+GH
+chmod +x "$work/cmp/gh"
+files() {  # files <merges|skips> <case> <compare object>
+  out="$(PATH="$work/cmp:$PATH" GH_REPO=samdu/topo base=main sha="$head_sha" FAKE_HEAD="$head_sha" FAKE_COMPARE="$3" \
+    bash -euo pipefail "$work/files.sh" 2>&1)" || { fail "automerge files: $2: exited $?: $out"; return; }
+  if [ "$1" = merges ] && grep -q MERGES <<<"$out"; then echo "ok   automerge files: $2 merges"
+  elif [ "$1" = skips ] && ! grep -q MERGES <<<"$out" && grep -q '^skip:' <<<"$out"; then echo "ok   automerge files: $2 is skipped"
+  else fail "automerge files: $2: wanted $1, got: $out"; fi
+}
+compare_of() { jq -nc --args '{files: [$ARGS.positional[] | split("<") | {filename: .[0]} + (if .[1] then {previous_filename: .[1]} else {} end)]}' "$@"; }
+files merges "app code and other scripts" "$(compare_of Apps/x.swift scripts/janitor.py scripts/ci-audio-lane.sh docs/x.md)"
+for path in .github/workflows/pr-validate.yaml .github/workflows/new.yaml scripts/review-prompt.sh scripts/ci-select-suites.sh; do
+  files skips "$path" "$(compare_of Apps/x.swift "$path")"
+done
+files skips "a rename out of scripts/review-prompt.sh" "$(compare_of "scripts/ordinary.sh<scripts/review-prompt.sh")"
+files skips "a compare at its 300-file limit" "$(compare_of $(seq -f 'Apps/f%g.swift' 1 300))"
+files merges "299 files" "$(compare_of $(seq -f 'Apps/f%g.swift' 1 299))"
+files skips "a compare that cannot be read" fail
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

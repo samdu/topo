@@ -431,11 +431,14 @@ enum SpokenCallSetting {
     }
 }
 
-/// Places the call and ends it: a call is wanted while a hold stands (`AudioSession.holding`,
-/// told through `Speaker.onHold` after the speaker has dealt with the keeper) or an open
-/// microphone is carried behind the lock (`Conversation`, told through `conversingChanged`,
-/// which keeps the call between an utterance's end and its wait's hold), the app is in the
-/// background and the setting is on. The background is UIKit's (`applicationState` at the start,
+/// Places the call and ends it: a call is placed while a turn's hold stands
+/// (`AudioSession.heldForATurn`) or an open microphone is carried behind the lock
+/// (`Conversation`, told through `conversingChanged`, which keeps the call between an utterance's
+/// end and its wait's hold), and kept while any hold does (`AudioSession.holding`, a cue's
+/// included, so the `done` a reply ends with is heard on its call), the holds told through
+/// `Speaker.onHold` after the speaker has dealt with the keeper, the app is in the background and
+/// the setting is on. A cue's hold alone places none: a lock as a reply's `done` sounds in front
+/// is no exchange to put on the Lock Screen. The background is UIKit's (`applicationState` at the start,
 /// then `didEnterBackgroundNotification` until `willEnterForegroundNotification`), Daphne's
 /// device-proven source, rather than SwiftUI's scene phase; both are logged (`app …`, `scene …`)
 /// so a run says which the lock reached first. A call is placed only in the background, and once
@@ -453,6 +456,8 @@ final class SpokenCallDriver {
     private let enabled: () -> Bool
     private var holding = false
     private var conversing = false
+    /// A hold stands that is a turn's and not only a cue's: what places a call.
+    private var turn = false
     /// The chat's microphone is open or opening: a call up is kept for it.
     private var microphone = false
     private var phase: ScenePhase
@@ -482,13 +487,15 @@ final class SpokenCallDriver {
         }
     }
 
-    /// The whole rule, as a function of the facts: placed in the background for a hold or a
-    /// conversation, and kept while it is up for either or an open microphone, so a press in
-    /// front under the call does not end it under the session the microphone opens on.
-    nonisolated static func wants(holding: Bool, conversing: Bool = false, phase: ScenePhase, enabled: Bool,
-                                  up: Bool = false, microphone: Bool = false) -> Bool {
-        let exchange = holding || conversing
-        return enabled && (exchange && phase == .background || up && (exchange || microphone))
+    /// The whole rule, as a function of the facts: placed in the background for a turn's hold
+    /// (`turn`, which is `holding` when not given) or a conversation, and kept while it is up for
+    /// any hold, a conversation or an open microphone, so a press in front under the call does not
+    /// end it under the session the microphone opens on.
+    nonisolated static func wants(holding: Bool, turn: Bool? = nil, conversing: Bool = false, phase: ScenePhase,
+                                  enabled: Bool, up: Bool = false, microphone: Bool = false) -> Bool {
+        let places = (turn ?? holding) || conversing
+        let keeps = holding || conversing || microphone
+        return enabled && (places && phase == .background || up && keeps)
     }
 
     func microphoneChanged(_ open: Bool) {
@@ -496,8 +503,11 @@ final class SpokenCallDriver {
         decide()
     }
 
-    func holdChanged(_ holding: Bool) {
+    /// `forATurn` is whether a turn's hold stands (`AudioSession.heldForATurn`); left out, it is
+    /// `holding`.
+    func holdChanged(_ holding: Bool, forATurn: Bool? = nil) {
         self.holding = holding
+        turn = forATurn ?? holding
         decide()
     }
 
@@ -513,11 +523,11 @@ final class SpokenCallDriver {
 
     private func decide() {
         let enabled = enabled()
-        let wanted = Self.wants(holding: holding, conversing: conversing, phase: phase, enabled: enabled,
+        let wanted = Self.wants(holding: holding, turn: turn, conversing: conversing, phase: phase, enabled: enabled,
                                 up: call.up, microphone: microphone)
         // Each decision with its facts, so a run says why a lock placed no call.
         if wanted != call.up {
-            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), conversing \(conversing), microphone \(microphone), app \(phase), setting \(enabled))")
+            AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), a turn's \(turn), conversing \(conversing), microphone \(microphone), app \(phase), setting \(enabled))")
         } else if wanted, phase != .background, call.state == .up {
             AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), conversing \(conversing), microphone \(microphone), app \(phase))")
         } else if holding || conversing, !wanted {

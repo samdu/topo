@@ -90,6 +90,10 @@ targets:
       # Smart Turn's mel filterbank (Apps/Client/SmartTurn.swift); scripts/smartturn-mel.py writes it.
       - path: Apps/Topo/Resources/smartturn-mel.bin
         buildPhase: resources
+      # The spoken exchange's cues (`Earcons`), UI SFX's Zen sounds; XcodeGen lands each at the
+      # bundle's root, which is where `Earcons` looks.
+      - path: Apps/Topo/Resources/sounds
+        buildPhase: resources
       # The mark itself, read at launch rather than copied into Swift.
       - path: Design/topo-mark.svg
         buildPhase: resources

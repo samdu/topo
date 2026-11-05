@@ -91,7 +91,7 @@ what stands is recorded and named in that one line, never said item by item.
 Everything it decides is a function of what it read, the model's answer in
 step 7 included; everything it does is a `gh`, `git`, `tmux` or shell call
 behind `Shell`, so `--dry-run` prints the pass instead (the model is still
-asked: a question changes nothing). The report, when there is one, is posted to buddy-prime's mesh
+asked: a question changes nothing). The report, when there is one, is posted to the coordinator's mesh
 bridge over the fleet's authenticated `/deliver` route with this host's own
 peer token, as `topo-janitor` on the host `buddy-janitor`; a report the far
 bridge does not take is kept in the state file and sent with the next. A
@@ -133,14 +133,19 @@ DEV_TREES = "~/github/topo-ota-dev.pr"   # pr-N.lock stands there while that PR'
 # Whether a head passed the suites its PR needs, as `test` concludes it, with or without a `test` run.
 GATE = "~/github/experiments/ota/topo-suites-gate.sh"
 CHECKOUT = "~/github/topo"
-MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", "http://192.168.1.201/mesh/buddy-prime/deliver")
+# The coordinator (docs/process.md): the session REPORT_TO on the host whose
+# bridge is REPORT_HOST. topo-coordinator runs on toolbox, whose bridge's mesh
+# name is `daphne`; the LAN Traefik routes /mesh/<host>/deliver to that bridge,
+# which writes the message into the local session named in `to`.
+REPORT_HOST = os.environ.get("TOPO_JANITOR_REPORT_HOST", "daphne")
+REPORT_TO = os.environ.get("TOPO_JANITOR_REPORT_TO", "topo-coordinator")
+MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", f"http://192.168.1.201/mesh/{REPORT_HOST}/deliver")
 MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
 MESH_SELF = "buddy-janitor"   # this host's verified mesh name; the sender below is the janitor's
-REPORT_TO = "buddy-prime"
 FROM = "topo-janitor"
 # The receiving bridge ends every relayed message by asking for a reply. One
 # sent to a script is addressed to no session: buddybox's bridge refuses it,
-# and it holds buddy-prime's queue to this host until it expires.
+# and it holds the coordinator's queue to this host until it expires.
 NO_REPLY = "No reply is read: topo-janitor is a script with no session, so do not answer this."
 
 GRACE = timedelta(minutes=15)      # automerge's chance, a box's
@@ -164,7 +169,7 @@ NOT_GREEN = ("failure", "cancelled", "timed_out")
 ISSUES_PAGE = 100                  # issues read per GraphQL page
 ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
 ISSUE_LINES = 60                   # issue lines one pass says, so a report is mostly PR lines
-TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
+TRIAGED = "triaged"                # the coordinator has read it: planned, parked or put to Sam
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
 LINK = "samdu/topo-link"           # the mailbox repository: an issue per build that carries device checks
 BUILDS_LIMIT = 50                  # open issues read there; a list that fills it is not read as whole
@@ -304,14 +309,21 @@ def pick_run(runs, number):
     return max(pool, key=lambda r: (r["created_at"], r["id"])) if pool else None
 
 
-def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
+# What PR validate runs from the PR's own copy: its workflow, and the scripts
+# its review jobs run from the checkout. A PR that changes one wrote its own
+# validation, so its green run proves nothing and automerge.yaml skips it.
+OWN_VALIDATION = re.compile(r"^(\.github/|scripts/review-|scripts/ci-select-)")
+
+
+def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, files=()):
     """What one open PR wants from this pass.
 
     Returns a list of dicts: {"kind": merge|rerun|report, "key": ..., "text": ...}.
     `run` is the newest pull_request validate run for the PR's head, or None;
     `jobs` its jobs as [{name, conclusion, id, steps}]. `sessions` is the set of
     tmux session names standing on this Mac, or None when they could not be
-    read. Pure: nothing is read or done.
+    read. `files` are the paths the PR changes at its head, or None when they
+    could not be read whole. Pure: nothing is read or done.
     """
     n, head = pr["number"], pr["headRefOid"]
     short = head[:7]
@@ -370,6 +382,16 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None):
         if require_label and "automerge" not in labels:
             return out
         if pr.get("baseRefName") != "main":
+            return out
+        if files is None:
+            if since > GRACE:
+                report("files", f"{title}: validate green, but the files it changes could not be read whole; not merged.")
+            return out
+        own = sorted(f for f in files if OWN_VALIDATION.match(f))
+        if own:
+            if since > GRACE:
+                report("own", f"{title}: validate green, but it changes {', '.join(own[:3])}{' …' if len(own) > 3 else ''}, "
+                              f"so its own copy validated it; the coordinator merges it after reading the review.")
             return out
         if since > GRACE:
             out.append({"kind": "merge", "key": f"{n}:merge:{head}", "head": head, "number": n,
@@ -1164,6 +1186,16 @@ class Shell:
         return self.whole(f"repos/{REPO}/actions/runners", "runners",
                           f'select(any(.labels[]; .name == "{POOL_LABEL}")) | {{status, busy}}')
 
+    def changed_files(self, head):
+        """The paths a PR changes at this head against main, renames' old paths
+        included. The compare lists at most 300 files, so a list that long is
+        refused rather than read as whole."""
+        listed = self.gh_api(f"repos/{REPO}/compare/main...{head}",
+                             "[.files[] | {filename, previous_filename}]") or []
+        if len(listed) >= 300:
+            raise RuntimeError(f"the compare of main...{head} answered {len(listed)} files; the list may not be whole")
+        return [p for f in listed for p in (f.get("filename"), f.get("previous_filename")) if p]
+
     def merge(self, number, head):
         self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",
                   "--match-head-commit", head], mutating=True)
@@ -1386,7 +1418,7 @@ def peer_token(path=MESH_ENV):
 
 
 def deliver(sh, state, now, dry=False, log=print, warn=None):
-    """The reports to buddy-prime, through its bridge's /deliver as the fleet's
+    """The reports to the coordinator, through its bridge's /deliver as the fleet's
     bridges forward to each other: this host's verified name as `from`, the
     janitor as `sender`. This pass's lines become one message under a new id;
     messages the bridge has not answered for good stand in `undelivered` under
@@ -1630,7 +1662,13 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             if not pr["isDraft"]:
                 run = sh.newest_run(head, n)
                 jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
-            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions)
+            files = ()
+            if run and run["status"] == "completed" and run.get("conclusion") == "success":
+                try:
+                    files = sh.changed_files(head)
+                except RuntimeError:
+                    files = None
+            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions, files)
         except RuntimeError as ex:
             say(f"{n}:read:{head}", f"#{n}: could not read its runs: {ex}")
             if "rate limit" in str(ex).lower():

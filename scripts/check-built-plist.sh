@@ -298,6 +298,14 @@ for action in AskTopoIntent:true FollowUpIntent:false QuickTaskIntent:false; do
         status=1
     fi
 done
+# The timer's intents, which AlarmKit and the countdown's buttons run by name: a press of one the
+# extraction skipped reaches nothing.
+for intent in TimerPressIntent TimerControlIntent; do
+    if [ "$(plutil -extract "actions.$intent.identifier" raw -o - -- "$actions" 2>/dev/null || true)" != "$intent" ]; then
+        echo "$app's App Intents metadata does not name $intent; a timer's button would run nothing" >&2
+        status=1
+    fi
+done
 # One App Shortcut for each, and no two for one action.
 offered="$(plutil -extract autoShortcuts json -o - -- "$actions" 2>/dev/null | tr ',{}' '\n\n\n' | sed -n 's/.*"actionIdentifier":"\([A-Za-z]*\)".*/\1/p' | sort | tr '\n' ' ')"
 if [ "$offered" != "AskTopoIntent FollowUpIntent QuickTaskIntent " ]; then

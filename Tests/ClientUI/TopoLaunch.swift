@@ -45,3 +45,27 @@ final class TopoApplication: XCUIApplication {
         super.activate()
     }
 }
+
+extension XCUIElement {
+    /// Scrolls `form` until this element sits in the middle half of what is on the screen of it,
+    /// a few small drags at most. `isHittable` is true of a slider under the navigation bar or at
+    /// the window's foot, where a drag on its thumb lands under the bars or off the screen and is
+    /// lost, so reachable is not where a drag is made. Answers whether it got there.
+    @MainActor
+    @discardableResult
+    func centred(in form: XCUIElement, window: XCUIElement, tries: Int = 8) -> Bool {
+        let area = form.frame.intersection(window.frame)
+        let low = area.minY + area.height * 0.25, high = area.minY + area.height * 0.75
+        for _ in 0..<tries {
+            guard exists else { return false }
+            let middle = frame.midY
+            if middle >= low, middle <= high { return true }
+            // A short drag on the form's leading edge, clear of every control, the way the
+            // content has to go.
+            let from = middle > high ? 0.6 : 0.4, to = middle > high ? 0.4 : 0.6
+            form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: from))
+                .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: to)))
+        }
+        return frame.midY >= low && frame.midY <= high
+    }
+}

@@ -106,7 +106,7 @@ struct TopoApp: App {
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
             ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
-            TimerTool(scheduler: TimerBook.scheduler, book: { TimerBook.shared }, broker: broker),
+            TimerTool(scheduler: TimerRecords.scheduler, records: .shared, broker: broker),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),
@@ -136,6 +136,7 @@ struct TopoApp: App {
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
+        TimerIntents.control = { await TimerControls.act($0, $1) }
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
         // Built now so its sign-out hook is registered in every process, scene or none.
@@ -163,13 +164,13 @@ struct TopoApp: App {
         #endif
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
-        let speaker = Speaker(audio: audio, voice: spoken)
+        let speaker = Speaker(audio: audio, voice: spoken, earcons: Earcons(audio: audio))
         // A spoken exchange behind the lock is a call: placed while a hold stands with the
         // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
         speaker.attach(call)
         let callDriver = SpokenCallDriver(call: call)
-        speaker.onHold = { callDriver.holdChanged($0) }
+        speaker.onHold = { [weak audio] in callDriver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
         speaker.onMicrophone = { callDriver.microphoneChanged($0) }
         _callDriver = State(initialValue: callDriver)
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
