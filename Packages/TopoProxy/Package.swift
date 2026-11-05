@@ -17,7 +17,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "TopoProxy", dependencies: [.product(name: "TopoCore", package: "TopoCore")]),
-        .target(name: "TopoTools", dependencies: ["TopoProxy"]),
+        .target(name: "TopoTools", dependencies: ["TopoProxy", .product(name: "TopoCore", package: "TopoCore")]),
         .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy"]),
         .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy"]),
     ]

@@ -1,4 +1,5 @@
 import Foundation
+import TopoCore
 import Network
 import os
 import TopoProxy
@@ -72,7 +73,7 @@ extension DNSForwarder: ForwarderChanges {
          setPort: @escaping @Sendable (UInt16?) -> Void = { Guest.shared.setDNSPort($0) },
          write: @escaping @Sendable ([String]) async throws -> Void = { try await Guest.shared.writeResolver(servers: $0) },
          retryDelay: Duration = .seconds(1),
-         log: @escaping @Sendable (String) -> Void = { Logger(subsystem: "zone.hexagon.topo", category: "dns").error("\($0, privacy: .public)") }) {
+         log: @escaping @Sendable (String) -> Void = { TopoLog(.dns).error($0) }) {
         self.changes = changes
         self.forwarder = forwarder
         self.servers = servers

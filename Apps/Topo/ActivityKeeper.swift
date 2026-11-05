@@ -1,5 +1,6 @@
 import ActivityKit
 import Foundation
+import TopoCore
 import OSLog
 import TopoTools
 
@@ -235,7 +236,7 @@ final class ActivityKeeper {
     /// sends them nothing more. A sign-out ends every one again, and the tool's take-down is asked
     /// for by name; both stand.
     private var takenDown: Set<String> = []
-    private let log = Logger(subsystem: "zone.hexagon.topo", category: "activity")
+    private let log = TopoLog(.activity)
 
     /// `login`: every way a login ends reaches the keeper through its `onEnd`; every activity is
     /// the login's.
@@ -324,7 +325,7 @@ final class ActivityKeeper {
                     guard !takenDown.contains(id) else { return }
                     forget(id)
                     await end(id, nil, dismissal: .now)
-                    log.info("activity \(id, privacy: .public) ended at its until")
+                    log.info("activity \(id) ended at its until")
                 } else if !record.ended, epoch.isCurrent {
                     // Kept only under the login that resumed: a sign-out queued behind this turn
                     // has already moved the epoch, and its end follows.
@@ -359,7 +360,7 @@ final class ActivityKeeper {
                     await end(id, nil, dismissal: .now)
                     return true
                 }
-                if ended == true { log.info("activity \(id, privacy: .public) ended at its until") }
+                if ended == true { log.info("activity \(id) ended at its until") }
                 if ended == nil { forget(id) }
             }
         }
@@ -411,7 +412,7 @@ final class ActivityKeeper {
                 return
             }
             guard let data = fetched, let tracker = ProgressTracker.read(data, now: now()).tracker else {
-                log.info("activity \(id, privacy: .public) poll gave no tracker")
+                log.info("activity \(id) poll gave no tracker")
                 continue
             }
             enum Round { case kept, gone, finished }
@@ -424,7 +425,7 @@ final class ActivityKeeper {
                 var state = record.state
                 state.card = TrackerCard(tracker)
                 guard let fitted = ActivityPayload.fit(state, with: record.attributes).state else {
-                    log.info("activity \(id, privacy: .public) poll gave a tracker over the payload budget")
+                    log.info("activity \(id) poll gave a tracker over the payload budget")
                     return .kept
                 }
                 if tracker.isRunning {
@@ -439,7 +440,7 @@ final class ActivityKeeper {
             }
             switch round {
             case .kept?: continue
-            case .finished?: log.info("activity \(id, privacy: .public) ended with its tracker"); return
+            case .finished?: log.info("activity \(id) ended with its tracker"); return
             case .gone?, nil: forget(id); return
             }
         }

@@ -2,6 +2,7 @@ import ActivityKit
 import AlarmKit
 import Foundation
 import os
+import TopoCore
 import SwiftUI
 import TopoTools
 
@@ -172,7 +173,7 @@ enum TimerControls {
                 records.drop(id)
             }
         } catch {
-            Logger(subsystem: "zone.hexagon.topo", category: "timer").error("timer \(action.rawValue, privacy: .public) refused by AlarmKit: \(error.localizedDescription, privacy: .public)")
+            TopoLog(.timer).error("timer \(action.rawValue) refused by AlarmKit: \(error.localizedDescription)")
         }
     }
 }
