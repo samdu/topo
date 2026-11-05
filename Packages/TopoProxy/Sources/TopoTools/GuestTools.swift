@@ -53,14 +53,30 @@ public enum GuestTools {
     /// value first clears every helper configured before it (a `credential.helper store` in the
     /// home's config included), since git hands an answer to every helper on its list to keep,
     /// and a `store` would write the token to `~/.git-credentials` and answer from it after a
-    /// disconnect.
+    /// disconnect. And git's identity, `Topo` (`commitName`, `commitEmail`): every commit the
+    /// guest makes says the mind on the phone made it, whatever the mind set in a config of its
+    /// own, since configuration from the environment outranks every file's.
     public static let environment: [String: String] = [
-        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_COUNT": "4",
         "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
         "GIT_CONFIG_VALUE_0": "",
         "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
         "GIT_CONFIG_VALUE_1": "topo",
+        "GIT_CONFIG_KEY_2": "user.name",
+        "GIT_CONFIG_VALUE_2": commitName,
+        "GIT_CONFIG_KEY_3": "user.email",
+        "GIT_CONFIG_VALUE_3": commitEmail,
     ]
+
+    /// The name and address the guest's commits carry: an address on no domain, so it names no
+    /// person and GitHub links the commit to no account.
+    public static let commitName = "Topo"
+    public static let commitEmail = "topo@topo.invalid"
+
+    /// The mark the `gh` wrapper puts at the end of a body the guest writes on GitHub — an
+    /// HTML comment, which GitHub does not render — so a reader can tell the mind on the phone
+    /// from the person whose login it writes with.
+    public static let bodyMark = "<!-- topo -->"
 
     /// Writes the scripts (executable: the guest sees the host's mode bits), the converter and the
     /// skills under `home`, replacing whatever is there.
@@ -198,7 +214,10 @@ public enum GuestTools {
 
     /// `gh` with GitHub's token from the app in that one process's environment, never the
     /// resident's. A `GH_TOKEN` or `GITHUB_TOKEN` already set is left to `gh`; when the app has no
-    /// token to give it says why, as `topo` said, and runs `gh` as it is.
+    /// token to give it says why, as `topo` said, and runs `gh` as it is. A body given to
+    /// `issue create`, `issue comment`, `pr create` or `pr comment` — `--body`, `-b`, `--body=`, or
+    /// `--body-file`/`-F` (`-` for standard input), which is read and passed as `--body` — ends with
+    /// `bodyMark`.
     public static let gh = #"""
     #!/bin/bash
     # gh: GitHub's CLI with the token from the Topo app, for this one command.
@@ -210,13 +229,42 @@ public enum GuestTools {
         echo "gh is not installed in the guest: apk add github-cli" >&2
         exit 127
     fi
+    # What the guest writes on GitHub is signed: a mark at the end of the body, which GitHub does
+    # not render, so a reader can tell the mind on the phone from the person it writes as.
+    mark='\#(bodyMark)'
+    args=("$@")
+    case "${1:-} ${2:-}" in
+        "issue create"|"issue comment"|"pr create"|"pr comment")
+            args=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --body|-b)
+                        [ $# -ge 2 ] || { args+=("$1"); shift; continue; }
+                        args+=("$1" "$2"$'\n\n'"$mark"); shift 2; continue ;;
+                    --body=*)
+                        args+=("$1"$'\n\n'"$mark") ;;
+                    --body-file|-F)
+                        [ $# -ge 2 ] || { args+=("$1"); shift; continue; }
+                        if [ "$2" = - ]; then body="$(cat)"; else body="$(cat -- "$2")" || exit 1; fi
+                        args+=(--body "$body"$'\n\n'"$mark"); shift 2; continue ;;
+                    --body-file=*)
+                        file="${1#--body-file=}"
+                        if [ "$file" = - ]; then body="$(cat)"; else body="$(cat -- "$file")" || exit 1; fi
+                        args+=(--body "$body"$'\n\n'"$mark") ;;
+                    *)
+                        args+=("$1") ;;
+                esac
+                shift
+            done
+            ;;
+    esac
     if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
-        exec "$real" "$@"
+        exec "$real" "${args[@]}"
     fi
     token="$(topo github token)"
     status=$?
     if [ "$status" = 0 ]; then
-        GH_TOKEN="$token" exec "$real" "$@"
+        GH_TOKEN="$token" exec "$real" "${args[@]}"
     fi
     # Status 1 is the app's own sentence on stdout; any other, `topo` has said why on stderr.
     [ -n "$token" ] && printf 'gh: %s\n' "$token" >&2

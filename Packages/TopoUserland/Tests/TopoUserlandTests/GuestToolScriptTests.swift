@@ -184,11 +184,16 @@ final class GuestToolScriptTests: XCTestCase {
         }
         XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand, GuestTools.appleDocCommand])
         // An empty helper first, which clears every helper configured before it, then this one.
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "2")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "4")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_0"], "credential.https://github.com.helper")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_0"], "")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_1"], "credential.https://github.com.helper")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_1"], "topo")
+        // The guest's commits say Topo made them: the githubpr channel reads the committer.
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_2"], "user.name")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_2"], "Topo")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_3"], "user.email")
+        XCTAssertTrue(GuestTools.environment["GIT_CONFIG_VALUE_3"]?.hasPrefix("topo@") == true)
         XCTAssertFalse(GuestTools.environment.keys.contains { $0.hasPrefix("GH_") || $0.hasPrefix("GITHUB_") },
                        "no GitHub token rides the environment the resident is given")
     }
@@ -321,6 +326,31 @@ final class GuestToolScriptTests: XCTestCase {
         let unconnected = try await shell("gh api user; echo \"status=$?\"", none)
         XCTAssertEqual(unconnected.output, "status=1\n", "gh ran without the app's token")
         XCTAssertTrue(unconnected.errors.contains("not connected"), unconnected.errors)
+        _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
+    }
+
+    /// A body the guest writes on GitHub ends with the mark, however it was given; anything else
+    /// gh is asked reaches it as it was.
+    func testTheGhWrapperSignsWhatItWrites() async throws {
+        let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
+        try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
+        let fake = try await Guest.shared.run("/bin/sh", ["-c", "printf '#!/bin/sh\\nfor a; do printf \"[%s]\\\\n\" \"$a\"; done\\n' > /usr/bin/gh && chmod +x /usr/bin/gh"])
+        XCTAssertEqual(fake.status, 0, fake.errors)
+        let environment = try await startedGitHub(token: "gho_test")
+        let signed = "\n\n\(GuestTools.bodyMark)"
+        let cases: [(String, String)] = [
+            ("gh pr comment 5 --body 'it held'", "[pr]\n[comment]\n[5]\n[--body]\n[it held\(signed)]\n"),
+            ("gh issue create --title t -b x", "[issue]\n[create]\n[--title]\n[t]\n[-b]\n[x\(signed)]\n"),
+            ("gh issue comment 3 --body=yo", "[issue]\n[comment]\n[3]\n[--body=yo\(signed)]\n"),
+            ("printf 'from a file\\n' > /tmp/b.md && gh pr create -F /tmp/b.md; rm -f /tmp/b.md",
+             "[pr]\n[create]\n[--body]\n[from a file\(signed)]\n"),
+            ("echo piped | gh pr comment 1 --body-file -", "[pr]\n[comment]\n[1]\n[--body]\n[piped\(signed)]\n"),
+            ("gh api repos/a/b/issues -f body=x", "[api]\n[repos/a/b/issues]\n[-f]\n[body=x]\n"),
+        ]
+        for (command, expected) in cases {
+            let exit = try await shell(command, environment)
+            XCTAssertEqual(exit.output, expected, command + "\n" + exit.errors)
+        }
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
     }
 
