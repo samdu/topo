@@ -3,15 +3,86 @@ import os
 import TopoTools
 import UIKit
 
+/// A timer or an alarm as the mind composed it: when it sounds, what it says in each state, and
+/// which buttons it carries. `AlarmKitScheduler` makes it AlarmKit's; the suites read it as it is.
+struct TimerPlan: Equatable, Sendable {
+    enum When: Equatable, Sendable {
+        /// A countdown of this many seconds, starting now.
+        case after(TimeInterval)
+        /// Once, at this moment.
+        case on(Date)
+        /// At this hour and minute in the phone's time zone: the next one when `days` is empty,
+        /// otherwise every one of those days.
+        case at(hour: Int, minute: Int, days: [Locale.Weekday])
+    }
+
+    struct Button: Equatable, Sendable {
+        var text: String
+        var icon: String
+    }
+
+    var when: When
+    /// What the countdown says, and the alert unless `title` says otherwise.
+    var label: String
+    /// What the alert says.
+    var title: String
+    /// Pause on the countdown, Resume while paused; both or neither.
+    var pause: Button?
+    var resume: Button?
+    var pausedTitle: String
+    /// Cancel beside the countdown and the paused time: the widget's own button.
+    var cancel: Button?
+    /// The alert's second button, and what it does: `again` starts a countdown of that span
+    /// (AlarmKit's `.countdown`, its `postAlert`), `tells` hands Topo the words kept for it.
+    var second: Button?
+    var again: TimeInterval?
+    var tells = false
+    /// The system's Stop hands Topo the words kept for it.
+    var tellsOnStop = false
+    var buttonColor: WidgetColour
+    var tint: WidgetColour
+    /// A file in the app's `Library/Sounds` that the alert plays; the system's when nil.
+    var sound: String?
+
+    /// Whether the alarm ever counts down, which is when Pause and Cancel have a countdown to sit on.
+    var countsDown: Bool {
+        if case .after = when { return true }
+        return again != nil
+    }
+}
+
+/// One of Topo's alarms as AlarmKit reports it, with what its Live Activity says of the countdown.
+struct TimerStatus: Equatable, Sendable {
+    enum State: String, Sendable {
+        /// Waiting for the moment it is set for.
+        case set
+        case counting, paused, sounding, unknown
+    }
+
+    var id: UUID
+    var state: State
+    /// When it is set for, where AlarmKit says: absent for a timer's first countdown.
+    var when: TimerPlan.When?
+    /// When a countdown reaches zero, from its Live Activity.
+    var fires: Date?
+    /// What is left of a paused countdown, from its Live Activity.
+    var left: TimeInterval?
+}
+
 /// The system's alarms: AlarmKit on iOS 26 (`AlarmKitScheduler`), a fake in the suites, nothing
 /// below iOS 26 (`NoAlarms`).
 protocol AlarmScheduler: Sendable {
     /// The permission AlarmKit asks for, or nil where the phone has no AlarmKit.
     var authorizer: (any Authorizer)? { get }
-    func schedule(id: UUID, label: String, duration: TimeInterval) async throws
-    /// Topo's alarms and their states (AlarmKit lists only the app's own).
-    func alarms() async throws -> [(id: UUID, state: String)]
-    /// Cancels one; throws what AlarmKit throws.
+    func schedule(id: UUID, plan: TimerPlan) async throws
+    /// Topo's alarms (AlarmKit lists only the app's own).
+    func alarms() async throws -> [TimerStatus]
+    /// Each throws what AlarmKit throws.
+    func pause(id: UUID) async throws
+    func resume(id: UUID) async throws
+    /// AlarmKit's `countdown(id:)`: a sounding alarm's next countdown.
+    func again(id: UUID) async throws
+    func stop(id: UUID) async throws
     func cancel(id: UUID) async throws
 }
 
@@ -30,36 +101,143 @@ struct AlarmLimit: Error {
 /// Below iOS 26: no AlarmKit, so no timer.
 struct NoAlarms: AlarmScheduler {
     var authorizer: (any Authorizer)? { nil }
-    func schedule(id: UUID, label: String, duration: TimeInterval) async throws {}
-    func alarms() async throws -> [(id: UUID, state: String)] { [] }
+    func schedule(id: UUID, plan: TimerPlan) async throws {}
+    func alarms() async throws -> [TimerStatus] { [] }
+    func pause(id: UUID) async throws {}
+    func resume(id: UUID) async throws {}
+    func again(id: UUID) async throws {}
+    func stop(id: UUID) async throws {}
     func cancel(id: UUID) async throws {}
 }
 
-/// The label and the time each alarm sounds, which AlarmKit's own `Alarm` does not carry, kept for
-/// `topo timer list` while Topo runs (and soonest first by them); a relaunch lists an alarm by its id
-/// and state alone, and those last.
-@MainActor
-final class TimerBook {
-    static let shared = TimerBook()
+/// What each alarm was set as, which AlarmKit's `Alarm` does not carry, kept on disk by its id so
+/// a relaunch still knows it: the label and the plan's shape for `list`, and the words a button
+/// hands Topo with the login it was set under (`TimerPresses`). A record is written after AlarmKit
+/// takes the alarm and dropped once AlarmKit no longer lists it. A start's copy, schedule and
+/// write, and a list's or a cancel's ask and sweep, each run alone (`alone`), so a sweep never
+/// judges by a list read before an alarm set beside it.
+final class TimerRecords: Sendable {
+    struct Record: Codable, Equatable, Sendable {
+        var label: String
+        /// The first countdown's end, for a timer.
+        var fires: Date?
+        /// The span of a timer's countdown.
+        var span: TimeInterval?
+        var again: TimeInterval?
+        /// The words the second button and Stop hand Topo, and the button's own.
+        var tell: String?
+        var onStop: String?
+        var second: String?
+        /// The login the words were kept under: a press under any other sends nothing.
+        var login: String?
+        /// The file in `Library/Sounds` the alert plays.
+        var sound: String?
+        /// The words on the countdown's Pause and Cancel and the paused Resume, for `list`.
+        var pause: String?
+        var resume: String?
+        var cancel: String?
+        /// When a sweep first found AlarmKit no longer listing the alarm, for a record whose words
+        /// a Stop's intent may still be on its way to read.
+        var gone: Date?
+    }
+
+    static let shared = TimerRecords(folder: URL.applicationSupportDirectory.appendingPathComponent("Timers", isDirectory: true))
 
     /// AlarmKit where the phone has it.
-    nonisolated static var scheduler: any AlarmScheduler {
+    static var scheduler: any AlarmScheduler {
         if #available(iOS 26, *) { AlarmKitScheduler() } else { NoAlarms() }
     }
-    private var known: [UUID: (label: String, fires: Date)] = [:]
 
-    func remember(_ id: UUID, label: String, fires: Date) { known[id] = (label, fires) }
-    func entry(_ id: UUID) -> (label: String, fires: Date)? { known[id] }
-    func drop(_ id: UUID) { known[id] = nil }
+    let folder: URL
+    private let lock = OSAllocatedUnfairLock()
+    private let gate = TimerGate()
+
+    /// Runs `work` with no other `alone` work of this store's under way, in the order called.
+    func alone<T: Sendable>(_ work: @Sendable () async -> T) async -> T {
+        await gate.enter()
+        let value = await work()
+        await gate.leave()
+        return value
+    }
+
+    init(folder: URL) { self.folder = folder }
+
+    private func file(_ id: UUID) -> URL { folder.appendingPathComponent(id.uuidString.lowercased() + ".json") }
+
+    /// Kept readable while the phone is locked after its first unlock, since a button pressed on
+    /// the lock screen is read here.
+    func write(_ record: Record, for id: UUID) throws {
+        try lock.withLock {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try JSONEncoder().encode(record).write(to: file(id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
+    func read(_ id: UUID) -> Record? {
+        lock.withLock { (try? Data(contentsOf: file(id))).flatMap { try? JSONDecoder().decode(Record.self, from: $0) } }
+    }
+
+    func drop(_ id: UUID) {
+        lock.withLock { try? FileManager.default.removeItem(at: file(id)) }
+    }
+
+    /// How long a record with words outlives its alarm. A Stop removes a one-shot alarm before
+    /// its intent runs, which then reads the words here.
+    static let grace: TimeInterval = 300
+
+    /// Drops every record of an alarm AlarmKit no longer lists. One with words a button hands
+    /// is marked gone at the first such sweep and dropped once `grace` has passed since.
+    /// Called inside `alone`.
+    func sweep(keeping alarms: Set<UUID>, now: Date) {
+        lock.withLock {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for name in names where name.hasSuffix(".json") {
+                guard let id = UUID(uuidString: String(name.dropLast(5))), !alarms.contains(id) else { continue }
+                let url = folder.appendingPathComponent(name)
+                if var record = (try? Data(contentsOf: url)).flatMap({ try? JSONDecoder().decode(Record.self, from: $0) }),
+                   record.tell != nil || record.onStop != nil {
+                    guard let gone = record.gone else {
+                        record.gone = now
+                        try? JSONEncoder().encode(record).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                        continue
+                    }
+                    if now.timeIntervalSince(gone) < Self.grace { continue }
+                }
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
 }
 
-/// `topo timer`: a countdown that sounds at zero, as an AlarmKit alarm, which sounds behind the
-/// lock and through silent mode. Where alarms are refused or the phone has no AlarmKit, nothing is
-/// set and the reply says why, so the mind asks the person what they wanted rather than setting
-/// something lesser. A timer outlives a sign-out: it ends by itself and is dismissed in a tap.
+/// A first-come lock for async work: one holder at a time, the rest waiting in order.
+actor TimerGate {
+    private var held = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        guard held else {
+            held = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func leave() {
+        if waiting.isEmpty { held = false } else { waiting.removeFirst().resume() }
+    }
+}
+
+/// `topo timer`: a countdown or an alarm, as AlarmKit makes them, which sound behind the lock and
+/// through silent mode, with every control AlarmKit offers for the mind to compose: Pause and
+/// Resume on the countdown, a second button at the alert that starts the next countdown or hands
+/// Topo a turn, a turn at Stop, Cancel on the countdown, its words, symbols and colours, a sound,
+/// and an alarm at a moment or on chosen days. Where alarms are refused or the phone has no
+/// AlarmKit, nothing is set and the reply says why, so the mind asks the person what they wanted
+/// rather than setting something lesser. An alarm outlives a sign-out; the turns its buttons hand
+/// Topo do not.
 struct TimerTool: Tool {
     let scheduler: any AlarmScheduler
-    let book: @MainActor () -> TimerBook
+    let records: TimerRecords
     let broker: PermissionBroker
     /// Where Topo stands, read as a call begins (to tell `leftBeforeThePrompt` from `offScreen`) and
     /// at the moment a new prompt would go up (`OnScreen`): the system's prompt can be raised unless
@@ -69,62 +247,250 @@ struct TimerTool: Tool {
     var state: @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }
     var now: @Sendable () -> Date = { Date() }
     var makeID: @Sendable () -> UUID = { UUID() }
+    var zone: TimeZone = .autoupdatingCurrent
+    /// The login a button's words are kept under, nil while signed out (`ShareStore`'s door).
+    var login: @Sendable () -> String? = { ShareStore.shared()?.door()?.login }
+    /// Whether the system has a symbol by this name.
+    var hasSymbol: @Sendable (String) -> Bool = { UIImage(systemName: $0) != nil }
+    /// Copies a sound file from the guest's home into `Library/Sounds` under the name given.
+    var sounds: TimerSounds = TimerSounds()
+    /// The copy itself, which the suites hold up.
+    var copy: @Sendable (TimerSounds, String, UUID) async throws -> String = { try await $0.copy($1, for: $2) }
     /// What the last prompt `OnScreen` was asked for came to, kept for every call that waited on it.
     let asked = Asked()
 
     static let labelLimit = 40
+    static let buttonLimit = 20
+    static let wordsLimit = 500
     static let longest: TimeInterval = 24 * 3600
 
     let name = "timer"
-    let summary = "a timer that sounds at zero, behind the lock and through silent mode; list or cancel them"
+    let summary = "timers and alarms that sound behind the lock and on silent, with pause, again, buttons that tell Topo, days and sounds"
     let usage = """
-    topo timer SPAN [LABEL]          a timer of SPAN (90s, 15m, 2h; 1s to 24h) that sounds at zero; LABEL
-                                     (at most 40 characters) is what the lock screen and the alert say
-    topo timer list                  Topo's timers, id first
-    topo timer cancel ID             cancel one before it sounds
+    topo timer SPAN [LABEL] [OPTIONS]      a countdown of SPAN (90s, 15m, 2h; 1s to 24h) that sounds at zero
+    topo timer at TIME [LABEL] [OPTIONS]   an alarm at TIME: HH:MM (24-hour, the next one; with --every, those days)
+                                           or a moment, 2026-11-05T07:30
+    topo timer list                        Topo's timers and alarms, id first, with their state and buttons
+    topo timer pause ID | resume ID        hold a counting timer, or set a held one counting again
+    topo timer again ID                    one sounding: start its next countdown (the --again span)
+    topo timer stop ID                     one sounding: stop it (one with --every waits for its next day)
+    topo timer cancel ID                   take it off, whatever its state
 
-    A timer is an alarm: it counts down on the lock screen and sounds at zero with the phone locked
-    or on silent, until it is stopped. Topo asks once to allow alarms, with Topo on the screen.
-    Where alarms are not allowed (status 5) or the phone's iOS is older than 26 (status 1), nothing
-    is set: ask the person what the timer was for, rather than setting something else in its place.
+    LABEL (at most 40 characters, "Timer" if none) is what the countdown and the alert say.
+    The alert:
+      --title TEXT          what the alert says instead of LABEL
+      --again SPAN|same     a second button that starts another countdown of SPAN; same is the timer's own
+                            (an alarm's snooze: give a span)
+      --tell WORDS          a second button that hands Topo WORDS as a turn (with --again, it does both)
+      --button-text TEXT    the second button's words (Again, Snooze or Tell Topo); --button-icon SYMBOL
+      --on-stop WORDS       the system's Stop also hands Topo WORDS as a turn
+      --sound FILE          a .caf, .aif, .aiff or .wav under /home/topo, under 30 seconds, played instead of the
+                            system's sound
+    The countdown (a timer, or an alarm with --again), on the lock screen and in the Dynamic Island:
+      --pause               Pause, and Resume while paused; --pause-text, --pause-icon, --resume-text,
+                            --resume-icon, --paused-title TEXT (what it says while paused)
+      --cancel              a Cancel button; --cancel-text, --cancel-icon
+                            (topo timer pause holds any counting timer, but one with no --pause shows no
+                            Resume: resume it with topo timer resume)
+    Every alarm:
+      --every DAYS          with at HH:MM: daily, weekdays, weekends, or days as mon,wed,fri
+      --tint COLOR          the alarm's colour; --button-color COLOR the buttons' words. A colour is primary,
+                            secondary, highlight, signal, onPrimary, text, …, or #RRGGBB, or #LIGHT/#DARK
+    Button words are at most 20 characters, WORDS at most 500, a SYMBOL an SF Symbol name.
+
+    An alarm sounds with the phone locked or on silent, until it is stopped. The person can press
+    every button on the lock screen without unlocking, so a --tell turn arrives from a locked phone:
+    WORDS are your own, read back to you, saying what the press means. A turn is sent only while the
+    login the alarm was set under is signed in. Topo asks once to allow alarms, with Topo on the
+    screen. Where alarms are not allowed (status 5) or the phone's iOS is older than 26 (status 1),
+    nothing is set: ask the person what it was for, rather than setting something else in its place.
     """
 
     enum Call: Equatable {
         case list
-        case cancel(id: String)
-        case start(span: TimeInterval, label: String)
+        case act(Act, id: String)
+        case start(TimerPlan, tell: String?, onStop: String?, soundPath: String?)
     }
 
+    enum Act: String, Equatable {
+        case pause, resume, again, stop, cancel
+    }
+
+    static let alertOptions: Set<String> = ["title", "again", "tell", "button-text", "button-icon", "on-stop", "sound",
+                                            "pause-text", "pause-icon", "resume-text", "resume-icon", "paused-title",
+                                            "cancel-text", "cancel-icon", "every", "tint", "button-color"]
+    static let alertFlags: Set<String> = ["pause", "cancel"]
+
     func parse(_ arguments: [String]) throws -> Call {
-        let parsed = try Arguments(arguments, options: [])
-        switch parsed.words.first {
-        case "list" where parsed.words.count == 1:
-            return .list
-        case "cancel" where parsed.words.count == 2:
-            return .cancel(id: parsed.words[1])
+        let parsed = try Arguments(arguments, options: Self.alertOptions, flags: Self.alertFlags)
+        let words = parsed.words
+        switch words.first {
         case "list":
-            throw Misuse("timer list takes nothing more")
-        case "cancel":
-            throw Misuse("timer cancel takes one id")
-        case let span? where (1...2).contains(parsed.words.count):
+            try parsed.only([], for: "timer list")
+            guard words.count == 1 else { throw Misuse("timer list takes nothing more") }
+            return .list
+        case let verb? where Act(rawValue: verb) != nil:
+            try parsed.only([], for: "timer \(verb)")
+            guard words.count == 2 else { throw Misuse("timer \(verb) takes one id") }
+            return .act(Act(rawValue: verb)!, id: words[1])
+        case "at":
+            guard (2...3).contains(words.count) else { throw Misuse("timer at takes a time and at most a label") }
+            let when = try at(words[1], every: parsed.options["every"])
+            return try start(when, label: words.count == 3 ? words[2] : nil, parsed)
+        case let span? where (1...2).contains(words.count):
             guard let seconds = ToolDates.duration(span) else {
                 throw ToolFailure("\(span) is not a span; write it as 90s, 15m or 2h", status: ToolReply.usage)
             }
             guard seconds >= 1, seconds <= Self.longest else {
                 throw ToolFailure("a timer runs from 1s to 24h; \(span) is outside that", status: ToolReply.usage)
             }
-            // Judged as written, before its lines are joined and its ends trimmed, so a longer label
-            // is refused rather than cut to fit.
-            let given = parsed.words.count == 2 ? parsed.words[1] : "Timer"
-            guard given.count <= Self.labelLimit else {
-                throw ToolFailure("the label is \(given.count) characters, past \(Self.labelLimit)", status: ToolReply.usage)
-            }
-            let label = PhoneTool.flat(given).trimmingCharacters(in: .whitespaces)
-            guard !label.isEmpty else { throw ToolFailure("the label is empty", status: ToolReply.usage) }
-            return .start(span: seconds, label: label)
+            if parsed.options["every"] != nil { throw usage("--every repeats an alarm: write timer at HH:MM --every DAYS") }
+            return try start(.after(seconds), label: words.count == 2 ? words[1] : nil, parsed)
         default:
-            throw Misuse("timer takes a span, list or cancel")
+            throw Misuse("timer takes a span, at, list, pause, resume, again, stop or cancel")
         }
+    }
+
+    private func usage(_ text: String) -> ToolFailure { ToolFailure(text, status: ToolReply.usage) }
+
+    /// `at`'s time: HH:MM, with or without `--every`, or a moment ahead with no `--every`.
+    private func at(_ text: String, every: String?) throws -> TimerPlan.When {
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 2, parts.allSatisfy({ !$0.isEmpty && $0.count <= 2 && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }),
+           !text.contains("-"), let hour = Int(parts[0]), let minute = Int(parts[1]), parts[1].count == 2 {
+            guard (0...23).contains(hour), (0...59).contains(minute) else {
+                throw usage("\(text) is not a time of day; write it as HH:MM, 00:00 to 23:59")
+            }
+            return .at(hour: hour, minute: minute, days: try every.map(Self.days) ?? [])
+        }
+        guard let reading = ToolDates.read(text, in: zone), reading.hasTime else {
+            throw usage("\(text) is not a time; write it as 07:30 or 2026-11-05T07:30")
+        }
+        guard Self.exists(text, reading.date, zone: zone) else { throw usage("\(text) is not a date and time that exists") }
+        if every != nil { throw usage("--every repeats a time of day: write at HH:MM --every DAYS, not a date") }
+        guard reading.date > now() else { throw usage("\(text) has passed") }
+        return .on(reading.date)
+    }
+
+    /// Whether the moment read is the one written: the date reader rolls a day or an hour past
+    /// its end into the next (2026-11-31 is 2026-12-01), so the fields are read back in the zone
+    /// the text names and compared.
+    static func exists(_ text: String, _ date: Date, zone: TimeZone) -> Bool {
+        let pattern = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/
+        guard let match = text.wholeMatch(of: pattern) else { return false }
+        var named = zone
+        if let offset = match.6 {
+            if offset == "Z" {
+                named = TimeZone(secondsFromGMT: 0)!
+            } else {
+                let digits = offset.dropFirst().filter(\.isNumber)
+                let seconds = (Int(digits.prefix(2))! * 60 + Int(digits.suffix(2))!) * 60
+                guard let given = TimeZone(secondsFromGMT: offset.first == "-" ? -seconds : seconds) else { return false }
+                named = given
+            }
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = named
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        return [parts.year, parts.month, parts.day, parts.hour, parts.minute] == [Int(match.1), Int(match.2), Int(match.3), Int(match.4), Int(match.5)]
+    }
+
+    static let weekdays: [(name: String, day: Locale.Weekday)] = [
+        ("mon", .monday), ("tue", .tuesday), ("wed", .wednesday), ("thu", .thursday), ("fri", .friday), ("sat", .saturday), ("sun", .sunday),
+    ]
+
+    static func days(_ text: String) throws -> [Locale.Weekday] {
+        switch text.lowercased() {
+        case "daily": return weekdays.map(\.day)
+        case "weekdays": return Array(weekdays.prefix(5).map(\.day))
+        case "weekends": return Array(weekdays.suffix(2).map(\.day))
+        default: break
+        }
+        var days: [Locale.Weekday] = []
+        for name in text.lowercased().split(separator: ",", omittingEmptySubsequences: false) {
+            guard let day = weekdays.first(where: { $0.name == name })?.day else {
+                throw ToolFailure("--every \(text): \(name.isEmpty ? "an empty day" : String(name)) is not a day; write daily, weekdays, weekends or mon,wed,fri",
+                                  status: ToolReply.usage)
+            }
+            if !days.contains(day) { days.append(day) }
+        }
+        return days
+    }
+
+    /// A start's plan from its options, each judged as written: past its limit is refused, never cut.
+    private func start(_ when: TimerPlan.When, label given: String?, _ parsed: Arguments) throws -> Call {
+        let label = try text(given ?? "Timer", "the label", limit: Self.labelLimit)
+        let options = parsed.options
+        func option(_ name: String, limit: Int) throws -> String? {
+            try options[name].map { try text($0, "--\(name)", limit: limit) }
+        }
+        func button(_ name: String, text fallback: String, icon fallbackIcon: String) throws -> TimerPlan.Button {
+            let words = try option("\(name)-text", limit: Self.buttonLimit) ?? fallback
+            let icon = options["\(name)-icon"] ?? fallbackIcon
+            guard hasSymbol(icon) else { throw usage("--\(name)-icon \(icon) is not a symbol this phone has") }
+            return TimerPlan.Button(text: words, icon: icon)
+        }
+        func colour(_ name: String, _ fallback: WidgetColour) throws -> WidgetColour {
+            guard let text = options[name] else { return fallback }
+            guard let colour = WidgetColour(option: text) else {
+                throw usage("--\(name) \(text) is not a colour: a Theme token (primary, text, …), #RRGGBB, or #LIGHT/#DARK")
+            }
+            return colour
+        }
+
+        var again: TimeInterval?
+        if let text = options["again"] {
+            if text == "same" {
+                guard case let .after(span) = when else { throw usage("--again same is a timer's own span; an alarm has none, so give one") }
+                again = span
+            } else {
+                guard let span = ToolDates.duration(text), span >= 1, span <= Self.longest else {
+                    throw usage("--again \(text) is not a span from 1s to 24h, or same")
+                }
+                again = span
+            }
+        }
+        let tell = try option("tell", limit: Self.wordsLimit)
+        let onStop = try option("on-stop", limit: Self.wordsLimit)
+
+        var plan = TimerPlan(when: when, label: label, title: try option("title", limit: Self.labelLimit) ?? label,
+                             pausedTitle: try option("paused-title", limit: Self.labelLimit) ?? label,
+                             again: again, tells: tell != nil, tellsOnStop: onStop != nil,
+                             buttonColor: try colour("button-color", .token(.onPrimary)),
+                             tint: try colour("tint", .token(.primary)))
+        if again != nil || tell != nil {
+            let snooze = again != nil && { if case .after = when { false } else { true } }()
+            plan.second = try button("button", text: again == nil ? "Tell Topo" : snooze ? "Snooze" : "Again",
+                                     icon: again == nil ? "bubble.left" : snooze ? "zzz" : "repeat")
+        } else if options["button-text"] != nil || options["button-icon"] != nil {
+            throw usage("--button-text and --button-icon dress the second button, which --again or --tell makes")
+        }
+
+        let pausing = parsed.flags.contains("pause") || ["pause-text", "pause-icon", "resume-text", "resume-icon", "paused-title"].contains { options[$0] != nil }
+        let cancelling = parsed.flags.contains("cancel") || options["cancel-text"] != nil || options["cancel-icon"] != nil
+        if (pausing || cancelling), !plan.countsDown {
+            throw usage("\(pausing ? "--pause" : "--cancel") sits on a countdown, and an alarm counts down only with --again")
+        }
+        if pausing {
+            plan.pause = try button("pause", text: "Pause", icon: "pause.fill")
+            plan.resume = try button("resume", text: "Resume", icon: "play.fill")
+        }
+        if cancelling { plan.cancel = try button("cancel", text: "Cancel", icon: "xmark") }
+
+        let soundPath = options["sound"]
+        if let soundPath { try TimerSounds.judgePath(soundPath) }
+        return .start(plan, tell: tell, onStop: onStop, soundPath: soundPath)
+    }
+
+    /// Text judged as written, before its lines are joined and its ends trimmed, so a longer one is
+    /// refused rather than cut to fit.
+    private func text(_ given: String, _ what: String, limit: Int) throws -> String {
+        guard given.count <= limit else {
+            throw ToolFailure("\(what) is \(given.count) characters, past \(limit)", status: ToolReply.usage)
+        }
+        let flat = PhoneTool.flat(given).trimmingCharacters(in: .whitespaces)
+        guard !flat.isEmpty else { throw ToolFailure("\(what) is empty", status: ToolReply.usage) }
+        return flat
     }
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -137,8 +503,8 @@ struct TimerTool: Tool {
         }, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
             switch call {
             case .list: await list()
-            case let .cancel(id): await cancel(id)
-            case let .start(span, label): await start(span: span, label: label)
+            case let .act(act, id): await self.act(act, id)
+            case let .start(plan, tell, onStop, soundPath): await start(plan, tell: tell, onStop: onStop, soundPath: soundPath)
             }
         }
         // A refusal the person made is a standing of denied, said as one. A no over a standing
@@ -229,63 +595,241 @@ struct TimerTool: Tool {
     }
 
     static let noAlarmKit = ToolReply(status: ToolReply.failed, text:
-        "topo: no timer was set: this phone's iOS has no AlarmKit (it needs iOS 26), so Topo cannot set an alarm here. Ask the person what the timer was for.\n")
+        "topo: nothing was set: this phone's iOS has no AlarmKit (it needs iOS 26), so Topo cannot set an alarm here. Ask the person what it was for.\n")
     static let offScreen = ToolReply(status: ToolReply.failed, text:
-        "topo: no timer was set: Topo asks once to allow alarms, and can ask only while it is on the screen. Ask the person to open Topo, then set the timer again.\n")
+        "topo: nothing was set: Topo asks once to allow alarms, and can ask only while it is on the screen. Ask the person to open Topo, then set it again.\n")
 
     static let leftBeforeThePrompt = ToolReply(status: ToolReply.failed, text:
-        "topo: no timer was set: it was asked for with Topo in front, but Topo went to the background before it could put up the prompt to allow alarms. Tell the person that, and ask them to set it again a moment slower, with Topo on the screen; once the prompt is answered it is not asked again.\n")
+        "topo: nothing was set: it was asked for with Topo in front, but Topo went to the background before it could put up the prompt to allow alarms. Tell the person that, and ask them to set it again a moment slower, with Topo on the screen; once the prompt is answered it is not asked again.\n")
 
     static func promptFailed(_ reason: String) -> ToolReply {
         ToolReply(status: ToolReply.failed, text:
-            "topo: no timer was set: AlarmKit's request to allow alarms failed (\(PhoneTool.flat(reason))); nothing was refused, and the person was likely not asked. Tell the person, and ask them to set it again with Topo on the screen.\n")
+            "topo: nothing was set: AlarmKit's request to allow alarms failed (\(PhoneTool.flat(reason))); nothing was refused, and the person was likely not asked. Tell the person, and ask them to set it again with Topo on the screen.\n")
     }
     static let promptUnanswered = ToolReply(status: ToolReply.failed, text:
-        "topo: no timer was set: the prompt to allow alarms closed and AlarmKit kept no answer, so alarms are neither allowed nor refused. Ask the person to set it again with Topo on the screen, and to answer the prompt.\n")
+        "topo: nothing was set: the prompt to allow alarms closed and AlarmKit kept no answer, so alarms are neither allowed nor refused. Ask the person to set it again with Topo on the screen, and to answer the prompt.\n")
 
-    private func start(span: TimeInterval, label: String) async -> ToolReply {
+    private func start(_ plan: TimerPlan, tell: String?, onStop: String?, soundPath: String?) async -> ToolReply {
         guard scheduler.authorizer != nil else { return Self.noAlarmKit }
-        let id = makeID()
-        let fires = now().addingTimeInterval(span)
-        do {
-            try await scheduler.schedule(id: id, label: label, duration: span)
-        } catch let error as AlarmLimit {
-            return .failed("topo: no timer was set: \(error.reason). Cancel one with topo timer cancel, or ask the person which to drop.\n")
-        } catch {
-            return .failed("topo: AlarmKit did not set the timer: \(error.localizedDescription)\n")
+        // A turn is kept under the login the alarm was set under, so one set while signed out
+        // would carry words no press could ever send.
+        let login = login()
+        if tell != nil || onStop != nil, login == nil {
+            return .failed("topo: nothing was set: --tell and --on-stop hand Topo a turn, and the phone is signed out\n")
         }
-        await book().remember(id, label: label, fires: fires)
-        return .ok("set: " + PhoneTool.line([id.uuidString.lowercased(), label, "sounds at " + ToolDates.write(fires)]) + "\n")
+        return await records.alone { await place(plan, tell: tell, onStop: onStop, soundPath: soundPath, login: login) }
+    }
+
+    /// A start's copy, schedule and record, run alone (`TimerRecords.alone`).
+    private func place(_ plan: TimerPlan, tell: String?, onStop: String?, soundPath: String?, login: String?) async -> ToolReply {
+        // A call the service answered at its bound while this one waited its turn sets nothing.
+        guard !Task.isCancelled else { return PhoneTool.late }
+        var plan = plan
+        let id = makeID()
+        if let soundPath {
+            do {
+                plan.sound = try await copy(sounds, soundPath, id)
+            } catch let failure as ToolFailure {
+                return ToolReply(status: failure.status, text: "topo: nothing was set: \(failure.text)\n")
+            } catch {
+                return .failed("topo: nothing was set: the sound could not be copied: \(error.localizedDescription)\n")
+            }
+            // The copy runs detached, so the service may have answered at its bound meanwhile.
+            guard !Task.isCancelled else {
+                if let sound = plan.sound { sounds.remove(sound) }
+                return PhoneTool.late
+            }
+        }
+        // The countdown starts at the schedule, after the sound's copy.
+        let set = now()
+        do {
+            try await scheduler.schedule(id: id, plan: plan)
+        } catch {
+            if let sound = plan.sound { sounds.remove(sound) }
+            if error is AlarmLimit {
+                return .failed("topo: nothing was set: \(AlarmLimit().reason). Cancel one with topo timer cancel, or ask the person which to drop.\n")
+            }
+            return .failed("topo: AlarmKit did not set it: \(error.localizedDescription)\n")
+        }
+        var fires: Date?
+        var span: TimeInterval?
+        if case let .after(seconds) = plan.when {
+            span = seconds
+            fires = set.addingTimeInterval(seconds)
+        }
+        let record = TimerRecords.Record(label: plan.label, fires: fires, span: span, again: plan.again, tell: tell,
+                                         onStop: onStop, second: plan.second?.text, login: login, sound: plan.sound,
+                                         pause: plan.pause?.text, resume: plan.resume?.text, cancel: plan.cancel?.text)
+        var kept = ""
+        do {
+            try records.write(record, for: id)
+        } catch {
+            // The alarm stands; only what list says of it and the words a button hands are lost.
+            kept = tell != nil || onStop != nil
+                ? " (its record could not be kept, so its buttons will send no turn: \(error.localizedDescription))"
+                : " (its record could not be kept, so list will give it by id and state alone)"
+        }
+        let when = fires.map { "sounds at " + ToolDates.write($0, in: zone) } ?? describe(plan.when)
+        return .ok("set: " + PhoneTool.line([id.uuidString.lowercased(), plan.label, when]) + kept + "\n")
+    }
+
+    /// When an alarm is set for, as `list` and a start say it.
+    func describe(_ when: TimerPlan.When) -> String {
+        switch when {
+        case let .after(span): return "a \(Self.span(span)) timer"
+        case let .on(date): return "sounds at " + ToolDates.write(date, in: zone)
+        case let .at(hour, minute, days):
+            let time = String(format: "%02d:%02d", hour, minute)
+            guard !days.isEmpty else { return "sounds at " + ToolDates.write(next(hour: hour, minute: minute, days: []), in: zone) }
+            let named = days.count == 7 ? "daily" : Self.weekdays.filter { days.contains($0.day) }.map(\.name).joined(separator: ",")
+            return "at \(time) every \(named), next " + ToolDates.write(next(hour: hour, minute: minute, days: days), in: zone)
+        }
+    }
+
+    /// The next moment at that hour and minute, on one of `days` when there are any.
+    func next(hour: Int, minute: Int, days: [Locale.Weekday]) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let numbers = days.compactMap { day in Self.weekdays.firstIndex { $0.day == day }.map { ($0 + 1) % 7 + 1 } }
+        let candidates = numbers.isEmpty
+            ? [calendar.nextDate(after: now(), matching: DateComponents(hour: hour, minute: minute), matchingPolicy: .nextTime)]
+            : numbers.map { calendar.nextDate(after: now(), matching: DateComponents(hour: hour, minute: minute, weekday: $0), matchingPolicy: .nextTime) }
+        return candidates.compactMap { $0 }.min() ?? now()
+    }
+
+    static func span(_ seconds: TimeInterval) -> String {
+        let whole = Int(seconds.rounded())
+        if whole % 3600 == 0 { return "\(whole / 3600)h" }
+        if whole % 60 == 0 { return "\(whole / 60)m" }
+        if whole >= 60 { return "\(whole / 60)m\(whole % 60)s" }
+        return "\(whole)s"
     }
 
     private func list() async -> ToolReply {
-        let book = await book()
-        var lines: [(fires: Date?, line: String)] = []
+        await records.alone { await listing() }
+    }
+
+    private func listing() async -> ToolReply {
+        let alarms: [TimerStatus]
         do {
-            for alarm in try await scheduler.alarms() {
-                let entry = await book.entry(alarm.id)
-                lines.append((entry?.fires, PhoneTool.line([alarm.id.uuidString.lowercased(), entry?.label,
-                                                            entry.map { "sounds at " + ToolDates.write($0.fires) }, alarm.state])))
-            }
+            alarms = try await scheduler.alarms()
         } catch {
-            return .failed("topo: AlarmKit did not list the timers: \(error.localizedDescription)\n")
+            return .failed("topo: AlarmKit did not list them: \(error.localizedDescription)\n")
         }
-        let text = lines.sorted { ($0.fires ?? .distantFuture) < ($1.fires ?? .distantFuture) }.map(\.line)
+        sweep(keeping: alarms)
+        var lines: [(order: Date, line: String)] = []
+        for alarm in alarms {
+            let record = records.read(alarm.id)
+            // A timer's countdown carries no schedule; its span is the record's.
+            var shape = alarm.when.map(describe)
+            if shape == nil, let span = record?.span { shape = "a \(Self.span(span)) timer" }
+            var state = alarm.state.rawValue
+            var order = Date.distantFuture
+            if let fires = alarm.fires {
+                state += ", sounds at " + ToolDates.write(fires, in: zone)
+                order = fires
+            } else if let left = alarm.left {
+                state += ", \(Self.span(left)) left"
+            } else if alarm.state == .counting, let fires = record?.fires {
+                state += ", sounds at " + ToolDates.write(fires, in: zone)
+                order = fires
+            }
+            if case let .on(date) = alarm.when { order = min(order, date) }
+            if case let .at(hour, minute, days) = alarm.when { order = min(order, next(hour: hour, minute: minute, days: days)) }
+            lines.append((order, PhoneTool.line([alarm.id.uuidString.lowercased(), record?.label, shape, state] + Self.buttons(record))))
+        }
+        let text = lines.sorted { $0.order < $1.order }.map(\.line)
         return .ok(PhoneTool.lines(text, none: "no timers"))
     }
 
-    private func cancel(_ id: String) async -> ToolReply {
+    /// What each of an alarm's buttons says and does, as its record keeps them.
+    static func buttons(_ record: TimerRecords.Record?) -> [String] {
+        guard let record else { return [] }
+        var buttons: [String] = []
+        if let pause = record.pause { buttons.append("button \"\(pause)\" pauses") }
+        if let resume = record.resume { buttons.append("button \"\(resume)\" resumes") }
+        if let cancel = record.cancel { buttons.append("button \"\(cancel)\" cancels") }
+        if let second = record.second {
+            let does = [record.again.map { "starts \(Self.span($0)) again" }, record.tell.map { _ in "tells Topo" }].compactMap { $0 }
+            buttons.append("button \"\(second)\" " + does.joined(separator: " and "))
+        }
+        if record.onStop != nil { buttons.append("Stop tells Topo") }
+        return buttons
+    }
+
+    /// Drops the records and sounds of alarms AlarmKit no longer lists: sounds by the id in their
+    /// names, so a copy whose record was never kept goes too.
+    private func sweep(keeping alarms: [TimerStatus]) {
+        let ids = Set(alarms.map(\.id))
+        records.sweep(keeping: ids, now: now())
+        sounds.sweep(keeping: ids)
+    }
+
+    /// What each act needs the alarm to be doing, which AlarmKit itself may answer with nothing.
+    private static func needs(_ act: Act) -> Set<TimerStatus.State>? {
+        switch act {
+        case .pause: [.counting]
+        case .resume: [.paused]
+        case .again, .stop: [.sounding]
+        case .cancel: nil
+        }
+    }
+
+    private func act(_ act: Act, _ id: String) async -> ToolReply {
+        await records.alone { await acting(act, id) }
+    }
+
+    private func acting(_ act: Act, _ id: String) async -> ToolReply {
+        guard !Task.isCancelled else { return PhoneTool.late }
         let missing = ToolReply(status: ToolReply.failed, text: "topo: no timer of Topo's with the id \(id)\n")
         guard let uuid = UUID(uuidString: id) else { return missing }
-        // Asked of the list first, so a cancel AlarmKit refused is not said as no such timer: that
-        // one may still sound.
+        // Asked of the list first, so an act AlarmKit refused is not said as no such timer, and an
+        // act on the wrong state is said as that state.
+        let alarms: [TimerStatus]
         do {
-            guard try await scheduler.alarms().contains(where: { $0.id == uuid }) else { return missing }
-            try await scheduler.cancel(id: uuid)
+            alarms = try await scheduler.alarms()
         } catch {
-            return .failed("topo: AlarmKit did not cancel \(id), which may still sound: \(error.localizedDescription)\n")
+            return .failed("topo: AlarmKit did not list its alarms, so \(id) was not asked to \(act.rawValue): \(error.localizedDescription)\n")
         }
-        await book().drop(uuid)
-        return .ok("cancelled: \(id)\n")
+        // What AlarmKit has already removed leaves its record and sound to the sweep, the target's
+        // included.
+        sweep(keeping: alarms)
+        do {
+            guard let alarm = alarms.first(where: { $0.id == uuid }) else { return missing }
+            if let needs = Self.needs(act), !needs.contains(alarm.state) {
+                return .failed("topo: \(id) is \(alarm.state.rawValue): \(Self.why(act))\n")
+            }
+            // An alarm set with no --again has no countdown for AlarmKit to start; a timer's own
+            // span is the one it starts again.
+            if act == .again, let record = records.read(uuid), record.again == nil, record.span == nil {
+                return .failed("topo: \(id) was set with no --again, so it has no countdown to start\n")
+            }
+            switch act {
+            case .pause: try await scheduler.pause(id: uuid)
+            case .resume: try await scheduler.resume(id: uuid)
+            case .again: try await scheduler.again(id: uuid)
+            case .stop: try await scheduler.stop(id: uuid)
+            case .cancel: try await scheduler.cancel(id: uuid)
+            }
+            if act == .cancel {
+                records.drop(uuid)
+                sweep(keeping: alarms.filter { $0.id != uuid })
+            }
+        } catch {
+            let still = act == .cancel || act == .stop ? ", which may still sound" : ""
+            return .failed("topo: AlarmKit did not \(act.rawValue) \(id)\(still): \(error.localizedDescription)\n")
+        }
+        let done = ["pause": "paused", "resume": "resumed", "again": "counting again", "stop": "stopped", "cancel": "cancelled"][act.rawValue]!
+        return .ok("\(done): \(id)\n")
+    }
+
+    private static func why(_ act: Act) -> String {
+        switch act {
+        case .pause: "only a counting timer pauses"
+        case .resume: "only a paused timer resumes"
+        case .again: "again starts the next countdown only while it sounds"
+        case .stop: "stop is for one sounding; cancel takes it off"
+        case .cancel: ""
+        }
     }
 }

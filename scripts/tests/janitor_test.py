@@ -1,5 +1,5 @@
 """scripts/janitor.py: the decisions over scripted readings, and whole passes
-against a fake gh, git, tmux, curl and claude with buddy-prime's bridge played by a
+against a fake gh, git, tmux, curl and claude with the coordinator's bridge played by a
 loopback HTTP server. No network beyond loopback, no repository, no session.
 
     scripts/tests/janitor-test.sh
@@ -110,6 +110,18 @@ class Decisions(unittest.TestCase):
     def test_an_unchecked_box_is_reported_and_never_merged(self):
         w = janitor.decide_pr(pr(body="- [x] suite\n- [ ] device: the phone"), run(), [], {}, NOW)
         self.assertEqual(kinds(w), ["report:boxes"])
+
+    def test_a_pr_that_changes_its_own_validation_is_reported_and_never_merged(self):
+        for path in (".github/workflows/pr-validate.yaml", ".github/workflows/new.yaml",
+                     "scripts/review-prompt.sh", "scripts/ci-select-suites.sh"):
+            w = janitor.decide_pr(pr(), run(), [], {}, NOW, files=["Apps/x.swift", path])
+            self.assertEqual(kinds(w), ["report:own"], path)
+        w = janitor.decide_pr(pr(), run(), [], {}, NOW, files=["scripts/janitor.py", "docs/x.md"])
+        self.assertEqual(kinds(w), ["merge"])
+
+    def test_files_that_could_not_be_read_merge_nothing(self):
+        w = janitor.decide_pr(pr(), run(), [], {}, NOW, files=None)
+        self.assertEqual(kinds(w), ["report:files"])
 
     def test_a_pr_not_on_main_is_not_merged(self):
         self.assertEqual(janitor.decide_pr(pr(baseRefName="release"), run(), [], {}, NOW), [])
@@ -1114,6 +1126,18 @@ if tool == "gh":
     if a[0] == "api" and "/actions/runners?" in a[1]: page("runners", S.get("pool_runners", []))
     if a[0] == "api" and "/jobs?" in a[1] and a[1].split("/runs/")[1].split("/")[0] in S.get("pool_jobs", {}):
         page("jobs", S["pool_jobs"][a[1].split("/runs/")[1].split("/")[0]])
+    if a[0] == "api" and "/compare/main..." in a[1]:
+        if S.get("files_error"): print(S["files_error"], file=sys.stderr); sys.exit(1)
+        # The compare's raw file objects, previous_filename only on a rename as GitHub sends it,
+        # with the janitor's own --jq applied by jq itself, so the test reads what its query keeps.
+        listed = S.get("files", {}).get(a[1].split("...")[1], [{"filename": "Apps/Client/x.swift"}])
+        raw = {"files": [dict({"sha": "0" * 40, "status": "renamed" if f.get("previous_filename") else "modified",
+                               "additions": 1, "deletions": 0, "changes": 1},
+                              **{k: v for k, v in f.items() if v is not None}) for f in listed]}
+        import subprocess
+        q = subprocess.run(["jq", "-c", a[a.index("--jq") + 1]], input=json.dumps(raw), capture_output=True, text=True)
+        if q.returncode: print(q.stderr, file=sys.stderr); sys.exit(1)
+        out(q.stdout.strip())
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
@@ -1195,8 +1219,29 @@ print("unscripted: " + tool + " " + " ".join(a), file=sys.stderr); sys.exit(1)
 '''
 
 
+class ReportTarget(unittest.TestCase):
+    """Where a report goes: the coordinator's session on its host's bridge by
+    default, and another session or host by the environment alone."""
+
+    def target(self, **env):
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("TOPO_JANITOR_")}
+        code = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('j', sys.argv[1]); "
+                "m = importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "print(m.REPORT_TO); print(m.MESH_DELIVER_URL)")
+        out = subprocess.run([sys.executable, "-c", code, str(SCRIPT)], env={**clean, **env},
+                             capture_output=True, text=True, check=True).stdout.split()
+        return tuple(out)
+
+    def test_default_is_topo_coordinator_on_toolbox(self):
+        self.assertEqual(self.target(), ("topo-coordinator", "http://192.168.1.201/mesh/daphne/deliver"))
+
+    def test_session_and_host_are_set_by_the_environment(self):
+        self.assertEqual(self.target(TOPO_JANITOR_REPORT_TO="buddy-prime", TOPO_JANITOR_REPORT_HOST="buddy-prime"),
+                         ("buddy-prime", "http://192.168.1.201/mesh/buddy-prime/deliver"))
+
+
 class Bridge(http.server.BaseHTTPRequestHandler):
-    """buddy-prime's bridge, as far as /deliver goes: records every body and
+    """The coordinator's bridge, as far as /deliver goes: records every body and
     bearer, answers what the test scripted."""
     status = 200
     received = []
@@ -1228,7 +1273,7 @@ class WholePass(unittest.TestCase):
     def setUpClass(cls):
         cls.server = http.server.HTTPServer(("127.0.0.1", 0), Bridge)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        cls.url = f"http://127.0.0.1:{cls.server.server_port}/mesh/buddy-prime/deliver"
+        cls.url = f"http://127.0.0.1:{cls.server.server_port}/mesh/daphne/deliver"
 
     @classmethod
     def tearDownClass(cls):
@@ -1319,8 +1364,8 @@ class WholePass(unittest.TestCase):
         self.assertEqual(len(Bridge.received), 1)
         got = Bridge.received[0]
         self.assertEqual(got["auth"], "Bearer tok-buddybox")
-        self.assertEqual(got["path"], "/mesh/buddy-prime/deliver")
-        self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "buddy-prime"))
+        self.assertEqual(got["path"], "/mesh/daphne/deliver")
+        self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "topo-coordinator"))
         self.assertTrue(got["body"]["id"])
         self.assertIn("merged #7", got["body"]["text"])
         self.assertIn("swept worktree topo-old", got["body"]["text"])
@@ -2761,6 +2806,26 @@ class WholePass(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("run rerun", calls)
         self.assertNotIn("/runs/99/jobs", calls)
+
+    def test_a_pass_merges_nothing_that_changes_its_own_validation_or_whose_files_it_cannot_read(self):
+        f = lambda name, was=None: {"filename": name, "previous_filename": was}
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f("Apps/x.swift"), f("scripts/review-prompt.sh")]}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"compare/main...{HEAD}", calls)
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("so its own copy validated it", self.texts())
+        # A rename out of a protected path is caught by the path it had.
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f("scripts/ordinary.sh", "scripts/review-prompt.sh")]}))
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("scripts/review-prompt.sh", self.texts())
+        # A compare at its 300-file limit is not read as whole.
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f(f"Apps/f{i}.swift") for i in range(300)]}))
+        self.assertNotIn("pr merge", calls)
+        p, calls = self.run_pass(self.scripted(worktrees="", files={HEAD: [f(f"Apps/f{i}.swift") for i in range(299)]}))
+        self.assertIn("pr merge 7", calls)
+        p, calls = self.run_pass(self.scripted(worktrees="", files_error="HTTP 502"))
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("could not be read whole", self.texts())
 
     def test_a_merge_github_refuses_is_said_with_the_refusal(self):
         s = self.scripted(worktrees="", merge_refused="Pull request is not mergeable: the merge commit cannot be cleanly created")

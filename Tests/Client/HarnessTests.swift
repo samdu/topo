@@ -1,4 +1,5 @@
 import AVFoundation
+import CloudKit
 import TopoAuth
 import TopoCore
 import TopoCoreTesting
@@ -1435,6 +1436,86 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNil(phone.error, "a read got through and the chat still says it did not")
     }
 
+    /// The lines `cloud` wrote since a fence line of its own, read back from the process's store,
+    /// waiting for one that `done` accepts. The store stamps lines from a clock of its own, so the
+    /// window opens at the fence's own stamp.
+    private func cloudLines(after act: () async throws -> Void, until done: @escaping (LogLine) -> Bool) async throws -> [LogLine] {
+        let fence = "cloud-fence-\(UUID().uuidString)"
+        TopoLog(.cloud).error(fence)
+        var since: Date?
+        for _ in 0..<50 where since == nil {
+            since = try UnifiedLogReader().lines(since: .distantPast).last { $0.message == fence }?.at
+            if since == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        let opened = try XCTUnwrap(since, "the fence never reached the store")
+        try await act()
+        var lines: [LogLine] = []
+        for _ in 0..<50 {
+            lines = try UnifiedLogReader().lines(since: opened).filter { $0.category == "cloud" && $0.message != fence }
+            if lines.contains(where: done) { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return lines
+    }
+
+    /// The red line's life is in the `cloud` category (#604): the read that failed, with its
+    /// mapped case, CloudKit's code and its time, the line put up, and taken down by the read that
+    /// got through, with no word of the line's own; at debug, the call that got through as well.
+    func testTheReadFailuresLifeIsInTheCloudLines() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        LogLevels.shared.set(.cloud, .debug, for: 60)
+        defer { LogLevels.shared.set(.cloud, .default) }
+        let lines = try await cloudLines(after: {
+            await db.refuseReads(true, with: CKError(.networkUnavailable))
+            await phone.refresh()
+            await db.refuseReads(false)
+            await phone.refresh()
+        }, until: { $0.message.hasPrefix("failure down: read after ") })
+        let messages = lines.map(\.message)
+        let failed = try NSRegularExpression(pattern: #"^(query|records|fetch) .+ failed in \d+ ms: unavailable \(CKError networkUnavailable 3\)$"#)
+        let failures = lines.filter { failed.firstMatch(in: $0.message, range: NSRange($0.message.startIndex..., in: $0.message)) != nil }
+        XCTAssertFalse(failures.isEmpty, "\(messages)")
+        XCTAssertTrue(failures.allSatisfy { $0.level == "error" }, "\(lines)")
+        XCTAssertTrue(messages.contains("failure up: read"), "\(messages)")
+        let down = try NSRegularExpression(pattern: #"^failure down: read after \d+ s$"#)
+        XCTAssertTrue(messages.contains { down.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }, "\(messages)")
+        XCTAssertTrue(messages.contains { $0.contains(" ok in ") }, "\(messages)")
+        XCTAssertFalse(messages.contains { $0.contains("out of reach") }, "the line's words were logged: \(messages)")
+    }
+
+    /// At off, `cloud` keeps the failed call, as an error line, and nothing else: not the red
+    /// line's going up, and no call that got through.
+    func testOffKeepsTheFailedCallAndNothingElse() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        LogLevels.shared.set(.cloud, .off, for: 60)
+        defer { LogLevels.shared.set(.cloud, .default) }
+        let lines = try await cloudLines(after: {
+            await db.refuseReads(true, with: CKError(.networkUnavailable))
+            await phone.refresh()
+            await db.refuseReads(false)
+            await phone.refresh()
+        }, until: { $0.message.contains(" failed in ") })
+        XCTAssertFalse(lines.isEmpty)
+        XCTAssertTrue(lines.allSatisfy { $0.level == "error" && $0.message.hasSuffix("unavailable (CKError networkUnavailable 3)") }, "\(lines)")
+    }
+
+    /// A failure replaced by one of another source, and then taken down, is said by source and
+    /// time: never its words.
+    func testAFailureReplacedByAnotherSourceIsSaidBySource() async throws {
+        let read = Harness.Failure(words: "SENTINEL read words", source: .read)
+        let other = Harness.Failure(words: "SENTINEL other words", source: .other)
+        let lines = try await cloudLines(after: {
+            var since: ContinuousClock.Instant?
+            Harness.noteFailure(from: nil, to: read, since: &since)
+            Harness.noteFailure(from: read, to: read, since: &since)
+            Harness.noteFailure(from: read, to: other, since: &since)
+            Harness.noteFailure(from: other, to: nil, since: &since)
+        }, until: { $0.message.hasPrefix("failure down: other") }).map(\.message)
+        XCTAssertEqual(lines, ["failure up: read", "failure now other, was read after 0 s", "failure down: other after 0 s"])
+    }
+
     /// A read that gets through takes down the read's failure and no other, however alike their
     /// words: a turn that could not be written says "iCloud is out of reach" in the same words a
     /// failed read did, and it stands, with the turn still on the line, until the turn goes.
@@ -2203,11 +2284,16 @@ private actor FailingDatabase: RecordDatabase {
     private var refusingReads = false
     private var refusingWrites = false
     private var darkAfterLostAcknowledgement = false
+    /// What a refused read is under `unavailable`.
+    private var readRefusal: any Error = Unexpected()
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
     func loseAcknowledgementOfNextTurn() { loseNextTurnAcknowledgement = true }
-    func refuseReads(_ on: Bool) { refusingReads = on }
+    func refuseReads(_ on: Bool, with underlying: any Error = Unexpected()) {
+        refusingReads = on
+        readRefusal = underlying
+    }
     func refuseWrites(_ on: Bool) { refusingWrites = on }
     /// The device that went off the network in the middle of the write: the turn is committed,
     /// the acknowledgement is lost, and nothing after it can read the log to find out.
@@ -2242,7 +2328,7 @@ private actor FailingDatabase: RecordDatabase {
 
     private func refuse() throws {
         guard refusingReads else { return }
-        throw RecordDatabaseError.unavailable(underlying: Unexpected())
+        throw RecordDatabaseError.unavailable(underlying: readRefusal)
     }
 }
 

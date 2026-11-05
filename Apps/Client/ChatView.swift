@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var setupStood = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
+    @Environment(Conversation.self) private var conversation
     /// What the composer's `+` attaches, where the app made one; a canvas or a screen made
     /// without it offers nothing there.
     @Environment(ComposerAttachments.self) private var attachments: ComposerAttachments?
@@ -301,7 +302,13 @@ struct ChatView: View {
             // Muted, neither is read: the mute is asked as each comes, off the defaults and not
             // this view's copy, which a task started earlier does not see change.
             SpokenReply.follow(harness, speaker: speaker) { Mute.readsAloud() }
+            // An open microphone carried behind the lock sends through this screen's own send,
+            // and only a session whose destination is a send is carried (`Conversation`).
+            conversation.send = { heard in await sendSpoken(heard) }
+            conversation.sends = { dictation.sends }
             defer {
+                conversation.send = nil
+                conversation.sends = nil
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
                 harness.onReply = nil
@@ -345,6 +352,8 @@ struct ChatView: View {
         // the keyboard ends a spoken turn: what was heard so far stays, and what is typed is not
         // written over by the next caption.
         .onChange(of: row.text) { _, text in
+            // Behind the lock the conversation's own sends write the row; nobody is typing.
+            guard !conversation.on else { return }
             guard voice.owner == .chat, voice.listening, !dictation.standing(in: text) else { return }
             voice.cancel(.chat)
         }
@@ -369,10 +378,11 @@ struct ChatView: View {
             // it, so nothing said into it was meant. One already released is not: its words are
             // being decoded to be sent, and the release's hold carries them behind the lock
             // (`VoiceInput.drop`). A reply plays on — that is what the hold is for — and the press
-            // that starts the next one is what stops it.
-            if phase != .active { voice.drop(.chat) }
+            // that starts the next one is what stops it. A hands-free spoken turn the lock carries
+            // into a call is the exception (`Conversation.scene`).
+            conversation.scene(phase)
         }
-        .onDisappear { voice.cancel(.chat) }
+        .onDisappear { if !conversation.on { voice.cancel(.chat) } }
     }
 
     /// A control under the transcript that sends something again: the line stopped on a failure,

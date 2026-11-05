@@ -23,7 +23,7 @@ struct ShareSheet: View {
 
         func symbol(for kind: Share.Kind) -> String {
             switch kind {
-            case .text, .prompt, .task: text
+            case .text, .prompt, .task, .timer: text
             case .link: link
             case .image: image
             case .file: file
@@ -82,7 +82,7 @@ struct ShareSheet: View {
 
     static func words(for item: ShareIntake.Item) -> String {
         switch item.kind {
-        case .text, .link, .prompt, .task: item.text ?? ""
+        case .text, .link, .prompt, .task, .timer: item.text ?? ""
         case .image, .file:
             [item.file?.lastPathComponent, item.bytes.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }]
                 .compactMap { $0 }.joined(separator: ", ")

@@ -358,8 +358,12 @@ final class SpokenCallTests: XCTestCase {
         XCTAssertEqual(call.state, .idle)
     }
 
-    func testMuteAndHoldAreFulfilledAndChangeNothing() {
+    /// The mute is fulfilled and told to `onMute` (the conversation's microphone); the hold is
+    /// fulfilled; neither changes the call.
+    func testMuteAndHoldAreFulfilledAndTheMuteIsTold() {
         let call = call()
+        var mutes: [Bool] = []
+        call.onMute = { mutes.append($0) }
         bringUp(call)
         let mute = CXSetMutedCallAction(call: call.id!, muted: true)
         call.provider(system.provider, perform: mute)
@@ -369,21 +373,30 @@ final class SpokenCallTests: XCTestCase {
         XCTAssertTrue(system.fulfilled.contains { $0 === held })
         XCTAssertEqual(call.state, .up)
         XCTAssertEqual(events, ["start", "active"])
+        XCTAssertEqual(mutes, [true], "the card's mute did not reach the conversation")
     }
 }
 
 /// When a call is wanted: the whole table.
 final class CallWantTests: XCTestCase {
-    /// A hold in the background with the setting on places a call, and a call up is kept in
-    /// front for as long as the hold stands.
-    func testAHoldInTheBackgroundPlacesACallAndAnUpCallIsKeptInFront() {
+    /// A hold or a conversation in the background with the setting on places a call, and a call
+    /// up is kept in front for as long as either stands or the microphone is open; a microphone
+    /// alone places none.
+    func testAHoldOrAConversationInTheBackgroundPlacesACallAndAnUpCallIsKeptInFront() {
         for holding in [false, true] {
-            for phase in [ScenePhase.active, .inactive, .background] {
-                for enabled in [false, true] {
-                    for up in [false, true] {
-                        let want = SpokenCallDriver.wants(holding: holding, phase: phase, enabled: enabled, up: up)
-                        XCTAssertEqual(want, holding && enabled && (phase == .background || up),
-                                       "holding \(holding), \(phase), enabled \(enabled), up \(up)")
+            for conversing in [false, true] {
+                for phase in [ScenePhase.active, .inactive, .background] {
+                    for enabled in [false, true] {
+                        for up in [false, true] {
+                            for microphone in [false, true] {
+                                let want = SpokenCallDriver.wants(holding: holding, conversing: conversing,
+                                                                  phase: phase, enabled: enabled, up: up,
+                                                                  microphone: microphone)
+                                let exchange = holding || conversing
+                                XCTAssertEqual(want, enabled && (exchange && phase == .background || up && (exchange || microphone)),
+                                               "holding \(holding), conversing \(conversing), \(phase), enabled \(enabled), up \(up), microphone \(microphone)")
+                            }
+                        }
                     }
                 }
             }
@@ -429,6 +442,8 @@ final class CallWantTests: XCTestCase {
     func testACuesHoldAlonePlacesNoCallAndKeepsOneUp() {
         XCTAssertFalse(SpokenCallDriver.wants(holding: true, turn: false, phase: .background, enabled: true))
         XCTAssertTrue(SpokenCallDriver.wants(holding: true, turn: false, phase: .background, enabled: true, up: true))
+        XCTAssertTrue(SpokenCallDriver.wants(holding: true, turn: false, conversing: true, phase: .background, enabled: true),
+                      "a conversation behind the lock under a cue's hold placed no call")
         let system = FakeCallSystem()
         let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
         let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
@@ -531,6 +546,30 @@ final class CallWantTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(system.starts.count, 1, "the retry placed a call on the way to the front")
         XCTAssertFalse(call.up)
+    }
+
+    /// The card's hang-up with the microphone flag still standing (a decode running past the
+    /// hang-up) and the hang-up's own effects asking for the call (the hold's drop, then the
+    /// conversation's end): no call is placed behind the one hung up.
+    @MainActor
+    func testAHangUpPlacesNoCallBehindIt() {
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        call.provider(system.provider, perform: system.starts[0])
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        driver.conversingChanged(true)
+        driver.microphoneChanged(true)
+        call.onHangUp = {
+            driver.holdChanged(false)
+            driver.conversingChanged(false)
+        }
+        call.provider(system.provider, perform: CXEndCallAction(call: call.id!))
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(system.starts.count, 1, "a call was placed behind the one hung up")
+        driver.microphoneChanged(false)
+        XCTAssertEqual(system.starts.count, 1)
     }
 
     @MainActor

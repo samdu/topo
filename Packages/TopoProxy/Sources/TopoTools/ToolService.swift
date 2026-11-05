@@ -1,4 +1,5 @@
 import Foundation
+import TopoCore
 import Network
 import os
 import Security
@@ -39,7 +40,7 @@ public actor ToolService {
     public static let defaultBound: Duration = .seconds(90)
 
     public static let defaultLog: Log = { line in
-        Logger(subsystem: "zone.hexagon.topo", category: "tools").info("\(line, privacy: .public)")
+        TopoLog(.tools).info(line)
     }
 
     public let token: String

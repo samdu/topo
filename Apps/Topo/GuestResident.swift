@@ -52,6 +52,9 @@ final class GuestResident {
     var toolTable: [any Tool] = []
     /// Asked once the guest is up and before any process starts: the sign-in's `refresh`.
     var booted: (@MainActor () async -> Void)?
+    /// Whether a conversation behind the lock holds the resident up (`GuestLifecycle.conversing`):
+    /// the app's `Conversation`, set before the first start (`TopoApp`).
+    var conversing: @MainActor (_ beginning: Bool) -> Bool = { _ in false }
     private var observers: [NSObjectProtocol] = []
 
     /// What a debug build launched with a developer's token (`TOPO_CLAUDE_SETUP_TOKEN`, which CI
@@ -169,6 +172,7 @@ final class GuestResident {
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
+            lifecycle.conversing = { [weak self] beginning in self?.conversing(beginning) ?? false }
             self.lifecycle = lifecycle
             self.follow(lifecycle)
             Perf.mark("guest.proxy.up")
@@ -246,12 +250,12 @@ final class GuestResident {
     private nonisolated static func listening(_ name: String, log: @escaping @Sendable (String) -> Void) -> @Sendable (String) -> Void {
         { line in
             log("\(name): \(line)")
-            if line.hasPrefix("listener lost") { listenerLog.notice("\(name, privacy: .public): \(line, privacy: .public)") }
+            if line.hasPrefix("listener lost") { listenerLog.notice("\(name): \(line)") }
         }
     }
 
     /// Where a listener started again is told: at `notice`, which the phone keeps.
-    nonisolated static let listenerLog = Logger(subsystem: "zone.hexagon.topo", category: "resident")
+    nonisolated static let listenerLog = TopoLog(.resident)
 
     /// A turn just sent, carried behind another app by a continued-processing task (iOS 26 on):
     /// the task is asked for now, while the app is in front, and the lifecycle hears the turn end
@@ -264,6 +268,11 @@ final class GuestResident {
         let turn = lifecycle.turnBegan()
         ContinuedTurns.submit(turn: turn, to: lifecycle, log: Self.note)
         return lifecycle.carry(updates, turn: turn)
+    }
+
+    /// The conversation behind the lock has ended: the background it spared runs now.
+    func conversationEnded() {
+        lifecycle?.conversationEnded()
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {
@@ -329,7 +338,7 @@ final class LaunchPorts {
             _ = try await tools.relisten(on: told.tools)
             return true
         } catch {
-            GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error), privacy: .public)")
+            GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error))")
             return false
         }
     }
@@ -384,7 +393,7 @@ extension GuestResident {
     /// variables and the app's build (`BuildFacts`). Says at notice what the launch is told, once the environment is made; a launch
     /// that then fails to start says so in the session's own line.
     nonisolated static func launchEnvironment(
-        ports: LaunchPorts, note: @escaping @Sendable (String) -> Void = { GuestResident.listenerLog.notice("\($0, privacy: .public)") },
+        ports: LaunchPorts, note: @escaping @Sendable (String) -> Void = { GuestResident.listenerLog.notice($0) },
         credential: @escaping @Sendable (UInt16) async throws -> [String: String]
     ) -> @Sendable () async throws -> [String: String] {
         { @Sendable in
@@ -410,7 +419,7 @@ struct GuestFiles {
     let new: URL
     var files: FileManager = .default
 
-    private static let log = Logger(subsystem: "zone.hexagon.topo", category: "resident")
+    private static let log = TopoLog(.resident)
 
     static var standard: GuestFiles { GuestFiles(old: .documentsDirectory, new: .applicationSupportDirectory) }
 
@@ -427,7 +436,7 @@ struct GuestFiles {
             do {
                 try files.removeItem(at: from)
             } catch {
-                Self.log.error("guest files: \(name, privacy: .public) left in Documents, not removed: \(error, privacy: .public)")
+                Self.log.error("guest files: \(name) left in Documents, not removed: \(error)")
             }
             return to
         }
@@ -436,7 +445,7 @@ struct GuestFiles {
             try files.moveItem(at: from, to: to)
             return to
         } catch {
-            Self.log.error("guest files: \(name, privacy: .public) stays in Documents until the next launch: \(error, privacy: .public)")
+            Self.log.error("guest files: \(name) stays in Documents until the next launch: \(error)")
             return from
         }
     }
@@ -598,7 +607,7 @@ extension GuestResident {
         // on disk as `note`'s are.
         if line.hasPrefix(GuestSession.cutLine) { return note(line) }
         let line = redacted(line)
-        Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
+        TopoLog(.resident).info(line)
         #if DEBUG
         DebugRun.say("guest: \(line)")
         #endif
@@ -609,7 +618,7 @@ extension GuestResident {
     /// disk: an `info` line is kept in memory alone, and is gone within minutes.
     nonisolated static let note: @Sendable (String) -> Void = { line in
         let line = redacted(line)
-        Logger(subsystem: "zone.hexagon.topo", category: "resident").notice("\(line, privacy: .public)")
+        TopoLog(.resident).notice(line)
         #if DEBUG
         DebugRun.say("guest: \(line)")
         #endif

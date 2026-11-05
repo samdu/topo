@@ -1,4 +1,5 @@
 import OSLog
+import CallKit
 import SwiftUI
 import TopoAuth
 import TopoCore
@@ -18,6 +19,8 @@ struct TopoApp: App {
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
     @State private var callDriver: SpokenCallDriver
+    @State private var conversation: Conversation
+    private let endpoint: Endpoint
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
@@ -33,8 +36,7 @@ struct TopoApp: App {
         // The Claude.ai tokens a build before Claude Code's own login kept in the keychain go
         // before anything asks whether this phone is signed in: it signs in once more.
         let migrated = LoginMigration.run { item, error in
-            Logger(subsystem: "zone.hexagon.topo", category: "auth")
-                .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
+            TopoLog(.auth).error("login migration: the keychain kept \(item.account) (\(String(describing: error))); tried again next launch")
         }
         let signInAgain = migrated || UserDefaults.standard.bool(forKey: LoginMigration.signInAgainKey)
         // A debug build launched with a developer's token in its environment is signed in by it,
@@ -103,7 +105,7 @@ struct TopoApp: App {
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
             ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
-            TimerTool(scheduler: TimerBook.scheduler, book: { TimerBook.shared }, broker: broker),
+            TimerTool(scheduler: TimerRecords.scheduler, records: .shared, broker: broker),
             LogTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),
@@ -133,6 +135,7 @@ struct TopoApp: App {
         ShortcutIntents.drain = { await shares.drain() }
         ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
+        TimerIntents.control = { await TimerControls.act($0, $1) }
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared
         // Built now so its sign-out hook is registered in every process, scene or none.
@@ -187,6 +190,29 @@ struct TopoApp: App {
         // it to close (`Speaker.speak`).
         speaker.microphoneOpen = { voice.listening }
         MicrophoneWatch.start(voice, speaker)
+        // An open hands-free spoken turn as the app goes behind the lock goes on as a
+        // conversation over the call: the call is placed for it, the resident stays up for it,
+        // and the microphone is suspended across the session changing hands, at whichever of
+        // the interruption's start and the call's placing comes first.
+        let endpoint = Endpoint()
+        self.endpoint = endpoint
+        let calls = CXCallObserver()
+        let conversation = Conversation(voice: voice, speaker: speaker, endpoint: endpoint,
+                                        holding: { [weak audio] in audio?.holding ?? false },
+                                        otherCall: { calls.calls.contains { !$0.hasEnded && $0.uuid != call.id } })
+        speaker.onCall = { conversation.call($0) }
+        conversation.conversingChanged = { callDriver.conversingChanged($0) }
+        voice.carries = { [weak conversation] in
+            guard let conversation, conversation.carries() else { return false }
+            conversation.noteInterruption()
+            return true
+        }
+        GuestResident.shared.conversing = { [weak conversation] beginning in
+            guard let conversation else { return false }
+            return beginning ? conversation.beginIfCarried() : conversation.on
+        }
+        conversation.ended = { GuestResident.shared.conversationEnded() }
+        _conversation = State(initialValue: conversation)
         _voice = State(initialValue: voice)
         _speaker = State(initialValue: speaker)
         // What the process costs, a line a minute, with what it was doing.
@@ -258,7 +284,7 @@ struct TopoApp: App {
     /// The app: the chat and everything the scene's phases drive.
     private var chat: some View {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
-            .environment(voice).environment(speaker).environment(memory).environment(mascot)
+            .environment(voice).environment(speaker).environment(conversation).environment(memory).environment(mascot)
             .environment(connections).environment(attachments)
             // An image a turn carries is drawn from the guest's home, which is on this phone; the
             // root hands it to the signed-in chat alone (`RootView`).
@@ -314,6 +340,7 @@ struct TopoApp: App {
                     Task.detached(priority: .utility) { ScreenTool.sweep(under: GuestResident.homeDirectory) }
                     LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
+                    endpoint.prepare()
                     speaker.prepare()
                     // The guest's rootfs and Claude Code, fetched (and the rootfs imported)
                     // on the same cue, so the userland is on the phone before anything
