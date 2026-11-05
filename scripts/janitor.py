@@ -91,7 +91,7 @@ what stands is recorded and named in that one line, never said item by item.
 Everything it decides is a function of what it read, the model's answer in
 step 7 included; everything it does is a `gh`, `git`, `tmux` or shell call
 behind `Shell`, so `--dry-run` prints the pass instead (the model is still
-asked: a question changes nothing). The report, when there is one, is posted to buddy-prime's mesh
+asked: a question changes nothing). The report, when there is one, is posted to the coordinator's mesh
 bridge over the fleet's authenticated `/deliver` route with this host's own
 peer token, as `topo-janitor` on the host `buddy-janitor`; a report the far
 bridge does not take is kept in the state file and sent with the next. A
@@ -133,14 +133,19 @@ DEV_TREES = "~/github/topo-ota-dev.pr"   # pr-N.lock stands there while that PR'
 # Whether a head passed the suites its PR needs, as `test` concludes it, with or without a `test` run.
 GATE = "~/github/experiments/ota/topo-suites-gate.sh"
 CHECKOUT = "~/github/topo"
-MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", "http://192.168.1.201/mesh/buddy-prime/deliver")
+# The coordinator (docs/process.md): the session REPORT_TO on the host whose
+# bridge is REPORT_HOST. topo-coordinator runs on toolbox, whose bridge's mesh
+# name is `daphne`; the LAN Traefik routes /mesh/<host>/deliver to that bridge,
+# which writes the message into the local session named in `to`.
+REPORT_HOST = os.environ.get("TOPO_JANITOR_REPORT_HOST", "daphne")
+REPORT_TO = os.environ.get("TOPO_JANITOR_REPORT_TO", "topo-coordinator")
+MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", f"http://192.168.1.201/mesh/{REPORT_HOST}/deliver")
 MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
 MESH_SELF = "buddy-janitor"   # this host's verified mesh name; the sender below is the janitor's
-REPORT_TO = "buddy-prime"
 FROM = "topo-janitor"
 # The receiving bridge ends every relayed message by asking for a reply. One
 # sent to a script is addressed to no session: buddybox's bridge refuses it,
-# and it holds buddy-prime's queue to this host until it expires.
+# and it holds the coordinator's queue to this host until it expires.
 NO_REPLY = "No reply is read: topo-janitor is a script with no session, so do not answer this."
 
 GRACE = timedelta(minutes=15)      # automerge's chance, a box's
@@ -164,7 +169,7 @@ NOT_GREEN = ("failure", "cancelled", "timed_out")
 ISSUES_PAGE = 100                  # issues read per GraphQL page
 ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
 ISSUE_LINES = 60                   # issue lines one pass says, so a report is mostly PR lines
-TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
+TRIAGED = "triaged"                # the coordinator has read it: planned, parked or put to Sam
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
 LINK = "samdu/topo-link"           # the mailbox repository: an issue per build that carries device checks
 BUILDS_LIMIT = 50                  # open issues read there; a list that fills it is not read as whole
@@ -1386,7 +1391,7 @@ def peer_token(path=MESH_ENV):
 
 
 def deliver(sh, state, now, dry=False, log=print, warn=None):
-    """The reports to buddy-prime, through its bridge's /deliver as the fleet's
+    """The reports to the coordinator, through its bridge's /deliver as the fleet's
     bridges forward to each other: this host's verified name as `from`, the
     janitor as `sender`. This pass's lines become one message under a new id;
     messages the bridge has not answered for good stand in `undelivered` under

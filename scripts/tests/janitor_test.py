@@ -1,5 +1,5 @@
 """scripts/janitor.py: the decisions over scripted readings, and whole passes
-against a fake gh, git, tmux, curl and claude with buddy-prime's bridge played by a
+against a fake gh, git, tmux, curl and claude with the coordinator's bridge played by a
 loopback HTTP server. No network beyond loopback, no repository, no session.
 
     scripts/tests/janitor-test.sh
@@ -1195,8 +1195,29 @@ print("unscripted: " + tool + " " + " ".join(a), file=sys.stderr); sys.exit(1)
 '''
 
 
+class ReportTarget(unittest.TestCase):
+    """Where a report goes: the coordinator's session on its host's bridge by
+    default, and another session or host by the environment alone."""
+
+    def target(self, **env):
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("TOPO_JANITOR_")}
+        code = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('j', sys.argv[1]); "
+                "m = importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "print(m.REPORT_TO); print(m.MESH_DELIVER_URL)")
+        out = subprocess.run([sys.executable, "-c", code, str(SCRIPT)], env={**clean, **env},
+                             capture_output=True, text=True, check=True).stdout.split()
+        return tuple(out)
+
+    def test_default_is_topo_coordinator_on_toolbox(self):
+        self.assertEqual(self.target(), ("topo-coordinator", "http://192.168.1.201/mesh/daphne/deliver"))
+
+    def test_session_and_host_are_set_by_the_environment(self):
+        self.assertEqual(self.target(TOPO_JANITOR_REPORT_TO="buddy-prime", TOPO_JANITOR_REPORT_HOST="buddy-prime"),
+                         ("buddy-prime", "http://192.168.1.201/mesh/buddy-prime/deliver"))
+
+
 class Bridge(http.server.BaseHTTPRequestHandler):
-    """buddy-prime's bridge, as far as /deliver goes: records every body and
+    """The coordinator's bridge, as far as /deliver goes: records every body and
     bearer, answers what the test scripted."""
     status = 200
     received = []
@@ -1228,7 +1249,7 @@ class WholePass(unittest.TestCase):
     def setUpClass(cls):
         cls.server = http.server.HTTPServer(("127.0.0.1", 0), Bridge)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        cls.url = f"http://127.0.0.1:{cls.server.server_port}/mesh/buddy-prime/deliver"
+        cls.url = f"http://127.0.0.1:{cls.server.server_port}/mesh/daphne/deliver"
 
     @classmethod
     def tearDownClass(cls):
@@ -1319,8 +1340,8 @@ class WholePass(unittest.TestCase):
         self.assertEqual(len(Bridge.received), 1)
         got = Bridge.received[0]
         self.assertEqual(got["auth"], "Bearer tok-buddybox")
-        self.assertEqual(got["path"], "/mesh/buddy-prime/deliver")
-        self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "buddy-prime"))
+        self.assertEqual(got["path"], "/mesh/daphne/deliver")
+        self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "topo-coordinator"))
         self.assertTrue(got["body"]["id"])
         self.assertIn("merged #7", got["body"]["text"])
         self.assertIn("swept worktree topo-old", got["body"]["text"])
