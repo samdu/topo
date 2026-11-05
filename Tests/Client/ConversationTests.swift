@@ -782,7 +782,8 @@ final class ConversationTests: XCTestCase {
         audio.callDeactivated()
         conversation.call(.taken)
         XCTAssertTrue(voice.suspended)
-        await drain()
+        // Long past the unmute's feeder's 256 ms sleep, so it has seen the suspension and gone.
+        try? await Task.sleep(for: .milliseconds(800))
         audio.callActivated()
         conversation.call(.active)
         XCTAssertTrue(voice.listening && !voice.suspended)

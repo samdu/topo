@@ -161,6 +161,8 @@ final class Conversation {
         muted = false
         deafStrikes = 0
         failures = 0
+        // A feeder of the last conversation still waiting on a verdict is not this one's.
+        feederSerial += 1
         restartIdle()
         conversingChanged(true)
         // Suspended at the interruption's start, it waits for the call's activation; still
