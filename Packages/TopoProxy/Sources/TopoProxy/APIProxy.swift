@@ -40,7 +40,7 @@ public actor APIProxy {
     public static let bodyLimit = 32 * 1024 * 1024
 
     public static let defaultLog: Log = { line in
-        Logger(subsystem: "zone.hexagon.topo", category: "proxy").info("\(line, privacy: .public)")
+        TopoLog(.proxy).info(line)
     }
 
     /// The listener of the running generation; nil while down.

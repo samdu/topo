@@ -29,7 +29,26 @@ final class Harness {
     var error: String? { failure?.words }
     /// The last failure and what it came from, so a read that gets through takes down a read's
     /// failure and no other, whatever the words.
-    private(set) var failure: Failure?
+    private(set) var failure: Failure? {
+        didSet { Self.noteFailure(from: oldValue, to: failure, since: &failureSince) }
+    }
+    @ObservationIgnored private var failureSince: ContinuousClock.Instant?
+
+    /// When the chat's failure line was put up and taken down, in the `cloud` category, by what
+    /// it came from: what iCloud answered is the line `RecordingDatabase` wrote before it. Never
+    /// the line's words, which can carry what an error said.
+    private static func noteFailure(from old: Failure?, to new: Failure?, since: inout ContinuousClock.Instant?) {
+        guard old?.source != new?.source || (old == nil) != (new == nil) else { return }
+        let now = ContinuousClock.now
+        let held = since.map { " after \(Int(($0.duration(to: now)) / .seconds(1))) s" } ?? ""
+        switch (old, new) {
+        case (nil, let new?): RecordingDatabase.log.notice("failure up: \(new.source)")
+        case (let old?, nil): RecordingDatabase.log.notice("failure down: \(old.source)\(held)")
+        case (let old?, let new?): RecordingDatabase.log.notice("failure now \(new.source), was \(old.source)\(held)")
+        case (nil, nil): return
+        }
+        since = new == nil ? nil : now
+    }
 
     struct Failure: Equatable {
         /// `sync` is iCloud behind a turn the guest already has: nothing failed for the person.
@@ -1416,10 +1435,18 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     var lastError: Failure? { lock.withLock { _lastError } }
     var lastSuccess: Date? { lock.withLock { _lastSuccess } }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await noting { try await base.save(records) } }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await noting { try await base.fetch(ids) } }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await noting { try await base.query(query) } }
-    func records(ofType type: String) async throws -> [Record] { try await noting { try await base.records(ofType: type) } }
+    func save(_ records: [Record]) async throws -> [Record] {
+        try await noting(Self.save(records)) { try await base.save(records) }
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        try await noting(Self.fetch(ids)) { try await base.fetch(ids) }
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        try await noting("query \(query.type)") { try await base.query(query) }
+    }
+    func records(ofType type: String) async throws -> [Record] {
+        try await noting("records \(type)") { try await base.records(ofType: type) }
+    }
 
     /// The base's bounded saves and fetches, noted here like the rest: the lease asks for
     /// these, and a wrapper that answered with itself would leave its requests unbounded.
@@ -1430,26 +1457,49 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     private struct Bounded: RecordDatabase {
         let recording: RecordingDatabase
         let base: any RecordDatabase
-        func save(_ records: [Record]) async throws -> [Record] { try await recording.noting { try await base.save(records) } }
-        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await recording.noting { try await base.fetch(ids) } }
+        func save(_ records: [Record]) async throws -> [Record] {
+            try await recording.noting(RecordingDatabase.save(records)) { try await base.save(records) }
+        }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+            try await recording.noting(RecordingDatabase.fetch(ids)) { try await base.fetch(ids) }
+        }
         func query(_ query: RecordQuery) async throws -> [Record] { try await recording.query(query) }
         func records(ofType type: String) async throws -> [Record] { try await recording.records(ofType: type) }
         func answering(within seconds: TimeInterval) -> any RecordDatabase { recording.answering(within: seconds) }
     }
 
-    fileprivate func noting<T>(_ call: () async throws -> T) async throws -> T {
+    /// Every call the turn log, the lease and the rest make of iCloud, in the `cloud` category:
+    /// a failure at the default level, with its mapped case and CloudKit's code; at debug every
+    /// call, with its time and what it touched. Record ids and types, never a field.
+    fileprivate func noting<T>(_ what: @autoclosure () -> String, _ call: () async throws -> T) async throws -> T {
+        let started = ContinuousClock.now
+        func took() -> String { "\(Int((ContinuousClock.now - started) / .milliseconds(1))) ms" }
         do {
             let value = try await call()
             lock.withLock { _lastSuccess = Date() }
+            Self.log.detail("\(what()) ok in \(took())")
             return value
         } catch {
             // A compare-and-set that lost is the protocol working, not a fault.
             switch error {
-            case RecordDatabaseError.serverRecordChanged, RecordDatabaseError.unknownItem: break
-            default: lock.withLock { _lastError = Failure(at: Date(), message: Self.describe(error)) }
+            case RecordDatabaseError.serverRecordChanged, RecordDatabaseError.unknownItem:
+                Self.log.detail("\(what()) lost in \(took()): \(CloudLog.describe(error))")
+            default:
+                lock.withLock { _lastError = Failure(at: Date(), message: Self.describe(error)) }
+                Self.log.notice("\(what()) failed in \(took()): \(CloudLog.describe(error))")
             }
             throw error
         }
+    }
+
+    static let log = TopoLog(.cloud)
+
+    /// A call's words: the ids it names, as far as a line holds them.
+    static func save(_ records: [Record]) -> String { "save \(names(records.map(\.id)))" }
+    static func fetch(_ ids: [RecordID]) -> String { "fetch \(names(ids))" }
+    static func names(_ ids: [RecordID]) -> String {
+        let shown = ids.prefix(4).map(\.name).joined(separator: ", ")
+        return ids.count > 4 ? "\(ids.count) records: \(shown), …" : "\(ids.count == 1 ? "" : "\(ids.count) records: ")\(shown)"
     }
 
     static func describe(_ error: any Error) -> String {

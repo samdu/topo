@@ -1395,6 +1395,40 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNil(phone.error, "a read got through and the chat still says it did not")
     }
 
+    /// The red line's life is in the `cloud` category (#604): the read that failed, with its
+    /// mapped case and code, the line put up, and taken down by the read that got through, with
+    /// no word of the line's own; at debug, the call that got through as well.
+    func testTheReadFailuresLifeIsInTheCloudLines() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        // The store stamps lines from a clock of its own, so the window opens at a line's own stamp.
+        let fence = "cloud-fence-\(UUID().uuidString)"
+        TopoLog(.cloud).error(fence)
+        var since: Date?
+        for _ in 0..<50 where since == nil {
+            since = try UnifiedLogReader().lines(since: .distantPast).last { $0.message == fence }?.at
+            if since == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        let opened = try XCTUnwrap(since, "the fence never reached the store")
+        LogLevels.shared.set(.cloud, .debug, for: 60)
+        defer { LogLevels.shared.set(.cloud, .default) }
+        await db.refuseReads(true)
+        await phone.refresh()
+        await db.refuseReads(false)
+        await phone.refresh()
+        var lines: [String] = []
+        for _ in 0..<50 {
+            lines = try UnifiedLogReader().lines(since: opened).filter { $0.category == "cloud" }.map(\.message)
+            if lines.contains(where: { $0.hasPrefix("failure down: read after ") }) { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(lines.contains { $0.contains(" failed in ") && $0.contains(" ms: unavailable (") }, "\(lines)")
+        XCTAssertTrue(lines.contains("failure up: read"), "\(lines)")
+        XCTAssertTrue(lines.contains { $0.hasPrefix("failure down: read after ") && $0.hasSuffix(" s") }, "\(lines)")
+        XCTAssertTrue(lines.contains { $0.contains(" ok in ") }, "\(lines)")
+        XCTAssertFalse(lines.contains { $0.contains("out of reach") }, "the line's words were logged: \(lines)")
+    }
+
     /// A read that gets through takes down the read's failure and no other, however alike their
     /// words: a turn that could not be written says "iCloud is out of reach" in the same words a
     /// failed read did, and it stands, with the turn still on the line, until the turn goes.

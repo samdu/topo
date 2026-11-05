@@ -6,7 +6,7 @@ import os
 /// category, so a launch's or a turn's timeline is read off a device's log; each line carries
 /// the wall clock in milliseconds, since a syslog relay keeps whole seconds. A mark carries a name and nothing of the person's.
 public enum Perf {
-    private static let log = Logger(subsystem: "zone.hexagon.topo", category: "perf")
+    private static let log = TopoLog(.perf)
 
     /// Where the marks are also written, a line each, when a run is being timed from a Mac
     /// (`PerfRun`): a file `devicectl` can copy off the phone, which the unified log is not
@@ -21,7 +21,7 @@ public enum Perf {
     public static func mark(_ name: String) {
         observer?(name)
         let line = "mark t=\(Int64(Date().timeIntervalSince1970 * 1000)) \(name)"
-        log.notice("\(line, privacy: .public)")
+        log.notice(line)
         file.withLock { $0?.write(Data((line + "\n").utf8)) }
     }
 

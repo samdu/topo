@@ -1,4 +1,5 @@
 import Foundation
+import TopoCore
 import Network
 import os
 
@@ -44,7 +45,7 @@ public actor DNSForwarder {
     public static let defaultLogInterval: Duration = .seconds(60)
 
     public static let defaultLog: Log = { line in
-        Logger(subsystem: "zone.hexagon.topo", category: "dns").info("\(line, privacy: .public)")
+        TopoLog(.dns).info(line)
     }
 
     private let queue: DispatchSerialQueue

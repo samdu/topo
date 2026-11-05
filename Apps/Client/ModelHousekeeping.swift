@@ -1,9 +1,10 @@
 #if os(iOS)
 import Foundation
+import TopoCore
 import MachO
 import OSLog
 
-private let log = Logger(subsystem: "zone.hexagon.topo", category: "models")
+private let log = TopoLog(.models)
 
 extension ModelStore {
     /// The ledger's name inside every model's directory.
@@ -37,14 +38,14 @@ extension ModelStore {
                 try fm.removeItem(at: url)
                 removed.append(url)
             } catch {
-                log.error("sweep: could not remove \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                log.error("sweep: could not remove \(url.path): \(error.localizedDescription)")
             }
         }
 
         // Nothing is removed or entered behind a link: `root` reached through one is somewhere
         // else's folder, and the sweep does nothing at all.
         guard !linkOnChain(from: anchor, to: root) else {
-            log.error("sweep: \(root.path, privacy: .public) is reached through a link; nothing swept")
+            log.error("sweep: \(root.path) is reached through a link; nothing swept")
             return []
         }
 
@@ -91,7 +92,7 @@ extension ModelStore {
             walk(directory(for: model), "")
         }
 
-        for url in removed { log.notice("sweep: removed \(url.path, privacy: .public)") }
+        for url in removed { log.notice("sweep: removed \(url.path)") }
         return removed
     }
 
@@ -175,7 +176,7 @@ struct CompileCache {
         let newInstall = defaults.string(forKey: Self.recorded) != install
         if newInstall { defaults.set(install, forKey: Self.recorded) }
         guard defaults.bool(forKey: Self.requested) else {
-            log.notice("\(Self.kept(install: install, new: newInstall), privacy: .public)")
+            log.notice("\(Self.kept(install: install, new: newInstall))")
             return newInstall ? .kept : .sameInstall
         }
         // Caches, and the app's folder in it, judged with `lstat`: a folder behind a link is
@@ -183,7 +184,7 @@ struct CompileCache {
         // removed as a link, which touches nothing behind it.
         let parent = directory.deletingLastPathComponent()
         if linkOnChain(from: parent.deletingLastPathComponent(), to: parent) {
-            log.error("compile cache: \(parent.path, privacy: .public) is reached through a link; not cleared")
+            log.error("compile cache: \(parent.path) is reached through a link; not cleared")
             return .failed("reached through a link")
         }
         let outcome: Outcome
@@ -195,11 +196,11 @@ struct CompileCache {
         } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
             outcome = .absent
         } catch {
-            log.error("compile cache: not cleared, retried next launch: \(error.localizedDescription, privacy: .public)")
+            log.error("compile cache: not cleared, retried next launch: \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
         defaults.removeObject(forKey: Self.requested)
-        log.notice("compile cache: \(outcome == .cleared ? "cleared" : "absent", privacy: .public) on request")
+        log.notice("compile cache: \(outcome == .cleared ? "cleared" : "absent") on request")
         return outcome
     }
 

@@ -1,5 +1,6 @@
 #if os(iOS)
 import Foundation
+import TopoCore
 import OSLog
 
 /// What the audio paths say about themselves where a debugger cannot be: every hold and keeper
@@ -12,11 +13,11 @@ import OSLog
 /// A debug build says the same lines on the console through `DebugRun`, so a simulator run reads
 /// them where it reads everything else.
 enum AudioLog {
-    private static let log = Logger(subsystem: "zone.hexagon.topo", category: "audio")
+    private static let log = TopoLog(.audio)
 
     static func say(_ line: @autoclosure () -> String) {
         let line = line()
-        log.notice("\(line, privacy: .public)")
+        log.notice(line)
         #if DEBUG
         DebugRun.say("audio: \(line)")
         #endif
