@@ -443,24 +443,28 @@ final class HarnessIntegrationTests: XCTestCase {
     }
 
     /// The same of a turn this device is not primary for, whose words could not be saved into
-    /// the log: no model was asked, and the failure is the person's.
+    /// the log: the phone answered once as primary, yielded to the hub's claim, and its next
+    /// turn's words are refused by the store. No model was asked for it, and the failure is the
+    /// person's.
     func testALimbsTurnWhoseWordsCannotBeSavedTellsTheFailureOnceBeforeTheTurnIsOver() async throws {
         let db = InMemoryRecordDatabase()
-        _ = try await claim(db, as: "hub")
         let refusing = RefusingSaves(db)
-        let transport = ScriptedTransport((200, reply("never")))
+        let transport = ScriptedTransport((200, reply("one back")))
         let harness = harness(refusing, defaults: makeDefaults(), transport: transport)
+        await harness.send("one")
+        _ = try await claim(db, as: "hub")
         let told = Said()
         harness.onTurnFailure = { told.add("failure \($0)") }
         harness.onTurnFailed = { told.add("over \($0)") }
         await refusing.refuse()
-        let nonce = harness.willSend("hello")
+        let nonce = harness.willSend("two")
         await harness.retry()
-        XCTAssertEqual(transport.sent, [], "a device that is not primary asked the model")
+        XCTAssertEqual(transport.sent.count, 1, "a device that is not primary asked the model")
         XCTAssertNotNil(harness.error)
         XCTAssertEqual(told.texts, ["failure \(nonce)", "over \(nonce)"])
+        XCTAssertNil(harness.info, "the refused words were said saved for the hub")
         let turns = try await log(db).map(\.text)
-        XCTAssertEqual(turns, [], "the words reached the log after all")
+        XCTAssertEqual(turns, ["one", "one back"], "the refused words reached the log after all")
     }
 
     /// A sign-out during a turn closes it.
@@ -2132,9 +2136,7 @@ private actor ReadFailingDatabase: RecordDatabase {
     }
 }
 
-/// What the reply handler was given, in order.
-/// A database whose saves are refused once `refuse()` is called, its reads still answered: the
-/// log read and a lease's own record, then the person's words refused.
+/// A database whose saves are refused once `refuse()` is called, its reads still answered.
 private actor RefusingSaves: RecordDatabase {
     struct Down: Error {}
     let wrapped: InMemoryRecordDatabase
@@ -2150,6 +2152,7 @@ private actor RefusingSaves: RecordDatabase {
     func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
+/// What the reply handler was given, in order.
 @MainActor
 private final class Said {
     private(set) var texts: [String] = []

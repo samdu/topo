@@ -36,9 +36,10 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
     }
 
     func play(whenDone: @escaping @MainActor () -> Void) -> Bool {
-        self.whenDone = whenDone
         player.currentTime = 0
-        return player.play()
+        guard player.play() else { return false }
+        self.whenDone = whenDone
+        return true
     }
 
     func stop() {
@@ -55,27 +56,27 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
     }
 }
 
-/// The four cues a spoken exchange sounds — `listening` as the microphone opens at a press,
-/// `sent` at a release that heard words, `done` as a reply read aloud comes to its end, and
-/// `failed` when a release heard nothing or a spoken turn fails — each a UI SFX Zen sound (CC0,
-/// `THIRD-PARTY`) bundled as `earcon_<cue>.mp3`. On unless turned off (`EarconsSetting`: a toggle
-/// in the settings sheet and `topo voice earcons`).
+/// The four cues a spoken exchange sounds — `listening` as the microphone opens at a press, `sent`
+/// at a release that heard words, `done` as a reply read aloud comes to its end, and `failed` when
+/// a release heard nothing or a spoken turn fails — each a UI SFX Zen sound (CC0, `THIRD-PARTY`)
+/// bundled as `earcon_<cue>.mp3`. On unless turned off (`EarconsSetting`: a toggle in the settings
+/// sheet and `topo voice earcons`).
 ///
 /// A cue is a moment, not a reply. It is played on the session as it stands — live
-/// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing
-/// and activates nothing, in the background under a hold least of all. Where a hold that is not
-/// a cue's own already stands it holds the process for its own length too (`AudioSession.Hold.cue`,
-/// let go when the player has finished and the route's tail has passed, or at `bound`), taken
-/// before the player starts, so that
-/// `done` behind the lock is heard out before the last hold goes and it is let
-/// go of; its caller plays it before dropping the hold it follows, so the process is never let
-/// go of between the two. With nothing held — `listening` at a press in front — a cue holds nothing, so a claim
-/// change waits on no cue; and under nothing but the cue before it, it lets that one's hold go,
-/// so cues cannot keep the process alive by themselves. Nothing but `listening` is played into
-/// an open microphone, and a cue still sounding as one opens is stopped (`microphoneOpening`). The players are handles into mediaserverd: the speaker tells of a media
+/// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing and
+/// activates nothing, in the background under a hold least of all. Where a hold that is not a cue's
+/// own already stands it holds the process for its own length too (`AudioSession.Hold.cue`, let go
+/// when the player has finished and the route's tail has passed, or at `bound`), taken before the
+/// player starts, so that `done` behind the lock is heard out before the last hold goes and it is
+/// let go of; its caller plays it before dropping the hold it follows, so the process is never let
+/// go of between the two. With nothing held — `listening` at a press in front — a cue holds
+/// nothing, so a claim change waits on no cue; and under nothing but the cue before it, it lets
+/// that one's hold go, so cues cannot keep the process alive by themselves. Nothing but `listening`
+/// is played into an open microphone, and a cue still sounding as one opens is stopped
+/// (`microphoneOpening`). The players are handles into mediaserverd: the speaker tells of a media
 /// services reset (`mediaServicesWereReset`), after it has dropped its own queue, and they are
-/// dropped and nothing built, so the next cue makes its own afresh. Lifted from Daphne's
-/// `Earcons`, per `THIRD-PARTY`. Main only.
+/// dropped and nothing built, so the next cue makes its own afresh. Lifted from Daphne's `Earcons`,
+/// per `THIRD-PARTY`. Main only.
 @MainActor
 final class Earcons {
     enum Cue: String, CaseIterable, Sendable {
@@ -194,12 +195,13 @@ final class Earcons {
         return true
     }
 
-    /// A microphone is opening (`Speaker.microphoneOpening`): a cue still sounding is stopped,
-    /// so it is not heard by the microphone — `listening` excepted, which is the microphone's
-    /// own — and its hold goes with it.
+    /// A microphone is opening (`Speaker.microphoneOpening`): every cue still sounding is
+    /// stopped — the one playing and any it was begun over — so none is heard by the
+    /// microphone, `listening` excepted, which is the microphone's own; and the hold goes with
+    /// the one playing.
     func microphoneOpening() {
-        guard let playing, let cue = playingCue, cue != .listening else { return }
-        players[cue]?.stop()
+        for (cue, player) in players where cue != .listening { player.stop() }
+        guard let playing, playingCue != .listening else { return }
         ended(playing, "the microphone is opening")
     }
 

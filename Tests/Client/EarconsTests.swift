@@ -462,7 +462,9 @@ final class EarconsTests: XCTestCase {
     /// read to its end, sounds `done`. The mark is the reading's, not the speaker's.
     func testAReplyAfterAFailedOneStoppedMidwayEndsDone() async throws {
         let rig = await rig(heard: .dataRendered)
-        rig.speaker.speak(writing: "The lights are", answering: "turn")
+        // A whole sentence, so the reading begins and the failure marks it.
+        rig.speaker.speak(writing: "The lights are on. And", answering: "turn")
+        await settle("the failed reply to start") { rig.speaker.report.started }
         rig.speaker.turnFailed("turn")
         rig.speaker.stop()
         XCTAssertEqual(rig.earcons.played, [], "a stop sounded a cue")
@@ -530,8 +532,8 @@ final class EarconsTests: XCTestCase {
         XCTAssertEqual(first, 0)
     }
 
-    /// A finish posted while a play sounds, then the player falling silent before the hop: the
-    /// hop finds it silent and ends that play, which is over.
+    /// A finish arriving with the player silent ends the play standing, once: a second finish
+    /// finds nothing to end.
     func testAFinishArrivingOnceThePlayerIsSilentEndsThePlayStanding() async throws {
         let url = try XCTUnwrap(Bundle(for: Earcons.self).url(forResource: "earcon_listening", withExtension: "mp3"))
         let stated = try StatedPlayer(contentsOf: url)
@@ -553,16 +555,22 @@ final class EarconsTests: XCTestCase {
         let rig = await rig()
         let sent = Sent()
         defer { rig.voice.cancel() }
-        XCTAssertTrue(rig.earcons.play(.done))
-        let done = try? XCTUnwrap(rig.cues.players.last)
-        XCTAssertEqual(done?.sounding, true)
+        // A wait standing, as one does under a reply's `sent` and `failed`: the session is live
+        // and the cues hold. `sent`, then `failed` over it while it still sounds.
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.earcons.play(.sent))
+        XCTAssertTrue(rig.earcons.play(.failed))
+        XCTAssertEqual(rig.cues.players.map(\.sounding), [true, true])
+        rig.speaker.endAwaiting("turn", "the turn failed")
+        XCTAssertTrue(rig.audio.holding, "the cue's hold did not outlast the wait's")
         await press(rig, true, sent)
         XCTAssertTrue(rig.voice.listening)
-        XCTAssertEqual(done?.stops, 1, "the cue sounding went on into the open microphone")
-        XCTAssertEqual(rig.earcons.played, [.done, .listening])
+        XCTAssertEqual(rig.cues.players.prefix(2).map(\.stops), [1, 1], "a cue sounding went on into the open microphone")
+        XCTAssertEqual(rig.earcons.played, [.sent, .failed, .listening])
         let listening = rig.cues.players.last
+        XCTAssertEqual(listening?.url.deletingPathExtension().lastPathComponent, "earcon_listening")
         XCTAssertEqual(listening?.stops, 0, "the press stopped its own cue")
-        XCTAssertEqual(rig.earcons.playingForATest, rig.earcons.serialForATest, "the listening cue is not the one playing")
+        XCTAssertFalse(rig.audio.holding, "the stopped cues' hold outlived them")
     }
 
     /// The failure's cue is not played into an open microphone: a second press while the first
