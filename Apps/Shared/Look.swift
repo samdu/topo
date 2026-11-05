@@ -628,6 +628,8 @@ struct Look: Equatable, Sendable {
             var file = "doc"
             var photo = "photo"
             var camera = "camera"
+            /// The way to share the screen, in the same menu.
+            var screen = "rectangle.dashed.badge.record"
             var keyboard = "keyboard"
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"
