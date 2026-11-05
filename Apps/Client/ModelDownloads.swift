@@ -129,7 +129,9 @@ struct ModelStore: Sendable {
     /// directory the models were loaded from; and the voice's pack, which `PocketTtsManager`
     /// reads from `<base>/Models/pocket-tts` beneath the base directory it is given. One copy
     /// each, agreed on by both sides. The ledger and the resume data sit beside the files
-    /// wherever the entry lives.
+    /// wherever the entry lives. And the voice activity detector, which `VadManager` reads from
+    /// `<base>/Models/silero-vad` (`Repo.vad.folderName`, with `-coreml` dropped) and not from
+    /// a directory named for the manifest's id, where the model is present and not found.
     let homes: [String: URL]
 
     init(root: URL, homes: [String: URL] = [:]) {
@@ -143,6 +145,7 @@ struct ModelStore: Sendable {
         #if canImport(FluidAudio)
         homes[ModelManifest.ctc] = CtcModels.defaultCacheDirectory(for: .ctc110m)
         homes[ModelManifest.pocket] = Self.pocketHome(under: support)
+        homes[ModelManifest.vad] = Self.vadHome(under: support)
         #endif
         let store = ModelStore(root: support.appendingPathComponent("Models", isDirectory: true), homes: homes)
         store.rehome()
@@ -159,6 +162,13 @@ struct ModelStore: Sendable {
     static func pocketHome(under base: URL) -> URL {
         base.appendingPathComponent(PocketTtsConstants.defaultModelsSubdirectory, isDirectory: true)
             .appendingPathComponent(Repo.pocketTts.folderName, isDirectory: true)
+    }
+
+    /// Where the voice activity detector lives under a base directory, in FluidAudio's own
+    /// terms: `VadManager(modelDirectory: base)` reads `<base>/Models/<Repo.vad.folderName>`.
+    static func vadHome(under base: URL) -> URL {
+        base.appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent(Repo.vad.folderName, isDirectory: true)
     }
     #endif
 
