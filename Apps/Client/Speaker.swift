@@ -695,7 +695,8 @@ final class Speaker {
     }
 
     /// Whether a hands-free conversation is on (`Conversation`, which sets it): a reply heard out
-    /// under one ends on the conversation's go-ahead, not `done`.
+    /// under one ends on the conversation's go-ahead rather than `done`, where the go-ahead can
+    /// sound (`KeeperSounds.saysGoAhead`).
     var conversing = false
     /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
     /// and not at every sentence's first frame.
@@ -1002,7 +1003,8 @@ final class Speaker {
     /// The reply came to its end, rather than being stopped. The cue first: its hold is taken
     /// while the reply's still stands, so behind the lock the process is not let go of between
     /// the two and nothing retakes a hold on a session the last one's going left to wait. A reply
-    /// cut short by its turn's failure (`turnFailed`) ends with `failed`, not `done`.
+    /// cut short by its turn's failure (`turnFailed`) ends with `failed`, not `done`, and one heard
+    /// out in a conversation with the go-ahead to come sounds neither.
     private func finished() {
         // The queue's drained lands on main a hop after the audio thread saw it: one landing
         // after a stop, or after the end `made` or `writingEnded` already saw, ends nothing twice.
@@ -1011,7 +1013,8 @@ final class Speaker {
         report.finished = report.started
         #endif
         // In a conversation the reply's end is the go-ahead's moment, sounded as the microphone
-        // opens again (`Conversation`), and one tone says it, as on Daphne's open mic.
+        // opens again (`Conversation`), and one tone says it, as on Daphne's open mic; where no
+        // go-ahead can sound (the keeper's sounds off), `done` says it.
         if readingFailed { earcons?.play(.failed) } else if !conversing || sounds?.saysGoAhead != true { earcons?.play(.done) }
         readingFailed = false
         done()

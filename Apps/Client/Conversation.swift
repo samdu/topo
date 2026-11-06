@@ -97,14 +97,16 @@ final class Conversation {
     /// The card's mute: the microphone closed and kept closed until the unmute.
     private var muted = false
     private var lastEnd: Date?
-    /// The go-ahead is owed: the conversation began, a reply has been read, or the card unmuted
-    /// it; paid once, as the microphone next opens with nothing on its way (Daphne's `cueOwed`).
+    /// The go-ahead is owed: the conversation began, an utterance was sent, a reply waited for
+    /// the microphone or was read, or the card unmuted it; paid once the microphone is open, the
+    /// detector has judged what it holds, nobody is speaking and nothing is on its way, at an
+    /// utterance's start or as the last of those clears (Daphne's `cueOwed`).
     private var goAheadOwed = false
     /// Whether this utterance's onset has sounded its `ack`.
     private var acked = false
-    /// Where, in the samples of the open session, the gate opens again after a tone sounded into
-    /// it: speech heard before then is not counted toward an utterance (Daphne's `holdGate`).
-    private var gateShutUntil = 0
+    /// The stretches of this utterance's samples a tone sounded into (Daphne's `holdGate`): an
+    /// onset inside one is the tone's (`Endpoint.Policy.take`).
+    private var gates: [Range<Int>] = []
     /// Which of the lock's two moments came first, for the log: the interruption's start or the
     /// call's placing.
     private var firstOff: String?
@@ -166,7 +168,7 @@ final class Conversation {
         speaker.conversing = true
         goAheadOwed = true
         acked = false
-        gateShutUntil = 0
+        gates = []
         voice.glancing = false
         AudioLog.say("conversation: begun behind the lock (\(firstOff.map { "the microphone came off at \($0)" } ?? "the microphone still running"))")
         policy = Endpoint.Policy()
@@ -284,7 +286,7 @@ final class Conversation {
         policy = Endpoint.Policy()
         fedTo = 0
         acked = false
-        gateShutUntil = 0
+        gates = []
         startFeeding(reset: true)
         restartIdle()
         payGoAhead()
@@ -313,7 +315,8 @@ final class Conversation {
         guard on, tone != .ack, voice.listening, !voice.suspended else { return }
         let samples = Int(Double(length.components.attoseconds) / 1e18 * Double(Ear.rate))
             + Int(length.components.seconds) * Int(Ear.rate)
-        gateShutUntil = max(gateShutUntil, voice.sink.peek(from: .max).end + samples)
+        let at = voice.sink.peek(from: .max).end
+        gates.append(max(0, at - Endpoint.startEarly)..<(at + samples))
     }
 
     private func startFeeding(reset: Bool = false) {
@@ -365,7 +368,7 @@ final class Conversation {
                     // a stop still decodes.
                     self.fedTo += Endpoint.chunk
                     self.failures = 0
-                    guard let event, let heard = self.policy.take(event, gateShutUntil: self.gateShutUntil) else { continue }
+                    guard let event, let heard = self.policy.take(event, gates: self.gates) else { continue }
                     switch heard {
                     case .speech:
                         self.restartIdle()
@@ -379,8 +382,9 @@ final class Conversation {
                         return
                     }
                 }
-                // A reply waiting on this microphone is judged once what was heard has been.
-                if self.speaker.waitingForMicrophone { self.react() }
+                // A reply waiting on this microphone, or a go-ahead owed, is judged once what was
+                // heard has been.
+                if self.speaker.waitingForMicrophone || self.goAheadOwed { self.react() }
                 try? await Task.sleep(for: Self.feedEvery)
             }
         }
@@ -416,8 +420,8 @@ final class Conversation {
         if dropped {
             AudioLog.say("conversation: the utterance being decoded was dropped (hung up or muted)")
         } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
-            // The turn sent owes the go-ahead, paid once nothing is on its way (Daphne's
-            // `cueIfReady` after the turn).
+            // The turn sent owes the go-ahead, paid once nothing is on its way: its reply's wait,
+            // taken by the send, holds it back until the reply has been read.
             goAheadOwed = true
             Task { await send(heard) }
         }
@@ -468,10 +472,11 @@ final class Conversation {
             // Suspended with the call's session live: resumed, whatever suspended it.
             return resumeOnTheCall()
         }
-        // The microphone open and nothing on its way or being said: an owed go-ahead is paid
-        // (the conversation's start, a wait that has ended under an open microphone). Not while
-        // a reopen is landing: its utterance's start pays it, after the gate is reset.
-        if voice.listening, !voice.suspended, !reopening, !policy.speaking, !speaker.speaking,
+        // The microphone open, every whole chunk it holds judged, and nothing on its way or being
+        // said: an owed go-ahead is paid (the conversation's start, a wait that has ended under an
+        // open microphone), never over an onset the detector has yet to give. Not while a reopen
+        // is landing: its utterance's start pays it, after the gates are reset.
+        if voice.listening, !voice.suspended, !reopening, caughtUp, !policy.speaking, !speaker.speaking,
            !speaker.waitingForMicrophone {
             payGoAhead()
         }

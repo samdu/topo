@@ -109,26 +109,32 @@ final class Endpoint {
     /// toward an end), or the utterance has ended and is to be sent.
     enum Heard: Equatable, Sendable { case speech, ended }
 
+    /// How far before a tone's place in the stream the detector can put its onset: a chunk, since
+    /// a start is resolved to the chunk it lands in, and FluidAudio's speech pad (0.1 s) before it.
+    static let startEarly = chunk + 1_600
+
     /// Topo's policy over the detector's events. Pure, so the suite drives it with a script.
     struct Policy: Equatable, Sendable {
         private var startedAt: Int?
-        /// The sample this utterance's speech is counted from: its start, or the end of the gate
-        /// that stood when it started. Fixed at the start, so a tone sounded while the person is
-        /// already speaking takes nothing of what they said.
+        /// The sample this onset's speech is counted from: its start, or the end of the gate it
+        /// started inside.
         private var countFrom = 0
         /// Whether this utterance has held speech of `minSpeech` or more.
         private(set) var heardSpeech = false
 
-        /// `gateShutUntil` is the sample a tone sounded into the microphone stops being heard at
-        /// (`Conversation`). An onset inside it is the tone's as much as anyone's: it is no
-        /// `.speech`, and only what runs on past the gate counts toward `minSpeech`. A gate shut
-        /// after an onset (a tone over words already begun) changes nothing of that utterance.
-        mutating func take(_ event: Event, gateShutUntil: Int = 0) -> Heard? {
+        /// `gates` are the stretches of the stream a tone sounded into the microphone is heard in
+        /// (`Conversation`, each from the tone's place less `startEarly` to its end). An onset
+        /// inside one is the tone's as much as anyone's: it is no `.speech`, and only what runs on
+        /// past the gate counts toward `minSpeech`. An onset before a gate is the person's, whenever
+        /// the detector's verdict on it arrives, so a tone over words already begun takes nothing
+        /// of them.
+        mutating func take(_ event: Event, gates: [Range<Int>] = []) -> Heard? {
             switch event {
             case .start(let at):
                 startedAt = at
-                countFrom = max(at, gateShutUntil)
-                return at >= gateShutUntil ? .speech : nil
+                let shut = gates.filter { $0.contains(at) }.map(\.upperBound).max()
+                countFrom = shut ?? at
+                return shut == nil ? .speech : nil
             case .end(let at):
                 // An end with no start before it ends nothing.
                 guard startedAt != nil else { return nil }

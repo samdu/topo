@@ -1068,6 +1068,68 @@ extension ConversationTests {
         XCTAssertEqual(played, [.speak, .ack, .speak], "the tone's onset sounded an ack")
     }
 
+    /// Words carried into the conversation from the press, judged only after the call's resume,
+    /// are the person's: the go-ahead waits for the detector to give them, and they are sent.
+    func testWordsCarriedInAreSentBeforeTheGoAheadSounds() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(18_000)])
+        let (conversation, voice, _) = await make(detector: detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await tap(voice)
+        utterance(into: voice.sink)
+        active = false
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
+        leave()
+        placeAndActivate(conversation)
+        await settle("the carried words sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+        XCTAssertEqual(played.first, .ack, "the go-ahead sounded over words the detector had yet to give")
+    }
+
+    /// A wait that ends while the next onset is still with the detector pays no go-ahead over it:
+    /// the words are judged first, and sent.
+    func testAWaitEndingOverAnOnsetNotYetJudgedPaysNoGoAheadOverIt() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the first turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again") { voice.listening }
+        await drain()
+        detector.script([2: .start(8_192), 4: .end(18_000)])
+        detector.hold(at: 2)
+        utterance(into: voice.sink)
+        await settle("the onset's chunk with the detector") { detector.holding }
+        let before = played
+        speaker.endAwaiting("spoken-1", "a reply nobody reads")
+        await drain()
+        XCTAssertEqual(played, before, "the go-ahead sounded over an onset the detector had yet to give")
+        detector.release()
+        await settle("the second turn sent") { self.sent.count == 2 }
+        speaker.endAwaiting("spoken-2", "the test is done")
+    }
+
+    /// A receipt sounded while the onset of words begun before it is still with the detector
+    /// takes nothing of them.
+    func testAReceiptOverAnOnsetNotYetJudgedTakesNothingOfIt() async {
+        let detector = ScriptedDetector([2: .start(8_192), 3: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        detector.hold(at: 2)
+        utterance(into: voice.sink)
+        await settle("the onset's chunk with the detector") { detector.holding }
+        sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
+        XCTAssertEqual(played, [.speak, .act])
+        detector.release()
+        await settle("the turn sent") { self.sent.count == 1 }
+        speaker.endAwaiting("before", "the test is done")
+    }
+
     /// A tone sounded over words already begun (a receipt of the turn still being worked on)
     /// takes nothing of them: the utterance is counted from its own start and sent.
     func testAToneOverWordsAlreadyBegunTakesNothingOfThem() async {
