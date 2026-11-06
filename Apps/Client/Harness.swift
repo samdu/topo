@@ -1248,6 +1248,7 @@ final class Harness {
             } else {
                 // The log read whole with nothing to answer, which is all a pass that ran would
                 // have found: a pass's failure is no longer true.
+                guard self.login == login else { return }
                 clearPassFailure()
                 await refreshUnfinished()
             }
@@ -1335,10 +1336,11 @@ final class Harness {
     }
 
     /// A pass completed, or the loop's read showed it had nothing to do, so a line saying the
-    /// last pass failed is no longer true. Any other failure stands: a turn's own stays up while
-    /// its words are still owed.
+    /// last pass failed is no longer true. Any other failure stands, and so does a pass's while
+    /// words are still on the line: a pass that failed can have put its line up over a turn's,
+    /// and the line is the person's sight of what is owed until the drain takes it.
     private func clearPassFailure() {
-        if failure?.source == .pass { failure = nil }
+        if failure?.source == .pass, pending.isEmpty, unsaved.isEmpty { failure = nil }
     }
 
     /// Reads which of the log's turns the brain holds as cut off, for the control that asks again.
