@@ -76,6 +76,9 @@ final class Speaker {
     /// reply is not capped, since the system holds the session for the call's length, and its
     /// hang-up is a mute. Nil where the app has not attached one.
     private(set) var call: SpokenCall?
+    /// Whether a call can still be placed for this exchange: one is attached and none is on its
+    /// way, up or closing. A release keeps its input for the placing only then (`MicPress`).
+    var callIdle: Bool { call?.state == .idle }
     /// Told every hold change after this object has dealt with it, so the keeper comes first
     /// and whoever listens — the call's driver — second.
     var onHold: ((Bool) -> Void)?

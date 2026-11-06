@@ -34,7 +34,10 @@ final class KeptInputTests: XCTestCase {
     /// Called from the session's seams, which run on the main actor.
     final class Watch: @unchecked Sendable {
         weak var voice: VoiceInput?
+        weak var speaker: Speaker?
         private(set) var underInput: [String] = []
+        /// What was done to the session while the speaker's keeper was rendering.
+        private(set) var underKeeper: [String] = []
         private(set) var atCategory: [Bool] = []
         private(set) var atHandBack: [Bool] = []
 
@@ -43,6 +46,7 @@ final class KeptInputTests: XCTestCase {
             if what == "category" { atCategory.append(running) }
             if what == "hand-back" { atHandBack.append(running) }
             if running { underInput.append(what) }
+            if MainActor.assumeIsolated({ speaker?.keeping ?? false }) { underKeeper.append(what) }
         }
     }
 
@@ -106,6 +110,11 @@ final class KeptInputTests: XCTestCase {
                                voiceProcessing: { try seams.process($0, $1) },
                                defaults: defaults())
         watch.voice = voice
+        watch.speaker = speaker
+        // A bound that never runs out unless a test lets it, so a test of another stop cannot
+        // pass on the bound standing in for it.
+        voice.keptSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
+        speaker.attach(SpokenCall(system: FakeCallSystem(), sleep: ManualSleep().sleep))
         speaker.microphoneOpen = { voice.listening }
         speaker.onCall = { voice.call($0) }
         return Rig(speaker: speaker, voice: voice, audio: audio, seams: seams, center: center, ear: engine,
@@ -269,6 +278,57 @@ final class KeptInputTests: XCTestCase {
         rig.speaker.stop()
     }
 
+    /// The session's own placing stops the input, the speaker's moments aside: `callPlaced`
+    /// tells it before the category is set.
+    func testThePlacingStopsTheKeptInputWithNoMomentToldOfIt() async {
+        let rig = await rig(isActive: false)
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        rig.speaker.onCall = nil
+        await say(rig)
+        XCTAssertTrue(rig.voice.inputRunning)
+        call.start()
+        call.provider(system.provider, perform: system.starts.last!)
+        XCTAssertEqual(rig.watch.atCategory, [false], "not running when callPlaced sets the category")
+        XCTAssertFalse(rig.voice.inputKept)
+        call.end()
+        rig.speaker.stop()
+    }
+
+    /// No placing follows a call already on its way or up, so a release under one keeps nothing.
+    func testAReleaseUnderACallKeepsNoInput() async {
+        let rig = await rig(isActive: false)
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        await say(rig)
+        call.start()
+        call.provider(system.provider, perform: system.starts.last!)
+        XCTAssertFalse(rig.voice.inputKept)
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(rig.audio.call, .active)
+        await say(rig)
+        XCTAssertEqual(rig.sent.texts.count, 2)
+        XCTAssertFalse(rig.voice.inputKept, "kept under a call nothing will place")
+        XCTAssertFalse(rig.voice.inputRunning)
+        call.end()
+        rig.speaker.stop()
+    }
+
+    /// The chat's cancels (the keyboard up, a typed send, the chat going) stop it, with no hold
+    /// changed to stand in for the stop.
+    func testACancelStopsTheKeptInput() async {
+        let rig = await rig()
+        await say(rig)
+        XCTAssertTrue(rig.voice.inputKept)
+        rig.voice.cancel()
+        XCTAssertFalse(rig.voice.inputKept)
+        XCTAssertFalse(rig.voice.inputRunning)
+        XCTAssertTrue(rig.watch.underInput.isEmpty, "\(rig.watch.underInput)")
+        rig.speaker.stop()
+    }
+
     func testTheKeptInputStopsAtItsBound() async {
         let rig = await rig()
         let bound = ManualSleep()
@@ -307,6 +367,7 @@ final class KeptInputTests: XCTestCase {
             XCTAssertFalse(rig.voice.inputRunning, "away \(away)")
             if away { XCTAssertEqual(rig.watch.atHandBack, [false], "handed back with the input stopped") }
             XCTAssertTrue(rig.watch.underInput.isEmpty, "away \(away): \(rig.watch.underInput)")
+            XCTAssertTrue(rig.watch.underKeeper.isEmpty, "away \(away), the keeper still rendering: \(rig.watch.underKeeper)")
             rig.speaker.stop()
         }
     }

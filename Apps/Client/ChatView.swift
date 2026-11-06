@@ -1079,7 +1079,7 @@ final class MicPress {
             let release = speaks ? speaker.releasing() : nil
             // A held release keeps its input running for the call's placing: the call service
             // lets the call start behind the lock when the app is recording (`VoiceInput.inputKept`).
-            let keeps = release != nil && calls()
+            let keeps = release != nil && calls() && speaker.callIdle
             return Task {
                 defer { release.map { speaker.released($0, "its send took no wait") } }
                 let heard = await voice.pressUp(as: .chat, keepingInput: keeps)
@@ -1107,7 +1107,7 @@ final class MicPress {
         // A press on the open microphone closes it and sends what it heard, so it is that send's
         // release and is held the same way.
         let release = speaks && drawn.open ? speaker.releasing() : nil
-        let keeps = release != nil && calls()
+        let keeps = release != nil && calls() && speaker.callIdle
         return Task {
             defer { release.map { speaker.released($0, "its send took no wait") } }
             let heard = await voice.pressDown(as: .chat, keepingInput: keeps)

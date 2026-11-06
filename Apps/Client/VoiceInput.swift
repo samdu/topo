@@ -102,8 +102,8 @@ final class VoiceInput {
     /// True from a spoken release that asked for it until `stopKeptInput`: the release's engine
     /// and tap left running, the gate shut, so the app is recording when a lock straight after
     /// the press places the call. The call service lets a call be started from the background
-    /// when the app placing it is recording, and recording can go on in the background but not
-    /// start there: Daphne's microphone is open whenever she places hers. Not the microphone
+    /// when the app placing it is recording, as Daphne's microphone is whenever she places hers.
+    /// Kept only while a call can still be placed (`Speaker.callIdle`). Not the microphone
     /// left open: `listening` is false, nothing it hears reaches a turn, a caption or the row,
     /// and a reply is not held for it. The audio session is kept for it as for an open
     /// microphone (`AudioSession.keptInput`), since its tap is on the format the session gave.
@@ -624,7 +624,7 @@ final class VoiceInput {
     /// kept for the next press as a release's is, then the session told. Free when none is kept.
     /// Called before the call's placing reconfigures the session (`AudioSession.callPlaced`), at
     /// the call's end however it ended, at an interruption's start, when no turn is held, as a
-    /// reply begins to be read, at its bound, at a cancel and at the next press.
+    /// reply begins to be read, at its bound, at a cancel and when the microphone next opens.
     func stopKeptInput(_ why: String) {
         keptBound?.cancel()
         keptBound = nil

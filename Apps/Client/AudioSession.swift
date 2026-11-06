@@ -321,15 +321,23 @@ final class AudioSession {
         guard holds != was else { return }
         let by = holds.isEmpty ? "nobody" : holds.map { "\($0)" }.sorted().joined(separator: ", ")
         AudioLog.say("hold \(on ? "taken" : "dropped") by \(who); held by \(by)")
-        if wasForATurn, !heldForATurn { endKeptInput?("no turn is held") }
+        // With no turn held there is no call to place, so a kept input stops: after the speaker
+        // has heard, so its keeper's engine is stopped before the stop applies what waited, and
+        // before the session is let go, so nothing is reconfigured or handed back under the tap.
+        let noTurn = wasForATurn && !heldForATurn
         if on, who == .speaking { endKeptInput?("the reply is being read") }
         // Told on every claim while anything is held, not only when the answer changes: a claim
         // taken while another already stands is the moment to retry a keeper an earlier refusal
         // left down, and a hold nothing renders for is a hold on paper.
-        guard holding != wasHolding else { onHoldChanged?(holding); return }
+        guard holding != wasHolding else {
+            onHoldChanged?(holding)
+            if noTurn { endKeptInput?("no turn is held") }
+            return
+        }
         // The speaker first, so the keeper's engine is stopped before the session is let go: a
         // deactivation with an engine still rendering is refused as busy.
         onHoldChanged?(holding)
+        if noTurn { endKeptInput?("no turn is held") }
         if !holding {
             clearOverride(after: "the last hold is gone")
             letGo(after: "the last hold is gone")
@@ -442,6 +450,8 @@ final class AudioSession {
     /// activated, and the session is not this object's again until `callActivated`. A category
     /// that will not set is logged: the call goes on without it, on whatever the session was.
     func callPlaced() {
+        // The input kept for the placing stops before the call's category is set on its session.
+        endKeptInput?("the call is placed: the session is the system's")
         call = .placed
         valid = false
         // The mode the session is in, not the one wanted: a change of voice processing asked for
