@@ -90,8 +90,8 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// stands, live (`AudioSession.ensureLive()`) and refused when it is not, so it configures and
 /// activates nothing; no receipt is played into an open microphone, and the bed dips while one
 /// is open. Where such a hold already stands a sound holds the process for its own length too
-/// (`AudioSession.Hold.sound`, let go at the receipt's length or the bed's fade-out, `bound` at
-/// most), taken before it starts and before the hold it follows drops, so an error receipt and
+/// (`AudioSession.Hold.sound`, standing while a receipt's length or the bed's fade-out is not
+/// yet up, each its own, `bound` at most), taken before it starts and before the hold it follows drops, so an error receipt and
 /// the bed's fade behind the lock are heard out before the last hold is let go of; with nothing
 /// held it holds nothing. The
 /// players are handles into mediaserverd: a media services reset drops them and builds nothing,
@@ -407,7 +407,7 @@ final class KeeperSounds {
 
     /// Topo's voice or a microphone has begun: a receipt still sounding is stopped, since the
     /// checks at its start only kept it from beginning over either. Its hold runs to its own
-    /// bound (`toneLength`), beside the bed's fade's, which the bed's pause ends alone.
+    /// bound (`toneLength`), beside the bed's fade's, which the bed's pause or its bound ends.
     func hush(_ why: String) {
         dropStale()
         for (tone, player) in players where player.isPlaying {
@@ -420,7 +420,7 @@ final class KeeperSounds {
 
     // MARK: - The hold
 
-    /// The process is held for `length` more (`bound` at most) — an extension of the turn's hold
+    /// `owner` holds the process for `length` more (`bound` at most), beside any other owner — an extension of the turn's hold
     /// that every caller has checked stands (`play`'s guard; the bed is on only under one, and
     /// its fade-out is asked for before the wait's hold drops), never a hold taken alone: in
     /// front nothing suspends, and a sound holding alone would keep a claim change waiting for

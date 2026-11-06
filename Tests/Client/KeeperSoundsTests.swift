@@ -721,6 +721,7 @@ final class KeeperSoundsTests: XCTestCase {
         await drain()
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_read"], "a player was built in the reset handler")
         XCTAssertFalse(rig.audio.holding, "the reset left a hold standing")
+        XCTAssertFalse(rig.sounds.holdingASound, "the reset left a sound's owner standing")
         XCTAssertEqual(rig.seams.engines.count, engines, "an engine was built in the reset handler")
         XCTAssertFalse(rig.speaker.keeperTransitions.dropFirst(transitions).contains("playing"), "the keeper was started in the reset handler: \(rig.speaker.keeperTransitions)")
         XCTAssertEqual(rig.seams.playEngineStarts, starts, "the engine the reset killed was started again")
@@ -830,12 +831,13 @@ final class PausedSleep: @unchecked Sendable {
     var asked: [Duration] { lock.withLock { _asked } }
 
     func sleep(_ duration: Duration) async throws {
-        lock.withLock { _asked.append(duration) }
         try Task.checkCancellation()
         let id = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+                // Asked and waiting under one lock, so a sleep a test sees asked for is one it can fire.
                 let early = lock.withLock { () -> Bool in
+                    _asked.append(duration)
                     if cancelled.remove(id) != nil { return true }
                     waiting[id] = (duration, continuation)
                     return false
