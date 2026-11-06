@@ -139,12 +139,12 @@ final class KeeperSoundsTests: XCTestCase {
                    center: center, defaults: defaults, clock: clock, earcons: earcons, cues: cues)
     }
 
-    private func toolUse(_ name: String, path: String? = nil) -> GuestActivity {
-        .update(.event(.toolUse(name: name, path: path)))
+    private func toolUse(_ name: String, path: String? = nil, id: String? = nil) -> GuestActivity {
+        .update(.event(.toolUse(name: name, path: path, id: id)))
     }
 
-    private func toolResult(isError: Bool = false) -> GuestActivity {
-        .update(.event(.toolResult(isError: isError, text: "")))
+    private func toolResult(isError: Bool = false, id: String? = nil) -> GuestActivity {
+        .update(.event(.toolResult(isError: isError, text: "", id: id)))
     }
 
     private func renderUntil(_ rig: Rig, _ what: String, file: StaticString = #filePath, line: UInt = #line,
@@ -200,22 +200,24 @@ final class KeeperSoundsTests: XCTestCase {
         }
     }
 
-    /// A delegate sounds as it is called and `return` as its result comes back, results paired
-    /// to calls in the order they were made; a result Claude Code marked an error sounds `error`,
-    /// whatever its call; a result before any call sounds nothing of a call's.
+    /// A delegate sounds as it is called and `return` as its own result comes back, paired by
+    /// id; a result Claude Code marked an error sounds `error`, whatever its call; a result
+    /// naming no call sounds nothing of a call's.
     func testADelegateReturnsAndAFailedToolSoundsTheError() async {
         let rig = await rig()
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.sounds.follow(toolResult())
+        rig.sounds.follow(toolResult(id: "nobody"))
         XCTAssertEqual(rig.sounds.played, [], "a result with no call sounded")
-        rig.sounds.follow(toolUse("Read"))
-        rig.sounds.follow(toolUse("Agent"))
-        rig.sounds.follow(toolResult())
+        rig.sounds.follow(toolUse("Read", id: "r"))
+        rig.sounds.follow(toolUse("Agent", id: "a"))
+        rig.sounds.follow(toolResult(id: "r"))
         XCTAssertEqual(rig.sounds.played, [.read, .delegate], "the read's result sounded as the delegate's return")
-        rig.sounds.follow(toolResult())
+        rig.sounds.follow(toolResult(id: "a"))
         XCTAssertEqual(rig.sounds.played, [.read, .delegate, .return])
-        rig.sounds.follow(toolUse("Bash"))
-        rig.sounds.follow(toolResult(isError: true))
+        rig.sounds.follow(toolResult(id: "a"))
+        XCTAssertEqual(rig.sounds.played, [.read, .delegate, .return], "a delegate returned twice")
+        rig.sounds.follow(toolUse("Bash", id: "b"))
+        rig.sounds.follow(toolResult(isError: true, id: "b"))
         XCTAssertEqual(rig.sounds.played, [.read, .delegate, .return, .act, .error])
         XCTAssertEqual(rig.players.names, ["bloop_read", "bloop_delegate", "bloop_return", "bloop_act", "bloop_error"])
         rig.speaker.endAwaiting("turn", "the test is done")
@@ -227,12 +229,58 @@ final class KeeperSoundsTests: XCTestCase {
         for end in [GuestActivity.gone(answering: []), .began(pid: nil, answering: [])] {
             let rig = await rig()
             _ = rig.speaker.awaitReply("turn", readAloud: true)
-            rig.sounds.follow(toolUse("Agent"))
+            rig.sounds.follow(toolUse("Agent", id: "a"))
             rig.sounds.follow(end)
-            rig.sounds.follow(toolUse("Read"))
-            rig.sounds.follow(toolResult())
+            rig.sounds.follow(toolUse("Read", id: "r"))
+            rig.sounds.follow(toolResult(id: "a"))
             XCTAssertEqual(rig.sounds.played, [.delegate, .read], "\(end): a call of the turn before was answered by this one's result")
             rig.speaker.endAwaiting("turn", "the test is done")
+        }
+    }
+
+    /// A sub-agent's own tools sound, and their results come between its delegate's call and
+    /// its result: `return` sounds at the delegate's own result and no other, whatever the
+    /// sub-agent did, and delegates called at once return in the order they finish. The lines
+    /// are Claude Code's own, through `StreamJSON`.
+    func testADelegateReturnsAtItsOwnResultWhateverItsSubagentDid() async {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        func feed(_ line: String) {
+            for event in StreamJSON.events(in: line) { rig.sounds.follow(.update(.event(event))) }
+        }
+        func call(_ name: String, _ id: String, parent: String? = nil) -> String {
+            let p = parent.map { #""\#($0)""# } ?? "null"
+            return #"{"type":"assistant","parent_tool_use_id":\#(p),"message":{"id":"m","model":"claude-haiku-4-5","content":[{"type":"tool_use","id":"\#(id)","name":"\#(name)","input":{}}]}}"#
+        }
+        func result(_ id: String, parent: String? = nil) -> String {
+            let p = parent.map { #""\#($0)""# } ?? "null"
+            return #"{"type":"user","parent_tool_use_id":\#(p),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"\#(id)","content":"ok"}]}}"#
+        }
+        feed(call("Agent", "a1"))
+        feed(call("Agent", "a2"))
+        feed(call("Read", "s1", parent: "a1"))
+        feed(result("s1", parent: "a1"))
+        XCTAssertEqual(rig.sounds.played, [.delegate, .delegate, .read], "a sub-agent's result sounded its delegate's return")
+        feed(result("a2"))
+        XCTAssertEqual(rig.sounds.played, [.delegate, .delegate, .read, .return])
+        feed(call("Grep", "s2", parent: "a1"))
+        feed(result("s2", parent: "a1"))
+        feed(result("a1"))
+        XCTAssertEqual(rig.sounds.played, [.delegate, .delegate, .read, .return, .read, .return],
+                       "the first delegate did not return at its own result")
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// In a conversation the go-ahead takes `done`'s place at a reply's end; with the sounds off
+    /// no go-ahead can sound, and `done` is said as it is outside one.
+    func testAConversationsReplySoundsDoneOnlyWhereNoGoAheadCanSound() async throws {
+        for mode in [WorkingSounds.Mode.receipts, .off] {
+            let rig = await rig(mode: mode, earcons: true, heard: .dataRendered)
+            rig.speaker.conversing = true
+            XCTAssertTrue(rig.speaker.speak("Hi."))
+            await settle("the reply to start") { rig.speaker.report.started }
+            try await renderUntil(rig, "the reply to finish") { rig.speaker.report.finished }
+            XCTAssertEqual(rig.earcons.played, mode == .off ? [.done] : [], "\(mode): the reply's end")
         }
     }
 

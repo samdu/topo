@@ -719,10 +719,10 @@ extension DebugRun {
                     switch update {
                     case .event(.started(let id, let model)):
                         say("guest turn \(number) model: \(model), session \(id), process \(pid)")
-                    case .event(.toolUse(let name, let path)):
+                    case .event(.toolUse(let name, let path, _)):
                         calls.append(name)
                         say("guest turn \(number) tool: \(name)" + (path.map { " \($0)" } ?? ""))
-                    case .event(.toolResult(let isError, let text)):
+                    case .event(.toolResult(let isError, let text, _)):
                         let name = calls.isEmpty ? "(no call)" : calls.removeFirst()
                         say("guest turn \(number) " + toolResultLine(tool: name, isError: isError, text: text))
                     case .event(.compacted(let compacted)):

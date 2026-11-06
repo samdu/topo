@@ -729,6 +729,9 @@ final class Speaker {
     /// Whether a wait stands for the spoken turn `nonce`.
     func isAwaiting(_ nonce: String) -> Bool { waits[nonce] != nil }
 
+    /// Whether any spoken turn's wait stands.
+    var awaitingAny: Bool { !waits.isEmpty }
+
     #if DEBUG
     /// The spoken turns a wait is standing for, for a test.
     var awaiting: [String] { waits.keys.sorted() }
@@ -1009,7 +1012,7 @@ final class Speaker {
         #endif
         // In a conversation the reply's end is the go-ahead's moment, sounded as the microphone
         // opens again (`Conversation`), and one tone says it, as on Daphne's open mic.
-        if readingFailed { earcons?.play(.failed) } else if !conversing { earcons?.play(.done) }
+        if readingFailed { earcons?.play(.failed) } else if !conversing || sounds?.saysGoAhead != true { earcons?.play(.done) }
         readingFailed = false
         done()
     }

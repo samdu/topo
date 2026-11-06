@@ -118,6 +118,8 @@ final class ConversationTests: XCTestCase {
     private var enabled = true
     private var holding = false
     private var sent: [String] = []
+    /// Whether the chat's send takes the turn's wait, as `ChatView.sendSpoken` does.
+    private var waitOnSend = false
     private var told: [Bool] = []
     private var ends = 0
     private var idle = ManualSleep()
@@ -202,7 +204,10 @@ final class ConversationTests: XCTestCase {
         speaker.onCall = { conversation.call($0) }
         conversation.conversingChanged = { [unowned self] in told.append($0) }
         conversation.ended = { [unowned self] in ends += 1 }
-        conversation.send = { [unowned self] in sent.append($0) }
+        conversation.send = { [unowned self] in
+            sent.append($0)
+            if waitOnSend { _ = speaker.awaitReply("spoken-\(sent.count)", readAloud: true) }
+        }
         conversation.sends = { sends }
         input.carries = { [weak conversation] in
             guard let conversation, conversation.carries() else { return false }
@@ -977,54 +982,63 @@ final class ConversationTests: XCTestCase {
 // MARK: - The conversation's tones
 
 /// Daphne's open-mic tones, on the conversation: the onset's `ack` once an utterance opens, the
-/// go-ahead owed at the conversation's start, after a reply and at an unmute and paid as the
-/// microphone opens again with nothing on its way, yielding to a cue that has just said it, and
-/// the gate shut under a tone so the ear does not take it for speech.
+/// go-ahead owed at the conversation's start, after a turn sent, after a reply and at an unmute
+/// and paid once the microphone is open with nothing on its way, yielding to a cue that has just
+/// said it, and the gate shut under a tone so the ear does not take it for speech.
 extension ConversationTests {
     private var played: [KeeperSounds.Tone] { sounds?.played ?? [] }
 
-    func testTheOnsetSoundsTheAckOnceAndTheGoAheadIsPaidAsTheMicrophoneOpensAgain() async {
-        let detector = ScriptedDetector([0: .start(0), 2: .start(8_000), 4: .end(16_000)])
+    func testTheGoAheadSoundsAtTheStartAndAfterATurnOnceNothingIsOnItsWay() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(4_096), 2: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, speaker) = await begun(detector, sounding: true)
         defer { conversation.stop("test", sending: false) }
         // The detector's resets at the start and the resume land before anything is heard.
         await drain()
         XCTAssertTrue(speaker.conversing)
-        XCTAssertEqual(played, [], "a tone before anything was heard: the go-ahead is paid as the microphone opens again")
+        await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
-        XCTAssertEqual(played.first, .ack)
+        XCTAssertEqual(played, [.speak, .ack], "an utterance's second onset sounded a second ack")
         await settle("the microphone open again") { voice.listening }
-        await settle("the go-ahead") { self.played.count == 2 }
-        XCTAssertEqual(played, [.ack, .speak], "an utterance's second onset sounded a second ack, or the go-ahead was not paid")
         await drain()
-        XCTAssertEqual(played, [.ack, .speak], "the go-ahead was paid twice")
+        XCTAssertEqual(played, [.speak, .ack], "the go-ahead sounded with the turn on its way")
+        speaker.endAwaiting("spoken-1", "the reply is in")
+        await settle("the go-ahead once the turn is in") { self.played == [.speak, .ack, .speak] }
+        await drain()
+        XCTAssertEqual(played, [.speak, .ack, .speak], "the go-ahead was paid twice")
+        detector.script([1: .start(8_000), 4: .end(16_000)])
+        utterance(into: voice.sink)
+        await settle("the second turn sent") { self.sent.count == 2 }
+        XCTAssertEqual(played, [.speak, .ack, .speak, .ack], "the next utterance went unacked")
+        speaker.endAwaiting("spoken-2", "the test is done")
         conversation.stop("test", sending: false)
         XCTAssertFalse(speaker.conversing)
     }
 
     func testAReplyReadOwesTheGoAheadForTheMicrophoneThatOpensAfterIt() async {
-        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, speaker) = await begun(detector, sounding: true)
         defer { conversation.stop("test", sending: false) }
-        // The detector's resets at the start and the resume land before anything is heard.
         await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
-        await settle("the go-ahead") { self.played == [.ack, .speak] }
+        await settle("the go-ahead after the turn") { self.played == [.speak, .ack, .speak] }
         XCTAssertTrue(speaker.speak("The lights are off."))
         await settle("the microphone closed for the reply") { !voice.listening }
         speaker.stop()
         await settle("the microphone open again") { voice.listening }
-        await settle("the go-ahead after the reply") { self.played == [.ack, .speak, .speak] }
+        await settle("the go-ahead after the reply") { self.played == [.speak, .ack, .speak, .speak] }
     }
 
     func testAnUnmuteOwesTheGoAheadAndACueThatHasJustSoundedStandsInForIt() async {
         let (conversation, voice, speaker) = await begun(sounding: true)
         defer { conversation.stop("test", sending: false) }
+        await settle("the go-ahead at the start") { self.played == [.speak] }
         conversation.call(.muted(true))
         await settle("the microphone closed") { !voice.listening }
         conversation.call(.muted(false))
-        await settle("the go-ahead at the unmute") { self.played == [.speak] }
+        await settle("the go-ahead at the unmute") { self.played == [.speak, .speak] }
 
         conversation.call(.muted(true))
         await settle("the microphone closed") { !voice.listening }
@@ -1032,27 +1046,44 @@ extension ConversationTests {
         conversation.call(.muted(false))
         await settle("the microphone open again") { voice.listening }
         await drain()
-        XCTAssertEqual(played, [.speak], "the go-ahead sounded over the cue that had just said it")
+        XCTAssertEqual(played, [.speak, .speak], "the go-ahead sounded over the cue that had just said it")
     }
 
     /// The go-ahead shuts the gate: the ear hearing its tone, a third of a second (longer than
     /// the minimum), sends nothing, and opens no turn of its own.
     func testTheGoAheadShutsTheGateSoItsToneIsNoUtterance() async {
-        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, _) = await begun(detector, sounding: true)
         defer { conversation.stop("test", sending: false) }
-        // The detector's resets at the start and the resume land before anything is heard.
         await drain()
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
         detector.script([0: .start(0), 1: .end(6_000)])
-        await settle("the go-ahead") { self.played == [.ack, .speak] }
+        await settle("the go-ahead") { self.played == [.speak, .ack, .speak] }
         await drain()
         utterance(into: voice.sink)
         await settle("the chunks fed") { detector.chunks >= 5 }
         await drain()
         XCTAssertEqual(sent.count, 1, "the go-ahead's own tone was sent as a turn")
-        XCTAssertEqual(played, [.ack, .speak], "the tone's onset sounded an ack")
+        XCTAssertEqual(played, [.speak, .ack, .speak], "the tone's onset sounded an ack")
+    }
+
+    /// A tone sounded over words already begun (a receipt of the turn still being worked on)
+    /// takes nothing of them: the utterance is counted from its own start and sent.
+    func testAToneOverWordsAlreadyBegunTakesNothingOfThem() async {
+        let detector = ScriptedDetector([1: .start(8_000), 7: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        // A turn on its way, whose tools sound while the person speaks.
+        _ = speaker.awaitReply("before", readAloud: true)
+        utterance(into: voice.sink)
+        await settle("the onset") { self.played.contains(.ack) }
+        sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
+        XCTAssertEqual(played, [.speak, .ack, .act])
+        utterance(into: voice.sink, seconds: 0.75)
+        await settle("the turn sent") { self.sent.count == 1 }
+        speaker.endAwaiting("before", "the test is done")
     }
 }
-

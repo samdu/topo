@@ -71,6 +71,12 @@ final class EndpointTests: XCTestCase {
 
         var past = Endpoint.Policy()
         XCTAssertEqual(past.take(.start(gate), gateShutUntil: gate), .speech, "an onset as the gate opens was not one")
+
+        // A gate shut after the onset, by a tone over words already begun, takes nothing of them.
+        var begun = Endpoint.Policy()
+        XCTAssertEqual(begun.take(.start(4_096), gateShutUntil: 0), .speech)
+        XCTAssertEqual(begun.take(.end(4_096 + quarter), gateShutUntil: 30_000), .ended,
+                       "a tone sounded over words already begun took them")
     }
 }
 

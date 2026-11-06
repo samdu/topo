@@ -381,14 +381,30 @@ final class EarconsTests: XCTestCase {
     /// In a conversation the reply's end is the go-ahead's (`Conversation`): a reply heard out
     /// under one sounds no `done`, so the moment has one tone, and one cut short by its turn's
     /// failure still sounds `failed`.
-    func testAReplyHeardOutInAConversationSoundsNoDone() async throws {
+    /// With no keeper's sounds to say the go-ahead, a conversation's reply still ends in `done`
+    /// (`KeeperSoundsTests` has the go-ahead taking its place).
+    func testAReplyHeardOutInAConversationWithNoGoAheadSoundsDone() async throws {
         let rig = await rig(heard: .dataRendered)
         rig.speaker.conversing = true
         XCTAssertTrue(rig.speaker.speak("Hi."))
         await settle("the reply to start") { rig.speaker.report.started }
         try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
-        XCTAssertEqual(rig.earcons.played, [], "done sounded at a conversation's reply end")
+        XCTAssertEqual(rig.earcons.played, [.done], "a conversation's reply with no go-ahead to come ended in silence")
         XCTAssertFalse(rig.speaker.speaking)
+    }
+
+    /// A cue stands in for the go-ahead for a second and a half after it begins, and no longer.
+    func testACueIsRecentForASecondAndAHalf() async {
+        let rig = await rig()
+        var now = ContinuousClock.now
+        rig.earcons.now = { now }
+        try? rig.audio.ensureActive()
+        XCTAssertFalse(rig.earcons.recent(Conversation.earconReceipt), "recent before any cue")
+        XCTAssertTrue(rig.earcons.play(.listening))
+        now += .milliseconds(1400)
+        XCTAssertTrue(rig.earcons.recent(Conversation.earconReceipt))
+        now += .milliseconds(200)
+        XCTAssertFalse(rig.earcons.recent(Conversation.earconReceipt), "a cue stood in past a second and a half")
     }
 
     // MARK: - The turn

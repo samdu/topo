@@ -295,7 +295,7 @@ final class Conversation {
     /// A cue that has just sounded (the earcons') was this moment's receipt, and a second would
     /// say it twice.
     private func payGoAhead() {
-        guard goAheadOwed, on, !muted, callUp, voice.listening, !voice.suspended, speaker.awaiting.isEmpty else { return }
+        guard goAheadOwed, on, !muted, callUp, voice.listening, !voice.suspended, !speaker.awaitingAny else { return }
         goAheadOwed = false
         if speaker.earcons?.recent(Self.earconReceipt) == true {
             return AudioLog.say("conversation: no go-ahead; a cue has just said it")
@@ -369,7 +369,7 @@ final class Conversation {
                     switch heard {
                     case .speech:
                         self.restartIdle()
-                        // The onset has opened a turn: its receipt, once (Daphne's `Keeper.heard`).
+                        // The utterance's first onset: its receipt, once (Daphne's `Keeper.heard`).
                         if !self.acked {
                             self.acked = true
                             self.speaker.sounds?.heard()
@@ -416,6 +416,9 @@ final class Conversation {
         if dropped {
             AudioLog.say("conversation: the utterance being decoded was dropped (hung up or muted)")
         } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
+            // The turn sent owes the go-ahead, paid once nothing is on its way (Daphne's
+            // `cueIfReady` after the turn).
+            goAheadOwed = true
             Task { await send(heard) }
         }
         react()
@@ -431,6 +434,7 @@ final class Conversation {
             _ = voice.suspended
             _ = speaker.speaking
             _ = speaker.waitingForMicrophone
+            _ = speaker.awaitingAny
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -463,6 +467,13 @@ final class Conversation {
         if voice.suspended, callUp, !muted, !voice.ending {
             // Suspended with the call's session live: resumed, whatever suspended it.
             return resumeOnTheCall()
+        }
+        // The microphone open and nothing on its way or being said: an owed go-ahead is paid
+        // (the conversation's start, a wait that has ended under an open microphone). Not while
+        // a reopen is landing: its utterance's start pays it, after the gate is reset.
+        if voice.listening, !voice.suspended, !reopening, !policy.speaking, !speaker.speaking,
+           !speaker.waitingForMicrophone {
+            payGoAhead()
         }
         guard !voice.listening, !reopening, callUp, !muted, !speaker.speaking, !speaker.waitingForMicrophone else { return }
         reopening = true

@@ -226,9 +226,9 @@ final class KeeperSounds {
     /// the error's. Everything else is Topo's to draw.
     func follow(_ activity: GuestActivity) {
         switch activity {
-        case .began, .gone: calls = []
-        case .update(.event(.toolUse(let name, _))): tool(name)
-        case .update(.event(.toolResult(let isError, _))): result(isError: isError)
+        case .began, .gone: delegates = []
+        case .update(.event(.toolUse(let name, _, let id))): tool(name, id: id)
+        case .update(.event(.toolResult(let isError, _, let id))): result(isError: isError, id: id)
         case .update(.ended(.failed)): failed()
         default: break
         }
@@ -249,25 +249,28 @@ final class KeeperSounds {
         return .act
     }
 
-    /// The classes of the calls made and not yet answered, in the order they were made, which
-    /// is the order their results come back in; emptied as a turn begins and goes, so a result
-    /// with no call before it misaligns nothing past its turn.
-    private var calls: [Tone] = []
+    /// The ids of the delegates called and not yet answered. A result is paired to its call by
+    /// id, since calls made at once finish in any order and a sub-agent's own calls and results
+    /// come between a delegate's call and its result. Emptied as a turn begins and goes.
+    private var delegates: Set<String> = []
+
+    /// Whether the go-ahead can sound: the sounds are not off. Where it cannot, a conversation's
+    /// reply ends with the earcons' `done` in its place.
+    var saysGoAhead: Bool { WorkingSounds.mode(defaults) != .off }
 
     /// The guest reached for `name`: its class's tone.
     @discardableResult
-    func tool(_ name: String) -> Bool {
+    func tool(_ name: String, id: String? = nil) -> Bool {
         let tone = Self.tone(forTool: name)
-        calls.append(tone)
+        if tone == .delegate, let id { delegates.insert(id) }
         return play(tone)
     }
 
-    /// A tool's result came back: a delegate handing back sounds `return`, and a result Claude
-    /// Code marked an error sounds `error` (Daphne's channel: `SubagentStop`, and a
-    /// `PostToolUse` that did not succeed).
-    func result(isError: Bool) {
-        let call = calls.isEmpty ? nil : calls.removeFirst()
-        if call == .delegate { play(.return) }
+    /// A tool's result came back: a delegate's own handing back sounds `return`, and a result
+    /// Claude Code marked an error sounds `error`, a sub-agent's tool's included (Daphne's
+    /// channel: `SubagentStop`, and a `PostToolUse` that did not succeed).
+    func result(isError: Bool, id: String? = nil) {
+        if let id, delegates.remove(id) != nil { play(.return) }
         if isError { play(.error) }
     }
 
@@ -282,8 +285,7 @@ final class KeeperSounds {
         return play(.error)
     }
 
-    /// The open microphone heard an onset, and the utterance it began has opened a turn
-    /// (Daphne's `Keeper.heard`). Under the conversation, which is the session armed.
+    /// The open microphone heard an utterance's first onset (Daphne's `Keeper.heard`). Under the conversation, which is the session armed.
     @discardableResult
     func heard() -> Bool { play(.ack, armed: true) }
 

@@ -112,22 +112,28 @@ final class Endpoint {
     /// Topo's policy over the detector's events. Pure, so the suite drives it with a script.
     struct Policy: Equatable, Sendable {
         private var startedAt: Int?
+        /// The sample this utterance's speech is counted from: its start, or the end of the gate
+        /// that stood when it started. Fixed at the start, so a tone sounded while the person is
+        /// already speaking takes nothing of what they said.
+        private var countFrom = 0
         /// Whether this utterance has held speech of `minSpeech` or more.
         private(set) var heardSpeech = false
 
         /// `gateShutUntil` is the sample a tone sounded into the microphone stops being heard at
-        /// (`Conversation`): speech before it is the tone's as much as anyone's, so it is not
-        /// counted toward `minSpeech`, and an onset inside it is not one; what goes on past it is.
+        /// (`Conversation`). An onset inside it is the tone's as much as anyone's: it is no
+        /// `.speech`, and only what runs on past the gate counts toward `minSpeech`. A gate shut
+        /// after an onset (a tone over words already begun) changes nothing of that utterance.
         mutating func take(_ event: Event, gateShutUntil: Int = 0) -> Heard? {
             switch event {
             case .start(let at):
                 startedAt = at
+                countFrom = max(at, gateShutUntil)
                 return at >= gateShutUntil ? .speech : nil
             case .end(let at):
                 // An end with no start before it ends nothing.
-                guard let start = startedAt else { return nil }
+                guard startedAt != nil else { return nil }
                 startedAt = nil
-                let long = Double(at - max(start, gateShutUntil)) >= Endpoint.minSpeech * Double(Ear.rate)
+                let long = Double(at - countFrom) >= Endpoint.minSpeech * Double(Ear.rate)
                 if long { heardSpeech = true }
                 return heardSpeech ? .ended : nil
             }
