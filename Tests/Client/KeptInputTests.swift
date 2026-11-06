@@ -121,8 +121,12 @@ final class KeptInputTests: XCTestCase {
                                 dictating: dictating, speaks: speaks, calls: { calls }) { _ in }?.value
         XCTAssertTrue(rig.voice.listening, "the press opened the microphone")
         utterance(into: rig.voice.sink)
+        // Held past a tap, which would leave the microphone open and send nothing.
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
         await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 dictating: dictating, speaks: speaks, calls: { calls }) { text in
+            // As the chat's send: nothing heard is no turn (`sendSpoken`).
+            guard !text.isEmpty else { return }
             rig.sent.add(text)
             if let waits { _ = rig.speaker.awaitReply(waits, readAloud: true) }
         }?.value
@@ -164,6 +168,8 @@ final class KeptInputTests: XCTestCase {
         feedTheTap()
         XCTAssertFalse(rig.voice.sink.peek().isEmpty, "the tap fed the sink while the press listened")
         utterance(into: rig.voice.sink)
+        // Held past a tap, which would leave the microphone open and send nothing.
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
         await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { text in
             rig.sent.add(text)
