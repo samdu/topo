@@ -212,8 +212,15 @@ final class AudioSession {
     /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
     /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
     /// the session reconfigured and activated from the background under a hold, for a cue.
+    /// Judged by the call's phase as `ensureActive` is: under an active call the session is the
+    /// system's and live whatever marked it otherwise (a claim deferred as the microphone closed
+    /// away, ahead of the turn's hold), and on its way to the system or back it is not.
     func ensureLive() throws {
-        guard valid else { throw NotLive() }
+        switch call {
+        case .active: return
+        case .placed, .deactivated, .closing: throw NotLive()
+        case .none: guard valid else { throw NotLive() }
+        }
     }
 
     struct NotLive: Error, CustomStringConvertible {

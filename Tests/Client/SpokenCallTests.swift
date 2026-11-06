@@ -749,6 +749,31 @@ final class AudioSessionCallTests: XCTestCase {
         XCTAssertEqual(seams.records, [], "and nothing was configured for any of it")
     }
 
+    /// A conversation behind the lock under an active call: the utterance's end drops the
+    /// chat's claim, which the call defers, and the microphone closes ahead of the turn's hold,
+    /// with the app away. That marks the session for the next path, and under the call it is
+    /// still the system's and live: a sound is let on it, and nothing is configured.
+    func testTheSessionStaysLiveUnderAnActiveCallWhenTheMicrophoneClosesAway() {
+        let seams = Seams()
+        let audio = audio(seams)
+        audio.wantRecord(true, for: .chat)
+        audio.wantAlive(true, for: .awaitingReply("before"))
+        active = false
+        audio.callPlaced()
+        audio.callActivated()
+        audio.wantAlive(false, for: .awaitingReply("before"))
+        audio.microphone(open: true)
+        seams.forget()
+        audio.wantRecord(false, for: .chat)
+        audio.microphone(open: false)
+        XCTAssertNoThrow(try audio.ensureLive(), "a sound was refused on the call's live session")
+        audio.wantAlive(true, for: .awaitingReply("turn"))
+        audio.microphone(open: true)
+        XCTAssertNoThrow(try audio.ensureLive())
+        XCTAssertEqual(seams.lines, [], "the session was configured beside the call")
+        XCTAssertEqual(seams.records, [])
+    }
+
     func testTheWarmClaimLeavesAnotherAppPlayingAlone() {
         let seams = Seams()
         var playing = true

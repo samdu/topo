@@ -458,6 +458,34 @@ final class KeeperSoundsTests: XCTestCase {
 
     // MARK: - The bed
 
+    /// Under `sounds`, a conversation behind the lock on an active call: the utterance's end
+    /// drops the chat's claim and closes the microphone ahead of the turn's hold, and the bed is
+    /// played for the wait on the call's live session, configuring nothing. Placed and not yet
+    /// activated, the session is not live and the bed is refused.
+    func testTheBedPlaysOnTheCallsLiveSessionUnderAConversation() async throws {
+        let rig = await rig(mode: .sounds, isActive: false)
+        rig.audio.wantRecord(true, for: .chat)
+        rig.audio.wantAlive(true, for: .awaitingReply("before"))
+        rig.audio.callPlaced()
+        rig.sounds.working(true)
+        XCTAssertNil(rig.players.bed, "a bed was made on a call not yet activated")
+        rig.audio.callActivated()
+        rig.audio.microphone(open: true)
+        rig.audio.wantAlive(false, for: .awaitingReply("before"))
+        rig.seams.forget()
+
+        rig.audio.wantRecord(false, for: .chat)
+        rig.audio.microphone(open: false)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.audio.microphone(open: true)
+        let bed = try XCTUnwrap(rig.players.bed, "no bed was made on the call's live session")
+        XCTAssertTrue(bed.isPlaying, "the bed was refused on the call's live session")
+        XCTAssertEqual(bed.plays, 1)
+        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session beside the call")
+        XCTAssertEqual(rig.seams.records, [])
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
     /// Under `sounds` the bed fades in from the release and out at the reply's first frame, once,
     /// and is paused after its fade rather than stopped; the next wait plays it on from where it was.
     func testTheBedPlaysFromTheReleaseToTheReplysFirstFrameAndIsPausedNotStopped() async throws {
