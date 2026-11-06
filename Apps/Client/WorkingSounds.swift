@@ -162,15 +162,18 @@ final class KeeperSounds {
     private var ducked = false
     /// The pause the fade-out ends in, cancelled when the bed is wanted again before it lands.
     private var parking: Task<Void, Never>?
-    /// Whether a sound holds the process, and the task that lets go of it.
-    private var holding = false
-    private var letting: Task<Void, Never>?
+    /// What a sound's hold is taken for: each owner has its own deadline, and the hold stands
+    /// while any owner's does, so the bed's pause lets go of the fade's and never a receipt's.
+    private enum Owner { case receipt, fade }
+    /// The owners holding, each with the serial of its latest hold, and the tasks that let go.
+    private var owned: [Owner: Int] = [:]
+    private var letting: [Owner: Task<Void, Never>] = [:]
     private var holdSerial = 0
     #if DEBUG
     /// Every receipt played, in order, for a test.
     private(set) var played: [Tone] = []
     /// Whether a sound's own hold stands, for a test.
-    var holdingASound: Bool { holding }
+    var holdingASound: Bool { !owned.isEmpty }
     #endif
 
     init(audio: AudioSession, defaults: UserDefaults = .standard, bundle: Bundle = .main,
@@ -271,7 +274,7 @@ final class KeeperSounds {
         dropStale()
         guard let player = player(for: tone) else { return false }
         // The hold before the player, so the process is held from the tone's first frame.
-        holdUntil(Self.toneLength)
+        holdUntil(Self.toneLength, for: .receipt)
         player.currentTime = 0
         guard player.play() else {
             AudioLog.say("receipt \(tone) did not start")
@@ -359,7 +362,7 @@ final class KeeperSounds {
             // hold whose keeper reconfigures the session from the background, so none is taken.
             // Let go once the bed is paused (`park`), and at the sounds' bound at the latest: a
             // hold let go with the player still running is a session handed back under live I/O.
-            if activate(for: "the working bed's fade") { holdUntil(Self.bound) }
+            if activate(for: "the working bed's fade") { holdUntil(Self.bound, for: .fade) }
             bed.setVolume(0, fadeDuration: Self.fadeOut)
             AudioLog.say("the working bed fades out")
             parking = Task { [sleep] in
@@ -376,7 +379,7 @@ final class KeeperSounds {
         guard !bedWanted else { return }
         bed?.pause()
         AudioLog.say("the working bed is paused")
-        letGo("the working bed is paused")
+        release(.fade, "the working bed is paused")
     }
 
     /// The speaker's engine is back after an interruption: a bed still wanted and not playing
@@ -404,7 +407,7 @@ final class KeeperSounds {
 
     /// Topo's voice or a microphone has begun: a receipt still sounding is stopped, since the
     /// checks at its start only kept it from beginning over either. Its hold runs to its own
-    /// bound (`toneLength`), which the bed's fade may share.
+    /// bound (`toneLength`), beside the bed's fade's, which the bed's pause ends alone.
     func hush(_ why: String) {
         dropStale()
         for (tone, player) in players where player.isPlaying {
@@ -422,28 +425,34 @@ final class KeeperSounds {
     /// its fade-out is asked for before the wait's hold drops), never a hold taken alone: in
     /// front nothing suspends, and a sound holding alone would keep a claim change waiting for
     /// nothing.
-    private func holdUntil(_ length: Duration) {
-        if !holding {
-            audio.wantAlive(true, for: .sound)
-            holding = true
-        }
-        letting?.cancel()
+    private func holdUntil(_ length: Duration, for owner: Owner) {
+        if owned.isEmpty { audio.wantAlive(true, for: .sound) }
+        letting[owner]?.cancel()
         holdSerial += 1
         let mine = holdSerial
-        letting = Task { [sleep] in
+        owned[owner] = mine
+        letting[owner] = Task { [sleep] in
             try? await sleep(min(length, Self.bound))
-            guard !Task.isCancelled, mine == self.holdSerial else { return }
-            self.letGo("the sound is over")
+            guard !Task.isCancelled, self.owned[owner] == mine else { return }
+            self.release(owner, "the sound is over")
         }
     }
 
-    /// The sound's hold, if one stands, goes now: at the end of the reset handler, after the
-    /// speaker's own holds have.
+    /// `owner`'s part of the hold goes; the hold itself goes with the last owner's.
+    private func release(_ owner: Owner, _ why: String) {
+        letting.removeValue(forKey: owner)?.cancel()
+        guard owned.removeValue(forKey: owner) != nil, owned.isEmpty else { return }
+        AudioLog.say("the keeper's sound let go: \(why)")
+        audio.wantAlive(false, for: .sound)
+    }
+
+    /// The sound's hold, if one stands, goes now, whoever holds it: at the end of the reset
+    /// handler, after the speaker's own holds have.
     func letGo(_ why: String) {
-        letting?.cancel()
-        letting = nil
-        guard holding else { return }
-        holding = false
+        letting.values.forEach { $0.cancel() }
+        letting = [:]
+        guard !owned.isEmpty else { return }
+        owned = [:]
         AudioLog.say("the keeper's sound let go: \(why)")
         audio.wantAlive(false, for: .sound)
     }

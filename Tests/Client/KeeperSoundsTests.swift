@@ -481,7 +481,8 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count, 1, "the pause asked for other than once")
         XCTAssertTrue(rig.clock.asked.contains(KeeperSounds.bound), "the fade's hold has no bound")
         bed.currentTime = 3.2
-        rig.clock.fire()
+        // The pause alone, the bound still waiting: the fade's hold goes at the pause.
+        rig.clock.fire(KeeperSounds.parkAfter)
         await settle("the bed to be paused") { bed.pauses == 1 }
         XCTAssertFalse(bed.isPlaying)
         XCTAssertFalse(rig.sounds.holdingASound, "the fade's hold outlived the pause")
@@ -647,9 +648,34 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.working(true)
         await drain()
         XCTAssertTrue(rig.sounds.holdingASound, "cancelling the pause let go of the fade's hold")
-        rig.clock.fire()
+        // The bound alone: with no pause to end it, the fade's hold goes at its bound.
+        rig.clock.fire(KeeperSounds.bound)
         await settle("the fade's hold to go") { !rig.sounds.holdingASound }
         rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// A receipt played inside the bed's fade holds on its own deadline: the bed's pause lets
+    /// go of the fade's hold and not the receipt's, which stands, past the wait's end, until the
+    /// receipt's own length is up.
+    func testTheBedsPauseLeavesAReceiptsHold() async throws {
+        let rig = await rig(mode: .sounds)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        rig.sounds.working(false)
+        await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
+        XCTAssertTrue(rig.sounds.tool("WebSearch", path: nil), "the receipt inside the fade was not played")
+        await settle("the receipt's hold to ask for its length") { rig.clock.asked.contains(KeeperSounds.toneLength) }
+        rig.speaker.endAwaiting("turn", "the turn is done")
+        XCTAssertTrue(rig.audio.holding, "the sounds' hold went with the wait's")
+
+        rig.clock.fire(KeeperSounds.parkAfter)
+        await settle("the bed to be paused") { bed.pauses == 1 }
+        XCTAssertTrue(rig.sounds.holdingASound, "the bed's pause let go of the receipt's hold")
+        XCTAssertTrue(rig.audio.holding, "the process was let go of mid-tone")
+
+        rig.clock.fire(KeeperSounds.toneLength)
+        await settle("the receipt's hold to go") { !rig.audio.holding }
+        XCTAssertFalse(rig.sounds.holdingASound)
     }
 
     /// A sound begun with nothing held holds nothing, and a claim change under it applies at once.
@@ -796,7 +822,7 @@ final class KeeperSoundsTests: XCTestCase {
 /// own: cancelling one ends that one and no other.
 final class PausedSleep: @unchecked Sendable {
     private let lock = NSLock()
-    private var waiting: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    private var waiting: [UUID: (duration: Duration, continuation: CheckedContinuation<Void, any Error>)] = [:]
     /// Sleeps cancelled before their continuation was kept, which end as soon as it is.
     private var cancelled: Set<UUID> = []
     private var _asked: [Duration] = []
@@ -811,14 +837,14 @@ final class PausedSleep: @unchecked Sendable {
             try await withCheckedThrowingContinuation { continuation in
                 let early = lock.withLock { () -> Bool in
                     if cancelled.remove(id) != nil { return true }
-                    waiting[id] = continuation
+                    waiting[id] = (duration, continuation)
                     return false
                 }
                 if early { continuation.resume(throwing: CancellationError()) }
             }
         } onCancel: {
             let mine = lock.withLock { () -> CheckedContinuation<Void, any Error>? in
-                guard let continuation = waiting.removeValue(forKey: id) else {
+                guard let continuation = waiting.removeValue(forKey: id)?.continuation else {
                     cancelled.insert(id)
                     return nil
                 }
@@ -828,14 +854,13 @@ final class PausedSleep: @unchecked Sendable {
         }
     }
 
-    /// Every sleep waiting ends now.
-    func fire() {
-        let all = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
-            let all = Array(waiting.values)
-            waiting = [:]
-            return all
+    /// Every sleep waiting ends now, or only those asked for `duration`.
+    func fire(_ duration: Duration? = nil) {
+        let due = lock.withLock { () -> [CheckedContinuation<Void, any Error>] in
+            let ids = waiting.filter { duration == nil || $0.value.duration == duration }.map(\.key)
+            return ids.compactMap { waiting.removeValue(forKey: $0)?.continuation }
         }
-        all.forEach { $0.resume() }
+        due.forEach { $0.resume() }
     }
 }
 
