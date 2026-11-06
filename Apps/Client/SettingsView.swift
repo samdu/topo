@@ -51,7 +51,7 @@ struct SettingsView: View {
                     Toggle("Noise suppression", isOn: $noiseSuppression)
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
-                    Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. Applies from the next press. Kept on this device.")
+                    Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. While it is on, Topo's voice is quieter on the phone's speaker; headphones are unaffected. Applies from the next press. Kept on this device.")
                 }
                 Section {
                     Toggle("Earcons", isOn: $earcons)
