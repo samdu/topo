@@ -1,5 +1,6 @@
 #if os(iOS)
 import AVFoundation
+import MediaPlayer
 import UIKit
 
 /// The process-wide audio resources, counted rather than assigned: the record configuration of
@@ -120,8 +121,19 @@ final class AudioSession {
     /// and a mode changed under that unit, so an open microphone keeps the session as a hold
     /// does, and a claim change made over one waits for it to close.
     private var microphoneOpen = false
-    /// Whether the session is to be left as it is: a hold stands, or the microphone is open.
-    private var kept: Bool { holding || microphoneOpen }
+    /// True while an input is kept running past a spoken release for the call's placing
+    /// (`VoiceInput.inputKept`): its tap is on the format the session gave, so it keeps the
+    /// session as an open microphone does.
+    private var inputKept = false
+    /// Whether the session is to be left as it is: a hold stands, the microphone is open, or an
+    /// input is kept.
+    private var kept: Bool { holding || microphoneOpen || inputKept }
+    /// Told, with why, when the input kept past a release has nothing left to be kept for: the
+    /// last hold that is a turn's going (`heldForATurn` true to false), told before the speaker
+    /// hears of it and before the session is let go, so the input never runs under a session
+    /// being reconfigured or handed back; and a reply beginning to be read (`.speaking` taken),
+    /// since the input's voice unit ducks every other sound on the phone, the reply among them.
+    var endKeptInput: ((String) -> Void)?
     /// True only between a configuration that activated the session and the next reset or failure.
     private var valid = false
     private var resetObserver: NSObjectProtocol?
@@ -263,6 +275,18 @@ final class AudioSession {
         }
     }
 
+    /// Says that an input kept past a release is running, or has stopped (`VoiceInput.inputKept`).
+    /// Between the two the session is not reconfigured, as for an open microphone; the stop
+    /// applies what waited.
+    func keptInput(running: Bool) {
+        guard inputKept != running else { return }
+        inputKept = running
+        if !running {
+            clearOverride(after: "the kept input has stopped")
+            applyDeferred(after: "the kept input has stopped")
+        }
+    }
+
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
     /// first `playAndRecord` activation of a launch costs a route change, seconds of it on
     /// AirPods, and paying that at the press is what a press feeling slow is. Permission-gated,
@@ -292,10 +316,13 @@ final class AudioSession {
     func wantAlive(_ on: Bool, for who: Hold) {
         let was = holds
         let wasHolding = holding
+        let wasForATurn = heldForATurn
         if on { holds.insert(who) } else { holds.remove(who) }
         guard holds != was else { return }
         let by = holds.isEmpty ? "nobody" : holds.map { "\($0)" }.sorted().joined(separator: ", ")
         AudioLog.say("hold \(on ? "taken" : "dropped") by \(who); held by \(by)")
+        if wasForATurn, !heldForATurn { endKeptInput?("no turn is held") }
+        if on, who == .speaking { endKeptInput?("the reply is being read") }
         // Told on every claim while anything is held, not only when the answer changes: a claim
         // taken while another already stands is the moment to retry a keeper an earlier refusal
         // left down, and a hold nothing renders for is a hold on paper.
@@ -432,6 +459,31 @@ final class AudioSession {
         }
     }
 
+    /// The session as a call's placing finds it, for the line each placing logs: the call service
+    /// judges whether the person meant the call from the app's state as it is asked, so a refusal
+    /// is read against these.
+    func describePlacing(inputRunning: Bool) -> String {
+        let session = AVAudioSession.sharedInstance()
+        return Self.placing(category: session.category.rawValue, options: session.categoryOptions,
+                            mode: session.mode.rawValue, inputRunning: inputRunning,
+                            nowPlaying: MPNowPlayingInfoCenter.default().nowPlayingInfo != nil)
+    }
+
+    /// The placing's line from its facts, every field named.
+    nonisolated static func placing(category: String, options: AVAudioSession.CategoryOptions, mode: String,
+                                    inputRunning: Bool, nowPlaying: Bool) -> String {
+        let named: [(AVAudioSession.CategoryOptions, String)] = [
+            (.mixWithOthers, "mixWithOthers"), (.duckOthers, "duckOthers"),
+            (.interruptSpokenAudioAndMixWithOthers, "interruptSpokenAudioAndMixWithOthers"),
+            (.allowBluetoothHFP, "allowBluetoothHFP"), (.allowBluetoothA2DP, "allowBluetoothA2DP"),
+            (.allowAirPlay, "allowAirPlay"), (.defaultToSpeaker, "defaultToSpeaker"),
+            (.overrideMutedMicrophoneInterruption, "overrideMutedMicrophoneInterruption"),
+        ]
+        let said = named.filter { options.contains($0.0) }.map(\.1)
+        return "category \(category), options [\(said.joined(separator: ", "))], mode \(mode), "
+            + "input running \(inputRunning), now playing \(nowPlaying)"
+    }
+
     /// The session as a reply about to be read finds it: the call's phase, the mode, the voice
     /// processing it is configured for, the route and the system's output volume. Read only.
     func describeOutput() -> String {
@@ -522,7 +574,9 @@ final class AudioSession {
         }
     }
 
-    private var keptBy: String { holding ? "a hold stands" : "the microphone is open" }
+    private var keptBy: String {
+        holding ? "a hold stands" : microphoneOpen ? "the microphone is open" : "the input is kept"
+    }
 
     /// Holds auto-lock off while someone is listening or speaking; process-wide, so counted.
     func wantScreenAwake(_ on: Bool, for who: ScreenClaim) {

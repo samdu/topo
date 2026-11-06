@@ -652,6 +652,7 @@
 		F1573B90E421C2BA529308C9 /* SecretTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38D69076CBD5D984124A297F /* SecretTool.swift */; };
 		F1658B67DBE624653FE6611D /* FirstRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAA62817ACBB2D81A716AAF2 /* FirstRun.swift */; };
 		F179B6F2808ECFFAA6763959 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
+		F33A6BE10C3A6405CA0A7681 /* KeptInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD04045E8FD99A454E729BBF /* KeptInputTests.swift */; };
 		F3531D84B904269CC46D9B27 /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
 		F35756204F3DEB498BF30D91 /* accessoryCircular.json in Resources */ = {isa = PBXBuildFile; fileRef = 1FBDF863613C6427982D813B /* accessoryCircular.json */; };
 		F4010B6C30D29D40FE5B6DF3 /* WidgetDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */; };
@@ -1051,6 +1052,7 @@
 		A937031358337FDFD5743C85 /* WatchSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSurfaces.swift; sourceTree = "<group>"; };
 		AA05A8C67947D4E32E7EF7D8 /* crossing-down.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crossing-down.json"; sourceTree = "<group>"; };
 		ABF59DEA104844F9AB750862 /* accessoryInline-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "accessoryInline-light.png"; sourceTree = "<group>"; };
+		AD04045E8FD99A454E729BBF /* KeptInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeptInputTests.swift; sourceTree = "<group>"; };
 		AD09EC67E05EAE6A1F06E821 /* BarControlsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarControlsTests.swift; sourceTree = "<group>"; };
 		AD15A5AEE33677DF707FA651 /* SurfaceSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceSyncTests.swift; sourceTree = "<group>"; };
 		ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestProcessTests.swift; sourceTree = "<group>"; };
@@ -1729,6 +1731,7 @@
 				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
+				AD04045E8FD99A454E729BBF /* KeptInputTests.swift */,
 				F38D6DA5F2D24CAB99BB2FA7 /* LaunchPortsTests.swift */,
 				834457A014E7809E1A052937 /* LicenceTests.swift */,
 				3012F68FA61C9EAA2605F38B /* LoginLifeTests.swift */,
@@ -2957,6 +2960,7 @@
 				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
+				F33A6BE10C3A6405CA0A7681 /* KeptInputTests.swift in Sources */,
 				3DBFBA399C354755BB11316F /* LaunchPortsTests.swift in Sources */,
 				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
 				A5C08588714126ACE17E504A /* LogToolTests.swift in Sources */,

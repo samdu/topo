@@ -138,13 +138,17 @@ final class Seams {
 /// An input node that remembers the format each tap was installed with. The engine's own node is
 /// reclassed into this on the way out of `inputNode`: `AVAudioInputNode` cannot be constructed, and
 /// this subclass adds no storage, so the instance's layout is the one it already had.
-private final class CapturingInputNode: AVAudioInputNode {
+final class CapturingInputNode: AVAudioInputNode {
     /// The last format a tap was installed with, anywhere. The suite is serial on the main actor.
     nonisolated(unsafe) static var installed: AVAudioFormat?
+    /// The last tap block installed, anywhere: what a test calls to be the audio thread handing
+    /// the tap a buffer, which the offline engine never does by itself.
+    nonisolated(unsafe) static var tap: AVAudioNodeTapBlock?
 
     override func installTap(onBus bus: AVAudioNodeBus, bufferSize: AVAudioFrameCount,
                              format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) {
         CapturingInputNode.installed = format
+        CapturingInputNode.tap = block
         super.installTap(onBus: bus, bufferSize: bufferSize, format: format, block: block)
     }
 }

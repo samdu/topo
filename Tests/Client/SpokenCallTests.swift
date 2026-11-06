@@ -18,7 +18,6 @@ final class FakeCallSystem: CallSystem {
     private(set) var fulfilled: [CXAction] = []
     private(set) var failed: [CXAction] = []
     private(set) var replaced = 0
-    private(set) var introductions = 0
 
     struct Refused: Error {}
 
@@ -33,7 +32,6 @@ final class FakeCallSystem: CallSystem {
     }
 
     func setDelegate(_ delegate: CXProviderDelegate) { self.delegate = delegate }
-    func introduce(completion: @escaping @MainActor (Error?) -> Void) { introductions += 1 }
 
     /// Records the request and, as CallKit does for the app's own end, performs its end action
     /// on the delegate before the completion is answered.
@@ -140,6 +138,40 @@ final class SpokenCallTests: XCTestCase {
         call.start()
         call.provider(system.provider, perform: system.starts.last!)
         call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+    }
+
+    /// Every placing, a retry's included, logs the session as the call service finds it, on the
+    /// placing's own line, so a refusal on the device says which of the facts it was judged on.
+    func testEachPlacingLogsTheSessionItIsJudgedOn() async {
+        var said: [String] = []
+        var asked = 0
+        let call = SpokenCall(system: system, sleep: sleep.sleep, say: { said.append($0) })
+        call.session = {
+            asked += 1
+            return AudioSession.placing(category: "AVAudioSessionCategoryPlayAndRecord",
+                                        options: [.defaultToSpeaker, .allowBluetoothHFP],
+                                        mode: "AVAudioSessionModeVoiceChat", inputRunning: asked == 1,
+                                        nowPlaying: false)
+        }
+        call.start()
+        system.answer(0, FakeCallSystem.Refused())
+        await settle { self.sleep.waiting == 1 }
+        sleep.fire()
+        await settle { self.system.starts.count == 2 }
+        let placings = said.filter { $0.hasPrefix("call: placing") }
+        XCTAssertEqual(placings, [
+            "call: placing (category AVAudioSessionCategoryPlayAndRecord, options [allowBluetoothHFP, defaultToSpeaker], mode AVAudioSessionModeVoiceChat, input running true, now playing false)",
+            "call: placing (category AVAudioSessionCategoryPlayAndRecord, options [allowBluetoothHFP, defaultToSpeaker], mode AVAudioSessionModeVoiceChat, input running false, now playing false)",
+        ], "asked afresh at each placing")
+        call.end()
+    }
+
+    func testThePlacingLineNamesEveryField() {
+        let line = AudioSession.placing(category: "AVAudioSessionCategoryPlayback", options: [.mixWithOthers],
+                                        mode: "AVAudioSessionModeDefault", inputRunning: false, nowPlaying: true)
+        XCTAssertEqual(line, "category AVAudioSessionCategoryPlayback, options [mixWithOthers], mode AVAudioSessionModeDefault, input running false, now playing true")
+        XCTAssertTrue(AudioSession.placing(category: "c", options: [], mode: "m", inputRunning: true, nowPlaying: false)
+            .contains("options []"), "no options is said, not left out")
     }
 
     func testPlacedThenActivatedIsUp() {
@@ -435,26 +467,6 @@ final class CallWantTests: XCTestCase {
         driver.holdChanged(false)
         driver.scene(.background)
         XCTAssertEqual(system.starts.count, 1, "nothing held places none")
-    }
-
-    /// The call service looks an app up the first time it is asked anything, and a placing it
-    /// judges after the app has stopped being visible is refused: so the driver introduces Topo
-    /// in front, when it is made there and at each coming to the front, and never away.
-    @MainActor
-    func testTheDriverIntroducesTopoToTheCallServiceInFront() {
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        let center = NotificationCenter()
-        let driver = SpokenCallDriver(call: call, enabled: { true }, center: center, initial: .active)
-        XCTAssertEqual(system.introductions, 1, "made in front")
-        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
-        XCTAssertEqual(system.introductions, 1, "the background and the way to the front introduce nothing")
-        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
-        XCTAssertEqual(system.introductions, 2, "each coming to the front")
-        let away = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
-        XCTAssertEqual(system.introductions, 2, "a driver made in the background introduces nothing")
-        withExtendedLifetime((driver, away)) {}
     }
 
     /// A cue's hold alone places no call behind the lock, and keeps one already up: a lock as a
