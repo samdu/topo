@@ -168,9 +168,7 @@ struct TopoApp: App {
         // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
         speaker.attach(call)
-        call.session = { [weak audio, weak voice] in
-            audio?.describePlacing(inputRunning: voice?.inputRunning ?? false) ?? "no session"
-        }
+        call.judged(on: audio, voice: voice)
         let callDriver = SpokenCallDriver(call: call)
         speaker.onHold = { [weak audio] in callDriver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
         speaker.onMicrophone = { callDriver.microphoneChanged($0) }

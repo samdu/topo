@@ -329,6 +329,57 @@ final class KeptInputTests: XCTestCase {
         rig.speaker.stop()
     }
 
+    /// A press on the hands-free microphone closes it and sends: that release keeps its input
+    /// the same way, and with the setting off it does not.
+    func testAHandsFreeCloseKeepsItsInput() async {
+        for calls in [true, false] {
+            let rig = await rig()
+            // A tap opens the microphone hands free.
+            await rig.press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+                                    speaks: true, calls: { calls }) { _ in }?.value
+            await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+                                    speaks: true, calls: { calls }) { _ in }?.value
+            XCTAssertTrue(rig.voice.handsFree, "the tap left the microphone open")
+            utterance(into: rig.voice.sink)
+            await rig.press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+                                    speaks: true, calls: { calls }) { text in
+                rig.sent.add(text)
+                _ = rig.speaker.awaitReply("a-turn", readAloud: true)
+            }?.value
+            XCTAssertEqual(rig.sent.texts, ["the weather in Bath"], "calls \(calls)")
+            XCTAssertFalse(rig.voice.listening, "calls \(calls)")
+            XCTAssertEqual(rig.voice.inputKept, calls, "calls \(calls)")
+            XCTAssertEqual(rig.voice.inputRunning, calls, "calls \(calls): read off the engine")
+            XCTAssertTrue(rig.watch.underInput.isEmpty, "calls \(calls): \(rig.watch.underInput)")
+            rig.voice.cancel()
+            rig.speaker.stop()
+        }
+    }
+
+    /// The line each placing logs is the app's own wiring (`SpokenCall.judged`) read at the
+    /// placing: the session as it stands and the kept input running, every field named.
+    func testThePlacingLogsTheSessionAndTheRunningInput() async {
+        let rig = await rig(isActive: false)
+        let system = FakeCallSystem()
+        var said: [String] = []
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep, say: { said.append($0) })
+        call.judged(on: rig.audio, voice: rig.voice)
+        rig.speaker.attach(call)
+        await say(rig)
+        XCTAssertTrue(rig.voice.inputRunning)
+        XCTAssertTrue(said.filter { $0.hasPrefix("call: placing") }.isEmpty, "nothing placed yet")
+        call.start()
+        let placings = said.filter { $0.hasPrefix("call: placing") }
+        XCTAssertEqual(placings, ["call: placing (\(rig.audio.describePlacing(inputRunning: true)))"])
+        let line = placings.first ?? ""
+        for field in ["category ", "options [", "mode ", "input running true", "now playing "] {
+            XCTAssertTrue(line.contains(field), "\(field) in \(line)")
+        }
+        call.provider(system.provider, perform: system.starts.last!)
+        call.end()
+        rig.speaker.stop()
+    }
+
     func testTheKeptInputStopsAtItsBound() async {
         let rig = await rig()
         let bound = ManualSleep()

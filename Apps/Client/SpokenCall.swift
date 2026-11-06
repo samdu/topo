@@ -62,6 +62,13 @@ final class SpokenCall: NSObject {
     /// the person meant it, and the app recording is what it judges by when the app is no longer
     /// visible, so a refusal is read against this.
     var session: () -> String = { "" }
+
+    /// Each placing's line read off the session and the microphone's engine as they stand.
+    func judged(on audio: AudioSession, voice: VoiceInput) {
+        session = { [weak audio, weak voice] in
+            audio?.describePlacing(inputRunning: voice?.inputRunning ?? false) ?? "no session"
+        }
+    }
     /// Placings of this call the system refused so far: a refusal is tried again, twice, before
     /// the call fails.
     private var refusals = 0
