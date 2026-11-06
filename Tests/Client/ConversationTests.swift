@@ -990,7 +990,7 @@ extension ConversationTests {
 
     func testTheGoAheadSoundsAtTheStartAndAfterATurnOnceNothingIsOnItsWay() async {
         waitOnSend = true
-        let detector = ScriptedDetector([1: .start(4_096), 2: .start(8_000), 4: .end(16_000)])
+        let detector = ScriptedDetector([1: .start(8_000), 2: .start(12_000), 4: .end(20_000)])
         let (conversation, voice, speaker) = await begun(detector, sounding: true)
         defer { conversation.stop("test", sending: false) }
         // The detector's resets at the start and the resume land before anything is heard.
