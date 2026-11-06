@@ -481,7 +481,8 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count, 1, "the pause asked for other than once")
         XCTAssertTrue(rig.clock.asked.contains(KeeperSounds.bound), "the fade's hold has no bound")
         bed.currentTime = 3.2
-        // The pause alone, the bound still waiting: the fade's hold goes at the pause.
+        // The pause alone, the bound still waiting: the fade's hold goes at the pause. Kills the
+        // mutant where the pause lets go of nothing and the bound alone ends the hold.
         rig.clock.fire(KeeperSounds.parkAfter)
         await settle("the bed to be paused") { bed.pauses == 1 }
         XCTAssertFalse(bed.isPlaying)
@@ -648,25 +649,31 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.working(true)
         await drain()
         XCTAssertTrue(rig.sounds.holdingASound, "cancelling the pause let go of the fade's hold")
-        // The bound alone: with no pause to end it, the fade's hold goes at its bound.
+        // The bound alone: with no pause to end it, the fade's hold goes at its bound. Kills the
+        // mutant where the fade's deadline never lets go.
         rig.clock.fire(KeeperSounds.bound)
         await settle("the fade's hold to go") { !rig.sounds.holdingASound }
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
-    /// A receipt played inside the bed's fade holds on its own deadline: the bed's pause lets
-    /// go of the fade's hold and not the receipt's, which stands, past the wait's end, until the
-    /// receipt's own length is up.
+    /// A receipt played inside the bed's fade holds on its own deadline. Under `sounds` a wait
+    /// plays the bed; the setting goes to `receipts`, and a second wait fades it; a WebSearch
+    /// receipt sounds inside the fade, and both waits end before the pause. The pause lets go of
+    /// the fade's hold and not the receipt's, which stands until the receipt's own length is up.
+    /// Kills the mutant where the pause lets go of the whole hold (`letGo` in `park`).
     func testTheBedsPauseLeavesAReceiptsHold() async throws {
         let rig = await rig(mode: .sounds)
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        _ = rig.speaker.awaitReply("first", readAloud: true)
         let bed = try XCTUnwrap(rig.players.bed)
-        rig.sounds.working(false)
+        rig.defaults.set(WorkingSounds.Mode.receipts.rawValue, forKey: WorkingSounds.key)
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        XCTAssertEqual(bed.fades.last?.to, 0, "the second wait under receipts did not fade the bed")
         await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
         XCTAssertTrue(rig.sounds.tool("WebSearch", path: nil), "the receipt inside the fade was not played")
         await settle("the receipt's hold to ask for its length") { rig.clock.asked.contains(KeeperSounds.toneLength) }
-        rig.speaker.endAwaiting("turn", "the turn is done")
-        XCTAssertTrue(rig.audio.holding, "the sounds' hold went with the wait's")
+        rig.speaker.endAwaiting("first", "the turn is done")
+        rig.speaker.endAwaiting("second", "the turn is done")
+        XCTAssertTrue(rig.audio.holding, "the sounds' hold went with the waits'")
 
         rig.clock.fire(KeeperSounds.parkAfter)
         await settle("the bed to be paused") { bed.pauses == 1 }
