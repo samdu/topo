@@ -1111,6 +1111,30 @@ extension ConversationTests {
         speaker.endAwaiting("spoken-2", "the test is done")
     }
 
+    /// A wait that ends while a chunk with nothing said in it is still with the detector has its
+    /// go-ahead paid once the detector has judged it.
+    func testAWaitEndingOverSilenceNotYetJudgedPaysTheGoAheadOnceItIs() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the first turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again") { voice.listening }
+        await drain()
+        detector.script([:])
+        detector.hold(at: 0)
+        utterance(into: voice.sink)
+        await settle("a chunk with the detector") { detector.holding }
+        let before = played
+        speaker.endAwaiting("spoken-1", "a reply nobody reads")
+        await drain()
+        XCTAssertEqual(played, before, "the go-ahead sounded over a chunk the detector had yet to judge")
+        detector.release()
+        await settle("the go-ahead once it is judged") { self.played == before + [.speak] }
+    }
+
     /// A receipt sounded while the onset of words begun before it is still with the detector
     /// takes nothing of them.
     func testAReceiptOverAnOnsetNotYetJudgedTakesNothingOfIt() async {
