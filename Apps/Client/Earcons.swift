@@ -112,6 +112,10 @@ final class Earcons {
     private var holding = false
     private var serial = 0
     private var bounding: Task<Void, Never>?
+    /// When the last cue began, for the go-ahead, which a cue that has just sounded stands in for.
+    private var lastBegan: ContinuousClock.Instant?
+    /// The clock that is read; a suite moves its own.
+    var now: @MainActor () -> ContinuousClock.Instant = { .now }
     #if DEBUG
     /// Every cue played, in order, for a test.
     private(set) var played: [Cue] = []
@@ -184,6 +188,7 @@ final class Earcons {
             return false
         }
         AudioLog.say("earcon \(cue) (\(route()))")
+        lastBegan = now()
         #if DEBUG
         played.append(cue)
         #endif
@@ -193,6 +198,13 @@ final class Earcons {
             self.ended(mine, "its bound passed")
         }
         return true
+    }
+
+    /// Whether a cue began within `span`: the moment's receipt, which a go-ahead would say twice
+    /// (Daphne's `Earcons.recent`, at her `earconReceipt`).
+    func recent(_ span: Duration) -> Bool {
+        guard let lastBegan else { return false }
+        return now() - lastBegan < span
     }
 
     /// A microphone is opening (`Speaker.microphoneOpening`): every cue still sounding is

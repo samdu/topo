@@ -128,6 +128,9 @@ final class ConversationTests: XCTestCase {
     private var seams: Seams!
     private var permission = PermissionGate()
     private var spoken = HeldVoice()
+    private var sounds: KeeperSounds?
+    private var tones = WorkingRecorder()
+    private var cues = CueRecorder()
 
     override func tearDown() {
         UIApplication.shared.isIdleTimerDisabled = false
@@ -148,7 +151,8 @@ final class ConversationTests: XCTestCase {
     /// The app's wiring over the seams: the speaker tells the conversation the call's moments,
     /// the microphone asks it at an interruption, and the chat's send is installed.
     private func make(detector: ScriptedDetector = ScriptedDetector(), endpoint: Endpoint? = nil,
-                      sends: Bool = true, deafAfter: TimeInterval = 3_600) async -> (Conversation, VoiceInput, Speaker) {
+                      sends: Bool = true, deafAfter: TimeInterval = 3_600,
+                      sounding: Bool = false) async -> (Conversation, VoiceInput, Speaker) {
         let seams = Seams()
         self.seams = seams
         let permission = permission
@@ -160,8 +164,22 @@ final class ConversationTests: XCTestCase {
         let voice = Voice(engine: spoken)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
+        // The keeper's sounds and the cues, on players of the suite's, when a test asks for them.
+        var earcons: Earcons?
+        if sounding {
+            let name = "topo.tests.conversation.\(UUID().uuidString)"
+            addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+            let defaults = UserDefaults(suiteName: name)!
+            defaults.set(true, forKey: EarconsSetting.key)
+            let tones = tones, cues = cues
+            sounds = KeeperSounds(audio: audio, defaults: defaults, bundle: Bundle(for: KeeperSounds.self),
+                                  makePlayer: { tones.make($0) })
+            earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),
+                              makePlayer: { cues.make($0) }, tail: { .zero })
+        }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
-                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
+                              sounds: sounds, earcons: earcons)
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: gate)
         let nowhere = URL(fileURLWithPath: "/dev/null")
@@ -389,8 +407,8 @@ final class ConversationTests: XCTestCase {
     // MARK: - The end, every way
 
     private func begun(_ detector: ScriptedDetector = ScriptedDetector(),
-                       deafAfter: TimeInterval = 3_600) async -> (Conversation, VoiceInput, Speaker) {
-        let made = await make(detector: detector, deafAfter: deafAfter)
+                       deafAfter: TimeInterval = 3_600, sounding: Bool = false) async -> (Conversation, VoiceInput, Speaker) {
+        let made = await make(detector: detector, deafAfter: deafAfter, sounding: sounding)
         await tap(made.1)
         leave()
         placeAndActivate(made.0)
@@ -955,3 +973,86 @@ final class ConversationTests: XCTestCase {
         assertEndedOnce(conversation)
     }
 }
+
+// MARK: - The conversation's tones
+
+/// Daphne's open-mic tones, on the conversation: the onset's `ack` once an utterance opens, the
+/// go-ahead owed at the conversation's start, after a reply and at an unmute and paid as the
+/// microphone opens again with nothing on its way, yielding to a cue that has just said it, and
+/// the gate shut under a tone so the ear does not take it for speech.
+extension ConversationTests {
+    private var played: [KeeperSounds.Tone] { sounds?.played ?? [] }
+
+    func testTheOnsetSoundsTheAckOnceAndTheGoAheadIsPaidAsTheMicrophoneOpensAgain() async {
+        let detector = ScriptedDetector([0: .start(0), 2: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        // The detector's resets at the start and the resume land before anything is heard.
+        await drain()
+        XCTAssertTrue(speaker.conversing)
+        XCTAssertEqual(played, [], "a tone before anything was heard: the go-ahead is paid as the microphone opens again")
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        XCTAssertEqual(played.first, .ack)
+        await settle("the microphone open again") { voice.listening }
+        await settle("the go-ahead") { self.played.count == 2 }
+        XCTAssertEqual(played, [.ack, .speak], "an utterance's second onset sounded a second ack, or the go-ahead was not paid")
+        await drain()
+        XCTAssertEqual(played, [.ack, .speak], "the go-ahead was paid twice")
+        conversation.stop("test", sending: false)
+        XCTAssertFalse(speaker.conversing)
+    }
+
+    func testAReplyReadOwesTheGoAheadForTheMicrophoneThatOpensAfterIt() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        // The detector's resets at the start and the resume land before anything is heard.
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the go-ahead") { self.played == [.ack, .speak] }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the microphone closed for the reply") { !voice.listening }
+        speaker.stop()
+        await settle("the microphone open again") { voice.listening }
+        await settle("the go-ahead after the reply") { self.played == [.ack, .speak, .speak] }
+    }
+
+    func testAnUnmuteOwesTheGoAheadAndACueThatHasJustSoundedStandsInForIt() async {
+        let (conversation, voice, speaker) = await begun(sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        conversation.call(.muted(true))
+        await settle("the microphone closed") { !voice.listening }
+        conversation.call(.muted(false))
+        await settle("the go-ahead at the unmute") { self.played == [.speak] }
+
+        conversation.call(.muted(true))
+        await settle("the microphone closed") { !voice.listening }
+        XCTAssertTrue(speaker.earcons?.play(.listening) == true)
+        conversation.call(.muted(false))
+        await settle("the microphone open again") { voice.listening }
+        await drain()
+        XCTAssertEqual(played, [.speak], "the go-ahead sounded over the cue that had just said it")
+    }
+
+    /// The go-ahead shuts the gate: the ear hearing its tone, a third of a second (longer than
+    /// the minimum), sends nothing, and opens no turn of its own.
+    func testTheGoAheadShutsTheGateSoItsToneIsNoUtterance() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, _) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        // The detector's resets at the start and the resume land before anything is heard.
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        detector.script([0: .start(0), 1: .end(6_000)])
+        await settle("the go-ahead") { self.played == [.ack, .speak] }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the chunks fed") { detector.chunks >= 5 }
+        await drain()
+        XCTAssertEqual(sent.count, 1, "the go-ahead's own tone was sent as a turn")
+        XCTAssertEqual(played, [.ack, .speak], "the tone's onset sounded an ack")
+    }
+}
+

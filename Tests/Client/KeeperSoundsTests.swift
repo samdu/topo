@@ -69,7 +69,7 @@ final class WorkingRecorder {
 /// and only while a hold stands, so a typed turn is silent; the bed only under `sounds`, in from
 /// the release and out at the reply's first frame, paused not stopped; off goes through in every
 /// mode; a value kept that is no mode reads as `receipts`; nothing on a session that will not
-/// activate; nothing into an open microphone; a hold that extends a standing one and never holds
+/// activate; a hold that extends a standing one and never holds
 /// alone; and the players dropped, not rebuilt, at a reset.
 @MainActor
 final class KeeperSoundsTests: XCTestCase {
@@ -87,6 +87,8 @@ final class KeeperSoundsTests: XCTestCase {
         let center: NotificationCenter
         let defaults: UserDefaults
         let clock: PausedSleep
+        let earcons: Earcons
+        let cues: CueRecorder
     }
 
     private func settle(_ what: String, file: StaticString = #filePath, line: UInt = #line,
@@ -127,15 +129,22 @@ final class KeeperSoundsTests: XCTestCase {
         let voice = Voice(engine: ScriptedVoice())
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
+        let cues = CueRecorder()
+        let earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),
+                              makePlayer: { cues.make($0) }, tail: { .zero })
         let speaker = Speaker(audio: audio, voice: voice, center: speakerCenter ?? center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
-                              heard: heard, sounds: sounds)
+                              heard: heard, sounds: sounds, earcons: earcons)
         return Rig(speaker: speaker, sounds: sounds, players: players, seams: seams, audio: audio,
-                   center: center, defaults: defaults, clock: clock)
+                   center: center, defaults: defaults, clock: clock, earcons: earcons, cues: cues)
     }
 
     private func toolUse(_ name: String, path: String? = nil) -> GuestActivity {
         .update(.event(.toolUse(name: name, path: path)))
+    }
+
+    private func toolResult(isError: Bool = false) -> GuestActivity {
+        .update(.event(.toolResult(isError: isError, text: "")))
     }
 
     private func renderUntil(_ rig: Rig, _ what: String, file: StaticString = #filePath, line: UInt = #line,
@@ -154,8 +163,9 @@ final class KeeperSoundsTests: XCTestCase {
 
     // MARK: - The receipts
 
-    /// Each class the mascot can name sounds its tone, over the bundled file, while a wait stands;
-    /// a tool with no class sounds nothing. Under `receipts` no bed is made.
+    /// Each tool sounds its class's tone, as Daphne's voice channel classes it (`classify.ts`),
+    /// over the bundled file, while a wait stands: the reads, the file writes, the delegates, and
+    /// `act` for everything else. Under `receipts` no bed is made.
     func testEachToolClassSoundsItsToneWhileAWaitStands() async {
         let rig = await rig()
         _ = rig.speaker.awaitReply("turn", readAloud: true)
@@ -165,24 +175,132 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.follow(toolUse("WebSearch"))
         rig.sounds.follow(toolUse("Bash"))
         rig.sounds.follow(toolUse("Edit", path: "notes/today.md"))
-        rig.sounds.follow(toolUse("Edit", path: "Sources/App.swift"))
-        rig.sounds.follow(toolUse("TodoWrite"))
-        XCTAssertEqual(rig.sounds.played, [.read, .act, .write, .act])
+        rig.sounds.follow(toolUse("Read"))
+        rig.sounds.follow(toolUse("mcp__home__lights"))
+        XCTAssertEqual(rig.sounds.played, [.read, .act, .write, .read, .act])
         XCTAssertEqual(rig.players.names, ["bloop_read", "bloop_act", "bloop_write"], "a tone's player was made twice, or the bed under receipts")
-        XCTAssertEqual(rig.players.players.map(\.plays), [1, 2, 1])
+        XCTAssertEqual(rig.players.players.map(\.plays), [2, 2, 1])
         XCTAssertNil(rig.players.bed)
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
-    /// The calendar is an act, like building; thinking and idle are nothing.
-    func testTheClassesMapToTheTones() {
-        XCTAssertEqual(KeeperSounds.tone(for: .searching), .read)
-        XCTAssertEqual(KeeperSounds.tone(for: .building), .act)
-        XCTAssertEqual(KeeperSounds.tone(for: .calendar), .act)
-        XCTAssertEqual(KeeperSounds.tone(for: .writing), .write)
-        XCTAssertNil(KeeperSounds.tone(for: .thinking))
-        XCTAssertNil(KeeperSounds.tone(for: .idle))
-        XCTAssertNil(KeeperSounds.tone(for: nil))
+    /// The table is `classify.ts`'s, tool for tool, with `act` for anything it does not name.
+    func testTheToolsMapToTheirClasses() {
+        for name in ["Read", "Grep", "Glob", "LS", "ToolSearch", "WebFetch", "WebSearch", "NotebookRead", "ListAgents", "TaskOutput"] {
+            XCTAssertEqual(KeeperSounds.tone(forTool: name), .read, name)
+        }
+        for name in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+            XCTAssertEqual(KeeperSounds.tone(forTool: name), .write, name)
+        }
+        for name in ["Agent", "Task", "Workflow"] {
+            XCTAssertEqual(KeeperSounds.tone(forTool: name), .delegate, name)
+        }
+        for name in ["Bash", "TodoWrite", "mcp__x__y", "Skill", ""] {
+            XCTAssertEqual(KeeperSounds.tone(forTool: name), .act, name)
+        }
+    }
+
+    /// A delegate sounds as it is called and `return` as its result comes back, results paired
+    /// to calls in the order they were made; a result Claude Code marked an error sounds `error`,
+    /// whatever its call; a result before any call sounds nothing of a call's.
+    func testADelegateReturnsAndAFailedToolSoundsTheError() async {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.follow(toolResult())
+        XCTAssertEqual(rig.sounds.played, [], "a result with no call sounded")
+        rig.sounds.follow(toolUse("Read"))
+        rig.sounds.follow(toolUse("Agent"))
+        rig.sounds.follow(toolResult())
+        XCTAssertEqual(rig.sounds.played, [.read, .delegate], "the read's result sounded as the delegate's return")
+        rig.sounds.follow(toolResult())
+        XCTAssertEqual(rig.sounds.played, [.read, .delegate, .return])
+        rig.sounds.follow(toolUse("Bash"))
+        rig.sounds.follow(toolResult(isError: true))
+        XCTAssertEqual(rig.sounds.played, [.read, .delegate, .return, .act, .error])
+        XCTAssertEqual(rig.players.names, ["bloop_read", "bloop_delegate", "bloop_return", "bloop_act", "bloop_error"])
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// The calls still owed a result go with their turn: a delegate whose result never came back
+    /// does not take the next turn's first result for its own.
+    func testTheCallsOwedGoWithTheirTurn() async {
+        for end in [GuestActivity.gone(answering: []), .began(pid: nil, answering: [])] {
+            let rig = await rig()
+            _ = rig.speaker.awaitReply("turn", readAloud: true)
+            rig.sounds.follow(toolUse("Agent"))
+            rig.sounds.follow(end)
+            rig.sounds.follow(toolUse("Read"))
+            rig.sounds.follow(toolResult())
+            XCTAssertEqual(rig.sounds.played, [.delegate, .read], "\(end): a call of the turn before was answered by this one's result")
+            rig.speaker.endAwaiting("turn", "the test is done")
+        }
+    }
+
+    /// Over Topo's voice and into an open microphone a receipt sounds, as Daphne's do; the gate
+    /// of the microphone it sounds into is told its length.
+    func testAReceiptSoundsOverTheVoiceAndIntoAnOpenMicrophone() async {
+        let rig = await rig()
+        var told: [KeeperSounds.Tone] = []
+        rig.sounds.toneSounded = { tone, length in
+            told.append(tone)
+            XCTAssertEqual(length, KeeperSounds.toneLength)
+        }
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.voiceSpeaking = { true }
+        rig.sounds.follow(toolUse("WebSearch"))
+        rig.sounds.voiceSpeaking = { false }
+        rig.sounds.microphoneOpen = { true }
+        rig.sounds.follow(toolUse("Bash"))
+        XCTAssertEqual(rig.sounds.played, [.read, .act])
+        XCTAssertEqual(told, [.read, .act])
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// The conversation's own tones — the onset's `ack` and the go-ahead — sound with no turn's
+    /// hold, since the call or the front keeps the process running under them, and take none of
+    /// their own; the queued bleep is a receipt's and sounds only under one. Off sounds none.
+    func testTheConversationsTonesSoundWithoutATurnsHoldAndHoldNothing() async {
+        let rig = await rig()
+        try? rig.audio.ensureActive()
+        XCTAssertFalse(rig.audio.holding)
+        XCTAssertTrue(rig.sounds.heard())
+        XCTAssertTrue(rig.sounds.goAhead())
+        XCTAssertFalse(rig.sounds.queued(), "the queued bleep sounded with no turn on its way")
+        XCTAssertEqual(rig.sounds.played, [.ack, .speak])
+        XCTAssertEqual(rig.players.names, ["bloop_ack", "bloop_speak"])
+        XCTAssertFalse(rig.audio.holding, "a conversation's tone held the process by itself")
+        XCTAssertFalse(rig.sounds.holdingASound)
+
+        rig.defaults.set(WorkingSounds.Mode.off.rawValue, forKey: WorkingSounds.key)
+        XCTAssertFalse(rig.sounds.heard())
+        XCTAssertFalse(rig.sounds.goAhead())
+        XCTAssertEqual(rig.sounds.played, [.ack, .speak])
+    }
+
+    /// A press released with words while a spoken turn is still on its way bleeps, and that is
+    /// its one sound: `sent` gives way. With nothing on its way, or nothing heard, or the sounds
+    /// off, the earcons say it as they did.
+    func testAPressHeardBehindATurnOnItsWayBleepsInPlaceOfSent() async {
+        let rig = await rig(earcons: true)
+        try? rig.audio.ensureActive()
+        rig.speaker.sounded(release: "and the kitchen")
+        XCTAssertEqual(rig.sounds.played, [], "a bleep with no turn on its way")
+        XCTAssertEqual(rig.earcons.played, [.sent])
+
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"])
+        rig.speaker.sounded(release: "and the kitchen")
+        XCTAssertEqual(rig.sounds.played, [.queue])
+        XCTAssertEqual(rig.earcons.played, [.sent], "sent sounded beside the bleep")
+        rig.speaker.sounded(release: "")
+        XCTAssertEqual(rig.sounds.played, [.queue], "a release that heard nothing bleeped")
+        XCTAssertEqual(rig.earcons.played, [.sent, .failed])
+
+        rig.defaults.set(WorkingSounds.Mode.off.rawValue, forKey: WorkingSounds.key)
+        rig.speaker.sounded(release: "and the hall")
+        XCTAssertEqual(rig.sounds.played, [.queue])
+        XCTAssertEqual(rig.earcons.played, [.sent, .failed, .sent], "with the sounds off the release went unsaid")
+        rig.speaker.endAwaiting("turn", "the test is done")
     }
 
     /// Review Focus 9: a typed turn holds nothing, so its tools sound nothing and its failure
@@ -256,61 +374,61 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(WorkingSounds.mode(defaults), .off)
     }
 
-    /// No receipt sounds over Topo's own voice: a tool reached for after the reading began, with
-    /// a second wait keeping the hold, is silent; one after the reading ends sounds again.
-    func testNoReceiptSoundsOverTheVoice() async throws {
+    /// A receipt sounds over Topo's own voice, as Daphne's Keeper's do: a tool reached for while
+    /// the reading goes on, with a second wait keeping the hold, sounds, and one sounding as the
+    /// reply's first frame is scheduled plays on.
+    func testAReceiptSoundsOverTheVoice() async throws {
         let rig = await rig(heard: .dataRendered)
         _ = rig.speaker.awaitReply("first", readAloud: true)
         _ = rig.speaker.awaitReply("second", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
         XCTAssertTrue(rig.speaker.speak("Paris.", answering: "first"))
+        await settle("the reply to start") { rig.speaker.report.started }
+        XCTAssertTrue(act.isPlaying, "a receipt was stopped at the reply's first frame")
+        XCTAssertEqual(act.pauses, 0)
         XCTAssertTrue(rig.speaker.speaking)
-        rig.sounds.follow(toolUse("Bash"))
-        XCTAssertEqual(rig.sounds.played, [], "a receipt sounded over the voice")
+        rig.sounds.follow(toolUse("WebSearch"))
+        XCTAssertEqual(rig.sounds.played, [.act, .read], "a receipt was refused over the voice")
         try await renderUntil(rig, "the reply to be made") { rig.speaker.report.finished }
-        await settle("the reply to end") { !rig.speaker.speaking }
-        rig.sounds.follow(toolUse("Bash"))
-        XCTAssertEqual(rig.sounds.played, [.act])
         rig.speaker.endAwaiting("second", "the test is done")
     }
 
-    /// No receipt is played into an open microphone: a hands-free session listening while the
-    /// turn it sent is worked on (a press of its own ends every wait, so the bed and the receipts
-    /// go with them). The speaker tells the sounds as the press's call returns and as it closes.
-    func testNoReceiptIsPlayedIntoAnOpenMicrophone() async {
+    /// A receipt sounds into an open microphone, as Daphne's do, and one sounding as a microphone
+    /// opens plays on: the conversation's gate is what keeps the ear from taking it for speech.
+    /// Only the keeper's rule holds it back: a press over the wait ends it, the last receipt's own
+    /// hold alone stands, and a receipt under nothing but that would be the receipts keeping the
+    /// process alive by themselves.
+    func testAReceiptSoundsIntoAnOpenMicrophoneButNotUnderItsOwnHoldAlone() async throws {
         let rig = await rig()
         var open = false
         rig.speaker.microphoneOpen = { open }
         _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.sounds.follow(toolUse("Bash"))
+        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
         open = true
-        rig.speaker.microphoneOpened(counted: false)
+        rig.speaker.microphoneListening()
+        XCTAssertTrue(act.isPlaying, "a receipt was stopped as a microphone opened")
         rig.sounds.follow(toolUse("WebSearch"))
-        XCTAssertEqual(rig.sounds.played, [], "a receipt was played into an open microphone")
-        XCTAssertTrue(rig.players.players.isEmpty)
+        XCTAssertEqual(rig.sounds.played, [.act, .read], "a receipt was refused into an open microphone")
         open = false
         rig.speaker.microphoneClosed()
-        rig.sounds.follow(toolUse("Bash"))
-        XCTAssertEqual(rig.sounds.played, [.act])
 
-        // A press over the wait ends it: only the last receipt's own hold stands, and a receipt
-        // under nothing but that would be the receipts keeping the process alive by themselves.
         rig.speaker.microphoneOpening()
         XCTAssertTrue(rig.speaker.awaiting.isEmpty)
         XCTAssertTrue(rig.audio.holding, "the receipt's hold went with the wait's")
         XCTAssertFalse(rig.audio.heldForATurn)
-        // The press opened nothing (a refusal, say): the microphone is closed again, and a tool
-        // reached for now meets only the receipt's own hold.
         rig.speaker.microphoneOpened(counted: true)
         rig.sounds.follow(toolUse("Bash"))
-        XCTAssertEqual(rig.sounds.played, [.act], "a receipt sounded under nothing but a receipt's hold")
+        XCTAssertEqual(rig.sounds.played, [.act, .read], "a receipt sounded under nothing but a receipt's hold")
         await settle("the hold's length to be asked for") { rig.clock.asked.contains(KeeperSounds.toneLength) }
         rig.clock.fire()
         await settle("the receipt's hold to go") { !rig.audio.holding }
     }
 
-    /// A microphone opened with no press telling the speaker is still one no receipt is played
-    /// into, since the sounds ask the speaker at each one; and the bed dips once the watch on the
-    /// microphone tells the speaker it is listening.
-    func testNoReceiptIsPlayedIntoAMicrophoneNoPressOpened() async throws {
+    /// The bed dips once the watch on the microphone tells the speaker it is listening, and comes
+    /// back up as it closes.
+    func testTheBedDipsUnderAMicrophoneNoPressOpened() async throws {
         let rig = await rig(mode: .sounds)
         var open = false
         rig.speaker.microphoneOpen = { open }
@@ -318,61 +436,12 @@ final class KeeperSoundsTests: XCTestCase {
         let bed = try XCTUnwrap(rig.players.bed)
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
         open = true
-        rig.sounds.follow(toolUse("WebSearch"))
-        XCTAssertEqual(rig.sounds.played, [], "a receipt was played into a microphone no press opened")
         rig.speaker.microphoneListening()
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.duckedVolume, "the bed did not dip under the microphone")
         open = false
         rig.speaker.microphoneClosed()
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
-        rig.sounds.follow(toolUse("Bash"))
-        XCTAssertEqual(rig.sounds.played, [.act])
         rig.speaker.endAwaiting("turn", "the test is done")
-    }
-
-    /// A receipt still sounding when a microphone opens is stopped, whether a press opens it or
-    /// the watch on the microphone sees it listening: the check at a receipt's start only kept
-    /// it from beginning into one.
-    func testAReceiptStillSoundingIsStoppedWhenAMicrophoneOpens() async throws {
-        let rig = await rig()
-        var open = false
-        rig.speaker.microphoneOpen = { open }
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.sounds.follow(toolUse("Bash"))
-        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
-        XCTAssertTrue(act.isPlaying)
-        rig.speaker.microphoneOpening()
-        XCTAssertFalse(act.isPlaying, "a receipt played on into a microphone a press is opening")
-        XCTAssertEqual(act.pauses, 1)
-        rig.speaker.microphoneOpened(counted: true)
-
-        _ = rig.speaker.awaitReply("again", readAloud: true)
-        rig.sounds.follow(toolUse("Bash"))
-        XCTAssertTrue(act.isPlaying)
-        open = true
-        rig.speaker.microphoneListening()
-        XCTAssertFalse(act.isPlaying, "a receipt played on into a microphone no press opened")
-        XCTAssertEqual(act.pauses, 2)
-        open = false
-        rig.speaker.microphoneClosed()
-        rig.speaker.endAwaiting("again", "the test is done")
-    }
-
-    /// A receipt still sounding when the reply's first frame is scheduled is stopped, so the
-    /// voice is not heard over a tone.
-    func testAReceiptStillSoundingIsStoppedAtTheReplysFirstFrame() async throws {
-        let rig = await rig(heard: .dataRendered)
-        _ = rig.speaker.awaitReply("first", readAloud: true)
-        _ = rig.speaker.awaitReply("second", readAloud: true)
-        rig.sounds.follow(toolUse("Bash"))
-        let act = try XCTUnwrap(rig.players.players.first { $0.name == "bloop_act" })
-        XCTAssertTrue(act.isPlaying)
-        XCTAssertTrue(rig.speaker.speak("Paris.", answering: "first"))
-        await settle("the reply to start") { rig.speaker.report.started }
-        XCTAssertFalse(act.isPlaying, "a receipt played on over the reply")
-        XCTAssertEqual(act.pauses, 1)
-        try await renderUntil(rig, "the reply to be made") { rig.speaker.report.finished }
-        rig.speaker.endAwaiting("second", "the test is done")
     }
 
     /// A sound on a session that is not live is refused and configures nothing to get one: no
@@ -381,7 +450,7 @@ final class KeeperSoundsTests: XCTestCase {
     /// background; a sound on a session nothing has activated yet is refused the same way.
     func testASoundOnASessionThatIsNotLiveIsRefusedAndConfiguresNothing() async {
         let rig = await rig(mode: .sounds, isActive: false)
-        XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil), "a receipt played on a session nothing had activated")
+        XCTAssertFalse(rig.sounds.tool("WebSearch"), "a receipt played on a session nothing had activated")
         rig.audio.wantRecord(true, for: .warm)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.audio.wantRecord(false, for: .warm)
@@ -390,7 +459,7 @@ final class KeeperSoundsTests: XCTestCase {
         await drain()
         rig.seams.forget()
 
-        XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil))
+        XCTAssertFalse(rig.sounds.tool("WebSearch"))
         XCTAssertEqual(rig.sounds.played, [])
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile], "a player was made on a session that is not live")
         // The bed somehow still going: the wait's end fades it, and takes no hold for the fade,
@@ -523,6 +592,19 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(bed.currentTime, 3.2, "the bed was started from the top")
         XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
         rig.speaker.stop()
+    }
+
+    /// Never under a sentence: a wait taken while Topo is reading starts no bed.
+    func testAWaitTakenWhileTopoIsReadingStartsNoBed() async {
+        let rig = await rig(mode: .sounds)
+        rig.sounds.voiceSpeaking = { true }
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertNil(rig.players.bed, "the bed was started under a sentence")
+        rig.sounds.voiceSpeaking = { false }
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        XCTAssertEqual(rig.players.bed?.isPlaying, true)
+        rig.speaker.endAwaiting("turn", "the test is done")
+        rig.speaker.endAwaiting("second", "the test is done")
     }
 
     /// With a second turn's wait standing, the first's reply does not end the bed at its landing
@@ -663,7 +745,7 @@ final class KeeperSoundsTests: XCTestCase {
         // foreground's next path, and a sound on it is refused.
         XCTAssertEqual(rig.seams.records, [], "a claim was applied from the background")
         XCTAssertFalse(rig.speaker.running)
-        XCTAssertFalse(rig.sounds.tool("WebSearch", path: nil))
+        XCTAssertFalse(rig.sounds.tool("WebSearch"))
     }
 
     /// The bed wanted again inside its fade cancels the pause and nothing else: the fade's hold
@@ -697,7 +779,7 @@ final class KeeperSoundsTests: XCTestCase {
         _ = rig.speaker.awaitReply("second", readAloud: true)
         XCTAssertEqual(bed.fades.last?.to, 0, "the second wait under receipts did not fade the bed")
         await settle("the fade's sleeps to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) && rig.clock.asked.contains(KeeperSounds.bound) }
-        XCTAssertTrue(rig.sounds.tool("WebSearch", path: nil), "the receipt inside the fade was not played")
+        XCTAssertTrue(rig.sounds.tool("WebSearch"), "the receipt inside the fade was not played")
         await settle("the receipt's hold to ask for its length") { rig.clock.asked.contains(KeeperSounds.toneLength) }
         rig.speaker.endAwaiting("first", "the turn is done")
         rig.speaker.endAwaiting("second", "the turn is done")
@@ -722,7 +804,7 @@ final class KeeperSoundsTests: XCTestCase {
         rig.clock.fire()
         await settle("the fade's hold to go") { !rig.audio.holding }
         // Nothing held: a receipt is the keeper's and is not played; the bed is not either.
-        XCTAssertFalse(rig.sounds.tool("Bash", path: nil))
+        XCTAssertFalse(rig.sounds.tool("Bash"))
         rig.sounds.working(true)
         XCTAssertFalse(rig.audio.holding, "a sound held alone")
         rig.seams.forget()
@@ -794,7 +876,7 @@ final class KeeperSoundsTests: XCTestCase {
         rig.sounds.working(false)
         XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was faded")
         XCTAssertEqual(bed.pauses, 0, "a bed made before the reset was paused")
-        XCTAssertTrue(rig.sounds.tool("Bash", path: nil))
+        XCTAssertTrue(rig.sounds.tool("Bash"))
         XCTAssertEqual(act.plays, 1, "a receipt made before the reset was played")
         XCTAssertEqual(rig.players.names, [KeeperSounds.bedFile, "bloop_act", "bloop_act"])
 
@@ -814,7 +896,7 @@ final class KeeperSoundsTests: XCTestCase {
         let fades = bed.fades.count
 
         rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
-        XCTAssertFalse(rig.sounds.tool("Bash", path: nil), "a receipt played at the reset's notification")
+        XCTAssertFalse(rig.sounds.tool("Bash"), "a receipt played at the reset's notification")
         rig.sounds.working(false)
         XCTAssertEqual(act.plays, 1, "a receipt made before the reset was played")
         XCTAssertEqual(bed.fades.count, fades, "a bed made before the reset was faded")

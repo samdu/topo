@@ -115,16 +115,19 @@ final class Endpoint {
         /// Whether this utterance has held speech of `minSpeech` or more.
         private(set) var heardSpeech = false
 
-        mutating func take(_ event: Event) -> Heard? {
+        /// `gateShutUntil` is the sample a tone sounded into the microphone stops being heard at
+        /// (`Conversation`): speech before it is the tone's as much as anyone's, so it is not
+        /// counted toward `minSpeech`, and an onset inside it is not one; what goes on past it is.
+        mutating func take(_ event: Event, gateShutUntil: Int = 0) -> Heard? {
             switch event {
             case .start(let at):
                 startedAt = at
-                return .speech
+                return at >= gateShutUntil ? .speech : nil
             case .end(let at):
                 // An end with no start before it ends nothing.
                 guard let start = startedAt else { return nil }
                 startedAt = nil
-                let long = Double(at - start) >= Endpoint.minSpeech * Double(Ear.rate)
+                let long = Double(at - max(start, gateShutUntil)) >= Endpoint.minSpeech * Double(Ear.rate)
                 if long { heardSpeech = true }
                 return heardSpeech ? .ended : nil
             }

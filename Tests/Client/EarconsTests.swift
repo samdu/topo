@@ -378,6 +378,19 @@ final class EarconsTests: XCTestCase {
         XCTAssertFalse(rig.speaker.running, "the engine ran on with nothing held")
     }
 
+    /// In a conversation the reply's end is the go-ahead's (`Conversation`): a reply heard out
+    /// under one sounds no `done`, so the moment has one tone, and one cut short by its turn's
+    /// failure still sounds `failed`.
+    func testAReplyHeardOutInAConversationSoundsNoDone() async throws {
+        let rig = await rig(heard: .dataRendered)
+        rig.speaker.conversing = true
+        XCTAssertTrue(rig.speaker.speak("Hi."))
+        await settle("the reply to start") { rig.speaker.report.started }
+        try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
+        XCTAssertEqual(rig.earcons.played, [], "done sounded at a conversation's reply end")
+        XCTAssertFalse(rig.speaker.speaking)
+    }
+
     // MARK: - The turn
 
     /// A harness over an in-memory log whose brain is the test's. No lease loop runs under it:

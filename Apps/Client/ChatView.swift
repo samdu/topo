@@ -1084,7 +1084,7 @@ final class MicPress {
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
                 guard let heard else { return }
-                if !dictating { speaker.earcons?.play(.sending(heard)) }
+                if !dictating { speaker.sounded(release: heard) }
                 speaker.sending(under: release)
                 await send(heard)
             }
@@ -1117,7 +1117,7 @@ final class MicPress {
                 return
             }
             // The press on the open microphone's waveform, which sends what it heard.
-            if !dictating { speaker.earcons?.play(.sending(heard)) }
+            if !dictating { speaker.sounded(release: heard) }
             speaker.sending(under: release)
             await send(heard)
         }

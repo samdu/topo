@@ -71,29 +71,32 @@ final class WorkingAudioPlayer: WorkingPlayer {
     func setVolume(_ volume: Float, fadeDuration: TimeInterval) { player.setVolume(volume, fadeDuration: fadeDuration) }
 }
 
-/// The keeper's sounds: what a phone in a pocket hears of a spoken turn being worked on. The
-/// receipts are tool-class tones, Daphne's bloops (Sam's own, `THIRD-PARTY`) bundled as
-/// `bloop_<tone>.wav` — `read` as the guest searches the web, `act` as it runs a command or
-/// writes code, `write` as it writes prose, each through `MascotMapping.activity(tool:path:)`'s
-/// classes (a tool with no class, the file reads included, sounds nothing), and `error` when the
-/// guest's turn fails — and the bed is `thinking_bed.wav`, an 8 s loop under −20 dBFS at
-/// `bedVolume`, faded in from the release and out when the wait it was for ends (a reply landing
-/// ends its own wait before its first frame) or at the reply's first frame under a second wait,
-/// paused rather than stopped so the next wait picks it up where the last left it. The mode is
-/// `WorkingSounds`: `off` sounds nothing, `receipts` the tones, `sounds` the tones over the bed.
+/// The keeper's sounds: what a phone in a pocket hears of a spoken turn being worked on, as
+/// Daphne's are, with her bloops (Sam's own, `THIRD-PARTY`) bundled as `bloop_<tone>.wav`. The
+/// receipts are tool-class tones, each tool classed as her voice channel classes it
+/// (`tone(forTool:)`): `read`, `write`, `delegate` and `act` for everything else; `return` as a
+/// delegate's result comes back, `error` for a result marked an error and when the guest's turn
+/// fails. The open microphone has `ack` at an utterance's onset and the go-ahead (`speak`), and a
+/// press heard behind a turn on its way bleeps (`queue`). The bed is `thinking_bed.wav`, an 8 s
+/// loop under −20 dBFS at `bedVolume`, faded in from the release and out when the wait it was for
+/// ends (a reply landing ends its own wait before its first frame) or at the reply's first frame
+/// under a second wait, never begun under a sentence, and paused rather than stopped so the next
+/// wait picks it up where the last left it. The mode is `WorkingSounds`: `off` sounds nothing,
+/// `receipts` the tones, `sounds` the tones over the bed.
 ///
-/// They are the keeper's, so they sound only while a hold that is not a sound's own stands
-/// (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes none, and a typed
-/// turn worked on while a spoken turn's wait stands receipts with it. No receipt sounds over
-/// Topo's own voice (`voiceSpeaking`, the speaker's), and one still sounding when the voice's
-/// first frame is scheduled or a microphone opens is stopped there (`hush`). Every sound is played on the session as it
-/// stands, live (`AudioSession.ensureLive()`) and refused when it is not, so it configures and
-/// activates nothing; no receipt is played into an open microphone, and the bed dips while one
-/// is open. Where such a hold already stands a sound holds the process for its own length too
-/// (`AudioSession.Hold.sound`, standing while a receipt's length or the bed's fade-out is not
-/// yet up, each its own, `bound` at most), taken before it starts and before the hold it follows drops, so an error receipt and
-/// the bed's fade behind the lock are heard out before the last hold is let go of; with nothing
-/// held it holds nothing. The
+/// The receipts and the bleep are the keeper's, so they sound only while a hold that is not a
+/// sound's own stands (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes
+/// none, and a typed turn worked on while a spoken turn's wait stands receipts with it. The
+/// conversation's tones sound under the conversation, which the call or the front keeps running.
+/// They sound over Topo's voice and into an open microphone, as Daphne's do, and tell the
+/// conversation their length (`toneSounded`), which shuts its gate under them. Every sound is
+/// played on the session as it stands, live (`AudioSession.ensureLive()`) and refused when it is
+/// not, so it configures and activates nothing, and the bed dips while a microphone is open.
+/// Where a turn's hold already stands a sound holds the process for its own length too
+/// (`AudioSession.Hold.sound`, standing while a receipt's length or the bed's fade-out is not yet
+/// up, each its own, `bound` at most), taken before it starts and before the hold it follows
+/// drops, so an error receipt and the bed's fade behind the lock are heard out before the last
+/// hold is let go of; with nothing held it holds nothing. The
 /// players are handles into mediaserverd: a media services reset drops them and builds nothing,
 /// and the next sound makes its own. Each is kept with the session's reset count it was made
 /// under (`AudioSession.resets`, counted at the notification) and checked against it before
@@ -106,7 +109,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 @MainActor
 final class KeeperSounds {
     enum Tone: String, CaseIterable, Sendable {
-        case read, act, write, error
+        case read, act, write, delegate, `return`, error, ack, speak, queue
 
         /// The bundled file's name, without its extension.
         var file: String { "bloop_\(rawValue)" }
@@ -127,16 +130,6 @@ final class KeeperSounds {
     static let parkAfter: Duration = .milliseconds(300)
     /// How long a sound's hold stands at most, so no hold outlives the sound it was taken for.
     static let bound: Duration = .seconds(2)
-
-    /// What each of the mascot's activities sounds as, for a tool that has one.
-    static func tone(for activity: MascotState.Activity?) -> Tone? {
-        switch activity {
-        case .searching: .read
-        case .building, .calendar: .act
-        case .writing: .write
-        case .thinking, .idle, nil: nil
-        }
-    }
 
     private let audio: AudioSession
     private let defaults: UserDefaults
@@ -233,17 +226,49 @@ final class KeeperSounds {
     /// the error's. Everything else is Topo's to draw.
     func follow(_ activity: GuestActivity) {
         switch activity {
-        case .update(.event(.toolUse(let name, let path))): tool(name, path: path)
+        case .began, .gone: calls = []
+        case .update(.event(.toolUse(let name, _))): tool(name)
+        case .update(.event(.toolResult(let isError, _))): result(isError: isError)
         case .update(.ended(.failed)): failed()
         default: break
         }
     }
 
-    /// The guest reached for `name`: its class's tone, or nothing for a tool with no class.
+    /// The tools of each class, as Daphne's voice channel classes them (buddy-channels
+    /// `voice/classify.ts`): a sound per kind of work, `act` for everything else — a command,
+    /// every MCP tool, anything new.
+    static let readTools: Set<String> = ["Read", "Grep", "Glob", "LS", "ToolSearch", "WebFetch", "WebSearch",
+                                         "NotebookRead", "ListAgents", "TaskOutput"]
+    static let writeTools: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+    static let delegateTools: Set<String> = ["Agent", "Task", "Workflow"]
+
+    static func tone(forTool name: String) -> Tone {
+        if readTools.contains(name) { return .read }
+        if writeTools.contains(name) { return .write }
+        if delegateTools.contains(name) { return .delegate }
+        return .act
+    }
+
+    /// The classes of the calls made and not yet answered, in the order they were made, which
+    /// is the order their results come back in; emptied as a turn begins and goes, so a result
+    /// with no call before it misaligns nothing past its turn.
+    private var calls: [Tone] = []
+
+    /// The guest reached for `name`: its class's tone.
     @discardableResult
-    func tool(_ name: String, path: String?) -> Bool {
-        guard let tone = Self.tone(for: MascotMapping.activity(tool: name, path: path)) else { return false }
+    func tool(_ name: String) -> Bool {
+        let tone = Self.tone(forTool: name)
+        calls.append(tone)
         return play(tone)
+    }
+
+    /// A tool's result came back: a delegate handing back sounds `return`, and a result Claude
+    /// Code marked an error sounds `error` (Daphne's channel: `SubagentStop`, and a
+    /// `PostToolUse` that did not succeed).
+    func result(isError: Bool) {
+        let call = calls.isEmpty ? nil : calls.removeFirst()
+        if call == .delegate { play(.return) }
+        if isError { play(.error) }
     }
 
     /// The guest's turn failed and nothing is coming. With the earcons on, the speaker's `failed`
@@ -257,24 +282,41 @@ final class KeeperSounds {
         return play(.error)
     }
 
-    private func play(_ tone: Tone) -> Bool {
+    /// The open microphone heard an onset, and the utterance it began has opened a turn
+    /// (Daphne's `Keeper.heard`). Under the conversation, which is the session armed.
+    @discardableResult
+    func heard() -> Bool { play(.ack, armed: true) }
+
+    /// The go-ahead: the conversation's microphone can take the next turn (Daphne's
+    /// `WaitSounds.ready`). Under the conversation, which is the session armed.
+    @discardableResult
+    func goAhead() -> Bool { play(.speak, armed: true) }
+
+    /// A press was heard and its turn waits behind one on its way (Daphne's `WaitSounds.bleep`).
+    @discardableResult
+    func queued() -> Bool { play(.queue) }
+
+    /// Told of each tone as it starts, with its length, so an open microphone's gate is shut
+    /// while it sounds (`Conversation`, Daphne's `holdGate`).
+    var toneSounded: @MainActor (Tone, Duration) -> Void = { _, _ in }
+
+    /// Plays `tone` on the session as it stands. A receipt is the keeper's, so it sounds only
+    /// where a turn's hold stands: a turn nothing waits for aloud sounds nothing, and a receipt
+    /// under nothing but a sound's own hold would be the receipts keeping the process alive by
+    /// themselves. `armed` is a tone of the conversation's own, which the call or the front keeps
+    /// running, so it sounds without one and holds only beside one. Over Topo's voice and into
+    /// an open microphone it sounds, as Daphne's do: the conversation's gate is shut under it.
+    @discardableResult
+    private func play(_ tone: Tone, armed: Bool = false) -> Bool {
         guard WorkingSounds.mode(defaults) != .off else { return false }
-        // The keeper's: a turn nothing waits for aloud sounds nothing, and a receipt under nothing
-        // but a sound's own hold would be the receipts keeping the process alive by themselves.
-        guard audio.heldForATurn else { return false }
-        if microphoneOpen() {
-            AudioLog.say("receipt \(tone) not played: the microphone is open")
-            return false
-        }
-        if voiceSpeaking() {
-            AudioLog.say("receipt \(tone) not played: Topo is speaking")
-            return false
-        }
+        let held = audio.heldForATurn
+        guard held || armed else { return false }
         guard activate(for: "receipt \(tone)") else { return false }
         dropStale()
         guard let player = player(for: tone) else { return false }
         // The hold before the player, so the process is held from the tone's first frame.
-        holdUntil(Self.toneLength, for: .receipt)
+        if held { holdUntil(Self.toneLength, for: .receipt) }
+        toneSounded(tone, Self.toneLength)
         player.currentTime = 0
         guard player.play() else {
             AudioLog.say("receipt \(tone) did not start")
@@ -328,7 +370,8 @@ final class KeeperSounds {
     /// change applies at the next sound; the bed plays on to the end of the wait it was for).
     func working(_ on: Bool) {
         dropStale()
-        let want = on && WorkingSounds.mode(defaults) == .sounds && audio.heldForATurn
+        // Never under a sentence: a wait taken while Topo is reading wants no bed.
+        let want = on && WorkingSounds.mode(defaults) == .sounds && audio.heldForATurn && !voiceSpeaking()
         // An interruption stops the player under a bed that is still wanted, so "already on" has
         // to mean "still playing" too.
         if want == bedWanted, !want || bed?.isPlaying == true { return }
@@ -397,23 +440,10 @@ final class KeeperSounds {
     func duck() {
         dropStale()
         let open = microphoneOpen()
-        // A receipt still sounding as a microphone opens would be heard by it.
-        if open { hush("a microphone is open") }
         guard open != ducked else { return }
         ducked = open
         guard bedWanted, let bed, bed.isPlaying else { return }
         bed.setVolume(open ? Self.duckedVolume : Self.bedVolume, fadeDuration: 0.15)
-    }
-
-    /// Topo's voice or a microphone has begun: a receipt still sounding is stopped, since the
-    /// checks at its start only kept it from beginning over either. Its hold runs to its own
-    /// bound (`toneLength`), beside the bed's fade's, which the bed's pause or its bound ends.
-    func hush(_ why: String) {
-        dropStale()
-        for (tone, player) in players where player.isPlaying {
-            player.pause()
-            AudioLog.say("receipt \(tone) stopped: \(why)")
-        }
     }
 
     private var target: Float { microphoneOpen() ? Self.duckedVolume : Self.bedVolume }

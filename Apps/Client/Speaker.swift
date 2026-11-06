@@ -685,6 +685,18 @@ final class Speaker {
     /// dipped while a microphone is open, and back at an interruption's end (`resumeAudio`). The
     /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
     let sounds: KeeperSounds?
+
+    /// A press was released with `heard` to send: heard behind a spoken turn still on its way it
+    /// bleeps (`queue`, Daphne's for a press held behind a turn in flight), and that is the
+    /// release's one sound; otherwise the cues say it was sent, or that nothing was heard.
+    func sounded(release heard: String) {
+        if !heard.isEmpty, !waits.isEmpty, sounds?.queued() == true { return }
+        earcons?.play(.sending(heard))
+    }
+
+    /// Whether a hands-free conversation is on (`Conversation`, which sets it): a reply heard out
+    /// under one ends on the conversation's go-ahead, not `done`.
+    var conversing = false
     /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
     /// and not at every sentence's first frame.
     private var replyBegan = false
@@ -902,10 +914,8 @@ final class Speaker {
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
                 if !replyBegan {
-                    // The reply's first frame: the bed and any receipt still sounding give
-                    // way to the voice.
+                    // The reply's first frame: the bed gives way to the voice.
                     replyBegan = true
-                    sounds?.hush("Topo is speaking")
                     sounds?.working(false)
                 }
                 if first == nil {
@@ -997,7 +1007,9 @@ final class Speaker {
         #if DEBUG
         report.finished = report.started
         #endif
-        earcons?.play(readingFailed ? .failed : .done)
+        // In a conversation the reply's end is the go-ahead's moment, sounded as the microphone
+        // opens again (`Conversation`), and one tone says it, as on Daphne's open mic.
+        if readingFailed { earcons?.play(.failed) } else if !conversing { earcons?.play(.done) }
         readingFailed = false
         done()
     }

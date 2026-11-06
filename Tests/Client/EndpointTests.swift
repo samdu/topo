@@ -52,6 +52,26 @@ final class EndpointTests: XCTestCase {
         XCTAssertEqual(policy.take(.start(10_000)), .speech)
         XCTAssertEqual(policy.take(.end(14_000)), .ended, "a quarter second was not an utterance")
     }
+
+    /// Under a tone sounded into the microphone the gate is shut (Daphne's `holdGate`): an onset
+    /// inside it is not one, and speech counts toward the minimum only past it, so a tone longer
+    /// than the minimum is no utterance, while words that run on past the gate are.
+    func testSpeechInsideTheGateIsTheTonesAndOnlyWhatRunsPastItCounts() {
+        let gate = 6_400
+        var policy = Endpoint.Policy()
+        XCTAssertNil(policy.take(.start(0), gateShutUntil: gate), "an onset inside the gate was one")
+        XCTAssertNil(policy.take(.end(6_000), gateShutUntil: gate), "a tone longer than the minimum was an utterance")
+        XCTAssertFalse(policy.speaking)
+
+        XCTAssertNil(policy.take(.start(100), gateShutUntil: gate))
+        XCTAssertNil(policy.take(.end(gate + quarter - 1), gateShutUntil: gate), "speech under the gate was counted")
+        XCTAssertNil(policy.take(.start(200), gateShutUntil: gate))
+        XCTAssertEqual(policy.take(.end(gate + quarter), gateShutUntil: gate), .ended,
+                       "words running on past the gate were lost")
+
+        var past = Endpoint.Policy()
+        XCTAssertEqual(past.take(.start(gate), gateShutUntil: gate), .speech, "an onset as the gate opens was not one")
+    }
 }
 
 #if canImport(FluidAudio)
