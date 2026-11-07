@@ -1870,9 +1870,13 @@ extension ConversationTests {
         defer { conversation.stop("test", sending: false) }
         await settle("the conversation in front") { conversation.on && conversation.inFront }
         utterance(into: voice.sink)
-        await quiet(3.0, into: voice.sink) { self.sent.count == 1 }
+        // Short of *Open mic waits* (1.2 s here), complete verdicts end nothing.
+        await quiet(0.9, into: voice.sink)
+        await drain()
+        XCTAssertGreaterThanOrEqual(judge.asks, 2, "the judge was not asked inside the wait")
+        XCTAssertEqual(sent, [], "a complete sentence was sent in front before the wait")
+        await quiet(2.0, into: voice.sink) { self.sent.count == 1 }
         await settle("the turn sent") { self.sent.count == 1 }
-        XCTAssertGreaterThanOrEqual(judge.asks, 2, "the turn ended in front without the judge")
         XCTAssertEqual(sent, ["turn the lights off"])
     }
 
