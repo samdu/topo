@@ -325,20 +325,32 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(rig.sounds.played, [.ack, .speak])
     }
 
-    /// A press released with words while a spoken turn is still on its way bleeps, and that is
-    /// its one sound: `sent` gives way. With nothing on its way, or nothing heard, or the sounds
-    /// off, the earcons say it as they did.
+    /// A press released with words while a turn is still on its way bleeps, and that is its one
+    /// sound: `sent` gives way. The press runs as the chat's does — the spoken turn's wait taken,
+    /// then the press's `microphoneOpening`, which ends that wait, then the release — so what
+    /// says a turn is on its way is the harness's line, which the press leaves standing. With
+    /// nothing on its way, or nothing heard, or the sounds off, the earcons say it as they did.
     func testAPressHeardBehindATurnOnItsWayBleepsInPlaceOfSent() async {
         let rig = await rig(earcons: true)
+        let harness = Harness(database: InMemoryRecordDatabase(), device: DeviceID("phone"), ensureZone: {},
+                              defaults: makeDefaults(), brain: NoBrain(),
+                              leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
+                              pause: { _ in throw CancellationError() })
+        rig.speaker.turnOnItsWay = { harness.turnOnItsWay }
         try? rig.audio.ensureActive()
+        rig.speaker.microphoneOpening()
+        rig.speaker.microphoneOpened(counted: true)
         rig.speaker.sounded(release: "and the kitchen")
         XCTAssertEqual(rig.sounds.played, [], "a bleep with no turn on its way")
         XCTAssertEqual(rig.earcons.played, [.sent])
 
+        _ = harness.willSend("what's on tonight")
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        XCTAssertEqual(rig.speaker.awaiting, ["turn"])
+        rig.speaker.microphoneOpening()
+        XCTAssertEqual(rig.speaker.awaiting, [], "the press left the turn's wait standing")
+        rig.speaker.microphoneOpened(counted: true)
         rig.speaker.sounded(release: "and the kitchen")
-        XCTAssertEqual(rig.sounds.played, [.queue])
+        XCTAssertEqual(rig.sounds.played, [.queue], "the release behind a turn on its way did not bleep")
         XCTAssertEqual(rig.earcons.played, [.sent], "sent sounded beside the bleep")
         rig.speaker.sounded(release: "")
         XCTAssertEqual(rig.sounds.played, [.queue], "a release that heard nothing bleeped")
@@ -348,7 +360,6 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.sounded(release: "and the hall")
         XCTAssertEqual(rig.sounds.played, [.queue])
         XCTAssertEqual(rig.earcons.played, [.sent, .failed, .sent], "with the sounds off the release went unsaid")
-        rig.speaker.endAwaiting("turn", "the test is done")
     }
 
     /// Review Focus 9: a typed turn holds nothing, so its tools sound nothing and its failure

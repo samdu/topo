@@ -65,6 +65,10 @@ final class Harness {
     /// guest has nothing to show yet. A failure closes it as the failure is put up, before
     /// whatever reads follow; a line stopped on a failure is not an open turn.
     private(set) var turnOpen = false
+    /// A turn is on its way: words on the line the log does not have, or a turn this device sent
+    /// whose reply is not yet shown (`turnOpen`). What a press released now waits behind, so its
+    /// release bleeps `queue` (`Speaker.sounded(release:)`).
+    var turnOnItsWay: Bool { turnOpen || !pending.isEmpty }
     /// The reply the guest is writing now, as far as it has got, drawn under the transcript
     /// before it is whole and before it is in the log: the words of every message of the turn
     /// so far, so what was said before a tool call stays while the tool runs and after. It is

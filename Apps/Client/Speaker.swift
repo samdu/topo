@@ -686,13 +686,18 @@ final class Speaker {
     /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
     let sounds: KeeperSounds?
 
-    /// A press was released with `heard` to send: heard behind a spoken turn still on its way it
-    /// bleeps (`queue`, Daphne's for a press held behind a turn in flight), and that is the
-    /// release's one sound; otherwise the cues say it was sent, or that nothing was heard.
+    /// A press was released with `heard` to send: heard behind a turn still on its way it bleeps
+    /// (`queue`, Daphne's for a press held behind a turn in flight), and that is the release's
+    /// one sound; otherwise the cues say it was sent, or that nothing was heard.
     func sounded(release heard: String) {
-        if !heard.isEmpty, !waits.isEmpty, sounds?.queued() == true { return }
+        if !heard.isEmpty, turnOnItsWay(), sounds?.queued() == true { return }
         earcons?.play(.sending(heard))
     }
+
+    /// Whether a turn is on its way, asked at a release: the harness's (`Harness.turnOnItsWay`),
+    /// which the press leaves standing, and not this object's waits, which the press ends. The
+    /// app answers; a speaker told nothing has none.
+    var turnOnItsWay: @MainActor () -> Bool = { false }
 
     /// Whether a hands-free conversation is on (`Conversation`, which sets it): a reply heard out
     /// under one ends on the conversation's go-ahead rather than `done`, where the go-ahead can
