@@ -118,7 +118,7 @@ final class Endpoint {
     struct Policy: Equatable, Sendable {
         private var startedAt: Int?
         /// The sample this onset's speech is counted from: its start, or the end of the gate it
-        /// started inside.
+        /// started inside and the detector's lateness past it (`startEarly`).
         private var countFrom = 0
         /// Whether this utterance has held speech of `minSpeech` or more.
         private(set) var heardSpeech = false

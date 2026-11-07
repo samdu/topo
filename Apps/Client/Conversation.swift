@@ -475,7 +475,8 @@ final class Conversation {
         // The microphone open, every whole chunk it holds judged, and nothing on its way or being
         // said: an owed go-ahead is paid (the conversation's start, a wait that has ended under an
         // open microphone), never over a whole chunk the detector has yet to judge; an onset in
-        // the part-chunk still filling is the go-ahead's gate's, and its words are sent unacked.
+        // the part-chunk still filling is the go-ahead's gate's, and its words are sent unacked if they
+        // run on past it by more than the detector's lateness.
         // Not while a reopen is landing: its utterance's start pays it, after the gates are reset.
         if voice.listening, !voice.suspended, !reopening, caughtUp, !policy.speaking, !speaker.speaking,
            !speaker.waitingForMicrophone {

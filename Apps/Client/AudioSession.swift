@@ -215,7 +215,7 @@ final class AudioSession {
     /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
     /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
     /// the session reconfigured and activated from the background under a hold, for a cue.
-    /// Judged by the call's phase as `ensureActive` is: under an active call the session is the
+    /// Judged by the call's phase, as `ensureActive` is, and by the reset count: under an active call the session is the
     /// system's and live whatever marked it otherwise (a claim deferred as the microphone closed
     /// away, ahead of the turn's hold) but a media services reset since its activation, and on
     /// its way to the system or back it is not.
