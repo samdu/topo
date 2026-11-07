@@ -117,15 +117,13 @@ final class Conversation {
     /// detector has judged what it holds, nobody is speaking and nothing is on its way, at an
     /// utterance's start or as the last of those clears (Daphne's `cueOwed`).
     private var goAheadOwed = false
-    /// Whether this utterance's onset has sounded its `ack`.
-    private var acked = false
     /// The stretches of this utterance's samples a tone sounded into (Daphne's `holdGate`): an
     /// onset inside one is the tone's (`Endpoint.Policy.take`).
     private var gates: [Range<Int>] = []
     /// Whether this utterance has had an onset the policy gave the person (`.speech`): only then
     /// is its quiet counted for the judge, as Daphne's judge runs only on a turn an ungated onset
     /// opened. A tone's own onset, inside its gate, opens nothing for the judge to end.
-    private var heardOnset = false
+    private(set) var heardOnset = false
     /// Which of the lock's two moments came first, for the log: the interruption's start or the
     /// call's placing.
     private var firstOff: String?
@@ -188,7 +186,6 @@ final class Conversation {
         on = true
         speaker.conversing = true
         goAheadOwed = true
-        acked = false
         gates = []
         voice.glancing = false
         AudioLog.say("conversation: begun behind the lock (\(firstOff.map { "the microphone came off at \($0)" } ?? "the microphone still running"))")
@@ -306,7 +303,6 @@ final class Conversation {
 
     private func startUtterance() {
         freshUtterance()
-        acked = false
         gates = []
         startFeeding(reset: true)
         restartIdle()
@@ -330,10 +326,9 @@ final class Conversation {
     static let earconReceipt: Duration = .milliseconds(1500)
 
     /// A tone sounded into the open microphone: its gate is shut while it sounds, so the ear
-    /// does not take the tone for speech. The onset's own `ack` sounds over a turn already open,
-    /// and shuts nothing (Daphne: "the receipt costs it nothing").
+    /// does not take the tone for speech.
     private func toneSounded(_ tone: KeeperSounds.Tone, _ length: Duration) {
-        guard on, tone != .ack, voice.listening, !voice.suspended else { return }
+        guard on, voice.listening, !voice.suspended else { return }
         let samples = Int(Double(length.components.attoseconds) / 1e18 * Double(Ear.rate))
             + Int(length.components.seconds) * Int(Ear.rate)
         let at = voice.sink.peek(from: .max).end
@@ -427,11 +422,6 @@ final class Conversation {
                         if case .start(let at) = event { self.framedTo = max(self.framedTo, at) }
                         self.heardOnset = true
                         self.restartIdle()
-                        // The utterance's first onset: its receipt, once (Daphne's `Keeper.heard`).
-                        if !self.acked {
-                            self.acked = true
-                            self.speaker.sounds?.heard()
-                        }
                     case .ended:
                         await self.endUtterance(self.sileroEnd)
                         return
@@ -657,7 +647,7 @@ final class Conversation {
         // The microphone open, every whole chunk it holds judged, and nothing on its way or being
         // said: an owed go-ahead is paid (the conversation's start, a wait that has ended under an
         // open microphone), never over a whole chunk the detector has yet to judge; an onset in
-        // the part-chunk still filling is the go-ahead's gate's, and its words are sent unacked if they
+        // the part-chunk still filling is the go-ahead's gate's, and its words are sent if they
         // run on past it by more than the detector's lateness.
         // Not while a reopen is landing: its utterance's start pays it, after the gates are reset.
         if voice.listening, !voice.suspended, !reopening, caughtUp, !policy.speaking, !speaker.speaking,
