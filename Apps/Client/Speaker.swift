@@ -164,8 +164,10 @@ final class Speaker {
         // this object's answer.
         self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
-        // No receipt is played into an open microphone either, asked at each sound rather than
-        // told at the press alone.
+        // Receipts sound into an open microphone, as Daphne's do: the conversation shuts its gate
+        // under each, and with noise suppression on the input's voice processing ducks them. Whether
+        // one is open or opening sets the working bed's level, asked rather than told at the press
+        // alone.
         sounds?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
