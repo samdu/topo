@@ -326,10 +326,12 @@ final class KeeperSoundsTests: XCTestCase {
     }
 
     /// A press released with words while a turn is still on its way bleeps, and that is its one
-    /// sound: `sent` gives way. The press runs as the chat's does — the spoken turn's wait taken,
-    /// then the press's `microphoneOpening`, which ends that wait, then the release — so what
-    /// says a turn is on its way is the harness's line, which the press leaves standing. With
-    /// nothing on its way, or nothing heard, or the sounds off, the earcons say it as they did.
+    /// sound: `sent` gives way. The press runs as the chat's does (`MicPress.gesture`) — the
+    /// spoken turn's wait taken, then the press's `microphoneOpening`, which ends that wait, the
+    /// microphone open, and the release, held as its words are finished — so what says a turn is
+    /// on its way is the harness's line, which the press leaves standing, and the hold the bleep
+    /// sounds under is the release's. With nothing on its way, or nothing heard, or the sounds
+    /// off, the earcons say it as they did.
     func testAPressHeardBehindATurnOnItsWayBleepsInPlaceOfSent() async {
         let rig = await rig(earcons: true)
         let harness = Harness(database: InMemoryRecordDatabase(), device: DeviceID("phone"), ensureZone: {},
@@ -338,28 +340,37 @@ final class KeeperSoundsTests: XCTestCase {
                               pause: { _ in throw CancellationError() })
         rig.speaker.turnOnItsWay = { harness.turnOnItsWay }
         try? rig.audio.ensureActive()
-        rig.speaker.microphoneOpening()
-        rig.speaker.microphoneOpened(counted: true)
-        rig.speaker.sounded(release: "and the kitchen")
+        press(rig)
         XCTAssertEqual(rig.sounds.played, [], "a bleep with no turn on its way")
         XCTAssertEqual(rig.earcons.played, [.sent])
 
         _ = harness.willSend("what's on tonight")
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.speaker.microphoneOpening()
-        XCTAssertEqual(rig.speaker.awaiting, [], "the press left the turn's wait standing")
-        rig.speaker.microphoneOpened(counted: true)
-        rig.speaker.sounded(release: "and the kitchen")
+        press(rig) { XCTAssertEqual(rig.speaker.awaiting, [], "the press left the turn's wait standing") }
         XCTAssertEqual(rig.sounds.played, [.queue], "the release behind a turn on its way did not bleep")
         XCTAssertEqual(rig.earcons.played, [.sent], "sent sounded beside the bleep")
-        rig.speaker.sounded(release: "")
+        press(rig, heard: "")
         XCTAssertEqual(rig.sounds.played, [.queue], "a release that heard nothing bleeped")
         XCTAssertEqual(rig.earcons.played, [.sent, .failed])
 
         rig.defaults.set(WorkingSounds.Mode.off.rawValue, forKey: WorkingSounds.key)
-        rig.speaker.sounded(release: "and the hall")
+        press(rig, heard: "and the hall")
         XCTAssertEqual(rig.sounds.played, [.queue])
         XCTAssertEqual(rig.earcons.played, [.sent, .failed, .sent], "with the sounds off the release went unsaid")
+    }
+
+    /// A hold-to-talk press as `MicPress.gesture` runs it, `pressed` seeing the open microphone,
+    /// released with `heard`; the release's hold goes once its words have sounded.
+    private func press(_ rig: Rig, heard: String = "and the kitchen", pressed: () -> Void = {},
+                       file: StaticString = #filePath, line: UInt = #line) {
+        rig.speaker.microphoneOpening()
+        rig.speaker.microphoneOpened(counted: true)
+        pressed()
+        let release = rig.speaker.releasing()
+        XCTAssertNotNil(release, "the release was not held", file: file, line: line)
+        rig.speaker.microphoneClosed()
+        rig.speaker.sounded(release: heard)
+        release.map { rig.speaker.released($0, "the test's send returned") }
     }
 
     /// Review Focus 9: a typed turn holds nothing, so its tools sound nothing and its failure
