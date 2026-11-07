@@ -892,6 +892,18 @@ final class EarconsTests: XCTestCase {
         XCTAssertEqual(rig.cues.players[1].plays, 1)
     }
 
+    /// A cue at the reset under an active call speaks to no player made before it.
+    func testACueAtTheResetUnderAnActiveCallSpeaksToNoPlayerMadeBeforeIt() async {
+        let rig = await rig()
+        rig.audio.callPlaced()
+        rig.audio.callActivated()
+        XCTAssertTrue(rig.earcons.play(.sent))
+        rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        XCTAssertFalse(rig.earcons.play(.sent), "a cue was played on a call's session the reset killed")
+        XCTAssertEqual(rig.cues.players[0].plays, 1, "a player made before the reset was spoken to")
+        rig.audio.callOver()
+    }
+
     /// Every cue has its file in the bundle, at the root, where `Earcons` looks.
     func testEveryCueIsBundled() {
         let bundle = Bundle(for: Earcons.self)

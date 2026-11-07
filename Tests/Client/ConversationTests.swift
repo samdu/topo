@@ -1154,6 +1154,71 @@ extension ConversationTests {
         speaker.endAwaiting("before", "the test is done")
     }
 
+    /// A delegate's tone heard a fifth of a second late, as the pinned Silero gives it through a
+    /// room (an onset inside the gate, an end past it by the detector's lateness), is no
+    /// utterance.
+    func testADelegatesToneHeardLateIsNoUtterance() async {
+        let detector = ScriptedDetector([5: .start(18_880), 7: .end(30_272)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        utterance(into: voice.sink, seconds: 19_328.5 / Double(voice.sink.format.sampleRate))
+        await settle("what the sink holds judged") { detector.chunks >= 4 }
+        sounds?.follow(.update(.event(.toolUse(name: "Agent"))))
+        utterance(into: voice.sink, seconds: 1.5)
+        await settle("the chunks fed") { detector.chunks >= 9 }
+        await drain()
+        XCTAssertEqual(sent, [], "the delegate's own tone was sent as a turn")
+        XCTAssertFalse(played.contains(.ack), "the tone's onset sounded an ack")
+        speaker.endAwaiting("before", "the test is done")
+    }
+
+    /// A receipt whose onset the detector puts a chunk and the pad before the receipt's place in
+    /// the stream is the receipt's, not the person's.
+    func testAReceiptsOnsetReportedEarlyIsTheReceipts() async {
+        let detector = ScriptedDetector([3: .start(10_688), 6: .end(22_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        utterance(into: voice.sink, seconds: 16_000.5 / Double(voice.sink.format.sampleRate))
+        await settle("what the sink holds judged") { detector.chunks >= 3 }
+        sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
+        utterance(into: voice.sink, seconds: 1.0)
+        await settle("the chunks fed") { detector.chunks >= 7 }
+        await drain()
+        XCTAssertEqual(sent, [], "the receipt's own onset was taken for the person's")
+        XCTAssertFalse(played.contains(.ack))
+        speaker.endAwaiting("before", "the test is done")
+    }
+
+    /// The gates go with their utterance: the next one's onset, in the same stretch of a sink
+    /// begun again, is the person's.
+    func testAnUtterancesGatesGoWithIt() async {
+        let detector = ScriptedDetector([1: .start(8_000), 7: .end(26_000)])
+        let (conversation, voice, speaker) = await begun(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        utterance(into: voice.sink)
+        await settle("the onset") { self.played.contains(.ack) }
+        await settle("what the sink holds judged") { detector.chunks >= 5 }
+        sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
+        utterance(into: voice.sink, seconds: 0.75)
+        await settle("the first turn sent") { self.sent.count == 1 }
+        speaker.endAwaiting("before", "its reply is in")
+        await settle("the microphone open again") { voice.listening }
+        await drain()
+        detector.script([5: .start(20_000), 7: .end(28_000)])
+        utterance(into: voice.sink, seconds: 2.25)
+        await settle("the second turn sent") { self.sent.count == 2 }
+        XCTAssertEqual(played.filter { $0 == .ack }.count, 2, "the last utterance's gate took the next one's onset")
+    }
+
     /// A tone sounded over words already begun (a receipt of the turn still being worked on)
     /// takes nothing of them: the utterance is counted from its own start and sent.
     func testAToneOverWordsAlreadyBegunTakesNothingOfThem() async {

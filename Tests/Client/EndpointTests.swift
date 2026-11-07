@@ -66,9 +66,11 @@ final class EndpointTests: XCTestCase {
         XCTAssertFalse(policy.speaking)
 
         XCTAssertNil(policy.take(.start(100), gates: [gate]))
-        XCTAssertNil(policy.take(.end(gate.upperBound + quarter - 1), gates: [gate]), "speech under the gate was counted")
+        let late = gate.upperBound + Endpoint.startEarly
+        XCTAssertNil(policy.take(.end(late + quarter - 1), gates: [gate]),
+                     "speech under the gate, or the detector's lateness past it, was counted")
         XCTAssertNil(policy.take(.start(200), gates: [gate]))
-        XCTAssertEqual(policy.take(.end(gate.upperBound + quarter), gates: [gate]), .ended,
+        XCTAssertEqual(policy.take(.end(late + quarter), gates: [gate]), .ended,
                        "words running on past the gate were lost")
 
         var past = Endpoint.Policy()
@@ -77,7 +79,7 @@ final class EndpointTests: XCTestCase {
         // A tone sounded at sample 30 000, its onset as early as the detector can put it: words
         // begun before that, judged before or after the tone, are the person's and counted whole.
         XCTAssertEqual(Endpoint.startEarly, Endpoint.chunk + 1_600,
-                       "the gate does not reach back as far as the detector can put a tone's onset")
+                       "the gate does not reach as far as the detector can put a tone's onset and end")
         let tone = (30_000 - Endpoint.startEarly)..<36_400
         var before = Endpoint.Policy()
         XCTAssertEqual(before.take(.start(4_096), gates: [tone]), .speech, "words begun before the tone were taken for it")

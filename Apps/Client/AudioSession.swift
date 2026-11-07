@@ -170,6 +170,9 @@ final class AudioSession {
     /// handle into mediaserverd kept across calls (a sound's player) is good only while this is
     /// the count it was made under.
     private(set) var resets = 0
+    /// The reset count the call's session was activated under: a reset since is the call's
+    /// session gone with every handle on it, until the system activates it again.
+    private var resetsAtActivation = 0
 
     private func serverWasReset() {
         resets += 1
@@ -214,10 +217,11 @@ final class AudioSession {
     /// the session reconfigured and activated from the background under a hold, for a cue.
     /// Judged by the call's phase as `ensureActive` is: under an active call the session is the
     /// system's and live whatever marked it otherwise (a claim deferred as the microphone closed
-    /// away, ahead of the turn's hold), and on its way to the system or back it is not.
+    /// away, ahead of the turn's hold) but a media services reset since its activation, and on
+    /// its way to the system or back it is not.
     func ensureLive() throws {
         switch call {
-        case .active: return
+        case .active: guard resets == resetsAtActivation else { throw NotLive() }
         case .placed, .deactivated, .closing: throw NotLive()
         case .none: guard valid else { throw NotLive() }
         }
@@ -462,6 +466,7 @@ final class AudioSession {
         call = .active
         applied = true
         valid = true
+        resetsAtActivation = resets
         defer { releaseSettling() }
         // CallKit routes an activated call to the earpiece, whatever the category's
         // `defaultToSpeaker` says: a reply read there is not heard from a phone held away or
