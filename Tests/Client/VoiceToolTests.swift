@@ -40,7 +40,9 @@ final class VoiceToolTests: XCTestCase {
                           ["noise", "off"], ["noise-suppression", "--off"], ["temperature", "0.3", "now"],
                           ["temperature", "warm"], ["temperature", "-0.1"], ["temperature", "1.01"],
                           ["temperature", "nan"], ["temperature", "inf"], ["temp", "0.3"],
-                          ["call", "maybe"], ["call", "on", "now"], ["calls", "on"]] {
+                          ["call", "maybe"], ["call", "on", "now"], ["calls", "on"],
+                          ["wait", "0.5"], ["wait", "3.1"], ["wait", "long"], ["wait", "nan"], ["wait", "inf"],
+                          ["wait", "1.2", "now"], ["waits", "1.2"]] {
             let reply = await tool.run(arguments)
             XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
             XCTAssertTrue(reply.text.contains("topo voice noise-suppression on"), "\(arguments)")
@@ -48,6 +50,34 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: NoiseSuppression.key))
         XCTAssertNil(defaults.object(forKey: VoiceTemperature.key))
         XCTAssertNil(defaults.object(forKey: SpokenCallSetting.key))
+        XCTAssertNil(defaults.object(forKey: QuietWait.key))
+    }
+
+    func testAPhoneNeverAskedWaitsTheStandardPause() async {
+        let defaults = defaults()
+        for arguments in [["wait"], ["wait", "status"]] {
+            let reply = await VoiceTool(defaults: defaults).run(arguments)
+            XCTAssertEqual(reply, .ok("wait 1.2 s\n"), "\(arguments)")
+        }
+        XCTAssertNil(defaults.object(forKey: QuietWait.key), "asking sets nothing")
+    }
+
+    func testAWaitIsKeptWhereTheRuleReadsIt() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        for (asked, said) in [("2", "2.0"), ("0.6", "0.6"), ("3.0", "3.0"), ("1.4", "1.4")] {
+            var reply = await tool.run(["wait", asked])
+            XCTAssertEqual(reply, .ok("wait \(said) s, from the next verdict\n"))
+            XCTAssertEqual(QuietWait.value(defaults), Double(said))
+            reply = await tool.run(["wait", "status"])
+            XCTAssertEqual(reply, .ok("wait \(said) s\n"))
+        }
+        // Out of range and not a number: the usage, and the wait as it was.
+        for refused in ["0.4", "3.5", "soon"] {
+            let reply = await tool.run(["wait", refused])
+            XCTAssertEqual(reply.status, ToolReply.usage, refused)
+            XCTAssertEqual(QuietWait.value(defaults), 1.4, refused)
+        }
     }
 
     func testAPhoneNeverAskedCallsForSpokenReplies() async {
@@ -134,6 +164,8 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertTrue(GuestTools.skill.contains("`topo voice temperature`"), "the mind is not told of the temperature")
         XCTAssertTrue(usage.text.contains("topo voice working sounds"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice working`"), "the mind is not told of the working sounds")
+        XCTAssertTrue(usage.text.contains("topo voice wait VALUE"), usage.text)
+        XCTAssertTrue(GuestTools.skill.contains("`topo voice wait`"), "the mind is not told of the wait")
         XCTAssertTrue(usage.text.contains("topo voice earcons off"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice earcons`"), "the mind is not told of the earcons")
     }

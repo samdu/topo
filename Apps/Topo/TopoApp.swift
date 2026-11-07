@@ -171,6 +171,7 @@ struct TopoApp: App {
         // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
         speaker.attach(call)
+        call.judged(on: audio, voice: voice)
         let callDriver = SpokenCallDriver(call: call)
         speaker.onHold = { [weak audio] in callDriver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
         speaker.onMicrophone = { callDriver.microphoneChanged($0) }
@@ -202,7 +203,10 @@ struct TopoApp: App {
         let conversation = Conversation(voice: voice, speaker: speaker, endpoint: endpoint,
                                         holding: { [weak audio] in audio?.holding ?? false },
                                         otherCall: { calls.calls.contains { !$0.hasEnded && $0.uuid != call.id } })
-        speaker.onCall = { conversation.call($0) }
+        speaker.onCall = {
+            voice.call($0)
+            conversation.call($0)
+        }
         conversation.conversingChanged = { callDriver.conversingChanged($0) }
         voice.carries = { [weak conversation] in
             guard let conversation, conversation.carries() else { return false }

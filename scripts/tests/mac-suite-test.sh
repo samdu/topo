@@ -105,6 +105,7 @@ case "$*" in
     exit "${UI_TEST:-0}" ;;
   *test-without-building*-skip-testing:TopoUITests*)
     echo "unit port53=${TEST_RUNNER_TOPO_PORT53_SOCKET-}" >> "$CALLS"
+    case "$*" in *-skip-testing:TopoTests/SmartTurnRealTests*) echo "unit turn: deselected" ;; *) echo "unit turn: run" ;; esac >> "$CALLS"
     echo "unit models=${TEST_RUNNER_TOPO_UNIT_EAR_MODELS-}" >> "$CALLS"
     exit 0 ;;
   *"-derivedDataPath build/device"*) [ ! -e build/device/built ] || echo "device-build over what was there" >> "$CALLS"; : > build/device/built ;;
@@ -168,6 +169,7 @@ results() { tr '\n' ' ' < "$RESULTS_DIR/suites.txt"; }
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
 is "green: no port 53 holder here, none handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53="
+is "green: the fast lane leaves the real Smart Turn test out by name" "$(grep '^unit turn' "$CALLS")" "unit turn: deselected"
 is "green: exits 0" "$status" 0
 is "green: every suite a success" "$(results)" "topo_unit=success topo_ui=success others=success "
 is "green: the lane is started once" "$(calls 'ci-audio-lane.sh start')" 1
@@ -265,6 +267,13 @@ ui_source() {  # ui_source [lines of the quiet class]
 }
 ui_source
 ear=TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
+LANE=full suite unit-full topo_unit
+is "unit, full lane: exits 0" "$status" 0
+is "unit, full lane: the models fetched once" "$(calls fetch-ear-models.sh)" 1
+is "unit, full lane: Silero's detector and Smart Turn, into the ear's cache" "$(grep '^fetch-ear-models.sh' "$CALLS" | sed "s|$work/cache|<cache>|")" "fetch-ear-models.sh <cache>/ear-models silero-vad-coreml smart-turn-v3"
+is "unit, full lane: the real Smart Turn test runs" "$(grep '^unit turn' "$CALLS")" "unit turn: run"
+is "unit, full lane: the models handed to the tests" "$(grep '^unit models' "$CALLS" | sed "s|$work/cache|<cache>|")" "unit models=<cache>/ear-models"
+
 LANE=full suite quiet topo_ui:quiet
 is "the quiet part: exits 0" "$status" 0
 is "the quiet part: a result of its own name" "$(results)" "topo_ui:quiet=success "

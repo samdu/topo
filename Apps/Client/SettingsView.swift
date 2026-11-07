@@ -4,8 +4,8 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// microphone's noise suppression, the voice's temperature, the clear of the compiled models, the
-/// diagnostics, the acknowledgements, and the way out.
+/// microphone's noise suppression, the voice's temperature, the open microphone's wait, the clear
+/// of the compiled models, the diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
@@ -22,6 +22,7 @@ struct SettingsView: View {
     @AppStorage(EarconsSetting.key) private var earcons = true
     @AppStorage(SpokenCallSetting.key) private var spokenCall = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
+    @AppStorage(QuietWait.key) private var quietWait = QuietWait.standard
     @AppStorage(CompileCache.requested) private var clearRequested = false
 
     /// The toggle's identifier, for the UI suite.
@@ -31,6 +32,8 @@ struct SettingsView: View {
     static let spokenCall = "settings-spoken-call"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
+    /// The stepper's identifier, for the UI suite.
+    static let quietWait = "settings-quiet-wait"
     /// The clear button's identifier, for the UI suite, which finds it whichever label it wears.
     static let clearCompiled = "settings-clear-compiled"
 
@@ -89,6 +92,18 @@ struct SettingsView: View {
                         .accessibilityLabel("Voice temperature")
                 } footer: {
                     Text("How much chance Topo's voice is drawn with: lower is steadier, higher livelier. \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. Applies from the next reply. Kept on this device.")
+                }
+                Section {
+                    // The value as the rule reads it, so one kept out of range shows as the
+                    // standard it waits for; each step is judged to a tenth, so the stepper's sums
+                    // cannot drift past the end of the range.
+                    let waits = QuietWait.judged(quietWait) ?? QuietWait.standard
+                    Stepper("Open mic waits \(QuietWait.said(waits)) s",
+                            value: Binding(get: { waits }, set: { quietWait = QuietWait.judged($0) ?? waits }),
+                            in: QuietWait.range, step: QuietWait.step)
+                        .accessibilityIdentifier(SettingsView.quietWait)
+                } footer: {
+                    Text("How long a pause has to be before Topo may decide you have finished, in a conversation behind the lock. Topo still waits through a pause that sounds unfinished, up to 4 s. \(QuietWait.said(QuietWait.standard)) s unless changed. Kept on this device.")
                 }
                 Section {
                     Button(clearRequested ? "Clears at the next launch" : "Clear compiled model cache") {

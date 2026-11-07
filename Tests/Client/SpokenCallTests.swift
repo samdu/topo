@@ -140,6 +140,40 @@ final class SpokenCallTests: XCTestCase {
         call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
     }
 
+    /// Every placing, a retry's included, logs the session as the call service finds it, on the
+    /// placing's own line, so a refusal on the device says which of the facts it was judged on.
+    func testEachPlacingLogsTheSessionItIsJudgedOn() async {
+        var said: [String] = []
+        var asked = 0
+        let call = SpokenCall(system: system, sleep: sleep.sleep, say: { said.append($0) })
+        call.session = {
+            asked += 1
+            return AudioSession.placing(category: "AVAudioSessionCategoryPlayAndRecord",
+                                        options: [.defaultToSpeaker, .allowBluetoothHFP],
+                                        mode: "AVAudioSessionModeVoiceChat", inputRunning: asked == 1,
+                                        nowPlaying: false)
+        }
+        call.start()
+        system.answer(0, FakeCallSystem.Refused())
+        await settle { self.sleep.waiting == 1 }
+        sleep.fire()
+        await settle { self.system.starts.count == 2 }
+        let placings = said.filter { $0.hasPrefix("call: placing") }
+        XCTAssertEqual(placings, [
+            "call: placing (category AVAudioSessionCategoryPlayAndRecord, options [allowBluetoothHFP, defaultToSpeaker], mode AVAudioSessionModeVoiceChat, input running true, now playing false)",
+            "call: placing (category AVAudioSessionCategoryPlayAndRecord, options [allowBluetoothHFP, defaultToSpeaker], mode AVAudioSessionModeVoiceChat, input running false, now playing false)",
+        ], "asked afresh at each placing")
+        call.end()
+    }
+
+    func testThePlacingLineNamesEveryField() {
+        let line = AudioSession.placing(category: "AVAudioSessionCategoryPlayback", options: [.mixWithOthers],
+                                        mode: "AVAudioSessionModeDefault", inputRunning: false, nowPlaying: true)
+        XCTAssertEqual(line, "category AVAudioSessionCategoryPlayback, options [mixWithOthers], mode AVAudioSessionModeDefault, input running false, now playing true")
+        XCTAssertTrue(AudioSession.placing(category: "c", options: [], mode: "m", inputRunning: true, nowPlaying: false)
+            .contains("options []"), "no options is said, not left out")
+    }
+
     func testPlacedThenActivatedIsUp() {
         let call = call()
         XCTAssertEqual(call.state, .idle)

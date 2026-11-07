@@ -76,6 +76,9 @@ final class Speaker {
     /// reply is not capped, since the system holds the session for the call's length, and its
     /// hang-up is a mute. Nil where the app has not attached one.
     private(set) var call: SpokenCall?
+    /// Whether a call can still be placed for this exchange: one is attached and none is on its
+    /// way, up or closing. A release keeps its input for the placing only then (`MicPress`).
+    var callIdle: Bool { call?.state == .idle }
     /// Told every hold change after this object has dealt with it, so the keeper comes first
     /// and whoever listens — the call's driver — second.
     var onHold: ((Bool) -> Void)?
@@ -161,8 +164,10 @@ final class Speaker {
         // this object's answer.
         self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
-        // No receipt is played into an open microphone either, asked at each sound rather than
-        // told at the press alone.
+        // Receipts sound into an open microphone, as Daphne's do: the conversation shuts its gate
+        // under each, and with noise suppression on the input's voice processing ducks them. Whether
+        // one is open or opening sets the working bed's level, asked rather than told at the press
+        // alone.
         sounds?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
@@ -658,6 +663,10 @@ final class Speaker {
             return false
         }
         progressed()
+        // Where and how loud the reply is about to be heard, so a run that sounded quiet says
+        // which of the session's states it was read under: the call's or not, its mode, the
+        // voice processing the session is configured for, the route and the system's volume.
+        AudioLog.say("the reply begins (\(audio.describeOutput()))")
         nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG

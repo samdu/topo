@@ -11,7 +11,7 @@ The format is the whole contract with the apps: a heading beginning `## ` opens 
 ## Daphne
 Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
 Where: samdu/daphne-assistant, `clients/ios`
-Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer, hold claims on the background), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` (the Pocket manager, its measured `.ane` placement and per-stage compute units, from `FluidPocketEngine`) and the frame-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `VoiceQueue`), with the silence keeper that holds the process open behind the lock screen and its counted owners (from `AudioIO.holdAlive` and `startKeeper`, and the cap on a wait in `TurnController.holdThroughLock`) and the rebuild of the queue on an audio engine configuration change (from `VoiceQueue.rebuild`), and the spoken exchange as an outgoing CallKit call in `Apps/Client/SpokenCall.swift` (the state machine, the activation and closing graces, the provider replaced on a reset, from `SessionCall` on the `ios-flic-standing-call` branch, PR #324), and the open microphone carried into the call in `Apps/Client/Conversation.swift` (engines rebuilt at the call's activation rather than carried across it, the call itself keeping the process alive, from `SessionCall` and `AudioIO` on the same branch), and the shape of the spoken exchange's cues in `Apps/Client/Earcons.swift` (an `AVAudioPlayer` per cue on the session as it stands, from `Earcons` on its `ios-flic-standing-call` branch at fc32b0d), and the keeper's sounds in `Apps/Client/WorkingSounds.swift` — the receipts, the working bed and its fades and pause, the mode read at each sound (from `Keeper` and `WaitSounds` on its `ios-flic-standing-call` branch at fc32b0d), the onset's `ack`, the go-ahead and its owing and yielding to a cue, the gate shut under a tone and the queued bleep (from `Keeper.heard`, `TurnController`'s `onSpeechStart` and `ClaudeTurn`'s `cueIfReady`, `holdGate` and `finishQueued` at 19b0a26), and the tool classes (buddy-channels `voice/classify.ts` at 79b3803, with `delegate` and `return` from its `SubagentStart` and `SubagentStop` and `error` from a `PostToolUse` that failed) — with the bloops themselves (`Resources/bloops/`, Sam's own, rendered by `server/bloops.py`), bundled under `Apps/Topo/Resources/sounds/` unchanged.
+Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer, hold claims on the background), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` (the Pocket manager, its measured `.ane` placement and per-stage compute units, from `FluidPocketEngine`) and the frame-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `VoiceQueue`), with the silence keeper that holds the process open behind the lock screen and its counted owners (from `AudioIO.holdAlive` and `startKeeper`, and the cap on a wait in `TurnController.holdThroughLock`) and the rebuild of the queue on an audio engine configuration change (from `VoiceQueue.rebuild`), and the spoken exchange as an outgoing CallKit call in `Apps/Client/SpokenCall.swift` (the state machine, the activation and closing graces, the provider replaced on a reset, from `SessionCall` on the `ios-flic-standing-call` branch, PR #324), and the open microphone carried into the call in `Apps/Client/Conversation.swift` (engines rebuilt at the call's activation rather than carried across it, the call itself keeping the process alive, from `SessionCall` and `AudioIO` on the same branch), and the shape of the spoken exchange's cues in `Apps/Client/Earcons.swift` (an `AVAudioPlayer` per cue on the session as it stands, from `Earcons` on its `ios-flic-standing-call` branch at fc32b0d), the keeper's sounds in `Apps/Client/WorkingSounds.swift` — the receipts, the working bed and its fades and pause, the mode read at each sound (from `Keeper` and `WaitSounds` on its `ios-flic-standing-call` branch at fc32b0d), the onset's `ack`, the go-ahead and its owing and yielding to a cue, the gate shut under a tone and the queued bleep (from `Keeper.heard`, `TurnController`'s `onSpeechStart` and `ClaudeTurn`'s `cueIfReady`, `holdGate` and `finishQueued` at 19b0a26), and the tool classes (buddy-channels `voice/classify.ts` at 79b3803, with `delegate` and `return` from its `SubagentStart` and `SubagentStop` and `error` from a `PostToolUse` that failed) — with the bloops themselves (`Resources/bloops/`, Sam's own, rendered by `server/bloops.py`), bundled under `Apps/Topo/Resources/sounds/` unchanged, and the open microphone's end of turn: Smart Turn's window and Whisper's mel front end in `Apps/Client/SmartTurn.swift` (`SmartTurn` and `Mel`, from `SmartTurn.swift`, with its bundled filterbank `smartturn-mel.bin`) and the rule over its verdicts in `Apps/Client/Endpoint.swift` (`Endpoint.Judging`: the −38 dBFS quiet, the asks, the two votes over 0.85, the wait and the 4 s cap, from `ClaudeTurnController.sense` and `OpenMic.rmsDB`).
 
 ## UI SFX
 Licence: The sounds are CC0 1.0 (a public domain dedication; attribution appreciated, not required), by Romain Simon. The package's code is MIT and none of it is used.
@@ -42,6 +42,16 @@ Use: FluidAudio's speaker clustering, compiled into the iOS app with it. Topo ca
 Licence: MIT, © Silero Team
 Where: https://huggingface.co/FluidInference/silero-vad-coreml at b419383c55c110e2c9271fa6ee0ea83d03c70d96 (`silero-vad-unified-256ms-v6.2.1.mlmodelc`), FluidInference's CoreML conversion of https://github.com/snakers4/silero-vad
 Use: The voice activity detector that hears the end of an utterance in a conversation behind the lock (`Apps/Client/Endpoint.swift`), run through FluidAudio's `VadManager`. Not in the bundle: Topo downloads it from FluidInference's repository at the pinned revision with the ear's models and keeps it in the app's Application Support.
+
+## Smart Turn v3.2
+Licence: BSD-2-Clause (text at the end of this file), © 2024–2025 Daily
+Where: https://huggingface.co/samthehugenerd/Smart-Turn-Topo at 2f07bf86005994dd804d467d5008e1ce9a5eaf30 (`smart-turn-v3.2-fp16.mlpackage`), Topo's own Core ML conversion of pipecat's fp32 weights in https://huggingface.co/pipecat-ai/smart-turn-v3 at f766f81d3cfdf7737ac64aad813d91bbfd56bf93 (`smart-turn-v3.2-gpu.onnx`), made by `smart-turn-coreml` in samdu/experiments at c8d4467: an FP16 ML Program, within 0.05 of pipecat's fp32 model, not its int8 `smart-turn-v3.2-cpu.onnx`. The model is from https://github.com/pipecat-ai/smart-turn, whose `LICENSE` at 24c720337e17befe0413bbc93b3504036c3a3bdc is the text below
+Use: Judges whether the speaker of an open microphone behind the lock has finished or only paused (`Apps/Client/SmartTurn.swift`), run through Core ML. Not in the bundle: Topo downloads it from its repository at the pinned revision with the ear's models, keeps it in the app's Application Support, and compiles it on the phone.
+
+## pipecat's Whisper features
+Licence: BSD-2-Clause (text at the end of this file), © 2024–2026 Daily; its own header credits transformers' `WhisperFeatureExtractor` (huggingface/transformers, Apache-2.0), whose math it mirrors
+Where: `_whisper_features.py` of https://github.com/pipecat-ai/pipecat, as Daphne vendors it (samdu/daphne-assistant, `server/_whisper_features.py`), here unchanged at `scripts/vendor/whisper_features.py`
+Use: The source of Smart Turn's filterbank, which `scripts/smartturn-mel.py` writes from it as `Apps/Topo/Resources/smartturn-mel.bin` (80 Slaney mel filters, 64 KB, in the iOS app's bundle), and the reference `Mel` in `Apps/Client/SmartTurn.swift` is checked against (`Tests/Client/SmartTurnTests.swift`). The script itself is a build tool and does not ship.
 
 ## Parakeet
 Licence: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/), © NVIDIA; converted to CoreML by FluidInference, and used here as converted
@@ -486,3 +496,30 @@ toolkit's deterministic CoreMLSineGenV2 semantics.
 Retain this notice and mattmireles-LICENSE when distributing adapted
 artifacts. Underlying Kokoro weights: hexgrad/Kokoro-82M and
 hexgrad/Kokoro-82M-v1.1-zh, Apache License 2.0.
+
+## Licence text: BSD-2-Clause, Daily
+Licence: BSD-2-Clause, for Smart Turn v3.2 and pipecat's Whisper features, whose copyright lines are in their entries; this is the text with Smart Turn's
+Text: BSD 2-Clause License
+
+Copyright (c) 2024–2025, Daily
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
