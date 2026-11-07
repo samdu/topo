@@ -2093,9 +2093,9 @@ extension ConversationTests {
         await settle("open on the call") { voice.listening }
     }
 
-    /// A reopen that opens after the lock's `.began` (the app no longer active, no call yet): what
-    /// opened is suspended, so nothing listens on the app's own session, and it resumes on the call.
-    func testAReopenThatOpensAsTheAppLeavesTheFrontIsSuspendedForTheCall() async {
+    /// A reopen whose permission answers after the lock's `.began` (the app no longer active, no
+    /// call yet) opens nothing and reads nothing, and opens on the call once it is live.
+    func testAReopenWhosePermissionLandsAsTheAppLeavesTheFrontOpensNothing() async {
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, _) = await inFront(detector)
         defer { conversation.stop("test", sending: false) }
@@ -2104,14 +2104,15 @@ extension ConversationTests {
         permission.arm()
         utterance(into: voice.sink)
         await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        let reads = seams.formatReads
         active = false
         permission.release()
-        await settle("the reopen opened") { voice.listening }
         await drain()
         XCTAssertTrue(conversation.on)
-        XCTAssertTrue(voice.suspended, "a reopen that opened with no live session was left listening on the app's own")
+        XCTAssertFalse(voice.listening, "the reopen opened the microphone from an inactive app with no call")
+        XCTAssertEqual(seams.formatReads, reads, "the input node was read from an inactive app with no call")
         leave()
         placeAndActivate(conversation)
-        await settle("resumed on the call") { voice.listening && !voice.suspended }
+        await settle("open on the call") { voice.listening && !voice.suspended }
     }
 }

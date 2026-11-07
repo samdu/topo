@@ -739,26 +739,21 @@ final class Conversation {
             reopening = false
             return
         }
-        let opened = await voice.reopen(as: .chat)
+        let opened = await voice.reopen(as: .chat, live: { [weak self] in self?.live ?? false })
         reopening = false
         guard on, !muted else {
             if opened { voice.cancel(.chat) }
             return
         }
         guard opened else {
-            // Refused as the session changed hands while it waited (a lock's placing landing on a
-            // front conversation): it opens again once the call's session is live.
+            // Refused as the session changed hands or stopped being live while the permission
+            // answered (a lock's placing or `.began` landing on a front conversation): it opens
+            // again once there is a live session.
             if !live {
                 return AudioLog.say("conversation: the reopen was refused with no live session (\(voice.refusal ?? "refused")); it opens again once there is one")
             }
             AudioLog.say("conversation: the microphone did not open again (\(voice.refusal ?? "refused"))")
             return stop("the microphone did not open again", sending: false)
-        }
-        // Opened as the app left the front with the call not yet live: suspended, so it is rebuilt
-        // on the call's session at the activation.
-        if !live {
-            voice.suspend("the session changed hands while it opened")
-            return
         }
         let gap = lastEnd.map { Int(now().timeIntervalSince($0) * 1000) }
         AudioLog.say("conversation: reopened\(gap.map { " after \($0) ms" } ?? "")")
