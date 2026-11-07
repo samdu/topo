@@ -130,7 +130,7 @@ final class Endpoint {
     var judgeLine: String {
         if judge != nil { return "judging ends with Smart Turn" }
         let why = judgeTrouble.map { "\(judgeState), \($0)" } ?? "\(judgeState)"
-        return "ending on \(Self.silence(judged: false)) s of silence alone (the judge: \(why))"
+        return "ending on Silero's \(Self.silence(judged: false)) s of quiet alone (the judge: \(why))"
     }
 
     /// FluidAudio's loader, from the store's directory: it reads `<base>/Models/<repo folder>`,

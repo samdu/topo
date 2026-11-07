@@ -383,6 +383,29 @@ final class KeptInputTests: XCTestCase {
         rig.speaker.stop()
     }
 
+    /// The lock comes between the release and the placing, and its drop (`Conversation.scene`,
+    /// with no conversation to carry) leaves the kept input running for the placing to read.
+    func testTheLockLeavesTheKeptInputForThePlacing() async {
+        let rig = await rig(isActive: false)
+        let system = FakeCallSystem()
+        var said: [String] = []
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep, say: { said.append($0) })
+        call.judged(on: rig.audio, voice: rig.voice)
+        rig.speaker.attach(call)
+        await say(rig)
+        rig.voice.drop(.chat)
+        XCTAssertTrue(rig.voice.inputKept, "the lock's drop stopped the input kept for the placing")
+        XCTAssertTrue(rig.voice.inputRunning)
+        call.start()
+        let placings = said.filter { $0.hasPrefix("call: placing") }
+        XCTAssertEqual(placings.count, 1)
+        XCTAssertTrue(placings.first?.contains("input running true") == true, "\(placings)")
+        call.provider(system.provider, perform: system.starts.last!)
+        XCTAssertFalse(rig.voice.inputKept, "the placing stops it")
+        call.end()
+        rig.speaker.stop()
+    }
+
     func testTheKeptInputStopsAtItsBound() async {
         let rig = await rig()
         let bound = ManualSleep()

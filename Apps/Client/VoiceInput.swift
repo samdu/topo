@@ -269,8 +269,11 @@ final class VoiceInput {
     /// finish: a released press has taken its audio and stopped its engine, and what is left is
     /// the decode of words the person meant to send — a lock or an interruption landing during it
     /// takes nothing from the microphone, which is no longer open.
+    /// An input kept past a release (`inputKept`) is kept for the lock: the lock's drop leaves it
+    /// to the call's placing, which stops it.
     func drop(_ gate: Gate? = nil) {
         guard !ending else { return }
+        if let gate, owner != gate { return }
         cancel(gate)
     }
 

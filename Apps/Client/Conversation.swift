@@ -567,9 +567,9 @@ final class Conversation {
     private var judgedIn: Duration?
     private var judged: String { judgedIn.map { ", judged in \(SmartTurn.ms($0))" } ?? "" }
 
-    /// Silero's end, in the log's words.
+    /// Silero's end, in the log's words: the cap's spelling, the listener named.
     private var sileroEnd: String {
-        String(format: "%.1f s of silence", silence) + (judge == nil ? "" : lastVerdict)
+        String(format: "Silero's %.1f s of quiet", silence) + (judge == nil ? "" : lastVerdict)
     }
 
     /// The utterance has ended, `why` saying how: it is decoded as a release decodes it, the next
