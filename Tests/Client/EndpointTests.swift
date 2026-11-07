@@ -88,6 +88,26 @@ final class EndpointTests: XCTestCase {
         var early = Endpoint.Policy()
         XCTAssertNil(early.take(.start(tone.lowerBound), gates: [tone]), "the tone's own onset, reported early, was speech")
     }
+
+    /// Two tones the detector hears as one segment are no utterance: what of it a later gate
+    /// covers is that tone's too. Words begun inside the first that run on past both are counted.
+    @MainActor
+    func testTwoTonesInOneSegmentAreNoUtterance() {
+        let first = 10_000..<16_400, second = 20_000..<26_400
+        let late = Endpoint.startEarly
+        var tones = Endpoint.Policy()
+        XCTAssertNil(tones.take(.start(10_500), gates: [first, second]))
+        XCTAssertNil(tones.take(.end(second.upperBound + late + 400), gates: [first, second]),
+                     "two receipts in one segment were sent as a turn")
+        var words = Endpoint.Policy()
+        XCTAssertNil(words.take(.start(10_500), gates: [first, second]))
+        XCTAssertEqual(words.take(.end(second.upperBound + late + quarter), gates: [first, second]), .ended,
+                       "words begun on a tone that ran on past the next were lost")
+        // An onset before any gate is the person's, a tone sounded over it included.
+        var spoken = Endpoint.Policy()
+        XCTAssertEqual(spoken.take(.start(4_000), gates: [second]), .speech)
+        XCTAssertEqual(spoken.take(.end(4_000 + quarter), gates: [second]), .ended)
+    }
 }
 
 #if canImport(FluidAudio)

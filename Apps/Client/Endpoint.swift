@@ -120,15 +120,20 @@ final class Endpoint {
         /// The sample this onset's speech is counted from: its start, or the end of the gate it
         /// started inside.
         private var countFrom = 0
+        /// Whether this onset was inside a gate: the tone's, so any later tone the segment runs
+        /// over is the tones' too.
+        private var gated = false
         /// Whether this utterance has held speech of `minSpeech` or more.
         private(set) var heardSpeech = false
 
         /// `gates` are the stretches of the stream a tone sounded into the microphone is heard in
         /// (`Conversation`, each from the tone's place less `startEarly` to its end). An onset
         /// inside one is the tone's as much as anyone's: it is no `.speech`, and only what runs on
-        /// past the gate, by more than the detector's `startEarly`, counts toward `minSpeech`. An onset before a gate is the person's, whenever
-        /// the detector's verdict on it arrives, so a tone over words already begun takes nothing
-        /// of them.
+        /// past the gate by more than the detector's `startEarly`, and outside any later gate it
+        /// runs over by as much, counts toward `minSpeech`, so tones the detector hears as one
+        /// segment are no utterance. An onset before a gate is the person's, whenever the
+        /// detector's verdict on it arrives, so a tone over words already begun takes nothing of
+        /// them.
         mutating func take(_ event: Event, gates: [Range<Int>] = []) -> Heard? {
             switch event {
             case .start(let at):
@@ -138,15 +143,31 @@ final class Endpoint {
                 // pad after the speech it closes, so a tone heard late is not a quarter second of
                 // speech by itself.
                 countFrom = shut.map { $0 + Endpoint.startEarly } ?? at
+                gated = shut != nil
                 return shut == nil ? .speech : nil
             case .end(let at):
                 // An end with no start before it ends nothing.
                 guard startedAt != nil else { return nil }
                 startedAt = nil
-                let long = Double(at - countFrom) >= Endpoint.minSpeech * Double(Ear.rate)
+                var heard = at - countFrom
+                if gated { heard -= Self.covered(by: gates, from: countFrom, to: at) }
+                let long = Double(heard) >= Endpoint.minSpeech * Double(Ear.rate)
                 if long { heardSpeech = true }
                 return heardSpeech ? .ended : nil
             }
+        }
+
+        /// How much of `from..<to` the gates cover, each widened by the detector's lateness.
+        private static func covered(by gates: [Range<Int>], from: Int, to: Int) -> Int {
+            let clipped = gates.map { max($0.lowerBound, from)..<max(min($0.upperBound + Endpoint.startEarly, to), from) }
+                .filter { !$0.isEmpty }.sorted { $0.lowerBound < $1.lowerBound }
+            var covered = 0
+            var reached = from
+            for range in clipped where range.upperBound > reached {
+                covered += range.upperBound - max(range.lowerBound, reached)
+                reached = range.upperBound
+            }
+            return covered
         }
 
         /// Whether speech is going on, or this utterance has held any.
