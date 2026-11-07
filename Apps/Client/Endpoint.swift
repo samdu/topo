@@ -112,7 +112,7 @@ final class Endpoint {
     /// How far before a tone's place in the stream the detector can put its onset, and after its
     /// end its end: a chunk, since a start and an end are resolved to the chunk they land in, and
     /// FluidAudio's speech pad (0.1 s).
-    static let startEarly = chunk + 1_600
+    nonisolated static let startEarly = chunk + 1_600
 
     /// Topo's policy over the detector's events. Pure, so the suite drives it with a script.
     struct Policy: Equatable, Sendable {
