@@ -316,13 +316,16 @@ final class KeptInputTests: XCTestCase {
         rig.speaker.stop()
     }
 
-    /// The chat's cancels (the keyboard up, a typed send, the chat going) stop it, with no hold
-    /// changed to stand in for the stop.
+    /// The chat's cancels (the keyboard up, a typed send, the chat going), which are scoped to the
+    /// chat's gate (`cancel(.chat)`) though its session has ended, stop it, with no hold changed to
+    /// stand in for the stop. Another gate's cancel leaves it.
     func testACancelStopsTheKeptInput() async {
         let rig = await rig()
         await say(rig)
         XCTAssertTrue(rig.voice.inputKept)
-        rig.voice.cancel()
+        rig.voice.cancel(.firstRun)
+        XCTAssertTrue(rig.voice.inputKept, "another gate's cancel stopped the chat's kept input")
+        rig.voice.cancel(.chat)
         XCTAssertFalse(rig.voice.inputKept)
         XCTAssertFalse(rig.voice.inputRunning)
         XCTAssertTrue(rig.watch.underInput.isEmpty, "\(rig.watch.underInput)")

@@ -108,6 +108,9 @@ final class VoiceInput {
     /// and a reply is not held for it. The audio session is kept for it as for an open
     /// microphone (`AudioSession.keptInput`), since its tap is on the format the session gave.
     private(set) var inputKept = false
+    /// The gate whose release kept the input: its cancel stops it, though the session it was
+    /// kept from has ended and `owner` is clear.
+    private var keptFor: Gate?
     /// Ends a kept input at `keptFor` from its release.
     private var keptBound: Task<Void, Never>?
     /// How long an input is kept at most: the release hold's own bound (`Speaker.releaseBound`).
@@ -273,8 +276,8 @@ final class VoiceInput {
 
     /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
     func cancel(_ gate: Gate? = nil) {
+        if gate == nil || gate == keptFor { stopKeptInput("the session was cancelled") }
         if let gate, owner != gate { return }
-        stopKeptInput("the session was cancelled")
         generation += 1
         text = ""
         tearDown()
@@ -553,7 +556,7 @@ final class VoiceInput {
         captioner?.cancel()
         captioner = nil
         if keeps, tapped, engine?.isRunning == true {
-            keepInput()
+            keepInput(for: gate)
         } else {
             removeTap()
             if engine?.isRunning == true { engine?.stop() }
@@ -595,9 +598,10 @@ final class VoiceInput {
 
     /// The release keeps its input: the gate shut first, so nothing the input hears from here
     /// reaches the sink, and the session kept for the tap before anything else lets it go.
-    private func keepInput() {
+    private func keepInput(for owner: Gate) {
         gate.shut()
         inputKept = true
+        keptFor = owner
         audio.keptInput(running: true)
         AudioLog.say("input kept past the release for the call's placing; what it hears is dropped")
         keptBound?.cancel()
@@ -630,6 +634,7 @@ final class VoiceInput {
         keptBound = nil
         guard inputKept else { return }
         inputKept = false
+        keptFor = nil
         removeTap()
         if engine?.isRunning == true { engine?.stop() }
         AudioLog.say("kept input stopped: \(why)")
