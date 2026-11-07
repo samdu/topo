@@ -378,17 +378,19 @@ final class HarnessIntegrationTests: XCTestCase {
 
     /// A turn is on its way, for a press released behind it to bleep (`Speaker.sounded(release:)`),
     /// while its words are on the line and after the log has them, through the wait on the model,
-    /// until its reply is in the log.
+    /// until its reply is shown — and not through the memory's pass after it, where its words
+    /// are still on the line.
     func testATurnIsOnItsWayFromTheLineUntilItsReply() async throws {
         let db = InMemoryRecordDatabase()
         let seen = Seen()
-        let asking = Answers()
+        let asking = Answers(), passing = Answers()
         let transport = ScriptedTransport((200, reply("Tonight.")))
         transport.duringRequest = {
             await asking.set(await MainActor.run { seen.harness?.turnOnItsWay ?? false })
         }
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
         seen.harness = harness
+        harness.onPass = { await passing.set(harness.turnOnItsWay) }
         XCTAssertFalse(harness.turnOnItsWay)
         _ = harness.willSend("When are the bins?")
         XCTAssertTrue(harness.turnOnItsWay, "words on the line were not on their way")
@@ -397,6 +399,8 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let wasAsking = await asking.value
         XCTAssertEqual(wasAsking, true, "the turn was not on its way while the model had it")
+        let wasPassing = await passing.value
+        XCTAssertEqual(wasPassing, false, "the turn was still on its way with its reply shown")
         let turns = try await log(db).map(\.text)
         XCTAssertEqual(turns, ["When are the bins?", "Tonight."])
         XCTAssertFalse(harness.turnOnItsWay, "the turn was still on its way after its reply")
