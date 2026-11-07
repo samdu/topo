@@ -286,6 +286,56 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(decoded, seen)
     }
 
+    // MARK: - The pass's failure (#615)
+
+    /// A turn whose guest was cut off is in the log with nothing owed for it: no words on the
+    /// line, no reply held. Its line is the turn's own, not a pass's, so a pass that completes
+    /// leaves it up; the clear #615 added takes down a pass's failure and no other.
+    func testAPassThatCompletesLeavesACutOffTurnsFailureUp() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.cutOff])
+        let (harness, _) = harness(db, guest)
+        await harness.send("delete my old drafts")
+        let cut = try XCTUnwrap(harness.failure, "the cut-off turn put nothing up")
+        XCTAssertNotEqual(cut.source, .pass)
+        XCTAssertTrue(harness.waiting.isEmpty, "words are still on the line: \(harness.waiting)")
+        XCTAssertTrue(harness.unsaved.isEmpty, "a reply is held: \(harness.unsaved)")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["delete my old drafts"])
+        await harness.refresh()
+        await harness.answerPending()
+        XCTAssertEqual(guest.inputs, ["delete my old drafts"], "the pass asked the guest again")
+        XCTAssertEqual(harness.failure, cut, "a pass that completed took down the cut-off turn's line")
+    }
+
+    /// The person's turn is in the log and the guest's reply is whole, held for a save iCloud
+    /// refused: nothing is on the line, but the reply is owed. A pass that fails puts its line up
+    /// over iCloud's, and a pass that then completes, its read not whole, leaves it up: the
+    /// reply is still owed.
+    func testAPassThatCompletesLeavesItsFailureUpWhileAReplyIsUnsaved() async throws {
+        let db = RefusingReplies()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])
+        let (harness, _) = harness(db, guest)
+        await harness.refresh()
+        await harness.answerPending()
+        await db.refuse(true)
+        let nonce = harness.willSend("What is the capital of France?")
+        await harness.retry()
+        XCTAssertTrue(harness.waiting.isEmpty, "words are still on the line: \(harness.waiting)")
+        XCTAssertEqual(harness.unsaved, [nonce: "Paris."])
+        XCTAssertEqual(harness.failure?.source, .sync)
+        // The pass writes the owed reply first, and its save is refused.
+        await harness.answerPending()
+        XCTAssertEqual(harness.failure?.source, .pass, "the pass's failure is not the last one up")
+        // A record the log cannot read: the runner's read is not whole, so the pass completes
+        // having done nothing.
+        _ = try await db.wrapped.save([Record(type: Turn.recordType, id: RecordID("junk"))])
+        await harness.answerPending()
+        XCTAssertTrue(harness.waiting.isEmpty)
+        XCTAssertEqual(harness.unsaved, [nonce: "Paris."], "the reply was saved")
+        XCTAssertEqual(harness.failure?.source, .pass, "the red line came down with a reply still owed")
+    }
+
     // MARK: - A turn lost or doubled
 
     /// The guest answered and the reply never reached the log; the app is killed. The next launch
@@ -1144,7 +1194,7 @@ final class GuestBridgeTests: XCTestCase {
         case .update(.event(.started)): "started"
         case .update(.event(.text)): "text"
         case .update(.event(.usage)): "usage"
-        case .update(.event(.toolUse(let name, _))): "tool \(name)"
+        case .update(.event(.toolUse(let name, _, _))): "tool \(name)"
         case .update(.event(let other)): "\(other)"
         case .update(.ended(.answered)): "ended answered"
         case .update(.ended(.abandoned)): "ended abandoned"

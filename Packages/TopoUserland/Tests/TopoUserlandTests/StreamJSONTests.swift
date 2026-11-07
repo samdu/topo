@@ -15,7 +15,7 @@ final class StreamJSONTests: XCTestCase {
         let started = events.filter { if case .started = $0 { return true } else { return false } }
         XCTAssertEqual(started, Array(repeating: .started(session: session, model: "claude-haiku-4-5-20251001"), count: 2),
                        "init comes once per turn, naming the model")
-        XCTAssertTrue(events.contains(.toolUse(name: "Bash")))
+        XCTAssertTrue(events.contains(.toolUse(name: "Bash", id: "toolREDACTED")))
         let results = events.compactMap { if case .result(let result) = $0 { return result } else { return nil } }
         XCTAssertEqual(results.count, 2)
         XCTAssertTrue(results.allSatisfy { !$0.isError && $0.subtype == "success" && $0.session == session })
@@ -33,7 +33,7 @@ final class StreamJSONTests: XCTestCase {
         // Code's words for it.
         XCTAssertTrue(events.contains(.toolResult(isError: true, text: "No suitable shell found. Claude CLI requires a Posix shell "
                                                   + "environment. Please ensure you have a valid shell installed and the SHELL "
-                                                  + "environment variable set.")))
+                                                  + "environment variable set.", id: "toolu_REDACTED")))
     }
 
     /// A tool's result, as a string or as text blocks, an error or not; a `user` message with no
@@ -42,10 +42,10 @@ final class StreamJSONTests: XCTestCase {
         func line(_ content: String, _ extra: String = "") -> String {
             #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"# + content + extra + "}]}}"
         }
-        XCTAssertEqual(StreamJSON.events(in: line(#""topo-42\n""#)), [.toolResult(isError: false, text: "topo-42\n")])
-        XCTAssertEqual(StreamJSON.events(in: line(#""nope""#, #","is_error":true"#)), [.toolResult(isError: true, text: "nope")])
+        XCTAssertEqual(StreamJSON.events(in: line(#""topo-42\n""#)), [.toolResult(isError: false, text: "topo-42\n", id: "t")])
+        XCTAssertEqual(StreamJSON.events(in: line(#""nope""#, #","is_error":true"#)), [.toolResult(isError: true, text: "nope", id: "t")])
         XCTAssertEqual(StreamJSON.events(in: line(#"[{"type":"text","text":"a"},{"type":"image"},{"type":"text","text":"b"}]"#)),
-                       [.toolResult(isError: false, text: "a\nb")])
+                       [.toolResult(isError: false, text: "a\nb", id: "t")])
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"user","message":{"role":"user","content":"hello"}}"#), [.other("user")])
     }
 
@@ -62,12 +62,12 @@ final class StreamJSONTests: XCTestCase {
             }
         }
         XCTAssertEqual(tools, [
-            .thinking, .toolUse(name: "WebSearch"),
-            .thinking, .toolUse(name: "Write", path: "/root/memory/capital.md"),
-            .thinking, .toolUse(name: "Write", path: "/root/work/capital.py"),
-            .thinking, .toolUse(name: "Read"),
-            .thinking, .toolUse(name: "Edit", path: "/root/memory/capital.md"),
-            .thinking, .toolUse(name: "Bash"),
+            .thinking, .toolUse(name: "WebSearch", id: "toolu_redacted0001"),
+            .thinking, .toolUse(name: "Write", path: "/root/memory/capital.md", id: "toolu_redacted0003"),
+            .thinking, .toolUse(name: "Write", path: "/root/work/capital.py", id: "toolu_redacted0004"),
+            .thinking, .toolUse(name: "Read", id: "toolu_redacted0005"),
+            .thinking, .toolUse(name: "Edit", path: "/root/memory/capital.md", id: "toolu_redacted0006"),
+            .thinking, .toolUse(name: "Bash", id: "toolu_redacted0007"),
             .thinking,
         ])
         XCTAssertFalse(events.contains { if case .malformed = $0 { return true } else { return false } })
@@ -262,7 +262,7 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"user","isReplay":true,"message":{"role":"user","content":"hi"}}"#),
                        [.other("user/replay")])
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"user","uuid":"u","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}"#),
-                       [.toolResult(isError: false, text: "ok")])
+                       [.toolResult(isError: false, text: "ok", id: "t")])
     }
 
     func testClaudeCodesArguments() {

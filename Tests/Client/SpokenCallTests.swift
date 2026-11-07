@@ -783,6 +783,48 @@ final class AudioSessionCallTests: XCTestCase {
         XCTAssertEqual(seams.records, [], "and nothing was configured for any of it")
     }
 
+    /// A conversation behind the lock under an active call: the utterance's end drops the
+    /// chat's claim, which the call defers, and the microphone closes ahead of the turn's hold,
+    /// with the app away. That marks the session for the next path, and under the call it is
+    /// still the system's and live: a sound is let on it, and nothing is configured.
+    func testTheSessionStaysLiveUnderAnActiveCallWhenTheMicrophoneClosesAway() {
+        let seams = Seams()
+        let audio = audio(seams)
+        audio.wantRecord(true, for: .chat)
+        audio.wantAlive(true, for: .awaitingReply("before"))
+        active = false
+        audio.callPlaced()
+        audio.callActivated()
+        audio.wantAlive(false, for: .awaitingReply("before"))
+        audio.microphone(open: true)
+        seams.forget()
+        audio.wantRecord(false, for: .chat)
+        audio.microphone(open: false)
+        XCTAssertNoThrow(try audio.ensureLive(), "a sound was refused on the call's live session")
+        audio.wantAlive(true, for: .awaitingReply("turn"))
+        audio.microphone(open: true)
+        XCTAssertNoThrow(try audio.ensureLive())
+        XCTAssertEqual(seams.lines, [], "the session was configured beside the call")
+        XCTAssertEqual(seams.records, [])
+    }
+
+    /// A media services reset under an active call is the call's session gone with every handle
+    /// on it: no sound is let on it until the system activates it again.
+    func testAResetUnderAnActiveCallLeavesTheSessionNotLiveUntilTheNextActivation() {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
+                                 deactivate: seams.deactivate, isActive: { [unowned self] in active })
+        audio.callPlaced()
+        audio.callActivated()
+        XCTAssertNoThrow(try audio.ensureLive())
+        center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        XCTAssertThrowsError(try audio.ensureLive(), "a sound was let onto a call's session the reset killed")
+        audio.callActivated()
+        XCTAssertNoThrow(try audio.ensureLive(), "the next activation is the call's session again")
+        XCTAssertEqual(seams.records, [])
+    }
+
     func testTheWarmClaimLeavesAnotherAppPlayingAlone() {
         let seams = Seams()
         var playing = true

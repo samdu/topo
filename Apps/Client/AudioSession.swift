@@ -31,9 +31,13 @@ final class AudioSession {
         case releasing(Int)
         case awaitingReply(String)
         case speaking
-        /// A sound played beside the voice being heard out — a cue, a receipt, the bed's fade —
-        /// taken only while another hold stands and bounded by the sound's own bound.
+        /// A cue of the spoken exchange's being heard out (`Earcons`), taken only while another
+        /// hold stands and bounded by the cue's own bound.
         case cue
+        /// The keeper's sound being heard out — a receipt, the bed's fade — taken only while
+        /// another hold stands and bounded by the sound's own bound. A case of its own beside
+        /// `cue`, since a hold is one per case: neither letting go can cut the other.
+        case sound
     }
     /// Where the session is with the CallKit call a spoken exchange behind the lock is
     /// (`SpokenCall`). From the call's placing until the system says it is over the session is
@@ -67,10 +71,10 @@ final class AudioSession {
     var onHoldChanged: ((Bool) -> Void)?
     /// True while anything wants the process kept alive.
     var holding: Bool { !holds.isEmpty }
-    /// Whether a hold stands that is not a sound's own: what a sound may extend. A sound begun
-    /// under nothing but another sound's hold holds nothing, so a run of them cannot keep the
-    /// process alive past the wait or the reply they were played for.
-    var heldForATurn: Bool { holds.contains { $0 != .cue } }
+    /// Whether a hold stands that is not a sound's own (a cue's or the keeper's): what a sound may
+    /// extend. A sound begun under nothing but another sound's hold holds nothing, so a run of
+    /// them cannot keep the process alive past the wait or the reply they were played for.
+    var heldForATurn: Bool { holds.contains { $0 != .cue && $0 != .sound } }
     private var recordMode: Bool { !recordClaims.isEmpty }
     /// Whether the record configuration is the one for a microphone heard through Apple's voice
     /// processing (`NoiseSuppression`), which is its mode: `voiceChat` with, `default` without.
@@ -167,8 +171,24 @@ final class AudioSession {
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            // Marked at the notification itself, before any handler's task runs: every handle
+            // made before it is dead from this moment, whichever object's handler comes first.
+            MainActor.assumeIsolated { self?.serverWasReset() }
             Task { @MainActor in self?.mediaServicesWereReset() }
         }
+    }
+
+    /// How many media services resets this session has seen, counted at the notification: a
+    /// handle into mediaserverd kept across calls (a sound's player) is good only while this is
+    /// the count it was made under.
+    private(set) var resets = 0
+    /// The reset count the call's session was activated under: a reset since is the call's
+    /// session gone with every handle on it, until the system activates it again.
+    private var resetsAtActivation = 0
+
+    private func serverWasReset() {
+        resets += 1
+        valid = false
     }
 
     private func mediaServicesWereReset() {
@@ -207,8 +227,16 @@ final class AudioSession {
     /// session, as `ensureActive` is, and a refusal on one that is not, since a moment configures
     /// nothing. Behind the lock, after an interruption took the session, `ensureActive` would be
     /// the session reconfigured and activated from the background under a hold, for a cue.
+    /// Judged by the call's phase, as `ensureActive` is, and by the reset count: under an active call the session is the
+    /// system's and live whatever marked it otherwise (a claim deferred as the microphone closed
+    /// away, ahead of the turn's hold) but a media services reset since its activation, and on
+    /// its way to the system or back it is not.
     func ensureLive() throws {
-        guard valid else { throw NotLive() }
+        switch call {
+        case .active: guard resets == resetsAtActivation else { throw NotLive() }
+        case .placed, .deactivated, .closing: throw NotLive()
+        case .none: guard valid else { throw NotLive() }
+        }
     }
 
     struct NotLive: Error, CustomStringConvertible {
@@ -509,6 +537,7 @@ final class AudioSession {
         call = .active
         applied = true
         valid = true
+        resetsAtActivation = resets
         defer { releaseSettling() }
         // CallKit routes an activated call to the earpiece, whatever the category's
         // `defaultToSpeaker` says: a reply read there is not heard from a phone held away or

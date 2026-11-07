@@ -163,7 +163,10 @@ struct TopoApp: App {
         #endif
         Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
-        let speaker = Speaker(audio: audio, voice: spoken, earcons: Earcons(audio: audio))
+        // The keeper's sounds follow the guest beside Topo, after him, and the speaker plays the bed.
+        let sounds = KeeperSounds(audio: audio)
+        sounds.follow(harness)
+        let speaker = Speaker(audio: audio, voice: spoken, sounds: sounds, earcons: Earcons(audio: audio))
         // A spoken exchange behind the lock is a call: placed while a hold stands with the
         // app in the background, ended as the app comes forward (`SpokenCall`).
         let call = SpokenCall()
@@ -187,6 +190,8 @@ struct TopoApp: App {
         // A reply is not read into an open microphone: one that lands while it is open waits for
         // it to close (`Speaker.speak`).
         speaker.microphoneOpen = { voice.listening }
+        // A press heard behind a turn on its way bleeps, whatever the press itself has ended.
+        speaker.turnOnItsWay = { harness.turnOnItsWay }
         MicrophoneWatch.start(voice, speaker)
         // An open hands-free spoken turn as the app goes behind the lock goes on as a
         // conversation over the call: the call is placed for it, the resident stays up for it,

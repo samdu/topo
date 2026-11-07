@@ -5,6 +5,7 @@ import TopoTools
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
+/// While Topo works (`WorkingSounds`), which the keeper's sounds read at each sound,
 /// Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks,
 /// Open mic waits (`QuietWait`), which the conversation's rule reads at each verdict,
 /// and Earcons (`EarconsSetting`), which each cue reads as it sounds.
@@ -19,7 +20,7 @@ struct VoiceTool: Tool {
     private struct Defaults: @unchecked Sendable { let store: UserDefaults }
 
     let name = "voice"
-    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the call behind the lock, the open microphone's wait, the earcons"
+    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the sounds while Topo works, the call behind the lock, the open microphone's wait, the earcons"
     let usage = """
     topo voice noise-suppression [status]   whether the microphone is cleaned up before it is heard
     topo voice noise-suppression on         clean it up: Apple's voice processing (noise suppression, echo
@@ -34,6 +35,15 @@ struct VoiceTool: Tool {
 
     \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. A change applies from the next reply read aloud, on this phone only, and they
     can change it back in Settings.
+
+    topo voice working [status]             what a spoken turn sounds like while you work on it
+    topo voice working off                  nothing until the reply
+    topo voice working receipts             a short tone as you search the web, run a command or write prose, and one when the turn fails (the earcons' own, when they are on)
+    topo voice working sounds               the tones over a soft working bed until the reply begins
+
+    Receipts unless changed. The sounds are the spoken turn's: nothing sounds unless one is being
+    waited for aloud. A change applies from the next sound, on this phone only, and they can
+    change it back in Settings.
 
     topo voice call [status]                whether a spoken reply behind the lock is a call
     topo voice call on                      it is: a card on the Lock Screen while you answer, hang up stops you
@@ -62,6 +72,7 @@ struct VoiceTool: Tool {
         switch arguments.first {
         case "noise-suppression": return noiseSuppression(arguments)
         case "temperature": return temperature(arguments)
+        case "working": return working(arguments)
         case "call": return call(arguments)
         case "wait": return wait(arguments)
         case "earcons": return earcons(arguments)
@@ -85,6 +96,16 @@ struct VoiceTool: Tool {
     private func set(_ on: Bool) -> ToolReply {
         defaults.store.set(on, forKey: NoiseSuppression.key)
         return .ok("noise suppression \(on ? "on" : "off"), from the next press\n")
+    }
+
+    private func working(_ arguments: [String]) -> ToolReply {
+        guard arguments.count == 2, arguments[1] != "status" else {
+            return .ok("working sounds \(WorkingSounds.mode(defaults.store).rawValue)\n")
+        }
+        // Judged as the sounds judge what they read, so nothing is kept that they would not play.
+        guard let mode = WorkingSounds.Mode(rawValue: arguments[1]) else { return .usage(usage + "\n") }
+        defaults.store.set(mode.rawValue, forKey: WorkingSounds.key)
+        return .ok("working sounds \(mode.rawValue), from the next sound\n")
     }
 
     private func call(_ arguments: [String]) -> ToolReply {

@@ -376,6 +376,37 @@ final class HarnessIntegrationTests: XCTestCase {
         try await eventually("Topo idle after the reply") { mascot.state.input.activity == "idle" }
     }
 
+    /// A turn is on its way, for a press released behind it to bleep (`Speaker.sounded(release:)`),
+    /// while its words are on the line and after the log has them, through the wait on the model,
+    /// until its reply is shown — and not through the memory's pass after it, where its words
+    /// are still on the line.
+    func testATurnIsOnItsWayFromTheLineUntilItsReply() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let asking = Answers(), passing = Answers()
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            await asking.set(await MainActor.run { seen.harness?.turnOnItsWay ?? false })
+        }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        seen.harness = harness
+        harness.onPass = { await passing.set(harness.turnOnItsWay) }
+        XCTAssertFalse(harness.turnOnItsWay)
+        _ = harness.willSend("When are the bins?")
+        XCTAssertTrue(harness.turnOnItsWay, "words on the line were not on their way")
+
+        await harness.retry()
+
+        let wasAsking = await asking.value
+        XCTAssertEqual(wasAsking, true, "the turn was not on its way while the model had it")
+        let wasPassing = await passing.value
+        XCTAssertEqual(wasPassing, false, "the turn was still on its way with its reply shown")
+        let turns = try await log(db).map(\.text)
+        XCTAssertEqual(turns, ["When are the bins?", "Tonight."])
+        XCTAssertFalse(harness.turnOnItsWay, "the turn was still on its way after its reply")
+        XCTAssertFalse(harness.turnOpen)
+    }
+
     /// A second turn, sent over the runner the first one made, is open before any of its steps
     /// has said where it is: here while a debug launch holds the reply, which is before the
     /// runner is asked anything.
@@ -1535,6 +1566,141 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(read)
         XCTAssertEqual(phone.error, "iCloud is out of reach. Topo will try again.",
                        "a read that got through took down the failure of a turn it was not about")
+    }
+
+    // MARK: The pass's failure (#615)
+
+    /// The answering loop, driven a pass at a time: `passes` finished so far.
+    private struct Looping {
+        let phone: Harness
+        let beats: Beats
+        let open: Task<Void, Never>
+        func next(_ pass: Int) async throws {
+            await beats.tick()
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+        }
+        func stop() async {
+            open.cancel()
+            await open.value
+        }
+    }
+
+    /// A phone whose loop has run one pass online, so its runner is made and every later pass
+    /// that reads the log whole with nothing to answer takes the idle path.
+    private func looping(_ db: FailingDatabase) async throws -> Looping {
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("pass 1") { await beats.passes >= 1 }
+        XCTAssertNil(phone.failure, "the first pass, online, put up a failure")
+        return Looping(phone: phone, beats: beats, open: open)
+    }
+
+    /// Sam's run of build 444616: iCloud out of reach, a pass of the loop fails and its failure
+    /// is the last up; iCloud back, every pass reads the log whole and has nothing to answer, so
+    /// no pass reaches the runner. The line comes down on the first of them, and says so.
+    func testAPassesFailureComesDownOnTheLoopsFirstIdleReadOnceICloudIsBack() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let loop = try await looping(db)
+        let lines = try await cloudLines(after: {
+            await db.refuseReads(true, with: CKError(.networkUnavailable))
+            try await loop.next(2)
+            XCTAssertEqual(loop.phone.failure?.source, .pass, "the pass's failure is not the last one up")
+            await db.refuseReads(false)
+            try await loop.next(3)
+        }, until: { $0.message.hasPrefix("failure down:") }).map(\.message).filter { $0.hasPrefix("failure ") }
+        await loop.stop()
+        XCTAssertNil(loop.phone.failure, "iCloud is back and the red line stands")
+        XCTAssertEqual(lines.first, "failure up: read")
+        XCTAssertEqual(lines.last.map { $0.hasPrefix("failure down: pass after ") }, true, "\(lines)")
+    }
+
+    /// A pass that completes takes down its own failure and no other: a turn iCloud would not
+    /// take is still owed (the guest has it, so its failure is iCloud behind), and that failure
+    /// stays up through passes that read the log and complete.
+    func testAPassThatCompletesLeavesATurnsFailureStanding() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let loop = try await looping(db)
+        await db.refuseWrites(true)
+        await loop.phone.send("water the plants")
+        XCTAssertEqual(loop.phone.waiting, ["water the plants"])
+        let owed = try XCTUnwrap(loop.phone.failure, "the turn iCloud would not take put nothing up")
+        XCTAssertNotEqual(owed.source, .pass)
+        for pass in 2...4 { try await loop.next(pass) }
+        await loop.stop()
+        XCTAssertEqual(loop.phone.waiting, ["water the plants"], "the turn went with writes refused")
+        XCTAssertEqual(loop.phone.failure, owed, "a pass took down the failure of a turn still owed")
+    }
+
+    /// With no runner made yet, the loop asks the pass whatever its read showed, so the pass that
+    /// completes is what takes its own failure down: iCloud out of reach from the launch, then
+    /// back.
+    func testAPassThatCompletesTakesDownItsOwnFailure() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        await db.refuseReads(true)
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), pause: { try await beats.pause($0) })
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("pass 1") { await beats.passes >= 1 }
+        XCTAssertEqual(phone.failure?.source, .pass, "the pass's failure is not the last one up")
+        await db.refuseReads(false)
+        await beats.tick()
+        try await eventually("pass 2") { await beats.passes >= 2 }
+        open.cancel()
+        await open.value
+        XCTAssertNil(phone.failure, "the pass completed and its failure stands")
+    }
+
+    /// A pass that fails while a turn's words are still on the line puts its line up over the
+    /// turn's; the next pass completes with nothing to answer, its retry of the line held by the
+    /// backoff, and the line stays up: the words are still owed.
+    func testAPassesFailureOverATurnStillOwedStaysUp() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let beats = Beats()
+        let clock = TestClock()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("pass 1") { await beats.passes >= 1 }
+        await db.refuseWrites(true)
+        await phone.send("water the plants")
+        XCTAssertEqual(phone.waiting, ["water the plants"])
+        // The loop's own attempt fails too, so the next waits out the backoff; the clock stands.
+        await beats.tick()
+        try await eventually("pass 2") { await beats.passes >= 2 }
+        await db.refuseReads(true)
+        await beats.tick()
+        try await eventually("pass 3") { await beats.passes >= 3 }
+        XCTAssertEqual(phone.failure?.source, .pass)
+        await db.refuseReads(false)
+        await beats.tick()
+        try await eventually("pass 4") { await beats.passes >= 4 }
+        open.cancel()
+        await open.value
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn went with writes refused")
+        XCTAssertNotNil(phone.failure, "the red line came down with the turn's words still owed")
+    }
+
+    /// The race #615 names: offline, a read and a pass both fail, in either order, and the last
+    /// one up is whichever failed last. Once iCloud is back, one pass of the loop leaves nothing
+    /// standing either way.
+    func testAReadAndAPassFailingInEitherOrderLeaveNothingOnceICloudIsBack() async throws {
+        for readLast in [false, true] {
+            let db = FailingDatabase(InMemoryRecordDatabase())
+            let loop = try await looping(db)
+            await db.refuseReads(true)
+            // The loop's own pass reads first and then runs the pass, so the pass fails last.
+            try await loop.next(2)
+            XCTAssertEqual(loop.phone.failure?.source, .pass)
+            if readLast {
+                await loop.phone.refresh()
+                XCTAssertEqual(loop.phone.failure?.source, .read)
+            }
+            await db.refuseReads(false)
+            try await loop.next(3)
+            await loop.stop()
+            XCTAssertNil(loop.phone.failure, readLast ? "the read failed last and its line stands" : "the pass failed last and its line stands")
+        }
     }
 
     // MARK: The reply that is read aloud

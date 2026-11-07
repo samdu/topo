@@ -64,8 +64,8 @@ final class EarconPlayer: NSObject, CuePlayer, AVAudioPlayerDelegate {
 ///
 /// A cue is a moment, not a reply. It is played on the session as it stands — live
 /// (`AudioSession.ensureLive()`), and refused when it is not, since a moment configures nothing and
-/// activates nothing, in the background under a hold least of all. Where a hold that is not a cue's
-/// own already stands it holds the process for its own length too (`AudioSession.Hold.cue`, let go
+/// activates nothing, in the background under a hold least of all. Where a turn's hold already
+/// stands (`AudioSession.heldForATurn`: neither a cue's nor the keeper's sound's) it holds the process for its own length too (`AudioSession.Hold.cue`, let go
 /// when the player has finished and the route's tail has passed, or at `bound`), taken before the
 /// player starts, so that `done` behind the lock is heard out before the last hold goes and it is
 /// let go of; its caller plays it before dropping the hold it follows, so the process is never let
@@ -112,6 +112,10 @@ final class Earcons {
     private var holding = false
     private var serial = 0
     private var bounding: Task<Void, Never>?
+    /// When the last cue began, for the go-ahead, which a cue that has just sounded stands in for.
+    private var lastBegan: ContinuousClock.Instant?
+    /// The clock that is read; a suite moves its own.
+    var now: @MainActor () -> ContinuousClock.Instant = { .now }
     #if DEBUG
     /// Every cue played, in order, for a test.
     private(set) var played: [Cue] = []
@@ -166,7 +170,7 @@ final class Earcons {
         playing = mine
         playingCue = cue
         // The hold before the player, so the process is held from the cue's first frame; only
-        // where a hold that is not a cue's own stands, since in front nothing suspends and a cue
+        // where a turn's hold stands (neither a cue's nor the keeper's sound's), since in front nothing suspends and a cue
         // that held alone would keep a claim change waiting for nothing. Under nothing but the
         // cue before it, that one's hold goes now: it was taken for a turn that is over.
         if audio.heldForATurn {
@@ -184,6 +188,7 @@ final class Earcons {
             return false
         }
         AudioLog.say("earcon \(cue) (\(route()))")
+        lastBegan = now()
         #if DEBUG
         played.append(cue)
         #endif
@@ -193,6 +198,13 @@ final class Earcons {
             self.ended(mine, "its bound passed")
         }
         return true
+    }
+
+    /// Whether a cue began within `span`: the moment's receipt, which a go-ahead would say twice
+    /// (Daphne's `Earcons.recent`, at her `earconReceipt`).
+    func recent(_ span: Duration) -> Bool {
+        guard let lastBegan else { return false }
+        return now() - lastBegan < span
     }
 
     /// A microphone is opening (`Speaker.microphoneOpening`): every cue still sounding is

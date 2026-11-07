@@ -54,6 +54,42 @@ final class EndpointTests: XCTestCase {
         XCTAssertEqual(policy.take(.end(14_000)), .ended, "a quarter second was not an utterance")
     }
 
+    /// Under a tone sounded into the microphone the gate is shut (Daphne's `holdGate`): an onset
+    /// inside it is not one, and speech counts toward the minimum only past it, so a tone longer
+    /// than the minimum is no utterance, while words that run on past the gate are. An onset
+    /// before the gate is the person's, whenever its verdict arrives.
+    @MainActor
+    func testSpeechInsideTheGateIsTheTonesAndOnlyWhatRunsPastItCounts() {
+        let gate = 0..<6_400
+        var policy = Endpoint.Policy()
+        XCTAssertNil(policy.take(.start(0), gates: [gate]), "an onset inside the gate was one")
+        XCTAssertNil(policy.take(.end(6_000), gates: [gate]), "a tone longer than the minimum was an utterance")
+        XCTAssertFalse(policy.speaking)
+
+        XCTAssertNil(policy.take(.start(100), gates: [gate]))
+        let late = gate.upperBound + Endpoint.startEarly
+        XCTAssertNil(policy.take(.end(late + quarter - 1), gates: [gate]),
+                     "speech under the gate, or the detector's lateness past it, was counted")
+        XCTAssertNil(policy.take(.start(200), gates: [gate]))
+        XCTAssertEqual(policy.take(.end(late + quarter), gates: [gate]), .ended,
+                       "words running on past the gate were lost")
+
+        var past = Endpoint.Policy()
+        XCTAssertEqual(past.take(.start(gate.upperBound), gates: [gate]), .speech, "an onset as the gate opens was not one")
+
+        // A tone sounded at sample 30 000, its onset as early as the detector can put it: words
+        // begun before that, judged before or after the tone, are the person's and counted whole.
+        XCTAssertEqual(Endpoint.startEarly, Endpoint.chunk + 1_600,
+                       "the gate does not reach as far as the detector can put a tone's onset and end")
+        let tone = (30_000 - Endpoint.startEarly)..<36_400
+        var before = Endpoint.Policy()
+        XCTAssertEqual(before.take(.start(4_096), gates: [tone]), .speech, "words begun before the tone were taken for it")
+        XCTAssertEqual(before.take(.end(4_096 + quarter), gates: [tone]), .ended,
+                       "a tone sounded over words already begun took them")
+        var early = Endpoint.Policy()
+        XCTAssertNil(early.take(.start(tone.lowerBound), gates: [tone]), "the tone's own onset, reported early, was speech")
+    }
+
     // MARK: - The rule
 
     typealias Rule = Endpoint.Judging

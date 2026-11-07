@@ -378,6 +378,35 @@ final class EarconsTests: XCTestCase {
         XCTAssertFalse(rig.speaker.running, "the engine ran on with nothing held")
     }
 
+    /// In a conversation the reply's end is the go-ahead's (`Conversation`): a reply heard out
+    /// under one sounds no `done`, so the moment has one tone, and one cut short by its turn's
+    /// failure still sounds `failed`.
+    /// With no keeper's sounds to say the go-ahead, a conversation's reply still ends in `done`
+    /// (`KeeperSoundsTests` has the go-ahead taking its place).
+    func testAReplyHeardOutInAConversationWithNoGoAheadSoundsDone() async throws {
+        let rig = await rig(heard: .dataRendered)
+        rig.speaker.conversing = true
+        XCTAssertTrue(rig.speaker.speak("Hi."))
+        await settle("the reply to start") { rig.speaker.report.started }
+        try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
+        XCTAssertEqual(rig.earcons.played, [.done], "a conversation's reply with no go-ahead to come ended in silence")
+        XCTAssertFalse(rig.speaker.speaking)
+    }
+
+    /// A cue stands in for the go-ahead for a second and a half after it begins, and no longer.
+    func testACueIsRecentForASecondAndAHalf() async {
+        let rig = await rig()
+        var now = ContinuousClock.now
+        rig.earcons.now = { now }
+        try? rig.audio.ensureActive()
+        XCTAssertFalse(rig.earcons.recent(Conversation.earconReceipt), "recent before any cue")
+        XCTAssertTrue(rig.earcons.play(.listening))
+        now += .milliseconds(1400)
+        XCTAssertTrue(rig.earcons.recent(Conversation.earconReceipt))
+        now += .milliseconds(200)
+        XCTAssertFalse(rig.earcons.recent(Conversation.earconReceipt), "a cue stood in past a second and a half")
+    }
+
     // MARK: - The turn
 
     /// A harness over an in-memory log whose brain is the test's. No lease loop runs under it:
@@ -861,6 +890,18 @@ final class EarconsTests: XCTestCase {
         XCTAssertTrue(rig.earcons.play(.done))
         XCTAssertEqual(rig.cues.files, ["earcon_done", "earcon_done"], "the next cue reused a player the reset invalidated")
         XCTAssertEqual(rig.cues.players[1].plays, 1)
+    }
+
+    /// A cue at the reset under an active call speaks to no player made before it.
+    func testACueAtTheResetUnderAnActiveCallSpeaksToNoPlayerMadeBeforeIt() async {
+        let rig = await rig()
+        rig.audio.callPlaced()
+        rig.audio.callActivated()
+        XCTAssertTrue(rig.earcons.play(.sent))
+        rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        XCTAssertFalse(rig.earcons.play(.sent), "a cue was played on a call's session the reset killed")
+        XCTAssertEqual(rig.cues.players[0].plays, 1, "a player made before the reset was spoken to")
+        rig.audio.callOver()
     }
 
     /// Every cue has its file in the bundle, at the root, where `Earcons` looks.

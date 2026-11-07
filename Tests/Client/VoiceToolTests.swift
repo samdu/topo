@@ -162,10 +162,48 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertTrue(usage.text.contains("topo voice call off"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice noise-suppression`"), "the mind is not told the tool exists")
         XCTAssertTrue(GuestTools.skill.contains("`topo voice temperature`"), "the mind is not told of the temperature")
+        XCTAssertTrue(usage.text.contains("topo voice working sounds"), usage.text)
+        XCTAssertTrue(GuestTools.skill.contains("`topo voice working`"), "the mind is not told of the working sounds")
         XCTAssertTrue(usage.text.contains("topo voice wait VALUE"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice wait`"), "the mind is not told of the wait")
         XCTAssertTrue(usage.text.contains("topo voice earcons off"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice earcons`"), "the mind is not told of the earcons")
+    }
+
+    // MARK: - The keeper's sounds
+
+    func testAPhoneNeverAskedPlaysReceipts() async {
+        let defaults = defaults()
+        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
+        for arguments in [["working"], ["working", "status"]] {
+            let reply = await VoiceTool(defaults: defaults).run(arguments)
+            XCTAssertEqual(reply, .ok("working sounds receipts\n"), "\(arguments)")
+        }
+        XCTAssertNil(defaults.object(forKey: WorkingSounds.key), "asking sets nothing")
+    }
+
+    func testEachModeIsKeptWhereTheSoundsReadIt() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        for mode in WorkingSounds.Mode.allCases {
+            let reply = await tool.run(["working", mode.rawValue])
+            XCTAssertEqual(reply, .ok("working sounds \(mode.rawValue), from the next sound\n"))
+            XCTAssertEqual(WorkingSounds.mode(defaults), mode)
+            XCTAssertEqual(defaults.string(forKey: WorkingSounds.key), mode.rawValue, "kept as anything but the case's name")
+            let status = await tool.run(["working", "status"])
+            XCTAssertEqual(status, .ok("working sounds \(mode.rawValue)\n"))
+        }
+    }
+
+    func testAModeItDoesNotTakeIsTheUsageWithNothingKept() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        for arguments in [["working", "loud"], ["working", "on"], ["working", "off", "now"], ["working", "Sounds"]] {
+            let reply = await tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
+            XCTAssertTrue(reply.text.contains("topo voice working off"), "\(arguments)")
+        }
+        XCTAssertNil(defaults.object(forKey: WorkingSounds.key))
     }
 
     // MARK: - Earcons

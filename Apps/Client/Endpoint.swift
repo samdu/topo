@@ -160,22 +160,41 @@ final class Endpoint {
     /// toward an end), or the utterance has ended and is to be sent.
     enum Heard: Equatable, Sendable { case speech, ended }
 
+    /// How far before a tone's place in the stream the detector can put its onset, and after its
+    /// end its end: a chunk, since a start and an end are resolved to the chunk they land in, and
+    /// FluidAudio's speech pad (0.1 s).
+    nonisolated static let startEarly = chunk + 1_600
+
     /// Topo's policy over the detector's events. Pure, so the suite drives it with a script.
     struct Policy: Equatable, Sendable {
         private var startedAt: Int?
+        /// The sample this onset's speech is counted from: its start, or the end of the gate it
+        /// started inside and the detector's lateness past it (`startEarly`).
+        private var countFrom = 0
         /// Whether this utterance has held speech of `minSpeech` or more.
         private(set) var heardSpeech = false
 
-        mutating func take(_ event: Event) -> Heard? {
+        /// `gates` are the stretches of the stream a tone sounded into the microphone is heard in
+        /// (`Conversation`, each from the tone's place less `startEarly` to its end). An onset
+        /// inside one is the tone's as much as anyone's: it is no `.speech`, and only what runs on
+        /// past the gate, by more than the detector's `startEarly`, counts toward `minSpeech`. An onset before a gate is the person's, whenever
+        /// the detector's verdict on it arrives, so a tone over words already begun takes nothing
+        /// of them.
+        mutating func take(_ event: Event, gates: [Range<Int>] = []) -> Heard? {
             switch event {
             case .start(let at):
                 startedAt = at
-                return .speech
+                let shut = gates.filter { $0.contains(at) }.map(\.upperBound).max()
+                // From past the gate by the detector's own lateness: an end is put a chunk and the
+                // pad after the speech it closes, so a tone heard late is not a quarter second of
+                // speech by itself.
+                countFrom = shut.map { $0 + Endpoint.startEarly } ?? at
+                return shut == nil ? .speech : nil
             case .end(let at):
                 // An end with no start before it ends nothing.
-                guard let start = startedAt else { return nil }
+                guard startedAt != nil else { return nil }
                 startedAt = nil
-                let long = Double(at - start) >= Endpoint.minSpeech * Double(Ear.rate)
+                let long = Double(at - countFrom) >= Endpoint.minSpeech * Double(Ear.rate)
                 if long { heardSpeech = true }
                 return heardSpeech ? .ended : nil
             }

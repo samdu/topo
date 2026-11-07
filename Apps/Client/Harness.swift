@@ -52,7 +52,8 @@ final class Harness {
 
     struct Failure: Equatable {
         /// `sync` is iCloud behind a turn the guest already has: nothing failed for the person.
-        enum Source { case read, sync, other }
+        /// `pass` is the answering pass's own, which the next pass that completes takes down.
+        enum Source { case read, sync, pass, other }
         var words: String
         var source: Source = .other
     }
@@ -64,6 +65,13 @@ final class Harness {
     /// guest has nothing to show yet. A failure closes it as the failure is put up, before
     /// whatever reads follow; a line stopped on a failure is not an open turn.
     private(set) var turnOpen = false
+    /// A turn is on its way: words on the line the log does not have, or a turn this device is
+    /// running (`turnOpen`). Words the log has, with no run of this device's open on them, are
+    /// not — a reply shown, though they stay on the line through the reads and the memory's pass
+    /// after it, a turn handed to the lease's holder, or one whose reply failed — which is
+    /// Daphne's turn landed. What a press released now waits behind, so its release bleeps
+    /// `queue` (`Speaker.sounded(release:)`).
+    var turnOnItsWay: Bool { turnOpen || pending.contains { !said($0.nonce) } }
     /// The reply the guest is writing now, as far as it has got, drawn under the transcript
     /// before it is whole and before it is in the log: the words of every message of the turn
     /// so far, so what was said before a tool call stays while the tool runs and after. It is
@@ -1245,6 +1253,10 @@ final class Harness {
             if await passHasWork(by: justRead) {
                 await answerPending()
             } else {
+                // The log read whole with nothing to answer, which is all a pass that ran would
+                // have found: a pass's failure is no longer true.
+                guard self.login == login else { return }
+                clearPassFailure()
                 await refreshUnfinished()
             }
             served.forEach { $0.resume() }
@@ -1304,6 +1316,7 @@ final class Harness {
             let answered = try await runner.answerPending(model: model)
             // A sign-out during the pass: what it found is for a screen that has gone.
             guard self.login == login else { return }
+            clearPassFailure()
             if let reply = answered {
                 // This device answered: the lease is its own, and the line is given ahead again.
                 handedBack = false
@@ -1324,9 +1337,17 @@ final class Harness {
         } catch {
             guard self.login == login else { return }
             dropWriting()
-            failure = Failure(words: Self.describe(error))
+            failure = Failure(words: Self.describe(error), source: .pass)
             await refreshUnfinished()
         }
+    }
+
+    /// A pass completed, or the loop's read showed it had nothing to do, so a line saying the
+    /// last pass failed is no longer true. Any other failure stands, and so does a pass's while
+    /// words are still on the line: a pass that failed can have put its line up over a turn's,
+    /// and the line is the person's sight of what is owed until the drain takes it.
+    private func clearPassFailure() {
+        if failure?.source == .pass, pending.isEmpty, unsaved.isEmpty { failure = nil }
     }
 
     /// Reads which of the log's turns the brain holds as cut off, for the control that asks again.
