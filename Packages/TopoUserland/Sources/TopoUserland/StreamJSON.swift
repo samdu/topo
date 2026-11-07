@@ -23,13 +23,14 @@ public enum StreamEvent: Sendable, Equatable {
     /// A tool the assistant called, by name. For a tool that writes a file — `Write`, `Edit`,
     /// `MultiEdit`, `NotebookEdit` (`StreamJSON.fileTools`) — `path` is the file it names, which is
     /// what says whether the turn is writing code, prose or the memory; nothing else of a tool's
-    /// input is read, and every other tool's path is nil.
-    case toolUse(name: String, path: String? = nil)
+    /// input is read, and every other tool's path is nil. `id` is the call's `id`, which its
+    /// result names.
+    case toolUse(name: String, path: String? = nil, id: String? = nil)
     /// A tool's result coming back, in a `user` message: whether Claude Code marked it an error
     /// (`is_error`), and its text — the result's string, or its text blocks joined by newlines.
-    /// It names the call it answers only by `tool_use_id`, which is not read: calls made one at a
-    /// time come back in the order they were made (`Tests/StreamJSON/tool-turn.jsonl`).
-    case toolResult(isError: Bool, text: String)
+    /// `id` is the `tool_use_id` of the call it answers: calls made at once come back in the order
+    /// they finish, and a sub-agent's results come between its own call's and its call's result.
+    case toolResult(isError: Bool, text: String, id: String? = nil)
     /// A thinking block of an assistant message: that the model thought, and nothing of what.
     case thinking
     /// An assistant message's usage.
@@ -240,7 +241,7 @@ public enum StreamJSON {
                 if let name = block["name"] as? String {
                     events.append(.toolUse(name: name, path: fileTools[name].flatMap { key in
                         (block["input"] as? [String: Any])?[key] as? String
-                    }))
+                    }, id: block["id"] as? String))
                 }
             case "thinking", "redacted_thinking":
                 events.append(.thinking)
@@ -285,7 +286,8 @@ public enum StreamJSON {
             default:
                 text = ""
             }
-            return .toolResult(isError: (block["is_error"] as? Bool) ?? false, text: text)
+            return .toolResult(isError: (block["is_error"] as? Bool) ?? false, text: text,
+                               id: block["tool_use_id"] as? String)
         }
     }
 

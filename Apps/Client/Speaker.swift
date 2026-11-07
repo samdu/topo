@@ -137,9 +137,10 @@ final class Speaker {
          ceiling: Duration = .seconds(120),
          now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime,
          heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
-         earcons: Earcons? = nil) {
+         sounds: KeeperSounds? = nil, earcons: Earcons? = nil) {
         self.audio = audio
         self.voice = voice
+        self.sounds = sounds
         self.earcons = earcons
         self.ceiling = ceiling
         self.now = now
@@ -159,6 +160,10 @@ final class Speaker {
         // A cue is never played into an open microphone, and whether one is open or opening is
         // this object's answer.
         self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
+        sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
+        // No receipt is played into an open microphone either, asked at each sound rather than
+        // told at the press alone.
+        sounds?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -309,6 +314,8 @@ final class Speaker {
         // what it owed is owed still. Anything owed or dead is rebuilt from nothing if need be.
         if queue.needsRebuild { queue.rebuild() }
         if audio.holding, !queue.keeping { hold(true) }
+        // The interruption stopped the bed too, and nothing else puts it back.
+        sounds?.resume()
     }
 
     /// Everything the notification carries, since what iOS calls an interruption at the lock
@@ -362,6 +369,7 @@ final class Speaker {
             return Wait(spoken: true, held: false)
         }
         waits[nonce] = ceilingWait(nonce)
+        sounds?.working(true)
         return Wait(spoken: true, held: true)
     }
 
@@ -471,6 +479,8 @@ final class Speaker {
         guard let counting = waits.removeValue(forKey: nonce) else { return }
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
+        // Before the hold drops, so the bed's fade-out is held through where this was the last.
+        if waits.isEmpty { sounds?.working(false) }
         audio.wantAlive(false, for: .awaitingReply(nonce))
     }
 
@@ -494,10 +504,13 @@ final class Speaker {
         waits.keys.forEach { endAwaiting($0, why) }
     }
 
-    /// iOS reset the media server: the reply stops, every hold goes with it, and the play queue's
-    /// nodes go too, since an engine that was running when the server went down will not start
-    /// again, and then the cues' players and the cue's hold. Nothing is built or started here
-    /// (`resetting`); the next `speak` activates the session and the first frame
+    /// iOS reset the media server: the keeper's sounds' players go first, so that nothing below
+    /// finds a bed to fade; every release goes; the reply stops and every hold goes with it; the
+    /// play queue's nodes go too, since an engine that was running when the server went down will
+    /// not start again; and then the keeper's sounds' own hold, and the cues' players and the
+    /// cue's hold. Nothing is built or started here: a hold change under the handler re-notifies
+    /// `hold(true)` while another hold still stands, and `resetting` keeps that from starting the
+    /// keeper on the dead engine. The next `speak` activates the session and the first frame
     /// builds the queue, which is how Say it again works after a reset with no press before it.
     /// A turn that was still awaited is answered on the next pass the app runs, on the foreground.
     private func mediaServicesWereReset() {
@@ -506,10 +519,12 @@ final class Speaker {
         #endif
         resetting = true
         defer { resetting = false }
+        sounds?.dropPlayers()
         // Every release goes, so none outlives the queue the reset drops.
         releases.keys.forEach { released($0, "the media server was reset") }
         stop()
         queue.reset()
+        sounds?.letGo("the media server was reset")
         earcons?.mediaServicesWereReset()
     }
 
@@ -584,6 +599,7 @@ final class Speaker {
     /// `reading` reads `text` from here; without it the caller queues the sentences itself.
     private func begin(_ text: String, answering nonce: String?, reply: TurnRef?, reading: Bool) -> Bool {
         cancel()
+        replyBegan = false
         readingFailed = false
         guard voice.ready else {
             #if DEBUG
@@ -665,6 +681,32 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
+    /// The keeper's sounds (`KeeperSounds`): the bed from the release to the reply's first frame,
+    /// dipped while a microphone is open, and back at an interruption's end (`resumeAudio`). The
+    /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
+    let sounds: KeeperSounds?
+
+    /// A press was released with `heard` to send: heard behind a turn still on its way it bleeps
+    /// (`queue`, Daphne's for a press held behind a turn in flight), and that is the release's
+    /// one sound; otherwise the cues say it was sent, or that nothing was heard.
+    func sounded(release heard: String) {
+        if !heard.isEmpty, turnOnItsWay(), sounds?.queued() == true { return }
+        earcons?.play(.sending(heard))
+    }
+
+    /// Whether a turn is on its way, asked at a release: the harness's (`Harness.turnOnItsWay`),
+    /// which the press leaves standing, and not this object's waits, which the press ends. The
+    /// app answers; a speaker told nothing has none.
+    var turnOnItsWay: @MainActor () -> Bool = { false }
+
+    /// Whether a hands-free conversation is on (`Conversation`, which sets it): a reply heard out
+    /// under one ends on the conversation's go-ahead rather than `done`, where the go-ahead can
+    /// sound (`KeeperSounds.saysGoAhead`).
+    var conversing = false
+    /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
+    /// and not at every sentence's first frame.
+    private var replyBegan = false
+
     /// The cues a spoken exchange sounds (`Earcons`), on this speaker's session: the chat's press
     /// plays the microphone's and the release's, this object plays `done` as a reply ends, or `failed` for one its turn's failure cut short. The
     /// app's to give; a speaker given none sounds nothing, which is every suite's but the cues' own.
@@ -693,6 +735,9 @@ final class Speaker {
     /// Whether a wait stands for the spoken turn `nonce`.
     func isAwaiting(_ nonce: String) -> Bool { waits[nonce] != nil }
 
+    /// Whether any spoken turn's wait stands.
+    var awaitingAny: Bool { !waits.isEmpty }
+
     #if DEBUG
     /// The spoken turns a wait is standing for, for a test.
     var awaiting: [String] { waits.keys.sorted() }
@@ -715,6 +760,12 @@ final class Speaker {
     /// and the activation or the call's end is what reads it.
     private var replyMustWait: Bool { microphoneBusy || audio.callChangingHands }
 
+    /// A microphone began listening, as `MicrophoneWatch` sees it, whatever opened it: the bed dips
+    /// under it as under a press's. Nothing else: what waits is read at its close, as ever.
+    func microphoneListening() {
+        sounds?.duck()
+    }
+
     /// A press is about to open the microphone. What is being read stops, so the microphone does
     /// not hear it, and every other wait goes, as at any press; a reply waiting for the microphone
     /// waits on with its wait, since opening it again is no reason to lose it — it is read when
@@ -731,6 +782,7 @@ final class Speaker {
         deferred = waiting
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         openings += 1
+        sounds?.duck()
     }
 
     /// The press that opened a microphone has done what it was going to, or a microphone closed:
@@ -739,6 +791,7 @@ final class Speaker {
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
     func microphoneClosed() {
+        sounds?.duck()
         readWhatWaited()
         // After the reading, so a reply read now holds the call before the microphone lets it go.
         if !microphoneBusy { onMicrophone?(false) }
@@ -869,6 +922,11 @@ final class Speaker {
                 guard !frame.samples.isEmpty else { continue }
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
+                if !replyBegan {
+                    // The reply's first frame: the bed gives way to the voice.
+                    replyBegan = true
+                    sounds?.working(false)
+                }
                 if first == nil {
                     first = now() - started
                     Perf.mark("speak.firstFrame")
@@ -950,7 +1008,8 @@ final class Speaker {
     /// The reply came to its end, rather than being stopped. The cue first: its hold is taken
     /// while the reply's still stands, so behind the lock the process is not let go of between
     /// the two and nothing retakes a hold on a session the last one's going left to wait. A reply
-    /// cut short by its turn's failure (`turnFailed`) ends with `failed`, not `done`.
+    /// cut short by its turn's failure (`turnFailed`) ends with `failed`, not `done`, and one heard
+    /// out in a conversation with the go-ahead to come sounds neither.
     private func finished() {
         // The queue's drained lands on main a hop after the audio thread saw it: one landing
         // after a stop, or after the end `made` or `writingEnded` already saw, ends nothing twice.
@@ -958,7 +1017,10 @@ final class Speaker {
         #if DEBUG
         report.finished = report.started
         #endif
-        earcons?.play(readingFailed ? .failed : .done)
+        // In a conversation the reply's end is the go-ahead's moment, sounded as the microphone
+        // opens again (`Conversation`), and one tone says it, as on Daphne's open mic; where no
+        // go-ahead can sound (the keeper's sounds off), `done` says it.
+        if readingFailed { earcons?.play(.failed) } else if !conversing || sounds?.saysGoAhead != true { earcons?.play(.done) }
         readingFailed = false
         done()
     }

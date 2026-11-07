@@ -34,7 +34,9 @@ final class BadgeGestureTests: XCTestCase {
         // slider shows is the value kept, so a move that was only drawn is the standard value here.
         let temperature = app.sliders["settings-voice-temperature"]
         for end in ["100%", "0%"] {
-            for _ in 0..<3 where !temperature.isHittable { app.swipeDown() }
+            // After the rows it is above the screen; on a sheet put up again it is built at the
+            // foot. `centred` drags the way it has to go, so a swipe is only for one not built.
+            for _ in 0..<3 where !temperature.exists { app.swipeDown() }
             XCTAssertTrue(temperature.centred(in: app.collectionViews.firstMatch, window: app.windows.firstMatch),
                           "the temperature slider would not come away from the sheet's edge")
             temperature.adjust(toNormalizedSliderPosition: end == "100%" ? 1 : 0)

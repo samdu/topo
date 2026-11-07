@@ -927,7 +927,8 @@ enum ReadAloud {
 /// a release, the keyboard, the scene going, a reset — by watching `VoiceInput.listening`. Not a
 /// view, so it runs behind the lock and whether or not the chat is drawn; the app starts it once.
 /// A press closes the microphone too and says so itself (`MicPress`), so the reply does not wait
-/// on the watch's hop.
+/// on the watch's hop. It tells the speaker of an opening too, so the keeper's bed dips under a
+/// microphone whatever opened it.
 @MainActor
 enum MicrophoneWatch {
     static func start(_ voice: VoiceInput, _ speaker: Speaker) {
@@ -937,7 +938,7 @@ enum MicrophoneWatch {
             // Called as the value is about to change, so the answer is read on the next turn.
             Task { @MainActor in
                 guard let voice, let speaker else { return }
-                if !voice.listening { speaker.microphoneClosed() }
+                if voice.listening { speaker.microphoneListening() } else { speaker.microphoneClosed() }
                 start(voice, speaker)
             }
         }
@@ -1083,7 +1084,7 @@ final class MicPress {
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
                 guard let heard else { return }
-                if !dictating { speaker.earcons?.play(.sending(heard)) }
+                if !dictating { speaker.sounded(release: heard) }
                 speaker.sending(under: release)
                 await send(heard)
             }
@@ -1116,7 +1117,7 @@ final class MicPress {
                 return
             }
             // The press on the open microphone's waveform, which sends what it heard.
-            if !dictating { speaker.earcons?.play(.sending(heard)) }
+            if !dictating { speaker.sounded(release: heard) }
             speaker.sending(under: release)
             await send(heard)
         }

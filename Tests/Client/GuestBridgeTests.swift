@@ -1194,7 +1194,7 @@ final class GuestBridgeTests: XCTestCase {
         case .update(.event(.started)): "started"
         case .update(.event(.text)): "text"
         case .update(.event(.usage)): "usage"
-        case .update(.event(.toolUse(let name, _))): "tool \(name)"
+        case .update(.event(.toolUse(let name, _, _))): "tool \(name)"
         case .update(.event(let other)): "\(other)"
         case .update(.ended(.answered)): "ended answered"
         case .update(.ended(.abandoned)): "ended abandoned"

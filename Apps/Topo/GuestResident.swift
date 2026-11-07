@@ -708,8 +708,8 @@ extension DebugRun {
                 // however it went, leaves him idle. Every change of pose is printed.
                 mascot.guestTurnBegan()
                 var pose = mascot.state.activity
-                // The calls whose results have not come back yet, oldest first.
-                var calls: [String] = []
+                // The calls whose results have not come back yet, by id.
+                var calls: [String: String] = [:]
                 for await update in updates {
                     mascot.guest(update)
                     if mascot.state.activity != pose {
@@ -719,11 +719,11 @@ extension DebugRun {
                     switch update {
                     case .event(.started(let id, let model)):
                         say("guest turn \(number) model: \(model), session \(id), process \(pid)")
-                    case .event(.toolUse(let name, let path)):
-                        calls.append(name)
+                    case .event(.toolUse(let name, let path, let id)):
+                        if let id { calls[id] = name }
                         say("guest turn \(number) tool: \(name)" + (path.map { " \($0)" } ?? ""))
-                    case .event(.toolResult(let isError, let text)):
-                        let name = calls.isEmpty ? "(no call)" : calls.removeFirst()
+                    case .event(.toolResult(let isError, let text, let id)):
+                        let name = id.flatMap { calls.removeValue(forKey: $0) } ?? "(no call)"
                         say("guest turn \(number) " + toolResultLine(tool: name, isError: isError, text: text))
                     case .event(.compacted(let compacted)):
                         say("guest turn \(number) compacted: \(compacted.trigger), \(compacted.pre) → \(compacted.post)")

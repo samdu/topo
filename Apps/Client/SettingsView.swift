@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var showConnections = false
     @State private var showContext = false
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
+    @AppStorage(WorkingSounds.key) private var workingSounds = WorkingSounds.standard.rawValue
     @AppStorage(EarconsSetting.key) private var earcons = true
     @AppStorage(SpokenCallSetting.key) private var spokenCall = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
@@ -25,6 +26,7 @@ struct SettingsView: View {
 
     /// The toggle's identifier, for the UI suite.
     static let noiseSuppression = "settings-noise-suppression"
+    static let workingSounds = "settings-working-sounds"
     static let earcons = "settings-earcons"
     static let spokenCall = "settings-spoken-call"
     /// The slider's identifier, for the UI suite.
@@ -52,6 +54,16 @@ struct SettingsView: View {
                         .accessibilityIdentifier(SettingsView.noiseSuppression)
                 } footer: {
                     Text("Cleans up the microphone before Topo hears it: for a bus, a street, a room with music. While it is on, Topo's voice is quieter on the phone's speaker; headphones are unaffected. Applies from the next press. Kept on this device.")
+                }
+                Section {
+                    // The mode as the sounds read it, so one kept that is not a mode shows as the standard.
+                    Picker("While Topo works", selection: Binding(get: { WorkingSounds.Mode(rawValue: workingSounds) ?? WorkingSounds.standard },
+                                                                 set: { workingSounds = $0.rawValue })) {
+                        ForEach(WorkingSounds.Mode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .accessibilityIdentifier(SettingsView.workingSounds)
+                } footer: {
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed until the reply begins. Only while a spoken turn is waited for. Kept on this device.")
                 }
                 Section {
                     Toggle("Earcons", isOn: $earcons)

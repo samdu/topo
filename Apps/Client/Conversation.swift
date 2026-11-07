@@ -97,6 +97,16 @@ final class Conversation {
     /// The card's mute: the microphone closed and kept closed until the unmute.
     private var muted = false
     private var lastEnd: Date?
+    /// The go-ahead is owed: the conversation began, an utterance was sent, a reply waited for
+    /// the microphone or was read, or the card unmuted it; paid once the microphone is open, the
+    /// detector has judged what it holds, nobody is speaking and nothing is on its way, at an
+    /// utterance's start or as the last of those clears (Daphne's `cueOwed`).
+    private var goAheadOwed = false
+    /// Whether this utterance's onset has sounded its `ack`.
+    private var acked = false
+    /// The stretches of this utterance's samples a tone sounded into (Daphne's `holdGate`): an
+    /// onset inside one is the tone's (`Endpoint.Policy.take`).
+    private var gates: [Range<Int>] = []
     /// Which of the lock's two moments came first, for the log: the interruption's start or the
     /// call's placing.
     private var firstOff: String?
@@ -131,6 +141,7 @@ final class Conversation {
                 MainActor.assumeIsolated { self?.becameActive() }
             },
         ]
+        speaker.sounds?.toneSounded = { [weak self] tone, length in self?.toneSounded(tone, length) }
         watch()
     }
 
@@ -154,6 +165,10 @@ final class Conversation {
         if on { return true }
         guard carries() else { return false }
         on = true
+        speaker.conversing = true
+        goAheadOwed = true
+        acked = false
+        gates = []
         voice.glancing = false
         AudioLog.say("conversation: begun behind the lock (\(firstOff.map { "the microphone came off at \($0)" } ?? "the microphone still running"))")
         policy = Endpoint.Policy()
@@ -222,6 +237,7 @@ final class Conversation {
                 AudioLog.say("conversation: muted from the card; the microphone is closed")
             } else {
                 AudioLog.say("conversation: unmuted from the card")
+                goAheadOwed = true
                 restartIdle()
                 react()
             }
@@ -269,8 +285,38 @@ final class Conversation {
     private func startUtterance() {
         policy = Endpoint.Policy()
         fedTo = 0
+        acked = false
+        gates = []
         startFeeding(reset: true)
         restartIdle()
+        payGoAhead()
+    }
+
+    /// The go-ahead, if it is owed and the microphone can take the next turn: open and running,
+    /// not muted, on the call's live session, with nothing on its way (Daphne's `cueIfReady`).
+    /// A cue that has just sounded (the earcons') was this moment's receipt, and a second would
+    /// say it twice.
+    private func payGoAhead() {
+        guard goAheadOwed, on, !muted, callUp, voice.listening, !voice.suspended, !speaker.awaitingAny else { return }
+        goAheadOwed = false
+        if speaker.earcons?.recent(Self.earconReceipt) == true {
+            return AudioLog.say("conversation: no go-ahead; a cue has just said it")
+        }
+        speaker.sounds?.goAhead()
+    }
+
+    /// How recently a cue stands in for the go-ahead (Daphne's `earconReceipt`).
+    static let earconReceipt: Duration = .milliseconds(1500)
+
+    /// A tone sounded into the open microphone: its gate is shut while it sounds, so the ear
+    /// does not take the tone for speech. The onset's own `ack` sounds over a turn already open,
+    /// and shuts nothing (Daphne: "the receipt costs it nothing").
+    private func toneSounded(_ tone: KeeperSounds.Tone, _ length: Duration) {
+        guard on, tone != .ack, voice.listening, !voice.suspended else { return }
+        let samples = Int(Double(length.components.attoseconds) / 1e18 * Double(Ear.rate))
+            + Int(length.components.seconds) * Int(Ear.rate)
+        let at = voice.sink.peek(from: .max).end
+        gates.append(max(0, at - Endpoint.startEarly)..<(at + samples))
     }
 
     private func startFeeding(reset: Bool = false) {
@@ -322,17 +368,23 @@ final class Conversation {
                     // a stop still decodes.
                     self.fedTo += Endpoint.chunk
                     self.failures = 0
-                    guard let event, let heard = self.policy.take(event) else { continue }
+                    guard let event, let heard = self.policy.take(event, gates: self.gates) else { continue }
                     switch heard {
                     case .speech:
                         self.restartIdle()
+                        // The utterance's first onset: its receipt, once (Daphne's `Keeper.heard`).
+                        if !self.acked {
+                            self.acked = true
+                            self.speaker.sounds?.heard()
+                        }
                     case .ended:
                         await self.endUtterance()
                         return
                     }
                 }
-                // A reply waiting on this microphone is judged once what was heard has been.
-                if self.speaker.waitingForMicrophone { self.react() }
+                // A reply waiting on this microphone, or a go-ahead owed, is judged once what was
+                // heard has been.
+                if self.speaker.waitingForMicrophone || self.goAheadOwed { self.react() }
                 try? await Task.sleep(for: Self.feedEvery)
             }
         }
@@ -368,6 +420,9 @@ final class Conversation {
         if dropped {
             AudioLog.say("conversation: the utterance being decoded was dropped (hung up or muted)")
         } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
+            // The turn sent owes the go-ahead, paid once nothing is on its way: its reply's wait,
+            // taken by the send, holds it back until the reply has been read.
+            goAheadOwed = true
             Task { await send(heard) }
         }
         react()
@@ -383,6 +438,7 @@ final class Conversation {
             _ = voice.suspended
             _ = speaker.speaking
             _ = speaker.waitingForMicrophone
+            _ = speaker.awaitingAny
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -400,6 +456,9 @@ final class Conversation {
 
     private func react() {
         guard on, !endingUtterance else { return }
+        // A reply waiting on the microphone or being read owes the go-ahead for the microphone
+        // that opens after it.
+        if speaker.speaking || speaker.waitingForMicrophone { goAheadOwed = true }
         if voice.listening, !voice.suspended, speaker.waitingForMicrophone, !policy.speaking, caughtUp {
             // A reply landed over an utterance with nothing said in it: the microphone closes
             // unsent, and the reply is read.
@@ -412,6 +471,16 @@ final class Conversation {
         if voice.suspended, callUp, !muted, !voice.ending {
             // Suspended with the call's session live: resumed, whatever suspended it.
             return resumeOnTheCall()
+        }
+        // The microphone open, every whole chunk it holds judged, and nothing on its way or being
+        // said: an owed go-ahead is paid (the conversation's start, a wait that has ended under an
+        // open microphone), never over a whole chunk the detector has yet to judge; an onset in
+        // the part-chunk still filling is the go-ahead's gate's, and its words are sent unacked if they
+        // run on past it by more than the detector's lateness.
+        // Not while a reopen is landing: its utterance's start pays it, after the gates are reset.
+        if voice.listening, !voice.suspended, !reopening, caughtUp, !policy.speaking, !speaker.speaking,
+           !speaker.waitingForMicrophone {
+            payGoAhead()
         }
         guard !voice.listening, !reopening, callUp, !muted, !speaker.speaking, !speaker.waitingForMicrophone else { return }
         reopening = true
@@ -474,6 +543,8 @@ final class Conversation {
     func stop(_ why: String, sending: Bool) {
         guard on else { return }
         on = false
+        speaker.conversing = false
+        goAheadOwed = false
         firstOff = nil
         // Read before the feeder goes: a chunk with the detector, or any sample not yet fed — a
         // word shorter than a chunk included — is unjudged.
