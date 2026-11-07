@@ -57,6 +57,7 @@ struct TopoApp: App {
         let signIn = SignIn(login: GuestLogin(), signInAgain: signInAgain, accept: accept)
         _signIn = State(initialValue: signIn)
         GuestResident.shared.booted = { await signIn.refresh() }
+        Harness.recordsWhere = { await AppRecords.recordsWhere() }
         let harness = Harness.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
         let mascot = Mascot()
         // The guest answering the chat moves Topo as it works: each turn's events set his pose.

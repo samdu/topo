@@ -45,7 +45,13 @@ final class RoleSelector {
     private let deadline: @Sendable (TimeInterval) async throws -> Void
     /// Attempts to decide that ran out of time, which lengthen the next one's bound.
     private var ranOut = 0
-    private static let key = "topo.role"
+    nonisolated private static let key = "topo.role"
+
+    /// True once this install has kept a role, which is what tells the records' route
+    /// (`RecordRoute`) that the first decision has been made.
+    nonisolated static func hasDecided(_ defaults: UserDefaults) -> Bool {
+        defaults.string(forKey: key).flatMap(Role.init(rawValue:)) != nil
+    }
 
     /// - Parameter ensureZone: run before the first claim, because the lease record goes in the
     ///   zone the writers create. Injected so a test can hold a database and no iCloud.

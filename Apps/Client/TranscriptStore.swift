@@ -200,6 +200,9 @@ final class TranscriptStore {
     }
 
     static func message(for error: any Error) -> String {
+        if TopoCloudKit.meansNoAccount(error) {
+            return "No iCloud account on this phone. Sign in to iCloud in Settings."
+        }
         switch error {
         case RecordDatabaseError.unavailable:
             return "iCloud is out of reach. Topo will try again."
