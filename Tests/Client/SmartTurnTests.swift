@@ -138,6 +138,22 @@ final class SampleSinkTests: XCTestCase {
         XCTAssertEqual(sink.tail(0), [])
         XCTAssertEqual(sink.peek().count, Int(frames), "the tail took samples from the sink")
     }
+
+    /// Over an utterance longer than the judge's window, the tail copies the window and nothing
+    /// more: the count of samples the sink copies out is the bound, not the values returned.
+    func testTheJudgesTailCopiesTheWindowAloneOfALongUtterance() throws {
+        let sink = SampleSink()
+        let frames = AVAudioFrameCount(SmartTurn.windowSamples + 2 * Ear.rate)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: sink.format, frameCapacity: frames))
+        buffer.frameLength = frames
+        for i in 0..<Int(frames) { buffer.floatChannelData![0][i] = Float(i) / Float(frames) }
+        sink.append(buffer)
+        let before = sink.copied
+        let tail = sink.tail(SmartTurn.windowSamples)
+        XCTAssertEqual(tail.count, SmartTurn.windowSamples)
+        XCTAssertEqual(tail.first, Float(Int(frames) - SmartTurn.windowSamples) / Float(frames))
+        XCTAssertEqual(sink.copied - before, SmartTurn.windowSamples, "the tail copied more of the utterance than the window")
+    }
 }
 
 /// The real model through Core ML on the simulator: it compiles from the store's layout into a

@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 #if canImport(FluidAudio)
 import FluidAudio
 #endif
@@ -303,10 +304,34 @@ final class SileroLoadTests: XCTestCase {
         }
         let loaded = try await Endpoint.silero(directory)
         let detector = try XCTUnwrap(loaded as? SileroDetector)
+        // A spoken phrase and six seconds of silence after it, fed as the conversation feeds it.
+        let wav = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/purple-elephants.wav")
+        let file = try AVAudioFile(forReading: wav)
+        XCTAssertEqual(file.processingFormat.sampleRate, Double(Ear.rate))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let phrase = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+        let stream = phrase + [Float](repeating: 0, count: 6 * Ear.rate)
         for judged in [true, false] {
             await detector.reset(silence: Endpoint.silence(judged: judged))
-            let silence = await detector.silence
-            XCTAssertEqual(silence, Endpoint.silence(judged: judged))
+            var started = false
+            var endedAt: Int?
+            var fed = 0
+            while fed + Endpoint.chunk <= stream.count {
+                let event = try await detector.feed(Array(stream[fed..<fed + Endpoint.chunk]))
+                fed += Endpoint.chunk
+                if case .start = event { started = true }
+                if case .end = event, endedAt == nil { endedAt = fed }
+            }
+            XCTAssertTrue(started, "judged \(judged): no speech heard in the phrase")
+            let ended = try XCTUnwrap(endedAt, "judged \(judged): no end in six seconds of silence")
+            let after = Double(ended - phrase.count) / Double(Ear.rate)
+            if judged {
+                XCTAssertGreaterThan(after, 3.0, "with a judge the detector ended the phrase \(after) s after it, before its 4 s")
+            } else {
+                XCTAssertLessThan(after, 3.0, "without a judge the detector waited \(after) s, past its 2.1 s")
+            }
         }
     }
 

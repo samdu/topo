@@ -202,6 +202,12 @@ final class Endpoint {
 
         /// Whether speech is going on, or this utterance has held any.
         var speaking: Bool { startedAt != nil || heardSpeech }
+
+        /// Whether the utterance would be one were its speech to end at sample `at`: it has held
+        /// `minSpeech` already, or the speech going on has run that long from where it counts.
+        func long(through at: Int) -> Bool {
+            heardSpeech || startedAt != nil && Double(at - countFrom) >= Endpoint.minSpeech * Double(Ear.rate)
+        }
     }
 
     /// Whether a frame is loud: over -38 dBFS of RMS, the onset Daphne's open microphone uses. A
@@ -284,6 +290,9 @@ final class Endpoint {
             guard votes >= Self.votesToEnd, waited else { return .none }
             return .end(.judged(p: p, quiet: quiet))
         }
+
+        /// Whether a verdict on `ask` would count: no loud frame has come since it was asked.
+        func counts(ask: Int) -> Bool { current == ask }
 
         /// Ask `ask` came back with no verdict (the judge threw): it counts for nothing, and the
         /// next ask may go.

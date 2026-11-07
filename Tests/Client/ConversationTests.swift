@@ -1036,6 +1036,70 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(sent, ["turn the lights off"])
     }
 
+    /// Speech resuming between an ask and its verdict, with the verdict landing before the
+    /// feeder's next pass: the frame that arrived first is counted first, so the verdict was
+    /// asked before speech resumed and counts for nothing.
+    func testAVerdictLandingAfterSpeechResumedButBeforeTheNextPassCountsForNothing() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.95])
+        judge.hold(calls: [1])
+        let (conversation, voice, _) = await begun(detector, judge: judge)
+        defer { conversation.stop("test", sending: false); judge.releaseAll() }
+        utterance(into: voice.sink)
+        // The first ask answered complete at 0.4 s: one vote. The second, at 0.6 s, held.
+        await quiet(1.2, into: voice.sink)
+        await settle("the quiet counted to the wait") { conversation.quietFrames == 12 }
+        XCTAssertEqual(conversation.votes, 1)
+        XCTAssertEqual(judge.held, 1)
+        // A whole loud frame arrives, and the held verdict lands, both inside one of the feeder's
+        // sleeps.
+        utterance(into: voice.sink, seconds: 0.1)
+        judge.release(call: 1)
+        await drain()
+        XCTAssertEqual(sent, [], "a verdict asked before speech resumed ended the turn over it")
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(conversation.quietFrames, 0, "the loud frame was not counted before the verdict")
+    }
+
+    /// Speech under 0.25 s is a cough to Silero's end, and so to the judge's and the cap's: a
+    /// pulse with Silero's end not yet come ends nothing, however complete the judge calls it.
+    func testAPulseShorterThanACoughIsNoUtteranceTheJudgeCanEnd() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.95])
+        let (conversation, voice, _) = await begun(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        utterance(into: voice.sink, seconds: 0.1)
+        await quiet(3.0, into: voice.sink)
+        await drain()
+        XCTAssertGreaterThanOrEqual(judge.asks, 2, "the judge was not asked")
+        XCTAssertEqual(sent, [], "the judge ended a 0.1 s pulse")
+        await quiet(1.5, into: voice.sink)
+        await drain()
+        XCTAssertEqual(sent, [], "the cap ended a 0.1 s pulse")
+        XCTAssertTrue(voice.listening)
+    }
+
+    /// A verdict the rule turns away (asked before speech resumed) leaves the latency the end's
+    /// line says as the last counted verdict's.
+    func testAVerdictTurnedAwayLeavesTheLatencyOfTheLastCountedOne() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.2])
+        judge.hold(calls: [1])
+        let (conversation, voice, _) = await begun(detector, judge: judge)
+        defer { conversation.stop("test", sending: false); judge.releaseAll() }
+        utterance(into: voice.sink)
+        await quiet(0.7, into: voice.sink)
+        await settle("the second ask held") { judge.held == 1 }
+        let counted = conversation.judgedLatency
+        XCTAssertNotNil(counted, "the first verdict counted no latency")
+        utterance(into: voice.sink, seconds: 0.3)
+        await settle("the loud frames counted") { conversation.quietFrames == 0 }
+        try? await Task.sleep(for: .milliseconds(400))
+        judge.release(call: 1)
+        await drain()
+        XCTAssertEqual(conversation.judgedLatency, counted, "a turned-away verdict's 400 ms became the line's latency")
+    }
+
     /// The verdict lands after the utterance it was asked for has ended and the microphone has
     /// opened again: it counts in the next utterance's rule for nothing, even where that rule has
     /// an ask of the same number in flight.
