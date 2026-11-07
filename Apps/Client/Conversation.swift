@@ -120,6 +120,10 @@ final class Conversation {
     /// The stretches of this utterance's samples a tone sounded into (Daphne's `holdGate`): an
     /// onset inside one is the tone's (`Endpoint.Policy.take`).
     private var gates: [Range<Int>] = []
+    /// Whether this utterance has had an onset the policy gave the person (`.speech`): only then
+    /// is its quiet counted for the judge, as Daphne's judge runs only on a turn an ungated onset
+    /// opened. A tone's own onset, inside its gate, opens nothing for the judge to end.
+    private var heardOnset = false
     /// Which of the lock's two moments came first, for the log: the interruption's start or the
     /// call's placing.
     private var firstOff: String?
@@ -342,6 +346,7 @@ final class Conversation {
         framedTo = 0
         judgeThrew = false
         judgedIn = nil
+        heardOnset = false
     }
 
     #if DEBUG
@@ -408,6 +413,7 @@ final class Conversation {
                         // The quiet is counted from where speech began, not from the silence
                         // before it.
                         if case .start(let at) = event { self.framedTo = max(self.framedTo, at) }
+                        self.heardOnset = true
                         self.restartIdle()
                         // The utterance's first onset: its receipt, once (Daphne's `Keeper.heard`).
                         if !self.acked {
@@ -420,7 +426,7 @@ final class Conversation {
                     }
                 }
                 // The quiet after speech, frame by frame, for the judge.
-                if let judge = self.judge, self.policy.speaking,
+                if let judge = self.judge, self.heardOnset, self.policy.speaking,
                    let ending = self.frames(judge, generation: mine) {
                     await self.endUtterance(ending)
                     return
@@ -448,14 +454,12 @@ final class Conversation {
 
     /// Counts the whole frames that have arrived since the last pass into the rule, asking the
     /// judge where it says to. Answers the end, in the log's words, if a frame reached the cap.
-    /// A frame a tone's gate covers is quiet: the tone is Topo's, not the person going on.
     private func frames(_ judge: any TurnJudge, generation: Int) -> String? {
         let (samples, _) = voice.sink.peek(from: framedTo)
         let size = Endpoint.Judging.frame
         var offset = 0
         while samples.count - offset >= size {
-            let at = framedTo..<(framedTo + size)
-            let loud = !gates.contains { $0.overlaps(at) } && Endpoint.loud(samples[offset..<offset + size])
+            let loud = Endpoint.loud(samples[offset..<offset + size])
             offset += size
             framedTo += size
             switch rule.frame(loud: loud) {

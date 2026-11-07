@@ -133,8 +133,8 @@ final class AudioSession {
     /// input is kept.
     private var kept: Bool { holding || microphoneOpen || inputKept }
     /// Told, with why, when the input kept past a release has nothing left to be kept for: the
-    /// last hold that is a turn's going (`heldForATurn` true to false), told before the speaker
-    /// hears of it and before the session is let go, so the input never runs under a session
+    /// last hold that is a turn's going (`heldForATurn` true to false), told after the speaker
+    /// has heard of it (so its keeper has stopped) and before the session is let go, so the input never runs under a session
     /// being reconfigured or handed back; and a reply beginning to be read (`.speaking` taken),
     /// since the input's voice unit ducks every other sound on the phone, the reply among them.
     var endKeptInput: ((String) -> Void)?

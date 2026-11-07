@@ -1494,3 +1494,174 @@ extension ConversationTests {
         speaker.endAwaiting("before", "the test is done")
     }
 }
+
+// MARK: - The tones with the judge loaded
+
+extension ConversationTests {
+    /// Speech-level tone at the ear's rate, paced as the tap delivers it, a tenth of a second at
+    /// a time; `between` runs before each tenth with its index.
+    private func pacedSpeech(_ seconds: Double, into sink: SampleSink, between: (Int) -> Void = { _ in }) async {
+        let format = sink.format
+        let steps = Int((seconds * 10).rounded())
+        for step in 0..<steps {
+            between(step)
+            let frames = AVAudioFrameCount((format.sampleRate * 0.1).rounded())
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return XCTFail("no buffer") }
+            buffer.frameLength = frames
+            for frame in 0..<Int(frames) { buffer.floatChannelData![0][frame] = 0.1 * Float(sin(Double(frame) * 0.05)) }
+            sink.append(buffer)
+            try? await Task.sleep(for: .milliseconds(110))
+        }
+    }
+
+    /// `testTheGoAheadShutsTheGateSoItsToneIsNoUtterance` with Smart Turn loaded and
+    /// Silero's end where a judged stream puts it (4 s of silence, past what is fed here).
+    func testTheGoAheadsGatedOnsetEndsNoUtteranceUnderTheJudge() async {
+        let detector = ScriptedDetector()
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, _) = await begun(detector, judge: judge, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        await drain()
+        let resets = detector.resets
+        let fedBefore = detector.chunks
+        detector.script([fedBefore: .start(1_000)])
+        await quiet(4.6, into: voice.sink)
+        await drain()
+        XCTAssertEqual(judge.asks, 0, "the judge was asked about the go-ahead's own tone")
+        XCTAssertEqual(detector.resets, resets, "the tone ended an utterance: the microphone closed and opened again")
+        XCTAssertEqual(sent, [], "the tone's utterance was decoded and sent (the suite's ear hears words in anything)")
+        XCTAssertTrue(voice.listening)
+    }
+
+    /// `testADelegatesToneHeardLateIsNoUtterance`'s shape, a receipt into an idle microphone
+    /// with a turn on its way, with Smart Turn loaded.
+    func testAReceiptsGatedOnsetEndsNoUtteranceUnderTheJudge() async {
+        let detector = ScriptedDetector()
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, speaker) = await begun(detector, judge: judge, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        await quiet(1.0, into: voice.sink)
+        await settle("what the sink holds judged") { detector.chunks >= 3 }
+        await drain()
+        let resets = detector.resets
+        sounds?.follow(.update(.event(.toolUse(name: "Read"))))
+        XCTAssertEqual(played, [.speak, .read])
+        // Silero hears the receipt inside its gate: chunk 4 is [16384, 20480).
+        detector.script([4: .start(17_000)])
+        await quiet(4.6, into: voice.sink)
+        await drain()
+        XCTAssertEqual(judge.asks, 0, "the judge was asked about a receipt's own tone")
+        XCTAssertEqual(detector.resets, resets, "the receipt ended an utterance: the microphone closed and opened again")
+        XCTAssertEqual(sent, [], "the receipt's utterance was decoded and sent")
+        speaker.endAwaiting("before", "the test is done")
+    }
+
+    /// The person talks on without a pause while the turn on its way reaches for a tool every
+    /// 0.6 s: the rule's cap is quiet frames, and none of these is quiet.
+    func testReceiptsOverContinuingSpeechDoNotReachTheCap() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, speaker) = await begun(detector, judge: judge, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        await pacedSpeech(5.5, into: voice.sink) { step in
+            if step >= 6, step % 6 == 0 { self.sounds?.follow(.update(.event(.toolUse(name: "Read")))) }
+        }
+        let sentWhileSpeaking = sent
+        await drain()
+        XCTAssertTrue(played.contains(.ack), "the person's onset")
+        XCTAssertGreaterThanOrEqual(played.filter { $0 == .read }.count, 7, "the receipts sounded")
+        XCTAssertEqual(sentWhileSpeaking, [], "the turn was ended at the quiet's cap while the person was still speaking")
+        speaker.endAwaiting("before", "the test is done")
+    }
+
+    /// Three receipts 0.6 s apart over continuing speech, with a judge that calls everything
+    /// complete: the wait (1.2 s, the standard) is quiet, and none of this is.
+    func testThreeReceiptsOverContinuingSpeechDoNotLetTheJudgeEndIt() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let judge = ScriptedJudge([0.95])
+        let (conversation, voice, speaker) = await begun(detector, judge: judge, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        await pacedSpeech(4.5, into: voice.sink) { step in
+            if [12, 18, 24].contains(step) { self.sounds?.follow(.update(.event(.toolUse(name: "Read")))) }
+        }
+        let sentWhileSpeaking = sent
+        let asks = judge.asks
+        await drain()
+        XCTAssertEqual(asks, 0, "the judge was asked while the person was speaking")
+        XCTAssertEqual(sentWhileSpeaking, [], "the judge ended the turn while the person was still speaking")
+        speaker.endAwaiting("before", "the test is done")
+    }
+
+    /// Control: the same speech with no receipts is never asked about and never ended.
+    func testContinuingSpeechAloneIsNeverAskedAbout() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let judge = ScriptedJudge([0.95])
+        let (conversation, voice, speaker) = await begun(detector, judge: judge, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        await pacedSpeech(5.5, into: voice.sink)
+        XCTAssertEqual(judge.asks, 0, "control: continuous speech was asked about")
+        XCTAssertEqual(sent, [], "control: continuous speech was ended")
+        speaker.endAwaiting("before", "the test is done")
+    }
+}
+
+extension ConversationTests {
+    /// A receipt heard after five seconds of an idle microphone with a turn on its way: the
+    /// frames counted from the utterance's start reach the cap in one pass.
+    func testAReceiptAfterALongSilenceEndsNoUtteranceUnderTheJudge() async {
+        let detector = ScriptedDetector()
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, speaker) = await begun(detector, judge: judge, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        _ = speaker.awaitReply("before", readAloud: true)
+        await quiet(5.0, into: voice.sink, paced: false)
+        await settle("what the sink holds judged") { detector.chunks >= 19 }
+        await drain()
+        let resets = detector.resets
+        sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
+        // Chunk 20 is [81920, 86016), inside the receipt's gate.
+        detector.script([20: .start(82_000)])
+        await quiet(0.6, into: voice.sink)
+        let sentSoon = sent
+        await drain()
+        XCTAssertEqual(sentSoon, [], "a receipt after a long silence ended an utterance at once")
+        XCTAssertEqual(detector.resets, resets, "the microphone closed and opened again for a receipt")
+        speaker.endAwaiting("before", "the test is done")
+    }
+
+    /// The test-coverage lens's pin for startUtterance's freshUtterance(): an ask in flight across
+    /// a mute leaves the next utterance caught up.
+    func testAnAskInFlightAcrossAMuteLeavesTheNextUtteranceCaughtUp() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.2]); judge.hold(calls: [0])
+        let (conversation, voice, speaker) = await begun(detector, judge: judge)
+        defer { conversation.stop("test", sending: false); judge.releaseAll() }
+        utterance(into: voice.sink)
+        await quiet(0.5, into: voice.sink)
+        await settle("the ask held") { judge.held == 1 }
+        conversation.call(.muted(true))
+        await settle("closed") { !voice.listening }
+        judge.release(call: 0)
+        await drain()
+        conversation.call(.muted(false))
+        await settle("open again") { voice.listening }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the mic closed for the reply over silence") { !voice.listening }
+    }
+}

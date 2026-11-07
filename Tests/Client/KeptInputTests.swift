@@ -475,3 +475,88 @@ final class KeptInputTests: XCTestCase {
         rig.speaker.stop()
     }
 }
+
+// MARK: - The keeper's sounds under the kept input
+
+extension KeptInputTests {
+    /// The kept-input rig with the keeper's sounds (the bed on) and the earcons on.
+    private func revSoundingRig(isActive: Bool) async -> (Rig, KeeperSounds, WorkingRecorder, CueRecorder) {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let watch = Watch()
+        let audio = AudioSession(center: center,
+                                 configure: { watch.saw("configure"); try seams.configure($0, $1) },
+                                 setCategory: { watch.saw("category"); try seams.setCategory($0, $1) },
+                                 deactivate: { watch.saw("hand-back"); try seams.deactivate($0) },
+                                 isActive: { isActive })
+        let spoken = Voice(engine: ScriptedVoice())
+        spoken.load(base: URL(fileURLWithPath: "/dev/null"))
+        await settle("the voice to load") { spoken.state == .ready }
+        let soundDefaults = defaults()
+        soundDefaults.set(WorkingSounds.Mode.sounds.rawValue, forKey: WorkingSounds.key)
+        soundDefaults.set(true, forKey: EarconsSetting.key)
+        let players = WorkingRecorder()
+        let cues = CueRecorder()
+        let sounds = KeeperSounds(audio: audio, defaults: soundDefaults, bundle: Bundle(for: KeeperSounds.self),
+                                  makePlayer: { players.make($0) })
+        let earcons = Earcons(audio: audio, defaults: soundDefaults, bundle: Bundle(for: Earcons.self),
+                              makePlayer: { cues.make($0) }, tail: { .zero })
+        let speaker = Speaker(audio: audio, voice: spoken, center: center,
+                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
+                              sounds: sounds, earcons: earcons)
+        let engine = CountingEar(hears: "the weather in Bath")
+        let ear = Ear(vocabulary: Vocabulary(defaults: defaults()), engine: engine)
+        let nowhere = URL(fileURLWithPath: "/dev/null")
+        ear.load(parakeet: nowhere, ctc: nowhere)
+        await settle("the ear to load") { ear.ready }
+        let voice = VoiceInput(audio: audio, ear: ear, center: center,
+                               makeEngine: { seams.makeEngine() },
+                               formats: { seams.readFormats($0) },
+                               permission: { true },
+                               voiceProcessing: { try seams.process($0, $1) },
+                               defaults: defaults())
+        watch.voice = voice
+        watch.speaker = speaker
+        voice.keptSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
+        speaker.attach(SpokenCall(system: FakeCallSystem(), sleep: ManualSleep().sleep))
+        speaker.microphoneOpen = { voice.listening }
+        speaker.onCall = { voice.call($0) }
+        let rig = Rig(speaker: speaker, voice: voice, audio: audio, seams: seams, center: center, ear: engine,
+                      watch: watch)
+        return (rig, sounds, players, cues)
+    }
+
+    /// Receipts, the bed, the queue's bleep, an error and the earcons all sound while the input is
+    /// kept: none reaches the sink, none reconfigures or hands back the session under the running
+    /// input, and the last turn's hold going with a sound's hold still standing stops the input
+    /// before anything is applied or handed back.
+    func testSoundsUnderTheKeptInputReachNothingAndChangeNoSession() async {
+        for away in [false, true] {
+            let (rig, sounds, players, cues) = await revSoundingRig(isActive: !away)
+            await say(rig)
+            XCTAssertTrue(rig.voice.inputKept, "away \(away)")
+            XCTAssertTrue(players.bed?.isPlaying == true, "away \(away): the bed fades in under the kept input")
+            XCTAssertFalse(cues.files.isEmpty, "away \(away): the release's earcon")
+            XCTAssertTrue(sounds.tool("Read"))
+            XCTAssertTrue(sounds.tool("Bash"))
+            XCTAssertTrue(sounds.queued())
+            sounds.result(isError: true)
+            XCTAssertEqual(sounds.played, [.read, .act, .queue, .error], "away \(away)")
+            for _ in 0..<20 { feedTheTap() }
+            XCTAssertTrue(rig.voice.sink.peek().isEmpty, "away \(away): a tone reached the sink through the kept tap")
+            XCTAssertTrue(rig.voice.inputKept, "away \(away)")
+            XCTAssertTrue(rig.watch.underInput.isEmpty, "away \(away): \(rig.watch.underInput)")
+            // The last turn's hold goes; the bed's fade and the receipts' holds still stand.
+            rig.speaker.endAwaiting("a-turn", "the test's turn is over")
+            XCTAssertFalse(rig.voice.inputKept, "away \(away): the input outlived the last turn's hold")
+            XCTAssertFalse(rig.voice.inputRunning, "away \(away)")
+            XCTAssertTrue(rig.audio.holding, "away \(away): a sound's hold stands past the turn's")
+            XCTAssertTrue(rig.watch.atHandBack.isEmpty, "away \(away): handed back under a sound's hold")
+            await settle("the sounds' holds let go") { !rig.audio.holding }
+            if away { XCTAssertEqual(rig.watch.atHandBack, [false], "away: handed back once, with the input stopped") }
+            XCTAssertTrue(rig.watch.underInput.isEmpty, "away \(away): \(rig.watch.underInput)")
+            XCTAssertTrue(rig.watch.underKeeper.isEmpty, "away \(away), the keeper still rendering: \(rig.watch.underKeeper)")
+            rig.speaker.stop()
+        }
+    }
+}
