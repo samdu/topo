@@ -291,11 +291,30 @@ final class Endpoint {
             return .end(.judged(p: p, quiet: quiet))
         }
 
+        /// The rule started over within an utterance (an end turned away as a cough's): the quiet,
+        /// the votes and the verdict that counts go, but the ask in flight stays in flight and the
+        /// next ask's number goes on from the last, so one ask is in flight at a time and an
+        /// answer to an ask made before can never be taken for one made since.
+        mutating func again() {
+            quietFrames = 0
+            votes = 0
+            current = nil
+            lastVerdict = nil
+        }
+
+        /// The rule for the next utterance: started over, and with no ask in flight, since one
+        /// still out belongs to the utterance before, whose verdicts reach nothing; the numbering
+        /// still goes on, so its answer matches no ask of this one.
+        mutating func nextUtterance() {
+            again()
+            inFlight = nil
+        }
+
         /// Whether a verdict on `ask` would count: no loud frame has come since it was asked.
         func counts(ask: Int) -> Bool { current == ask }
 
-        /// Ask `ask` came back with no verdict (the judge threw): it counts for nothing, and the
-        /// next ask may go.
+        /// Ask `ask` came back with no verdict to count (the judge threw, or the verdict reached
+        /// nothing): it counts for nothing, and the next ask may go.
         mutating func unanswered(ask: Int) {
             if inFlight == ask { inFlight = nil }
             if current == ask { current = nil }

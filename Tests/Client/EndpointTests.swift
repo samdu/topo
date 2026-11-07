@@ -202,6 +202,47 @@ final class EndpointTests: XCTestCase {
         XCTAssertNotNil(rule.inFlight)
     }
 
+    func testStartingOverKeepsTheAskInFlightAndItsNumbering() {
+        var rule = Rule()
+        var asked: Int?
+        for _ in 1...4 { if case .ask(let n) = rule.frame(loud: false) { asked = n } }
+        guard let counted = asked else { return XCTFail("no ask at four quiet frames") }
+        _ = rule.verdict(0.95, ask: counted, wait: 3)
+        XCTAssertEqual(rule.votes, 1)
+        var first: Int?
+        for _ in 1...2 { if case .ask(let n) = rule.frame(loud: false) { first = n } }
+        guard let first else { return XCTFail("no second ask") }
+        rule.again()
+        XCTAssertEqual(rule.quietFrames, 0)
+        XCTAssertEqual(rule.votes, 0, "starting over kept the votes")
+        XCTAssertNil(rule.lastVerdict, "starting over kept the last verdict")
+        XCTAssertEqual(rule.inFlight, first, "starting over let go of the ask in flight")
+        for _ in 1...6 { XCTAssertEqual(rule.frame(loud: false), .none, "a second ask went with the first in flight") }
+        XCTAssertEqual(rule.verdict(0.95, ask: first, wait: 0), .none)
+        XCTAssertEqual(rule.votes, 0, "an answer to an ask made before starting over was a vote")
+        XCTAssertNil(rule.inFlight)
+        var next: Int?
+        for _ in 1...2 { if case .ask(let n) = rule.frame(loud: false) { next = n } }
+        XCTAssertNotNil(next, "no ask once the first was answered")
+        XCTAssertNotEqual(next, first, "an ask after starting over took a number already used")
+    }
+
+    func testTheNextUtterancesRuleHasNoAskInFlightAndNumbersOn() {
+        var rule = Rule()
+        var first: Int?
+        for _ in 1...4 { if case .ask(let n) = rule.frame(loud: false) { first = n } }
+        guard let first else { return XCTFail("no ask at four quiet frames") }
+        rule.nextUtterance()
+        XCTAssertNil(rule.inFlight, "the utterance before's ask held this one's back")
+        var next: Int?
+        for _ in 1...4 { if case .ask(let n) = rule.frame(loud: false) { next = n } }
+        guard let next else { return XCTFail("the next utterance asked nothing") }
+        XCTAssertNotEqual(next, first, "the next utterance's ask took a number already used")
+        XCTAssertEqual(rule.verdict(0.95, ask: first, wait: 0), .none)
+        XCTAssertEqual(rule.votes, 0, "the utterance before's answer was a vote in this one")
+        XCTAssertEqual(rule.inFlight, next, "the utterance before's answer let this one's ask go")
+    }
+
     func testAVerdictAtExactlyTheThresholdIsNotAVote() {
         var rule = Rule()
         let run = quiet(&rule, frames: 40, verdicts: [0.85])

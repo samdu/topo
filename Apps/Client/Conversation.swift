@@ -87,8 +87,8 @@ final class Conversation {
     /// The judge this conversation's utterances end by, taken as it begins: none when Smart Turn
     /// was not loaded, and then the utterances end on Silero's silence alone.
     @ObservationIgnored private var judge: (any TurnJudge)?
-    /// The turn's rule over the quiet and the judge's verdicts (`Endpoint.Judging`), one per
-    /// utterance, and how far into the sink its 100 ms frames have been counted.
+    /// The turn's rule over the quiet and the judge's verdicts (`Endpoint.Judging`), started over
+    /// for each utterance with its asks numbered on from the last, and how far into the sink its 100 ms frames have been counted.
     private var rule = Endpoint.Judging()
     private var framedTo = 0
     /// Where the last loud frame the rule counted ends: the speech's end, for the cough rule (`ends`).
@@ -343,7 +343,7 @@ final class Conversation {
     /// Nothing judged yet: what the next utterance starts from.
     private func freshUtterance() {
         policy = Endpoint.Policy()
-        rule = Endpoint.Judging()
+        rule.nextUtterance()
         fedTo = 0
         framedTo = 0
         loudTo = 0
@@ -501,24 +501,28 @@ final class Conversation {
     }
 
     private func landed(_ verdict: Float?, ask n: Int, generation: Int, trouble: String?, took: Duration) {
-        // A verdict from an utterance that has ended, or a session that has, reaches nothing.
-        guard on, voice.generation == generation, voice.listening, !endingUtterance else { return }
+        // A verdict from an utterance that has ended, or a session that has, reaches nothing but
+        // the ask in flight, which it was.
+        guard on, voice.generation == generation, voice.listening, !endingUtterance else {
+            return rule.unanswered(ask: n)
+        }
         // The frames that arrived since the feeder's last pass are counted first, so a loud one
         // among them makes this verdict count for nothing, and a cap they reach is the end.
         if let judge, heardOnset, policy.speaking, let ending = frames(judge, generation: generation) {
+            rule.unanswered(ask: n)
             feeder?.cancel()
             feeder = nil
             Task { await endUtterance(ending) }
             return
         }
-        // The latency the end's line says is a counted verdict's, never one the rule turned away.
-        if verdict != nil, rule.counts(ask: n) { judgedIn = took }
         if let trouble, !judgeThrew {
             judgeThrew = true
             AudioLog.say("conversation: the judge failed (\(trouble)); the utterance ends on the quiet's cap")
         }
         // Speech that turned out a cough is not an utterance to end.
         if let verdict, policy.speaking {
+            // The latency the end's line says is a counted verdict's, never one the rule turned away.
+            if rule.counts(ask: n) { judgedIn = took }
             if case .end(let ending) = rule.verdict(verdict, ask: n, wait: wait()), let why = ends(ending) {
                 feeder?.cancel()
                 feeder = nil
@@ -539,7 +543,7 @@ final class Conversation {
     private func ends(_ ending: Endpoint.Judging.Ending) -> String? {
         guard policy.long(through: loudTo) else {
             AudioLog.say("conversation: no end on under \(Endpoint.minSpeech) s of speech; Silero's end judges it")
-            rule = Endpoint.Judging()
+            rule.again()
             return nil
         }
         return said(ending)

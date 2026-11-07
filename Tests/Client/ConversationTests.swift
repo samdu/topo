@@ -1039,6 +1039,26 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(sent, ["turn the lights off"])
     }
 
+    /// One of the feeder's passes over what the sink holds, driven by hand through its sleep
+    /// (`Conversation.feedSleep`), then parked again.
+    private func pass(_ feed: ManualSleep, _ what: String) async {
+        feed.fire()
+        await settle(what) { feed.waiting == 1 }
+        await Task.yield()
+    }
+
+    /// Quiet a frame at a time, a pass each, until `done`; the frames the sink holds past a
+    /// detector chunk are counted a pass late, so the count is watched rather than assumed.
+    private func quietUntil(_ what: String, _ sink: SampleSink, _ feed: ManualSleep, frames: Int = 60,
+                            file: StaticString = #filePath, line: UInt = #line,
+                            _ done: @MainActor () -> Bool) async {
+        for _ in 0..<frames where !done() {
+            await quiet(0.1, into: sink, paced: false)
+            await pass(feed, what)
+        }
+        XCTAssertTrue(done(), "fed \(frames) quiet frames without \(what)", file: file, line: line)
+    }
+
     /// Speech resuming between an ask and its verdict, with the verdict landing before the
     /// feeder's next pass: the frame that arrived first is counted first, so the verdict was
     /// asked before speech resumed and counts for nothing. The feeder's passes are driven by hand,
@@ -1051,28 +1071,13 @@ final class ConversationTests: XCTestCase {
         let (conversation, voice, _) = await begun(detector, judge: judge, feedSleep: feed.sleep)
         defer { conversation.stop("test", sending: false); judge.releaseAll() }
         await settle("the feeder parked after its first pass") { feed.waiting == 1 }
-        /// One of the feeder's passes over what the sink holds, then parked again.
-        func pass(_ what: String) async {
-            feed.fire()
-            await settle(what) { feed.waiting == 1 }
-            await Task.yield()
-        }
-        /// Quiet a frame at a time, a pass each, until `done`; the frames the sink holds past a
-        /// detector chunk are counted a pass late, so the count is watched rather than assumed.
-        func quietUntil(_ what: String, _ done: @MainActor () -> Bool) async {
-            for _ in 0..<40 where !done() {
-                await quiet(0.1, into: voice.sink, paced: false)
-                await pass(what)
-            }
-            XCTAssertTrue(done(), "fed four seconds of quiet without \(what)")
-        }
         utterance(into: voice.sink)
-        await pass("the speech counted")
+        await pass(feed, "the speech counted")
         // The first ask, answered complete at once, is one vote; the second is held.
-        await quietUntil("the first verdict counted") { conversation.votes == 1 }
-        await quietUntil("the second ask held") { judge.held == 1 }
+        await quietUntil("the first verdict counted", voice.sink, feed) { conversation.votes == 1 }
+        await quietUntil("the second ask held", voice.sink, feed) { judge.held == 1 }
         // On to the wait: nothing is asked while the second is in flight.
-        await quietUntil("the quiet counted to the wait") { conversation.quietFrames >= 12 }
+        await quietUntil("the quiet counted to the wait", voice.sink, feed) { conversation.quietFrames >= 12 }
         XCTAssertEqual(conversation.votes, 1)
         XCTAssertEqual(judge.asks, 2)
         XCTAssertEqual(sent, [])
@@ -1086,12 +1091,12 @@ final class ConversationTests: XCTestCase {
         XCTAssertTrue(voice.listening)
         XCTAssertEqual(conversation.quietFrames, 0, "the loud frame was not counted before the verdict")
         XCTAssertEqual(conversation.votes, 1, "the verdict asked before speech resumed was a vote")
-        await pass("the next pass")
+        await pass(feed, "the next pass")
         XCTAssertEqual(sent, [])
     }
 
-    /// Speech under 0.25 s is a cough to Silero's end, and so to the judge's and the cap's: a
-    /// pulse with Silero's end not yet come ends nothing, however complete the judge calls it.
+    /// Speech under 0.25 s is a cough to Silero's end, and so to the judge's: a pulse with
+    /// Silero's end not yet come is not ended by the judge, however complete it calls it.
     func testAPulseShorterThanACoughIsNoUtteranceTheJudgeCanEnd() async {
         let detector = ScriptedDetector([0: .start(0)])
         let judge = ScriptedJudge([0.95])
@@ -1102,9 +1107,61 @@ final class ConversationTests: XCTestCase {
         await drain()
         XCTAssertGreaterThanOrEqual(judge.asks, 2, "the judge was not asked")
         XCTAssertEqual(sent, [], "the judge ended a 0.1 s pulse")
-        await quiet(1.5, into: voice.sink)
+        XCTAssertTrue(voice.listening)
+    }
+
+    /// And to the cap's: with verdicts that never end it, a pulse's quiet runs to the cap, which
+    /// is turned away, the rule starting over, and nothing is sent.
+    func testAPulseShorterThanACoughIsNoUtteranceTheCapCanEnd() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.1])
+        let feed = ManualSleep()
+        let (conversation, voice, _) = await begun(detector, judge: judge, feedSleep: feed.sleep)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the feeder parked after its first pass") { feed.waiting == 1 }
+        utterance(into: voice.sink, seconds: 0.1)
+        await pass(feed, "the pulse counted")
+        var most = 0
+        await quietUntil("the cap reached and turned away", voice.sink, feed) {
+            most = max(most, conversation.quietFrames)
+            return most >= Endpoint.Judging.cap - 1 && conversation.quietFrames < most
+        }
         await drain()
+        XCTAssertGreaterThanOrEqual(most, Endpoint.Judging.cap - 1, "the quiet never ran to the cap")
         XCTAssertEqual(sent, [], "the cap ended a 0.1 s pulse")
+        XCTAssertTrue(voice.listening)
+    }
+
+    /// A pulse's cap turned away starts the rule over with the ask in flight still in flight and
+    /// the next numbered on from it: no second ask goes while the first is out, and the first's
+    /// answer, landing under the rule started over, is no vote of its.
+    func testAnAskInFlightAcrossACoughsCapIsTheOnlyOneAndCountsForNothing() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.95])
+        judge.hold(calls: [0])
+        let feed = ManualSleep()
+        let (conversation, voice, _) = await begun(detector, judge: judge, feedSleep: feed.sleep)
+        defer { conversation.stop("test", sending: false); judge.releaseAll() }
+        await settle("the feeder parked after its first pass") { feed.waiting == 1 }
+        utterance(into: voice.sink, seconds: 0.1)
+        await pass(feed, "the pulse counted")
+        await quietUntil("the first ask held", voice.sink, feed) { judge.held == 1 }
+        var most = 0
+        await quietUntil("the cap reached and turned away", voice.sink, feed) {
+            most = max(most, conversation.quietFrames)
+            return most >= Endpoint.Judging.cap - 1 && conversation.quietFrames < most
+        }
+        // Past where the rule started over asks: nothing goes while the first ask is out.
+        await quietUntil("the quiet counted past the first ask's place", voice.sink, feed) {
+            conversation.quietFrames >= Endpoint.Judging.askFrom + Endpoint.Judging.askEvery
+        }
+        XCTAssertEqual(judge.asks, 1, "a second ask went while the first was in flight")
+        judge.release(call: 0)
+        await drain()
+        XCTAssertEqual(conversation.votes, 0, "the answer to an ask made before the rule started over was a vote")
+        // The first ask's answer has come back, so the next ask goes.
+        await quietUntil("the next ask", voice.sink, feed) { judge.asks == 2 }
+        XCTAssertEqual(sent, [])
         XCTAssertTrue(voice.listening)
     }
 
@@ -1130,8 +1187,8 @@ final class ConversationTests: XCTestCase {
     }
 
     /// The verdict lands after the utterance it was asked for has ended and the microphone has
-    /// opened again: it counts in the next utterance's rule for nothing, even where that rule has
-    /// an ask of the same number in flight.
+    /// opened again: it counts in the next utterance's rule for nothing, and holds back none of that
+    /// rule's own asks, which are numbered on from it.
     func testAVerdictAfterTheEndReachesNothing() async {
         let detector = ScriptedDetector([0: .start(0), 7: .end(30_000)])
         let judge = ScriptedJudge([0.95])
