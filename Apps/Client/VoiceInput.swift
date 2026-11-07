@@ -327,8 +327,8 @@ final class VoiceInput {
         }
     }
 
-    /// Opens a hands-free session with no thumb: the conversation's next utterance behind the
-    /// lock. A press in everything but the gesture: the permission is not asked — one not
+    /// Opens a hands-free session with no thumb: the conversation's next utterance, in front or
+    /// behind the lock. A press in everything but the gesture: the permission is not asked — one not
     /// already granted refuses — and the ear's readiness, the session, the engine and the tap go
     /// through `press` as a thumb's do. Answers whether the microphone is listening for `gate`.
     /// It does not wait out a call's session changing hands, as a thumb's press does, and refuses:

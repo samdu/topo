@@ -220,7 +220,7 @@ final class ConversationTests: XCTestCase {
         input.carries = { [weak conversation] in
             guard let conversation else { return false }
             guard conversation.carries() else {
-                if conversation.inFront { conversation.stop("an interruption in front", sending: false) }
+                if conversation.inFront { conversation.stop("an interruption in front", sending: false, keepingDecode: true) }
                 return false
             }
             conversation.noteInterruption()
@@ -1984,5 +1984,134 @@ extension ConversationTests {
         await drain()
         XCTAssertFalse(voice.listening)
         XCTAssertEqual(sent, [])
+    }
+
+    /// the lock's `.began` before `didEnterBackground` (either order is real,
+    /// testTheInterruptionsStartBeforeTheBackgroundIsCarriedAndResumedAtTheActivation),
+    /// the setting on: a front conversation the lock carries stays suspended until the call's activation.
+    func testTheLocksBeganBeforeTheBackgroundKeepsAFrontConversationSuspendedForTheCall() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        enabled = true
+        let engines = seams.inputEngines
+        active = false
+        beganInterruption()
+        await drain()
+        XCTAssertTrue(conversation.on, "the lock's .began ended the front conversation")
+        XCTAssertTrue(voice.listening && voice.suspended,
+                      "the microphone was rebuilt on the app's own session at the lock's .began, with no call")
+        XCTAssertEqual(seams.inputEngines, engines, "an engine was made between the lock's .began and the call")
+        XCTAssertEqual(audio.call, .none)
+        leave()
+        XCTAssertTrue(conversation.on && !conversation.inFront)
+        placeAndActivate(conversation)
+        await settle("resumed on the call") { voice.listening && !voice.suspended }
+        utterance(into: voice.sink)
+        await settle("the turn sent behind the lock") { self.sent.count == 1 }
+    }
+
+    /// the same lock with the activation refused, as iOS refuses one from an app that is not
+    /// active with no call: the front conversation is still carried, and nothing is sent at the lock.
+    func testTheLocksBeganBeforeTheBackgroundWithTheActivationRefusedStillCarries() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await settle("the onset") { conversation.heardOnset }
+        enabled = true
+        active = false
+        seams.activationError = Seams.Refused()
+        beganInterruption()
+        await drain()
+        XCTAssertTrue(conversation.on, "the lock's .began ended the front conversation")
+        XCTAssertEqual(sent, [], "half an utterance was sent at the lock")
+        XCTAssertEqual(ends, 0)
+        leave()
+        XCTAssertTrue(conversation.on, "a front conversation the lock carries was not carried")
+        seams.activationError = nil
+    }
+
+    /// A lock in front with the setting off: the judge has
+    /// ended the utterance and its decode is under way when the scene goes. The words are sent, as a
+    /// released press's are (StopWhileSpeakingTests.testALockDuringTheReleasesDecodeKeepsItsWords).
+    func testALockDuringAFrontUtterancesDecodeKeepsItsWords() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the utterance's decode under way") { voice.ending }
+        active = false
+        conversation.scene(.inactive)
+        beganInterruption()
+        await drain()
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, ["turn the lights off"], "the lock dropped the words the judge had ended")
+    }
+
+    /// an interruption in front (a phone call, the app still active) while the judge's
+    /// utterance decodes: the words are sent, as an interruption leaves a release's decode to send.
+    func testAnInterruptionInFrontDuringAnUtterancesDecodeKeepsItsWords() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on }
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the utterance's decode under way") { voice.ending }
+        beganInterruption()
+        await drain()
+        XCTAssertFalse(conversation.on)
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, ["turn the lights off"], "the interruption dropped the words the judge had ended")
+    }
+
+    /// a reopen waiting on the permission when the phone
+    /// locks: the lock's placing makes the reopen refuse, and the carried conversation ends.
+    func testAReopenSpanningTheLockWaitsForTheActivation() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        enabled = true
+        await settle("on") { conversation.on }
+        permission.arm()
+        utterance(into: voice.sink)
+        await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        leave()
+        XCTAssertTrue(conversation.on && !conversation.inFront)
+        audio.callPlaced()
+        conversation.call(.placing)
+        permission.release()
+        await drain()
+        XCTAssertTrue(conversation.on, "the lock's placing ended the carried conversation")
+        audio.callActivated()
+        conversation.call(.active)
+        await settle("open on the call") { voice.listening }
+    }
+
+    /// A reopen that opens after the lock's `.began` (the app no longer active, no call yet): what
+    /// opened is suspended, so nothing listens on the app's own session, and it resumes on the call.
+    func testAReopenThatOpensAsTheAppLeavesTheFrontIsSuspendedForTheCall() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        enabled = true
+        await settle("on") { conversation.on }
+        permission.arm()
+        utterance(into: voice.sink)
+        await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        active = false
+        permission.release()
+        await settle("the reopen opened") { voice.listening }
+        await drain()
+        XCTAssertTrue(conversation.on)
+        XCTAssertTrue(voice.suspended, "a reopen that opened with no live session was left listening on the app's own")
+        leave()
+        placeAndActivate(conversation)
+        await settle("resumed on the call") { voice.listening && !voice.suspended }
     }
 }

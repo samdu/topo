@@ -6,8 +6,9 @@ import SwiftUI
 /// A microphone tapped open hands-free on a spoken turn is a conversation: Topo keeps listening,
 /// ends each utterance itself when the person stops speaking (`Endpoint`), sends it through the
 /// chat's own send, closes the microphone while it reads the reply, and opens it again when the
-/// reading is done. It runs in two places. In front (`inFront`) it is on the app's own session
-/// with no call, begun by the tap, and ended by any press of the microphone but Stop (a tap on the
+/// reading is done. It runs in two places. In front (`inFront`) it places no call (one already up
+/// stays up under it, as under any open microphone, and it runs on that call's session; with
+/// none it runs on the app's own, while the app is active), begun by the tap, and ended by any press of the microphone but Stop (a tap on the
 /// open microphone sends what it heard and closes it), the keyboard, the chat going, an
 /// interruption, or leaving the front with nothing to carry it. Behind the lock it is a call: with
 /// *Call for spoken replies* on, a session or a front conversation open as Topo leaves the front
@@ -38,7 +39,7 @@ final class Conversation {
 
     private(set) var on = false
     /// The conversation is in front, on the app's own session, which a reopen may activate as a
-    /// press does; no call is wanted for it until the app leaves the front.
+    /// press does; no call is placed for it until the app leaves the front.
     private(set) var inFront = false
 
     @ObservationIgnored private let voice: VoiceInput
@@ -83,8 +84,9 @@ final class Conversation {
     /// activated from the background without a call is refused and left invalid.
     private var callUp = false
     /// Whether the microphone may open, resume and take the go-ahead: on the call's live session
-    /// behind the lock, or on the app's own in front.
-    private var live: Bool { callUp || inFront }
+    /// behind the lock, or on the app's own in front while the app is active. A front conversation
+    /// the lock is carrying (the app inactive, the call not yet live) waits for the call.
+    private var live: Bool { callUp || (inFront && appActive()) }
     /// The session a front conversation was ended on: it never begins another, so a press's end
     /// does not see the session it is ending as a tap's to begin one for.
     private var frontEndedOn: Int?
@@ -200,7 +202,7 @@ final class Conversation {
         if on, !inFront { return true }
         if on {
             guard carries() else {
-                stop("Topo left the front with no call to carry it", sending: false)
+                stop("Topo left the front with no call to carry it", sending: false, keepingDecode: true)
                 return false
             }
             inFront = false
@@ -240,7 +242,7 @@ final class Conversation {
     /// (`VoiceInput.drop`).
     func scene(_ phase: ScenePhase) {
         guard phase != .active, !carries() else { return }
-        if on, inFront { return stop("Topo left the front with no call to carry it", sending: false) }
+        if on, inFront { return stop("Topo left the front with no call to carry it", sending: false, keepingDecode: true) }
         voice.drop(.chat)
     }
 
@@ -354,6 +356,9 @@ final class Conversation {
     /// start in front (a phone call over the open microphone) is dropped, as an interruption
     /// drops it there.
     private func becameActive() {
+        // A front conversation the app's inactive moment held back (Control Center, a lock that
+        // went no further) picks up where it was.
+        if on, inFront { return react() }
         guard !on, !handingOff, voice.suspended, voice.owner == .chat else { return }
         AudioLog.say("conversation: none began; the suspended microphone is dropped")
         voice.cancel(.chat)
@@ -375,7 +380,7 @@ final class Conversation {
     }
 
     /// The go-ahead, if it is owed and the microphone can take the next turn: open and running,
-    /// not muted, on the call's live session, with nothing on its way (Daphne's `cueIfReady`).
+    /// not muted, on a live session (`live`), with nothing on its way (Daphne's `cueIfReady`).
     /// A cue that has just sounded (the earcons') was this moment's receipt, and a second would
     /// say it twice.
     private func payGoAhead() {
@@ -708,7 +713,8 @@ final class Conversation {
             return
         }
         if voice.suspended, live, !muted, !voice.ending {
-            // Suspended with the call's session live: resumed, whatever suspended it.
+            // Suspended with a live session (the call's, or the app's own while it is active): resumed,
+            // whatever suspended it.
             return resumeOnTheCall()
         }
         // The microphone open, every whole chunk it holds judged, and nothing on its way or being
@@ -740,8 +746,19 @@ final class Conversation {
             return
         }
         guard opened else {
+            // Refused as the session changed hands while it waited (a lock's placing landing on a
+            // front conversation): it opens again once the call's session is live.
+            if !live {
+                return AudioLog.say("conversation: the reopen was refused with no live session (\(voice.refusal ?? "refused")); it opens again once there is one")
+            }
             AudioLog.say("conversation: the microphone did not open again (\(voice.refusal ?? "refused"))")
             return stop("the microphone did not open again", sending: false)
+        }
+        // Opened as the app left the front with the call not yet live: suspended, so it is rebuilt
+        // on the call's session at the activation.
+        if !live {
+            voice.suspend("the session changed hands while it opened")
+            return
         }
         let gap = lastEnd.map { Int(now().timeIntervalSince($0) * 1000) }
         AudioLog.say("conversation: reopened\(gap.map { " after \($0) ms" } ?? "")")
@@ -781,7 +798,9 @@ final class Conversation {
     /// dropped; the call is let go, and the guest's lifecycle told. Nothing when none is on.
     /// `leaving` leaves the open session to a press, untouched, and an utterance being decoded is
     /// still sent: the judge ended it before the press.
-    func stop(_ why: String, sending: Bool, leaving: Bool = false) {
+    /// `keepingDecode` leaves an utterance being decoded to be sent, as a released press's decode
+    /// is: the judge ended it before the scene, the background or an interruption did.
+    func stop(_ why: String, sending: Bool, leaving: Bool = false, keepingDecode: Bool = false) {
         guard on else { return }
         on = false
         if inFront { frontEndedOn = voice.generation }
@@ -801,7 +820,7 @@ final class Conversation {
         let send = send
         if endingUtterance {
             // The decode under way finishes the open utterance: sent, or dropped with the end.
-            if !sending, !leaving { dropDecoded = true }
+            if !sending, !leaving, !keepingDecode { dropDecoded = true }
         } else if !leaving, voice.owner == .chat {
             // Samples the detector has not judged — a suspended session's, a chunk with it or
             // not yet fed — are decoded, and silence decodes to nothing.
