@@ -69,6 +69,9 @@ struct ModelManifest: Codable, Sendable {
     static let ctc = "parakeet-ctc-110m-coreml"
     /// Silero's voice activity detector, which ends an utterance behind the lock (`Endpoint`).
     static let vad = "silero-vad-coreml"
+    /// Smart Turn, which judges whether the speaker of an open microphone has finished
+    /// (`SmartTurn`, `Endpoint.Judging`): one Core ML package, compiled on the phone.
+    static let smartTurn = "smart-turn-v3"
     /// The voice's repository. Its paths are repository-relative (`v2.1/english/…`), because
     /// FluidAudio's Pocket loader reads the language pack from beneath the repository root.
     static let pocket = "pocket-tts-coreml"

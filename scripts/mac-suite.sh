@@ -80,6 +80,8 @@ WATCHOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.watchOS-27-2"
 XCODEGEN_VERSION="2.46.0"
 # The one test only the full lane runs: Parakeet hearing the fixture.
 REAL_EAR_TEST="TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone"
+# The unit suite's one test the full lane alone runs: the real Smart Turn judging the fixture.
+REAL_TURN_TEST="TopoTests/SmartTurnRealTests"
 SUITES=(topo_unit topo_ui others scripts)
 # The class the audio lane exists for, and the order everything asked for runs in: the parts of
 # `topo_ui` are suites by their own names.
@@ -413,17 +415,25 @@ prepare() {
 # The app targets' own suite (TopoTests), hosted by the iOS app and covering the code the watch
 # and TV builds share with the phone, and the userland package's two bundles.
 suite_topo_unit() {
-  local status=0 udid rootfs shell claude
+  local status=0 udid rootfs shell claude select=()
   unit_steps() {
     fresh_packages
     say "The rootfs, bash and Claude Code for the userland suites"
     rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$cache/rootfs")" || return 1
     shell="$(scripts/fetch-pinned.sh alpine-bash "$cache/alpine-bash")" || return 1
     claude="$(scripts/fetch-pinned.sh claude-code "$cache/claude-code")" || return 1
-    # Silero's detector alone (1 MB), which SileroLoadTests loads as the app does, in the cache
-    # the full lane's microphone test reads the rest of the ear's models from.
-    say "Silero's detector for its load"
-    scripts/fetch-ear-models.sh "$cache/ear-models" silero-vad-coreml || return 1
+    # Silero's detector (1 MB), which SileroLoadTests loads as the app does, in the cache the full
+    # lane's microphone test reads the rest of the ear's models from; and on the full lane Smart
+    # Turn's model for its real test, which the fast lane leaves out by name rather than skip.
+    local named=(silero-vad-coreml)
+    if [ "$lane" = full ]; then
+      named+=(smart-turn-v3)
+    else
+      select=("-skip-testing:$REAL_TURN_TEST")
+      echo "Fast lane: $REAL_TURN_TEST is deselected."
+    fi
+    say "The unit suite's models: ${named[*]}"
+    scripts/fetch-ear-models.sh "$cache/ear-models" "${named[@]}" || return 1
     new_simulator unit "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
 
     say "xcodebuild build-for-testing (Topo)"
@@ -467,7 +477,7 @@ suite_topo_unit() {
       -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" \
       "${NO_DIAGNOSE[@]}" \
-      -skip-testing:TopoUITests \
+      -skip-testing:TopoUITests ${select[@]+"${select[@]}"} \
       -resultBundlePath "$RESULTS/Topo-unit.xcresult"
   }
   unit_steps || status=1
@@ -732,7 +742,7 @@ suite_scripts() {
     started=()
     for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
                 suite-gate ci-require-tests check-built-plist strip-luxtts maps-opens-nothing build-ish \
-                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator; do
+                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator smartturn-mel; do
       if [ ! -x "scripts/tests/$test-test.sh" ]; then
         say "scripts/tests/$test-test.sh"
         err "scripts/tests/$test-test.sh is missing."

@@ -1065,6 +1065,7 @@ final class MicPress {
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  dictating: Bool = false, speaks: Bool = false,
+                 calls: @MainActor () -> Bool = { SpokenCallSetting.enabled() },
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
@@ -1077,9 +1078,12 @@ final class MicPress {
             // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
             // a send that took none returns.
             let release = speaks ? speaker.releasing() : nil
+            // A held release keeps its input running for the call's placing: the call service
+            // lets the call start behind the lock when the app is recording (`VoiceInput.inputKept`).
+            let keeps = release != nil && calls() && speaker.callIdle
             return Task {
                 defer { release.map { speaker.released($0, "its send took no wait") } }
-                let heard = await voice.pressUp(as: .chat)
+                let heard = await voice.pressUp(as: .chat, keepingInput: keeps)
                 speaker.microphoneClosed()
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
@@ -1104,9 +1108,10 @@ final class MicPress {
         // A press on the open microphone closes it and sends what it heard, so it is that send's
         // release and is held the same way.
         let release = speaks && drawn.open ? speaker.releasing() : nil
+        let keeps = release != nil && calls() && speaker.callIdle
         return Task {
             defer { release.map { speaker.released($0, "its send took no wait") } }
-            let heard = await voice.pressDown(as: .chat)
+            let heard = await voice.pressDown(as: .chat, keepingInput: keeps)
             speaker.microphoneOpened(counted: opens)
             guard let heard else {
                 // Nil is a session begun or a press refused, and only the chat holding the

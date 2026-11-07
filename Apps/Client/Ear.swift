@@ -249,15 +249,34 @@ final class SampleSink: @unchecked Sendable {
     }
 
     /// Everything so far, for a caption glance; the session keeps recording.
-    func peek() -> [Float] { lock.withLock { samples } }
+    func peek() -> [Float] { lock.withLock { copy(samples[...]) } }
+
+    #if DEBUG
+    /// How many samples the sink has copied out, for the suite: the tail's bound is a count.
+    private(set) var copied = 0
+    #endif
+
+    private func copy(_ slice: ArraySlice<Float>) -> [Float] {
+        #if DEBUG
+        copied += slice.count
+        #endif
+        return Array(slice)
+    }
 
     /// What has arrived from sample `start` on, and where the stream now ends: what the
     /// voice detector is fed, without copying the utterance from its start each time.
     func peek(from start: Int) -> (samples: [Float], end: Int) {
         lock.withLock {
             let from = min(max(start, 0), samples.count)
-            return (Array(samples[from...]), samples.count)
+            return (copy(samples[from...]), samples.count)
         }
+    }
+
+    /// The last `count` samples, or everything when fewer have arrived: what the turn's judge is
+    /// asked about. Only the tail is copied, so asking five times a second costs eight seconds of
+    /// samples each time however long the utterance has run.
+    func tail(_ count: Int) -> [Float] {
+        lock.withLock { copy(samples.suffix(max(count, 0))) }
     }
 
     /// Everything so far, emptied: the utterance.

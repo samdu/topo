@@ -57,6 +57,18 @@ final class SpokenCall: NSObject {
     /// Whether a call may be placed now: the driver's background. A retry or a call wanted while
     /// the last one closed is not placed once the app has come forward.
     var mayPlace: () -> Bool = { true }
+    /// The session as each placing finds it (`AudioSession.describePlacing`), logged on the
+    /// placing's line: the call service lets a call start from the background only when it judges
+    /// the person meant it, and the app recording is what it judges by when the app is no longer
+    /// visible, so a refusal is read against this.
+    var session: () -> String = { "" }
+
+    /// Each placing's line read off the session and the microphone's engine as they stand.
+    func judged(on audio: AudioSession, voice: VoiceInput) {
+        session = { [weak audio, weak voice] in
+            audio?.describePlacing(inputRunning: voice?.inputRunning ?? false) ?? "no session"
+        }
+    }
     /// Placings of this call the system refused so far: a refusal is tried again, twice, before
     /// the call fails.
     private var refusals = 0
@@ -68,6 +80,8 @@ final class SpokenCall: NSObject {
 
     private let system: CallSystem
     private let sleep: CallSleep
+    /// Where the call's lines go: the audio log, a recorder in the suite.
+    private let say: (String) -> Void
     private var grace: Task<Void, Never>?
 
     /// How long a placed call may go without the system activating its session before the
@@ -77,9 +91,11 @@ final class SpokenCall: NSObject {
     static let activationGrace: Duration = .seconds(10)
     static let closingGrace: Duration = .seconds(2)
 
-    init(system: CallSystem = CallKitSystem(), sleep: @escaping CallSleep = { try await Task.sleep(for: $0) }) {
+    init(system: CallSystem = CallKitSystem(), sleep: @escaping CallSleep = { try await Task.sleep(for: $0) },
+         say: @escaping (String) -> Void = { AudioLog.say($0) }) {
         self.system = system
         self.sleep = sleep
+        self.say = say
         super.init()
         system.setDelegate(self)
     }
@@ -96,7 +112,7 @@ final class SpokenCall: NSObject {
         id = call
         state = .starting
         active = false
-        AudioLog.say("call: placing")
+        say("call: placing (\(session()))")
         let action = CXStartCallAction(call: call, handle: CXHandle(type: .generic, value: Self.name))
         system.request(CXTransaction(action: action)) { [weak self] error in
             guard let self, let error, self.id == call else { return }
@@ -105,7 +121,7 @@ final class SpokenCall: NSObject {
             guard self.state == .starting, self.refusals < Self.placeAttempts else {
                 return self.fail("not placed after \(self.refusals) attempts: \(why)")
             }
-            AudioLog.say("call: refused (\(why)); placing again in \(Self.retryAfter)")
+            say("call: refused (\(why)); placing again in \(Self.retryAfter)")
             self.retry(call)
         }
         grace = Task { [sleep] in
@@ -143,12 +159,12 @@ final class SpokenCall: NSObject {
     func end() {
         again = false
         guard let call = id, state == .starting || state == .up else { return }
-        AudioLog.say("call: ending")
+        say("call: ending")
         close(call)
         system.request(CXTransaction(action: CXEndCallAction(call: call))) { [weak self] error in
             // Refused, so no deactivation is coming to finish it.
             guard let self, let error, self.id == call else { return }
-            AudioLog.say("call: end refused: \(error.localizedDescription)")
+            say("call: end refused: \(error.localizedDescription)")
             self.finish()
         }
     }
@@ -172,11 +188,11 @@ final class SpokenCall: NSObject {
         id = nil
         state = .idle
         active = false
-        AudioLog.say("call: over")
+        say("call: over")
         onOver()
         if again {
             again = false
-            if mayPlace() { start() } else { AudioLog.say("call: the call wanted behind it is not placed: the app is in front") }
+            if mayPlace() { start() } else { say("call: the call wanted behind it is not placed: the app is in front") }
         }
     }
 
@@ -186,7 +202,7 @@ final class SpokenCall: NSObject {
         state = .idle
         active = false
         again = false
-        AudioLog.say("call: \(why)")
+        say("call: \(why)")
         onFailed(why)
     }
 
@@ -215,13 +231,13 @@ final class SpokenCall: NSObject {
         // A provider that has been through a reset is not asked again: the calls placed on one
         // after it were never activated.
         system.replace(delegate: self)
-        guard let call = id else { return AudioLog.say("call: provider reset with no call up") }
+        guard let call = id else { return say("call: provider reset with no call up") }
         // Not from inside the callback: the system holds the old provider for as long as it
         // runs, and what ends a call here is audio work that takes a while.
         Task { @MainActor [weak self] in
             guard let self, self.id == call else { return }
             if self.state == .closing {
-                AudioLog.say("call: provider reset while closing")
+                say("call: provider reset while closing")
                 self.finish()
             } else {
                 self.fail("provider reset: the system's call service restarted")
@@ -238,7 +254,7 @@ final class SpokenCall: NSObject {
         report(action.callUUID)
         // There is no far end to wait on: placed is connected.
         system.connected(action.callUUID)
-        AudioLog.say("call: placed")
+        say("call: placed")
     }
 
     fileprivate func activated() {
@@ -246,7 +262,7 @@ final class SpokenCall: NSObject {
         state = .up
         active = true
         grace?.cancel()
-        AudioLog.say("call: session activated")
+        say("call: session activated")
         onActive()
     }
 
@@ -254,7 +270,7 @@ final class SpokenCall: NSObject {
         active = false
         guard id != nil else { return }
         if state == .closing { return finish() }
-        AudioLog.say("call: session deactivated with the call up")
+        say("call: session deactivated with the call up")
         onInactive()
     }
 
@@ -262,7 +278,7 @@ final class SpokenCall: NSObject {
         system.fulfill(action)
         guard action.callUUID == id, state == .starting || state == .up else { return }
         // Not ours: `end` moves to closing before it asks.
-        AudioLog.say("call: hung up from the card")
+        say("call: hung up from the card")
         close(action.callUUID)
         onHangUp()
         // A hang-up wants no call behind it: what the hang-up's own effects asked for as they
@@ -275,13 +291,13 @@ final class SpokenCall: NSObject {
     /// lock holds open and keeps it closed until the unmute (`Conversation`). Always fulfilled,
     /// never refused, so the card stays consistent.
     fileprivate func perform(mute action: CXSetMutedCallAction) {
-        AudioLog.say("call: \(action.isMuted ? "muted" : "unmuted") from the card")
+        say("call: \(action.isMuted ? "muted" : "unmuted") from the card")
         system.fulfill(action)
         onMute(action.isMuted)
     }
 
     fileprivate func perform(held action: CXSetHeldCallAction) {
-        AudioLog.say("call: \(action.isOnHold ? "on hold" : "off hold")")
+        say("call: \(action.isOnHold ? "on hold" : "off hold")")
         system.fulfill(action)
     }
 }

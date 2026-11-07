@@ -147,9 +147,11 @@ final class KeeperSounds {
     /// Whether Topo's own voice is being read out; `Speaker` answers it. A receipt over the voice
     /// is a stray tone in the middle of a sentence.
     var voiceSpeaking: @MainActor () -> Bool = { false }
-    /// Whether a microphone is open or opening, asked at each sound; `Speaker` answers it. Asked
-    /// rather than told at the press, so no path that opens one is missed, and a receipt played
-    /// into one is heard by it.
+    /// Whether a microphone is open or opening; `Speaker` answers it. It sets the bed's level, the
+    /// bed ducked under an open microphone; a receipt sounds into one whatever it answers, as
+    /// Daphne's do, its gate shut by the conversation (`toneSounded`) and the tone ducked by the
+    /// input's voice processing when noise suppression is on. Asked rather than told at the press,
+    /// so no path that opens one is missed.
     var microphoneOpen: @MainActor () -> Bool = { false }
     /// What the bed's level was last set for: `duck()` moves it only when the answer has changed.
     private var ducked = false
@@ -438,7 +440,7 @@ final class KeeperSounds {
     }
 
     /// A microphone opened over the bed, or closed again: the bed is set to the level the answer
-    /// now asks for. Told at each microphone moment; a receipt asks for itself (`play`).
+    /// now asks for. Told at each microphone moment, and read again as the bed starts (`target`).
     func duck() {
         dropStale()
         let open = microphoneOpen()
