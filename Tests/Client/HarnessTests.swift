@@ -397,7 +397,8 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let wasAsking = await asking.value
         XCTAssertEqual(wasAsking, true, "the turn was not on its way while the model had it")
-        XCTAssertEqual(try await log(db).map(\.text), ["When are the bins?", "Tonight."])
+        let turns = try await log(db).map(\.text)
+        XCTAssertEqual(turns, ["When are the bins?", "Tonight."])
         XCTAssertFalse(harness.turnOnItsWay, "the turn was still on its way after its reply")
         XCTAssertFalse(harness.turnOpen)
     }
