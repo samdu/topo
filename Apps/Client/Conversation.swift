@@ -91,6 +91,8 @@ final class Conversation {
     /// utterance, and how far into the sink its 100 ms frames have been counted.
     private var rule = Endpoint.Judging()
     private var framedTo = 0
+    /// Where the last loud frame the rule counted ends: the speech's end, for the cough rule (`ends`).
+    private var loudTo = 0
     /// Whether this utterance has logged a judge that threw: once is enough.
     private var judgeThrew = false
     /// The wait the rule is judged against, read at each verdict.
@@ -344,6 +346,7 @@ final class Conversation {
         rule = Endpoint.Judging()
         fedTo = 0
         framedTo = 0
+        loudTo = 0
         judgeThrew = false
         judgedIn = nil
         heardOnset = false
@@ -466,6 +469,7 @@ final class Conversation {
             let loud = Endpoint.loud(samples[offset..<offset + size])
             offset += size
             framedTo += size
+            if loud { loudTo = framedTo }
             switch rule.frame(loud: loud) {
             case .none: continue
             case .ask(let n): ask(n, of: judge, generation: generation)
@@ -524,12 +528,11 @@ final class Conversation {
     }
 
     /// An end the judge or the cap reached, in the log's words, given only over speech Silero's
-    /// own end would take for an utterance: `minSpeech` of it, counted from its onset to where the
-    /// quiet began. Shorter, it is a cough, as it would be at Silero's end: the rule starts again
+    /// own end would take for an utterance: `minSpeech` of it, counted from its onset to the end of
+    /// its last loud frame (`loudTo`), which a rule started again does not move. Shorter, it is a cough, as it would be at Silero's end: the rule starts again
     /// and the end is Silero's to judge.
     private func ends(_ ending: Endpoint.Judging.Ending) -> String? {
-        let quietFrom = framedTo - rule.quietFrames * Endpoint.Judging.frame
-        guard policy.long(through: quietFrom) else {
+        guard policy.long(through: loudTo) else {
             AudioLog.say("conversation: no end on under \(Endpoint.minSpeech) s of speech; Silero's end judges it")
             rule = Endpoint.Judging()
             return nil
