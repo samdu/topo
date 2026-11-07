@@ -376,6 +376,32 @@ final class HarnessIntegrationTests: XCTestCase {
         try await eventually("Topo idle after the reply") { mascot.state.input.activity == "idle" }
     }
 
+    /// A turn is on its way, for a press released behind it to bleep (`Speaker.sounded(release:)`),
+    /// while its words are on the line and after the log has them, through the wait on the model,
+    /// until its reply is in the log.
+    func testATurnIsOnItsWayFromTheLineUntilItsReply() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let asking = Answers()
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            await asking.set(await MainActor.run { seen.harness?.turnOnItsWay ?? false })
+        }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        seen.harness = harness
+        XCTAssertFalse(harness.turnOnItsWay)
+        _ = harness.willSend("When are the bins?")
+        XCTAssertTrue(harness.turnOnItsWay, "words on the line were not on their way")
+
+        await harness.retry()
+
+        let wasAsking = await asking.value
+        XCTAssertEqual(wasAsking, true, "the turn was not on its way while the model had it")
+        XCTAssertEqual(try await log(db).map(\.text), ["When are the bins?", "Tonight."])
+        XCTAssertFalse(harness.turnOnItsWay, "the turn was still on its way after its reply")
+        XCTAssertFalse(harness.turnOpen)
+    }
+
     /// A second turn, sent over the runner the first one made, is open before any of its steps
     /// has said where it is: here while a debug launch holds the reply, which is before the
     /// runner is asked anything.
