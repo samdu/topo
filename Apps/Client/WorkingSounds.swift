@@ -87,7 +87,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// The receipts and the bleep are the keeper's, so they sound only while a hold that is not a
 /// sound's own stands (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes
 /// none, and a typed turn worked on while a spoken turn's wait stands receipts with it. The
-/// conversation's tones sound under the conversation, which the call or the front keeps running.
+/// conversation's go-ahead sounds under the conversation, which the call or the front keeps running.
 /// They sound over Topo's voice and into an open microphone, as Daphne's do, and tell the
 /// conversation their length (`toneSounded`), which shuts its gate under them. Every sound is
 /// played on the session as it stands, live (`AudioSession.ensureLive()`) and refused when it is

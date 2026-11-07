@@ -1390,7 +1390,7 @@ final class ScriptedJudge: TurnJudge, @unchecked Sendable {
 
 // MARK: - The conversation's tones
 
-/// The open mic's one tone, on the conversation: no tone at an utterance's onset, the
+/// The open mic's own tone, on the conversation: no tone at an utterance's onset, the
 /// go-ahead owed at the conversation's start, after a turn sent, after a reply and at an unmute
 /// and paid once the microphone is open with nothing on its way, yielding to a cue that has just
 /// said it, and the gate shut under a tone so the ear does not take it for speech.
@@ -1475,6 +1475,7 @@ extension ConversationTests {
         await drain()
         XCTAssertEqual(sent.count, 1, "the go-ahead's own tone was sent as a turn")
         XCTAssertEqual(played, [.speak, .speak], "the tone's onset sounded a tone")
+        XCTAssertFalse(conversation.heardOnset, "the go-ahead's own onset was given to the person")
     }
 
     /// Words carried into the conversation from the press, judged only after the call's resume,
