@@ -1830,11 +1830,13 @@ extension ConversationTests {
 /// listening (Sam's rulings in plan-open-mic-in-front.md).
 extension ConversationTests {
     /// A tap with Topo in front, the call setting off: a conversation in front.
-    private func inFront(_ detector: ScriptedDetector, sounding: Bool = false,
-                         sends: Bool = true) async -> (Conversation, VoiceInput, Speaker) {
+    private func inFront(_ detector: ScriptedDetector, judge: ScriptedJudge? = nil, sounding: Bool = false,
+                         sends: Bool = true,
+                         wire: (Conversation, VoiceInput, Speaker) -> Void = { _, _, _ in }) async -> (Conversation, VoiceInput, Speaker) {
         active = true
         enabled = false
-        let made = await make(detector: detector, sends: sends, sounding: sounding)
+        let made = await make(detector: detector, judge: judge, sends: sends, sounding: sounding)
+        wire(made.0, made.1, made.2)
         await tap(made.1)
         return made
     }
@@ -1857,6 +1859,105 @@ extension ConversationTests {
         await settle("the go-ahead after the turn") { self.played == [.speak, .speak] }
         XCTAssertTrue(conversation.inFront)
         XCTAssertEqual(audio.call, .none, "a call was placed in front")
+    }
+
+    /// In front the turn ends on Smart Turn as behind the lock: a sentence the judge calls
+    /// complete is sent after the wait, inside the cap.
+    func testInFrontACompleteSentenceIsSentOnTheJudgeAfterTheWait() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.95])
+        let (conversation, voice, _) = await inFront(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await quiet(3.0, into: voice.sink) { self.sent.count == 1 }
+        await settle("the turn sent") { self.sent.count == 1 }
+        XCTAssertGreaterThanOrEqual(judge.asks, 2, "the turn ended in front without the judge")
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// In front a pause the judge calls unfinished holds: Silero's own end is the cap.
+    func testInFrontAPauseTheJudgeCallsUnfinishedHolds() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, _) = await inFront(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await quiet(3.5, into: voice.sink)
+        await drain()
+        XCTAssertGreaterThan(judge.asks, 4, "the judge was not asked through the pause in front")
+        XCTAssertEqual(sent, [], "a pause the judge called unfinished ended the turn in front")
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(detector.silences.first, Endpoint.silence(judged: true))
+    }
+
+    /// In front four seconds of quiet ends the turn whatever the judge says.
+    func testInFrontFourSecondsOfQuietEndsWhateverTheJudgeSays() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, _) = await inFront(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await quiet(3.8, into: voice.sink, paced: false)
+        await drain()
+        XCTAssertEqual(sent, [], "the turn ended in front before four seconds of quiet")
+        await quiet(0.3, into: voice.sink, paced: false)
+        await settle("the turn sent at the cap") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// With *Call for spoken replies* on and the call driver wired as the app wires it, a front
+    /// conversation, its turn and the reply's wait and reading place no call.
+    func testInFrontWithTheSettingOnNoCallIsPlaced() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
+        defer { withExtendedLifetime(driver) {} }
+        let (conversation, voice, speaker) = await inFront(detector) { [unowned self] conversation, _, speaker in
+            enabled = true
+            let audio: AudioSession = self.audio
+            speaker.onHold = { [weak audio] in driver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
+            speaker.onMicrophone = { driver.microphoneChanged($0) }
+            conversation.conversingChanged = { driver.conversingChanged($0) }
+        }
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await settle("sent") { self.sent.count == 1 }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await drain()
+        speaker.stop()
+        await settle("open again") { voice.listening }
+        await drain()
+        XCTAssertTrue(conversation.on)
+        XCTAssertEqual(system.starts.count, 0, "a front conversation placed a call")
+    }
+
+    /// The press's own path in two halves, deterministically: `pressed()` ends the conversation,
+    /// leaving the session open hands-free for the press, and a reaction to a change the
+    /// conversation watches runs before the press reaches the session. It begins no second
+    /// conversation on that session.
+    func testASessionAFrontConversationEndedOnBeginsNoOther() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, speaker) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        conversation.pressed()
+        XCTAssertFalse(conversation.on)
+        XCTAssertTrue(voice.listening && voice.handsFree, "the press's stop closed the session it leaves to the press")
+        // A reply landing waits for the open microphone (`waitingForMicrophone`, which the
+        // conversation watches): its reaction runs here, before the press reaches the session.
+        XCTAssertTrue(speaker.speak("Elsewhere."))
+        await settle("the reply waiting on the microphone") { speaker.waitingForMicrophone }
+        await drain()
+        XCTAssertFalse(conversation.on, "the session the press ended the conversation on began another")
+        speaker.stop()
+        _ = await voice.pressDown(as: .chat)
+        _ = await voice.pressUp(as: .chat)
+        await drain()
+        XCTAssertFalse(conversation.on)
     }
 
     func testNoConversationInFrontForDictationOrUnderAPhoneCall() async {
