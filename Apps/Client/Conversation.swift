@@ -352,6 +352,10 @@ final class Conversation {
         heardOnset = false
     }
 
+    /// How the feeder waits between its passes (`feedEvery`); the suite's own sleep, so a test
+    /// drives each pass by hand.
+    var feedSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+
     #if DEBUG
     /// The votes the rule holds now, for the suite.
     var votes: Int { rule.votes }
@@ -374,6 +378,7 @@ final class Conversation {
         let now = now
         let deafLimit = deafLimit
         let silence = silence
+        let feedSleep = feedSleep
         feeder = Task { [weak self] in
             if reset { await detector.reset(silence: silence) }
             var heardAt = now()
@@ -441,7 +446,7 @@ final class Conversation {
                 // A reply waiting on this microphone, or a go-ahead owed, is judged once what was
                 // heard has been.
                 if self.speaker.waitingForMicrophone || self.goAheadOwed { self.react() }
-                try? await Task.sleep(for: Self.feedEvery)
+                try? await feedSleep(Self.feedEvery)
             }
         }
     }
