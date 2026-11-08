@@ -357,7 +357,12 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
 
     if run is None:
         if age > GRACE:
-            starts = ("none starts while it conflicts with main" if pr.get("mergeStateStatus") == "DIRTY"
+            # PR validate runs on PRs into main alone, so a stacked PR gets no run
+            # whatever is pushed to it until it is retargeted.
+            base = pr.get("baseRefName")
+            starts = (f"none starts on a PR into {base}, since PR validate runs on PRs into main; "
+                      f"retarget it (gh pr edit {n} --base main)" if base and base != "main"
+                      else "none starts while it conflicts with main" if pr.get("mergeStateStatus") == "DIRTY"
                       else "a push starts one")
             report("norun", f"{title}: ready with no validate run for {minutes(age)}; {starts}.")
         return out
