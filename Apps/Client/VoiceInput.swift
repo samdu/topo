@@ -327,20 +327,22 @@ final class VoiceInput {
         }
     }
 
-    /// Opens a hands-free session with no thumb: the conversation's next utterance behind the
-    /// lock. A press in everything but the gesture: the permission is not asked — one not
+    /// Opens a hands-free session with no thumb: the conversation's next utterance, in front or
+    /// behind the lock. A press in everything but the gesture: the permission is not asked — one not
     /// already granted refuses — and the ear's readiness, the session, the engine and the tap go
     /// through `press` as a thumb's do. Answers whether the microphone is listening for `gate`.
     /// It does not wait out a call's session changing hands, as a thumb's press does, and refuses:
     /// behind the lock the wait could end at the call's end, on a session the background cannot
-    /// activate.
-    func reopen(as gate: Gate) async -> Bool {
+    /// activate. `live` is asked again once the permission has answered, the one wait before the
+    /// session is touched: a session no longer live (the app gone inactive with no call) refuses,
+    /// so nothing is opened or read from a session iOS would refuse.
+    func reopen(as gate: Gate, live: @escaping @MainActor () -> Bool = { true }) async -> Bool {
         guard !listening, !starting, !ending, !denied, permitted() else { return false }
         guard !audio.callChangingHands else {
             refusal = "the call's session is changing hands"
             return false
         }
-        await begin(as: gate, settling: false)
+        await begin(as: gate, settling: false, live: live)
         guard listening, owner == gate else { return false }
         handsFree = true
         return true
@@ -348,7 +350,8 @@ final class VoiceInput {
 
     /// `settling` false refuses a call's session changing hands rather than waiting it out, as
     /// `reopen` does, however long the permission took to answer.
-    private func begin(as gate: Gate, settling waits: Bool = true) async {
+    private func begin(as gate: Gate, settling waits: Bool = true,
+                       live: @MainActor () -> Bool = { true }) async {
         presses += 1
         refusal = nil
         #if DEBUG
@@ -377,6 +380,11 @@ final class VoiceInput {
         var tapped = false
         if audio.callChangingHands, !waits {
             refusal = "the call's session is changing hands"
+            owner = nil
+            return
+        }
+        guard live() else {
+            refusal = "no live session"
             owner = nil
             return
         }

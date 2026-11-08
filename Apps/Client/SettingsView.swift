@@ -118,7 +118,7 @@ struct SettingsView: View {
                             in: QuietWait.range, step: QuietWait.step)
                         .accessibilityIdentifier(SettingsView.quietWait)
                 } footer: {
-                    Text("How long a pause has to be before Topo may decide you have finished, in a conversation behind the lock. Topo still waits through a pause that sounds unfinished, up to 4 s. \(QuietWait.said(QuietWait.standard)) s unless changed. Kept on this device.")
+                    Text("How long a pause has to be before Topo may decide you have finished, in a conversation with the open microphone. Topo still waits through a pause that sounds unfinished, up to 4 s. \(QuietWait.said(QuietWait.standard)) s unless changed. Kept on this device.")
                 }
                 Section {
                     Button(clearRequested ? "Clears at the next launch" : "Clear compiled model cache") {

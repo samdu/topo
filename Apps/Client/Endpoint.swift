@@ -322,7 +322,7 @@ final class Endpoint {
     }
 }
 
-/// How long a pause in a conversation behind the lock has to run before the judge's verdict may
+/// How long a pause in an open-mic conversation, in front or behind the lock, has to run before the judge's verdict may
 /// end the turn: a short sentence sounds finished to it while the speaker is still thinking of
 /// the next one. Set in the settings sheet and by the mind's `topo voice wait`, kept as the
 /// `quietWait` default on this device, and read at each verdict, as Daphne reads it. Inside
