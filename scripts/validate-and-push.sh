@@ -501,8 +501,8 @@ ticket_in() {
 ticket_out() { [ -z "$ticket" ] || rm -f "$ticket"; }
 # Whether a suite's name is free here for a run that waits for it: its lock not held, the one
 # this run holds itself counted free, and no suite of the name on record in a slot. The lock is
-# asked without waiting and let go at once, so its holder-to-be can find it held for that
-# instant and ask again at its next look.
+# asked without waiting and let go at once, under the line's lock (queue_in) like every take of
+# a suite's lock, so no run reading the line finds it held for that instant.
 name_free() {  # name_free <name> <the names of the suites left going without their script>
   [ "$1" != "$mine" ] || return 0
   case " $2 " in *" $1 "*) return 1 ;; esac
@@ -724,8 +724,12 @@ if [ "$hold" = yes ]; then
   trap '[ -z "${ticket-}" ] || rm -f "$ticket"' EXIT
   trap 'exit 143' TERM INT HUP
   while [ -z "$slot" ]; do
-    ! queue_in || { take_slot; queue_out; }
-    [ -n "$slot" ] || waiting "a checkout" "$slot_held"
+    if queue_in; then
+      take_slot; queue_out
+      [ -n "$slot" ] || waiting "a checkout" "$slot_held"
+    else
+      waiting "a checkout" "$slot_held" "$QUEUE_WAIT"
+    fi
   done
   echo "Slot $slot is held for: ${hold_command[*]}" >&2
   exec 3>&1 4>&2
@@ -785,7 +789,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     # Then here: the first suite still to run that no sibling is running, its lock on
     # descriptor 6. A suite a killed script left going holds its name as a lock would. Only
     # with one found is a slot asked for, and it is this suite's alone: let go as it ends.
-    held="" wanted="a suite" here=no wants="" mine=""
+    held="" wanted="a suite" here=no wants="" mine="" waited_for=""
     for candidate in $remaining; do
       case " $wants " in *" ${candidate%%:*} "*) ;; *) wants="$wants${wants:+ }${candidate%%:*}" ;; esac
     done
@@ -795,10 +799,16 @@ if [ "${#chosen[@]}" -gt 0 ]; then
         # parts still to run here they are the suite whole, in one call.
         name="${candidate%%:*}" what="$candidate"
         case "$name:$remaining" in topo_ui:*" topo_ui:quiet "*) case "$remaining" in *" topo_ui:mic "*) what=topo_ui ;; esac ;; esac
-        # Free at a look that holds it for no longer than the look, and not on record as
-        # running in some slot (one whose script is gone); then the line, read holding
-        # nothing; and only then the name's lock, on descriptor 6, and a slot.
+        # All under the line's lock: free at a look that holds it for no longer than the
+        # look, and not on record as running in some slot (one whose script is gone); then
+        # the line, read holding no suite's lock; and only then the name's lock, on
+        # descriptor 6, and a slot.
+        if ! queue_in; then
+          wanted="a checkout" held="; $slot_held" waited_for="$QUEUE_WAIT"
+          break
+        fi
         if ! name_free "$name" ""; then
+          queue_out
           held="$held; $candidate: $(cat "$cache/suite-$name.holder" 2>/dev/null || echo unknown)"
           continue
         fi
@@ -807,12 +817,9 @@ if [ "${#chosen[@]}" -gt 0 ]; then
           if found="$(orphan_in "$dir")" && found_suite="${found#* }" && [ "${found_suite%%:*}" = "$name" ]; then orphan="${found%% *}"; fi
         done
         if [ -n "$orphan" ]; then
+          queue_out
           held="$held; $candidate: still running without its script, pid $orphan, end it with \`kill $orphan\`"
           continue
-        fi
-        if ! queue_in; then
-          wanted="a checkout" held="; $slot_held"
-          break
         fi
         mine="$name"
         if ! line_clear; then
@@ -846,7 +853,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
       # Waiting for a suite's name is waiting in the line too, in this run's own place: its
       # ticket names what it waits for, and holds nobody up while none of those is free.
       ticket_in
-      waiting "$wanted" "${held#; }"
+      waiting "$wanted" "${held#; }" $waited_for
       continue
     fi
     say_at="$waited"
