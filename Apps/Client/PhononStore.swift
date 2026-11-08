@@ -82,6 +82,9 @@ struct PhononStore: Sendable {
     func install(from source: any PhononSource, progress: @escaping @Sendable (Double?) -> Void = { _ in },
                  copying: @Sendable () -> Void = {}) async throws -> URL {
         let kept = installed()
+        // A partial folder standing now is one an earlier process left mid-copy: one install runs
+        // at a time, so nothing is still writing it. It goes before anything is taken or made.
+        try? FileManager.default.removeItem(at: staging)
         // A whole store of the pack's version is taken without making the pack local, so a pack
         // let go after its copy is not fetched again for nothing; nor is it when the pack's version
         // cannot be read this launch, which leaves the copy here standing for the next.

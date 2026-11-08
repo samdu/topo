@@ -261,6 +261,26 @@ final class PhononStoreTests: XCTestCase {
         XCTAssertTrue(store.isWhole())
     }
 
+    /// A partial folder an earlier process left mid-copy is taken away by a launch that takes
+    /// the store as it stands, without making the pack local, as by one whose version is unreadable.
+    func testALaunchThatTakesTheStoreTakesAPartialFolderLeftBehind() async throws {
+        let folder = try bundle(built: 100, files: weights)
+        _ = try await store.install(from: FakePack(folder: folder, version: 3))
+        let stray = store.staging.appendingPathComponent("flow.mlpackage/Data/com.apple.CoreML/weights/weight.bin")
+        try fm.createDirectory(at: stray.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("half of version 4".utf8).write(to: stray)
+        let unreadable = FakePack(folder: folder, version: 4, unreadable: 1)
+        _ = try await store.install(from: unreadable)
+        XCTAssertEqual(unreadable.counts.madeLocal, 0, "the store was not taken as it stands")
+        XCTAssertFalse(fm.fileExists(atPath: store.staging.path), "the store taken as it stands kept the partial folder")
+        try fm.createDirectory(at: stray.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("half again".utf8).write(to: stray)
+        let same = FakePack(folder: folder, version: 3)
+        _ = try await store.install(from: same)
+        XCTAssertEqual(same.counts.madeLocal, 0)
+        XCTAssertFalse(fm.fileExists(atPath: store.staging.path), "a store at the pack's version kept the partial folder")
+    }
+
     func testAPathOutsideTheBundleIsRefused() async throws {
         let folder = try bundle(built: 100, files: weights)
         let manifest: [String: Any] = ["built": 100, "files": [["path": "../escape", "size": 1, "sha256": String(repeating: "0", count: 64)]]]
