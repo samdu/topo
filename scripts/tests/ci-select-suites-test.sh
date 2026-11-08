@@ -70,6 +70,7 @@ expected=(
   'scripts/tests/review-verdict-test.sh scripts'
   'scripts/tests/simulator-run-test.sh scripts'
   'scripts/tests/ci-audio-lane-test.sh scripts'
+  'scripts/tests/ci-require-tests-test.sh scripts'
 )
 
 failures=0
@@ -136,6 +137,8 @@ selects false false false "the reviewer's scripts and their tests" $'scripts/rev
 # alone is the harness's; the scripts they test are what the product suites prove.
 selects false false false "the simulator run's and the audio lane's tests alone" $'scripts/tests/simulator-run-test.sh\nscripts/tests/ci-audio-lane-test.sh\n' true
 selects true true true "the simulator run's script beside its test" $'scripts/simulator-run.sh\nscripts/tests/simulator-run-test.sh\n'
+selects false false false "the suite gate's test alone" $'scripts/tests/ci-require-tests-test.sh\n' true
+selects true true true "the suite gate beside its test" $'scripts/ci-require-tests.sh\nscripts/tests/ci-require-tests-test.sh\n'
 selects true true true "the audio lane's script beside its test" $'scripts/ci-audio-lane.sh\nscripts/tests/ci-audio-lane-test.sh\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
