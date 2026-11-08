@@ -1157,6 +1157,25 @@ case "$out" in *"the first still 0000011, pid $still, for "*) ok "a flickering l
 is "a flickering line that stands still: gave up within the allowance" "$(looks)" 3
 is "a flickering line that stands still: no suite ran" "$(recorded suites)" ""
 rm -f "$q/0000000000000011-0000011"
+# A `ps` that answers nothing for a run that is still going, as a loaded Mac's can: the ticket
+# is that run's still, and the run behind waits for it rather than taking it for dead.
+sleep 600 & still=$!
+printf '%s\n%s\n%s\n' "$still" "$(began "$still")" "still 0000013" > "$q/0000000000000013-0000013"
+mkdir -p "$work/blankps"
+cat > "$work/blankps/ps" <<PS
+#!/usr/bin/env bash
+case " \$* " in *" -p $still "*) exit 1 ;; esac
+exec /bin/ps "\$@"
+PS
+chmod +x "$work/blankps/ps"
+export POLLS="$work/blankps.looks"; : > "$POLLS"
+PATH="$work/blankps:$work/pollbin:$PATH" LOCK_WAIT=3 validate
+is "a ps that answers nothing: exits 2" "$status" 2
+case "$out" in *"still 0000013, pid $still"*) ok "a ps that answers nothing: it waited behind the run ahead" ;; *) fail "a ps that answers nothing: $out" ;; esac
+is "a ps that answers nothing: no suite ran" "$(recorded suites)" ""
+[ -e "$q/0000000000000013-0000013" ] && ok "a ps that answers nothing: the ticket stands" || fail "a ps that answers nothing: the ticket was removed"
+kill "$still" 2>/dev/null; wait "$still" 2>/dev/null
+rm -f "$q/0000000000000013-0000013"
 
 # With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
 # out of the line for each asking and back under its own name, so a run that came later does

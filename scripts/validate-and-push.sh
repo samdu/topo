@@ -502,16 +502,34 @@ name_free() {  # name_free <name> <the names of the suites left going without th
   case " $2 " in *" $1 "*) return 1 ;; esac
   perl -MFcntl=:flock -e 'open(my $lock, ">>", shift) or exit 1; exit(flock($lock, LOCK_EX | LOCK_NB) ? 0 : 1)' "$cache/suite-$1.lock" 6>&- 7>&-
 }
+# first_free <the names of the suites left going without their script> <name>... — the first of
+# the names that is free here, as name_free judges each, printed; false when none is. Every lock
+# is asked in one process, microseconds apart, so a name changing hands between two of the
+# asks cannot make a ticket whose names are never all held at once read as wanting none.
+first_free() {
+  local left="$1"; shift
+  perl -MFcntl=:flock -e '
+    my ($dir, $mine, $left) = splice(@ARGV, 0, 3);
+    my %left = map { $_ => 1 } split " ", $left;
+    for my $n (@ARGV) {
+      if ($n eq $mine) { print "$n\n"; exit 0 }
+      next if $left{$n};
+      open(my $lock, ">>", "$dir/suite-$n.lock") or next;
+      if (flock($lock, LOCK_EX | LOCK_NB)) { print "$n\n"; exit 0 }
+    }
+    exit 1' "$cache" "$mine" "$left" "$@" 6>&- 7>&-
+}
 # Who is ahead of this run, one a line: every live ticket before its own, or every live one
 # when it has none in, that waits for something this run could be given in its place. A
 # ticket with no fourth line (a hold)
 # waits for a slot alone and always counts; one with names counts only while one of them is
 # free here, since a run that cannot have any of its suites' names takes no slot. A ticket is
 # live while its pid is running and began when the ticket says; one that is not, or that does
-# not read as three lines, is dead and is removed here. A live run whose ticket was taken for
-# dead (a `ps` that failed) puts it back at its next look.
+# not read as three lines, is dead and is removed here; a `ps` that answers nothing for a pid
+# that is still running (a loaded Mac) is no answer, and the ticket is read as live. A live run whose
+# ticket was taken for dead puts it back at its next look.
 ahead() {
-  local name pid began who names n dir found left=""
+  local name pid began who names n dir found now left=""
   [ -d "$queue" ] || return 0
   for dir in "$cache"/slots/*/; do
     if found="$(orphan_in "$dir")"; then found="${found#* }"; left="$left ${found%%:*}"; fi
@@ -521,11 +539,13 @@ ahead() {
     [ "$queue/$name" != "$ticket" ] || break
     pid="$(sed -n 1p "$queue/$name" 2>/dev/null)" began="$(sed -n 2p "$queue/$name" 2>/dev/null)" who="$(sed -n 3p "$queue/$name" 2>/dev/null)"
     names="$(sed -n 4p "$queue/$name" 2>/dev/null)"
-    if [ -n "$pid" ] && [ -n "$began" ] && [ -n "$who" ] && [ "$(began_of "$pid")" = "$began" ]; then
+    now=""
+    [ -z "$pid" ] || now="$(began_of "$pid")"
+    if [ -n "$pid" ] && [ -n "$began" ] && [ -n "$who" ] \
+       && { [ "$now" = "$began" ] || { [ -z "$now" ] && kill -0 "$pid" 2>/dev/null; }; }; then
       if [ -z "$names" ]; then echo "$who, pid $pid"; continue; fi
-      for n in $names; do
-        if name_free "$n" "$left"; then echo "$who, pid $pid, for $n"; break; fi
-      done
+      # shellcheck disable=SC2086 # the names are words
+      if n="$(first_free "$left" $names)"; then echo "$who, pid $pid, for $n"; fi
     else
       rm -f "$queue/$name"
     fi
