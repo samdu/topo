@@ -46,6 +46,15 @@ enum TopoCloudKit {
         }
     }
 
+    /// True when CloudKit refused because this device has no iCloud account signed in
+    /// (`notAuthenticated`), which is said as that rather than as a refusal.
+    static func meansNoAccount(_ error: any Error) -> Bool {
+        var errors: [any Error] = [error]
+        if case RecordDatabaseError.rejected(let underlying) = error { errors.append(underlying) }
+        if case RecordDatabaseError.unavailable(let underlying) = error { errors.append(underlying) }
+        return errors.contains { ($0 as? CKError)?.code == .notAuthenticated }
+    }
+
     /// True when the error means the log does not exist yet rather than
     /// something being wrong with it: nobody has written a turn, so the zone
     /// the writers create is not there.

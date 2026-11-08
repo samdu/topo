@@ -200,6 +200,12 @@ final class TranscriptStore {
     }
 
     static func message(for error: any Error) -> String {
+        if LocalRecordDatabase.isJournalFailure(error) {
+            return "Topo couldn't read or write the conversation it keeps on this phone. Restart Topo; if it says this again, the phone may be out of space."
+        }
+        if TopoCloudKit.meansNoAccount(error) {
+            return "No iCloud account on this phone. Sign in to iCloud in Settings."
+        }
         switch error {
         case RecordDatabaseError.unavailable:
             return "iCloud is out of reach. Topo will try again."

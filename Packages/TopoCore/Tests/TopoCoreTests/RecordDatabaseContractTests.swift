@@ -3,10 +3,45 @@ import Testing
 import TopoCore
 import TopoCoreTesting
 
-@Suite struct InMemoryRecordDatabaseTests {
-    let db = InMemoryRecordDatabase()
+/// The semantics every local record store keeps, run over the in-memory store the tests hold
+/// and the journalled one a phone with no iCloud account runs on (`RecordDatabaseContract`).
+enum ContractStore: String, CaseIterable, CustomTestStringConvertible {
+    case memory, disk
+    var testDescription: String { rawValue }
+}
 
-    @Test func createIsCreateOnly() async throws {
+/// A store under the contract, with the one read the contract needs beyond the protocol.
+struct ContractDB: Sendable {
+    let base: any ZoneDatabase
+    let peek: @Sendable (RecordID) async -> Record?
+
+    init(_ kind: ContractStore) throws {
+        switch kind {
+        case .memory:
+            let db = InMemoryRecordDatabase()
+            base = db
+            peek = { await db.current($0) }
+        case .disk:
+            let db = try LocalRecordDatabase(file: FileManager.default.temporaryDirectory
+                .appending(path: "contract-\(UUID().uuidString)/records.journal"))
+            base = db
+            peek = { await db.current($0) }
+        }
+    }
+
+    func current(_ id: RecordID) async -> Record? { await peek(id) }
+    func save(_ r: Record) async throws -> Record { try await base.save(r) }
+    func save(_ r: [Record]) async throws -> [Record] { try await base.save(r) }
+    func query(_ q: RecordQuery) async throws -> [Record] { try await base.query(q) }
+    func records(ofType t: String) async throws -> [Record] { try await base.records(ofType: t) }
+    func delete(_ ids: [RecordID]) async throws { try await base.delete(ids) }
+    func changes(ofType t: String, since token: Data?) async throws -> RecordChanges { try await base.changes(ofType: t, since: token) }
+}
+
+@Suite struct RecordDatabaseContract {
+
+    @Test(arguments: ContractStore.allCases) func createIsCreateOnly(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         let id = RecordID("r")
         let saved = try await db.save(Record(type: "T", id: id, fields: ["v": .int(1)]))
         #expect(saved.changeTag != nil)
@@ -16,7 +51,8 @@ import TopoCoreTesting
         #expect(await db.current(id)?.int("v") == 1)
     }
 
-    @Test func compareAndSetNeedsTheCurrentTag() async throws {
+    @Test(arguments: ContractStore.allCases) func compareAndSetNeedsTheCurrentTag(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         let id = RecordID("r")
         var first = try await db.save(Record(type: "T", id: id, fields: ["v": .int(1)]))
         var second = try await db.save(first.with(v: 2))
@@ -34,7 +70,8 @@ import TopoCoreTesting
         #expect(await db.current(id)?.int("v") == 4)
     }
 
-    @Test func recordsOfATypeAreEveryRecordOfItWhateverTheirFields() async throws {
+    @Test(arguments: ContractStore.allCases) func recordsOfATypeAreEveryRecordOfItWhateverTheirFields(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         _ = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(1)]))
         _ = try await db.save(Record(type: "T", id: RecordID("junk")))
         _ = try await db.save(Record(type: "U", id: RecordID("b"), fields: ["v": .int(1)]))
@@ -42,23 +79,26 @@ import TopoCoreTesting
         #expect(all.map(\.id.name) == ["a", "junk"])
     }
 
-    @Test func taggedSaveOfMissingRecordIsUnknownItem() async throws {
+    @Test(arguments: ContractStore.allCases) func taggedSaveOfMissingRecordIsUnknownItem(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         await #expect(throws: RecordDatabaseError.self) {
             try await db.save(Record(type: "T", id: RecordID("gone"), changeTag: "x"))
         }
     }
 
-    @Test func batchIsAllOrNothing() async throws {
+    @Test(arguments: ContractStore.allCases) func batchIsAllOrNothing(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         let a = RecordID("a"), b = RecordID("b")
-        _ = try await db.save(Record(type: "T", id: b))
+        let stored = try await db.save(Record(type: "T", id: b))
         await #expect(throws: RecordDatabaseError.self) {
             try await db.save([Record(type: "T", id: a), Record(type: "T", id: b)])
         }
         #expect(await db.current(a) == nil)
-        #expect(await db.writes.count == 1)
+        #expect(await db.current(b)?.changeTag == stored.changeTag, "the record the batch failed on is untouched")
     }
 
-    @Test func queryFiltersByTypeAndFields() async throws {
+    @Test(arguments: ContractStore.allCases) func queryFiltersByTypeAndFields(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         _ = try await db.save([
             Record(type: "T", id: RecordID("1"), fields: ["d": .string("x"), "n": .int(1)]),
             Record(type: "T", id: RecordID("2"), fields: ["d": .string("x"), "n": .int(2)]),
@@ -75,7 +115,8 @@ import TopoCoreTesting
 
     // MARK: The change feed and deletes, as CloudKit's
 
-    @Test func theFeedFromATokenCarriesOnlyWhatMovedSince() async throws {
+    @Test(arguments: ContractStore.allCases) func theFeedFromATokenCarriesOnlyWhatMovedSince(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         _ = try await db.save(Record(type: "T", id: RecordID("a")))
         _ = try await db.save(Record(type: "U", id: RecordID("u")))
         let first = try await db.changes(ofType: "T", since: nil)
@@ -93,6 +134,7 @@ import TopoCoreTesting
     }
 
     @Test func anExpiredTokenIsRefusedAsCloudKitRefusesIt() async throws {
+        let db = InMemoryRecordDatabase()
         let token = try await db.changes(ofType: "T", since: nil).token
         await db.expireChangeTokens()
         await #expect(throws: RecordChangesError.self) { try await db.changes(ofType: "T", since: token) }
@@ -101,7 +143,8 @@ import TopoCoreTesting
 
     /// From no token the feed lists what exists and no deletion, as CloudKit's does, so a reader
     /// that cached a record deleted since cannot learn of it from the feed alone.
-    @Test func theFeedFromNoTokenReportsNoDeletion() async throws {
+    @Test(arguments: ContractStore.allCases) func theFeedFromNoTokenReportsNoDeletion(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         _ = try await db.save(Record(type: "T", id: RecordID("a")))
         _ = try await db.save(Record(type: "T", id: RecordID("b")))
         try await db.delete([RecordID("a")])
@@ -110,7 +153,8 @@ import TopoCoreTesting
         #expect(all.deleted.isEmpty)
     }
 
-    @Test func deletingWhatIsGoneIsNotAnError() async throws {
+    @Test(arguments: ContractStore.allCases) func deletingWhatIsGoneIsNotAnError(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
         try await db.delete([RecordID("never")])
         let saved = try await db.save(Record(type: "T", id: RecordID("r")))
         try await db.delete([saved.id])

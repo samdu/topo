@@ -1392,12 +1392,17 @@ final class Harness {
         var rows: [(String, String)]
     }
 
+    /// Where the records live, in words, for the diagnostics screen; the app sets it from its
+    /// route (`AppRecords`). Nil where there is only CloudKit.
+    nonisolated(unsafe) static var recordsWhere: (@Sendable () async -> String)?
+
     func diagnostics() async -> Diagnostics {
         var rows: [(String, String)] = []
         rows.append(("Device", device.rawValue))
         rows.append(("Role", UserDefaults.standard.string(forKey: "topo.role") ?? "undecided"))
         rows.append(("Container", TopoCloudKit.containerIdentifier))
         rows.append(("iCloud account", await TopoCloudKit.accountStatus()))
+        if let recordsWhere = Self.recordsWhere { rows.append(("Records", await recordsWhere())) }
         rows.append(("Turn in flight", busy ? (status ?? "yes") : "none"))
         rows.append(("Waiting to send", pending.isEmpty ? "none" : pending.map(\.text).joined(separator: " | ")))
         rows.append(("Last error shown", error ?? "none"))
