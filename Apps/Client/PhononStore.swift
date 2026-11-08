@@ -248,7 +248,12 @@ struct AssetPackSource: PhononSource {
         let pack = try await manager.assetPack(withID: id)
         let watch = Task {
             for await update in manager.statusUpdates(forAssetPackWithID: id) {
-                if case .downloading(_, let fraction) = update { progress(fraction.fractionCompleted) }
+                switch update {
+                // A download begun says so at once, before its first progress.
+                case .began: progress(0)
+                case .downloading(_, let fraction): progress(fraction.fractionCompleted)
+                default: break
+                }
             }
         }
         defer { watch.cancel() }
