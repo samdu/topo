@@ -86,8 +86,68 @@ import Testing
         #expect(try Data(contentsOf: file) == bytes, "nothing was cut")
     }
 
-    /// The same with the length and its complement both damaged to agree, so only the body's
-    /// checksum is left to tell: the frame is not the last, so it is damage.
+    /// Codex's case: a middle frame whose length and complement are both damaged, and agree, so
+    /// the frame claims to run past the end of the file. A whole frame follows it, so it is not
+    /// the last write, and it is refused with nothing cut.
+    @Test func aMiddleLengthDamagedWithItsComplementIsRefusedAndCutsNothing() async throws {
+        let db = try open()
+        for name in ["a", "b", "c"] { _ = try await db.save(Record(type: "T", id: RecordID(name))) }
+        var bytes = try Data(contentsOf: file)
+        let b = try LocalRecordDatabaseTests.frameStarts(bytes)[2]
+        bytes.replaceSubrange(b..<b + 8, with: [0x7F, 0xFF, 0xFF, 0xFF, 0x80, 0x00, 0x00, 0x00])
+        try bytes.write(to: file)
+        #expect(throws: LocalRecordDatabase.Failure.self) { try open() }
+        #expect(try Data(contentsOf: file) == bytes, "nothing was cut")
+        // And agreeing lengths that land inside the next frame or exactly on the end of the file.
+        for wrong in [UInt32(3), UInt32(bytes.count - b - LocalRecordDatabase.prefix)] {
+            var moved = bytes
+            let be = { (v: UInt32) in [UInt8(v >> 24), UInt8(v >> 16 & 0xFF), UInt8(v >> 8 & 0xFF), UInt8(v & 0xFF)] }
+            moved.replaceSubrange(b..<b + 8, with: be(wrong) + be(~wrong))
+            try moved.write(to: file)
+            #expect(throws: LocalRecordDatabase.Failure.self) { try open() }
+            #expect(try Data(contentsOf: file) == moved, "nothing was cut")
+        }
+    }
+
+    /// A compacted journal is one header frame holding the store. A flipped bit in it is damage,
+    /// never a torn write, so the file is refused with nothing cut rather than opened empty.
+    @Test func aDamagedCompactedHeaderIsRefusedAndCutsNothing() async throws {
+        let db = try open()
+        _ = try await db.save(Record(type: "Turn", id: RecordID("turn/p/1"), fields: ["t": .string("hi")]))
+        var a = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(0)]))
+        for v in 1...10 {
+            a.fields["v"] = .int(Int64(v))
+            a = try await db.save(a)
+        }
+        _ = try open()
+        var bytes = try Data(contentsOf: file)
+        #expect(try LocalRecordDatabaseTests.frameStarts(bytes) == [0], "compacted to one frame")
+        for at in [bytes.count - 20, 2, 9, LocalRecordDatabase.prefix + 3] {
+            var flipped = bytes
+            flipped[at] ^= 1
+            try flipped.write(to: file)
+            #expect(throws: LocalRecordDatabase.Failure.self, "a bit flipped at \(at)") { try open() }
+            #expect(try Data(contentsOf: file) == flipped, "nothing was cut")
+        }
+        try bytes.write(to: file)
+        bytes = Data()
+        #expect(await (try open()).current(RecordID("turn/p/1")) != nil)
+    }
+
+    /// A long run of zeros at the end opens in one pass over the file, not one per byte.
+    @Test func aLongZeroTailOpensQuickly() async throws {
+        let db = try open()
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        let before = try Data(contentsOf: file)
+        try (before + Data(count: 128 << 10)).write(to: file)
+        let started = ContinuousClock.now
+        let reopened = try open()
+        #expect(ContinuousClock.now - started < .seconds(1), "a 128 KB zero tail took \(ContinuousClock.now - started)")
+        #expect(await reopened.current(RecordID("a")) != nil)
+        #expect(try Data(contentsOf: file) == before)
+    }
+
+    /// A middle body that fails its checksum, its length intact, is damage.
     @Test func aBodyThatFailsItsChecksumBeforeTheEndIsDamage() async throws {
         let db = try open()
         for name in ["a", "b", "c"] { _ = try await db.save(Record(type: "T", id: RecordID(name))) }
@@ -202,5 +262,167 @@ import Testing
         guard case .primary = try await q.acquire() else { Issue.record("the phone's own lease"); return }
         let record = try await relaunched.fetch(Lease.recordID)
         #expect(Lease(record: try #require(record))?.holder == phone)
+    }
+}
+
+
+/// The journal's own failures, made to happen through `JournalIO`.
+@Suite struct LocalRecordFaultTests {
+    let file = FileManager.default.temporaryDirectory
+        .appending(path: "local-faults-\(UUID().uuidString)/records.journal")
+
+    struct Fault: Error {}
+
+    /// What the next writes do: a partial write that then fails, and whether the cut back fails.
+    final class Faults: @unchecked Sendable {
+        private let lock = NSLock()
+        private var partial = false
+        private var cutFails = false
+        private var replaceFails = false
+        private(set) var replaces = 0
+        func next(partial: Bool = false, cutFails: Bool = false, replaceFails: Bool = false) {
+            lock.withLock { (self.partial, self.cutFails, self.replaceFails) = (partial, cutFails, replaceFails) }
+        }
+        var io: JournalIO {
+            var io = JournalIO.system
+            io.append = { [self] handle, data in
+                let tear = lock.withLock { () -> Bool in defer { partial = false }; return partial }
+                if tear {
+                    try handle.write(contentsOf: data.prefix(data.count / 2))
+                    throw Fault()
+                }
+                try handle.write(contentsOf: data)
+            }
+            io.truncate = { [self] handle, offset in
+                if lock.withLock({ cutFails }) { throw Fault() }
+                try handle.truncate(atOffset: offset)
+            }
+            io.replace = { [self] data, url, options in
+                let fails = lock.withLock { () -> Bool in replaces += 1; return replaceFails }
+                if fails { throw Fault() }
+                try data.write(to: url, options: options)
+            }
+            return io
+        }
+    }
+
+    /// Half a frame reaches the file and the write fails; the cut back works. The save is
+    /// unavailable, the next save lands after the last whole frame, and a reopen holds both
+    /// whole saves and nothing of the failed one.
+    @Test func aPartialWriteIsCutBackAndTheNextWriteFollowsTheLastWholeFrame() async throws {
+        let faults = Faults()
+        let db = try LocalRecordDatabase(file: file, io: faults.io)
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        let before = try Data(contentsOf: file)
+        faults.next(partial: true)
+        await #expect(throws: RecordDatabaseError.self) { try await db.save(Record(type: "T", id: RecordID("lost"))) }
+        #expect(try Data(contentsOf: file) == before, "the half frame is cut away")
+        #expect(await db.current(RecordID("lost")) == nil)
+        _ = try await db.save(Record(type: "T", id: RecordID("after")))
+        let reopened = try LocalRecordDatabase(file: file)
+        #expect(await reopened.current(RecordID("a")) != nil)
+        #expect(await reopened.current(RecordID("after")) != nil)
+        #expect(await reopened.current(RecordID("lost")) == nil)
+    }
+
+    /// Half a frame reaches the file and the cut back fails too: the journal takes no more
+    /// writes this launch, so the half frame stays the last thing in the file, and a reopen
+    /// cuts it as a torn last write and holds every save that answered.
+    @Test func aPartialWriteThatCannotBeCutBackStopsEveryWriteAfterIt() async throws {
+        let faults = Faults()
+        let db = try LocalRecordDatabase(file: file, io: faults.io)
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        faults.next(partial: true, cutFails: true)
+        await #expect(throws: RecordDatabaseError.self) { try await db.save(Record(type: "T", id: RecordID("lost"))) }
+        faults.next()
+        do {
+            _ = try await db.save(Record(type: "T", id: RecordID("refused")))
+            Issue.record("a journal that could not cut back took another write")
+        } catch RecordDatabaseError.rejected(let underlying) {
+            #expect(LocalRecordDatabase.isJournalFailure(underlying))
+        }
+        let reopened = try LocalRecordDatabase(file: file)
+        #expect(await reopened.current(RecordID("a")) != nil)
+        #expect(await reopened.current(RecordID("lost")) == nil)
+        #expect(await reopened.current(RecordID("refused")) == nil)
+    }
+
+    /// A torn tail the open cannot cut refuses the file: a frame written after an uncut torn one
+    /// would be damage at the next open.
+    @Test func aTornTailThatCannotBeCutRefusesTheOpen() async throws {
+        let db = try LocalRecordDatabase(file: file)
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        try (try Data(contentsOf: file) + Data([1, 2, 3])).write(to: file)
+        let faults = Faults()
+        faults.next(cutFails: true)
+        #expect(throws: LocalRecordDatabase.Failure.self) { try LocalRecordDatabase(file: file, io: faults.io) }
+        #expect(await (try LocalRecordDatabase(file: file)).current(RecordID("a")) != nil)
+    }
+
+    /// A compaction that fails is tried, and leaves the journal's bytes as they were and a
+    /// token from before it still read.
+    @Test func aFailedCompactionLeavesTheJournalAndItsTokens() async throws {
+        let first = try LocalRecordDatabase(file: file)
+        var record = try await first.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(0)]))
+        let token = try await first.changes(ofType: "T", since: nil).token
+        for v in 1...10 {
+            record.fields["v"] = .int(Int64(v))
+            record = try await first.save(record)
+        }
+        let before = try Data(contentsOf: file)
+        let faults = Faults()
+        faults.next(replaceFails: true)
+        let reopened = try LocalRecordDatabase(file: file, io: faults.io)
+        #expect(faults.replaces == 1, "the compaction was tried")
+        #expect(try Data(contentsOf: file) == before)
+        #expect(await reopened.current(RecordID("a")) == record)
+        #expect(try await reopened.changes(ofType: "T", since: token).changed == [record])
+    }
+
+    /// The protection the journal asks for, on its folder, at its creation and at a compaction,
+    /// and that nothing excludes the file or its folder from backups. The simulator and macOS
+    /// keep no protection class, so what is held here is what was asked for.
+    @Test func theJournalAsksForItsProtectionAndStaysInBackups() async throws {
+        let asked = Asked()
+        var io = JournalIO.system
+        io.replace = { data, url, options in
+            asked.note(options)
+            try data.write(to: url, options: options)
+        }
+        io.makeFolder = { url, attributes in
+            asked.note(folder: attributes[.protectionKey] as? FileProtectionType)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: attributes)
+        }
+        let db = try LocalRecordDatabase(file: file, io: io)
+        var record = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(0)]))
+        for v in 1...10 {
+            record.fields["v"] = .int(Int64(v))
+            record = try await db.save(record)
+        }
+        _ = try LocalRecordDatabase(file: file, io: io)
+        let writes = asked.writes
+        #expect(writes.count == 2, "the creation and the compaction")
+        for options in writes {
+            #expect(options.contains(.atomic))
+            #expect(options == LocalRecordDatabase.writing)
+        }
+        #expect(asked.folders.allSatisfy { $0 == LocalRecordDatabase.protectionClass })
+        #if os(iOS)
+        #expect(LocalRecordDatabase.protectionClass == .completeUntilFirstUserAuthentication)
+        #expect(writes.allSatisfy { $0.contains(.completeFileProtectionUntilFirstUserAuthentication) })
+        #endif
+        for url in [file, file.deletingLastPathComponent()] {
+            #expect(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == false)
+        }
+    }
+
+    final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var options: [Data.WritingOptions] = []
+        private var classes: [FileProtectionType?] = []
+        func note(_ o: Data.WritingOptions) { lock.withLock { options.append(o) } }
+        func note(folder: FileProtectionType?) { lock.withLock { classes.append(folder) } }
+        var writes: [Data.WritingOptions] { lock.withLock { options } }
+        var folders: [FileProtectionType?] { lock.withLock { classes } }
     }
 }

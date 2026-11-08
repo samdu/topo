@@ -161,8 +161,9 @@ actor RecordRoute {
 struct RoutedRecordDatabase: ZoneDatabase {
     let route: RecordRoute
     let cloud: any ZoneDatabase
-    /// The bound a caller asked for (`answering(within:)`), applied to the wait for the route as
-    /// well as to the request the store makes.
+    /// The bound a caller asked for (`answering(within:)`), taken as a deadline from the call's
+    /// start: the wait for the route spends from it, and the store is asked to answer within what
+    /// is left. That is the store's own bound from there, which for CloudKit is per request.
     var bound: TimeInterval?
 
     private func zone() async throws -> any ZoneDatabase {
@@ -178,10 +179,14 @@ struct RoutedRecordDatabase: ZoneDatabase {
         }
     }
 
+    /// The store, asked to answer within what is left of the bound once the route is known.
     private func store() async throws -> any RecordDatabase {
+        guard let bound else { return try await zone() }
+        let deadline = ContinuousClock.now + .seconds(bound)
         let database = try await zone()
-        guard let bound else { return database }
-        return database.answering(within: bound)
+        let left = deadline - .now
+        guard left > .zero else { throw RecordDatabaseError.unavailable(underlying: BoundSpent()) }
+        return database.answering(within: Double(left.components.seconds) + Double(left.components.attoseconds) / 1e18)
     }
 
     func save(_ records: [Record]) async throws -> [Record] { try await store().save(records) }
@@ -224,4 +229,6 @@ struct RoutedRecordDatabase: ZoneDatabase {
     }
 
     struct RouteNotDecided: Error {}
+    /// The route was decided with none of the call's bound left for the store.
+    struct BoundSpent: Error {}
 }

@@ -84,6 +84,97 @@ final class RecordRouteTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    /// One deadline for the wait and the request: a route that takes most of the bound leaves
+    /// the store only what is left. Codex's sequence, scaled: a bound of 4 with the account
+    /// answering in 3 and a fetch taking 3 runs out.
+    func testTheStoreHasOnlyWhatTheRouteLeftOfTheBound() async throws {
+        let r = RecordRoute(file: file, decided: { false }, account: {
+            try await Task.sleep(for: .milliseconds(300))
+            return .available
+        }, pause: { _ in await Task.yield() })
+        let cloud = Slow(takes: 0.3)
+        let db = RoutedRecordDatabase(route: r, cloud: cloud).answering(within: 0.4)
+        do {
+            _ = try await db.fetch(Lease.recordID)
+            XCTFail("a fetch answered past the call's bound")
+        } catch RecordDatabaseError.unavailable {}
+        let asked = try XCTUnwrap(cloud.bounds.first)
+        XCTAssertLessThanOrEqual(asked, 0.15, "the store was given \(asked) s of a 0.4 s bound after a 0.3 s route")
+    }
+
+    /// On iOS the journal asks for protection until first unlock on its folder, at its creation
+    /// and at a compaction, and nothing excludes it from backups.
+    func testTheJournalIsProtectedUntilFirstUnlockAndBackedUp() async throws {
+        let asked = NSLock()
+        nonisolated(unsafe) var writes: [Data.WritingOptions] = []
+        nonisolated(unsafe) var folders: [FileProtectionType?] = []
+        var io = JournalIO.system
+        io.replace = { data, url, options in
+            asked.withLock { writes.append(options) }
+            try data.write(to: url, options: options)
+        }
+        io.makeFolder = { url, attributes in
+            asked.withLock { folders.append(attributes[.protectionKey] as? FileProtectionType) }
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: attributes)
+        }
+        let db = try LocalRecordDatabase(file: file, io: io)
+        var record = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(0)]))
+        for v in 1...10 {
+            record.fields["v"] = .int(Int64(v))
+            record = try await db.save(record)
+        }
+        _ = try LocalRecordDatabase(file: file, io: io)
+        let (w, f) = asked.withLock { (writes, folders) }
+        XCTAssertEqual(w.count, 2, "the creation and the compaction")
+        XCTAssertTrue(w.allSatisfy { $0.contains(.atomic) && $0.contains(.completeFileProtectionUntilFirstUserAuthentication) })
+        XCTAssertEqual(f, [.completeUntilFirstUserAuthentication, .completeUntilFirstUserAuthentication])
+        for url in [file, folder!] {
+            XCTAssertEqual(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, false)
+        }
+        let kept = try FileManager.default.attributesOfItem(atPath: file.path)[.protectionKey]
+        print("[records-protection] read back on this device: \(String(describing: kept))")
+    }
+
+    /// A store whose requests take `takes` seconds, and which runs out as CloudKit's bounded
+    /// requests do when given less.
+    final class Slow: ZoneDatabase, @unchecked Sendable {
+        let takes: TimeInterval
+        private let lock = NSLock()
+        private var asked: [TimeInterval] = []
+        init(takes: TimeInterval) { self.takes = takes }
+        var bounds: [TimeInterval] { lock.withLock { asked } }
+
+        struct Bounded: RecordDatabase {
+            let takes: TimeInterval
+            let seconds: TimeInterval
+            private func wait() async throws {
+                try await Task.sleep(for: .seconds(min(takes, seconds)))
+                if seconds < takes { throw RecordDatabaseError.unavailable(underlying: Thrown()) }
+            }
+            func save(_ records: [Record]) async throws -> [Record] { try await wait(); return records }
+            func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wait(); return [:] }
+            func query(_ query: RecordQuery) async throws -> [Record] { try await wait(); return [] }
+            func records(ofType type: String) async throws -> [Record] { try await wait(); return [] }
+            func answering(within seconds: TimeInterval) -> any RecordDatabase {
+                Bounded(takes: takes, seconds: min(seconds, self.seconds))
+            }
+        }
+
+        private var unbounded: Bounded { Bounded(takes: takes, seconds: .infinity) }
+        func save(_ records: [Record]) async throws -> [Record] { try await unbounded.save(records) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await unbounded.fetch(ids) }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await unbounded.query(query) }
+        func records(ofType type: String) async throws -> [Record] { try await unbounded.records(ofType: type) }
+        func delete(_ ids: [RecordID]) async throws {}
+        func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
+            try await InMemoryRecordDatabase().changes(ofType: type, since: token)
+        }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase {
+            lock.withLock { asked.append(seconds) }
+            return Bounded(takes: takes, seconds: seconds)
+        }
+    }
+
     // Review Focus 2: a phone that has decided its role on CloudKit stays there when its
     // account goes away, and is never asked.
     func testDecidedCloudStaysCloud() async throws {
