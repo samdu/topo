@@ -369,6 +369,7 @@ struct ChatView: View {
         // not still talking. What was heard stays in the draft, to be finished by hand.
         .onChange(of: row.typing) { _, up in
             guard up else { return }
+            if conversation.inFront { conversation.stop("the keyboard came up", sending: false) }
             voice.cancel(.chat)
         }
         // What the look calls the models is what the notice calls them.
@@ -382,7 +383,10 @@ struct ChatView: View {
             // into a call is the exception (`Conversation.scene`).
             conversation.scene(phase)
         }
-        .onDisappear { if !conversation.on { voice.cancel(.chat) } }
+        .onDisappear {
+            if conversation.inFront { conversation.stop("the chat went", sending: false) }
+            if !conversation.on { voice.cancel(.chat) }
+        }
     }
 
     /// A control under the transcript that sends something again: the line stopped on a failure,
@@ -666,6 +670,7 @@ struct ChatView: View {
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
                                                  dictating: !going.sends,
                                                  speaks: going.sends && readAloud,
+                                                 pressed: { conversation.pressed() },
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
@@ -1066,12 +1071,16 @@ final class MicPress {
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  dictating: Bool = false, speaks: Bool = false,
                  calls: @MainActor () -> Bool = { SpokenCallSetting.enabled() },
+                 pressed: @MainActor () -> Void = {},
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
             if stopping {
                 stopping = false
                 return nil
             }
+            // Every press but Stop's ends a conversation in front before it reaches the session
+            // (`Conversation.pressed`); Stop's keeps it listening.
+            pressed()
             // A release whose words will be read a reply is held from the thumb coming up, not
             // from the send after the final transcription: a lock in between would otherwise
             // suspend the process with the turn half made. Taken here, in the gesture's callback,
@@ -1094,6 +1103,7 @@ final class MicPress {
             }
         }
         stopping = drawn.appearance == .stop
+        if !stopping { pressed() }
         // A press on a closed microphone stops what is being read, so the mic does not hear it.
         // One on the open microphone leaves the speaker alone: nothing is read while it is open,
         // and a reply waiting for it to close is read once this press closes it.

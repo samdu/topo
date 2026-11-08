@@ -209,7 +209,13 @@ struct TopoApp: App {
         }
         conversation.conversingChanged = { callDriver.conversingChanged($0) }
         voice.carries = { [weak conversation] in
-            guard let conversation, conversation.carries() else { return false }
+            guard let conversation else { return false }
+            // An interruption over a conversation in front (a phone call, the app still active)
+            // ends it, and the session is dropped as an interruption drops one in front.
+            guard conversation.carries() else {
+                if conversation.inFront { conversation.stop("an interruption in front", sending: false, keepingDecode: true) }
+                return false
+            }
             conversation.noteInterruption()
             return true
         }
