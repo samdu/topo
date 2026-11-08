@@ -259,7 +259,7 @@ is "app, second commit: pushed" "$(origin_head)" "$sha"
 scratch no-mic Apps/Client/SettingsView.swift
 FAKE_MIC=0 LOCK_WAIT=0 validate
 is "no microphone grant: exits 2" "$status" 2
-case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"docs/simulator.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"tmux new-session -d -s validate-"*"docs/testing.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
 is "no microphone grant: no suite ran" "$(recorded suites)" ""
 is "no microphone grant: nothing pushed" "$(origin_head)" ""
 is "no microphone grant: no status" "$(posted)" ""
