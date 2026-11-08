@@ -1,3 +1,4 @@
+@preconcurrency import CloudKit
 import Foundation
 import TopoCore
 #if DEBUG
@@ -25,21 +26,42 @@ enum AppRecords {
     private static var stalled: Bool { debugStore is StalledRecordDatabase }
     #endif
 
+    /// Where the records live, CloudKit or this phone (`RecordRoute`), decided once per install.
+    static let route = RecordRoute(file: routeFile, decided: { RoleSelector.hasDecided(.standard) },
+                                   account: account)
+
     static func database() -> any ZoneDatabase {
         #if DEBUG
         if let debugStore { return debugStore }
         #endif
-        return TopoCloudKit.database()
+        return RoutedRecordDatabase(route: route, cloud: TopoCloudKit.database())
     }
 
     /// True when the records are CloudKit's, so that a push subscription to its zone means
-    /// something: the in-memory store has nothing to subscribe to, and a launch on it saves none.
-    static var isCloudKit: Bool {
+    /// something: neither the journal of a phone with no iCloud account nor the in-memory store
+    /// has anything to subscribe to, and a launch on either saves none. Waits for the route.
+    static func isCloudKit() async -> Bool {
         #if DEBUG
-        return debugStore == nil
-        #else
-        return true
+        if debugStore != nil { return false }
         #endif
+        return (try? await route.store()) == .cloud
+    }
+
+    /// Where the records live, in words, without waiting for a route not yet decided.
+    static func recordsWhere() async -> String {
+        #if DEBUG
+        if debugStore != nil { return "a debug store (\(storeVariable))" }
+        #endif
+        switch await route.decidedStore {
+        case .local?:
+            // The class the file holds, read back, which a simulator does not keep.
+            let kept = (try? FileManager.default.attributesOfItem(atPath: RecordRoute.standardFile.path))?[.protectionKey] as? FileProtectionType
+            let protection = kept == .completeUntilFirstUserAuthentication ? "protected until first unlock"
+                : "protection \(kept?.rawValue ?? "none")"
+            return "on this phone (no iCloud account when Topo was first opened), \(protection)"
+        case .cloud?: return "iCloud"
+        case nil: return "not decided yet"
+        }
     }
 
     static let ensureZone: @Sendable () async throws -> Void = {
@@ -47,7 +69,15 @@ enum AppRecords {
         if stalled { try await StalledRecordDatabase.never() }
         if debugStore != nil { return }
         #endif
+        // The journal has no zone to make.
+        guard try await route.store() == .cloud else { return }
         try await TopoCloudKit.ensureZone()
+    }
+
+    private static var routeFile: URL { RecordRoute.standardFile }
+
+    private static let account: @Sendable () async throws -> CKAccountStatus = {
+        try await CKContainer(identifier: TopoCloudKit.containerIdentifier).accountStatus()
     }
 }
 

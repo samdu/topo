@@ -20,14 +20,10 @@ import TopoCore
 /// actor suspends at that await, a test can hold one writer there while
 /// another fetches and saves, which is how the lease race is reproduced.
 public actor InMemoryRecordDatabase: ZoneDatabase {
-    private var store: [RecordID: Record] = [:]
-    private var tagCounter = 0
+    /// The semantics, shared with the store a phone with no iCloud account runs on
+    /// (`LocalRecordDatabase`), so the two cannot drift apart.
+    private var core = RecordStoreCore(store: "tag")
     private var beforeSave: (@Sendable ([Record]) async -> Void)?
-    /// The change feed: one entry per save or delete, in order, which `changes(ofType:since:)`
-    /// reads from a token (the entry count when it was handed out, and the epoch it was handed
-    /// out in). A token from an earlier epoch has expired, as CloudKit's do.
-    private var feed: [(id: RecordID, type: String)] = []
-    private var feedEpoch = 0
 
     /// Every record ever saved, in save order. A record ID appearing twice
     /// here means a record was overwritten.
@@ -40,94 +36,29 @@ public actor InMemoryRecordDatabase: ZoneDatabase {
     }
 
     /// The record the store holds now, or nil.
-    public func current(_ id: RecordID) -> Record? { store[id] }
+    public func current(_ id: RecordID) -> Record? { core.records[id] }
 
     public func save(_ records: [Record]) async throws -> [Record] {
         await beforeSave?(records)
-        for record in records {
-            switch (record.changeTag, store[record.id]) {
-            case (nil, let existing?):
-                throw RecordDatabaseError.serverRecordChanged(record.id, server: existing)
-            case (let tag?, let existing?) where existing.changeTag != tag:
-                throw RecordDatabaseError.serverRecordChanged(record.id, server: existing)
-            case (.some, nil):
-                throw RecordDatabaseError.unknownItem(record.id)
-            default:
-                break
-            }
-        }
-        var saved: [Record] = []
-        for var record in records {
-            tagCounter += 1
-            record.changeTag = "tag-\(tagCounter)"
-            store[record.id] = record
-            writes.append(record)
-            feed.append((record.id, record.type))
-            saved.append(record)
-        }
+        let applied = try core.prepareSave(records)
+        core.apply(applied)
+        guard case .saved(let saved) = applied else { return [] }
+        writes.append(contentsOf: saved)
         return saved
     }
 
-    public func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
-        var out: [RecordID: Record] = [:]
-        for id in ids {
-            if let r = store[id] { out[id] = r }
-        }
-        return out
-    }
+    public func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { core.fetch(ids) }
 
-    public func query(_ query: RecordQuery) async throws -> [Record] {
-        store.values
-            .filter { record in record.type == query.type && query.filters.allSatisfy { matches(record, $0) } }
-            .sorted { $0.id.name < $1.id.name }
-    }
+    public func query(_ query: RecordQuery) async throws -> [Record] { core.query(query) }
 
-    public func records(ofType type: String) async throws -> [Record] {
-        store.values.filter { $0.type == type }.sorted { $0.id.name < $1.id.name }
-    }
+    public func records(ofType type: String) async throws -> [Record] { core.records(ofType: type) }
 
-    public func delete(_ ids: [RecordID]) async throws {
-        for id in ids {
-            guard let gone = store.removeValue(forKey: id) else { continue }
-            feed.append((id, gone.type))
-        }
-    }
+    public func delete(_ ids: [RecordID]) async throws { core.apply(core.prepareDelete(ids)) }
 
     /// Every token handed out so far stops being answered, as CloudKit's expire.
-    public func expireChangeTokens() { feedEpoch += 1 }
+    public func expireChangeTokens() { core.expireTokens() }
 
     public func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
-        var start = 0
-        if let token {
-            let parts = String(decoding: token, as: UTF8.self).split(separator: ":").compactMap { Int($0) }
-            guard parts.count == 2, parts[0] == feedEpoch, parts[1] <= feed.count else { throw RecordChangesError.tokenExpired }
-            start = parts[1]
-        }
-        var seen: Set<RecordID> = []
-        var changed: [Record] = []
-        var deleted: [RecordID] = []
-        // Each record once, as the store holds it now: the feed says what moved, not how often.
-        for entry in feed[start...].reversed() where entry.type == type && seen.insert(entry.id).inserted {
-            // From no token the feed is what exists, as CloudKit's is: a record gone before it is
-            // not reported, so a reader has to ask for what it cached by name.
-            if let record = store[entry.id], record.type == type { changed.append(record) } else if token != nil { deleted.append(entry.id) }
-        }
-        return RecordChanges(changed: changed.reversed(), deleted: deleted.reversed(), token: Data("\(feedEpoch):\(feed.count)".utf8))
-    }
-
-    private func matches(_ record: Record, _ filter: RecordQuery.Filter) -> Bool {
-        guard let value = record.fields[filter.field] else { return false }
-        switch (filter.op, value, filter.value) {
-        case (.equals, _, _):
-            return value == filter.value
-        case (.greaterThan, .int(let a), .int(let b)):
-            return a > b
-        case (.greaterThan, .date(let a), .date(let b)):
-            return a > b
-        case (.greaterThan, .string(let a), .string(let b)):
-            return a > b
-        case (.greaterThan, _, _):
-            return false
-        }
+        try core.changes(ofType: type, since: token)
     }
 }
