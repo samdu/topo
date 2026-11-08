@@ -300,11 +300,14 @@ def working(panes, worktrees):
     """The branches some tmux pane stands in: a pane whose current path is a
     worktree's or under it works that worktree's branch, whatever its session
     is named — a session spawned for one topic often opens its branch under
-    another name. Pure."""
+    another name. Both are compared as real paths, since tmux reports a
+    process's and git the registered one. Reads no file."""
     out = set()
     for _, cwd in panes:
+        cwd = os.path.realpath(cwd)
         for wt in worktrees:
-            if wt.get("branch") and (cwd == wt["path"] or cwd.startswith(wt["path"].rstrip("/") + "/")):
+            path = os.path.realpath(wt["path"])
+            if wt.get("branch") and (cwd == path or cwd.startswith(path.rstrip("/") + "/")):
                 out.add(wt["branch"])
     return out
 
