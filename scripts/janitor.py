@@ -676,9 +676,12 @@ LEAD = "first, Sam's device test is ticked and it is not merging: "
 
 
 def leads(pr, conds):
-    """Whether a PR's report lines lead the report: a ticked device box, and
-    something holding the PR other than more boxes still to tick. Pure."""
-    return ticked_device(pr.get("body")) and bool(set(conds) - {"boxes"})
+    """Whether a PR's report lines lead the report: a ready PR with a ticked
+    device box, and something holding it other than more boxes still to tick.
+    A draft never leads: it is the coordinator's, who put it back knowing what
+    Sam had ticked. Pure."""
+    return (not pr.get("isDraft") and ticked_device(pr.get("body"))
+            and bool(set(conds) - {"boxes"}))
 
 
 def device_boxes(body):

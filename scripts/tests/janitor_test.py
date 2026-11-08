@@ -708,12 +708,17 @@ class TickedFirst(unittest.TestCase):
 
     def test_every_hold_but_more_boxes_leads_and_only_with_a_ticked_box(self):
         ticked, unticked = pr(body=self.TICKED), pr(body="- [x] suite\n- [ ] device: the phone")
-        for cond in ("verdict", "cap", "red", "cancelled", "norun", "idle", "dirty", "draft", "label"):
+        for cond in ("verdict", "cap", "red", "cancelled", "norun", "idle", "dirty", "label"):
             self.assertTrue(janitor.leads(ticked, [cond]), cond)
             self.assertTrue(janitor.leads(ticked, ["boxes", cond]), cond)
             self.assertFalse(janitor.leads(unticked, [cond]), cond)
         self.assertFalse(janitor.leads(ticked, ["boxes"]))
         self.assertFalse(janitor.leads(ticked, []))
+
+    def test_a_ticked_draft_never_leads(self):
+        draft = pr(isDraft=True, body="- [x] device: one\n- [x] device: two\n- [ ] device: three")
+        for cond in ("draft", "dirty"):
+            self.assertFalse(janitor.leads(draft, [cond]), cond)
 
     def test_a_device_box_ticked_since_moves_the_fingerprint_at_the_same_count(self):
         before = pr(body="- [x] suite\n- [ ] device: phone")
@@ -2881,12 +2886,12 @@ class WholePass(unittest.TestCase):
         got = self.report_lines()
         self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7: merge refused"), got)
 
-    def test_a_ticked_draft_leads_once_per_head(self):
+    def test_a_ticked_draft_is_said_once_per_head_and_does_not_lead(self):
         s = self.scripted(prs=[pr(isDraft=True, body="- [x] device: the phone shows it")], runs={}, worktrees="")
         self.run_pass(s)
         self.run_pass(s)
         self.assertEqual(sum("is a draft at" in l for l in self.report_lines()), 1)
-        self.assertTrue(self.report_lines()[0].startswith("- first,"))
+        self.assertFalse(any(l.startswith("- first,") for l in self.report_lines()), self.report_lines())
         s = self.scripted(prs=[pr(isDraft=True, headRefOid="fff0000", body="- [x] device: the phone shows it")],
                           runs={}, worktrees="")
         self.run_pass(s)
@@ -2897,7 +2902,9 @@ class WholePass(unittest.TestCase):
         self.run_pass(self.scripted(prs=[pr(isDraft=True, body=body)], runs={}, worktrees=""))
         n = len(Bridge.received)
         self.run_pass(self.scripted(prs=[pr(isDraft=True, body=body, mergeStateStatus="DIRTY")], runs={}, worktrees=""))
-        self.assertTrue(any("conflicts with main" in l and l.startswith("- first,") for l in self.report_lines(n)))
+        got = self.report_lines(n)
+        self.assertTrue(any("conflicts with main" in l for l in got), got)
+        self.assertFalse(any(l.startswith("- first,") for l in got), got)
 
     def test_ticked_drafts_on_a_first_run_are_one_digest_line(self):
         os.remove(self.state)
