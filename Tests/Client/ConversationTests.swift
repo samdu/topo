@@ -121,6 +121,8 @@ final class ConversationTests: XCTestCase {
     private var enabled = true
     private var holding = false
     private var sent: [String] = []
+    /// The tones played by the time of each send.
+    private var tonesAtSend: [[KeeperSounds.Tone]] = []
     /// Whether the chat's send takes the turn's wait, as `ChatView.sendSpoken` does.
     private var waitOnSend = false
     private var told: [Bool] = []
@@ -210,12 +212,17 @@ final class ConversationTests: XCTestCase {
         conversation.ended = { [unowned self] in ends += 1 }
         conversation.send = { [unowned self] in
             sent.append($0)
+            tonesAtSend.append(sounds?.played ?? [])
             if waitOnSend { _ = speaker.awaitReply("spoken-\(sent.count)", readAloud: true) }
         }
         conversation.sends = { sends }
         if let feedSleep { conversation.feedSleep = feedSleep }
         input.carries = { [weak conversation] in
-            guard let conversation, conversation.carries() else { return false }
+            guard let conversation else { return false }
+            guard conversation.carries() else {
+                if conversation.inFront { conversation.stop("an interruption in front", sending: false, keepingDecode: true) }
+                return false
+            }
             conversation.noteInterruption()
             return true
         }
@@ -1387,7 +1394,7 @@ final class ScriptedJudge: TurnJudge, @unchecked Sendable {
 
 // MARK: - The conversation's tones
 
-/// Daphne's open-mic tones, on the conversation: the onset's `ack` once an utterance opens, the
+/// The open mic's own tone, on the conversation: no tone at an utterance's onset, the
 /// go-ahead owed at the conversation's start, after a turn sent, after a reply and at an unmute
 /// and paid once the microphone is open with nothing on its way, yielding to a cue that has just
 /// said it, and the gate shut under a tone so the ear does not take it for speech.
@@ -1405,18 +1412,18 @@ extension ConversationTests {
         await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
-        XCTAssertEqual(played, [.speak, .ack], "an utterance's second onset sounded a second ack")
+        XCTAssertEqual(played, [.speak], "the utterance's onset sounded a tone")
         await settle("the microphone open again") { voice.listening }
         await drain()
-        XCTAssertEqual(played, [.speak, .ack], "the go-ahead sounded with the turn on its way")
+        XCTAssertEqual(played, [.speak], "the go-ahead sounded with the turn on its way")
         speaker.endAwaiting("spoken-1", "the reply is in")
-        await settle("the go-ahead once the turn is in") { self.played == [.speak, .ack, .speak] }
+        await settle("the go-ahead once the turn is in") { self.played == [.speak, .speak] }
         await drain()
-        XCTAssertEqual(played, [.speak, .ack, .speak], "the go-ahead was paid twice")
+        XCTAssertEqual(played, [.speak, .speak], "the go-ahead was paid twice")
         detector.script([1: .start(8_000), 4: .end(16_000)])
         utterance(into: voice.sink)
         await settle("the second turn sent") { self.sent.count == 2 }
-        XCTAssertEqual(played, [.speak, .ack, .speak, .ack], "the next utterance went unacked")
+        XCTAssertEqual(played, [.speak, .speak], "the next utterance's onset sounded a tone")
         speaker.endAwaiting("spoken-2", "the test is done")
         conversation.stop("test", sending: false)
         XCTAssertFalse(speaker.conversing)
@@ -1429,12 +1436,12 @@ extension ConversationTests {
         await drain()
         await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
-        await settle("the go-ahead after the turn") { self.played == [.speak, .ack, .speak] }
+        await settle("the go-ahead after the turn") { self.played == [.speak, .speak] }
         XCTAssertTrue(speaker.speak("The lights are off."))
         await settle("the microphone closed for the reply") { !voice.listening }
         speaker.stop()
         await settle("the microphone open again") { voice.listening }
-        await settle("the go-ahead after the reply") { self.played == [.speak, .ack, .speak, .speak] }
+        await settle("the go-ahead after the reply") { self.played == [.speak, .speak, .speak] }
     }
 
     func testAnUnmuteOwesTheGoAheadAndACueThatHasJustSoundedStandsInForIt() async {
@@ -1465,13 +1472,14 @@ extension ConversationTests {
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
         detector.script([0: .start(0), 1: .end(6_000)])
-        await settle("the go-ahead") { self.played == [.speak, .ack, .speak] }
+        await settle("the go-ahead") { self.played == [.speak, .speak] }
         await drain()
         utterance(into: voice.sink)
         await settle("the chunks fed") { detector.chunks >= 5 }
         await drain()
         XCTAssertEqual(sent.count, 1, "the go-ahead's own tone was sent as a turn")
-        XCTAssertEqual(played, [.speak, .ack, .speak], "the tone's onset sounded an ack")
+        XCTAssertEqual(played, [.speak, .speak], "the tone's onset sounded a tone")
+        XCTAssertFalse(conversation.heardOnset, "the go-ahead's own onset was given to the person")
     }
 
     /// Words carried into the conversation from the press, judged only after the call's resume,
@@ -1489,7 +1497,7 @@ extension ConversationTests {
         placeAndActivate(conversation)
         await settle("the carried words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
-        XCTAssertEqual(played.first, .ack, "the go-ahead sounded over words the detector had yet to give")
+        XCTAssertEqual(tonesAtSend, [[]], "the go-ahead sounded over words the detector had yet to give")
     }
 
     /// A wait that ends while the next onset is still with the detector pays no go-ahead over it:
@@ -1577,7 +1585,7 @@ extension ConversationTests {
         await settle("the chunks fed") { detector.chunks >= 9 }
         await drain()
         XCTAssertEqual(sent, [], "the delegate's own tone was sent as a turn")
-        XCTAssertFalse(played.contains(.ack), "the tone's onset sounded an ack")
+        XCTAssertFalse(conversation.heardOnset, "the tone's onset was given to the person")
         speaker.endAwaiting("before", "the test is done")
     }
 
@@ -1597,7 +1605,7 @@ extension ConversationTests {
         await settle("the chunks fed") { detector.chunks >= 7 }
         await drain()
         XCTAssertEqual(sent, [], "the receipt's own onset was taken for the person's")
-        XCTAssertFalse(played.contains(.ack))
+        XCTAssertFalse(conversation.heardOnset, "the receipt's onset was given to the person")
         speaker.endAwaiting("before", "the test is done")
     }
 
@@ -1611,7 +1619,7 @@ extension ConversationTests {
         await settle("the go-ahead at the start") { self.played == [.speak] }
         _ = speaker.awaitReply("before", readAloud: true)
         utterance(into: voice.sink)
-        await settle("the onset") { self.played.contains(.ack) }
+        await settle("the onset") { conversation.heardOnset }
         await settle("what the sink holds judged") { detector.chunks >= 5 }
         sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
         utterance(into: voice.sink, seconds: 0.75)
@@ -1622,7 +1630,6 @@ extension ConversationTests {
         detector.script([5: .start(20_000), 7: .end(28_000)])
         utterance(into: voice.sink, seconds: 2.25)
         await settle("the second turn sent") { self.sent.count == 2 }
-        XCTAssertEqual(played.filter { $0 == .ack }.count, 2, "the last utterance's gate took the next one's onset")
     }
 
     /// A tone sounded over words already begun (a receipt of the turn still being worked on)
@@ -1636,9 +1643,9 @@ extension ConversationTests {
         // A turn on its way, whose tools sound while the person speaks.
         _ = speaker.awaitReply("before", readAloud: true)
         utterance(into: voice.sink)
-        await settle("the onset") { self.played.contains(.ack) }
+        await settle("the onset") { conversation.heardOnset }
         sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
-        XCTAssertEqual(played, [.speak, .ack, .act])
+        XCTAssertEqual(played, [.speak, .act])
         utterance(into: voice.sink, seconds: 0.75)
         await settle("the turn sent") { self.sent.count == 1 }
         speaker.endAwaiting("before", "the test is done")
@@ -1726,7 +1733,7 @@ extension ConversationTests {
         }
         let sentWhileSpeaking = sent
         await drain()
-        XCTAssertTrue(played.contains(.ack), "the person's onset")
+        XCTAssertTrue(conversation.heardOnset, "the person's onset")
         XCTAssertGreaterThanOrEqual(played.filter { $0 == .read }.count, 7, "the receipts sounded")
         XCTAssertEqual(sentWhileSpeaking, [], "the turn was ended at the quiet's cap while the person was still speaking")
         speaker.endAwaiting("before", "the test is done")
@@ -1813,5 +1820,404 @@ extension ConversationTests {
         await settle("open again") { voice.listening }
         XCTAssertTrue(speaker.speak("The lights are off."))
         await settle("the mic closed for the reply over silence") { !voice.listening }
+    }
+}
+
+// MARK: - In front
+
+/// A tap in front is a conversation on the app's own session, with no call: the judge ends each
+/// utterance and the microphone opens again (#622). Any press but Stop ends it; Stop keeps it
+/// listening (Sam's rulings in plan-open-mic-in-front.md).
+extension ConversationTests {
+    /// A tap with Topo in front, the call setting off: a conversation in front.
+    private func inFront(_ detector: ScriptedDetector, judge: ScriptedJudge? = nil, sounding: Bool = false,
+                         sends: Bool = true,
+                         wire: (Conversation, VoiceInput, Speaker) -> Void = { _, _, _ in }) async -> (Conversation, VoiceInput, Speaker) {
+        active = true
+        enabled = false
+        let made = await make(detector: detector, judge: judge, sends: sends, sounding: sounding)
+        wire(made.0, made.1, made.2)
+        await tap(made.1)
+        return made
+    }
+
+    private func drawn(_ voice: VoiceInput, _ speaker: Speaker) -> Composer.MicState {
+        Composer.MicState(voice, speaking: speaker.speaking)
+    }
+
+    func testATapInFrontIsAConversationThatSendsByItselfAndOpensAgain() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        XCTAssertEqual(told, [true])
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        utterance(into: voice.sink)
+        await settle("the turn sent with no second tap") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+        await settle("the microphone open again") { voice.listening }
+        await settle("the go-ahead after the turn") { self.played == [.speak, .speak] }
+        XCTAssertTrue(conversation.inFront)
+        XCTAssertEqual(audio.call, .none, "a call was placed in front")
+    }
+
+    /// In front the turn ends on Smart Turn as behind the lock: a sentence the judge calls
+    /// complete is sent after the wait, inside the cap.
+    func testInFrontACompleteSentenceIsSentOnTheJudgeAfterTheWait() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.95])
+        let (conversation, voice, _) = await inFront(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        // Short of *Open mic waits* (1.2 s here), complete verdicts end nothing.
+        await quiet(0.9, into: voice.sink)
+        await drain()
+        XCTAssertGreaterThanOrEqual(judge.asks, 2, "the judge was not asked inside the wait")
+        XCTAssertEqual(sent, [], "a complete sentence was sent in front before the wait")
+        await quiet(2.0, into: voice.sink) { self.sent.count == 1 }
+        await settle("the turn sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// In front a pause the judge calls unfinished holds: Silero's own end is the cap.
+    func testInFrontAPauseTheJudgeCallsUnfinishedHolds() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, _) = await inFront(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await quiet(3.5, into: voice.sink)
+        await drain()
+        XCTAssertGreaterThan(judge.asks, 4, "the judge was not asked through the pause in front")
+        XCTAssertEqual(sent, [], "a pause the judge called unfinished ended the turn in front")
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(detector.silences.first, Endpoint.silence(judged: true))
+    }
+
+    /// In front four seconds of quiet ends the turn whatever the judge says.
+    func testInFrontFourSecondsOfQuietEndsWhateverTheJudgeSays() async {
+        let detector = ScriptedDetector([0: .start(0)])
+        let judge = ScriptedJudge([0.2])
+        let (conversation, voice, _) = await inFront(detector, judge: judge)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await quiet(3.8, into: voice.sink, paced: false)
+        await drain()
+        XCTAssertEqual(sent, [], "the turn ended in front before four seconds of quiet")
+        await quiet(0.3, into: voice.sink, paced: false)
+        await settle("the turn sent at the cap") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+    }
+
+    /// With *Call for spoken replies* on and the call driver wired as the app wires it, a front
+    /// conversation, its turn and the reply's wait and reading place no call.
+    func testInFrontWithTheSettingOnNoCallIsPlaced() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
+        defer { withExtendedLifetime(driver) {} }
+        let (conversation, voice, speaker) = await inFront(detector) { [unowned self] conversation, _, speaker in
+            enabled = true
+            let audio: AudioSession = self.audio
+            speaker.onHold = { [weak audio] in driver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
+            speaker.onMicrophone = { driver.microphoneChanged($0) }
+            conversation.conversingChanged = { driver.conversingChanged($0) }
+        }
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await settle("sent") { self.sent.count == 1 }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await drain()
+        speaker.stop()
+        await settle("open again") { voice.listening }
+        await drain()
+        XCTAssertTrue(conversation.on)
+        XCTAssertEqual(system.starts.count, 0, "a front conversation placed a call")
+    }
+
+    /// The press's own path in two halves, deterministically: `pressed()` ends the conversation,
+    /// leaving the session open hands-free for the press, and a reaction to a change the
+    /// conversation watches runs before the press reaches the session. It begins no second
+    /// conversation on that session.
+    func testASessionAFrontConversationEndedOnBeginsNoOther() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, speaker) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        conversation.pressed()
+        XCTAssertFalse(conversation.on)
+        XCTAssertTrue(voice.listening && voice.handsFree, "the press's stop closed the session it leaves to the press")
+        // A reply landing waits for the open microphone (`waitingForMicrophone`, which the
+        // conversation watches): its reaction runs here, before the press reaches the session.
+        XCTAssertTrue(speaker.speak("Elsewhere."))
+        await settle("the reply waiting on the microphone") { speaker.waitingForMicrophone }
+        await drain()
+        XCTAssertFalse(conversation.on, "the session the press ended the conversation on began another")
+        speaker.stop()
+        _ = await voice.pressDown(as: .chat)
+        _ = await voice.pressUp(as: .chat)
+        await drain()
+        XCTAssertFalse(conversation.on)
+    }
+
+    func testNoConversationInFrontForDictationOrUnderAPhoneCall() async {
+        let (dictating, voice, _) = await inFront(ScriptedDetector(), sends: false)
+        await drain()
+        XCTAssertFalse(dictating.on, "dictation into the draft began a conversation")
+        voice.cancel()
+        other = true
+        let (calling, second, _) = await inFront(ScriptedDetector())
+        await drain()
+        XCTAssertFalse(calling.on, "a conversation began under a phone call")
+        second.cancel()
+    }
+
+    /// A tap on the open microphone sends what it heard, once, and closes it: the conversation
+    /// ends before the press reaches the session.
+    func testATapOnTheOpenMicrophoneInFrontSendsOnceAndCloses() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, speaker) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on }
+        utterance(into: voice.sink)
+        await settle("the onset") { conversation.heardOnset }
+        let press = MicPress()
+        var pressSent: [String] = []
+        await press.gesture(true, drawn: drawn(voice, speaker), speaker: speaker, voice: voice,
+                            pressed: { conversation.pressed() }) { pressSent.append($0) }?.value
+        await press.gesture(false, drawn: drawn(voice, speaker), speaker: speaker, voice: voice,
+                            pressed: { conversation.pressed() }) { pressSent.append($0) }?.value
+        XCTAssertFalse(conversation.on)
+        XCTAssertEqual(pressSent, ["turn the lights off"])
+        await drain()
+        XCTAssertEqual(sent, [], "the conversation sent what the press sent")
+        XCTAssertFalse(voice.listening, "the microphone opened again after the tap")
+        XCTAssertFalse(conversation.on, "the press's own session began a conversation")
+    }
+
+    /// Stop while Topo reads stops the reading and keeps the conversation: neither the press nor
+    /// its release reaches the microphone, which the conversation opens again with the go-ahead.
+    func testStopWhileTopoReadsInFrontKeepsItListening() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await inFront(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on }
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again") { voice.listening }
+        XCTAssertTrue(speaker.speak("The lights are off, and the heating is down."))
+        await settle("the microphone closed for the reading") { !voice.listening && speaker.speaking }
+        let tonesBefore = played.count
+        let releases = voice.releases
+        let press = MicPress()
+        let stop = drawn(voice, speaker)
+        XCTAssertEqual(stop.appearance, .stop)
+        _ = press.gesture(true, drawn: stop, speaker: speaker, voice: voice, pressed: { conversation.pressed() }) { _ in }
+        _ = press.gesture(false, drawn: drawn(voice, speaker), speaker: speaker, voice: voice,
+                          pressed: { conversation.pressed() }) { _ in }
+        XCTAssertFalse(speaker.speaking, "Stop did not stop the reading")
+        XCTAssertEqual(voice.releases, releases, "Stop's release reached the microphone")
+        XCTAssertTrue(conversation.on && conversation.inFront, "Stop ended the conversation")
+        await settle("the microphone open again after Stop") { voice.listening }
+        await settle("the go-ahead after Stop") { self.played.count == tonesBefore + 1 }
+        XCTAssertEqual(played.last, .speak)
+        XCTAssertEqual(sent.count, 1)
+    }
+
+    /// A reply that is not read (muted, `SpokenReply.read(muted:)`) ends its wait: the microphone
+    /// opens again with the go-ahead.
+    func testAWaitEndingUnreadInFrontOpensAgainWithTheGoAhead() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await inFront(detector, sounding: true)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the go-ahead at the start") { self.played == [.speak] }
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again") { voice.listening }
+        await drain()
+        XCTAssertEqual(played, [.speak], "the go-ahead sounded with the turn on its way")
+        speaker.endAwaiting("spoken-1", "muted: nothing read")
+        await settle("the go-ahead once the wait is over") { self.played == [.speak, .speak] }
+        XCTAssertTrue(voice.listening)
+    }
+
+    /// Leaving the front with the setting on carries it into the call, as a tapped session is.
+    func testLeavingTheFrontCarriesItIntoTheCall() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on }
+        enabled = true
+        leave()
+        XCTAssertTrue(conversation.on)
+        XCTAssertFalse(conversation.inFront)
+        placeAndActivate(conversation)
+        await settle("the microphone resumed on the call") { voice.listening && !voice.suspended }
+        utterance(into: voice.sink)
+        await settle("the turn sent behind the lock") { self.sent.count == 1 }
+    }
+
+    /// Leaving the front with the setting off has nothing to carry it: it ends, and what was open
+    /// is dropped as the scene's drop drops a session.
+    func testLeavingTheFrontWithTheSettingOffEndsIt() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on }
+        utterance(into: voice.sink)
+        active = false
+        conversation.scene(.inactive)
+        XCTAssertFalse(conversation.on)
+        await drain()
+        XCTAssertFalse(voice.listening)
+        XCTAssertEqual(sent, [])
+        XCTAssertEqual(ends, 1)
+    }
+
+    /// An interruption over it in front (a phone call, the app still active) ends it and drops
+    /// what was open.
+    func testAnInterruptionInFrontEndsIt() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on }
+        utterance(into: voice.sink)
+        beganInterruption()
+        await settle("ended") { !conversation.on }
+        await drain()
+        XCTAssertFalse(voice.listening)
+        XCTAssertEqual(sent, [])
+    }
+
+    /// the lock's `.began` before `didEnterBackground` (either order is real,
+    /// testTheInterruptionsStartBeforeTheBackgroundIsCarriedAndResumedAtTheActivation),
+    /// the setting on: a front conversation the lock carries stays suspended until the call's activation.
+    func testTheLocksBeganBeforeTheBackgroundKeepsAFrontConversationSuspendedForTheCall() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        enabled = true
+        let engines = seams.inputEngines
+        active = false
+        beganInterruption()
+        await drain()
+        XCTAssertTrue(conversation.on, "the lock's .began ended the front conversation")
+        XCTAssertTrue(voice.listening && voice.suspended,
+                      "the microphone was rebuilt on the app's own session at the lock's .began, with no call")
+        XCTAssertEqual(seams.inputEngines, engines, "an engine was made between the lock's .began and the call")
+        XCTAssertEqual(audio.call, .none)
+        leave()
+        XCTAssertTrue(conversation.on && !conversation.inFront)
+        placeAndActivate(conversation)
+        await settle("resumed on the call") { voice.listening && !voice.suspended }
+        utterance(into: voice.sink)
+        await settle("the turn sent behind the lock") { self.sent.count == 1 }
+    }
+
+    /// the same lock with the activation refused, as iOS refuses one from an app that is not
+    /// active with no call: the front conversation is still carried, and nothing is sent at the lock.
+    func testTheLocksBeganBeforeTheBackgroundWithTheActivationRefusedStillCarries() async {
+        let detector = ScriptedDetector([1: .start(8_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        utterance(into: voice.sink)
+        await settle("the onset") { conversation.heardOnset }
+        enabled = true
+        active = false
+        seams.activationError = Seams.Refused()
+        beganInterruption()
+        await drain()
+        XCTAssertTrue(conversation.on, "the lock's .began ended the front conversation")
+        XCTAssertEqual(sent, [], "half an utterance was sent at the lock")
+        XCTAssertEqual(ends, 0)
+        leave()
+        XCTAssertTrue(conversation.on, "a front conversation the lock carries was not carried")
+        seams.activationError = nil
+    }
+
+    /// A lock in front with the setting off: the judge has
+    /// ended the utterance and its decode is under way when the scene goes. The words are sent, as a
+    /// released press's are (StopWhileSpeakingTests.testALockDuringTheReleasesDecodeKeepsItsWords).
+    func testALockDuringAFrontUtterancesDecodeKeepsItsWords() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the utterance's decode under way") { voice.ending }
+        active = false
+        conversation.scene(.inactive)
+        beganInterruption()
+        await drain()
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, ["turn the lights off"], "the lock dropped the words the judge had ended")
+    }
+
+    /// an interruption in front (a phone call, the app still active) while the judge's
+    /// utterance decodes: the words are sent, as an interruption leaves a release's decode to send.
+    func testAnInterruptionInFrontDuringAnUtterancesDecodeKeepsItsWords() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        await settle("the conversation in front") { conversation.on }
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the utterance's decode under way") { voice.ending }
+        beganInterruption()
+        await drain()
+        XCTAssertFalse(conversation.on)
+        gate.open()
+        await drain()
+        XCTAssertEqual(sent, ["turn the lights off"], "the interruption dropped the words the judge had ended")
+    }
+
+    /// a reopen waiting on the permission when the phone
+    /// locks: the lock's placing makes the reopen refuse, and the carried conversation ends.
+    func testAReopenSpanningTheLockWaitsForTheActivation() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        enabled = true
+        await settle("on") { conversation.on }
+        permission.arm()
+        utterance(into: voice.sink)
+        await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        leave()
+        XCTAssertTrue(conversation.on && !conversation.inFront)
+        audio.callPlaced()
+        conversation.call(.placing)
+        permission.release()
+        await drain()
+        XCTAssertTrue(conversation.on, "the lock's placing ended the carried conversation")
+        audio.callActivated()
+        conversation.call(.active)
+        await settle("open on the call") { voice.listening }
+    }
+
+    /// A reopen whose permission answers after the lock's `.began` (the app no longer active, no
+    /// call yet) opens nothing and reads nothing, and opens on the call once it is live.
+    func testAReopenWhosePermissionLandsAsTheAppLeavesTheFrontOpensNothing() async {
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, _) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        enabled = true
+        await settle("on") { conversation.on }
+        permission.arm()
+        utterance(into: voice.sink)
+        await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        let reads = seams.formatReads
+        active = false
+        permission.release()
+        await drain()
+        XCTAssertTrue(conversation.on)
+        XCTAssertFalse(voice.listening, "the reopen opened the microphone from an inactive app with no call")
+        XCTAssertEqual(seams.formatReads, reads, "the input node was read from an inactive app with no call")
+        leave()
+        placeAndActivate(conversation)
+        await settle("open on the call") { voice.listening && !voice.suspended }
     }
 }

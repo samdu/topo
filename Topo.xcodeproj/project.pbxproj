@@ -673,7 +673,6 @@
 		F44AD65B7607EE255C10D21E /* DownloadWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE401C13B7D8F3D497875DFC /* DownloadWatchdog.swift */; };
 		F4974068046E34EB0AB10E96 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		F5BC4F835E1FB62BE65C79D3 /* licence-libarchive-in-this-position.txt in Resources */ = {isa = PBXBuildFile; fileRef = 50FE4123A72BCC53B9AA9B7B /* licence-libarchive-in-this-position.txt */; };
-		F5F5595548DC6CA17A4A505F /* bloop_ack.wav in Resources */ = {isa = PBXBuildFile; fileRef = 1B00496E0201104D09A8FD1C /* bloop_ack.wav */; };
 		F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7F8C14868F6151C38208F7 /* ThemeTests.swift */; };
 		F710CD8D19E9952AD050CCD8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 843B7316243F6B0BFD30D130 /* Assets.xcassets */; };
 		F75D792DC2DD86483B13581A /* TopoMoment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EA598B0990C965B7E3F0F6A /* TopoMoment.swift */; };
@@ -849,7 +848,6 @@
 		18DEE83593874ABE4660BB2D /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
 		1A7B76958213F991C66478F1 /* DefaultSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultSurface.swift; sourceTree = "<group>"; };
 		1AF008F3C113182739CEB6D7 /* SignOutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignOutTests.swift; sourceTree = "<group>"; };
-		1B00496E0201104D09A8FD1C /* bloop_ack.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = bloop_ack.wav; sourceTree = "<group>"; };
 		1C9781748E990C71B5291594 /* FilesTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTool.swift; sourceTree = "<group>"; };
 		1D550B30D535A628FF48FCC4 /* WidgetTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTool.swift; sourceTree = "<group>"; };
 		1DABB17BCD6602885282D24F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -1626,7 +1624,6 @@
 		6A597EC30DA10049B1C073CA /* sounds */ = {
 			isa = PBXGroup;
 			children = (
-				1B00496E0201104D09A8FD1C /* bloop_ack.wav */,
 				9022C77BA5D9021AB8DE508A /* bloop_act.wav */,
 				F851574F758F8B7992DD7729 /* bloop_delegate.wav */,
 				79516B161850167DD385786F /* bloop_error.wav */,
@@ -2556,7 +2553,6 @@
 				9C3DBAD81CD9FEC783B43859 /* LICENSE in Resources */,
 				6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */,
 				86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */,
-				F5F5595548DC6CA17A4A505F /* bloop_ack.wav in Resources */,
 				51CD906D875E7BCC4AFF3C53 /* bloop_act.wav in Resources */,
 				C1B4E1E52E07CC525D4E61B3 /* bloop_delegate.wav in Resources */,
 				F8EB6D537210F1DEC0867F61 /* bloop_error.wav in Resources */,

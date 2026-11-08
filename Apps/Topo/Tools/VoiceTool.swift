@@ -53,7 +53,7 @@ struct VoiceTool: Tool {
     they can change it back in Settings.
 
     topo voice wait [status]                how long a pause runs before Topo may decide you have finished
-    topo voice wait VALUE                   set it: seconds from \(QuietWait.said(QuietWait.range.lowerBound)) to \(QuietWait.said(QuietWait.range.upperBound)), in a conversation behind the lock
+    topo voice wait VALUE                   set it: seconds from \(QuietWait.said(QuietWait.range.lowerBound)) to \(QuietWait.said(QuietWait.range.upperBound)), in an open-mic conversation
 
     \(QuietWait.said(QuietWait.standard)) s unless changed. A pause that sounds unfinished is still waited through, up to 4 s. A
     change applies from the judge's next verdict, on this phone only, and they can change it back in Settings.

@@ -76,7 +76,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// receipts are tool-class tones, each tool classed as her voice channel classes it
 /// (`tone(forTool:)`): `read`, `write`, `delegate` and `act` for everything else; `return` as a
 /// delegate's result comes back, `error` for a result marked an error and when the guest's turn
-/// fails. The open microphone has `ack` at an utterance's onset and the go-ahead (`speak`), and a
+/// fails. The open microphone has the go-ahead (`speak`) and no tone at an utterance's onset, and a
 /// press heard behind a turn on its way bleeps (`queue`). The bed is `thinking_bed.wav`, an 8 s
 /// loop under −20 dBFS at `bedVolume`, faded in from the release and out when the wait it was for
 /// ends (a reply landing ends its own wait before its first frame) or at the reply's first frame
@@ -87,7 +87,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// The receipts and the bleep are the keeper's, so they sound only while a hold that is not a
 /// sound's own stands (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes
 /// none, and a typed turn worked on while a spoken turn's wait stands receipts with it. The
-/// conversation's tones sound under the conversation, which the call or the front keeps running.
+/// conversation's go-ahead sounds under the conversation, which the call or the front keeps running.
 /// They sound over Topo's voice and into an open microphone, as Daphne's do, and tell the
 /// conversation their length (`toneSounded`), which shuts its gate under them. Every sound is
 /// played on the session as it stands, live (`AudioSession.ensureLive()`) and refused when it is
@@ -109,7 +109,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
 @MainActor
 final class KeeperSounds {
     enum Tone: String, CaseIterable, Sendable {
-        case read, act, write, delegate, `return`, error, ack, speak, queue
+        case read, act, write, delegate, `return`, error, speak, queue
 
         /// The bundled file's name, without its extension.
         var file: String { "bloop_\(rawValue)" }
@@ -286,10 +286,6 @@ final class KeeperSounds {
         }
         return play(.error)
     }
-
-    /// The open microphone heard an utterance's first onset (Daphne's `Keeper.heard`). Under the conversation, which is the session armed.
-    @discardableResult
-    func heard() -> Bool { play(.ack, armed: true) }
 
     /// The go-ahead: the conversation's microphone can take the next turn (Daphne's
     /// `WaitSounds.ready`). Under the conversation, which is the session armed.

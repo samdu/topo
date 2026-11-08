@@ -304,25 +304,23 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
-    /// The conversation's own tones — the onset's `ack` and the go-ahead — sound with no turn's
-    /// hold, since the call or the front keeps the process running under them, and take none of
-    /// their own; the queued bleep is a receipt's and sounds only under one. Off sounds none.
-    func testTheConversationsTonesSoundWithoutATurnsHoldAndHoldNothing() async {
+    /// The conversation's own tone, the go-ahead, sounds with no turn's hold, since the call or
+    /// the front keeps the process running under it, and takes none of its own; the queued bleep
+    /// is a receipt's and sounds only under one. Off sounds none.
+    func testTheConversationsToneSoundsWithoutATurnsHoldAndHoldsNothing() async {
         let rig = await rig()
         try? rig.audio.ensureActive()
         XCTAssertFalse(rig.audio.holding)
-        XCTAssertTrue(rig.sounds.heard())
         XCTAssertTrue(rig.sounds.goAhead())
         XCTAssertFalse(rig.sounds.queued(), "the queued bleep sounded with no turn on its way")
-        XCTAssertEqual(rig.sounds.played, [.ack, .speak])
-        XCTAssertEqual(rig.players.names, ["bloop_ack", "bloop_speak"])
+        XCTAssertEqual(rig.sounds.played, [.speak])
+        XCTAssertEqual(rig.players.names, ["bloop_speak"])
         XCTAssertFalse(rig.audio.holding, "a conversation's tone held the process by itself")
         XCTAssertFalse(rig.sounds.holdingASound)
 
         rig.defaults.set(WorkingSounds.Mode.off.rawValue, forKey: WorkingSounds.key)
-        XCTAssertFalse(rig.sounds.heard())
         XCTAssertFalse(rig.sounds.goAhead())
-        XCTAssertEqual(rig.sounds.played, [.ack, .speak])
+        XCTAssertEqual(rig.sounds.played, [.speak])
     }
 
     /// A press released with words while a turn is still on its way bleeps, and that is its one
