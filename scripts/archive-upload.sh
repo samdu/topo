@@ -64,15 +64,33 @@ commit="$(git rev-parse HEAD)"
 [ -n "$(git branch -r --contains "$commit")" ] \
   || { echo "$commit is on no remote branch; push it first, since the About screen points at it" >&2; exit 1; }
 
-# The key: from the environment, or from the login keychain, in that order,
-# and in whatever shape it was kept (scripts/asc-pem.sh). Nothing here writes
+# The key: from the environment, the login keychain or 1Password, in that
+# order, and in whatever shape it was kept (scripts/asc-pem.sh). Over ssh the
+# keychain answers nothing and exits 0, so an empty answer is what sends the
+# read on to the item `Topo App Store Connect` in the Homelab vault, asked
+# only with a service account in the environment, since `op` on one never
+# stops on a prompt. Nothing here writes
 # it anywhere but a folder of its own, which is where altool looks and which
 # is taken away on the way out. With it xcodebuild registers a new target's
 # App ID and makes its profile with no Apple ID signed in to Xcode; without it
 # the archive is whatever Xcode's own accounts allow, and there is no upload.
-key_id="${ASC_KEY_ID:-$(security find-generic-password -s topo-asc-key-id -w 2>/dev/null || true)}"
-issuer="${ASC_ISSUER_ID:-$(security find-generic-password -s topo-asc-issuer-id -w 2>/dev/null || true)}"
-private_key="${ASC_PRIVATE_KEY:-$(security find-generic-password -s topo-asc-private-key -w 2>/dev/null || true)}"
+asc_part() { # asc_part <the environment's value> <keychain service> <1Password field>
+  local got="$1"
+  [ -n "$got" ] || got="$(security find-generic-password -s "$2" -w 2>/dev/null || true)"
+  if [ -z "$got" ] && [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+    got="$(op read "op://Homelab/Topo App Store Connect/$3" 2>/dev/null || true)"
+  fi
+  printf '%s' "$got"
+}
+key_id="$(asc_part "${ASC_KEY_ID:-}" topo-asc-key-id key_id)"
+issuer="$(asc_part "${ASC_ISSUER_ID:-}" topo-asc-issuer-id issuer_id)"
+private_key="$(asc_part "${ASC_PRIVATE_KEY:-}" topo-asc-private-key private_key)"
+# A key found in part is said, not taken for no key.
+missing="$([ -n "$key_id" ] || printf ' key id')$([ -n "$issuer" ] || printf ' issuer id')$([ -n "$private_key" ] || printf ' private key')"
+if [ -n "$key_id$issuer$private_key" ] && [ -n "$missing" ]; then
+  echo "the App Store Connect API key is incomplete: the environment, the keychain and 1Password gave no$missing" >&2
+  exit 1
+fi
 
 auth=()
 if [ -n "$key_id" ] && [ -n "$issuer" ] && [ -n "$private_key" ]; then
@@ -88,7 +106,9 @@ No App Store Connect API key.
 
 Set ASC_KEY_ID, ASC_ISSUER_ID and ASC_PRIVATE_KEY (the .p8's contents), or
 put them in the login keychain as topo-asc-key-id, topo-asc-issuer-id and
-topo-asc-private-key. docs/testflight.md says how to make one.
+topo-asc-private-key. Over ssh the keychain answers nothing: there, set
+OP_SERVICE_ACCOUNT_TOKEN and the key is read from 1Password's item
+"Topo App Store Connect" (Homelab). docs/testflight.md says how to make one.
 MISSING
   exit 1
 fi

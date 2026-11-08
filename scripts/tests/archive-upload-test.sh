@@ -82,7 +82,16 @@ cat > "$work/bin/security" <<'FAKE'
 [ "$1" = find-generic-password ] && [ "$2" = -s ] && [ "$4" = -w ] && [ -f "${KEYCHAIN:-/nowhere}/$3" ] || exit 44
 cat "$KEYCHAIN/$3"
 FAKE
-chmod +x "$work/bin/xcodebuild" "$work/bin/xcrun" "$work/bin/security"
+# 1Password: a field is a file under $OPVAULT named for it, read only as the item
+# `Topo App Store Connect` in Homelab; with none set it reads nothing.
+cat > "$work/bin/op" <<'FAKE'
+#!/usr/bin/env bash
+echo "op $*" >> "${OPCALLS:-/dev/null}"
+case "$*" in "read op://Homelab/Topo App Store Connect/"*) ;; *) exit 1 ;; esac
+f="${2##*/}"; [ -f "${OPVAULT:-/nowhere}/$f" ] || exit 1
+cat "$OPVAULT/$f"
+FAKE
+chmod +x "$work/bin/xcodebuild" "$work/bin/xcrun" "$work/bin/security" "$work/bin/op"
 
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/key.p8" 2>/dev/null \
     || { echo "FAIL: could not make a key to test with" >&2; exit 1; }
@@ -121,6 +130,32 @@ grep -q '^xcrun \[AuthKey_KEYID12345.p8\] altool --validate-app .* --apiKey KEYI
     || fail "altool was not asked to validate with the keychain's key: $(cat "$work/kept")"
 grep -q -- '--upload-app' "$work/kept" && fail "a validation uploaded"
 [ -z "$(ls "$work/tmp")" ] || fail "the keychain's key outlived the run: $(ls "$work/tmp")"
+
+# Over ssh the keychain answers empty with exit 0: with a service account, the key is 1Password's.
+mkdir -p "$work/blank" "$work/vault"
+for item in topo-asc-key-id topo-asc-issuer-id topo-asc-private-key; do : > "$work/blank/$item"; done
+printf 'KEYID12345\n' > "$work/vault/key_id"
+printf 'an-issuer\n' > "$work/vault/issuer_id"
+cp "$work/key.p8" "$work/vault/private_key"
+KEYCHAIN="$work/blank" OPVAULT="$work/vault" OP_SERVICE_ACCOUNT_TOKEN=ops_fake run "$work/vaulted" --validate \
+    || fail "a validation with 1Password's key failed: $(cat "$work/out")"
+grep -q '^xcrun \[AuthKey_KEYID12345.p8\] altool --validate-app .* --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/vaulted" \
+    || fail "altool was not given 1Password's key: $(cat "$work/vaulted")"
+[ -z "$(ls "$work/tmp")" ] || fail "1Password's key outlived the run: $(ls "$work/tmp")"
+# Without a service account 1Password is not asked, and the empty keychain is no key.
+: > "$work/opcalls"
+if (unset OP_SERVICE_ACCOUNT_TOKEN; KEYCHAIN="$work/blank" OPVAULT="$work/vault" OPCALLS="$work/opcalls" run "$work/unvaulted" --validate); then
+    fail "an empty keychain with no service account validated"
+fi
+[ ! -s "$work/opcalls" ] || fail "1Password was asked with no service account: $(cat "$work/opcalls")"
+grep -q 'No App Store Connect API key' "$work/out" || fail "an empty keychain is not said as no key: $(cat "$work/out")"
+# A key in part is said, and builds nothing.
+rm "$work/vault/issuer_id"
+if KEYCHAIN="$work/blank" OPVAULT="$work/vault" OP_SERVICE_ACCOUNT_TOKEN=ops_fake run "$work/partial"; then
+    fail "a key in part was taken"
+fi
+[ ! -s "$work/partial" ] || fail "a key in part built something: $(cat "$work/partial")"
+grep -q 'incomplete: the environment, the keychain and 1Password gave no issuer id' "$work/out" || fail "a key in part is not said: $(cat "$work/out")"
 
 # A key that is no key stops it before anything is built.
 if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY=deadbeef run "$work/bad"; then
@@ -174,4 +209,4 @@ grep -q -- 'altool' "$work/stray" && fail "an archive carrying the voice's bundl
 grep -q "carries a model or weights" "$work/out" || fail "the refusal does not say the archive carries the bundle: $(cat "$work/out")"
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed" >&2; exit 1; }
-echo "archive-upload.sh: an archive carrying the voice's bundle is refused; --voice packages the voice's pack and uploads it before the build; with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"
+echo "archive-upload.sh: an archive carrying the voice's bundle is refused; --voice packages the voice's pack and uploads it before the build; with a key kept as hex, in the environment or the keychain, or in 1Password where the keychain answers empty, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"
