@@ -343,8 +343,9 @@ actor PhononVoiceEngine: VoiceEngine {
             throw VoiceError.unavailable("the voice's bundle.json is not an object")
         }
         if let kept = object["temperature"] as? NSNumber, kept.floatValue == temperature { return }
-        // The float's shortest decimal, so 0.3 is written 0.3 and not 0.30000001192092896.
-        object["temperature"] = Double("\(temperature)") ?? Double(temperature)
+        // The float's shortest decimal, as a decimal number, which JSONSerialization writes as its
+        // own digits: 0.3 is written 0.3, not a double's seventeen.
+        object["temperature"] = NSDecimalNumber(string: "\(temperature)")
         try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]).write(to: url, options: .atomic)
     }
 
