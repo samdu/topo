@@ -71,7 +71,7 @@ final class RecordRouteTests: XCTestCase {
     /// that has not answered, never an answer from a store nobody chose.
     func testABoundedCallOnARouteNotDecidedRunsOutAsUnavailable() async throws {
         let r = RecordRoute(file: file, decided: { false }, account: { .couldNotDetermine },
-                            pause: { _ in try? await Task.sleep(for: .milliseconds(20)) })
+                            pause: { _ in try? await Task.sleep(for: .seconds(1)) })
         let cloud = InMemoryRecordDatabase()
         let db = RoutedRecordDatabase(route: r, cloud: cloud).answering(within: 0.2)
         do {
@@ -161,6 +161,85 @@ final class RecordRouteTests: XCTestCase {
         let relaunched = try LocalRecordDatabase(file: file)
         let record = try await relaunched.fetch(Lease.recordID)
         XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, me)
+    }
+
+    /// A journal that fails to open and then opens, with many callers waiting and retrying, is
+    /// one journal: every caller that is answered gets the same instance, so no two append to
+    /// the one file.
+    func testAJournalThatFailsThenOpensIsOneJournalForEveryCaller() async throws {
+        for _ in 0..<20 {
+            try? FileManager.default.removeItem(at: folder)
+            // The journal's folder is a file, so the first opens fail.
+            try FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: folder)
+            let r = RecordRoute(file: file, decided: { false }, account: { .noAccount }, pause: { _ in })
+            let blocker = Blocker(folder)
+            let opened = try await withThrowingTaskGroup(of: ObjectIdentifier?.self) { group in
+                for _ in 0..<16 {
+                    group.addTask {
+                        while true {
+                            do {
+                                guard case .local(let db) = try await r.route() else { return nil }
+                                return ObjectIdentifier(db)
+                            } catch {
+                                // The first failure clears the way, so the callers that waited
+                                // on the failed open and the ones that come after all retry.
+                                await blocker.clear()
+                                await Task.yield()
+                            }
+                        }
+                    }
+                }
+                var all: Set<ObjectIdentifier?> = []
+                for try await id in group { all.insert(id) }
+                return all
+            }
+            XCTAssertEqual(opened.count, 1, "one journal for every caller")
+        }
+    }
+
+    actor Blocker {
+        let url: URL
+        var cleared = false
+        init(_ url: URL) { self.url = url }
+        func clear() {
+            guard !cleared else { return }
+            cleared = true
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// A journal that would not open is not the login's evidence: the role stays undecided with
+    /// the journal's words, and nothing sends the phone to CloudKit.
+    @MainActor
+    func testAJournalThatWillNotOpenDecidesNoRoleEvenSignedIn() async throws {
+        try FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: folder)
+        let suite = "topo.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let r = RecordRoute(file: file, decided: { RoleSelector.hasDecided(UserDefaults(suiteName: suite)!) },
+                            account: { .noAccount })
+        let selector = RoleSelector(database: RoutedRecordDatabase(route: r, cloud: InMemoryRecordDatabase()),
+                                    device: DeviceID("ios-test"), defaults: defaults, isSignedIn: { true }, ensureZone: {})
+        await selector.decide()
+        XCTAssertNil(selector.role)
+        XCTAssertFalse(RoleSelector.hasDecided(defaults))
+        XCTAssertEqual(selector.trouble?.hasPrefix("Topo couldn't read or write the conversation"), true, selector.trouble ?? "nil")
+    }
+
+    /// On the journal a phone that is signed in is primary by its first claim, as on CloudKit.
+    @MainActor
+    func testASignedInNoAccountPhoneIsPrimary() async throws {
+        let suite = "topo.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let r = RecordRoute(file: file, decided: { RoleSelector.hasDecided(UserDefaults(suiteName: suite)!) },
+                            account: { .noAccount })
+        let selector = RoleSelector(database: RoutedRecordDatabase(route: r, cloud: InMemoryRecordDatabase()),
+                                    device: DeviceID("ios-test"), defaults: defaults, isSignedIn: { true }, ensureZone: {})
+        await selector.decide()
+        XCTAssertEqual(selector.role, .primary)
+        let store = try await r.store()
+        XCTAssertEqual(store, .local)
     }
 
     /// A refusal for want of an account is said as that, not as a refusal.

@@ -66,11 +66,64 @@ import Testing
         _ = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .string(String(repeating: "x", count: 64))]))
         _ = try await db.save(Record(type: "T", id: RecordID("b")))
         var bytes = try Data(contentsOf: file)
-        // Scribble over the middle of the first save's frame.
-        let header = try LocalRecordDatabaseTests.frameLengths(bytes)[0] + 4
-        for i in (header + 8)..<(header + 40) { bytes[i] = 0xFF }
+        // Scribble over the middle of the first save's body.
+        let first = try LocalRecordDatabaseTests.frameStarts(bytes)[1]
+        for i in (first + 20)..<(first + 40) { bytes[i] = 0xFF }
         try bytes.write(to: file)
-        #expect(throws: LocalRecordDatabase.OpenError.self) { try open() }
+        #expect(throws: LocalRecordDatabase.Failure.self) { try open() }
+    }
+
+    /// A middle frame whose length is damaged so that it points past the end of the file is
+    /// damage, never a torn last frame: reading it as one would cut every frame after it away.
+    @Test func aDamagedLengthBeforeTheLastFrameRefusesTheFileAndCutsNothing() async throws {
+        let db = try open()
+        for name in ["a", "b", "c", "d"] { _ = try await db.save(Record(type: "T", id: RecordID(name))) }
+        var bytes = try Data(contentsOf: file)
+        let b = try LocalRecordDatabaseTests.frameStarts(bytes)[2]
+        bytes[b] = 0x7F
+        try bytes.write(to: file)
+        #expect(throws: LocalRecordDatabase.Failure.self) { try open() }
+        #expect(try Data(contentsOf: file) == bytes, "nothing was cut")
+    }
+
+    /// The same with the length and its complement both damaged to agree, so only the body's
+    /// checksum is left to tell: the frame is not the last, so it is damage.
+    @Test func aBodyThatFailsItsChecksumBeforeTheEndIsDamage() async throws {
+        let db = try open()
+        for name in ["a", "b", "c"] { _ = try await db.save(Record(type: "T", id: RecordID(name))) }
+        var bytes = try Data(contentsOf: file)
+        let b = try LocalRecordDatabaseTests.frameStarts(bytes)[2]
+        bytes[b + 12] ^= 0x01
+        try bytes.write(to: file)
+        #expect(throws: LocalRecordDatabase.Failure.self) { try open() }
+    }
+
+    /// Zeros the file was extended with past the last whole frame are a torn write, cut away.
+    @Test func aZeroFilledTailIsTorn() async throws {
+        let db = try open()
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        let whole = try Data(contentsOf: file)
+        for zeros in [1, 5, 8, 64] {
+            try (whole + Data(count: zeros)).write(to: file)
+            let reopened = try open()
+            #expect(await reopened.current(RecordID("a")) != nil)
+            #expect(try Data(contentsOf: file) == whole)
+        }
+    }
+
+    /// A compaction that cannot be written leaves the journal as it was and the store open.
+    @Test func aCompactionThatFailsStillOpensTheJournal() async throws {
+        let db = try open()
+        var record = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(0)]))
+        for v in 1...10 {
+            record.fields["v"] = .int(Int64(v))
+            record = try await db.save(record)
+        }
+        let folder = file.deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        let reopened = try open()
+        #expect(await reopened.current(RecordID("a")) == record)
     }
 
     @Test func aTagOrATokenFromAnotherFileIsNotHonoured() async throws {
@@ -104,13 +157,14 @@ import Testing
         #expect(await (try open()).current(RecordID("a")) == next)
     }
 
-    static func frameLengths(_ bytes: Data) throws -> [Int] {
+    /// Where each frame begins: the header's first, then each save's.
+    static func frameStarts(_ bytes: Data) throws -> [Int] {
         var out: [Int] = []
         var offset = 0
-        while offset + 4 <= bytes.count {
+        while offset + LocalRecordDatabase.prefix <= bytes.count {
+            out.append(offset)
             let length = bytes[offset..<offset + 4].reduce(0) { ($0 << 8) | Int($1) }
-            out.append(length)
-            offset += 4 + length
+            offset += LocalRecordDatabase.prefix + length
         }
         return out
     }

@@ -75,12 +75,16 @@ actor RecordRoute {
         resolving = task
         do {
             let answer = try await task.value
+            // Every waiter on the one task gets the one answer; the first to wake keeps it.
+            if let resolved { return resolved }
             resolved = answer
             return answer
         } catch {
             // A journal that would not open is asked again by the next call, never taken for
-            // the cloud: its records are this phone's only copy.
-            resolving = nil
+            // the cloud: its records are this phone's only copy. Only the failed task is let go,
+            // so a waiter waking late never clears a newer one, and there is never more than one
+            // decision, and so one journal, at a time.
+            if resolving == task { resolving = nil }
             throw error
         }
     }
@@ -88,14 +92,14 @@ actor RecordRoute {
     private static func decide(file: URL, decided: @Sendable () -> Bool,
                                account: @Sendable () async throws -> CKAccountStatus,
                                pause: @Sendable (Int) async -> Void) async throws -> Resolved {
-        if FileManager.default.fileExists(atPath: file.path) { return .local(try open(file)) }
+        if FileManager.default.fileExists(atPath: file.path) { return .local(try await open(file)) }
         if decided() { return .cloud }
         var asked = 0
         while true {
             switch try? await account() {
             case .noAccount?:
                 TopoLog(.cloud).notice("records: no iCloud account at the first decision; kept on this phone")
-                return .local(try open(file))
+                return .local(try await open(file))
             case .available?, .restricted?, .temporarilyUnavailable?:
                 return .cloud
             default:
@@ -106,12 +110,33 @@ actor RecordRoute {
         }
     }
 
-    private static func open(_ file: URL) throws -> LocalRecordDatabase {
+    /// Opens the journal on a queue of its own: the open reads the whole file and may cut or
+    /// rewrite it, which is not work for the cooperative pool.
+    private static func open(_ file: URL) async throws -> LocalRecordDatabase {
         do {
-            return try LocalRecordDatabase(file: file)
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result { try LocalRecordDatabase(file: file) })
+                }
+            }
         } catch {
-            TopoLog(.cloud).error("records: the journal on this phone would not open: \(String(describing: type(of: error)))")
+            TopoLog(.cloud).error("records: the journal on this phone would not open: \(Self.said(error))")
             throw RecordDatabaseError.rejected(underlying: error)
+        }
+    }
+
+    /// A journal failure for a log line, by its case and code: a `cloud` line carries no error's
+    /// description, which can name a path.
+    static func said(_ error: any Error) -> String {
+        func code(_ error: any Error) -> String {
+            let ns = error as NSError
+            return "\(ns.domain) \(ns.code)"
+        }
+        switch error {
+        case LocalRecordDatabase.Failure.damaged(let offset): return "damaged at byte \(offset)"
+        case LocalRecordDatabase.Failure.unopenable(let underlying): return "unopenable (\(code(underlying)))"
+        case LocalRecordDatabase.Failure.write(let underlying): return "write failed (\(code(underlying)))"
+        default: return code(error)
         }
     }
 

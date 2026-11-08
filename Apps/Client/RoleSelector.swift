@@ -104,8 +104,10 @@ final class RoleSelector {
             trouble = "iCloud hasn't answered in \(Int(bound)) seconds. Topo will keep asking."
             return
         } catch {
-            // With a login and no record to read, the login is the evidence there is.
-            if signedIn {
+            // With a login and no record to read, the login is the evidence there is. A journal
+            // on this phone that would not open or write is not a record nobody could read: it
+            // decides nothing, or the phone would keep a role and leave its records behind.
+            if signedIn, !LocalRecordDatabase.isJournalFailure(error) {
                 keep(.primary)
             } else {
                 trouble = TranscriptStore.message(for: error)

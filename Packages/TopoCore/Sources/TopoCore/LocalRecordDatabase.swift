@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The record store of a phone with no iCloud account: `RecordStoreCore`'s semantics, which are
@@ -5,20 +6,27 @@ import Foundation
 /// the memory's store and the widgets' slots survive a relaunch on a phone with nowhere else to
 /// keep them.
 ///
-/// The journal is a header frame and then one frame per save or delete, each a 4-byte
-/// big-endian length and a binary plist, appended and synchronised to the disk before the call
-/// answers. A batch is one frame, so it is on disk whole or not at all: a last frame cut short
-/// or unreadable at open is a write whose caller never had an answer, which every writer
-/// already settles as one that may have landed, and it is dropped and the file cut back to the
-/// frame before it. A frame before the last that does not read is damage, not a torn write, and
-/// opening refuses the file rather than guess at what it held.
+/// The journal is a header frame, written whole with the file, and then one frame per save or
+/// delete, appended and synchronised to the disk before the call answers. A frame is its body's
+/// length (4 bytes, big-endian), the length's complement, the first 4 bytes of the body's
+/// SHA-256, and the body, a binary plist. A batch is one frame, so it is on disk whole or not at
+/// all. At open a torn last write — fewer bytes left than a frame's prefix, a body running past
+/// the end of the file, a body that ends the file and fails its checksum, or nothing but zeros
+/// from there on — is a write whose caller never had an answer, which every writer already
+/// settles as one that may have landed, and it is dropped and the file cut back to the frame
+/// before it. Anything else that does not read — a length that fails its complement, a body
+/// before the end that fails its checksum, a body that will not decode — is damage, and opening
+/// refuses the file rather than guess at what it held, since a damaged length would otherwise
+/// pass for a torn last frame and take every frame after it with it.
 ///
 /// When the journal holds more than twice as many saved records as the store does, opening
 /// rewrites it as one snapshot under a new feed epoch (a sibling written whole and renamed
-/// over), and every feed token handed out before expires, as CloudKit's do. Tags and tokens
-/// carry the file's own id, so one from another file is never honoured.
+/// over), and every feed token handed out before expires, as CloudKit's do. A compaction that
+/// fails leaves the journal as it was and is logged; it is never a reason the store does not
+/// open. Tags and tokens carry the file's own id, so one from another file is never honoured.
 ///
-/// The file's I/O runs on the actor's own serial queue, never the cooperative pool.
+/// Opening reads the file synchronously, so a caller on the cooperative pool opens it from a
+/// queue of its own (`RecordRoute`); the appends run on the actor's own serial queue.
 public actor LocalRecordDatabase: ZoneDatabase {
     /// What a frame holds.
     private enum Frame: Codable {
@@ -29,12 +37,31 @@ public actor LocalRecordDatabase: ZoneDatabase {
         case applied(RecordStoreCore.Applied)
     }
 
-    public enum OpenError: Error, Sendable {
-        /// A frame before the last does not read, or the header is not this journal's.
-        case damaged(URL, offset: Int)
+    /// What went wrong with the journal itself, as distinct from anything iCloud says.
+    public enum Failure: Error, Sendable {
+        /// A frame that is not a torn last write does not read, or the header is not this
+        /// journal's: opening refuses the file.
+        case damaged(offset: Int)
+        /// The file or its folder could not be made, read or opened.
+        case unopenable(underlying: any Error)
+        /// An append did not reach the disk.
+        case write(underlying: any Error)
     }
 
     static let version = 1
+
+    /// True when the error is the journal's own — damaged, unopenable or a write that did not
+    /// reach the disk — whether bare or as the store's refusal: a failure of this phone's
+    /// records, never anything iCloud said, and never evidence of who is primary.
+    public static func isJournalFailure(_ error: any Error) -> Bool {
+        if error is Failure { return true }
+        switch error {
+        case RecordDatabaseError.rejected(let underlying), RecordDatabaseError.unavailable(let underlying):
+            return underlying is Failure
+        default:
+            return false
+        }
+    }
 
     private let queue: DispatchSerialQueue
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
@@ -49,32 +76,58 @@ public actor LocalRecordDatabase: ZoneDatabase {
     public init(file: URL) throws {
         self.file = file
         queue = DispatchSerialQueue(label: "topo.local-records")
-        let manager = FileManager.default
-        try manager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                    attributes: Self.protection)
-        if !manager.fileExists(atPath: file.path) {
-            let store = UUID().uuidString
-            var bytes = Data()
-            try Self.append(.header(store: store, version: Self.version), to: &bytes)
-            guard manager.createFile(atPath: file.path, contents: bytes, attributes: Self.protection) else {
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: file.path])
+        do {
+            let manager = FileManager.default
+            try manager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                        attributes: Self.protection)
+            if !manager.fileExists(atPath: file.path) {
+                // Written whole and renamed into place, so a header is never torn: a file that
+                // exists is a journal, and its existence is what puts the phone on it.
+                var bytes = Data()
+                try Self.append(.header(store: UUID().uuidString, version: Self.version), to: &bytes)
+                try bytes.write(to: file, options: Self.writing)
             }
+        } catch {
+            throw Failure.unopenable(underlying: error)
         }
-        var (core, savedInJournal, goodLength, fileLength) = try Self.replay(file)
-        if goodLength < fileLength {
-            // A torn last write: cut it away so the next frame follows the last whole one.
-            let truncating = try FileHandle(forWritingTo: file)
-            try truncating.truncate(atOffset: UInt64(goodLength))
-            try truncating.synchronize()
-            try truncating.close()
+        let replayed: (RecordStoreCore, Int, Int, Int)
+        do {
+            replayed = try Self.replay(file)
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure.unopenable(underlying: error)
+        }
+        var (core, savedInJournal, goodLength, fileLength) = replayed
+        do {
+            if goodLength < fileLength {
+                // A torn last write: cut it away so the next frame follows the last whole one.
+                let truncating = try FileHandle(forWritingTo: file)
+                try truncating.truncate(atOffset: UInt64(goodLength))
+                try truncating.synchronize()
+                try truncating.close()
+            }
+        } catch {
+            throw Failure.unopenable(underlying: error)
         }
         if savedInJournal > 2 * max(core.records.count, 1) {
-            core.expireTokens()
-            try Self.compact(core, into: file)
+            var compacted = core
+            compacted.expireTokens()
+            do {
+                try Self.compact(compacted, into: file)
+                core = compacted
+            } catch {
+                // The journal as it was is still whole: the store opens on it, tokens and all.
+                TopoLog(.cloud).error("records: the journal on this phone could not be compacted (\(String(describing: type(of: error))))")
+            }
         }
         self.core = core
-        handle = try FileHandle(forWritingTo: file)
-        try handle.seekToEnd()
+        do {
+            handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+        } catch {
+            throw Failure.unopenable(underlying: error)
+        }
     }
 
     deinit { try? handle.close() }
@@ -89,15 +142,39 @@ public actor LocalRecordDatabase: ZoneDatabase {
         #endif
     }
 
+    private static var writing: Data.WritingOptions {
+        #if os(iOS)
+        [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        #else
+        [.atomic]
+        #endif
+    }
+
     // MARK: The journal
 
     private static func append(_ frame: Frame, to bytes: inout Data) throws {
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
         let body = try encoder.encode(frame)
-        var length = UInt32(body.count).bigEndian
-        bytes.append(Data(bytes: &length, count: 4))
+        bytes.append(contentsOf: bigEndian(UInt32(body.count)))
+        bytes.append(contentsOf: bigEndian(~UInt32(body.count)))
+        bytes.append(contentsOf: checksum(body))
         bytes.append(body)
+    }
+
+    /// A frame's prefix: the length, its complement and the body's checksum.
+    static let prefix = 12
+
+    private static func bigEndian(_ value: UInt32) -> [UInt8] {
+        [UInt8(value >> 24), UInt8(value >> 16 & 0xFF), UInt8(value >> 8 & 0xFF), UInt8(value & 0xFF)]
+    }
+
+    private static func uint32(_ bytes: Data, at offset: Int) -> UInt32 {
+        bytes[offset..<offset + 4].reduce(0) { ($0 << 8) | UInt32($1) }
+    }
+
+    private static func checksum(_ body: Data) -> [UInt8] {
+        Array(SHA256.hash(data: body).prefix(4))
     }
 
     /// The store as the journal holds it, how many records its frames saved, how many bytes of
@@ -110,17 +187,22 @@ public actor LocalRecordDatabase: ZoneDatabase {
         var saved = 0
         while offset < bytes.count {
             let start = offset
-            guard bytes.count - offset >= 4 else { break }
-            let length = bytes[offset..<offset + 4].reduce(0) { ($0 << 8) | Int($1) }
-            offset += 4
-            guard bytes.count - offset >= length,
-                  let frame = try? decoder.decode(Frame.self, from: bytes[offset..<offset + length]) else {
-                // A frame that does not read: torn if it is the last, damage otherwise.
-                if offset + length < bytes.count { throw OpenError.damaged(file, offset: start) }
-                offset = start
-                break
+            let rest = bytes.count - offset
+            // A torn last write: a prefix cut short, or zeros the file was extended with.
+            if rest < prefix || bytes[offset...].allSatisfy({ $0 == 0 }) { break }
+            let length = uint32(bytes, at: offset)
+            guard ~length == uint32(bytes, at: offset + 4) else { throw Failure.damaged(offset: start) }
+            let bodyStart = offset + prefix
+            // A length that passed its complement and runs past the end is the last write, cut.
+            guard bytes.count - bodyStart >= Int(length) else { break }
+            let body = bytes[bodyStart..<bodyStart + Int(length)]
+            if Array(bytes[offset + 8..<offset + 12]) != checksum(Data(body)) {
+                // Torn only where it ends the file; anywhere else it is damage.
+                if bodyStart + Int(length) == bytes.count { break }
+                throw Failure.damaged(offset: start)
             }
-            offset += length
+            guard let frame = try? decoder.decode(Frame.self, from: body) else { throw Failure.damaged(offset: start) }
+            offset = bodyStart + Int(length)
             switch (frame, core) {
             case (.header(let store, let version), nil) where version == Self.version:
                 core = RecordStoreCore(store: store)
@@ -132,10 +214,10 @@ public actor LocalRecordDatabase: ZoneDatabase {
                 core = current
                 if case .saved(let records) = applied { saved += records.count }
             default:
-                throw OpenError.damaged(file, offset: start)
+                throw Failure.damaged(offset: start)
             }
         }
-        guard let core else { throw OpenError.damaged(file, offset: 0) }
+        guard let core else { throw Failure.damaged(offset: 0) }
         return (core, saved, offset, bytes.count)
     }
 
@@ -146,24 +228,17 @@ public actor LocalRecordDatabase: ZoneDatabase {
         try append(.header(store: core.store, version: version), to: &bytes)
         try append(.snapshot(records: core.records.values.sorted { $0.id.name < $1.id.name },
                              minted: core.minted, epoch: core.epoch), to: &bytes)
-        let sibling = file.appendingPathExtension("compacting")
-        try? FileManager.default.removeItem(at: sibling)
-        guard FileManager.default.createFile(atPath: sibling.path, contents: nil, attributes: protection) else {
-            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: sibling.path])
-        }
-        let writer = try FileHandle(forWritingTo: sibling)
-        try writer.write(contentsOf: bytes)
-        try writer.synchronize()
-        try writer.close()
-        _ = try FileManager.default.replaceItemAt(file, withItemAt: sibling)
+        // `atomic` writes beside the file and renames over it.
+        try bytes.write(to: file, options: writing)
     }
 
     /// Appends one outcome and waits for it to reach the disk, then applies it. A write that
-    /// fails leaves the store as it was, and says the store refused rather than that it might
-    /// still land: the frame is either whole on disk, and replayed at the next open as it would
-    /// have been applied now, or it is not.
+    /// fails leaves the store in memory as it was and is `unavailable`, which writers take as a
+    /// write that may have landed: the part that reached the file is cut back, but a frame that
+    /// was synchronised whole before the failure is replayed at the next open as it would have
+    /// been applied now.
     private func commit(_ applied: RecordStoreCore.Applied) throws {
-        if let broken { throw RecordDatabaseError.rejected(underlying: broken) }
+        if let broken { throw RecordDatabaseError.rejected(underlying: Failure.write(underlying: broken)) }
         var bytes = Data()
         try Self.append(.applied(applied), to: &bytes)
         let end = try handle.offset()
@@ -180,7 +255,7 @@ public actor LocalRecordDatabase: ZoneDatabase {
             } catch {
                 broken = error
             }
-            throw RecordDatabaseError.unavailable(underlying: error)
+            throw RecordDatabaseError.unavailable(underlying: Failure.write(underlying: error))
         }
         core.apply(applied)
     }
