@@ -56,8 +56,9 @@ import Testing
         _ = try await later.changes(ofType: "T", since: token)
     }
 
-    /// A last frame whose length is whole but whose body does not read (zeros from a torn write) is torn, not damage.
-    @Test func aWholeLengthUnreadableLastFrameIsTorn() async throws {
+    /// A committed last frame whose body was zeroed is a frame that rotted, not a torn write: its
+    /// slot was written after it was whole, so the file is refused and nothing is cut.
+    @Test func aCommittedLastFrameThatDoesNotReadIsDamage() async throws {
         let db = try open()
         _ = try await db.save(Record(type: "T", id: RecordID("a")))
         let before = try Data(contentsOf: file)
@@ -65,8 +66,7 @@ import Testing
         var bytes = try Data(contentsOf: file)
         for i in (before.count + LocalRecordDatabase.prefix)..<bytes.count { bytes[i] = 0 }
         try bytes.write(to: file)
-        let reopened = try open()
-        #expect(await reopened.current(RecordID("a")) != nil)
-        #expect(await reopened.current(RecordID("b")) == nil)
+        #expect(throws: LocalRecordDatabase.Failure.self) { try open() }
+        #expect(try Data(contentsOf: file) == bytes)
     }
 }
