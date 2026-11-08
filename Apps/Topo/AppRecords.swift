@@ -69,28 +69,10 @@ enum AppRecords {
         try await TopoCloudKit.ensureZone()
     }
 
-    #if DEBUG
-    /// A debug launch with `TOPO_DEBUG_ACCOUNT=none` is a phone with no iCloud account to the
-    /// route, and `TOPO_DEBUG_RECORDS_DIR` names the folder its journal goes in, so a UI suite on
-    /// an unsigned simulator takes the path a phone with no Apple ID takes.
-    static let accountVariable = "TOPO_DEBUG_ACCOUNT"
-    static let recordsDirectoryVariable = "TOPO_DEBUG_RECORDS_DIR"
-    #endif
-
-    private static var routeFile: URL {
-        #if DEBUG
-        if let folder = ProcessInfo.processInfo.environment[recordsDirectoryVariable], !folder.isEmpty {
-            return URL(filePath: folder, directoryHint: .isDirectory).appending(path: "records.journal")
-        }
-        #endif
-        return RecordRoute.standardFile
-    }
+    private static var routeFile: URL { RecordRoute.standardFile }
 
     private static let account: @Sendable () async throws -> CKAccountStatus = {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment[accountVariable] == "none" { return .noAccount }
-        #endif
-        return try await CKContainer(identifier: TopoCloudKit.containerIdentifier).accountStatus()
+        try await CKContainer(identifier: TopoCloudKit.containerIdentifier).accountStatus()
     }
 }
 

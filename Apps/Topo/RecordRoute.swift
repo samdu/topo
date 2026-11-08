@@ -98,6 +98,10 @@ actor RecordRoute {
         while true {
             switch try? await account() {
             case .noAccount?:
+                // Read again at the answer: a role kept while the account was being asked, or
+                // one the defaults could not show until now (a launch before first unlock reads
+                // them empty), is an install that has decided, and stays on CloudKit.
+                if decided() { return .cloud }
                 TopoLog(.cloud).notice("records: no iCloud account at the first decision; kept on this phone")
                 return .local(try await open(file))
             case .available?, .restricted?, .temporarilyUnavailable?:

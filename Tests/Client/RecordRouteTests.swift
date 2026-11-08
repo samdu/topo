@@ -96,6 +96,27 @@ final class RecordRouteTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    /// A role kept while the account was being asked is read again at the answer: no journal.
+    func testARoleKeptWhileTheAccountIsAskedStaysCloud() async throws {
+        let flag = Flag()
+        let r = RecordRoute(file: file, decided: { flag.value }, account: {
+            flag.value = true
+            return .noAccount
+        })
+        let store = try await r.store()
+        XCTAssertEqual(store, .cloud)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = false
+        var value: Bool {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
+        }
+    }
+
     /// An install whose journal exists is on the phone whatever the account says now: the move
     /// into iCloud is its own step, never a switch at launch.
     func testAJournalKeepsTheRouteLocal() async throws {

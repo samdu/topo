@@ -7,8 +7,9 @@ import Foundation
 /// journal behind it, so the store a test holds and the store a phone with no iCloud account
 /// runs on cannot drift apart.
 ///
-/// A store's tags and tokens carry its `store` id, so a tag or a token from another store is
-/// never honoured: a tag is a stale save, a token an expired one.
+/// A store's tags and tokens carry its `store` id, so a tag or a token from a store with another
+/// id is never honoured: a tag is a stale save, a token an expired one. Each journal has an id
+/// of its own; every `InMemoryRecordDatabase` shares one.
 package struct RecordStoreCore: Sendable {
     /// What one mutation did, as it is replayed: the records as saved (their new tags on them),
     /// or the records deleted with their types.
