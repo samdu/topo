@@ -837,8 +837,24 @@ else
   echo "Every suite asked for passed at $short (${chosen[*]:-none needed}) in $minutes min."
 fi
 
+# push_green — three tries, since a push GitHub fails (a 500, a dropped connection) after every
+# suite passed would otherwise cost the whole run again. A branch that has moved past anything
+# this commit carries is a refusal and is not tried again; a push that failed but landed is a push.
+push_green() {
+  local try at
+  for try in 1 2 3; do
+    git push origin "$sha:refs/heads/$branch" && return 0
+    at="$(remote_head)" || at=""
+    [ "$at" != "$sha" ] || { echo "the push of $short answered with a failure, and origin's $branch is at it."; return 0; }
+    if [ -n "$at" ] && ! git merge-base --is-ancestor "$at" "$sha" 2>/dev/null; then
+      die "origin's $branch is at ${at:0:7}, which $short does not carry: the push was refused; nothing is posted."
+    fi
+    [ "$try" = 3 ] || { echo "the push of $short failed (try $try of 3); trying again in $((try * POST_RETRY)) s." >&2; sleep $((try * POST_RETRY)); }
+  done
+  die "the push of $short to $branch failed three times; nothing is posted. The suites passed: push it again once GitHub answers, then post with --no-push."
+}
 if [ -z "$red" ] && [ "$push" = yes ] && [ "$already_pushed" = no ]; then
-  git push origin "$sha:refs/heads/$branch" || die "the push of $short to $branch was refused; nothing is posted."
+  push_green
 fi
 if [ "$(remote_head)" != "$sha" ]; then
   [ -z "$red" ] || { echo "Nothing was pushed and no status posted: origin's $branch is not at $short."; exit 1; }

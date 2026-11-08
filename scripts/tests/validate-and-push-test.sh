@@ -10,8 +10,10 @@
 # untracked files; a green run pushes that commit and then posts `success` for each suite to that
 # commit and no other, with `local/real_ear` only beside a green `topo_ui` on the full lane; a
 # red suite pushes nothing and posts nothing, unless origin's branch was already at the commit,
-# when it posts what happened; a suite that wrote no result is a failure; a push origin refuses
-# and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
+# when it posts what happened; a suite that wrote no result is a failure; a push that fails is
+# tried three times, and one that lands on a later try is posted; a push origin refuses (its branch
+# moved past the commit), one that never lands and a status GitHub refuses post nothing more and
+# exit 2; --no-push refuses a commit origin's
 # branch is not at before any suite runs; a suite with two results is red; a description keeps
 # the logs' path; a head run again keeps the earlier run's logs, five runs a commit; and the
 # `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
@@ -346,6 +348,31 @@ g -C "$work/refused/other" checkout -q -b topic && echo z > "$work/refused/other
 validate
 is "refused push: exits 2" "$status" 2
 is "refused push: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+grep -q 'does not carry' <<<"$out" && ! grep -q 'try 1 of 3' <<<"$out" && ok "refused push: not tried again, saying why" || fail "refused push: $out"
+
+# A push GitHub fails and then takes (a 500): tried again, pushed and posted.
+scratch flaky Packages/TopoLink/Package.swift
+mkdir -p "$work/flaky/origin.git/hooks"
+printf '#!/bin/sh\nn=$(cat "$0.count" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.count"\n[ "$n" -ge 1 ] || { echo "HTTP 500" >&2; exit 1; }\n' > "$work/flaky/origin.git/hooks/pre-receive"
+chmod +x "$work/flaky/origin.git/hooks/pre-receive"
+git -C "$work/flaky/origin.git" config core.hooksPath "$work/flaky/origin.git/hooks"
+POST_RETRY=0 validate
+is "a push that fails once: exits 0" "$status" 0
+is "a push that fails once: pushed" "$(origin_head)" "$sha"
+is "a push that fails once: tried twice" "$(cat "$work/flaky/origin.git/hooks/pre-receive.count")" 2
+is "a push that fails once: posted" "$(posted)" "local/others=success "
+
+# A push that never lands: three tries, nothing posted, and it says the suites passed.
+scratch downpush Packages/TopoLink/Package.swift
+mkdir -p "$work/downpush/origin.git/hooks"
+printf '#!/bin/sh\nn=$(cat "$0.count" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.count"; exit 1\n' > "$work/downpush/origin.git/hooks/pre-receive"
+chmod +x "$work/downpush/origin.git/hooks/pre-receive"
+git -C "$work/downpush/origin.git" config core.hooksPath "$work/downpush/origin.git/hooks"
+POST_RETRY=0 validate
+is "a push that never lands: exits 2" "$status" 2
+is "a push that never lands: tried three times" "$(cat "$work/downpush/origin.git/hooks/pre-receive.count")" 3
+is "a push that never lands: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+grep -q 'The suites passed' <<<"$out" && ok "a push that never lands: says the suites passed" || fail "a push that never lands: $out"
 
 # A status GitHub does not take: exit 2, and it says how to post again.
 scratch nopost Packages/TopoLink/Package.swift
