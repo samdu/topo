@@ -3,7 +3,7 @@
 # at the commit being pushed, pushes that commit, and posts each suite's result to it as a commit
 # status, which is what pr-validate.yaml's `test` job requires in place of a hosted macOS run.
 #
-#   scripts/validate-and-push.sh [--no-push] [--suites "<suite>..."|all|none] [--lane fast|full]
+#   scripts/validate-and-push.sh [--no-push] [--after-verdict] [--suites "<suite>..."|all|none] [--lane fast|full]
 #   scripts/validate-and-push.sh --hold -- <command…>
 #
 # Run from the worktree whose HEAD is the commit to push, on its branch. In order:
@@ -67,7 +67,9 @@
 #      runs here. A pass counts only when the connection outlived it. A red result the Mac
 #      wrote is red, as this Mac's would be, whatever there made it so.
 #   4. Pushes the commit to its branch on origin, without force, only when every suite passed.
-#      A red suite pushes nothing. --no-push never pushes.
+#      A red suite pushes nothing. --no-push never pushes. A push to a PR that is ready and whose
+#      newest Codex verdict read an earlier head is refused before any suite runs, since it
+#      would start a review round nobody chose; --after-verdict pushes it anyway.
 #   5. Posts the statuses to the commit, once origin's branch is at it: `local/<suite>` as
 #      `success` or `failure` for each suite run, and `local/real_ear` beside a `topo_ui` that
 #      passed on the full lane. `topo_ui` run as its two parts is the one status, a success
@@ -124,6 +126,7 @@ SUITES=(topo_unit topo_ui others scripts)
 EVERY=(topo_unit topo_ui others)
 
 push=yes
+after_verdict=no
 suites_arg=""
 lane_arg=""
 hold=no
@@ -135,6 +138,7 @@ while [ $# -gt 0 ]; do
       hold=yes; shift 2; hold_command=("$@"); break
       ;;
     --no-push) push=no; shift ;;
+    --after-verdict) after_verdict=yes; shift ;;
     --suites) suites_arg="${2:-}"; [ -n "$suites_arg" ] || { echo "--suites takes suite names, all or none" >&2; exit 2; }; shift 2 ;;
     --lane) lane_arg="${2:-}"; [ -n "$lane_arg" ] || { echo "--lane takes full or fast" >&2; exit 2; }; shift 2 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
@@ -182,6 +186,30 @@ if [ "$hold" = no ]; then
   [ "$(remote_head)" != "$sha" ] || already_pushed=yes
   if [ "$push" = no ] && [ "$already_pushed" = no ]; then
     die "origin's $branch is not at $short, and --no-push posts only to a commit origin already has as the branch's head."
+  fi
+
+  # A push to a ready PR whose newest Codex verdict read an earlier head starts a review round
+  # nobody chose, out of the four the cap allows: a fix after a verdict goes to a draft, which the
+  # coordinator marks ready when it wants the round. Asked before any suite runs, so a refusal
+  # costs no queue. --after-verdict is the push meant anyway. A PR list or a comment read that
+  # fails is said and refuses nothing, since GitHub being slow is no reason to hold a push.
+  if [ "$push" = yes ] && [ "$already_pushed" = no ] && [ "$after_verdict" = no ]; then
+    if open_pr="$(gh pr list --repo "$repo_slug" --head "$branch" --state open --json number,isDraft \
+        --jq '.[0] | select(. != null) | "\(.number) \(.isDraft)"' 2>/dev/null)"; then
+      if [ -n "$open_pr" ] && [ "${open_pr#* }" = false ]; then
+        if marks="$(gh api --paginate "repos/$repo_slug/issues/${open_pr%% *}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- agent-review: codex -->"))) | .body' 2>/dev/null)"; then
+          read_at="$(sed -n 's/.*<!-- agent-review-sha: \([0-9a-f]*\) -->.*/\1/p' <<<"$marks" | tail -n 1)"
+          if [ -n "$read_at" ] && [ "$read_at" != "$sha" ]; then
+            die "#${open_pr%% *} is ready and its newest Codex verdict read ${read_at:0:7}: a push of $short to it starts another review round. Ask the coordinator to put it back to draft (gh pr ready ${open_pr%% *} --undo), or pass --after-verdict to push it anyway."
+          fi
+        else
+          echo "warning: could not read #${open_pr%% *}'s comments to see whether a verdict stands; going on." >&2
+        fi
+      fi
+    else
+      echo "warning: could not ask GitHub for $branch's open PR to see whether a verdict stands; going on." >&2
+    fi
   fi
 
   # The lists `select` reads, out of the commit's own workflow.

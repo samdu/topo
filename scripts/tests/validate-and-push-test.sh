@@ -89,6 +89,8 @@ case "$*" in
   "api repos/samdu/topo/actions/workflows/pr-validate.yaml/runs?head_sha="*) printf '%s\n' "${FAKE_RUN-}" ;;
   "api repos/samdu/topo/actions/runs/99/jobs?"*) printf '%s\n' "${FAKE_TEST_JOB-}" ;;
   "run rerun --repo samdu/topo --job 4242") ;;
+  "pr list --repo samdu/topo --head topic --state open "*) [ "${FAKE_PR_LIST-}" != fail ] || exit 1; printf '%s\n' "${FAKE_PR-}" ;;
+  "api --paginate repos/samdu/topo/issues/"*"/comments "*) printf '%b' "${FAKE_VERDICTS-}" ;;
   *) echo "unexpected gh call: $*" >&2; exit 64 ;;
 esac
 GH
@@ -220,7 +222,7 @@ validate
 is "docs: exits 0" "$status" 0
 is "docs: pushed" "$(origin_head)" "$sha"
 is "docs: no suite ran" "$(recorded head)" ""
-is "docs: no gh call but the look for a red test job" "$(grep -vc 'actions/workflows' "$GH_CALLS")" 0
+is "docs: no gh call but the PR's state and the look for a red test job" "$(grep -vcE 'actions/workflows|^pr list ' "$GH_CALLS")" 0
 
 # An app change off the voice path: every suite, the fast lane, at the commit and nothing else.
 scratch app Apps/Client/SettingsView.swift
@@ -346,6 +348,27 @@ g -C "$work/refused/other" checkout -q -b topic && echo z > "$work/refused/other
 validate
 is "refused push: exits 2" "$status" 2
 is "refused push: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+
+# A ready PR whose newest verdict read an earlier head: refused before any suite runs, unless
+# --after-verdict says the push is meant. A draft, or a ready PR with no verdict yet, pushes.
+scratch ready Packages/TopoLink/Package.swift
+FAKE_PR="7 false" FAKE_VERDICTS='<!-- agent-review: codex -->\n<!-- agent-review-sha: 1111111aaaa -->\nold\n<!-- agent-review: codex -->\n<!-- agent-review-sha: 2222222bbbb -->\n' validate
+is "ready, a verdict stands: exits 2" "$status" 2
+is "ready, a verdict stands: no suite ran" "$(recorded suites)" ""
+is "ready, a verdict stands: nothing pushed" "$(origin_head)" ""
+grep -q 'newest Codex verdict read 2222222' <<<"$out" && grep -q -- '--after-verdict' <<<"$out" && ok "ready, a verdict stands: names the newest verdict's head and the flag" || fail "ready, a verdict stands: $out"
+FAKE_PR="7 false" FAKE_VERDICTS='<!-- agent-review: codex -->\n<!-- agent-review-sha: 2222222bbbb -->\n' validate --after-verdict
+is "ready, a verdict stands, --after-verdict: pushed" "$(origin_head)" "$sha"
+scratch ready-draft Packages/TopoLink/Package.swift
+FAKE_PR="7 true" FAKE_VERDICTS='<!-- agent-review: codex -->\n<!-- agent-review-sha: 2222222bbbb -->\n' validate
+is "a draft with a verdict: pushed" "$(origin_head)" "$sha"
+scratch ready-unread Packages/TopoLink/Package.swift
+FAKE_PR="7 false" validate
+is "ready with no verdict yet: pushed" "$(origin_head)" "$sha"
+scratch ready-unknown Packages/TopoLink/Package.swift
+FAKE_PR_LIST=fail validate
+is "a PR list that fails: pushed" "$(origin_head)" "$sha"
+grep -q "could not ask GitHub for topic's open PR" <<<"$out" && ok "a PR list that fails: says so" || fail "a PR list that fails: $out"
 
 # A status GitHub does not take: exit 2, and it says how to post again.
 scratch nopost Packages/TopoLink/Package.swift
