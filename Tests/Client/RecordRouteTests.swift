@@ -85,21 +85,21 @@ final class RecordRouteTests: XCTestCase {
     }
 
     /// One deadline for the wait and the request: a route that takes most of the bound leaves
-    /// the store only what is left. Codex's sequence, scaled: a bound of 4 with the account
-    /// answering in 3 and a fetch taking 3 runs out.
+    /// the store only what is left. Codex's sequence, scaled: the account answering in 0.3 s of
+    /// a 1 s bound leaves a fetch that takes 0.9 s too little, which the whole bound would not.
     func testTheStoreHasOnlyWhatTheRouteLeftOfTheBound() async throws {
         let r = RecordRoute(file: file, decided: { false }, account: {
             try await Task.sleep(for: .milliseconds(300))
             return .available
         }, pause: { _ in await Task.yield() })
-        let cloud = Slow(takes: 0.3)
-        let db = RoutedRecordDatabase(route: r, cloud: cloud).answering(within: 0.4)
+        let cloud = Slow(takes: 0.9)
+        let db = RoutedRecordDatabase(route: r, cloud: cloud).answering(within: 1.0)
         do {
             _ = try await db.fetch(Lease.recordID)
             XCTFail("a fetch answered past the call's bound")
         } catch RecordDatabaseError.unavailable {}
         let asked = try XCTUnwrap(cloud.bounds.first)
-        XCTAssertLessThanOrEqual(asked, 0.15, "the store was given \(asked) s of a 0.4 s bound after a 0.3 s route")
+        XCTAssertLessThanOrEqual(asked, 0.75, "the store was given \(asked) s of a 1 s bound after a 0.3 s route")
     }
 
     /// On iOS the journal asks for protection until first unlock on its folder, at its creation

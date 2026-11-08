@@ -10,12 +10,12 @@ import Foundation
 /// delete, appended and synchronised to the disk before the call answers. A frame is its body's
 /// length (4 bytes, big-endian), the length's complement, the first 4 bytes of the body's
 /// SHA-256, and the body, a binary plist. A batch is one frame, so it is on disk whole or not at
-/// all. At open a torn last write — fewer bytes left than a frame's prefix, a body running past
-/// the end of the file, a body that ends the file and fails its checksum, or nothing but zeros
-/// from there on, with no whole frame anywhere after it — is a write whose caller never had an
+/// all. At open a torn last write — fewer bytes left than a frame's prefix, a length that fails
+/// its complement, a body running past the end of the file, a body that ends the file and fails
+/// its checksum, or nothing but zeros from there on, with no whole frame anywhere after it — is a write whose caller never had an
 /// answer, which every writer already settles as one that may have landed, and it is dropped
 /// and the file cut back to the frame before it. Anything else that does not read — a frame
-/// that runs out with a whole frame after it, a length that fails its complement, a body before
+/// that runs out with a whole frame after it, a body before
 /// the end that fails its checksum, a body that will not decode, a header that does not read —
 /// is damage, and opening refuses the file and cuts nothing rather than guess at what it held.
 /// The header is written only whole with the file, so it is never torn.
@@ -197,10 +197,11 @@ public actor LocalRecordDatabase: ZoneDatabase {
     enum FrameAt: Equatable {
         /// A frame whose prefix and checksum hold, and the offset after it.
         case whole(body: Range<Int>, next: Int)
-        /// It runs out: a prefix cut short, zeros to the end, a body past the end, or a body
-        /// that ends the file and fails its checksum. A torn last write, if it is the last.
+        /// It runs out: a prefix cut short or failing its complement, zeros to the end, a body
+        /// past the end, or a body that ends the file and fails its checksum. A torn last write
+        /// when no whole frame follows it, damage when one does.
         case runsOut
-        /// Its length fails its complement, or its body fails its checksum before the end.
+        /// Its body fails its checksum before the end.
         case damaged
     }
 
@@ -210,7 +211,9 @@ public actor LocalRecordDatabase: ZoneDatabase {
         let rest = bytes.count - offset
         if rest < prefix || offset >= zeros { return .runsOut }
         let length = uint32(bytes, at: offset)
-        guard ~length == uint32(bytes, at: offset + 4) else { return .damaged }
+        // A length that fails its complement is a prefix that did not land whole, or one that rotted:
+        // the frame runs out, and the scan after it tells the last write from damage.
+        guard ~length == uint32(bytes, at: offset + 4) else { return .runsOut }
         let bodyStart = offset + prefix
         guard bytes.count - bodyStart >= Int(length) else { return .runsOut }
         let body = bodyStart..<bodyStart + Int(length)

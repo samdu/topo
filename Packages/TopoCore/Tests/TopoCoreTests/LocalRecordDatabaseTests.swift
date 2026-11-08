@@ -134,6 +134,27 @@ import Testing
         #expect(await (try open()).current(RecordID("turn/p/1")) != nil)
     }
 
+    /// A last write whose prefix did not land whole (zeroed, or its length without its
+    /// complement, as a write straddling a page can leave) is torn, not damage that keeps the
+    /// phone from its records for good.
+    @Test func aLastFrameWhosePrefixDidNotLandIsTorn() async throws {
+        let db = try open()
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        let before = try Data(contentsOf: file)
+        _ = try await db.save(Record(type: "T", id: RecordID("b")))
+        let whole = try Data(contentsOf: file)
+        for zeroed in [0..<4, 0..<8, 0..<12, 0..<40, 4..<8] {
+            var bytes = whole
+            let cut = before.count + zeroed.lowerBound..<before.count + zeroed.upperBound
+            bytes.resetBytes(in: cut)
+            try bytes.write(to: file)
+            let reopened = try open()
+            #expect(await reopened.current(RecordID("a")) != nil, "\(cut)")
+            #expect(await reopened.current(RecordID("b")) == nil, "\(cut)")
+            #expect(try Data(contentsOf: file) == before, "\(cut) is cut away")
+        }
+    }
+
     /// A long run of zeros at the end opens in one pass over the file, not one per byte.
     @Test func aLongZeroTailOpensQuickly() async throws {
         let db = try open()
