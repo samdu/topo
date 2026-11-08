@@ -40,6 +40,11 @@ final class Voice {
     private(set) var trouble: String?
     /// How far a pack's download has come, while the store waits on one.
     private(set) var fraction: Double?
+    /// Whether this fetch replaces a copy already in the store: a new version of the pack after
+    /// an update, which downloads at the first launch after it, with replies written until it is in.
+    private(set) var renewing = false
+    /// Whether the store has begun a copy, rather than still finding its copy whole.
+    private(set) var copyingNow = false
     /// The ear beside the voice, which comes first: the first thing a person does is talk, and a
     /// reply can be text until the voice is in. The voice's compile waits while the ear is still
     /// to be fetched or is compiling (`mayLoad`), so the ear's compile is not shared with the
@@ -59,9 +64,14 @@ final class Voice {
     /// What the voice's line says while its copy is made and its compile waits on the ear's.
     nonisolated static let afterEar = "waiting for the ear"
 
+    /// What the line says while the store finds its copy whole, which every launch does and draws
+    /// no meter for (`Setup.launchWords`).
+    nonisolated static let checking = "checking Topo's voice"
     /// What the line says while the store waits on the pack, and while it copies.
     static let downloading = "downloading Topo's voice"
     static let copying = "copying Topo's voice"
+    /// What the line says while a new version of the pack downloads over the copy in the store.
+    static let renewingWords = "downloading Topo's new voice, replies written until it's in"
 
     /// Whether the voice may compile, given the ear: none beside it, or one neither still to be
     /// fetched nor compiling. An ear being fetched lets the voice go once its download failed.
@@ -120,7 +130,9 @@ final class Voice {
     /// What the line says while the state is `fetching`.
     var fetchWords: String {
         if waitsForEar { return Self.afterEar }
-        return fraction.map { "\(Self.downloading) (\(Int(($0 * 100).rounded()))%)" } ?? Self.copying
+        let downloading = renewing ? Self.renewingWords : Self.downloading
+        if let fraction { return "\(downloading) (\(Int((fraction * 100).rounded()))%)" }
+        return copyingNow ? Self.copying : Self.checking
     }
 
     /// One line for the diagnostics screen.
@@ -150,15 +162,23 @@ final class Voice {
         trouble = nil
         folder = nil
         fraction = nil
+        renewing = store.installed() != nil
+        copyingNow = false
         let store = store, source = source
         Task {
             do {
-                let folder = try await store.install(from: source) { fraction in
+                let folder = try await store.install(from: source, progress: { fraction in
                     Task { @MainActor [weak self] in
-                        guard let self, self.state == .fetching, self.folder == nil else { return }
+                        guard let self, self.state == .fetching, self.folder == nil, !self.copyingNow else { return }
                         self.fraction = fraction
                     }
-                }
+                }, copying: {
+                    Task { @MainActor [weak self] in
+                        guard let self, self.state == .fetching, self.folder == nil else { return }
+                        self.fraction = nil
+                        self.copyingNow = true
+                    }
+                })
                 guard state == .fetching else { return }
                 self.folder = folder
                 fraction = nil
@@ -323,7 +343,8 @@ actor PhononVoiceEngine: VoiceEngine {
             throw VoiceError.unavailable("the voice's bundle.json is not an object")
         }
         if let kept = object["temperature"] as? NSNumber, kept.floatValue == temperature { return }
-        object["temperature"] = Double(temperature)
+        // The float's shortest decimal, so 0.3 is written 0.3 and not 0.30000001192092896.
+        object["temperature"] = Double("\(temperature)") ?? Double(temperature)
         try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]).write(to: url, options: .atomic)
     }
 

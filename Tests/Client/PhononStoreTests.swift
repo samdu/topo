@@ -85,6 +85,46 @@ final class PhononStoreTests: XCTestCase {
         XCTAssertTrue(store.isWhole())
     }
 
+    /// A new version of the pack (an update's, fetched at the first launch after it, since the
+    /// pack is essential at first installation alone) is downloaded, copied over the store and
+    /// let go: the phone keeps one copy of the weights.
+    func testANewPackVersionIsFetchedCopiedAndLetGo() async throws {
+        let folder = try bundle(built: 100, files: weights)
+        _ = try await store.install(from: FakePack(folder: folder, version: 3))
+        let next = FakePack(folder: folder, version: 4)
+        _ = try await store.install(from: next)
+        XCTAssertEqual(next.counts, .init(madeLocal: 1, copied: 1))
+        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 4))
+        _ = try await store.install(from: next)
+        XCTAssertEqual(next.counts, .init(madeLocal: 1, copied: 1), "a store at the pack's version fetched it again")
+    }
+
+    /// The voice's line says a new version is downloading over the copy here, and that replies
+    /// are written until it is in; a first download says only that it is downloading.
+    @MainActor func testTheLineSaysANewVersionIsDownloadingAndRepliesAreWritten() async throws {
+        let folder = try bundle(built: 100, files: weights)
+        let first = GatedPack(folder: folder, version: 3)
+        let fresh = Voice(engine: TemperatureRecorder(), store: store, source: first)
+        fresh.prepare()
+        while fresh.fraction == nil { await Task.yield() }
+        XCTAssertEqual(fresh.fetchWords, "\(Voice.downloading) (50%)")
+        first.open()
+        while store.installed() == nil { await Task.yield() }
+
+        // A launch finding the store at the source's own copy says it is checking, and copies nothing.
+        let launch = Voice(engine: TemperatureRecorder(), store: store, source: GatedPack(folder: folder, version: 3, reports: false))
+        launch.prepare()
+        XCTAssertEqual(launch.fetchWords, Voice.checking)
+
+        let next = GatedPack(folder: folder, version: 4)
+        let renewing = Voice(engine: TemperatureRecorder(), store: store, source: next)
+        renewing.prepare()
+        while renewing.fraction == nil { await Task.yield() }
+        XCTAssertEqual(renewing.fetchWords, "\(Voice.renewingWords) (50%)")
+        next.open()
+        while store.installed()?.version != 4 { await Task.yield() }
+    }
+
     func testAFileThatDoesNotMatchItsDigestLeavesNoStoreFolder() async throws {
         let source = FolderSource(folder: try bundle(built: 100, files: weights, lie: "flow.mlpackage/Manifest.json"))
         do {
@@ -174,4 +214,45 @@ final class FakePack: PhononSource, @unchecked Sendable {
     func url(of path: String) throws -> URL { try FolderSource(folder: folder).url(of: path) }
     func version() async -> Int? { packVersion }
     func copied() async { lock.withLock { kept.copied += 1 } }
+}
+
+/// A pack whose download stands at half until the test lets it finish.
+final class GatedPack: PhononSource, @unchecked Sendable {
+    let folder: URL
+    let packVersion: Int
+    private let lock = NSLock()
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    let reports: Bool
+
+    init(folder: URL, version: Int, reports: Bool = true) {
+        self.folder = folder
+        self.packVersion = version
+        self.reports = reports
+    }
+
+    func open() {
+        let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            opened = true
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume()
+    }
+
+    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {
+        if reports { progress(0.5) }
+        await withCheckedContinuation { continuation in
+            let go = lock.withLock { () -> Bool in
+                if opened { return true }
+                waiter = continuation
+                return false
+            }
+            if go { continuation.resume() }
+        }
+    }
+    func url(of path: String) throws -> URL { try FolderSource(folder: folder).url(of: path) }
+    func version() async -> Int? { packVersion }
+    func copied() async {}
 }

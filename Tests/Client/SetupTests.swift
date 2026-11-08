@@ -142,6 +142,18 @@ final class SetupTests: XCTestCase {
         let claudeBehind = Setup.lines(phase: .ready(.reused), claude: .fetching, workspace: present, ear: .loading, earFetch: present,
                                        earLoading: Ear.preparing, voice: .cold, voiceFetch: present, voiceLoading: Voice.preparing)
         XCTAssertFalse(Setup.standing(claudeBehind, stood: false))
+        // The voice's store finding its copy whole, which every launch does, is no install; its
+        // copy and its download are.
+        let checking = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .ready, earFetch: present,
+                                   earLoading: Ear.preparing, voice: .fetching,
+                                   voiceFetch: Setup.Fetch(fraction: nil, words: Voice.checking), voiceLoading: Voice.preparing)
+        XCTAssertFalse(Setup.standing(checking, stood: false), "the store's check drew the meter")
+        for words in [Voice.copying, Voice.renewingWords] {
+            let copy = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .ready, earFetch: present,
+                                   earLoading: Ear.preparing, voice: .fetching,
+                                   voiceFetch: Setup.Fetch(fraction: nil, words: words), voiceLoading: Voice.preparing)
+            XCTAssertTrue(Setup.standing(copy, stood: false), words)
+        }
         // An install: each of these brings it.
         for install in [lines(.fetching, .cold, .cold), lines(.importing, .cold, .cold), lines(.ready(.imported), .fetching, .cold),
                         lines(.ready(.reused), .ready, .fetching, fetch: held), lines(.ready(.reused), .failed("no room"), .ready),

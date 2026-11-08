@@ -97,9 +97,9 @@ enum Setup {
 
     static let notStarted = "not started"
     /// What a part waiting says on a launch with nothing to fetch: not begun, its files all on
-    /// the phone and its own state a moment behind them, or the voice's compile waiting for the
-    /// ear's, which every launch has.
-    static let launchWords: Set<String> = [notStarted, ModelDownloads.downloaded, Voice.afterEar]
+    /// the phone and its own state a moment behind them, the voice's store finding its copy whole,
+    /// or the voice's compile waiting for the ear's, which every launch has.
+    static let launchWords: Set<String> = [notStarted, ModelDownloads.downloaded, Voice.checking, Voice.afterEar]
 
     static func state(phase: Userland.Phase, claude: Userland.ClaudePhase, fetch: Fetch) -> State {
         // Every pair is named, so a phase added later is a line this has to be taught.

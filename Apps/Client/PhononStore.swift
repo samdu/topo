@@ -57,8 +57,10 @@ struct PhononStore: Sendable {
     }
 
     /// The store folder, made from `source` if it is not already that source's bundle. `progress`
-    /// hears a pack's download, as a fraction when the system gives one.
-    func install(from source: any PhononSource, progress: @escaping @Sendable (Double?) -> Void = { _ in }) async throws -> URL {
+    /// hears a pack's download, as a fraction when the system gives one; `copying`, that a copy
+    /// has begun. A launch that finds the store whole hears neither.
+    func install(from source: any PhononSource, progress: @escaping @Sendable (Double?) -> Void = { _ in },
+                 copying: @Sendable () -> Void = {}) async throws -> URL {
         let kept = installed()
         // A store folder of the source's version is taken without making the source local, so
         // a pack removed after its copy is not fetched again for nothing.
@@ -70,6 +72,7 @@ struct PhononStore: Sendable {
             let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: try source.url(of: "bundle.json")))
             let version = await source.version()
             if kept == Installed(built: manifest.built, version: version), isWhole(manifest) { return home }
+            copying()
             try copy(manifest, version: version, from: source)
             await source.copied()
             return home
@@ -140,7 +143,7 @@ struct PhononStore: Sendable {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
     }
 
-    /// The weights come back from their source; a backup of them is half a gigabyte of nothing.
+    /// The weights come back from their source; a backup of them is 200 MB of nothing.
     static func excludeFromBackup(_ url: URL) throws {
         var url = url
         var values = URLResourceValues()

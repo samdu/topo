@@ -56,13 +56,14 @@ while IFS=$'\t' read -r path size sha; do fetch "$path" "$size" "$sha"; done
 echo "phonon-bundles: $name verified in $dest"
 
 [ "$package" = yes ] || exit 0
-# The pack: its id, the essential policy (downloaded as part of installing or updating the app),
+# The pack: its id, the essential policy at first installation alone (an update's new version is
+# fetched at the first launch after it, so an update never fetches weights the store already has),
 # and the bundle's folder, whose path in the pack is the path the app reads each file at. Only
 # the files bundle.json names and bundle.json itself go in, never a compile left beside them.
 manifest="$out/$name-manifest.json"
 jq -n --arg name "$name" --slurpfile b "$dest/bundle.json" '{
   assetPackID: $name,
-  downloadPolicy: { essential: { installationEventTypes: ["firstInstallation", "subsequentUpdate"] } },
+  downloadPolicy: { essential: { installationEventTypes: ["firstInstallation"] } },
   fileSelectors: ([{ file: ($name + "/bundle.json") }] + [$b[0].files[] | { file: ($name + "/" + .path) }]),
   platforms: ["iOS"]
 }' > "$manifest"

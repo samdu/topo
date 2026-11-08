@@ -48,10 +48,8 @@ fi
 # downloader fetches from the network at runtime.
 sources="$(cd "$root/Packages/PhononTTS/Sources/PhononTTS" && ls)"
 [ "$sources" = Phonon.swift ] && ok "the package carries Phonon.swift and nothing else" || fail "the package carries: $sources"
-if git -C "$root" grep -q -E 'PhononPlayer|PhononModels' -- Apps Packages; then
-  fail "PhononPlayer or PhononModels is named in the app: $(git -C "$root" grep -l -E 'PhononPlayer|PhononModels' -- Apps Packages)"
-else
-  ok "nothing in the app names PhononPlayer or PhononModels"
-fi
+# Code, not comments: the vendored file's own documentation names them.
+named="$(git -C "$root" grep -n -E 'PhononPlayer|PhononModels' -- Apps Packages | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*//' || true)"
+[ -z "$named" ] && ok "no code in the app uses PhononPlayer or PhononModels" || fail "used in the app: $named"
 
 [ "$failures" = 0 ] && echo "fetch-phonon.sh admits only its pin" || { echo "$failures failure(s)"; exit 1; }

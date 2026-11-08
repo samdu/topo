@@ -30,6 +30,7 @@ final class PhononVoiceTests: XCTestCase {
         try PhononVoiceEngine.write(temperature: 0.7, into: bundleJSON)
         let after = try JSONSerialization.jsonObject(with: Data(contentsOf: bundleJSON)) as! [String: Any]
         XCTAssertEqual((after["temperature"] as? NSNumber)?.floatValue, 0.7)
+        XCTAssertTrue(try String(contentsOf: bundleJSON, encoding: .utf8).contains("\"temperature\":0.7"), "written as the decimal it is")
         XCTAssertEqual(Set(after.keys), Set(before.keys))
         for key in before.keys where key != "temperature" {
             XCTAssertEqual(after[key] as? NSObject, before[key] as? NSObject, key)
