@@ -2750,12 +2750,18 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         self.assertIn("which is final and has passed its suites", self.texts(), "final now: said")
 
-    def test_a_final_gate_that_cannot_judge_is_said_once(self):
+    def test_a_final_gate_that_cannot_judge_is_said_once_while_it_stands_and_again_when_it_comes_back(self):
         s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
                           gate={HEAD: 0}, final={"7": 2}, worktrees="")
         self.run_pass(s)
         self.run_pass(s)
-        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1, "said once while it stands")
+        s["final"] = {"7": 1}
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1, "a judgement clears it")
+        s["final"] = {"7": 2}
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 2, "said again when it comes back")
 
     def test_a_gate_that_cannot_judge_or_slots_that_do_not_answer_are_said_once(self):
         s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
