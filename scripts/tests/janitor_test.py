@@ -1939,6 +1939,15 @@ class WholePass(unittest.TestCase):
         self.assertEqual(Bridge.received, [])
         self.assertEqual(self.said("pr:"), set())
 
+    def test_a_draft_at_the_review_cap_is_not_said_blocked(self):
+        # post_feedback's recount met the cap and held the post: no verdict this run.
+        j = jobs(test="success", codex="success", reviewer_ran="success", review_gate="failure")
+        j.append(job("post_feedback", "success", "Report Codex feedback", 9, step_conclusion="skipped"))
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET, jobs=j)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertFalse(any("the reviewer blocked" in t for t in texts), texts)
+
     def test_a_draft_the_reviewer_blocked_is_said_once_per_head(self):
         s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET,
                           jobs=jobs(test="success", codex="success", post_feedback="success",
