@@ -1206,6 +1206,9 @@ elif tool == "curl":
         out(json.dumps(S.get("slots", [])))
     if S.get("page_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
     out(json.dumps({"commit": S["published"]}))
+elif tool == "bash" and a[0].endswith("topo-final-gate.sh"):
+    code = S.get("final", {}).get(a[1], 0)
+    print({0: "final: fake", 1: "not final: fake"}.get(code, "unread: fake")); sys.exit(code)
 elif tool == "bash" and a[0].endswith("topo-suites-gate.sh"):
     code = S.get("gate", {}).get(a[2], 1)
     print({0: "green: fake", 1: "not green: fake"}.get(code, "unread: fake")); sys.exit(code)
@@ -2713,7 +2716,8 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f"topo-suites-gate.sh /r/topo {HEAD}", calls)
-        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}", self.texts())
+        self.assertIn("topo-final-gate.sh 7", calls)
+        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}, which is final", self.texts())
         n = len(Bridge.received)
         p, calls = self.run_pass(s)
         self.assertNotIn("dev build", self.texts(n))
@@ -2733,6 +2737,25 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertNotIn("topo-suites-gate", calls)
         self.assertNotIn("dev build", self.texts())
+
+    def test_a_behind_build_on_a_pr_in_review_says_nothing_and_is_judged_again(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, final={"7": 1}, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("topo-final-gate.sh 7", calls)
+        self.assertNotIn("topo-suites-gate", calls, "not final: the suites are not asked")
+        self.assertNotIn("dev build", self.texts())
+        s["final"] = {"7": 0}
+        self.run_pass(s)
+        self.assertIn("which is final and has passed its suites", self.texts(), "final now: said")
+
+    def test_a_final_gate_that_cannot_judge_is_said_once(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, final={"7": 2}, worktrees="")
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1)
 
     def test_a_gate_that_cannot_judge_or_slots_that_do_not_answer_are_said_once(self):
         s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
