@@ -92,7 +92,6 @@ Struck through: shipped, then removed, with the reason.
 3. **A reply on the screen, round two.** A code block or a table opens full screen on a tap (#179), a copy button on code (#217); a list item whose first block is a quote keeps its bullet (#183); an image re-read after a vault change does not wait behind the read in flight (#325).
 4. **The mind keeps working behind another app.**
 5. **Topo's ears and mouth take Daphne's gains.**
-    - The ear is Parakeet Ultra (`AsrModelVersion.ultra`, a pinned entry in `models.json`) in place of v2, the spotter and `Vocabulary` unchanged. On Sam's 22 bench recordings through Daphne's path it measured WER 0.027 against v2's 0.059 (samdu/daphne-assistant#205). The encoder is ~595 MB against 442 MB; first load and resident memory on a phone are unmeasured.
     - Pocket's Mimi encoder pinned `.cpuOnly` beside the decoder (`PocketTtsComputeUnits.mimiEncoder`), closing the last stage whose default can reach the GPU.
     - A reply's opening piece ends at its first comma, semicolon or dash past 30 characters, not only at a sentence end (samdu/daphne-assistant#207): on Daphne's eval the piece was ready a median 0.28 s sooner on the 9 of 45 turns it changed. Measured here with `docs/perf.md`'s marks.
 6. **P8: TestFlight, what is left.** The bundle's size; the zone mirror's cache keyed by CloudKit environment, so a TestFlight install over a debug build never offers production a development change token (#384).

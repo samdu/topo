@@ -31,7 +31,7 @@ final class ModelDownloadsTests: XCTestCase {
 
     func testTheBundledManifestNamesEveryModelWithADigestForEveryFile() throws {
         let manifest = try ModelManifest.bundled()
-        for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.pocket] {
+        for id in [ModelManifest.parakeet, ModelManifest.mini, ModelManifest.ctc, ModelManifest.pocket] {
             let model = try XCTUnwrap(manifest.model(id), id)
             XCTAssertFalse(model.files.isEmpty, id)
             XCTAssertEqual(model.revision?.count, 40, "\(id) is pinned to a commit")
@@ -96,6 +96,45 @@ final class ModelDownloadsTests: XCTestCase {
         let parakeet = try XCTUnwrap(manifest.model(ModelManifest.parakeet))
         XCTAssertTrue(parakeet.files.contains { $0.path == "Encoder.mlmodelc/weights/weight.bin" })
         XCTAssertTrue(parakeet.files.contains { $0.path == "parakeet_vocab.json" })
+    }
+
+    /// Fluid Speech Mini loads as FluidAudio's `.ultra` from its own directory, whose loader asks
+    /// for the joint as `JointDecisionv3.mlmodelc`: the manifest lays the repository's
+    /// `JointDecision.mlmodelc` there and fetches it from its own path, so a file lands where the
+    /// loader looks and its URL is one the Hub serves.
+    func testFluidSpeechMiniLandsItsJointWhereTheUltraLoaderLooks() throws {
+        let mini = try XCTUnwrap(try ModelManifest.bundled().model(ModelManifest.mini))
+        XCTAssertEqual(mini.repo, "FluidVoice-Labs/fluid-speech-mini-coreml")
+        let bundles = Set(mini.files.compactMap { $0.path.split(separator: "/").first.map(String.init) })
+        XCTAssertEqual(bundles, ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc",
+                                 "JointDecisionv3.mlmodelc", "parakeet_vocab.json"])
+        let joint = mini.files.filter { $0.path.hasPrefix("JointDecisionv3.mlmodelc/") }
+        XCTAssertFalse(joint.isEmpty)
+        for file in joint {
+            let from = try XCTUnwrap(file.from, file.path)
+            XCTAssertEqual(from, "JointDecision.mlmodelc/" + file.path.dropFirst("JointDecisionv3.mlmodelc/".count))
+            XCTAssertEqual(mini.url(for: file).absoluteString,
+                           "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/\(mini.revision!)/\(from)")
+        }
+        for file in mini.files where !file.path.hasPrefix("JointDecisionv3.mlmodelc/") {
+            XCTAssertNil(file.from, file.path)
+        }
+    }
+
+    /// The phone's manifest holds the one recogniser its OS runs: Mini on iOS 18 and later, v2
+    /// on 17, and the other's entry gone, so it is never fetched and a copy left by an earlier
+    /// OS is swept.
+    func testThePhoneKeepsTheRecogniserItsOSRuns() throws {
+        XCTAssertEqual(Recogniser.running(iOS18: true), .fluidSpeechMini)
+        XCTAssertEqual(Recogniser.running(iOS18: false), .parakeetV2)
+        XCTAssertEqual(Recogniser.current, .fluidSpeechMini, "the suite runs on an iOS 18 or later simulator")
+        XCTAssertEqual(Recogniser.unused, .parakeetV2)
+        XCTAssertEqual(Ear.models, [ModelManifest.mini, ModelManifest.ctc])
+        let bundled = try ModelManifest.bundled()
+        let kept = bundled.excluding([Recogniser.unused.id])
+        XCTAssertNil(kept.model(ModelManifest.parakeet))
+        XCTAssertNotNil(kept.model(ModelManifest.mini))
+        XCTAssertEqual(kept.models.map(\.id), bundled.models.map(\.id).filter { $0 != ModelManifest.parakeet })
     }
 
     func testAModelIsPresentOnlyWhenEveryFileIsVerified() throws {

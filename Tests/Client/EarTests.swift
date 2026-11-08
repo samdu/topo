@@ -87,7 +87,7 @@ final class EarTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()), engine: engine)
         ear.load(parakeet: URL(fileURLWithPath: "/parakeet"), ctc: URL(fileURLWithPath: "/ctc"))
         await settle { ear.state == .ready }
-        await settle { ear.trouble == nil && ear.summary == "Parakeet resident" }
+        await settle { ear.trouble == nil && ear.summary == "\(Recogniser.current.name) resident" }
         let rebuilds = await engine.rebuilds
         XCTAssertEqual(rebuilds, [[]], "the load ends in one rebuild over the list as it is")
     }
@@ -114,7 +114,7 @@ final class EarTests: XCTestCase {
         ear.load(parakeet: URL(fileURLWithPath: "/parakeet"), ctc: URL(fileURLWithPath: "/ctc"))
         await settle { ear.state == .ready && ear.trouble != nil }
         XCTAssertTrue(ear.ready)
-        XCTAssertEqual(ear.summary, "Parakeet resident; vocabulary boost unavailable: tokenizer.json not found")
+        XCTAssertEqual(ear.summary, "\(Recogniser.current.name) resident; vocabulary boost unavailable: tokenizer.json not found")
         let heard = try await ear.hear([0, 0, 0])
         XCTAssertEqual(heard, "heard")
     }

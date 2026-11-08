@@ -16,9 +16,20 @@ import FluidAudio
 /// the Hub, which is why the list is flat.
 struct ModelManifest: Codable, Sendable {
     struct File: Codable, Sendable, Equatable {
+        /// Where the file lands under the entry's directory, and the name the ledger keeps it by.
         let path: String
+        /// The file's path at its source where that is not `path`: a file the loader asks for
+        /// under another name than its repository gives it (Fluid Speech Mini's joint).
+        let from: String?
         let size: Int64
         let sha256: String
+
+        init(path: String, from: String? = nil, size: Int64, sha256: String) {
+            self.path = path
+            self.from = from
+            self.size = size
+            self.sha256 = sha256
+        }
     }
 
     struct Model: Codable, Sendable, Identifiable {
@@ -55,7 +66,8 @@ struct ModelManifest: Codable, Sendable {
         /// Where a file is fetched from: the explicit source when the entry has one, otherwise the
         /// pinned revision on the Hub, so the manifest's digest is the digest of what arrives.
         func url(for file: File) -> URL {
-            let path = file.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file.path
+            let source = file.from ?? file.path
+            let path = source.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? source
             if let url { return URL(string: url + path)! }
             return URL(string: "https://huggingface.co/\(repo ?? "")/resolve/\(revision ?? "")/\(path)")!
         }
@@ -63,9 +75,12 @@ struct ModelManifest: Codable, Sendable {
 
     let models: [Model]
 
-    /// The directory name FluidAudio derives for the repository, which its loader appends to
-    /// the parent of the directory it is given.
+    /// The ear's recogniser on iOS 17 (`Recogniser`): the directory name FluidAudio derives for
+    /// the repository, which its loader appends to the parent of the directory it is given.
     static let parakeet = "parakeet-tdt-0.6b-v2"
+    /// The ear's recogniser on iOS 18 and later (`Recogniser`), loaded from exactly this
+    /// directory, so the name is the repository's.
+    static let mini = "fluid-speech-mini-coreml"
     static let ctc = "parakeet-ctc-110m-coreml"
     /// Silero's voice activity detector, which ends an utterance behind the lock (`Endpoint`).
     static let vad = "silero-vad-coreml"
@@ -100,6 +115,13 @@ struct ModelManifest: Codable, Sendable {
     }
 
     func model(_ id: String) -> Model? { models.first { $0.id == id } }
+
+    /// The manifest as this phone keeps it: without the recogniser its OS does not run
+    /// (`Recogniser.unused`), so that entry is never fetched and the sweep removes a copy an
+    /// earlier OS downloaded.
+    func excluding(_ ids: Set<String>) -> ModelManifest {
+        ModelManifest(models: models.filter { !ids.contains($0.id) })
+    }
 }
 
 enum ModelStoreError: LocalizedError {
@@ -353,7 +375,8 @@ final class ModelDownloads {
     }
 
     private convenience init() {
-        self.init(store: .standard(), manifest: Result { try ModelManifest.bundled() }, configuration: Self.configuration())
+        self.init(store: .standard(), manifest: Result { try ModelManifest.bundled().excluding([Recogniser.unused.id]) },
+                  configuration: Self.configuration())
     }
 
     /// The app's is `shared`, over the background session; a test's is over an ephemeral one

@@ -432,9 +432,10 @@ extension DebugRun {
     /// how a test has something heard without a recogniser. `TOPO_DEBUG_EAR=loading` is one
     /// whose load never finishes, so every press is refused with the ear's reason, however fast
     /// the real models would have downloaded. `TOPO_DEBUG_EAR=` an
-    /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
-    /// real ear, loaded from there instead of the app's own download, which is how the UI test
-    /// gets Parakeet resident in a simulator without the background download. Any other launch
+    /// absolute directory holding this OS's recogniser (`Recogniser.current.id`) and
+    /// `parakeet-ctc-110m-coreml` is the real ear, loaded from there instead of the app's own
+    /// download, which is how the UI test gets the recogniser resident in a simulator without the
+    /// background download. Any other launch
     /// gets the real ear, prepared as usual.
     @MainActor
     static func ear(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Ear {
@@ -455,9 +456,9 @@ extension DebugRun {
         }
         let root = URL(fileURLWithPath: choice, isDirectory: true)
         let ear = Ear()
-        ear.load(parakeet: root.appendingPathComponent(ModelManifest.parakeet, isDirectory: true),
+        ear.load(parakeet: root.appendingPathComponent(Recogniser.current.id, isDirectory: true),
                  ctc: root.appendingPathComponent(ModelManifest.ctc, isDirectory: true))
-        say("ear: Parakeet from \(root.path)")
+        say("ear: \(Recogniser.current.name) from \(root.path)")
         return ear
     }
 

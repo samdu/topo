@@ -113,6 +113,123 @@
       ]
     },
     {
+      "id": "fluid-speech-mini-coreml",
+      "repo": "FluidVoice-Labs/fluid-speech-mini-coreml",
+      "revision": "d81c3160dfe5a5e1f8f7267164a07d30617a3a1a",
+      "files": [
+        {
+          "path": "Preprocessor.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "c9beeb989c8d66f8be11df59bc6df277ec76cee404f6865b46243835ef562f6d"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/coremldata.bin",
+          "size": 486,
+          "sha256": "dbde3f2300842c1fd51ef3ff948a0bcffe65ffd2dca10707f2509f32c1d65b1d"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/metadata.json",
+          "size": 2841,
+          "sha256": "2a98699e22d279dd37fa1d238aeb1c6db1df0d6fad687775324157689d8f3acf"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/model.mil",
+          "size": 28181,
+          "sha256": "4b8518a956450fec57f06c2a21bdffc26973f7f1fa6842fb38fe917f896b6b93"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/weights/weight.bin",
+          "size": 491072,
+          "sha256": "129b76e3aeafa8afa3ea76d995b964b145fe83700d579f6ff42c4c38fa0968ea"
+        },
+        {
+          "path": "Encoder.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "3a3caa2c6aec983d94a5659eff09a00f77077147ea6726b8ddfdf022f0238ce9"
+        },
+        {
+          "path": "Encoder.mlmodelc/coremldata.bin",
+          "size": 427,
+          "sha256": "494d8e2ce30b37bcdf494b3ba7ddf6e1bc921b9a59e369a9efd44d013ca3bf7d"
+        },
+        {
+          "path": "Encoder.mlmodelc/metadata.json",
+          "size": 2906,
+          "sha256": "1a2229e2cc4c271e4876715c9e36aef18bc7287e35690022c7f3939d85260ea9"
+        },
+        {
+          "path": "Encoder.mlmodelc/model.mil",
+          "size": 712643,
+          "sha256": "f96b7707936ea7ce5517c5b0f5c15cc634006bc58af1fe2587ac5979dd180343"
+        },
+        {
+          "path": "Encoder.mlmodelc/weights/weight.bin",
+          "size": 233096704,
+          "sha256": "cf0b61022de8c698984a8c7185c2d093fa744694621881ff062c46fee2546131"
+        },
+        {
+          "path": "Decoder.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "d4beee43a6eab29b2adcc298f2e8582e8fb79d5fe3aa9f1ab692ade681ca369d"
+        },
+        {
+          "path": "Decoder.mlmodelc/coremldata.bin",
+          "size": 491,
+          "sha256": "6094d06d05c1ca4599c7b13c9a4ca7c00826ee2396796cf3084ce602a9884468"
+        },
+        {
+          "path": "Decoder.mlmodelc/metadata.json",
+          "size": 3373,
+          "sha256": "13fcb358af8b028703dc7f424fd149ce9524642de510f3d682b75d471b1a001d"
+        },
+        {
+          "path": "Decoder.mlmodelc/model.mil",
+          "size": 13411,
+          "sha256": "4ccd8ecbc7eb59bed7ad38d471bf6b78ef52a24500bf64619c549ed45fbee4e9"
+        },
+        {
+          "path": "Decoder.mlmodelc/weights/weight.bin",
+          "size": 11845120,
+          "sha256": "d173e381488d07fd7648e2ccecbfb1bceff0457d75461550b26ba7fa2d23309a"
+        },
+        {
+          "path": "JointDecisionv3.mlmodelc/analytics/coremldata.bin",
+          "from": "JointDecision.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "9e767d69e1092b27b28d9f236b9cbcded58ff3891e320cba7855e2c24e803d69"
+        },
+        {
+          "path": "JointDecisionv3.mlmodelc/coremldata.bin",
+          "from": "JointDecision.mlmodelc/coremldata.bin",
+          "size": 462,
+          "sha256": "284b235c08cd4769202af017f854deace69c0209c29f2253a2073bb68d58d38d"
+        },
+        {
+          "path": "JointDecisionv3.mlmodelc/metadata.json",
+          "from": "JointDecision.mlmodelc/metadata.json",
+          "size": 2790,
+          "sha256": "fe1ce083f9ff57524926a92fc264b0cf7d88f3ba9852f7acf9f59dcdf427e01f"
+        },
+        {
+          "path": "JointDecisionv3.mlmodelc/model.mil",
+          "from": "JointDecision.mlmodelc/model.mil",
+          "size": 7547,
+          "sha256": "1109ce72f6d014a6b99e49b41e83b3082d7555d74a6275838e7cbea42a6bd0ee"
+        },
+        {
+          "path": "JointDecisionv3.mlmodelc/weights/weight.bin",
+          "from": "JointDecision.mlmodelc/weights/weight.bin",
+          "size": 6350284,
+          "sha256": "f991f65979c1b3fee3db39a645aa87e6bef1a304ed1816d074b17479bea797fc"
+        },
+        {
+          "path": "parakeet_vocab.json",
+          "size": 151122,
+          "sha256": "7ec60e05f1b24480736ec0eed40900f4626bce1fa9a60fd700ec7e2a59198735"
+        }
+      ]
+    },
+    {
       "id": "parakeet-ctc-110m-coreml",
       "repo": "FluidInference/parakeet-ctc-110m-coreml",
       "revision": "accdafd8cf8a2ff1cabe3c11e54416b405d409aa",

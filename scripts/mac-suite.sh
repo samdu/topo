@@ -12,7 +12,7 @@
 #              and the userland package's two bundles, against the pinned rootfs, bash and
 #              Claude Code.
 #   topo_ui    TopoUITests behind the input-capable audio lane (scripts/ci-audio-lane.sh). The
-#              full lane adds Parakeet's models and the test in which the real ear hears the
+#              full lane adds the ear's models and the test in which the real ear hears the
 #              fixture; the fast lane deselects that test by name, so it neither runs nor skips.
 #              It has two parts, each a suite by its own name with its own line in suites.txt
 #              and its own result bundle: `topo_ui:quiet`, every UI test class but
@@ -529,7 +529,7 @@ quiet_launches() {
 # quiet_models <udid> — the proof the quiet part fetched no model: the app's data container on
 # that simulator, read after the part's tests and before the run deletes the simulator, holds no
 # file under the ear's or the voice's homes (`ModelStore.directory(for:)`, in Application
-# Support: `Models/parakeet-tdt-0.6b-v2`, the voice's `Models/pocket-tts`, FluidAudio's own
+# Support: `Models/fluid-speech-mini-coreml` and `Models/parakeet-tdt-0.6b-v2`, the voice's `Models/pocket-tts`, FluidAudio's own
 # `FluidAudio/Models` where the spotter lives, and `Models/pocket-tts-coreml` and
 # `Models/parakeet-ctc-110m-coreml`, where a set made before its home sits until `rehome`
 # moves it). The rest of `Models/` is the guest's (its rootfs, bash, Claude Code), which the
@@ -541,7 +541,7 @@ quiet_models() {
   local container home at part parts files found="" unread="" status=0
   container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
     || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
-  for home in Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Models/pocket-tts Models/pocket-tts-coreml FluidAudio/Models; do
+  for home in Models/fluid-speech-mini-coreml Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Models/pocket-tts Models/pocket-tts-coreml FluidAudio/Models; do
     # Down to the home a folder at a time: a folder that cannot be listed or entered is unread,
     # and only a name missing from one that can be is no home.
     IFS=/ read -ra parts <<<"Library/Application Support/$home"
@@ -628,7 +628,7 @@ suite_topo_ui() {
     new_simulator ui "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
     xcrun simctl boot "$udid" || return 1
 
-    # Parakeet's models, fetched from the manifest's pinned revisions and verified file by
+    # The ear's models, fetched from the manifest's pinned revisions and verified file by
     # file. The full lane only.
     if [ "$lane" = full ] && [ "$part" != quiet ]; then
       say "The ear's models for the microphone test"

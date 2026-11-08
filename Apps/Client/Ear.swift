@@ -6,22 +6,23 @@ import Observation
 import FluidAudio
 #endif
 
-/// Speech to text on this phone: Parakeet-tdt-0.6b-v2 through FluidAudio, rescored against the
+/// Speech to text on this phone: a Parakeet-family recogniser through FluidAudio (`Recogniser`:
+/// Fluid Speech Mini on iOS 18 and later, Parakeet-tdt-0.6b-v2 on iOS 17), rescored against the
 /// person's own `Vocabulary`, the words the recogniser breaks on. The microphone's audio never
-/// leaves the device. The measured reason (Daphne's stt-tune sweep over Sam's own recordings):
-/// WER 0.058 against 0.186 for the server recogniser, eighteen of twenty vocabulary words
-/// recognised against two, no invented jargon in ordinary speech, and the transcript in about
-/// 0.3s with no network in the loop.
+/// leaves the device. The measured reason for an on-device ear (Daphne's stt-tune sweep over
+/// Sam's own recordings, on v2): WER 0.058 against 0.186 for the server recogniser, eighteen of
+/// twenty vocabulary words recognised against two, no invented jargon in ordinary speech, and
+/// the transcript in about 0.3s with no network in the loop.
 ///
 /// The models are not in the bundle. `ModelDownloads` fetches them through the app's background
-/// session (about 540 MB of CoreML: 442 MB for Parakeet, 98 MB for the CTC spotter, listed
-/// file by file in the manifest) into the app's Application Support, and FluidAudio loads them
+/// session (CoreML listed file by file in the manifest: 253 MB for Mini or 464 MB for v2, and
+/// 103 MB for the CTC spotter) into the app's Application Support, and FluidAudio loads them
 /// from there, told to touch no network of its own. Until they are resident, or if they fail to
 /// load, `VoiceInput` refuses a press with `summary`: this is the phone's one ear.
 ///
-/// The vocabulary is a layer over that, not a condition of it. Parakeet recognising bare is
-/// still the ear, so a boosting session that cannot be built (and none is built for an empty
-/// list) leaves the ear ready and says so in `summary`.
+/// The vocabulary is a layer over that, not a condition of it. The recogniser bare is still the
+/// ear, so a boosting session that cannot be built (and none is built for an empty list) leaves
+/// the ear ready and says so in `summary`.
 ///
 /// Published state lives on the main actor; recognition itself runs in `EarEngine`, an actor,
 /// because a CoreML decode on the main thread is a visible freeze.
@@ -40,13 +41,13 @@ final class Ear {
     /// Where the load has got to: a state that says only that it is preparing for a minute reads as hung.
     private(set) var progress = ""
 
-    /// The manifest entries the ear needs on disk.
-    static let models = [ModelManifest.parakeet, ModelManifest.ctc]
+    /// The manifest entries the ear needs on disk: this OS's recogniser and the spotter.
+    static let models = [Recogniser.current.id, ModelManifest.ctc]
 
     /// What `loading` reads as: the step a first load after an install spends its time in.
     static let preparing = "preparing the models for this phone"
 
-    /// Parakeet eats 16 kHz mono, so the microphone is converted to that and nothing else.
+    /// The recogniser eats 16 kHz mono, so the microphone is converted to that and nothing else.
     nonisolated static let rate = 16000
 
     /// The words the recogniser is rescored towards, canonical spellings only, the person's to
@@ -60,10 +61,11 @@ final class Ear {
     /// word. The rescorer's other knobs stay stock because past this gate they measurably do
     /// nothing, except the one FluidAudio added since the sweep and turned on by default: the
     /// confident-word bias gate (`confidentWordBiasGate`), which takes the context bonus off a
-    /// term where Parakeet heard every word at 0.99 or better and the term is under 0.80
+    /// term where the recogniser heard every word at 0.99 or better and the term is under 0.80
     /// similar, so fewer replacements happen. It is off here (`VocabularyRescorer.Config` at
     /// the session), because the sweep measured the rescorer without it and nothing has
-    /// measured it since. A term shorter than `minTermLength` is ignored by the rescorer, so
+    /// measured it since. Over Fluid Speech Mini the same gate measured WER 0.050 boosted against
+    /// 0.126 bare on Sam's twenty scripted lines (v2: 0.059 against 0.144). A term shorter than `minTermLength` is ignored by the rescorer, so
     /// the store refuses one.
     nonisolated static let minSimilarity: Float = 0.65
     nonisolated static let minTermLength = 3
@@ -96,7 +98,9 @@ final class Ear {
         case .cold: return "not loaded"
         case .fetching: return ModelDownloads.shared.describe(Self.models)
         case .loading: return progress.isEmpty ? Self.preparing : "\(Self.preparing): \(progress)"
-        case .ready: return trouble.map { "Parakeet resident; vocabulary boost unavailable: \($0)" } ?? "Parakeet resident"
+        case .ready:
+            let resident = "\(Recogniser.current.name) resident"
+            return trouble.map { "\(resident); vocabulary boost unavailable: \($0)" } ?? resident
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
@@ -116,7 +120,7 @@ final class Ear {
         downloads.whenPresent(Self.models) { [weak self] in
             guard let self, self.state == .fetching else { return }
             do {
-                self.load(parakeet: try downloads.directory(for: ModelManifest.parakeet),
+                self.load(parakeet: try downloads.directory(for: Recogniser.current.id),
                           ctc: try downloads.directory(for: ModelManifest.ctc))
             } catch {
                 self.state = .failed
@@ -184,9 +188,50 @@ final class Ear {
     }
 }
 
+/// The recogniser the ear runs, chosen by the OS. Fluid Speech Mini wherever it can load: iOS 18
+/// and later, since its encoder uses iOS 18 Core ML ops. FluidAudio would not stop it loading on
+/// 17 (it loads as `.ultra`, which FluidAudio's platform check passes), so this choice is the one
+/// guard. Parakeet v2 on iOS 17, where the kitchenPad (an A10X, with no Neural Engine) stays.
+///
+/// Mini over v2, measured on Sam's twenty scripted lines (FluidAudio 0.18.2, the vocabulary
+/// boost as `Ear` builds it): WER 0.126 bare and 0.050 boosted against v2's 0.144 and 0.059; with
+/// a second speaker 6 dB under Sam, 0.383 and 0.333 against 0.977 boosted for v2, which
+/// transcribes the other speaker. Half the download, at about the same Neural Engine speed.
+enum Recogniser: Equatable, Sendable {
+    case parakeetV2
+    case fluidSpeechMini
+
+    static var current: Recogniser {
+        if #available(iOS 18, *) { return running(iOS18: true) }
+        return running(iOS18: false)
+    }
+
+    /// The one this OS does not run, which the phone's manifest leaves out.
+    static var unused: Recogniser { current == .fluidSpeechMini ? .parakeetV2 : .fluidSpeechMini }
+
+    static func running(iOS18: Bool) -> Recogniser { iOS18 ? .fluidSpeechMini : .parakeetV2 }
+
+    /// Its manifest entry, which is the directory it is loaded from.
+    var id: String {
+        switch self {
+        case .parakeetV2: return ModelManifest.parakeet
+        case .fluidSpeechMini: return ModelManifest.mini
+        }
+    }
+
+    /// What `summary` and the progress lines call it.
+    var name: String {
+        switch self {
+        case .parakeetV2: return "Parakeet"
+        case .fluidSpeechMini: return "Fluid Speech Mini"
+        }
+    }
+}
+
 /// The engine as the ear drives it: `EarEngine` in the app, a double in the tests.
 protocol SpeechEngine: Sendable {
-    /// The models from disk. Throws when they cannot be loaded, which fails the ear.
+    /// The models from disk, `parakeet` being the recogniser's directory. Throws when they cannot
+    /// be loaded, which fails the ear.
     func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws
     /// The boosting session around `terms`, or none for an empty list. Throws when the session
     /// cannot be built, which leaves the ear ready without it.
@@ -297,7 +342,7 @@ final class SampleSink: @unchecked Sendable {
 }
 
 #if canImport(FluidAudio)
-/// Parakeet's per-token timings, which the rescore step lines the spotter's evidence up
+/// The recogniser's per-token timings, which the rescore step lines the spotter's evidence up
 /// against. Named here so a `Boost` outside this file needs no FluidAudio of its own.
 typealias EarTimings = [TokenTiming]
 
@@ -313,15 +358,24 @@ extension VocabularyBoostingSession: Boost {
     }
 }
 
-/// Everything FluidAudio, one instance for the process. Parakeet and the CTC spotter are about
-/// 120 MB resident together, and an actor because `transcribe` is a synchronous CoreML forward
-/// pass.
+/// Everything FluidAudio, one instance for the process, and an actor because `transcribe` is a
+/// synchronous CoreML forward pass. The weights the Neural Engine runs live outside the process;
+/// on a Mac the process's own footprint measured about 65 MB loaded and 96 MB at its peak for
+/// Mini, about 30 and 58 for v2.
 actor EarEngine: SpeechEngine {
     static let shared = EarEngine()
 
-    /// v2 explicitly: `AsrModels` defaults to v3, and the multilingual model is a different
-    /// recogniser from the one every number was measured on.
-    static let version: AsrModelVersion = .v2
+    /// The FluidAudio version the recogniser loads as, named explicitly because `AsrModels`
+    /// defaults to v3, a different recogniser from either measured here. Mini is `.ultra`: its
+    /// decoder and joint are Parakeet Ultra's, so Ultra's decode contract is Mini's, and FluidAudio
+    /// has no case of its own for it. Mini's joint has no top-K outputs, which FluidAudio reads
+    /// only for a transcribe given a `language:`, and the ear gives none.
+    static var version: AsrModelVersion {
+        switch Recogniser.current {
+        case .parakeetV2: return .v2
+        case .fluidSpeechMini: return .ultra
+        }
+    }
 
     /// The session around a list: FluidAudio's, over the resident spotter, or nil for a list
     /// with nothing in it the spotter could look for.
@@ -344,18 +398,28 @@ actor EarEngine: SpeechEngine {
     var boosted: Bool { boost != nil }
 
     /// Load from disk, the acoustic model then the spotter. `parakeet` is the directory the
-    /// manifest's Parakeet entry fills (named as FluidAudio's loader expects, since it appends
-    /// that name to the parent it is given) and `ctc` the spotter's, which is also where
-    /// FluidAudio's boosting session will read the tokenizer from (`ModelStore.homes`). The
-    /// list is `rebuild`'s.
+    /// manifest's entry for this OS's recogniser fills, and `ctc` the spotter's, which is also
+    /// where FluidAudio's boosting session will read the tokenizer from (`ModelStore.homes`).
+    /// v2 goes through `AsrModels.load`, whose directory is named as that loader expects, since it
+    /// appends the name to the parent it is given; Mini through `loadLocal`, which reads exactly
+    /// the directory it is given and asks for the joint as `JointDecisionv3.mlmodelc`, the name
+    /// the manifest lays it under. The list is `rebuild`'s.
     func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
         if asr != nil && builder != nil { return }
         // Every file is the manifest's and verified; a load that fails is reported, and never
         // answered by FluidAudio deleting the directory and fetching afresh over a session of
         // its own.
         ModelHub.offlineMode = true
-        let models = try await AsrModels.load(from: parakeet, version: Self.version) { p in
-            if case .compiling(let name) = p.phase { onProgress("Parakeet: compiling \(name)") }
+        let recogniser = Recogniser.current
+        let models: AsrModels
+        switch recogniser {
+        case .parakeetV2:
+            models = try await AsrModels.load(from: parakeet, version: Self.version) { p in
+                if case .compiling(let name) = p.phase { onProgress("\(recogniser.name): compiling \(name)") }
+            }
+        case .fluidSpeechMini:
+            onProgress("\(recogniser.name): compiling")
+            models = try AsrModels.loadLocal(from: parakeet, version: Self.version)
         }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
@@ -399,7 +463,7 @@ actor EarEngine: SpeechEngine {
     /// is its own utterance, and LSTM state carried across them would let one borrow context
     /// no real utterance gets.
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {
-        guard let asr else { throw EarError.unavailable("Parakeet is not loaded") }
+        guard let asr else { throw EarError.unavailable("\(Recogniser.current.name) is not loaded") }
         let layers = await asr.decoderLayerCount
         var state = TdtDecoderState.make(decoderLayers: layers)
         let result = try await asr.transcribe(samples, decoderState: &state)

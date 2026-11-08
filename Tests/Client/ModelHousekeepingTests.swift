@@ -56,6 +56,26 @@ final class ModelHousekeepingTests: XCTestCase {
                        [ModelManifest.parakeet, home.lastPathComponent], "only the two homes under Models/ remain")
     }
 
+    /// A phone that moved from iOS 17 to 18 has v2 on disk and Mini wanted: the phone's manifest
+    /// leaves v2 out (`Recogniser.unused`), so its whole directory goes, while Mini's set, its
+    /// joint under the name the loader reads (`JointDecisionv3.mlmodelc`), stays.
+    func testAnUpgradedPhoneSweepsTheRecogniserItNoLongerRuns() throws {
+        let (store, laidOut) = try realStore()
+        let v2 = try XCTUnwrap(laidOut.model(ModelManifest.parakeet))
+        let mini = try filled(store, id: ModelManifest.mini, files: [
+            "Encoder.mlmodelc/weights/weight.bin": "mini encoder",
+            "JointDecisionv3.mlmodelc/coremldata.bin": "mini joint",
+            "parakeet_vocab.json": "vocabulary",
+        ])
+        let manifest = ModelManifest(models: laidOut.models + [mini]).excluding([ModelManifest.parakeet])
+
+        store.sweep(manifest)
+
+        XCTAssertFalse(exists(store.directory(for: v2)), "v2's directory is gone whole")
+        for file in mini.files { XCTAssertTrue(exists(store.location(of: file, in: mini)), file.path) }
+        XCTAssertTrue(store.isPresent(mini))
+    }
+
     /// The guest's rootfs on the phone as it is laid out: the tarball in its manifest home under
     /// `Models/`, and the fakefs made from it beside `Models/`, never inside it, since everything
     /// under `Models/` that is not a manifest home or a manifest file goes.

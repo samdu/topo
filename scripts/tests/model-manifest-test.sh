@@ -2,7 +2,9 @@
 # Holds scripts/model-manifest.sh's dependency check for the guest's Alpine packages against small
 # hand-written indexes, offline (`--closure`): a set is closed only when every dependency is
 # provided at a version that meets its constraint, and a failure names the package and the
-# requirement.
+# requirement. And its file selectors against a hand-written tree listing, offline (`--select`):
+# a prefix picks the files beneath it and no directory entry, an exact path only itself, and a
+# renamed selector keeps the Hub path beside the local one.
 #
 #   scripts/tests/model-manifest-test.sh
 set -uo pipefail
@@ -92,6 +94,38 @@ case_ nothing-provides-it              fail "$base so:libfoo.so.1" "$nc" "nothin
 case_ readline-left-out                fail "$base" "$nc" "bash requires so:libreadline.so.8" \
                                             bash-5.2.37-r0 libncursesw-6.5_p20250503-r0 ncurses-terminfo-base-6.5_p20250503-r0
 case_ a-conflict-is-not-a-need         pass "$base !bash-completion" "$nc" ""
+
+cat > "$work/tree.json" <<'TREE'
+[{"type":"directory","path":"JointDecision.mlmodelc"},
+ {"type":"file","path":"JointDecision.mlmodelc/coremldata.bin"},
+ {"type":"file","path":"JointDecision.mlmodelc/weights/weight.bin"},
+ {"type":"file","path":"JointDecisionv2.mlmodelc/coremldata.bin"},
+ {"type":"file","path":"parakeet_vocab.json"},
+ {"type":"file","path":"parakeet_v3_vocab.json"}]
+TREE
+
+# select <name> <selector> <expected lines, one per argument...>
+select_() {
+  local name="$1" selector="$2"; shift 2
+  local want got
+  want="$(printf '%s\n' "$@")"
+  got="$("$script" --select "$selector" < "$work/tree.json" 2>&1)"
+  if [ "$got" != "$want" ]; then
+    echo "FAIL $name: wanted"; printf '%s\n' "$want" | sed 's/^/    | /'; echo "  got"; printf '%s\n' "$got" | sed 's/^/    | /'
+    failures=$((failures + 1))
+  else
+    echo "ok   $name"
+  fi
+}
+
+select_ a-prefix-is-the-files-beneath-it JointDecision.mlmodelc/ \
+  "JointDecision.mlmodelc/coremldata.bin|JointDecision.mlmodelc/coremldata.bin" \
+  "JointDecision.mlmodelc/weights/weight.bin|JointDecision.mlmodelc/weights/weight.bin"
+select_ an-exact-path-is-itself parakeet_vocab.json "parakeet_vocab.json|parakeet_vocab.json"
+select_ a-renamed-prefix-keeps-the-hub-path JointDecision.mlmodelc/=JointDecisionv3.mlmodelc/ \
+  "JointDecision.mlmodelc/coremldata.bin|JointDecisionv3.mlmodelc/coremldata.bin" \
+  "JointDecision.mlmodelc/weights/weight.bin|JointDecisionv3.mlmodelc/weights/weight.bin"
+select_ a-renamed-path parakeet_v3_vocab.json=vocab.json "parakeet_v3_vocab.json|vocab.json"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"

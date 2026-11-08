@@ -13,6 +13,8 @@
 #   scripts/model-manifest.sh --check    # regenerate to a temp file and diff against the committed one
 #   scripts/model-manifest.sh --closure <APKINDEX> <installed db> <name-version>...
 #                                        # only the packages' dependency check, offline, on those files
+#   scripts/model-manifest.sh --select <selector> < <tree.json>
+#                                        # only the files one selector picks from a tree listing, offline
 #
 # A `.mlmodelc` bundle is a directory of several files on the Hub, so a model's entry is the
 # flattened file list; the tree API is asked recursively and paged through its `link` header,
@@ -111,6 +113,22 @@ closed() {
   rm -f "$table" "$reqs"
 }
 
+# The files one selector picks from a tree listing on stdin, one `<hub path>|<local path>` a line:
+# a selector ending in / is a directory prefix, any other an exact path, and `<hub>=<local>` lays
+# what `<hub>` picks under `<local>` in its place.
+selected() {
+  local hub="${1%%=*}" local_name="${1#*=}"
+  jq -r --arg p "$hub" --arg l "$local_name" '.[] | select(.type=="file")
+    | select(if ($p|endswith("/")) then (.path|startswith($p)) else .path == $p end)
+    | "\(.path)|\($l + .path[($p|length):])"'
+}
+
+if [ "${1:-}" = "--select" ]; then
+  [ $# -eq 2 ] || { echo "usage: $0 --select <selector> < <tree.json>" >&2; exit 2; }
+  selected "$2"
+  exit 0
+fi
+
 if [ "${1:-}" = "--closure" ]; then
   [ $# -ge 4 ] || { echo "usage: $0 --closure <APKINDEX> <installed db> <name-version>..." >&2; exit 2; }
   work="$(mktemp -d)"
@@ -122,16 +140,23 @@ if [ "${1:-}" = "--closure" ]; then
   exit 0
 fi
 
-# id | repo | revision | file selectors (a path, or a directory prefix ending in /)
+# id | repo | revision | file selectors (a path, or a directory prefix ending in /; either as
+# <hub>=<local>, a file or a prefix renamed on the phone)
 #
 # The paths are repository-relative and the app lays them out under the entry's directory
-# exactly as they are here, because that is what each library's loader reads.
+# exactly as they are here, because that is what each library's loader reads. A renamed file's
+# entry carries its Hub path as `from`, which is what the app fetches; `path` is where it lands.
 #
-# Parakeet: the four bundles FluidAudio's v2 loader asks for and the vocabulary beside them,
-# under the directory name FluidAudio derives for the repository (its loader appends that to
-# the parent of the directory it is given); the repo's other bundles are older conversions the
-# loader never reads. The CTC spotter: its two bundles, the vocabulary CtcModels reads and the
-# tokenizer CtcTokenizer reads.
+# Parakeet v2, the ear on iOS 17: the four bundles FluidAudio's v2 loader asks for and the
+# vocabulary beside them, under the directory name FluidAudio derives for the repository (its
+# loader appends that to the parent of the directory it is given); the repo's other bundles are
+# older conversions the loader never reads. Fluid Speech Mini, the ear on iOS 18 and later (its
+# encoder uses iOS 18 Core ML ops): the same four bundles and vocabulary, loaded from its own
+# directory as FluidAudio's `.ultra` (`AsrModels.loadLocal`), since its decoder and joint are
+# Parakeet Ultra's; that loader asks for the joint as `JointDecisionv3.mlmodelc`, which the
+# repository names `JointDecision.mlmodelc`, so the joint is renamed. The repository's
+# `parakeet_v3_vocab.json` is the same file as `parakeet_vocab.json` and is not fetched. The CTC
+# spotter: its two bundles, the vocabulary CtcModels reads and the tokenizer CtcTokenizer reads.
 #
 # Pocket TTS: Topo's own pack of Kyutai's `english_2026-04` weights, which is
 # FluidInference's English v2.1 pack with its flow decoder replaced by one converted at one
@@ -148,6 +173,7 @@ fi
 # the phone compiles once it has it (`Apps/Client/SmartTurn.swift`).
 models="
 parakeet-tdt-0.6b-v2|FluidInference/parakeet-tdt-0.6b-v2-coreml|ee09c569f73759e6d44c9bd16766f477b2b36d39|Preprocessor.mlmodelc/ Encoder.mlmodelc/ Decoder.mlmodelc/ JointDecision.mlmodelc/ parakeet_vocab.json
+fluid-speech-mini-coreml|FluidVoice-Labs/fluid-speech-mini-coreml|d81c3160dfe5a5e1f8f7267164a07d30617a3a1a|Preprocessor.mlmodelc/ Encoder.mlmodelc/ Decoder.mlmodelc/ JointDecision.mlmodelc/=JointDecisionv3.mlmodelc/ parakeet_vocab.json
 parakeet-ctc-110m-coreml|FluidInference/parakeet-ctc-110m-coreml|accdafd8cf8a2ff1cabe3c11e54416b405d409aa|MelSpectrogram.mlmodelc/ AudioEncoder.mlmodelc/ vocab.json tokenizer.json
 pocket-tts-coreml|samthehugenerd/Marius-Topo|0e896ab51092ac9ec3525688ee4918757e893983|v2.1/english/cond_prefill_ane.mlmodelc/ v2.1/english/flowlm_step_ane.mlmodelc/ v2.1/english/flow_decoder_fused.mlmodelc/ v2.1/english/mimi_decoder.mlmodelc/ v2.1/english/constants_bin/bos_emb.bin v2.1/english/constants_bin/bos_before_voice.bin v2.1/english/constants_bin/text_embed_table.bin v2.1/english/constants_bin/tokenizer.model v2.1/english/constants_bin/marius.safetensors
 silero-vad-coreml|FluidInference/silero-vad-coreml|b419383c55c110e2c9271fa6ee0ea83d03c70d96|silero-vad-unified-256ms-v6.2.1.mlmodelc/
@@ -213,21 +239,19 @@ while IFS='|' read -r id repo revision selectors; do
     next="$(sed -n 's/^[Ll]ink: <\(.*\)>; rel="next".*/\1/p' "$tmp/headers" | tr -d '\r')"
   done
   jq -s 'add' "$tmp/pages.json" > "$tree"
+  # Each file as `<hub path>|<local path>`.
   files=()
-  for selector in $selectors; do
-    if [[ "$selector" == */ ]]; then
-      matched=()
-      while IFS= read -r path; do matched+=("$path"); done < <(jq -r --arg p "$selector" '.[] | select(.type=="file" and (.path|startswith($p))) | .path' "$tree")
-    else
-      matched=()
-      while IFS= read -r path; do matched+=("$path"); done < <(jq -r --arg p "$selector" '.[] | select(.type=="file" and .path==$p) | .path' "$tree")
-    fi
-    [ "${#matched[@]}" -gt 0 ] || { echo "nothing in $repo matches $selector" >&2; exit 1; }
+  for spec in $selectors; do
+    matched=()
+    while IFS= read -r pair; do matched+=("$pair"); done < <(selected "$spec" < "$tree")
+    [ "${#matched[@]}" -gt 0 ] || { echo "nothing in $repo matches ${spec%%=*}" >&2; exit 1; }
     files+=("${matched[@]}")
   done
   entry_files=()
   total=0
-  for path in "${files[@]}"; do
+  for pair in "${files[@]}"; do
+    path="${pair%%|*}"
+    local_path="${pair#*|}"
     size="$(jq -r --arg p "$path" '.[] | select(.path==$p) | .size' "$tree")"
     local_file="$cache/$repo/$revision/$path"
     if [ ! -f "$local_file" ] || [ "$(stat -f %z "$local_file")" != "$size" ]; then
@@ -237,7 +261,8 @@ while IFS='|' read -r id repo revision selectors; do
       [ "$(stat -f %z "$local_file")" = "$size" ] || { echo "$path: got $(stat -f %z "$local_file") bytes, tree says $size" >&2; exit 1; }
     fi
     digest="$(shasum -a 256 "$local_file" | cut -d' ' -f1)"
-    entry_files+=("$(jq -cn --arg p "$path" --argjson s "$size" --arg d "$digest" '{path:$p,size:$s,sha256:$d}')")
+    entry_files+=("$(jq -cn --arg p "$local_path" --arg f "$path" --argjson s "$size" --arg d "$digest" \
+      '{path:$p} + (if $f == $p then {} else {from:$f} end) + {size:$s,sha256:$d}')")
     total=$((total + size))
   done
   echo "   $id: ${#files[@]} files, $total bytes ($((total / 1048576)) MiB)" >&2

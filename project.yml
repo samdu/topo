@@ -44,8 +44,9 @@ packages:
   # engine from samdu/experiments (topo-mascot-swift at 91139e8), unchanged. The iOS app only.
   TopoMascot:
     path: Packages/TopoMascot
-  # The phone's ear and its voice: NVIDIA Parakeet as CoreML with its CTC keyword spotter for
-  # the vocabulary rescoring (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
+  # The phone's ear and its voice: Fluid Speech Mini (iOS 18+) or NVIDIA Parakeet v2 (iOS 17)
+  # as CoreML with Parakeet's CTC keyword spotter for the vocabulary rescoring
+  # (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
   # (Apps/Client/Voice.swift). Pinned exactly: neither the vocabulary-boosting API the ear
   # drives by hand (VocabularyBoostingSession) nor the per-stage compute units the voice sets
   # (PocketTtsComputeUnits) is the version-stable part of the package, and a floating minor
