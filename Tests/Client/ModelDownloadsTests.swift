@@ -124,6 +124,7 @@ final class ModelDownloadsTests: XCTestCase {
     /// The phone's manifest holds the one recogniser its OS runs: Mini on iOS 18 and later, v2
     /// on 17, and the other's entry gone, so it is never fetched and a copy left by an earlier
     /// OS is swept.
+    @MainActor
     func testThePhoneKeepsTheRecogniserItsOSRuns() throws {
         XCTAssertEqual(Recogniser.running(iOS18: true), .fluidSpeechMini)
         XCTAssertEqual(Recogniser.running(iOS18: false), .parakeetV2)
