@@ -108,10 +108,10 @@ final class VoiceToolTests: XCTestCase {
 
     func testAPhoneNeverAskedSpeaksAtTheStandardTemperature() async {
         let defaults = defaults()
-        XCTAssertEqual(VoiceTemperature.value(defaults), 0.5)
+        XCTAssertEqual(VoiceTemperature.value(defaults), 0.3)
         for arguments in [["temperature"], ["temperature", "status"]] {
             let reply = await VoiceTool(defaults: defaults).run(arguments)
-            XCTAssertEqual(reply, .ok("temperature 0.50\n"), "\(arguments)")
+            XCTAssertEqual(reply, .ok("temperature 0.30\n"), "\(arguments)")
         }
         XCTAssertNil(defaults.object(forKey: VoiceTemperature.key), "asking sets nothing")
     }
@@ -119,7 +119,7 @@ final class VoiceToolTests: XCTestCase {
     func testATemperatureIsKeptWhereTheVoiceReadsIt() async {
         let defaults = defaults()
         let tool = VoiceTool(defaults: defaults)
-        for (asked, said, kept) in [("0.7", "0.70", Float(0.7)), ("0", "0.00", 0), ("1", "1.00", 1), ("0.3", "0.30", 0.3)] {
+        for (asked, said, kept) in [("0.7", "0.70", Float(0.7)), ("0", "0.00", 0), ("1", "1.00", 1), ("0.5", "0.50", 0.5)] {
             var reply = await tool.run(["temperature", asked])
             XCTAssertEqual(reply, .ok("temperature \(said), from the next reply\n"))
             XCTAssertEqual(VoiceTemperature.value(defaults), kept)
@@ -132,10 +132,47 @@ final class VoiceToolTests: XCTestCase {
         let defaults = defaults()
         for kept: Any in [-0.1, 1.5, Double.nan, Double.infinity, "0.7", Data(), true, false] {
             defaults.set(kept, forKey: VoiceTemperature.key)
-            XCTAssertEqual(VoiceTemperature.value(defaults), 0.5, "\(kept)")
+            XCTAssertEqual(VoiceTemperature.value(defaults), 0.3, "\(kept)")
         }
         defaults.set(0.7, forKey: VoiceTemperature.key)
         XCTAssertEqual(VoiceTemperature.value(defaults), 0.7, "what the settings sheet's slider writes")
+    }
+
+    func testAPhoneNeverAskedSpeaksAtItsOwnPace() async {
+        let defaults = defaults()
+        XCTAssertEqual(VoiceSpeed.value(defaults), 1.0)
+        for arguments in [["speed"], ["speed", "status"]] {
+            let reply = await VoiceTool(defaults: defaults).run(arguments)
+            XCTAssertEqual(reply, .ok("speed 1.00\n"), "\(arguments)")
+        }
+        XCTAssertNil(defaults.object(forKey: VoiceSpeed.key), "asking sets nothing")
+    }
+
+    func testASpeedIsKeptWhereThePlayQueueReadsIt() async {
+        let defaults = defaults()
+        let tool = VoiceTool(defaults: defaults)
+        for (asked, said, kept) in [("1.2", "1.20", Float(1.2)), ("0.8", "0.80", 0.8), ("1.5", "1.50", 1.5), ("1", "1.00", 1)] {
+            var reply = await tool.run(["speed", asked])
+            XCTAssertEqual(reply, .ok("speed \(said), from the next words read aloud\n"))
+            XCTAssertEqual(VoiceSpeed.value(defaults), kept)
+            reply = await tool.run(["speed"])
+            XCTAssertEqual(reply, .ok("speed \(said)\n"))
+        }
+    }
+
+    func testASpeedTheUnitCannotTakeIsRefusedAndOneKeptIsReadAsTheStandard() async {
+        let defaults = defaults()
+        for asked in ["0.79", "1.51", "0", "-1", "nan", "inf", "fast"] {
+            let reply = await VoiceTool(defaults: defaults).run(["speed", asked])
+            XCTAssertEqual(reply.status, ToolReply.usage, asked)
+        }
+        XCTAssertNil(defaults.object(forKey: VoiceSpeed.key))
+        for kept: Any in [0.5, 2.0, Double.nan, Double.infinity, "1.2", Data(), true, false] {
+            defaults.set(kept, forKey: VoiceSpeed.key)
+            XCTAssertEqual(VoiceSpeed.value(defaults), 1.0, "\(kept)")
+        }
+        defaults.set(1.25, forKey: VoiceSpeed.key)
+        XCTAssertEqual(VoiceSpeed.value(defaults), 1.25, "what the settings sheet's slider writes")
     }
 
     @MainActor func testTheVoiceHandsItsEngineTheTemperatureKeptAsEachSentenceIsAskedFor() async throws {
@@ -149,7 +186,7 @@ final class VoiceToolTests: XCTestCase {
         _ = try await voice.synthesise("Set by the mind.")
         defaults.set(7.0, forKey: VoiceTemperature.key)
         _ = try await voice.synthesise("Kept out of range.")
-        XCTAssertEqual(engine.handed, [0.5, 0.7, 0.2, 0.5])
+        XCTAssertEqual(engine.handed, [0.3, 0.7, 0.2, 0.3])
     }
 
     @MainActor func testTheToolIsInTheTableWithItsUsageAndTheSkillNamesIt() async {
@@ -162,6 +199,8 @@ final class VoiceToolTests: XCTestCase {
         XCTAssertTrue(usage.text.contains("topo voice call off"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice noise-suppression`"), "the mind is not told the tool exists")
         XCTAssertTrue(GuestTools.skill.contains("`topo voice temperature`"), "the mind is not told of the temperature")
+        XCTAssertTrue(usage.text.contains("topo voice speed VALUE"), usage.text)
+        XCTAssertTrue(GuestTools.skill.contains("`topo voice speed`"), "the mind is not told of the speed")
         XCTAssertTrue(usage.text.contains("topo voice working sounds"), usage.text)
         XCTAssertTrue(GuestTools.skill.contains("`topo voice working`"), "the mind is not told of the working sounds")
         XCTAssertTrue(usage.text.contains("topo voice wait VALUE"), usage.text)
@@ -250,7 +289,7 @@ final class TemperatureRecorder: VoiceEngine, @unchecked Sendable {
     private var temperatures: [Float] = []
     var handed: [Float] { lock.withLock { temperatures } }
 
-    func load(base: URL) async throws {}
+    func load(folder: URL, temperature: Float) async throws {}
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         lock.withLock { temperatures.append(temperature) }
         return AsyncThrowingStream { $0.finish() }

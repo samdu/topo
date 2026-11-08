@@ -170,7 +170,7 @@ final class ConversationTests: XCTestCase {
         let spoken = HeldVoice()
         self.spoken = spoken
         let voice = Voice(engine: spoken)
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         // The keeper's sounds and the cues, on players of the suite's, when a test asks for them.
         var earcons: Earcons?

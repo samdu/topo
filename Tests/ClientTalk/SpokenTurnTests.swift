@@ -14,7 +14,7 @@ import XCTest
 /// - `TOPO_TALK_SETUP_TOKEN`: a Claude Code setup token, handed to the app's launch environment
 ///   and nowhere else.
 /// - `TOPO_UITEST_EAR_MODELS`: a directory `scripts/fetch-ear-models.sh` filled.
-/// - `TOPO_UITEST_VOICE_MODELS`: a directory `scripts/fetch-voice-models.sh` filled.
+/// - `TOPO_UITEST_VOICE_MODELS`: the voice's bundle, as `scripts/phonon-bundles.sh` fetches it.
 /// - a loopback lane playing the fixture into the host's default input, and an iCloud account on
 ///   the simulator; neither is declared, and both fail by name when absent (a refused press, an
 ///   error line on the chat screen).
@@ -38,7 +38,7 @@ final class SpokenTurnTests: XCTestCase {
         let models = try XCTUnwrap(environment["TOPO_UITEST_EAR_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
                                    "Parakeet's models in TEST_RUNNER_TOPO_UITEST_EAR_MODELS")
         let voiceModels = try XCTUnwrap(environment["TOPO_UITEST_VOICE_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
-                                        "Pocket's models in TEST_RUNNER_TOPO_UITEST_VOICE_MODELS")
+                                        "the voice's bundle in TEST_RUNNER_TOPO_UITEST_VOICE_MODELS")
 
         let app = XCUIApplication()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = token
@@ -61,10 +61,10 @@ final class SpokenTurnTests: XCTestCase {
         try waitFor(timeout: 600, "Parakeet is resident", { try self.voice(app) }) { $0.ear == "ready" || $0.ear == "failed" }
         XCTAssertEqual(try voice(app).ear, "ready", "Parakeet loaded from \(models)")
 
-        // Pocket compiles its models on the first load, so the question waits for it: a reply
-        // that landed before it is resident would be answered in silence.
-        try waitFor(timeout: 600, "Pocket is resident", { try self.chat(app) }) { $0.voice == "ready" || $0.voice == "failed" }
-        XCTAssertEqual(try chat(app).voice, "ready", "Pocket loaded from \(voiceModels)")
+        // The voice is copied into its store and compiled on the first load, so the question
+        // waits for it: a reply that landed before it is resident would be answered in silence.
+        try waitFor(timeout: 600, "the voice is resident", { try self.chat(app) }) { $0.voice == "ready" || $0.voice == "failed" }
+        XCTAssertEqual(try chat(app).voice, "ready", "the voice loaded from \(voiceModels)")
 
         // The hold spans two loops and a second, so a whole question is in it wherever the loop
         // starts. On a simulator that has not answered the microphone prompt, the first hold is
@@ -106,7 +106,7 @@ final class SpokenTurnTests: XCTestCase {
         XCTAssertEqual(spoken.speaker.text, reply.text, "the speaker was given the reply: \(spoken.raw)")
         XCTAssertTrue(spoken.speaker.started, "the speaker started the reply: \(spoken.raw)")
         XCTAssertTrue(spoken.speaker.finished, "the speaker finished the reply: \(spoken.raw)")
-        XCTAssertEqual(spoken.speaker.engine, .pocket, "the reply was read by Pocket: \(spoken.raw)")
+        XCTAssertEqual(spoken.speaker.engine, .phonon, "the reply was read by Phonon: \(spoken.raw)")
         // Stop while the reply was read, the microphone again once it came to its end.
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 10),
                       "the button is the microphone again once the reply has finished")
@@ -182,7 +182,7 @@ final class SpokenTurnTests: XCTestCase {
 
     /// `Speaker.Report`.
     struct SpeakerReport: Decodable {
-        enum Engine: String, Decodable { case pocket }
+        enum Engine: String, Decodable { case phonon }
         var speaks: UInt
         var engine: Engine?
         var text: String

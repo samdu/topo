@@ -548,7 +548,7 @@ struct Replay {
     /// every row is then the one that stops it, since two replies over each other is noise.
     var speaking = false
     /// Whether the phone can say anything at all: the voice is resident. A phone still
-    /// downloading Pocket is offered nothing rather than offered an item it would hear nothing
+    /// still copying or compiling the voice is offered nothing rather than offered an item it would hear nothing
     /// from, and the diagnostics `voice` row says how far along it is.
     var canSpeak = false
     /// Says a turn again; the turn rather than its words, so what the voice reaches in it is

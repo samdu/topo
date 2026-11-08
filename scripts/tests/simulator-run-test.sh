@@ -381,7 +381,7 @@ ended ended-during-the-suite-slowly "sleep 31"  no  yes --press-mic
 # writes what it was called with to a file. A start that refuses (exit 3) found another run's
 # lane: the script exits 3 and never calls stop. A start that fails any other way is this run's
 # to stop.
-for fake in fetch-ear-models.sh fetch-voice-models.sh; do printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/$fake"; done
+for fake in fetch-ear-models.sh phonon-bundles.sh; do printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/$fake"; done
 cat >"$work/root/scripts/ci-audio-lane.sh" <<EOF
 #!/bin/sh
 echo "\$1" >> "$work/lane-calls"

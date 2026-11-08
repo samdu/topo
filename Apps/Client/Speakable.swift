@@ -37,8 +37,8 @@ import Foundation
 ///   is read as the word; a shorter one is left as it is written, since it is more likely an
 ///   initialism the voice should spell.
 ///
-/// Pocket reads text as it is given, with no normalisation beyond quotes and whitespace, so none
-/// of this is done further down.
+/// Phonon then normalises what is left as English (`Language.english`): numbers, amounts, dates,
+/// emails and the symbols between them are said as words. None of the above is done there.
 enum Speakable {
     /// One line of the spoken text, and the code block it stands for when it stands for one.
     struct Line: Equatable, Sendable {

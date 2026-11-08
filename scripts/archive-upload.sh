@@ -4,6 +4,7 @@
 #   scripts/archive-upload.sh                 # archive and export, nothing leaves this Mac
 #   scripts/archive-upload.sh --upload        # ... and upload to App Store Connect
 #   scripts/archive-upload.sh --validate      # ... and ask App Store Connect whether it would take it
+#   scripts/archive-upload.sh --upload --voice  # ... and the voice's asset pack before the build
 #   BUILD=42 scripts/archive-upload.sh        # a build number of your choosing
 #
 # The archive needs a Distribution certificate and an App Store provisioning
@@ -11,6 +12,12 @@
 # on its own the first time somebody signed into the account archives here.
 # The upload needs an App Store Connect API key, and docs/testflight.md says
 # where to get one.
+#
+# The voice's weights are never in the archive: they are the Apple-hosted asset
+# pack `phonon-40m-en`, which App Store Connect keeps apart from the builds.
+# `--voice` packages it (scripts/phonon-bundles.sh) and, with `--upload`, sends
+# it as a new version of the pack before the build; it is wanted only when the
+# bundle has changed, since a build uses the pack's current version.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,11 +31,14 @@ export_options="$root/Distribution/ExportOptions.plist"
 
 upload=no
 validate=no
+voice=no
+apple_id=6826966978
 for argument in "$@"; do
   case "$argument" in
     --upload) upload=yes ;;
     --validate) validate=yes ;;
-    -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --voice) voice=yes ;;
+    -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $argument" >&2; exit 2 ;;
   esac
 done
@@ -41,6 +51,8 @@ echo "==> build $build"
 
 # The guest's kernel is built from the fork at its pin, never committed; the archive links it.
 "$(dirname "${BASH_SOURCE[0]}")/build-ish.sh"
+# The voice's compiled core, fetched by checksum and never committed; the archive links it.
+"$(dirname "${BASH_SOURCE[0]}")/fetch-phonon.sh"
 
 # The About screen names the commit this build is as its corresponding source, which is only
 # true of a clean tree whose commit is on GitHub.
@@ -114,15 +126,30 @@ xcodebuild -exportArchive \
   -exportPath "$out/export" \
   -allowProvisioningUpdates ${auth[@]+"${auth[@]}"}
 
+# The weights reach a TestFlight or App Store install as the asset pack and never in the app
+# (docs/voice.md); the product is the proof, not the build setting.
+scripts/check-built-assets.sh "$archive/Products/Applications/$scheme.app"
+
 ipa="$(/usr/bin/find "$out/export" -maxdepth 1 -name '*.ipa' -print -quit)"
 [ -n "$ipa" ] || { echo "no .ipa in $out/export" >&2; exit 1; }
 echo "==> $ipa"
+
+if [ "$voice" = yes ]; then
+  echo "==> packaging the voice's asset pack"
+  scripts/phonon-bundles.sh package "$out/phonon"
+fi
 
 [ "$upload" = yes ] || [ "$validate" = yes ] || exit 0
 
 if [ "$validate" = yes ]; then
   echo "==> validating"
   xcrun altool --validate-app -f "$ipa" -t ios --apiKey "$key_id" --apiIssuer "$issuer"
+fi
+
+if [ "$upload" = yes ] && [ "$voice" = yes ]; then
+  echo "==> uploading the voice's asset pack"
+  xcrun altool --upload-asset-pack "$out/phonon/phonon-40m-en.aar" --apple-id "$apple_id" --wait \
+    --apiKey "$key_id" --apiIssuer "$issuer"
 fi
 
 if [ "$upload" = yes ]; then

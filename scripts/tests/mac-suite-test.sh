@@ -85,8 +85,10 @@ case "$1" in
   *) exit 0 ;;
 esac'
 fake "$tree/scripts/build-ish.sh" 'exit 0'
+fake "$tree/scripts/fetch-phonon.sh" 'exit 0'
 fake "$tree/scripts/ci-require-tests.sh" '[ "$1" != "${REQUIRE_RED-}" ]'
 fake "$tree/scripts/check-built-plist.sh" 'exit 0'
+fake "$tree/scripts/check-built-assets.sh" 'exit 0'
 fake "$tree/scripts/fetch-pinned.sh" 'echo "$2"'
 fake "$tree/scripts/fetch-ear-models.sh" 'exit 0'
 fake "$tree/scripts/model-manifest.sh" 'exit 0'
@@ -313,23 +315,23 @@ models() {  # models <case> <want status:results> <named, |-separated, or ""> [p
 support="Library/Application Support"
 models an-ears-file "1:topo_ui:quiet=failure " "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin" \
   "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin"
-models a-voice-before-its-home "1:topo_ui:quiet=failure " "$support/Models/pocket-tts-coreml/constants.bin" "$support/Models/pocket-tts-coreml/constants.bin"
+models a-voice-mid-copy "1:topo_ui:quiet=failure " "$support/Voice/phonon-40m-en.partial/host.safetensors" "$support/Voice/phonon-40m-en.partial/host.safetensors"
 models a-spotter-before-its-home "1:topo_ui:quiet=failure " "$support/Models/parakeet-ctc-110m-coreml/vocab.json" "$support/Models/parakeet-ctc-110m-coreml/vocab.json"
-models a-voices-ledger "1:topo_ui:quiet=failure " "$support/Models/pocket-tts/.verified.json" "$support/Models/pocket-tts/.verified.json"
-models resume-data "1:topo_ui:quiet=failure " "$support/Models/pocket-tts/mimi.mlmodelc/weights.bin.resume" "$support/Models/pocket-tts/mimi.mlmodelc/weights.bin.resume"
+models a-voices-record "1:topo_ui:quiet=failure " "$support/Voice/phonon-40m-en/.installed" "$support/Voice/phonon-40m-en/.installed"
+models resume-data "1:topo_ui:quiet=failure " "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/weights.bin.resume" "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/weights.bin.resume"
 models the-spotters-file "1:topo_ui:quiet=failure " "$support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json" \
   "$support/FluidAudio/Models/parakeet-ctc-110m-coreml/vocab.json"
 models every-file-named "1:topo_ui:quiet=failure " \
-  "$support/Models/parakeet-tdt-0.6b-v2/a.bin|$support/Models/parakeet-tdt-0.6b-v2/b.bin|$support/Models/pocket-tts/c.bin|$support/FluidAudio/Models/x/d.bin" \
-  "$support/Models/parakeet-tdt-0.6b-v2/a.bin" "$support/Models/parakeet-tdt-0.6b-v2/b.bin" "$support/Models/pocket-tts/c.bin" "$support/FluidAudio/Models/x/d.bin"
-models empty-homes "0:topo_ui:quiet=success " "No ear or voice model" "$support/Models/pocket-tts/" "$support/FluidAudio/Models/"
+  "$support/Models/parakeet-tdt-0.6b-v2/a.bin|$support/Models/parakeet-tdt-0.6b-v2/b.bin|$support/Voice/phonon-40m-en/c.bin|$support/FluidAudio/Models/x/d.bin" \
+  "$support/Models/parakeet-tdt-0.6b-v2/a.bin" "$support/Models/parakeet-tdt-0.6b-v2/b.bin" "$support/Voice/phonon-40m-en/c.bin" "$support/FluidAudio/Models/x/d.bin"
+models empty-homes "0:topo_ui:quiet=success " "No ear or voice model" "$support/Voice/phonon-40m-en/" "$support/FluidAudio/Models/"
 models the-guests-downloads "0:topo_ui:quiet=success " "" "$support/Models/claude-code/claude" "$support/Models/alpine-bash/.verified.json"
 models elsewhere-in-the-container "0:topo_ui:quiet=success " "" "$support/notes.json" "Library/Caches/x"
 FAKE_NO_CONTAINER=1 models no-container "1:topo_ui:quiet=failure " "could not be read"
-UNREADABLE="$support/Models/pocket-tts" models a-home-not-listable "1:topo_ui:quiet=failure " "could not be read|Models/pocket-tts" "$support/Models/pocket-tts/c.bin"
-UNREADABLE="$support/Models/pocket-tts/mimi" models a-folder-in-a-home-not-listable "1:topo_ui:quiet=failure " "could not be read|Models/pocket-tts/mimi|$support/Models/pocket-tts/c.bin" \
-  "$support/Models/pocket-tts/c.bin" "$support/Models/pocket-tts/mimi/d.bin"
-UNREADABLE="$support" models an-ancestor-not-enterable "1:topo_ui:quiet=failure " "could not be read|$support: cannot be listed or entered" "$support/Models/pocket-tts/c.bin"
+UNREADABLE="$support/Voice/phonon-40m-en" models a-home-not-listable "1:topo_ui:quiet=failure " "could not be read|Voice/phonon-40m-en" "$support/Voice/phonon-40m-en/c.bin"
+UNREADABLE="$support/Voice/phonon-40m-en/mimi" models a-folder-in-a-home-not-listable "1:topo_ui:quiet=failure " "could not be read|Voice/phonon-40m-en/mimi|$support/Voice/phonon-40m-en/c.bin" \
+  "$support/Voice/phonon-40m-en/c.bin" "$support/Voice/phonon-40m-en/mimi/d.bin"
+UNREADABLE="$support" models an-ancestor-not-enterable "1:topo_ui:quiet=failure " "could not be read|$support: cannot be listed or entered" "$support/Voice/phonon-40m-en/c.bin"
 REQUIRE_RED=absent suite quiet-has-mic topo_ui:quiet
 is "the quiet part with the microphone's class in its results: a failure" "$status:$(results)" "1:topo_ui:quiet=failure "
 UI_TEST=1 suite quiet-red topo_ui:quiet

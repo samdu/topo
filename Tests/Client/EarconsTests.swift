@@ -134,7 +134,7 @@ final class EarconsTests: XCTestCase {
         let earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),
                               makePlayer: { cues.make($0) }, sleep: sleep, tail: { tail })
         let voice = Voice(engine: engine)
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) },

@@ -20,21 +20,23 @@ final class ModelHousekeepingTests: XCTestCase {
     // MARK: The sweep
 
     /// The store laid out as the phone has it: Parakeet under its id, the spotter in FluidAudio's
-    /// own cache, and the voice at `Models/pocket-tts` while its id is `pocket-tts-coreml`. What
-    /// the voice's earlier pack left at the root of its home goes, and so does every directory
-    /// under `Models/` that is no model's home; the voice itself survives.
-    func testTheSweepKeepsTheVoiceWhoseHomeIsNotItsId() throws {
+    /// own cache, and the voice activity detector at `Models/silero-vad` while its id is
+    /// `silero-vad-coreml`. What is loose at the root of its home goes, and so does every
+    /// directory under `Models/` that is no model's home — the Pocket voice's `Models/pocket-tts`
+    /// a build before Phonon left included; the detector itself survives.
+    func testTheSweepKeepsTheDetectorWhoseHomeIsNotItsId() throws {
         let (store, manifest) = try realStore()
-        let pocket = try XCTUnwrap(manifest.model(ModelManifest.pocket))
-        let home = store.directory(for: pocket)
-        XCTAssertNotEqual(home.lastPathComponent, pocket.id, "the case this test exists for")
-        XCTAssertEqual(home.deletingLastPathComponent(), store.root, "the voice's home is under Models/")
+        let vad = try XCTUnwrap(manifest.model(ModelManifest.vad))
+        let home = store.directory(for: vad)
+        XCTAssertNotEqual(home.lastPathComponent, vad.id, "the case this test exists for")
+        XCTAssertEqual(home.deletingLastPathComponent(), store.root, "the detector's home is under Models/")
 
         let strays = [
             home.appendingPathComponent("model.safetensors"),
             home.appendingPathComponent("config.json"),
             home.appendingPathComponent("v2/english/old.mlmodelc/weights/weight.bin"),
-            store.root.appendingPathComponent("pocket-tts-coreml/v2.1/english/constants_bin/eponine.bin"),
+            store.root.appendingPathComponent("silero-vad-coreml/silero-vad.mlmodelc/weights/weight.bin"),
+            store.root.appendingPathComponent("pocket-tts/v2.1/english/constants_bin/marius.safetensors"),
             store.root.appendingPathComponent("kokoro/model.bin"),
             store.root.appendingPathComponent(".DS_Store"),
         ]
@@ -50,7 +52,8 @@ final class ModelHousekeepingTests: XCTestCase {
         }
         for stray in strays { XCTAssertFalse(exists(stray), "\(stray.path) is gone") }
         XCTAssertFalse(exists(home.appendingPathComponent("v2")), "an emptied orphan folder goes with its files")
-        XCTAssertFalse(exists(store.root.appendingPathComponent("pocket-tts-coreml")))
+        XCTAssertFalse(exists(store.root.appendingPathComponent("silero-vad-coreml")))
+        XCTAssertFalse(exists(store.root.appendingPathComponent("pocket-tts")), "the Pocket voice's pack goes")
         XCTAssertFalse(exists(store.root.appendingPathComponent("kokoro")))
         XCTAssertEqual(try Set(fm.contentsOfDirectory(atPath: store.root.path)),
                        [ModelManifest.parakeet, home.lastPathComponent], "only the two homes under Models/ remain")
@@ -254,14 +257,14 @@ final class ModelHousekeepingTests: XCTestCase {
             }),
         ]
         for (name, breaking) in breaks {
-            // The voice, partially downloaded in its real home.
+            // The detector, partially downloaded in its real home.
             let (store, manifest) = try realStore()
-            let pocket = try XCTUnwrap(manifest.model(ModelManifest.pocket))
-            try breaking(store, pocket)
-            XCTAssertFalse(store.isPresent(pocket), name)
-            let home = store.directory(for: pocket)
+            let vad = try XCTUnwrap(manifest.model(ModelManifest.vad))
+            try breaking(store, vad)
+            XCTAssertFalse(store.isPresent(vad), name)
+            let home = store.directory(for: vad)
             let orphans = [home.appendingPathComponent("model.safetensors"),
-                           home.appendingPathComponent("v2.1/english/constants_bin/alba.bin")]
+                           home.appendingPathComponent("silero-vad.mlmodelc/stray.bin")]
             try orphans.forEach(write)
             // An entry under its id, the same way.
             let root = base.appendingPathComponent("\(UUID().uuidString)/Models", isDirectory: true)
@@ -277,11 +280,11 @@ final class ModelHousekeepingTests: XCTestCase {
                          plain.directory(for: model).appendingPathComponent("Encoder.mlmodelc/stray.bin")]
             try loose.forEach(write)
 
-            XCTAssertEqual(store.sweep(manifest), [], "\(name): nothing of the voice's is removed")
+            XCTAssertEqual(store.sweep(manifest), [], "\(name): nothing of the detector's is removed")
             XCTAssertEqual(plain.sweep(ModelManifest(models: [model])), [], "\(name): nothing is removed")
 
             for orphan in orphans + loose + [resume] { XCTAssertTrue(exists(orphan), "\(name): \(orphan.path) stays") }
-            for file in pocket.files.dropFirst() { XCTAssertTrue(exists(store.location(of: file, in: pocket)), "\(name): \(file.path)") }
+            for file in vad.files.dropFirst() { XCTAssertTrue(exists(store.location(of: file, in: vad)), "\(name): \(file.path)") }
         }
     }
 
@@ -306,15 +309,15 @@ final class ModelHousekeepingTests: XCTestCase {
         for file in ctc.files { XCTAssertTrue(exists(store.location(of: file, in: ctc)), file.path) }
     }
 
-    /// The bundled manifest, over the homes the phone's store has, resolves the voice to
-    /// `Models/pocket-tts`, a home Topo owns and one that is not named after its id.
-    func testTheBundledManifestResolvesTheVoiceToItsHome() throws {
+    /// The bundled manifest, over the homes the phone's store has, resolves the detector to
+    /// `Models/silero-vad`, a home Topo owns and one that is not named after its id.
+    func testTheBundledManifestResolvesTheDetectorToItsHome() throws {
         let manifest = try ModelManifest.bundled()
         let store = ModelStore(root: base.appendingPathComponent("Models"),
-                               homes: [ModelManifest.pocket: ModelStore.pocketHome(under: base)])
-        let pocket = try XCTUnwrap(manifest.model(ModelManifest.pocket))
-        XCTAssertEqual(store.directory(for: pocket).path, base.appendingPathComponent("Models/pocket-tts").path)
-        XCTAssertTrue(store.owns(pocket))
+                               homes: [ModelManifest.vad: ModelStore.vadHome(under: base)])
+        let vad = try XCTUnwrap(manifest.model(ModelManifest.vad))
+        XCTAssertEqual(store.directory(for: vad).path, base.appendingPathComponent("Models/silero-vad").path)
+        XCTAssertTrue(store.owns(vad))
     }
 
     // MARK: The compile cache
@@ -471,14 +474,14 @@ final class ModelHousekeepingTests: XCTestCase {
     // MARK: Helpers
 
     /// A store with the phone's homes under `base` and a manifest of three entries, every one
-    /// present: Parakeet under its id, the spotter in a library's cache, the voice in the home
-    /// FluidAudio names for it.
+    /// present: Parakeet under its id, the spotter in a library's cache, the voice activity
+    /// detector in the home FluidAudio names for it.
     private func realStore() throws -> (ModelStore, ModelManifest) {
         let root = base.appendingPathComponent("\(UUID().uuidString)/Models", isDirectory: true)
         let support = root.deletingLastPathComponent()
         let store = ModelStore(root: root, homes: [
             ModelManifest.ctc: support.appendingPathComponent("FluidAudio/Models/\(ModelManifest.ctc)", isDirectory: true),
-            ModelManifest.pocket: ModelStore.pocketHome(under: support),
+            ModelManifest.vad: ModelStore.vadHome(under: support),
         ])
         let parakeet = try filled(store, id: ModelManifest.parakeet, files: [
             "Encoder.mlmodelc/model.mil": "encoder graph",
@@ -489,13 +492,12 @@ final class ModelHousekeepingTests: XCTestCase {
             "AudioEncoder.mlmodelc/weights/weight.bin": "ctc weights",
             "tokenizer.json": "tokenizer",
         ])
-        let pocket = try filled(store, id: ModelManifest.pocket, files: [
-            "v2.1/english/cond_step.mlmodelc/weights/weight.bin": "conditioner",
-            "v2.1/english/cond_step.mlmodelc/model.mil": "conditioner graph",
-            "v2.1/english/constants_bin/eponine.bin": "eponine",
-            "v2.1/english/tokenizer.model": "tokenizer",
+        let vad = try filled(store, id: ModelManifest.vad, files: [
+            "silero-vad.mlmodelc/weights/weight.bin": "detector weights",
+            "silero-vad.mlmodelc/model.mil": "detector graph",
+            "silero-vad.mlmodelc/metadata.json": "metadata",
         ])
-        return (store, ModelManifest(models: [parakeet, ctc, pocket]))
+        return (store, ModelManifest(models: [parakeet, ctc, vad]))
     }
 
     /// A manifest entry for `files`, admitted into `store` the way the downloader admits each.

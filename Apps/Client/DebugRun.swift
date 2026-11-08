@@ -462,11 +462,11 @@ extension DebugRun {
     }
 
     /// The voice a debug build starts with. `TOPO_DEBUG_VOICE=loading` is one that never becomes
-    /// resident, so no reply is read aloud however much of Pocket is on the phone.
-    /// `TOPO_DEBUG_VOICE=` an absolute directory holding the pack under
-    /// `Models/pocket-tts/v2.1/english` is the real voice, loaded from there instead of the
-    /// app's own download, which is how a lane gets Pocket resident in a simulator without the
-    /// background download. Any other launch gets the real voice, prepared as usual.
+    /// resident, so no reply is read aloud however much of the voice is on the phone.
+    /// `TOPO_DEBUG_VOICE=` an absolute directory holding the bundle (`phonon-40m-en`, as
+    /// scripts/phonon-bundles.sh fetches it) is the real voice, copied into the store from there
+    /// as from any source, which is how a lane gets the voice resident in a simulator with no
+    /// asset pack. Any other launch gets the real voice, prepared as usual.
     @MainActor
     static func voice(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Voice {
         guard let choice = environment[voiceVariable], !choice.isEmpty else { return Voice() }
@@ -474,10 +474,10 @@ extension DebugRun {
             say("voice: loading, and never resident")
             return Voice.stalledVoice()
         }
-        let base = URL(fileURLWithPath: choice, isDirectory: true)
-        let voice = Voice()
-        voice.load(base: base)
-        say("voice: Pocket from \(base.path)")
+        let folder = URL(fileURLWithPath: choice, isDirectory: true)
+        let voice = Voice(source: FolderSource(folder: folder))
+        voice.prepare()
+        say("voice: Phonon from \(folder.path)")
         return voice
     }
 
@@ -491,7 +491,7 @@ extension DebugRun {
         /// The error line on the chat screen, if any.
         var error: String?
         var speaker: Speaker.Report
-        /// The voice's state, so a lane waits for Pocket to be resident rather than sending a
+        /// The voice's state, so a lane waits for the voice to be resident rather than sending a
         /// question the speaker would have nothing to read it with.
         var voice: String
         /// Where Topo stands over the chat, and whether he is hidden; nil before he has been placed.

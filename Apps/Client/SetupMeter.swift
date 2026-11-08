@@ -139,7 +139,7 @@ enum Setup {
                      ear: stage(ear.state, trouble: ear.trouble), earFetch: fetch(Ear.models),
                      earLoading: ear.progress.isEmpty ? Ear.preparing : "\(Ear.preparing): \(ear.progress)",
                      voice: stage(voice.state, trouble: voice.trouble),
-                     voiceFetch: voice.waitsForEar ? Fetch(fraction: nil, words: Voice.afterEar) : fetch(Voice.models),
+                     voiceFetch: Fetch(fraction: voice.waitsForEar ? nil : voice.fraction, words: voice.fetchWords),
                      voiceLoading: Voice.preparing)
     }
 

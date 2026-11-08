@@ -42,9 +42,14 @@
 # generates it, and without `zone.hexagon.topo.turn.*` in it the continued-processing task a turn
 # asks for is refused at registration, so every turn behind another app has the grace alone.
 #
+# The Background Assets keys are read the same way and for the same reason: `BAAppGroupID`,
+# `BAHasManagedAssetPacks` and `BAUsesAppleHosting` are what make the system download the voice's
+# Apple-hosted pack with the app, and no setting generates them. The downloader is read off the
+# product beside them: `Extensions/TopoAssets.appex`, a background-asset downloader extension.
+#
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
-# FluidAudio's LuxTTS lexicon is read the same way: the build phase that strips it is not proof
+# FluidAudio's LuxTTS lexicon is read the same way: the trait set that leaves it out is not proof
 # that it is gone.
 #
 # The watch app embedded as the phone app's companion is read off the product too, and its copy
@@ -121,6 +126,26 @@ key=PHPhotoLibraryPreventAutomaticLimitedAccessAlert
 value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
 if [ "$value" != "true" ] && [ "$value" != "1" ]; then
     echo "$app/Info.plist does not set $key ( ${value:-absent} ); a limited photo library would put the system's sheet up at a tool's call" >&2
+    status=1
+fi
+
+# The voice's asset pack: without these the system never downloads it, and a TestFlight or App
+# Store install has no voice.
+value="$(plutil -extract BAAppGroupID raw -o - -- "$plist" 2>/dev/null || true)"
+if [ "$value" != group.zone.hexagon.topo ]; then
+    echo "$app/Info.plist does not set BAAppGroupID to group.zone.hexagon.topo ( ${value:-absent} ); the voice's asset pack would not download" >&2
+    status=1
+fi
+for key in BAHasManagedAssetPacks BAUsesAppleHosting; do
+    value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+    if [ "$value" != "true" ] && [ "$value" != "1" ]; then
+        echo "$app/Info.plist does not set $key ( ${value:-absent} ); the voice's asset pack would not download" >&2
+        status=1
+    fi
+done
+point="$(plutil -extract EXAppExtensionAttributes.EXExtensionPointIdentifier raw -o - -- "$app/Extensions/TopoAssets.appex/Info.plist" 2>/dev/null || true)"
+if [ "$point" != com.apple.background-asset-downloader-extension ]; then
+    echo "$app does not embed Extensions/TopoAssets.appex as a background-asset downloader (${point:-no extension}); the voice's asset pack would not download" >&2
     status=1
 fi
 
@@ -319,12 +344,12 @@ if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     status=1
 fi
 
-# FluidAudio's LuxTTS lexicon is espeak-ng's output, GPL-3.0 with no App Store waiver, and
-# scripts/strip-luxtts.sh takes it out of the product; anywhere in the app is a failure, so a
-# bundle FluidAudio renames is caught as well as the one the script strips.
+# FluidAudio's LuxTTS lexicon is espeak-ng's output, GPL-3.0 with no App Store waiver, and it is
+# part of the package's `TTS` trait, which project.yml leaves out; anywhere in the app is a
+# failure, so a trait set that brings it back is caught.
 luxtts="$(find "$app" -name 'luxtts_*' -print 2>/dev/null | head -3)"
 if [ -n "$luxtts" ]; then
-    echo "$app carries FluidAudio's LuxTTS lexicon ($(echo "$luxtts" | tr '\n' ' ')); scripts/strip-luxtts.sh did not run on it" >&2
+    echo "$app carries FluidAudio's LuxTTS lexicon ($(echo "$luxtts" | tr '\n' ' ')); FluidAudio's TTS trait is back in project.yml" >&2
     status=1
 fi
 
@@ -372,5 +397,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, the turn's continued-processing task, $entitlements, embeds TopoWidgets.appex, TopoShare.appex and TopoWatch.app as its companion, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, the turn's continued-processing task, the voice's asset-pack keys, $entitlements, embeds TopoWidgets.appex, TopoShare.appex, TopoAssets.appex and TopoWatch.app as its companion, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

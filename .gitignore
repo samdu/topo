@@ -9,4 +9,7 @@ build/
 
 # What scripts/build-ish.sh makes from the fork's pin and patches/ish/.
 Packages/TopoUserland/Frameworks/
+
+# What scripts/fetch-phonon.sh fetches by checksum.
+Packages/PhononTTS/Frameworks/
 __pycache__/
