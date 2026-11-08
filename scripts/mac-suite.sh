@@ -204,6 +204,15 @@ for suite in "${asked[@]}"; do [ "$suite" = scripts ] || builds=yes; done
 if [ "$check" = yes ]; then
   lacks=0
   command -v jq >/dev/null || { err "jq is not installed."; lacks=1; }
+  # The bash every script's `#!/usr/bin/env bash` runs under, asked to do what the scripts do
+  # all the time: give a command its locale in a forked subshell. A Homebrew bash (5.3.15)
+  # linked to gettext can segfault there, and a suite under it goes red for nothing in the commit.
+  shell="$(command -v bash || true)"
+  if [ -z "$shell" ]; then
+    err "there is no bash on PATH, and every script runs under env bash."; lacks=1
+  elif ! env bash -c 'for _ in $(seq 20); do got="$(LC_ALL=C /usr/bin/true; echo ok)"; [ "$got" = ok ] || exit 1; done' >/dev/null 2>&1; then
+    err "the bash env finds ($shell, $(env bash --version 2>/dev/null | head -n 1)) dies in a forked subshell that gives a command its locale, and every script runs under it."; lacks=1
+  fi
   # What the scripts' tests run under beside bash: review-prompt's runs a workflow step's
   # script under node, and the janitor's is python, which on a Mac with no developer tools is
   # a stub at /usr/bin that asks to install them.

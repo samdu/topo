@@ -17,7 +17,8 @@
 # which every build is then run under), a simulator of a pinned runtime, the tools the guest's framework is built
 # with when the one there is not current, room on the disk, an open lid, and, for `topo_ui`,
 # being buddybox; `scripts` runs each script's test and prepares, builds and boots nothing,
-# and is asked by --check for jq, node, a python3 that runs and an open lid alone; the device
+# and is asked by --check for a bash that survives a forked subshell giving a command its
+# locale, jq, node, a python3 that runs and an open lid alone; the device
 # build's directory is built over for the pins it was built from and made afresh for any
 # other, and so is the package state every build and test of the project resolves into,
 # before any of a suite resolves; the port 53 holder's socket, when there is one, is handed to the unit tests; and the display is held on under `topo_ui`, by a hold that waits on the script's own
@@ -701,6 +702,14 @@ check can topo_unit others
 is "check: a Mac with everything exits 0" "$status" 0
 is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen generate|xcodebuild (build|test)|xcrun simctl (create|boot)|build-ish.sh$|ci-audio-lane)' "$CALLS")" 0
 [ ! -e "$work/can.results" ] && ok "check: no results are written" || fail "check: results were written"
+# A bash that dies in a forked subshell giving a command its locale: refused, named, for every
+# suite. The script itself runs under this shell's bash; only what env finds is the fake.
+mkdir -p "$work/crashbin"
+printf '#!/bin/sh\ncase "$1" in --version) echo "GNU bash, version 5.3.15(1)-release" ;; *) kill -SEGV $$ ;; esac\n' > "$work/crashbin/bash"
+chmod +x "$work/crashbin/bash"
+said="$(cd "$tree" && PATH="$work/crashbin:$work/bin:$PATH" "$BASH" scripts/mac-suite.sh --check --cache "$work/cache" scripts 2>&1)" && status=0 || status=$?
+is "check, a bash that crashes: exits 1" "$status" 1
+names "check, a bash that crashes: named, with its version" "the bash env finds ($work/crashbin/bash, GNU bash, version 5.3.15(1)-release) dies"
 FAKE_XCODE=26.4 check xcode others
 is "check, another Xcode: exits 1" "$status" 1
 names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
