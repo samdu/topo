@@ -95,6 +95,32 @@ final class PhononVoiceTests: XCTestCase {
         XCTAssertEqual(opened.alive, [], "an instance was still held while the next opened: \(opened.alive)")
     }
 
+    /// A sentence dropped mid-way, then one at another temperature: the reload waits for the
+    /// dropped sentence's call to return, and opens with nothing of the old instance held.
+    func testAReloadAfterADroppedSentenceWaitsForItsCallAndHoldsNoInstance() async throws {
+        let log = SpeakLog()
+        let opened = Opened()
+        let engine = PhononVoiceEngine(open: { url in
+            log.add("open \(try PhononTestsBundle.temperature(at: url))")
+            opened.check()
+            let phonon = FakePhonon(log: log, chunks: 1_000)
+            opened.keep(phonon)
+            return phonon
+        })
+        try await engine.load(folder: folder, temperature: 0.3)
+        var stream: AsyncThrowingStream<Voice.Frame, Error>? = try await engine.stream("dropped", temperature: 0.3)
+        for try await _ in stream! { break }
+        stream = nil
+        let next = Task { for try await _ in try await engine.stream("next", temperature: 0.7) {} }
+        try await withTimeout { try await next.value }
+        let events = log.events
+        let end = try XCTUnwrap(events.firstIndex(of: "end dropped"))
+        let reload = try XCTUnwrap(events.firstIndex(of: "open 0.7"))
+        XCTAssertLessThan(end, reload, "the bundle was opened again while the dropped sentence's call ran")
+        XCTAssertLessThan(log.chunks(of: "dropped"), 1_000)
+        XCTAssertEqual(opened.alive, [], "an instance was still held while the next opened: \(opened.alive)")
+    }
+
     private func withTimeout(_ body: @escaping @Sendable () async throws -> Void) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await body() }
@@ -149,28 +175,24 @@ final class SpeakLog: @unchecked Sendable {
     func end(_ text: String) { lock.withLock { kept.append("end \(text)"); active -= 1 } }
 }
 
-/// Phonon as the engine sees it: a stream of chunks made one at a time, which stops when its
-/// consumer goes, the way `Phonon.stream` cancels its speaking on termination.
+/// Phonon as the engine sees it: one call per sentence that hands its chunks over as it makes
+/// them and returns once it is done, or at the next chunk after its task is cancelled, the way
+/// ptts's `speak` stops at its sink's flag. The call holds the instance for as long as it runs.
 final class FakePhonon: PhononSpeaking, @unchecked Sendable {
     let log: SpeakLog
     let chunks: Int
     init(log: SpeakLog, chunks: Int) { self.log = log; self.chunks = chunks }
 
-    func stream(_ text: String) -> AsyncThrowingStream<[Float], Error> {
-        let (stream, continuation) = AsyncThrowingStream<[Float], Error>.makeStream()
-        let log = log, chunks = chunks
-        let task = Task {
-            log.start(text)
-            for _ in 0..<chunks {
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .milliseconds(1))
-                log.chunk(text)
-                continuation.yield([0, 0, 0])
-            }
-            log.end(text)
-            continuation.finish()
+    func say(_ text: String, onAudio: @escaping @Sendable ([Float]) -> Void) async throws {
+        log.start(text)
+        for _ in 0..<chunks {
+            if Task.isCancelled { break }
+            try? await Task.sleep(for: .milliseconds(1))
+            log.chunk(text)
+            onAudio([0, 0, 0])
         }
-        continuation.onTermination = { _ in task.cancel() }
-        return stream
+        // The native call's tail after the sink stops: still this instance's work.
+        try? await Task.sleep(for: .milliseconds(5))
+        log.end(text)
     }
 }

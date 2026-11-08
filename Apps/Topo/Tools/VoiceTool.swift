@@ -5,7 +5,7 @@ import TopoTools
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
-/// Voice speed (`VoiceSpeed`), which the play queue reads at each frame, so a change is heard at once,
+/// Voice speed (`VoiceSpeed`), which the play queue reads as it queues each frame, so a change is heard from the next frame queued,
 /// While Topo works (`WorkingSounds`), which the keeper's sounds read at each sound,
 /// Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks,
 /// Open mic waits (`QuietWait`), which the conversation's rule reads at each verdict,

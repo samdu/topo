@@ -50,10 +50,14 @@ struct PhononStore: Sendable {
         let files: [File]
     }
 
-    /// What the store last installed: the bundle's stamp and, from a pack, its version.
+    /// What the store last installed: the bundle's stamp, from a pack its version, and whether
+    /// the pack has been let go since its copy (nil for a folder, which has nothing to let go).
     struct Installed: Codable, Equatable, Sendable {
         let built: Int64
         let version: Int?
+        var released: Bool? = nil
+
+        func isCopy(of built: Int64, version: Int?) -> Bool { self.built == built && self.version == version }
     }
 
     /// The store folder, made from `source` if it is not already that source's bundle. `progress`
@@ -62,27 +66,51 @@ struct PhononStore: Sendable {
     func install(from source: any PhononSource, progress: @escaping @Sendable (Double?) -> Void = { _ in },
                  copying: @Sendable () -> Void = {}) async throws -> URL {
         let kept = installed()
-        // A store folder of the source's version is taken without making the source local, so
-        // a pack removed after its copy is not fetched again for nothing.
-        if let kept, let version = await source.version(), kept.version == version, isWhole() {
-            return home
+        // A whole store of the pack's version is taken without making the pack local, so a pack
+        // let go after its copy is not fetched again for nothing; nor is it when the pack's version
+        // cannot be read this launch, which leaves the copy here standing for the next.
+        if let kept, source.versioned, isWhole() {
+            let version = await source.version()
+            if version == nil || version == kept.version {
+                if version == nil { log.notice("voice: the pack's version could not be read; the copy here stands") }
+                await release(kept, from: source)
+                return home
+            }
         }
         do {
             try await source.makeLocal(progress: progress)
             let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: try source.url(of: "bundle.json")))
             let version = await source.version()
-            if kept == Installed(built: manifest.built, version: version), isWhole(manifest) { return home }
+            if let kept, kept.isCopy(of: manifest.built, version: version), isWhole(manifest) {
+                await release(kept, from: source)
+                return home
+            }
             copying()
             try copy(manifest, version: version, from: source)
-            await source.copied()
+            await release(Installed(built: manifest.built, version: version, released: source.versioned ? false : nil), from: source)
             return home
         } catch {
             // A good copy of an older bundle still speaks.
             if kept != nil, isWhole() {
-                log.error("voice: the bundle's source could not be read, keeping the copy here: \(String(describing: type(of: error)))")
+                log.error("voice: no new copy was made, keeping the one here: \(String(describing: error))")
                 return home
             }
             throw error
+        }
+    }
+
+    /// Lets a pack go once its copy is the store's, and records that it has: a removal that fails,
+    /// or a process that ends before it, is tried again at the next launch that finds the store
+    /// whole, so the phone does not keep the weights twice.
+    private func release(_ record: Installed, from source: any PhononSource) async {
+        guard source.versioned, record.released != true else { return }
+        guard await source.copied() else { return }
+        var released = record
+        released.released = true
+        do {
+            try JSONEncoder().encode(released).write(to: self.record, options: .atomic)
+        } catch {
+            log.error("voice: the pack was let go and its record not written: \(String(describing: error))")
         }
     }
 
@@ -112,8 +140,12 @@ struct PhononStore: Sendable {
         }
         try fm.createDirectory(at: home.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Self.excludeFromBackup(home.deletingLastPathComponent())
-        try? fm.removeItem(at: home)
-        try fm.moveItem(at: staging, to: home)
+        // One step from the old copy to the new: a process that ends in it leaves one or the other.
+        if fm.fileExists(atPath: home.path) {
+            _ = try fm.replaceItemAt(home, withItemAt: staging)
+        } else {
+            try fm.moveItem(at: staging, to: home)
+        }
         log.notice("voice: bundle \(manifest.built) copied into the store")
     }
 
@@ -130,7 +162,7 @@ struct PhononStore: Sendable {
             guard try ModelStore.sha256(of: target) == file.sha256 else { throw PhononStoreError.wrongDigest(file.path) }
         }
         try fm.copyItem(at: try source.url(of: "bundle.json"), to: staging.appendingPathComponent("bundle.json"))
-        try JSONEncoder().encode(Installed(built: manifest.built, version: version))
+        try JSONEncoder().encode(Installed(built: manifest.built, version: version, released: version == nil ? nil : false))
             .write(to: staging.appendingPathComponent(".installed"), options: .atomic)
     }
 
@@ -175,10 +207,13 @@ protocol PhononSource: Sendable {
     func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws
     /// A file of the bundle, by its path in the bundle, once it is local.
     func url(of path: String) throws -> URL
-    /// The source's own version where it has one (a pack's), read without making it local.
+    /// Whether the source has a version of its own and a copy to let go: a pack.
+    var versioned: Bool { get }
+    /// The source's own version where it has one (a pack's), read without making it local; nil
+    /// when it cannot be read.
     func version() async -> Int?
-    /// The store holds a checked copy.
-    func copied() async
+    /// The store holds a checked copy: the source's own is let go. Whether it was.
+    func copied() async -> Bool
 }
 
 /// The bundle as a folder: the app's own resources in a build from the install page, or the
@@ -197,8 +232,9 @@ struct FolderSource: PhononSource {
         guard FileManager.default.fileExists(atPath: url.path) else { throw PhononStoreError.missing(path) }
         return url
     }
+    var versioned: Bool { false }
     func version() async -> Int? { nil }
-    func copied() async {}
+    func copied() async -> Bool { true }
 }
 
 /// The Apple-hosted pack (`phonon-40m-en`, essential), which TopoAssets downloads with the app.
@@ -223,17 +259,21 @@ struct AssetPackSource: PhononSource {
         try AssetPackManager.shared.url(for: FilePath("\(PhononStore.name)/\(path)"))
     }
 
+    var versioned: Bool { true }
+
     func version() async -> Int? {
         try? await AssetPackManager.shared.assetPack(withID: id).version
     }
 
     /// The pack's files are in the store now, checked; the pack itself is let go, so the phone
     /// keeps one copy of the weights and not two.
-    func copied() async {
+    func copied() async -> Bool {
         do {
             try await AssetPackManager.shared.remove(assetPackWithID: id)
+            return true
         } catch {
-            log.error("voice: the asset pack could not be removed after its copy: \(String(describing: type(of: error)))")
+            log.error("voice: the asset pack could not be removed after its copy, tried again at the next launch: \(String(describing: error))")
+            return false
         }
     }
 }

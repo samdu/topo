@@ -19,6 +19,7 @@ repo=samthehugenerd/phonon-topo
 revision=6412faefe4882879bbe1528ab39996ac50f4250a
 name=phonon-40m-en
 manifest_sha=51a609c3c856affd94d866997457fe7fcf755171ea19ce16ace00a7fa375f5f0
+manifest_size=2945
 token_ref='op://Homelab/opqt7nwkxvoau6hxuwpjx47rpe/user access token'
 base="${PHONON_REPO_URL:-https://huggingface.co/$repo/resolve/$revision/$name}"
 
@@ -41,7 +42,12 @@ fetch() {  # fetch <path> <size> <sha256>
   matches "$file" "$2" "$3" && return 0
   mkdir -p "$(dirname "$file")"
   local url="$base/$(jq -rn --arg p "$1" '$p | @uri' | sed 's/%2F/\//g')"
-  curl -fsSL --retry 3 ${token:+-H "Authorization: Bearer $token"} -o "$file.part" "$url"
+  # The token goes to curl on its standard input, never in its arguments, which `ps` shows.
+  if [ -n "$token" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -fsSL --retry 3 -K - -o "$file.part" "$url"
+  else
+    curl -fsSL --retry 3 -o "$file.part" "$url"
+  fi
   if ! matches "$file.part" "$2" "$3"; then
     echo "error: phonon-bundles: $1 is $(stat -f %z "$file.part") bytes, sha256 $(shasum -a 256 "$file.part" | cut -d' ' -f1); the pin says $2 bytes, $3" >&2
     rm -f "$file.part"
@@ -50,7 +56,7 @@ fetch() {  # fetch <path> <size> <sha256>
   mv "$file.part" "$file"
 }
 
-fetch bundle.json "$(stat -f %z "$dest/bundle.json" 2>/dev/null || echo 2945)" "$manifest_sha"
+fetch bundle.json "$manifest_size" "$manifest_sha"
 jq -r '.files[] | [.path, (.size|tostring), .sha256] | @tsv' "$dest/bundle.json" |
 while IFS=$'\t' read -r path size sha; do fetch "$path" "$size" "$sha"; done
 echo "phonon-bundles: $name verified in $dest"

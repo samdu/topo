@@ -66,9 +66,10 @@ final class PhononStoreTests: XCTestCase {
     func testAPackSourceTakesTheSamePathAndIsLetGoAfterItsCopy() async throws {
         let pack = FakePack(folder: try bundle(built: 100, files: weights), version: 3)
         _ = try await store.install(from: pack)
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 3))
+        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 3, released: true))
         XCTAssertTrue(store.isWhole())
         XCTAssertEqual(pack.counts, .init(madeLocal: 1, copied: 1))
+        XCTAssertFalse(pack.isLocal, "the pack is kept beside its copy")
     }
 
     /// A store of the pack's own version is taken as it stands, without making the pack local:
@@ -94,7 +95,7 @@ final class PhononStoreTests: XCTestCase {
         let next = FakePack(folder: folder, version: 4)
         _ = try await store.install(from: next)
         XCTAssertEqual(next.counts, .init(madeLocal: 1, copied: 1))
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 4))
+        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 4, released: true))
         _ = try await store.install(from: next)
         XCTAssertEqual(next.counts, .init(madeLocal: 1, copied: 1), "a store at the pack's version fetched it again")
     }
@@ -111,18 +112,48 @@ final class PhononStoreTests: XCTestCase {
         first.open()
         while store.installed() == nil { await Task.yield() }
 
-        // A launch finding the store at the source's own copy says it is checking, and copies nothing.
-        let launch = Voice(engine: TemperatureRecorder(), store: store, source: GatedPack(folder: folder, version: 3, reports: false))
+        // While the store waits on a pack that has said nothing of its download, the line says
+        // it is checking, which is a launch's words and draws no meter.
+        let quiet = GatedPack(folder: folder, version: 5, reports: false)
+        let launch = Voice(engine: TemperatureRecorder(), store: store, source: quiet)
         launch.prepare()
+        while !quiet.entered { await Task.yield() }
         XCTAssertEqual(launch.fetchWords, Voice.checking)
+        quiet.open()
+        while store.installed()?.version != 5 { await Task.yield() }
 
-        let next = GatedPack(folder: folder, version: 4)
+        let next = GatedPack(folder: folder, version: 6)
         let renewing = Voice(engine: TemperatureRecorder(), store: store, source: next)
         renewing.prepare()
         while renewing.fraction == nil { await Task.yield() }
         XCTAssertEqual(renewing.fetchWords, "\(Voice.renewingWords) (50%)")
         next.open()
-        while store.installed()?.version != 4 { await Task.yield() }
+        while store.installed()?.version != 6 { await Task.yield() }
+    }
+
+    /// A removal that fails, or a process that ends between the copy and the removal, is tried
+    /// again at the next launch that finds the store whole, until the pack is gone.
+    func testAPackNotLetGoIsLetGoAtTheNextLaunch() async throws {
+        let pack = FakePack(folder: try bundle(built: 100, files: weights), version: 3, refusals: 1)
+        _ = try await store.install(from: pack)
+        XCTAssertTrue(pack.isLocal, "the refused removal took the pack")
+        XCTAssertEqual(store.installed()?.released, false)
+        _ = try await store.install(from: pack)
+        XCTAssertFalse(pack.isLocal, "the next launch left the pack beside the store")
+        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 3, released: true))
+        XCTAssertEqual(pack.counts, .init(madeLocal: 1, copied: 2))
+        _ = try await store.install(from: pack)
+        XCTAssertEqual(pack.counts, .init(madeLocal: 1, copied: 2), "a pack let go is not let go again")
+    }
+
+    /// A pack whose version cannot be read this launch leaves a whole store standing: it is not
+    /// downloaded again to find out.
+    func testAnUnreadableVersionKeepsTheStoreWithoutAFetch() async throws {
+        let pack = FakePack(folder: try bundle(built: 100, files: weights), version: 3, unreadable: 1)
+        _ = try await store.install(from: FakePack(folder: pack.folder, version: 3))
+        _ = try await store.install(from: pack)
+        XCTAssertEqual(pack.counts.madeLocal, 0, "the pack was fetched again for a version nobody could read")
+        XCTAssertTrue(store.isWhole())
     }
 
     func testAFileThatDoesNotMatchItsDigestLeavesNoStoreFolder() async throws {
@@ -190,7 +221,9 @@ final class PhononStoreTests: XCTestCase {
     }
 }
 
-/// A pack: a folder that counts its downloads and its letting go, or fails to download.
+/// A pack: a folder that counts its downloads and its letting go. Letting it go takes its files
+/// away, as removing a pack does, and a download brings them back; a removal can be made to fail,
+/// and the version to be unreadable, a number of times.
 final class FakePack: PhononSource, @unchecked Sendable {
     struct Counts: Equatable { var madeLocal = 0; var copied = 0 }
     let folder: URL
@@ -198,22 +231,48 @@ final class FakePack: PhononSource, @unchecked Sendable {
     let fails: Bool
     private let lock = NSLock()
     private var kept = Counts()
+    private var refusals: Int
+    private var unreadable: Int
     var counts: Counts { lock.withLock { kept } }
+    private var gone: URL { folder.appendingPathExtension("removed") }
 
-    init(folder: URL, version: Int, fails: Bool = false) {
+    init(folder: URL, version: Int, fails: Bool = false, refusals: Int = 0, unreadable: Int = 0) {
         self.folder = folder
         self.packVersion = version
         self.fails = fails
+        self.refusals = refusals
+        self.unreadable = unreadable
     }
+
+    /// Whether the pack's files are on the phone.
+    var isLocal: Bool { FileManager.default.fileExists(atPath: folder.path) }
 
     func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {
         lock.withLock { kept.madeLocal += 1 }
         if fails { throw URLError(.notConnectedToInternet) }
+        if !isLocal, FileManager.default.fileExists(atPath: gone.path) {
+            try FileManager.default.moveItem(at: gone, to: folder)
+        }
         progress(1)
     }
     func url(of path: String) throws -> URL { try FolderSource(folder: folder).url(of: path) }
-    func version() async -> Int? { packVersion }
-    func copied() async { lock.withLock { kept.copied += 1 } }
+    var versioned: Bool { true }
+    func version() async -> Int? {
+        lock.withLock {
+            if unreadable > 0 { unreadable -= 1; return nil }
+            return packVersion
+        }
+    }
+    func copied() async -> Bool {
+        let refused = lock.withLock { () -> Bool in
+            kept.copied += 1
+            if refusals > 0 { refusals -= 1; return true }
+            return false
+        }
+        if refused { return false }
+        try? FileManager.default.moveItem(at: folder, to: gone)
+        return true
+    }
 }
 
 /// A pack whose download stands at half until the test lets it finish.
@@ -223,6 +282,9 @@ final class GatedPack: PhononSource, @unchecked Sendable {
     private let lock = NSLock()
     private var waiter: CheckedContinuation<Void, Never>?
     private var opened = false
+    private var began = false
+    /// Whether the store has asked for the download.
+    var entered: Bool { lock.withLock { began } }
 
     let reports: Bool
 
@@ -242,6 +304,7 @@ final class GatedPack: PhononSource, @unchecked Sendable {
     }
 
     func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {
+        lock.withLock { began = true }
         if reports { progress(0.5) }
         await withCheckedContinuation { continuation in
             let go = lock.withLock { () -> Bool in
@@ -253,6 +316,7 @@ final class GatedPack: PhononSource, @unchecked Sendable {
         }
     }
     func url(of path: String) throws -> URL { try FolderSource(folder: folder).url(of: path) }
+    var versioned: Bool { true }
     func version() async -> Int? { packVersion }
-    func copied() async {}
+    func copied() async -> Bool { true }
 }

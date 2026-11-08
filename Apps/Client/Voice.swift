@@ -290,7 +290,10 @@ enum VoiceError: LocalizedError {
 /// the tests, so the engine's order — one sentence at a time, a reload never under one — is held
 /// without a model.
 protocol PhononSpeaking: AnyObject, Sendable {
-    func stream(_ text: String) -> AsyncThrowingStream<[Float], Error>
+    /// Makes `text`, handing each chunk to `onAudio` as it is made, and returns once the native
+    /// call has: at the end of the sentence, or at the next chunk after the calling task is
+    /// cancelled.
+    func say(_ text: String, onAudio: @escaping @Sendable ([Float]) -> Void) async throws
 }
 
 /// Phonon, one instance for the process. An actor so its order is one place: a sentence is
@@ -354,14 +357,14 @@ actor PhononVoiceEngine: VoiceEngine {
         do {
             if self.temperature != temperature { try await reload(at: temperature) }
             guard let phonon else { throw VoiceError.notLoaded }
-            // The producer holds the sentence's samples and not the instance, so a reload after
-            // it is never beside a second instance kept alive by the sentence before.
-            let chunks = phonon.stream(text)
             let (frames, continuation) = AsyncThrowingStream<Voice.Frame, Error>.makeStream()
+            // The producer calls Phonon itself and frees the engine only once that call has
+            // returned, so a dropped sentence's native work is over before the next begins; and it
+            // has let go of the instance by then, so a reload after it never opens beside it.
+            let held = Held(phonon)
             let producer = Task.detached {
                 do {
-                    for try await chunk in chunks {
-                        if Task.isCancelled { break }
+                    try await held.take()?.say(text) { chunk in
                         continuation.yield(Voice.Frame(samples: chunk, rate: Voice.rate))
                     }
                     continuation.finish()
@@ -401,8 +404,25 @@ actor PhononVoiceEngine: VoiceEngine {
     }
 }
 
+/// The instance a sentence's producer holds until it hands it to its one call.
+private final class Held: @unchecked Sendable {
+    private let lock = NSLock()
+    private var phonon: (any PhononSpeaking)?
+    init(_ phonon: any PhononSpeaking) { self.phonon = phonon }
+    func take() -> (any PhononSpeaking)? {
+        lock.withLock {
+            defer { phonon = nil }
+            return phonon
+        }
+    }
+}
+
 #if canImport(PhononTTS)
-extension Phonon: PhononSpeaking {}
+extension Phonon: PhononSpeaking {
+    func say(_ text: String, onAudio: @escaping @Sendable ([Float]) -> Void) async throws {
+        try await speak(text, onAudio: onAudio)
+    }
+}
 #endif
 /// How much chance each frame of the voice is drawn with: Phonon's flow sampler draws every
 /// frame's noise with a spread of this value's square root. A setting, this device's alone: a
