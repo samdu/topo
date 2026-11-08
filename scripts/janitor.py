@@ -296,6 +296,19 @@ def owners(branch):
     return {f"topo-{topic}", topic}
 
 
+def working(panes, worktrees):
+    """The branches some tmux pane stands in: a pane whose current path is a
+    worktree's or under it works that worktree's branch, whatever its session
+    is named — a session spawned for one topic often opens its branch under
+    another name. Pure."""
+    out = set()
+    for _, cwd in panes:
+        for wt in worktrees:
+            if wt.get("branch") and (cwd == wt["path"] or cwd.startswith(wt["path"].rstrip("/") + "/")):
+                out.add(wt["branch"])
+    return out
+
+
 def pick_run(runs, number):
     """The run that speaks for a PR's head, from the head's pull_request
     validate runs: only those GitHub ties to this PR, since two PRs can share a
@@ -321,8 +334,9 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
     Returns a list of dicts: {"kind": merge|rerun|report, "key": ..., "text": ...}.
     `run` is the newest pull_request validate run for the PR's head, or None;
     `jobs` its jobs as [{name, conclusion, id, steps}]. `sessions` is the set of
-    tmux session names standing on this Mac, or None when they could not be
-    read. `files` are the paths the PR changes at its head, or None when they
+    tmux session names standing on this Mac, with the owner names of every
+    branch a pane stands in the worktree of (`working`), or None when they
+    could not be read. `files` are the paths the PR changes at its head, or None when they
     could not be read whole. Pure: nothing is read or done.
     """
     n, head = pr["number"], pr["headRefOid"]
@@ -1650,8 +1664,14 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     prs_whole = prs_ok
     # The engineers' sessions standing on this Mac, for a PR that conflicts with main.
     try:
-        sessions = {name for name, _ in sh.tmux_panes()}
+        panes = sh.tmux_panes()
+        sessions = {name for name, _ in panes}
         state["fired"].pop("sessions:read", None)
+        try:
+            for branch in working(panes, sh.worktrees(checkout)):
+                sessions |= owners(branch)
+        except RuntimeError:
+            pass   # the worktrees go unread: the sessions' names alone say who stands
     except RuntimeError as ex:
         sessions = None
         say("sessions:read", f"could not read the tmux sessions, so no conflicted PR is judged abandoned: {ex}")

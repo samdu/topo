@@ -2745,6 +2745,21 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         self.assertEqual(self.texts().count("could not read the dev slots"), 1)
 
+    def test_a_pane_in_the_branchs_worktree_owns_its_pr_whatever_its_session_is_called(self):
+        wt = "worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\nworktree /w/topo-gone\nHEAD 2222\nbranch refs/heads/buddy/gone\n\n"
+        s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees=wt,
+                          panes="topo-other-name\t/w/topo-gone/Packages")
+        self.run_pass(s)
+        self.assertNotIn("stands to merge main in", self.texts())
+        s["panes"] = "topo-other-name\t/w/topo-gone-2"
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, "a sibling path is not the worktree")
+
+    def test_working_is_the_branches_a_pane_stands_in(self):
+        wts = [{"path": "/w/a", "branch": "buddy/a"}, {"path": "/w/b", "branch": "buddy/b"}, {"path": "/w/c"}]
+        self.assertEqual(janitor.working([("s", "/w/a"), ("t", "/w/b/x/y"), ("u", "/w/c"), ("v", "/w/ab")], wts),
+                         {"buddy/a", "buddy/b"})
+
     def test_a_conflicted_pr_with_no_session_is_said_once_per_head(self):
         s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees="",
                           panes="topo-other\t/x")
