@@ -335,9 +335,16 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
     # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
-    # waits for ready, and nothing about its runs is the janitor's to say. One
-    # with a ticked device box went back to draft after Sam tested it.
+    # waits for ready, and nothing else about its runs is the janitor's to say. Two
+    # things are: a verdict that blocked its head, since a blocking verdict puts
+    # the PR back to draft and its review lands where no session on this Mac
+    # reads it (codex ran on the head, so the verdict is this head's), and a
+    # ticked device box, a draft Sam tested.
     if pr["isDraft"]:
+        names = {j["name"]: j.get("conclusion") for j in jobs}
+        if (run and run["status"] == "completed" and names.get("codex") == "success"
+                and names.get("review_gate") in NOT_GREEN and names.get("reviewer_ran") not in NOT_GREEN):
+            report("verdict", f"{title}: the reviewer blocked {short}, and it is back to draft; the verdict is on the PR.")
         if ticked_device(pr.get("body")):
             report("draft", f"{title} is a draft at {short}, so nothing merges it.")
             if pr.get("mergeStateStatus") == "DIRTY":
@@ -1658,10 +1665,8 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     for pr in prs:
         n, head = pr["number"], pr["headRefOid"]
         try:
-            run = jobs = None
-            if not pr["isDraft"]:
-                run = sh.newest_run(head, n)
-                jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
+            run = sh.newest_run(head, n)
+            jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
             files = ()
             if run and run["status"] == "completed" and run.get("conclusion") == "success":
                 try:
