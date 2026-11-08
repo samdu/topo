@@ -121,6 +121,8 @@ final class ConversationTests: XCTestCase {
     private var enabled = true
     private var holding = false
     private var sent: [String] = []
+    /// The tones played by the time of each send.
+    private var tonesAtSend: [[KeeperSounds.Tone]] = []
     /// Whether the chat's send takes the turn's wait, as `ChatView.sendSpoken` does.
     private var waitOnSend = false
     private var told: [Bool] = []
@@ -210,6 +212,7 @@ final class ConversationTests: XCTestCase {
         conversation.ended = { [unowned self] in ends += 1 }
         conversation.send = { [unowned self] in
             sent.append($0)
+            tonesAtSend.append(sounds?.played ?? [])
             if waitOnSend { _ = speaker.awaitReply("spoken-\(sent.count)", readAloud: true) }
         }
         conversation.sends = { sends }
@@ -1387,7 +1390,7 @@ final class ScriptedJudge: TurnJudge, @unchecked Sendable {
 
 // MARK: - The conversation's tones
 
-/// Daphne's open-mic tones, on the conversation: the onset's `ack` once an utterance opens, the
+/// The open mic's own tone, on the conversation: no tone at an utterance's onset, the
 /// go-ahead owed at the conversation's start, after a turn sent, after a reply and at an unmute
 /// and paid once the microphone is open with nothing on its way, yielding to a cue that has just
 /// said it, and the gate shut under a tone so the ear does not take it for speech.
@@ -1405,18 +1408,18 @@ extension ConversationTests {
         await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
-        XCTAssertEqual(played, [.speak, .ack], "an utterance's second onset sounded a second ack")
+        XCTAssertEqual(played, [.speak], "the utterance's onset sounded a tone")
         await settle("the microphone open again") { voice.listening }
         await drain()
-        XCTAssertEqual(played, [.speak, .ack], "the go-ahead sounded with the turn on its way")
+        XCTAssertEqual(played, [.speak], "the go-ahead sounded with the turn on its way")
         speaker.endAwaiting("spoken-1", "the reply is in")
-        await settle("the go-ahead once the turn is in") { self.played == [.speak, .ack, .speak] }
+        await settle("the go-ahead once the turn is in") { self.played == [.speak, .speak] }
         await drain()
-        XCTAssertEqual(played, [.speak, .ack, .speak], "the go-ahead was paid twice")
+        XCTAssertEqual(played, [.speak, .speak], "the go-ahead was paid twice")
         detector.script([1: .start(8_000), 4: .end(16_000)])
         utterance(into: voice.sink)
         await settle("the second turn sent") { self.sent.count == 2 }
-        XCTAssertEqual(played, [.speak, .ack, .speak, .ack], "the next utterance went unacked")
+        XCTAssertEqual(played, [.speak, .speak], "the next utterance's onset sounded a tone")
         speaker.endAwaiting("spoken-2", "the test is done")
         conversation.stop("test", sending: false)
         XCTAssertFalse(speaker.conversing)
@@ -1429,12 +1432,12 @@ extension ConversationTests {
         await drain()
         await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
-        await settle("the go-ahead after the turn") { self.played == [.speak, .ack, .speak] }
+        await settle("the go-ahead after the turn") { self.played == [.speak, .speak] }
         XCTAssertTrue(speaker.speak("The lights are off."))
         await settle("the microphone closed for the reply") { !voice.listening }
         speaker.stop()
         await settle("the microphone open again") { voice.listening }
-        await settle("the go-ahead after the reply") { self.played == [.speak, .ack, .speak, .speak] }
+        await settle("the go-ahead after the reply") { self.played == [.speak, .speak, .speak] }
     }
 
     func testAnUnmuteOwesTheGoAheadAndACueThatHasJustSoundedStandsInForIt() async {
@@ -1465,13 +1468,14 @@ extension ConversationTests {
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
         detector.script([0: .start(0), 1: .end(6_000)])
-        await settle("the go-ahead") { self.played == [.speak, .ack, .speak] }
+        await settle("the go-ahead") { self.played == [.speak, .speak] }
         await drain()
         utterance(into: voice.sink)
         await settle("the chunks fed") { detector.chunks >= 5 }
         await drain()
         XCTAssertEqual(sent.count, 1, "the go-ahead's own tone was sent as a turn")
-        XCTAssertEqual(played, [.speak, .ack, .speak], "the tone's onset sounded an ack")
+        XCTAssertEqual(played, [.speak, .speak], "the tone's onset sounded a tone")
+        XCTAssertFalse(conversation.heardOnset, "the go-ahead's own onset was given to the person")
     }
 
     /// Words carried into the conversation from the press, judged only after the call's resume,
@@ -1489,7 +1493,7 @@ extension ConversationTests {
         placeAndActivate(conversation)
         await settle("the carried words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
-        XCTAssertEqual(played.first, .ack, "the go-ahead sounded over words the detector had yet to give")
+        XCTAssertEqual(tonesAtSend, [[]], "the go-ahead sounded over words the detector had yet to give")
     }
 
     /// A wait that ends while the next onset is still with the detector pays no go-ahead over it:
@@ -1577,7 +1581,7 @@ extension ConversationTests {
         await settle("the chunks fed") { detector.chunks >= 9 }
         await drain()
         XCTAssertEqual(sent, [], "the delegate's own tone was sent as a turn")
-        XCTAssertFalse(played.contains(.ack), "the tone's onset sounded an ack")
+        XCTAssertFalse(conversation.heardOnset, "the tone's onset was given to the person")
         speaker.endAwaiting("before", "the test is done")
     }
 
@@ -1597,7 +1601,7 @@ extension ConversationTests {
         await settle("the chunks fed") { detector.chunks >= 7 }
         await drain()
         XCTAssertEqual(sent, [], "the receipt's own onset was taken for the person's")
-        XCTAssertFalse(played.contains(.ack))
+        XCTAssertFalse(conversation.heardOnset, "the receipt's onset was given to the person")
         speaker.endAwaiting("before", "the test is done")
     }
 
@@ -1611,7 +1615,7 @@ extension ConversationTests {
         await settle("the go-ahead at the start") { self.played == [.speak] }
         _ = speaker.awaitReply("before", readAloud: true)
         utterance(into: voice.sink)
-        await settle("the onset") { self.played.contains(.ack) }
+        await settle("the onset") { conversation.heardOnset }
         await settle("what the sink holds judged") { detector.chunks >= 5 }
         sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
         utterance(into: voice.sink, seconds: 0.75)
@@ -1622,7 +1626,6 @@ extension ConversationTests {
         detector.script([5: .start(20_000), 7: .end(28_000)])
         utterance(into: voice.sink, seconds: 2.25)
         await settle("the second turn sent") { self.sent.count == 2 }
-        XCTAssertEqual(played.filter { $0 == .ack }.count, 2, "the last utterance's gate took the next one's onset")
     }
 
     /// A tone sounded over words already begun (a receipt of the turn still being worked on)
@@ -1636,9 +1639,9 @@ extension ConversationTests {
         // A turn on its way, whose tools sound while the person speaks.
         _ = speaker.awaitReply("before", readAloud: true)
         utterance(into: voice.sink)
-        await settle("the onset") { self.played.contains(.ack) }
+        await settle("the onset") { conversation.heardOnset }
         sounds?.follow(.update(.event(.toolUse(name: "Bash"))))
-        XCTAssertEqual(played, [.speak, .ack, .act])
+        XCTAssertEqual(played, [.speak, .act])
         utterance(into: voice.sink, seconds: 0.75)
         await settle("the turn sent") { self.sent.count == 1 }
         speaker.endAwaiting("before", "the test is done")
@@ -1726,7 +1729,7 @@ extension ConversationTests {
         }
         let sentWhileSpeaking = sent
         await drain()
-        XCTAssertTrue(played.contains(.ack), "the person's onset")
+        XCTAssertTrue(conversation.heardOnset, "the person's onset")
         XCTAssertGreaterThanOrEqual(played.filter { $0 == .read }.count, 7, "the receipts sounded")
         XCTAssertEqual(sentWhileSpeaking, [], "the turn was ended at the quiet's cap while the person was still speaking")
         speaker.endAwaiting("before", "the test is done")
