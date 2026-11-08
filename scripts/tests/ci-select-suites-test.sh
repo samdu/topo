@@ -68,6 +68,9 @@ expected=(
   'scripts/tests/review-prompt-test.sh scripts'
   'scripts/review-verdicts.sh scripts'
   'scripts/tests/review-verdict-test.sh scripts'
+  'scripts/tests/simulator-run-test.sh scripts'
+  'scripts/tests/ci-audio-lane-test.sh scripts'
+  'scripts/tests/ci-require-tests-test.sh scripts'
 )
 
 failures=0
@@ -130,6 +133,13 @@ selects false false false "the push script and its test" $'scripts/validate-and-
 selects false false false "the host switch and its test" $'scripts/validate-host.sh\nscripts/tests/validate-host-test.sh\n' true
 selects false false false "the selectors and their tests" $'scripts/ci-select-suites.sh\nscripts/ci-select-lane.sh\nscripts/tests/ci-select-suites-test.sh\nscripts/tests/ci-select-lane-test.sh\n' true
 selects false false false "the reviewer's scripts and their tests" $'scripts/review-cap.sh\nscripts/review-prompt.sh\nscripts/review-verdicts.sh\nscripts/tests/review-cap-test.sh\nscripts/tests/review-prompt-test.sh\nscripts/tests/review-verdict-test.sh\n' true
+# The simulator run's and the audio lane's tests fake their whole world, so a change to a test
+# alone is the harness's; the scripts they test are what the product suites prove.
+selects false false false "the simulator run's and the audio lane's tests alone" $'scripts/tests/simulator-run-test.sh\nscripts/tests/ci-audio-lane-test.sh\n' true
+selects true true true "the simulator run's script beside its test" $'scripts/simulator-run.sh\nscripts/tests/simulator-run-test.sh\n'
+selects false false false "the suite gate's test alone" $'scripts/tests/ci-require-tests-test.sh\n' true
+selects true true true "the suite gate beside its test" $'scripts/ci-require-tests.sh\nscripts/tests/ci-require-tests-test.sh\n'
+selects true true true "the audio lane's script beside its test" $'scripts/ci-audio-lane.sh\nscripts/tests/ci-audio-lane-test.sh\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
 selects true true true "the app's client code" $'Apps/Client/SettingsView.swift\n'

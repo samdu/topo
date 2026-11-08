@@ -73,8 +73,9 @@ judgement:
      `allowed_pr()` is every write the step can make. It merges nothing:
      the box is what automerge and step 1 were waiting on;
   9. reports, once per head, an open PR whose dev slot (slots.json) carries
-     another commit than its head while the head has passed its suites
-     (`GATE`, the gate publish-topo.sh builds behind): a build never recut.
+     another commit than its head while the PR is final (`FINAL_GATE`) and
+     the head has passed its suites (`GATE`), the two gates publish-topo.sh
+     builds behind: a build never recut. A PR in review is not final.
 
 Step 2 takes a run cancelled inside the reviewer chain alone (codex past its
 time limit) as a reviewer that never ran, and reruns any other cancelled run
@@ -132,6 +133,7 @@ DEV_SLOTS = "https://topo.hexagon.zone/files/dfb52de461975ddf6837/slots.json"
 DEV_TREES = "~/github/topo-ota-dev.pr"   # pr-N.lock stands there while that PR's build is being cut
 # Whether a head passed the suites its PR needs, as `test` concludes it, with or without a `test` run.
 GATE = "~/github/experiments/ota/topo-suites-gate.sh"
+FINAL_GATE = "~/github/experiments/ota/topo-final-gate.sh"
 CHECKOUT = "~/github/topo"
 # The coordinator (docs/process.md): the session REPORT_TO on the host whose
 # bridge is REPORT_HOST. topo-coordinator runs on toolbox, whose bridge's mesh
@@ -659,9 +661,12 @@ LEAD = "first, Sam's device test is ticked and it is not merging: "
 
 
 def leads(pr, conds):
-    """Whether a PR's report lines lead the report: a ticked device box, and
-    something holding the PR other than more boxes still to tick. Pure."""
-    return ticked_device(pr.get("body")) and bool(set(conds) - {"boxes"})
+    """Whether a PR's report lines lead the report: a ready PR with a ticked
+    device box, and something holding it other than more boxes still to tick.
+    A draft never leads: it is the coordinator's, who put it back knowing what
+    Sam had ticked. Pure."""
+    return (not pr.get("isDraft") and ticked_device(pr.get("body"))
+            and bool(set(conds) - {"boxes"}))
 
 
 def device_boxes(body):
@@ -1345,6 +1350,15 @@ class Shell:
             return p.returncode == 0
         raise RuntimeError(f"the suites gate could not judge {sha[:7]}: {(p.stdout + p.stderr).strip()[-200:]}")
 
+    def pr_final(self, number):
+        """The final gate on one PR (ready, no conflict, its last review
+        passed): True when final, False when not, a RuntimeError when it
+        could not judge."""
+        p = self.run(["bash", os.path.expanduser(FINAL_GATE), str(number)], timeout=120, check=False)
+        if p.returncode in (0, 1):
+            return p.returncode == 0
+        raise RuntimeError(f"the final gate could not judge #{number}: {(p.stdout + p.stderr).strip()[-200:]}")
+
     def publish(self):
         script = os.path.expanduser(PUBLISH)
         p = self.run(["bash", script, "origin/main"], timeout=self.publish_timeout, check=False, mutating=True)
@@ -1777,8 +1791,10 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         state["fired"] = {k: v for k, v in state["fired"].items() if not (k.startswith("build") and k.endswith(":read"))}
 
     # 9: a dev build left behind its PR. A slot serving another commit than
-    # the head, while that head has passed its suites, is a build nobody recut:
-    # said once per head. A build being cut (its lock stands) is not yet one.
+    # the head, while the PR is final and its head has passed its suites, is a
+    # build nobody recut: said once per head. A PR still in review is not
+    # final, since its build is cut only after its last round (docs/process.md,
+    # Device checks), and a build being cut (its lock stands) is not yet one.
     if prs_ok:
         try:
             stale = decide_slots(prs, sh.dev_slots())
@@ -1793,6 +1809,15 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     quiet.append(f"#{n}: its dev build is being cut")
                     continue
                 try:
+                    final = sh.pr_final(n)
+                    state["fired"].pop(f"{n}:final:{head}", None)
+                except RuntimeError as ex:
+                    say(f"{n}:final:{head}", f"#{n}: its dev build carries {served}, not its head {head[:7]}, and {ex}")
+                    continue
+                if not final:
+                    quiet.append(f"#{n}: its dev build is behind, and it is not final")
+                    continue
+                try:
                     green = sh.suites_green(checkout, head)
                     state["fired"].pop(f"{n}:gate:{head}", None)
                 except RuntimeError as ex:
@@ -1802,7 +1827,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     quiet.append(f"#{n}: its dev build is behind, and {head[:7]} has not passed its suites")
                     continue
                 lines.append(f"#{n} ({pr['headRefName']}): its dev build carries {served}, but its head is {head[:7]}, "
-                             f"which has passed its suites; the build was never recut (publish-topo.sh --dev {n}).")
+                             f"which is final and has passed its suites; the build was never recut (publish-topo.sh --dev {n}).")
                 state["fired"][key] = now.isoformat()
         except RuntimeError as ex:
             say("slots:read", f"could not read the dev slots: {ex}")
