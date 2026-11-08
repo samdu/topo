@@ -53,7 +53,12 @@ enum AppRecords {
         if debugStore != nil { return "a debug store (\(storeVariable))" }
         #endif
         switch await route.decidedStore {
-        case .local?: return "on this phone (no iCloud account when Topo was first opened)"
+        case .local?:
+            // The class the file holds, read back, which a simulator does not keep.
+            let kept = (try? FileManager.default.attributesOfItem(atPath: RecordRoute.standardFile.path))?[.protectionKey] as? FileProtectionType
+            let protection = kept == .completeUntilFirstUserAuthentication ? "protected until first unlock"
+                : "protection \(kept?.rawValue ?? "none")"
+            return "on this phone (no iCloud account when Topo was first opened), \(protection)"
         case .cloud?: return "iCloud"
         case nil: return "not decided yet"
         }
