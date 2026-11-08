@@ -239,8 +239,19 @@ final class Voice {
 
     /// One sentence, as the frames of it arrive. The caller queues each for playback the instant
     /// it exists, so what a listener waits for is a frame rather than the sentence.
+    /// An engine that refuses the sentence itself, before any frame, holds no bundle: a reload
+    /// for a new temperature failed. That is a voice that is not ready, so the voice fails, the
+    /// line says why, replies are text, and the next `prepare` loads it again.
     func synthesise(_ text: String) async throws -> AsyncThrowingStream<Frame, Error> {
-        try await engine.stream(text, temperature: VoiceTemperature.value(defaults))
+        do {
+            return try await engine.stream(text, temperature: VoiceTemperature.value(defaults))
+        } catch {
+            if state == .ready {
+                state = .failed
+                trouble = "could not be loaded again: \(error.localizedDescription)"
+            }
+            throw error
+        }
     }
 
     /// One decoded frame, 80 ms of audio.

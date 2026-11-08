@@ -7,9 +7,13 @@
 #   scripts/check-built-assets.sh <path to Topo.app>              # carries no part of the bundle
 #   scripts/check-built-assets.sh --embedded <path to Topo.app>   # carries the whole bundle
 #
-# Without `--embedded`, any `phonon-40m-en` folder, Core ML package or `.safetensors` file anywhere
-# in the app is a failure, so a bundle copied under another name is caught as well. With it, the
-# app's `phonon-40m-en/bundle.json` has to be there and every file it lists at the size it names.
+# Without `--embedded`, any of these anywhere in the app is a failure: a `phonon-40m-en` folder; a
+# model in any of Core ML's forms (`.mlpackage`, `.mlmodel`, `.mlmodelc`, the compiled one Xcode
+# makes of the other two); weights by their own extensions (`.safetensors`, `.gguf`, `.onnx`,
+# `.pt`, `.pth`, `.ckpt`, `.npz`) or the `.aar` the pack is shipped as; and any file larger than
+# 4 MiB that is not code (a Mach-O), which is renamed weights; the largest resource the app has
+# otherwise, its asset catalogue, is under 2 MiB. With it, the app's `phonon-40m-en/bundle.json`
+# has to be there and every file it lists at the size it names.
 set -euo pipefail
 
 embedded=no
@@ -19,12 +23,20 @@ app="${1:?usage: check-built-assets.sh [--embedded] <Topo.app>}"
 name=phonon-40m-en
 
 if [ "$embedded" = no ]; then
-  found="$(find "$app" \( -name "$name" -o -name '*.mlpackage' -o -name '*.safetensors' \) -print 2>/dev/null | head -5)"
+  found="$(find "$app" \( -name "$name" -o -name '*.mlpackage' -o -name '*.mlmodel' -o -name '*.mlmodelc' \
+    -o -name '*.safetensors' -o -name '*.gguf' -o -name '*.onnx' -o -name '*.pt' -o -name '*.pth' \
+    -o -name '*.ckpt' -o -name '*.npz' -o -name '*.aar' \) -prune -print 2>/dev/null)"
+  # A Mach-O's magic, thin or universal, in either byte order.
+  is_code() { [[ "$(head -c 4 "$1" | xxd -p)" =~ ^(cffaedfe|cefaedfe|feedfacf|feedface|cafebabe|bebafeca)$ ]]; }
+  large="$(find "$app" -type f -size +4096k -print 2>/dev/null | while IFS= read -r file; do
+    is_code "$file" || echo "$file"
+  done)"
+  found="$(printf '%s\n%s\n' "$found" "$large" | sed '/^$/d')"
   if [ -n "$found" ]; then
-    echo "$app carries the voice's bundle, which only an install-page build may: $(echo "$found" | tr '\n' ' ')" >&2
+    echo "$app carries a model or weights, which only an install-page build may: $(echo "$found" | head -5 | tr '\n' ' ')" >&2
     exit 1
   fi
-  echo "$app carries no part of the voice's bundle"
+  echo "$app carries no model and no weights"
   exit 0
 fi
 

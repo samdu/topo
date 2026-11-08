@@ -171,7 +171,7 @@ if STRAY_VOICE=1 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="
     fail "an archive carrying the voice's bundle was uploaded"
 fi
 grep -q -- 'altool' "$work/stray" && fail "an archive carrying the voice's bundle reached altool: $(cat "$work/stray")"
-grep -q "carries the voice's bundle" "$work/out" || fail "the refusal does not say the archive carries the bundle: $(cat "$work/out")"
+grep -q "carries a model or weights" "$work/out" || fail "the refusal does not say the archive carries the bundle: $(cat "$work/out")"
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed" >&2; exit 1; }
 echo "archive-upload.sh: an archive carrying the voice's bundle is refused; --voice packages the voice's pack and uploads it before the build; with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"

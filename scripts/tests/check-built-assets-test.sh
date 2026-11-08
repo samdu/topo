@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # scripts/check-built-assets.sh and scripts/embed-voice.sh against hand-made products: an app with
 # no part of the voice's bundle passes the plain check and fails `--embedded`; one with the bundle
-# embed-voice.sh put there passes `--embedded` and fails the plain check, as does one with a stray
-# Core ML package or voice file under any name; one whose bundle lacks a file or has one of the
+# embed-voice.sh put there passes `--embedded` and fails the plain check, as does one with a model
+# in any of Core ML's forms, a file by a weights format's extension or the pack's `.aar`, or a file
+# over 4 MiB that is not a Mach-O; one whose bundle lacks a file or has one of the
 # wrong size fails `--embedded`, naming it. embed-voice.sh with NO removes a copy a build left,
 # and with YES refuses a source that lacks a file.
 #
@@ -43,17 +44,35 @@ dev="$work/dev/Topo.app"
 mkdir -p "$dev"
 PHONON_BUNDLE="$source" "$embed" "$dev" YES >/dev/null || fail "embed-voice.sh YES refused a whole bundle"
 passes --embedded "$dev"
-refuses "carries the voice's bundle" "$dev"
+refuses "carries a model or weights" "$dev"
 
 PHONON_BUNDLE="$source" "$embed" "$dev" NO || fail "embed-voice.sh NO failed"
 [ ! -e "$dev/phonon-40m-en" ] || fail "embed-voice.sh NO left the bundle in the product"
 passes "$dev"
 
+# Every form a model or its weights takes, under any name, in any bundle of the app.
 stray="$work/stray/Topo.app"
-mkdir -p "$stray/Elsewhere.bundle/b.mlpackage" "$stray/Other.bundle"
-refuses "b.mlpackage" "$stray"
-rm -rf "$stray/Elsewhere.bundle"; printf 'v' > "$stray/Other.bundle/someone.safetensors"
-refuses "someone.safetensors" "$stray"
+for form in b.mlpackage b.mlmodelc; do
+  mkdir -p "$stray/Elsewhere.bundle/$form"
+  refuses "$form" "$stray"
+  rm -rf "$stray/Elsewhere.bundle"
+done
+mkdir -p "$stray/Other.bundle"
+for form in b.mlmodel someone.safetensors b.gguf b.onnx b.pt b.pth b.ckpt b.npz phonon-40m-en.aar; do
+  printf 'v' > "$stray/Other.bundle/$form"
+  refuses "$form" "$stray"
+  rm "$stray/Other.bundle/$form"
+done
+passes "$stray"
+# Weights renamed past every extension are caught by their size; code that size is not.
+head -c 4194305 /dev/zero > "$stray/Other.bundle/data.bin"
+refuses "data.bin" "$stray"
+rm "$stray/Other.bundle/data.bin"
+head -c 4194304 /dev/zero > "$stray/Other.bundle/data.bin"
+passes "$stray"
+{ printf '\xcf\xfa\xed\xfe'; head -c 8388608 /dev/zero; } > "$stray/Other.bundle/Other"
+{ printf '\xca\xfe\xba\xbe'; head -c 8388608 /dev/zero; } > "$stray/Other.bundle/Universal"
+passes "$stray"
 
 short="$work/short/Topo.app"
 mkdir -p "$short"

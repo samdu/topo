@@ -876,7 +876,7 @@ suite_others() {
   # A build that does not ask for the voice's bundle carries none of it, which is the archive's
   # case: the weights reach TestFlight and the App Store as the asset pack.
   scripts/check-built-assets.sh build/device/Build/Products/Release-iphoneos/Topo.app \
-    || { err "the built app carries the voice's bundle."; status=1; }
+    || { err "the built app carries a model or weights."; status=1; }
   run "$RESULTS/TopoHub-build.log" xcodebuild build -project Topo.xcodeproj -scheme TopoHub "${PACKAGES[@]}" \
     -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
     || { err "TopoHub failed to build."; status=1; }

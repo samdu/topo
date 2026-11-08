@@ -121,6 +121,39 @@ final class PhononVoiceTests: XCTestCase {
         XCTAssertEqual(opened.alive, [], "an instance was still held while the next opened: \(opened.alive)")
     }
 
+    /// A reload that fails is not a voice that is ready: the voice fails, the line says why, and
+    /// the next load, which `prepare` makes, brings it back.
+    @MainActor
+    func testAFailedReloadFailsTheVoice() async throws {
+        let refuse = Refuse()
+        let engine = PhononVoiceEngine(open: { _ in
+            if refuse.now { throw VoiceError.unavailable("Core ML refused the bundle") }
+            return FakePhonon(log: SpeakLog(), chunks: 1)
+        })
+        let defaults = UserDefaults(suiteName: "phonon-voice-\(UUID().uuidString)")!
+        let voice = Voice(engine: engine, defaults: defaults)
+        voice.load(folder: folder)
+        for _ in 0..<1_000 where voice.state != .ready { await Task.yield() }
+        XCTAssertEqual(voice.state, .ready)
+
+        refuse.now = true
+        defaults.set(0.7, forKey: VoiceTemperature.key)
+        do {
+            _ = try await voice.synthesise("after the change")
+            XCTFail("a sentence was made with no bundle loaded")
+        } catch {}
+        XCTAssertEqual(voice.state, .failed)
+        XCTAssertFalse(voice.ready, "a failed reload left the voice ready")
+        XCTAssertTrue(voice.summary.contains("could not be loaded again"), voice.summary)
+        XCTAssertTrue(voice.summary.contains("Core ML refused the bundle"), voice.summary)
+
+        refuse.now = false
+        voice.load(folder: folder)
+        for _ in 0..<1_000 where voice.state != .ready { await Task.yield() }
+        XCTAssertEqual(voice.state, .ready)
+        for try await _ in try await voice.synthesise("again") {}
+    }
+
     private func withTimeout(_ body: @escaping @Sendable () async throws -> Void) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await body() }
@@ -131,6 +164,15 @@ final class PhononVoiceTests: XCTestCase {
             try await group.next()
             group.cancelAll()
         }
+    }
+}
+
+final class Refuse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var now: Bool {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }
 
