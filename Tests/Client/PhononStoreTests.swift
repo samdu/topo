@@ -206,6 +206,61 @@ final class PhononStoreTests: XCTestCase {
         } catch {}
     }
 
+    /// An older pack an earlier removal left on the phone, made local while the manager
+    /// advertises a newer one, is recorded as the version its files are: the next launch still
+    /// fetches the newer, rather than taking the older weights for it.
+    func testAnOlderPackLeftLocalIsNotRecordedAsTheNewerVersion() async throws {
+        let older = try bundle(built: 100, files: weights)
+        _ = try await store.install(from: FakePack(folder: older, version: 3, refusals: 1))
+        XCTAssertEqual(store.installed()?.released, false)
+        var newer = weights
+        newer["voices/Friendly Octopus.safetensors"] = "the octopus, version 4"
+        let stale = FakePack(folder: older, version: 4, local: 3)
+        _ = try await store.install(from: stale)
+        XCTAssertEqual(store.installed()?.version, 3, "the older pack's files were recorded as the newer version")
+        XCTAssertEqual(store.installed()?.built, 100)
+        let latest = FakePack(folder: try bundle(built: 200, files: newer), version: 4)
+        _ = try await store.install(from: latest)
+        XCTAssertEqual(latest.counts.madeLocal, 1, "the newer version was never fetched")
+        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 200, version: 4, released: true))
+        XCTAssertEqual(try String(contentsOf: store.home.appendingPathComponent("voices/Friendly Octopus.safetensors"), encoding: .utf8),
+                       "the octopus, version 4")
+    }
+
+    /// A copy whose files are all in and checked, and whose last step fails, takes its partial
+    /// folder with it and leaves the good copy in use.
+    func testAFailureAfterTheFilesAreInTakesThePartialFolder() async throws {
+        _ = try await store.install(from: FolderSource(folder: try bundle(built: 100, files: weights)))
+        struct Refused: Error {}
+        let failing = PhononStore(home: store.home, swap: { _, staging in
+            XCTAssertTrue(FileManager.default.fileExists(atPath: staging.appendingPathComponent(".installed").path),
+                          "the swap was reached before the copy was whole")
+            throw Refused()
+        })
+        let home = try await failing.install(from: FolderSource(folder: try bundle(built: 200, files: weights)))
+        XCTAssertEqual(home, store.home)
+        XCTAssertEqual(store.installed()?.built, 100)
+        XCTAssertFalse(fm.fileExists(atPath: store.staging.path), "the whole partial copy was left behind")
+        // With no copy here, the failure is the answer, and it leaves nothing behind either.
+        try fm.removeItem(at: store.home)
+        do {
+            _ = try await failing.install(from: FolderSource(folder: try bundle(built: 300, files: weights)))
+            XCTFail("a copy that never reached its place was taken")
+        } catch {}
+        XCTAssertFalse(fm.fileExists(atPath: store.staging.path))
+    }
+
+    /// A partial folder an earlier process left is taken away by a launch whose source fails.
+    func testASourceThatFailsTakesAPartialFolderLeftBehind() async throws {
+        _ = try await store.install(from: FolderSource(folder: try bundle(built: 100, files: weights)))
+        let stray = store.staging.appendingPathComponent("flow.mlpackage/Data/com.apple.CoreML/weights/weight.bin")
+        try fm.createDirectory(at: stray.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("half the weights".utf8).write(to: stray)
+        _ = try await store.install(from: FakePack(folder: base.appendingPathComponent("nowhere"), version: 4, fails: true))
+        XCTAssertFalse(fm.fileExists(atPath: store.staging.path), "a failing source kept the partial folder")
+        XCTAssertTrue(store.isWhole())
+    }
+
     func testAPathOutsideTheBundleIsRefused() async throws {
         let folder = try bundle(built: 100, files: weights)
         let manifest: [String: Any] = ["built": 100, "files": [["path": "../escape", "size": 1, "sha256": String(repeating: "0", count: 64)]]]
@@ -228,6 +283,9 @@ final class FakePack: PhononSource, @unchecked Sendable {
     struct Counts: Equatable { var madeLocal = 0; var copied = 0 }
     let folder: URL
     let packVersion: Int
+    /// The version a download leaves local, which is the advertised one unless an older pack
+    /// left on the phone stands in for it.
+    let localVersion: Int
     let fails: Bool
     private let lock = NSLock()
     private var kept = Counts()
@@ -236,9 +294,10 @@ final class FakePack: PhononSource, @unchecked Sendable {
     var counts: Counts { lock.withLock { kept } }
     private var gone: URL { folder.appendingPathExtension("removed") }
 
-    init(folder: URL, version: Int, fails: Bool = false, refusals: Int = 0, unreadable: Int = 0) {
+    init(folder: URL, version: Int, local: Int? = nil, fails: Bool = false, refusals: Int = 0, unreadable: Int = 0) {
         self.folder = folder
         self.packVersion = version
+        self.localVersion = local ?? version
         self.fails = fails
         self.refusals = refusals
         self.unreadable = unreadable
@@ -247,13 +306,14 @@ final class FakePack: PhononSource, @unchecked Sendable {
     /// Whether the pack's files are on the phone.
     var isLocal: Bool { FileManager.default.fileExists(atPath: folder.path) }
 
-    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {
+    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int? {
         lock.withLock { kept.madeLocal += 1 }
         if fails { throw URLError(.notConnectedToInternet) }
         if !isLocal, FileManager.default.fileExists(atPath: gone.path) {
             try FileManager.default.moveItem(at: gone, to: folder)
         }
         progress(1)
+        return localVersion
     }
     func url(of path: String) throws -> URL { try FolderSource(folder: folder).url(of: path) }
     var versioned: Bool { true }
@@ -303,7 +363,7 @@ final class GatedPack: PhononSource, @unchecked Sendable {
         waiter?.resume()
     }
 
-    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {
+    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int? {
         lock.withLock { began = true }
         if reports { progress(0.5) }
         await withCheckedContinuation { continuation in
@@ -314,6 +374,7 @@ final class GatedPack: PhononSource, @unchecked Sendable {
             }
             if go { continuation.resume() }
         }
+        return packVersion
     }
     func url(of path: String) throws -> URL { try FolderSource(folder: folder).url(of: path) }
     var versioned: Bool { true }

@@ -179,6 +179,8 @@ final class VoiceToolTests: XCTestCase {
         let defaults = defaults()
         let engine = TemperatureRecorder()
         let voice = Voice(engine: engine, defaults: defaults)
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
+        for _ in 0..<1_000 where !voice.ready { await Task.yield() }
         _ = try await voice.synthesise("Never asked.")
         defaults.set(0.7, forKey: VoiceTemperature.key)
         _ = try await voice.synthesise("Set in Settings.")

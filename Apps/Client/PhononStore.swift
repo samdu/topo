@@ -28,10 +28,26 @@ struct PhononStore: Sendable {
     static let voice = "Friendly Octopus"
 
     let home: URL
+    /// The one step from the old copy to the new; a seam for the tests, which fail it.
+    let swap: @Sendable (_ home: URL, _ staging: URL) throws -> Void
     var staging: URL { home.deletingLastPathComponent().appendingPathComponent(Self.name + ".partial", isDirectory: true) }
     var record: URL { home.appendingPathComponent(".installed") }
 
-    init(home: URL) { self.home = home }
+    init(home: URL, swap: @escaping @Sendable (_ home: URL, _ staging: URL) throws -> Void = PhononStore.swapIn) {
+        self.home = home
+        self.swap = swap
+    }
+
+    /// The old copy replaced by the new in one step, so a process that ends in it leaves one or
+    /// the other; the first copy is a rename.
+    static func swapIn(_ home: URL, _ staging: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: home.path) {
+            _ = try fm.replaceItemAt(home, withItemAt: staging)
+        } else {
+            try fm.moveItem(at: staging, to: home)
+        }
+    }
 
     static func standard() -> PhononStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -78,9 +94,11 @@ struct PhononStore: Sendable {
             }
         }
         do {
-            try await source.makeLocal(progress: progress)
+            // The version recorded is the one whose files are local now, as the source vouches for
+            // them, never one read apart from them: an older pack left on the phone is not the
+            // newer one the manager advertises.
+            let version = try await source.makeLocal(progress: progress)
             let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: try source.url(of: "bundle.json")))
-            let version = await source.version()
             if let kept, kept.isCopy(of: manifest.built, version: version), isWhole(manifest) {
                 await release(kept, from: source)
                 return home
@@ -90,6 +108,9 @@ struct PhononStore: Sendable {
             await release(Installed(built: manifest.built, version: version, released: source.versioned ? false : nil), from: source)
             return home
         } catch {
+            // Nothing of a copy that did not finish stays behind, a partial folder an earlier
+            // process left included.
+            try? FileManager.default.removeItem(at: staging)
             // A good copy of an older bundle still speaks.
             if kept != nil, isWhole() {
                 log.error("voice: no new copy was made, keeping the one here: \(String(describing: error))")
@@ -128,23 +149,19 @@ struct PhononStore: Sendable {
     }
 
     /// The copy: every file into the partial folder, checked, then the manifest and the record,
-    /// then the rename. Throws `PhononStoreError` naming the file that did not match.
+    /// then the swap into place. Throws `PhononStoreError` naming the file that did not match; a
+    /// failure at any step, the swap's included, takes the partial folder with it.
     func copy(_ manifest: Manifest, version: Int?, from source: any PhononSource) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: staging)
         do {
             try fill(staging, with: manifest, version: version, from: source)
+            try fm.createDirectory(at: home.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.excludeFromBackup(home.deletingLastPathComponent())
+            try swap(home, staging)
         } catch {
             try? fm.removeItem(at: staging)
             throw error
-        }
-        try fm.createDirectory(at: home.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Self.excludeFromBackup(home.deletingLastPathComponent())
-        // One step from the old copy to the new: a process that ends in it leaves one or the other.
-        if fm.fileExists(atPath: home.path) {
-            _ = try fm.replaceItemAt(home, withItemAt: staging)
-        } else {
-            try fm.moveItem(at: staging, to: home)
         }
         log.notice("voice: bundle \(manifest.built) copied into the store")
     }
@@ -189,6 +206,7 @@ enum PhononStoreError: LocalizedError, Equatable {
     case wrongSize(String)
     case wrongDigest(String)
     case missing(String)
+    case notLatest(Int)
 
     var errorDescription: String? {
         switch self {
@@ -196,6 +214,7 @@ enum PhononStoreError: LocalizedError, Equatable {
         case .wrongSize(let path): "the voice's \(path) is not the size its bundle names"
         case .wrongDigest(let path): "the voice's \(path) does not match its digest"
         case .missing(let path): "the voice's \(path) is not in its source"
+        case .notLatest(let version): "the voice's pack is not yet at version \(version) on this phone"
         }
     }
 }
@@ -203,8 +222,9 @@ enum PhononStoreError: LocalizedError, Equatable {
 /// Where a build has the voice's bundle.
 protocol PhononSource: Sendable {
     /// Brings the bundle onto the phone where it is not: a pack's download, which `progress`
-    /// hears. Throws when it cannot.
-    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws
+    /// hears, of its latest version. Answers the version whose files `url(of:)` now reads (nil for
+    /// a source with none), and throws when it cannot bring that version in.
+    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int?
     /// A file of the bundle, by its path in the bundle, once it is local.
     func url(of path: String) throws -> URL
     /// Whether the source has a version of its own and a copy to let go: a pack.
@@ -226,7 +246,7 @@ struct FolderSource: PhononSource {
         bundle.url(forResource: PhononStore.name, withExtension: nil).map(FolderSource.init(folder:))
     }
 
-    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {}
+    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int? { nil }
     func url(of path: String) throws -> URL {
         let url = folder.appendingPathComponent(path)
         guard FileManager.default.fileExists(atPath: url.path) else { throw PhononStoreError.missing(path) }
@@ -243,7 +263,7 @@ struct AssetPackSource: PhononSource {
 
     init(id: String = PhononStore.name) { self.id = id }
 
-    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws {
+    func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int? {
         let manager = AssetPackManager.shared
         let pack = try await manager.assetPack(withID: id)
         let watch = Task {
@@ -257,7 +277,19 @@ struct AssetPackSource: PhononSource {
             }
         }
         defer { watch.cancel() }
-        try await manager.ensureLocalAvailability(of: pack)
+        // The latest version, not whichever is local: a pack an earlier removal left on the phone
+        // is an older version, and its files are not the version the manager advertises.
+        if #available(iOS 26.4, *) {
+            try await manager.ensureLocalAvailability(of: pack, requireLatestVersion: true)
+        } else {
+            // Before 26.4 the call brings in whatever version it has, so the pack's status says
+            // whether the local one is the latest; one that is not is no version to record.
+            try await manager.ensureLocalAvailability(of: pack)
+            guard try await manager.status(ofAssetPackWithID: id).contains(.upToDate) else {
+                throw PhononStoreError.notLatest(pack.version)
+            }
+        }
+        return pack.version
     }
 
     func url(of path: String) throws -> URL {

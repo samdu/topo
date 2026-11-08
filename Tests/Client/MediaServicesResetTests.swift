@@ -1810,17 +1810,25 @@ final class MediaServicesResetTests: XCTestCase {
     }
 
     /// A media services reset speaks to no node, the time-pitch unit included: the speed is not
-    /// read there, and the next frame's build takes it.
+    /// read there, the old unit is neither read nor written, and the next frame's build takes it.
     func testAResetDoesNotTouchTheSpeed() throws {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let pace = Pace(1.2)
-        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center, speed: { pace.value })
+        var units: [WatchedTimePitch] = []
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center, speed: { pace.value },
+                              makeTimePitch: { let unit = WatchedTimePitch(); units.append(unit); return unit })
         queue.ensureActive = { try audio.ensureActive() }
         try queue.play(toneFrame(0.1), rate: Voice.rate)
         let reads = pace.reads
+        let old = try XCTUnwrap(units.first)
+        XCTAssertTrue(queue.timePitch === old)
+        old.touches = []
+        old.watching = true
         queue.reset()
+        old.watching = false
+        XCTAssertEqual(old.touches, [], "the reset spoke to the old time-pitch unit")
         XCTAssertEqual(pace.reads, reads, "the reset read the speed")
         XCTAssertNil(queue.timePitch)
         pace.value = 0.9
@@ -1855,6 +1863,29 @@ final class MediaServicesResetTests: XCTestCase {
     }
 }
 
+
+/// A time-pitch unit that writes down each read and write of its parameters while it is watched.
+final class WatchedTimePitch: AVAudioUnitTimePitch {
+    var watching = false
+    var touches: [String] = []
+    private func touch(_ what: String) { if watching { touches.append(what) } }
+    override var rate: Float {
+        get { touch("rate read"); return super.rate }
+        set { touch("rate set"); super.rate = newValue }
+    }
+    override var pitch: Float {
+        get { touch("pitch read"); return super.pitch }
+        set { touch("pitch set"); super.pitch = newValue }
+    }
+    override var overlap: Float {
+        get { touch("overlap read"); return super.overlap }
+        set { touch("overlap set"); super.overlap = newValue }
+    }
+    override var bypass: Bool {
+        get { touch("bypass read"); return super.bypass }
+        set { touch("bypass set"); super.bypass = newValue }
+    }
+}
 
 /// The `speak.sentence` marks one task made, in order (`Perf.observer`).
 final class SpokenMarks: @unchecked Sendable {

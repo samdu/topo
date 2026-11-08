@@ -1169,15 +1169,19 @@ final class PlayQueue: @unchecked Sendable {
     /// The rate the time-pitch unit is set to (`VoiceSpeed`), read where the queue speaks to its
     /// nodes and nowhere else.
     private let speed: () -> Float
+    /// Makes the time-pitch unit at each build; a seam for the tests, which watch it.
+    private let makeTimePitch: () -> AVAudioUnitTimePitch
 
     init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          center: NotificationCenter = .default,
          heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
-         speed: @escaping () -> Float = { VoiceSpeed.value() }) {
+         speed: @escaping () -> Float = { VoiceSpeed.value() },
+         makeTimePitch: @escaping () -> AVAudioUnitTimePitch = { AVAudioUnitTimePitch() }) {
         self.makeEngine = makeEngine
         self.center = center
         self.heard = heard
         self.speed = speed
+        self.makeTimePitch = makeTimePitch
     }
 
     /// The engine, the player and the time-pitch unit are built on the first frame, because the
@@ -1291,7 +1295,7 @@ final class PlayQueue: @unchecked Sendable {
         let e = makeEngine()
         let player = AVAudioPlayerNode()
         let silence = AVAudioPlayerNode()
-        let unit = AVAudioUnitTimePitch()
+        let unit = makeTimePitch()
         e.attach(player)
         e.attach(unit)
         e.attach(silence)

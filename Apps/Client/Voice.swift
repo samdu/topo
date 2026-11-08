@@ -239,10 +239,13 @@ final class Voice {
 
     /// One sentence, as the frames of it arrive. The caller queues each for playback the instant
     /// it exists, so what a listener waits for is a frame rather than the sentence.
-    /// An engine that refuses the sentence itself, before any frame, holds no bundle: a reload
-    /// for a new temperature failed. That is a voice that is not ready, so the voice fails, the
-    /// line says why, replies are text, and the next `prepare` loads it again.
+    /// A sentence of a voice that is not ready is refused, and the engine is not asked: a reply
+    /// whose earlier sentence failed the voice says the rest of itself as text. An engine that
+    /// refuses the sentence itself, before any frame, holds no bundle: a reload for a new
+    /// temperature failed. That is a voice that is not ready, so the voice fails, the line says
+    /// why, replies are text, and the next `prepare` loads it again.
     func synthesise(_ text: String) async throws -> AsyncThrowingStream<Frame, Error> {
+        guard state == .ready else { throw VoiceError.notLoaded }
         do {
             return try await engine.stream(text, temperature: VoiceTemperature.value(defaults))
         } catch {

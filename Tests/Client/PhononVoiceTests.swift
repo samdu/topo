@@ -121,12 +121,14 @@ final class PhononVoiceTests: XCTestCase {
         XCTAssertEqual(opened.alive, [], "an instance was still held while the next opened: \(opened.alive)")
     }
 
-    /// A reload that fails is not a voice that is ready: the voice fails, the line says why, and
-    /// the next load, which `prepare` makes, brings it back.
+    /// A reload that fails is not a voice that is ready: the voice fails, the line says why, the
+    /// reply's next sentence is refused without the engine asked, and the next load, which
+    /// `prepare` makes, brings it back.
     @MainActor
     func testAFailedReloadFailsTheVoice() async throws {
         let refuse = Refuse()
         let engine = PhononVoiceEngine(open: { _ in
+            refuse.opened()
             if refuse.now { throw VoiceError.unavailable("Core ML refused the bundle") }
             return FakePhonon(log: SpeakLog(), chunks: 1)
         })
@@ -147,7 +149,17 @@ final class PhononVoiceTests: XCTestCase {
         XCTAssertTrue(voice.summary.contains("could not be loaded again"), voice.summary)
         XCTAssertTrue(voice.summary.contains("Core ML refused the bundle"), voice.summary)
 
+        // The reply's next sentence, with no load between: refused, and the engine not asked, so
+        // a reload that would succeed now does not speak it while the voice says failed.
         refuse.now = false
+        let opens = refuse.opens
+        do {
+            _ = try await voice.synthesise("the reply's next sentence")
+            XCTFail("a failed voice made the reply's next sentence")
+        } catch {}
+        XCTAssertEqual(refuse.opens, opens, "a failed voice asked the engine to load again")
+        XCTAssertEqual(voice.state, .failed)
+
         voice.load(folder: folder)
         for _ in 0..<1_000 where voice.state != .ready { await Task.yield() }
         XCTAssertEqual(voice.state, .ready)
@@ -170,6 +182,9 @@ final class PhononVoiceTests: XCTestCase {
 final class Refuse: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
+    private var count = 0
+    var opens: Int { lock.withLock { count } }
+    func opened() { lock.withLock { count += 1 } }
     var now: Bool {
         get { lock.withLock { value } }
         set { lock.withLock { value = newValue } }
