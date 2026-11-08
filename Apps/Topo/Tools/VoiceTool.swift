@@ -1,10 +1,11 @@
 import Foundation
 import TopoTools
 
-/// `topo voice`: the mind's hand on how this phone hears and speaks. Five settings, each read and
+/// `topo voice`: the mind's hand on how this phone hears and speaks. Seven settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
+/// Voice speed (`VoiceSpeed`), which the play queue reads as it queues each frame, so a change is heard from the next frame queued,
 /// While Topo works (`WorkingSounds`), which the keeper's sounds read at each sound,
 /// Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks,
 /// Open mic waits (`QuietWait`), which the conversation's rule reads at each verdict,
@@ -20,7 +21,7 @@ struct VoiceTool: Tool {
     private struct Defaults: @unchecked Sendable { let store: UserDefaults }
 
     let name = "voice"
-    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature, the sounds while Topo works, the call behind the lock, the open microphone's wait, the earcons"
+    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature and speed, the sounds while Topo works, the call behind the lock, the open microphone's wait, the earcons"
     let usage = """
     topo voice noise-suppression [status]   whether the microphone is cleaned up before it is heard
     topo voice noise-suppression on         clean it up: Apple's voice processing (noise suppression, echo
@@ -35,6 +36,12 @@ struct VoiceTool: Tool {
 
     \(VoiceTemperature.said(VoiceTemperature.standard)) unless changed. A change applies from the next reply read aloud, on this phone only, and they
     can change it back in Settings.
+
+    topo voice speed [status]               how fast your voice is heard
+    topo voice speed VALUE                  set it: from \(VoiceSpeed.said(VoiceSpeed.range.lowerBound)) to \(VoiceSpeed.said(VoiceSpeed.range.upperBound)) times your own pace, the pitch kept
+
+    \(VoiceSpeed.said(VoiceSpeed.standard)) unless changed. A change applies from the next words read aloud, on this phone only,
+    and they can change it back in Settings.
 
     topo voice working [status]             what a spoken turn sounds like while you work on it
     topo voice working off                  nothing until the reply
@@ -72,6 +79,7 @@ struct VoiceTool: Tool {
         switch arguments.first {
         case "noise-suppression": return noiseSuppression(arguments)
         case "temperature": return temperature(arguments)
+        case "speed": return speed(arguments)
         case "working": return working(arguments)
         case "call": return call(arguments)
         case "wait": return wait(arguments)
@@ -152,5 +160,15 @@ struct VoiceTool: Tool {
         guard let value = VoiceTemperature.judged(Double(arguments[1])) else { return .usage(usage + "\n") }
         defaults.store.set(value, forKey: VoiceTemperature.key)
         return .ok("temperature \(VoiceTemperature.said(value)), from the next reply\n")
+    }
+
+    private func speed(_ arguments: [String]) -> ToolReply {
+        guard arguments.count == 2, arguments[1] != "status" else {
+            return .ok("speed \(VoiceSpeed.said(Double(VoiceSpeed.value(defaults.store))))\n")
+        }
+        // Judged as the play queue judges what it reads, so nothing is kept it would not play at.
+        guard let value = VoiceSpeed.judged(Double(arguments[1])) else { return .usage(usage + "\n") }
+        defaults.store.set(value, forKey: VoiceSpeed.key)
+        return .ok("speed \(VoiceSpeed.said(value)), from the next words read aloud\n")
     }
 }

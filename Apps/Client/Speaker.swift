@@ -14,9 +14,9 @@ import TopoCore
 /// the configuration change carries the reply on. No hold outlives its ceiling either way, while
 /// no call is up (`attach`): under one the system holds the session and the card's hang-up is the bound.
 ///
-/// One voice. When the `Voice` (Pocket TTS, on the device) is resident, the reply is cut into
+/// One voice. When the `Voice` (Phonon, on the device) is resident, the reply is cut into
 /// sentences, each synthesised behind the one before and pushed to the play queue frame by frame
-/// as it decodes, paced by the queue's time-pitch unit at `Voice.tempo`, so what a listener waits
+/// as it decodes, paced by the queue's time-pitch unit at the speed setting (`VoiceSpeed`), so what a listener waits
 /// for is the first frame of the first sentence rather than the reply. A reply given to a voice
 /// that is not resident is not spoken at all; the diagnostics `voice` row says why. Nor is one
 /// read into an open microphone: it waits until the microphone closes (`microphoneOpen`,
@@ -670,11 +670,11 @@ final class Speaker {
         nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
-        report = Report(speaks: report.speaks + 1, engine: .pocket, text: text)
+        report = Report(speaks: report.speaks + 1, engine: .phonon, text: text)
         spokeAt = now()
         replySamples = 0
         replySynth = 0
-        DebugRun.say("speak: session ok, pocket")
+        DebugRun.say("speak: session ok, phonon")
         #endif
         self.reply = reply
         if reading { speakLocally(text) }
@@ -1065,10 +1065,10 @@ final class Speaker {
 
 #if DEBUG
 extension Speaker {
-    enum Engine: String, Codable { case pocket }
+    enum Engine: String, Codable { case phonon }
 
     /// The badge's debug-only report of the last reply: how many replies `speak` has been
-    /// given, which engine the last one took (`pocket`, the only one there is), its text, whether
+    /// given, which engine the last one took (`phonon`, the only one there is), its text, whether
     /// audio for it started (the first frame queued) and whether it came to its end rather than
     /// being stopped. `first` and `rtf` are the reply's, not a sentence's: seconds from `speak`
     /// to the reply's first frame being scheduled, and the time spent synthesising over the
@@ -1133,9 +1133,8 @@ final class PlayQueue: @unchecked Sendable {
     /// True from an interruption's `.began` until the queue is built again: iOS has stopped the
     /// engine, so a frame that arrives meanwhile is owed rather than played.
     private(set) var dead = false
-    /// Between the player and the mixer: stage two of the pacing, for a voice with no pace of
-    /// its own. `rate` stretches time and leaves the pitch where it was, so at `Voice.tempo` the
-    /// words come faster without rising.
+    /// Between the player and the mixer: the speed setting (`VoiceSpeed`). `rate` stretches time
+    /// and leaves the pitch where it was, so faster speech comes without rising.
     private(set) var timePitch: AVAudioUnitTimePitch?
     private var format: AVAudioFormat?
     /// What the engine is built at. Remembered past a drop, so a rebuild with no engine left to
@@ -1167,12 +1166,22 @@ final class PlayQueue: @unchecked Sendable {
     /// Whether an engine of this queue's is running, which is what iOS counts as audio.
     var running: Bool { engine?.isRunning ?? false }
 
+    /// The rate the time-pitch unit is set to (`VoiceSpeed`), read where the queue speaks to its
+    /// nodes and nowhere else.
+    private let speed: () -> Float
+    /// Makes the time-pitch unit at each build; a seam for the tests, which watch it.
+    private let makeTimePitch: () -> AVAudioUnitTimePitch
+
     init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          center: NotificationCenter = .default,
-         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) {
+         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
+         speed: @escaping () -> Float = { VoiceSpeed.value() },
+         makeTimePitch: @escaping () -> AVAudioUnitTimePitch = { AVAudioUnitTimePitch() }) {
         self.makeEngine = makeEngine
         self.center = center
         self.heard = heard
+        self.speed = speed
+        self.makeTimePitch = makeTimePitch
     }
 
     /// The engine, the player and the time-pitch unit are built on the first frame, because the
@@ -1192,7 +1201,7 @@ final class PlayQueue: @unchecked Sendable {
         guard !samples.isEmpty else { return }
         // While the engine is dead — from an interruption's `.began` until something rebuilds —
         // the frame is owed rather than played. Restarting a dead engine here throws, and the
-        // throw reads to the voice as the sentence's end, so the rest of a sentence Pocket was
+        // throw reads to the voice as the sentence's end, so the rest of a sentence the voice was
         // still yielding would be lost to an interruption nobody asked for.
         if !dead { try build(rate: rate) }
         guard let format, format.sampleRate == Double(rate),
@@ -1225,6 +1234,9 @@ final class PlayQueue: @unchecked Sendable {
         do {
             try start()
             guard let node else { throw VoiceError.noPlayer }
+            // The speed as it stands now, so a change is heard from this frame on.
+            let pace = speed()
+            if let timePitch, timePitch.rate != pace { timePitch.rate = pace }
             if !node.isPlaying { node.play() }
             if let lead { schedule(lead, era: era) }
             schedule(buffer, era: era)
@@ -1283,14 +1295,14 @@ final class PlayQueue: @unchecked Sendable {
         let e = makeEngine()
         let player = AVAudioPlayerNode()
         let silence = AVAudioPlayerNode()
-        let unit = AVAudioUnitTimePitch()
+        let unit = makeTimePitch()
         e.attach(player)
         e.attach(unit)
         e.attach(silence)
         e.connect(player, to: unit, format: f)
         e.connect(unit, to: e.mainMixerNode, format: f)
         e.connect(silence, to: e.mainMixerNode, format: f)
-        unit.rate = Voice.tempo
+        unit.rate = speed()
         silence.volume = 0
         self.rate = rate
         engine = e

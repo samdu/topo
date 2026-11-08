@@ -18,9 +18,16 @@ fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 
 tree="$work/tree"
 mkdir -p "$tree/scripts" "$tree/Distribution" "$work/bin"
-cp "$here/../archive-upload.sh" "$here/../asc-pem.sh" "$tree/scripts/"
-printf '#!/bin/sh\nexit 0\n' > "$tree/scripts/build-ish.sh"
-chmod +x "$tree/scripts/build-ish.sh"
+cp "$here/../archive-upload.sh" "$here/../asc-pem.sh" "$here/../check-built-assets.sh" "$tree/scripts/"
+cat > "$tree/scripts/phonon-bundles.sh" <<'FAKE'
+#!/bin/sh
+echo "phonon-bundles.sh $*" >> "$CALLS"
+FAKE
+chmod +x "$tree/scripts/phonon-bundles.sh"
+for fake in build-ish.sh fetch-phonon.sh; do
+  printf '#!/bin/sh\nexit 0\n' > "$tree/scripts/$fake"
+  chmod +x "$tree/scripts/$fake"
+done
 touch "$tree/Distribution/ExportOptions.plist"
 pins="$tree/Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 mkdir -p "$(dirname "$pins")"
@@ -35,13 +42,19 @@ git -C "$tree" update-ref refs/remotes/origin/main HEAD
 # xcodebuild: one line per call, and whether the key it was pointed at is a key as it runs.
 cat > "$work/bin/xcodebuild" <<'FAKE'
 #!/usr/bin/env bash
-line="$*" key="" next="" export=""
+line="$*" key="" next="" export="" archive=""
 for argument in "$@"; do
   [ "$next" = key ] && key="$argument"
   [ "$next" = export ] && export="$argument"
+  [ "$next" = archive ] && archive="$argument"
   next=""
-  case "$argument" in -authenticationKeyPath) next=key ;; -exportPath) next=export ;; esac
+  case "$argument" in -authenticationKeyPath) next=key ;; -exportPath) next=export ;; -archivePath) next=archive ;; esac
 done
+# An archive's app, carrying a stray voice bundle when STRAY_VOICE is set.
+if [ "$1" = archive ] && [ -n "$archive" ]; then
+  mkdir -p "$archive/Products/Applications/Topo.app"
+  [ -z "${STRAY_VOICE-}" ] || mkdir -p "$archive/Products/Applications/Topo.app/phonon-40m-en"
+fi
 state=none
 if [ -n "$key" ]; then
   if openssl pkey -in "$key" -noout 2>/dev/null; then state=key; else state=not-a-key; fi
@@ -143,5 +156,22 @@ git -C "$tree" update-ref refs/remotes/origin/main HEAD
 run "$work/packages-moved" || fail "an archive failed: $(cat "$work/out")"
 grep -qx 'packages: fresh pins: two' "$work/packages-moved" || fail "pins that moved did not make the state afresh: $(cat "$work/packages-moved")"
 
+# The voice: no pack unless asked; asked, it is packaged and uploaded before the build.
+grep -q 'phonon-bundles.sh\|upload-asset-pack' "$work/with" && fail "an upload not asked for the voice touched its pack: $(cat "$work/with")"
+ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/voice" --upload --voice \
+    || fail "an upload with the voice failed: $(cat "$work/out")"
+order="$(grep -oE '^(phonon-bundles.sh package|xcrun \[[^]]*\] altool --upload-asset-pack|xcrun \[[^]]*\] altool --upload-app)' "$work/voice" | sed 's/\[[^]]*\] //')"
+[ "$order" = "$(printf 'phonon-bundles.sh package\nxcrun altool --upload-asset-pack\nxcrun altool --upload-app')" ] \
+    || fail "the voice's pack was not packaged, then uploaded, then the build: $(cat "$work/voice")"
+grep -q -- '--upload-asset-pack .*/phonon/phonon-40m-en.aar --apple-id 6826966978 --wait --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/voice" \
+    || fail "the pack was not uploaded to Topo's record with the key: $(cat "$work/voice")"
+
+# An archive carrying the voice's bundle is refused before anything is uploaded.
+if STRAY_VOICE=1 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/stray" --upload; then
+    fail "an archive carrying the voice's bundle was uploaded"
+fi
+grep -q -- 'altool' "$work/stray" && fail "an archive carrying the voice's bundle reached altool: $(cat "$work/stray")"
+grep -q "carries a model or weights" "$work/out" || fail "the refusal does not say the archive carries the bundle: $(cat "$work/out")"
+
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed" >&2; exit 1; }
-echo "archive-upload.sh: with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"
+echo "archive-upload.sh: an archive carrying the voice's bundle is refused; --voice packages the voice's pack and uploads it before the build; with a key kept as hex, in the environment or the keychain, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"

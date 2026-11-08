@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key; so does one without the topo URL scheme, the turn's continued-processing identifier, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, the broadcast extension as one that takes sample buffers and has a program and a principal class, or the share extension with its program, its principal class and its rule of four things, one of each; nor one whose share extension is signed without the app group, nor one carrying FluidAudio's LuxTTS lexicon in any bundle. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme, the turn's continued-processing identifier, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads, the widget extension, the broadcast extension as one that takes sample buffers and has a program and a principal class, or the share extension with its program, its principal class and its rule of four things, one of each; nor one whose share extension is signed without the app group, nor one carrying FluidAudio's LuxTTS lexicon in any bundle, nor one without the Background Assets keys or the asset-pack downloader. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -52,6 +52,13 @@ make_app() {
     plutil -insert NSAppTransportSecurity -json '{"NSAllowsArbitraryLoads":true}' "$app/Info.plist"
     plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo","CFBundleURLSchemes":["topo"]}]' "$app/Info.plist"
     plutil -insert BGTaskSchedulerPermittedIdentifiers -json '["zone.hexagon.topo.turn.*"]' "$app/Info.plist"
+    plutil -insert BAAppGroupID -string group.zone.hexagon.topo "$app/Info.plist"
+    plutil -insert BAHasManagedAssetPacks -bool YES "$app/Info.plist"
+    plutil -insert BAUsesAppleHosting -bool YES "$app/Info.plist"
+    mkdir -p "$app/Extensions/TopoAssets.appex"
+    plutil -create xml1 "$app/Extensions/TopoAssets.appex/Info.plist"
+    plutil -insert EXAppExtensionAttributes -json '{"EXExtensionPointIdentifier":"com.apple.background-asset-downloader-extension"}' \
+        "$app/Extensions/TopoAssets.appex/Info.plist"
     mkdir -p "$app/PlugIns/TopoWidgets.appex"
     plutil -create xml1 "$app/PlugIns/TopoWidgets.appex/Info.plist"
     mkdir -p "$app/PlugIns/TopoBroadcast.appex"
@@ -131,6 +138,29 @@ for permitted in absent '["zone.hexagon.topo.other.*"]'; do
     fi
     rm -rf "$work/no-turn"
 done
+
+for key in BAAppGroupID BAHasManagedAssetPacks BAUsesAppleHosting; do
+    make_app "$work/no-$key/Topo.app"
+    plutil -remove "$key" "$work/no-$key/Topo.app/Info.plist"
+    if errors="$("$check" "$work/no-$key/Topo.app" 2>&1 >/dev/null)"; then
+        fail "a product without $key passed"
+    elif [[ "$errors" != *"$key"* ]]; then
+        fail "the refusal of a product without $key does not name it: $errors"
+    fi
+    rm -rf "$work/no-$key"
+done
+make_app "$work/other-group/Topo.app"
+plutil -replace BAAppGroupID -string group.zone.hexagon.other "$work/other-group/Topo.app/Info.plist"
+if "$check" "$work/other-group/Topo.app" >/dev/null 2>&1; then
+    fail "a product naming another app group for its asset packs passed"
+fi
+make_app "$work/no-assets/Topo.app"
+rm -rf "$work/no-assets/Topo.app/Extensions"
+if errors="$("$check" "$work/no-assets/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product without the asset-pack downloader passed"
+elif [[ "$errors" != *"TopoAssets.appex"* ]]; then
+    fail "the refusal of a product without the asset-pack downloader does not name it: $errors"
+fi
 
 make_app "$work/no-scheme/Topo.app"
 plutil -remove CFBundleURLTypes "$work/no-scheme/Topo.app/Info.plist"

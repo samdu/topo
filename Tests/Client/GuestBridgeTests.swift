@@ -4521,7 +4521,7 @@ extension GuestBridgeTests {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: ScriptedVoice())
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center, makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
         SpokenReply.follow(harness, speaker: speaker) { true }

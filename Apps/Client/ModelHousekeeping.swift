@@ -23,7 +23,8 @@ extension ModelStore {
 
     /// Removes what the manifest does not account for, and returns what went. The protected set
     /// is every manifest entry's directory as `directory(for:)` resolves it, never its id: the
-    /// voice's id is `pocket-tts-coreml` and its home is `Models/pocket-tts`. Under `root`,
+    /// voice activity detector's id is `silero-vad-coreml` and its home is `Models/silero-vad`.
+    /// Under `root`,
     /// anything that is not one of those homes (or a folder on the way down to one) is removed.
     /// Inside a home Topo owns, of a model that is present — every manifest file on disk at its
     /// size and in the ledger, the downloader's own definition — anything that is not a manifest

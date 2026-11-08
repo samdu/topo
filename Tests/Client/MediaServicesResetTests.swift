@@ -261,7 +261,7 @@ struct ScriptedVoice: VoiceEngine {
     /// sentence runs out of cache; none by default.
     var cutShort: @Sendable (String) -> Bool = { _ in false }
 
-    func load(base: URL) async throws {
+    func load(folder: URL, temperature: Float) async throws {
         guard loads else { throw VoiceError.unavailable("no models here") }
     }
 
@@ -300,7 +300,7 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
     var streams: Int { lock.withLock { asked } }
     func releaseTheHeldFrame() { lock.withLock { released = true } }
 
-    func load(base: URL) async throws {}
+    func load(folder: URL, temperature: Float) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         lock.withLock { asked += 1 }
@@ -333,7 +333,7 @@ final class HeldSecondSentence: VoiceEngine, @unchecked Sendable {
     var sentencesAsked: Int { lock.withLock { asked } }
     func releaseTheSecondSentence() { lock.withLock { released = true } }
 
-    func load(base: URL) async throws {}
+    func load(folder: URL, temperature: Float) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         let mine = lock.withLock { asked += 1; return asked }
@@ -362,7 +362,7 @@ final class FramesAfterTheInterruption: VoiceEngine, @unchecked Sendable {
     var yieldedTheRest: Bool { lock.withLock { delivered } }
     func releaseTheRest() { lock.withLock { released = true } }
 
-    func load(base: URL) async throws {}
+    func load(folder: URL, temperature: Float) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
         AsyncThrowingStream { continuation in
@@ -744,7 +744,7 @@ final class MediaServicesResetTests: XCTestCase {
                          heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) async -> Speaker {
         CapturingPlayerNode.scheduled = []
         let voice = Voice(engine: engine)
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == (ready ? .ready : .failed) }
         return Speaker(audio: audio, voice: voice, center: center,
                        makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
@@ -764,7 +764,7 @@ final class MediaServicesResetTests: XCTestCase {
         await settle { speaker.report.started }
         XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
                        "the session is active before the queue exists")
-        XCTAssertEqual(speaker.report.engine, .pocket, "there is one voice")
+        XCTAssertEqual(speaker.report.engine, .phonon, "there is one voice")
         speaker.stop()
     }
 
@@ -1792,6 +1792,50 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(seams.engines.count, 1)
     }
 
+    /// The speed setting is read as each frame is queued, so a change is heard from the next
+    /// frame and never waits for the engine to be rebuilt.
+    func testASpeedChangeIsHeardFromTheNextFrame() throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let pace = Pace(1.0)
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center, speed: { pace.value })
+        queue.ensureActive = { try audio.ensureActive() }
+        try queue.play(toneFrame(0.1), rate: Voice.rate)
+        XCTAssertEqual(queue.timePitch?.rate, 1.0)
+        pace.value = 1.3
+        try queue.play(toneFrame(0.1), rate: Voice.rate)
+        XCTAssertEqual(queue.timePitch?.rate, 1.3)
+        XCTAssertEqual(seams.engines.count, 1, "a speed change rebuilt the engine")
+    }
+
+    /// A media services reset speaks to no node, the time-pitch unit included: the speed is not
+    /// read there, the old unit is neither read nor written, and the next frame's build takes it.
+    func testAResetDoesNotTouchTheSpeed() throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let pace = Pace(1.2)
+        var units: [WatchedTimePitch] = []
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center, speed: { pace.value },
+                              makeTimePitch: { let unit = WatchedTimePitch(); units.append(unit); return unit })
+        queue.ensureActive = { try audio.ensureActive() }
+        try queue.play(toneFrame(0.1), rate: Voice.rate)
+        let reads = pace.reads
+        let old = try XCTUnwrap(units.first)
+        XCTAssertTrue(queue.timePitch === old)
+        old.touches = []
+        old.watching = true
+        queue.reset()
+        old.watching = false
+        XCTAssertEqual(old.touches, [], "the reset spoke to the old time-pitch unit")
+        XCTAssertEqual(pace.reads, reads, "the reset read the speed")
+        XCTAssertNil(queue.timePitch)
+        pace.value = 0.9
+        try queue.play(toneFrame(0.1), rate: Voice.rate)
+        XCTAssertEqual(queue.timePitch?.rate, 0.9)
+    }
+
     func testAResetQueueBuildsANewEngineAndNewNodesOnTheNextPlay() throws {
         var built = 0
         let rate = 24_000
@@ -1820,6 +1864,29 @@ final class MediaServicesResetTests: XCTestCase {
 }
 
 
+/// A time-pitch unit that writes down each read and write of its parameters while it is watched.
+final class WatchedTimePitch: AVAudioUnitTimePitch {
+    var watching = false
+    var touches: [String] = []
+    private func touch(_ what: String) { if watching { touches.append(what) } }
+    override var rate: Float {
+        get { touch("rate read"); return super.rate }
+        set { touch("rate set"); super.rate = newValue }
+    }
+    override var pitch: Float {
+        get { touch("pitch read"); return super.pitch }
+        set { touch("pitch set"); super.pitch = newValue }
+    }
+    override var overlap: Float {
+        get { touch("overlap read"); return super.overlap }
+        set { touch("overlap set"); super.overlap = newValue }
+    }
+    override var bypass: Bool {
+        get { touch("bypass read"); return super.bypass }
+        set { touch("bypass set"); super.bypass = newValue }
+    }
+}
+
 /// The `speak.sentence` marks one task made, in order (`Perf.observer`).
 final class SpokenMarks: @unchecked Sendable {
     private let lock = NSLock()
@@ -1828,4 +1895,17 @@ final class SpokenMarks: @unchecked Sendable {
     var add: @Sendable (String) -> Void {
         { [self] name in if name.hasPrefix("speak.sentence") { lock.withLock { kept.append(name) } } }
     }
+}
+
+/// A speed setting the test moves, counting its reads.
+final class Pace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: Float
+    private var count = 0
+    init(_ value: Float) { kept = value }
+    var value: Float {
+        get { lock.withLock { count += 1; return kept } }
+        set { lock.withLock { kept = newValue } }
+    }
+    var reads: Int { lock.withLock { count } }
 }

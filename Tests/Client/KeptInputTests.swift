@@ -94,7 +94,7 @@ final class KeptInputTests: XCTestCase {
                                  deactivate: { watch.saw("hand-back"); try seams.deactivate($0) },
                                  isActive: { isActive })
         let spoken = Voice(engine: ScriptedVoice())
-        spoken.load(base: URL(fileURLWithPath: "/dev/null"))
+        spoken.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { spoken.state == .ready }
         let speaker = Speaker(audio: audio, voice: spoken, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
@@ -516,7 +516,7 @@ extension KeptInputTests {
                                  deactivate: { watch.saw("hand-back"); try seams.deactivate($0) },
                                  isActive: { isActive })
         let spoken = Voice(engine: ScriptedVoice())
-        spoken.load(base: URL(fileURLWithPath: "/dev/null"))
+        spoken.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { spoken.state == .ready }
         let soundDefaults = defaults()
         soundDefaults.set(WorkingSounds.Mode.sounds.rawValue, forKey: WorkingSounds.key)

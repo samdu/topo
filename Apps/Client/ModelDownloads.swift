@@ -72,9 +72,6 @@ struct ModelManifest: Codable, Sendable {
     /// Smart Turn, which judges whether the speaker of an open microphone has finished
     /// (`SmartTurn`, `Endpoint.Judging`): one Core ML package, compiled on the phone.
     static let smartTurn = "smart-turn-v3"
-    /// The voice's repository. Its paths are repository-relative (`v2.1/english/…`), because
-    /// FluidAudio's Pocket loader reads the language pack from beneath the repository root.
-    static let pocket = "pocket-tts-coreml"
     /// The guest's rootfs: Alpine's aarch64 minirootfs, one tarball, which the userland imports
     /// into a fakefs once it is here and verified (`Apps/Topo/Userland.swift`).
     static let rootfs = "alpine-minirootfs"
@@ -127,13 +124,11 @@ enum ModelStoreError: LocalizedError {
 struct ModelStore: Sendable {
     let root: URL
     /// The entries kept somewhere other than at `root/<id>`, by id, because the library that
-    /// reads them reads one path and no other. Three: the CTC spotter, whose tokenizer
+    /// reads them reads one path and no other. Two: the CTC spotter, whose tokenizer
     /// `VocabularyBoostingSession` reads from `CtcModels.defaultCacheDirectory` whatever
-    /// directory the models were loaded from; the voice's pack, which `PocketTtsManager` reads
-    /// from `<base>/Models/pocket-tts` beneath the base directory it is given; and the voice
-    /// activity detector, which `VadManager` reads from `<base>/Models/silero-vad`
-    /// (`Repo.vad.folderName`, with `-coreml` dropped), so under its id it is present and never
-    /// found. One copy each, agreed on by both sides. The ledger and the resume data sit beside
+    /// directory the models were loaded from; and the voice activity detector, which
+    /// `VadManager` reads from `<base>/Models/silero-vad` (`Repo.vad.folderName`, with `-coreml`
+    /// dropped), so under its id it is present and never found. One copy each, agreed on by both sides. The ledger and the resume data sit beside
     /// the files wherever the entry lives.
     let homes: [String: URL]
 
@@ -152,7 +147,6 @@ struct ModelStore: Sendable {
         var homes: [String: URL] = [:]
         #if canImport(FluidAudio)
         homes[ModelManifest.ctc] = CtcModels.defaultCacheDirectory(for: .ctc110m)
-        homes[ModelManifest.pocket] = Self.pocketHome(under: support)
         homes[ModelManifest.vad] = Self.vadHome(under: support)
         #endif
         let store = ModelStore(root: support.appendingPathComponent("Models", isDirectory: true), homes: homes)
@@ -160,18 +154,7 @@ struct ModelStore: Sendable {
         return store
     }
 
-    /// The base directory `PocketTtsManager` is handed. It appends `Models/pocket-tts` to reach
-    /// the repository root, which is `pocketHome(under:)` — so the manifest's repository-relative
-    /// paths land exactly where the loader looks and the pack is spelt once.
-    var pocketBase: URL { root.deletingLastPathComponent() }
-
     #if canImport(FluidAudio)
-    /// Where the voice's pack lives under a base directory, in FluidAudio's own terms.
-    static func pocketHome(under base: URL) -> URL {
-        base.appendingPathComponent(PocketTtsConstants.defaultModelsSubdirectory, isDirectory: true)
-            .appendingPathComponent(Repo.pocketTts.folderName, isDirectory: true)
-    }
-
     /// Where the voice activity detector lives under a base directory, in FluidAudio's own
     /// terms: `VadManager(modelDirectory: base)` reads `<base>/Models/<Repo.vad.folderName>`.
     static func vadHome(under base: URL) -> URL {
@@ -393,10 +376,6 @@ final class ModelDownloads {
         guard let model = manifest?.model(id) else { throw ModelStoreError.unknownModel(id) }
         return store.directory(for: model)
     }
-
-    /// The base directory the voice's loader takes, which is not its model's directory: it
-    /// derives that itself.
-    var pocketBase: URL { store.pocketBase }
 
     /// Starts, or carries on, the download of the named models where they are not yet present.
     /// Idempotent and called on every foreground: tasks the session already holds (from before a

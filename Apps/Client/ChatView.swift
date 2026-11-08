@@ -58,8 +58,8 @@ struct ChatView: View {
     @State private var showDiagnostics = false
     /// The two edges the pane's presence is read from, in the chat's own space: where the
     /// transcript stops drawing, measured down from its own top edge, and where that top edge
-    /// and the pane's own are. Each is nil until something has measured it — iOS 17 has no
-    /// scroll geometry to read at all — and the pane is drawn whole while any of them is.
+    /// and the pane's own are. Each is nil until something has measured it, and the pane is drawn
+    /// whole while any of them is.
     @State private var contentBottomInTranscript: CGFloat?
     #if DEBUG
     /// What a tap on a reply's link asked to be opened, over a fixture transcript.
@@ -569,9 +569,8 @@ struct ChatView: View {
     private static let space = "chat"
 
     /// The transcript, and — from iOS 18, which is where there is a scroll geometry to read —
-    /// where its content ends and where its own top edge is. On iOS 17, the deployment target,
-    /// there is neither: nothing is measured and the pane is drawn whole, which is the pane as
-    /// it was before it had a presence. This is the one availability branch on this screen.
+    /// where its content ends and where its own top edge is. The branch for an OS before that, which
+    /// measures nothing and draws the pane whole, is below the deployment target and never runs.
     @ViewBuilder private func transcript(_ draft: Draft) -> some View {
         let queued = row.queued(in: harness)
         let drawn = !shownTurns.isEmpty || draft.drawer == .row || !queued.before.isEmpty || !queued.after.isEmpty
@@ -614,8 +613,8 @@ struct ChatView: View {
         }
     }
 
-    /// How much of a pane the pane is. One while any of the three edges is unmeasured: iOS 17
-    /// measures none of them, and a launch has not measured them yet. One while the pane's field
+    /// How much of a pane the pane is. One while any of the three edges is unmeasured, as a launch
+    /// has not measured them yet. One while the pane's field
     /// holds focus, which is the keyboard asked for, whatever the geometry, and while Topo sits
     /// on the glass.
     private var panePresence: Double {

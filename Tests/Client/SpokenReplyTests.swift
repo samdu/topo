@@ -38,7 +38,7 @@ final class SpokenReplyTests: XCTestCase {
             heard.append(sentence)
             return [toneFrame(0.5)]
         }))
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })

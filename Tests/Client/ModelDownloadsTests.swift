@@ -19,19 +19,18 @@ final class ModelDownloadsTests: XCTestCase {
         XCTAssertTrue(configuration.sessionSendsLaunchEvents)
     }
 
-    /// The manifest fetches one stock speaker, and it is the one the voice asks the port for: a
-    /// speaker named in one place and fetched under another is a voice that never loads.
-    func testTheBundledManifestFetchesTheSpeakerTheVoiceAsksFor() throws {
-        let pocket = try XCTUnwrap(try ModelManifest.bundled().model(ModelManifest.pocket))
-        let speakers = pocket.files.map(\.path).filter { $0.hasSuffix(".safetensors") }
-        XCTAssertEqual(speakers, ["v2.1/english/constants_bin/\(Voice.speaker).safetensors"])
-        XCTAssertEqual(Voice.speaker, "marius")
-        XCTAssertEqual(Voice.tempo, 1.0, "marius is heard at the pace he speaks at")
+    /// The voice is not a download: its bundle comes from the asset pack or the app's own
+    /// resources (`PhononStore`), so the manifest names no voice and no `.safetensors` at all.
+    func testTheBundledManifestFetchesNoVoice() throws {
+        let manifest = try ModelManifest.bundled()
+        XCTAssertNil(manifest.model("pocket-tts-coreml"))
+        let paths = manifest.models.flatMap { $0.files.map(\.path) }
+        XCTAssertFalse(paths.contains { $0.hasSuffix(".safetensors") })
     }
 
     func testTheBundledManifestNamesEveryModelWithADigestForEveryFile() throws {
         let manifest = try ModelManifest.bundled()
-        for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.pocket] {
+        for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.vad] {
             let model = try XCTUnwrap(manifest.model(id), id)
             XCTAssertFalse(model.files.isEmpty, id)
             XCTAssertEqual(model.revision?.count, 40, "\(id) is pinned to a commit")

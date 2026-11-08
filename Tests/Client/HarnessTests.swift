@@ -2188,7 +2188,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: ScriptedVoice())
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
@@ -2241,7 +2241,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
         let voice = Voice(engine: ScriptedVoice())
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
@@ -2306,7 +2306,7 @@ final class HarnessIntegrationTests: XCTestCase {
 @MainActor
 private func makeSpeaker(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter) async throws -> Speaker {
     let voice = Voice(engine: ScriptedVoice())
-    voice.load(base: URL(fileURLWithPath: "/dev/null"))
+    voice.load(folder: URL(fileURLWithPath: "/dev/null"))
     try await eventually("the voice to load") { voice.state == .ready }
     return Speaker(audio: audio, voice: voice, center: center,
                    makeEngine: { seams.makePlayEngine(rate: Voice.rate) })

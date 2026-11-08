@@ -38,8 +38,8 @@
 # in the guest's proxy.
 #
 # --talk runs the TopoTalk scheme's one UI test (Tests/ClientTalk) and nothing else: it fetches
-# and verifies the ear's models into EAR_MODELS (build/ear-models) and the voice's into
-# VOICE_MODELS (build/voice-models), starts the loopback lane with
+# and verifies the ear's models into EAR_MODELS (build/ear-models) and the voice's bundle into
+# VOICE_MODELS (build/phonon; scripts/phonon-bundles.sh, with Sam's Hugging Face token), starts the loopback lane with
 # Tests/Fixtures/capital-of-france.wav (scripts/ci-audio-lane.sh; BlackHole as the Mac's default
 # input and output), hands the token to the test runner as TEST_RUNNER_TOPO_TALK_SETUP_TOKEN, and
 # passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
@@ -220,14 +220,15 @@ tracked() {
 
 if [ "$build" = yes ]; then
   scripts/build-ish.sh
+  scripts/fetch-phonon.sh
 fi
 
 if [ "$talk" = yes ]; then
   read_token
   models="${EAR_MODELS:-$root/build/ear-models}"
-  voice_models="${VOICE_MODELS:-$root/build/voice-models}"
+  voice_models="${VOICE_MODELS:-$root/build/phonon}"
   scripts/fetch-ear-models.sh "$models"
-  scripts/fetch-voice-models.sh "$voice_models"
+  scripts/phonon-bundles.sh "$voice_models"
   # A start that refuses (exit 3) found another run's lane, which is not this run's to stop.
   # The lane is this run's (AUDIO_LANE_OWNER), so a later start finds it abandoned once this
   # run has ended without stopping it, a SIGKILL's, and stops it.
@@ -250,7 +251,7 @@ if [ "$talk" = yes ]; then
   echo "==> speaking a question into the microphone (TopoTalkTests)"
   status=0
   TEST_RUNNER_TOPO_TALK_SETUP_TOKEN="$token" TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
-  TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models" \
+  TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models/phonon-40m-en" \
     tracked xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -resultBundlePath "$results" || status=$?

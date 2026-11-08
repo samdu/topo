@@ -3,7 +3,9 @@ name: Topo
 options:
   bundleIdPrefix: zone.hexagon.topo
   deploymentTarget:
-    iOS: "17.0"
+    # 26: the voice's model arrives as an Apple-hosted asset pack (Background Assets'
+    # `AssetPackManager`, Apps/Client/PhononStore.swift), which is iOS 26 and later.
+    iOS: "26.0"
     watchOS: "10.0"
     tvOS: "17.0"
     macOS: "14.0"
@@ -44,26 +46,30 @@ packages:
   # engine from samdu/experiments (topo-mascot-swift at 91139e8), unchanged. The iOS app only.
   TopoMascot:
     path: Packages/TopoMascot
-  # The phone's ear and its voice: NVIDIA Parakeet as CoreML with its CTC keyword spotter for
-  # the vocabulary rescoring (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
-  # (Apps/Client/Voice.swift). Pinned exactly: neither the vocabulary-boosting API the ear
-  # drives by hand (VocabularyBoostingSession) nor the per-stage compute units the voice sets
-  # (PocketTtsComputeUnits) is the version-stable part of the package, and a floating minor
-  # could move either. The iOS app only: nothing on the wrist or the television transcribes or
-  # speaks, and the models are the better part of a gigabyte.
+  # The phone's ear: NVIDIA Parakeet as CoreML with its CTC keyword spotter for the vocabulary
+  # rescoring (Apps/Client/Ear.swift), Silero's VAD and Smart Turn. Pinned exactly: the
+  # vocabulary-boosting API the ear drives by hand (VocabularyBoostingSession) is not the
+  # version-stable part of the package, and a floating minor could move it. The iOS app only:
+  # nothing on the wrist or the television transcribes, and the models are most of a gigabyte.
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.18.2"
-    # The package's default traits, named, so the set the voice is built with is the project's
-    # and not the package's default of the day. It is the default set at this pin, read again at
-    # every bump: a default trait a later version adds stays off until it is named here. TTS is
-    # the voice; Diarizer is nothing Topo calls, kept so the build is the package as released.
-    # Naming them does not cure a package state that last resolved another version: Xcode 27.2
-    # carries that resolution's trait set into the next and refuses a named trait the old
-    # version did not declare, which is why the validation keeps its package state per pin
-    # (scripts/mac-suite.sh, build/packages) and why a build elsewhere that moves this pin under
-    # a kept DerivedData wants its SourcePackages/workspace-state.json removed first.
-    traits: [NemoTextProcessing, TTS, Diarizer]
+    # The traits, named, so the set the ear is built with is the project's and not the package's
+    # default of the day. The default set at this pin less `TTS`: the voice is Phonon's
+    # (PhononTTS below), so FluidAudio's speech synthesis is left out of the build. Read again at
+    # every bump: a default trait a later version adds stays off until it is named here.
+    # Diarizer is nothing Topo calls, kept so the build is the package as released otherwise.
+    # Naming them does not cure a package state that last resolved another version or set:
+    # Xcode 27.2 carries that resolution's trait set into the next and refuses a named trait the
+    # old version did not declare, which is why the validation keeps its package state per pin
+    # (scripts/mac-suite.sh, build/packages) and why a build elsewhere that moves this pin or this
+    # set under a kept DerivedData wants its SourcePackages/workspace-state.json removed first.
+    traits: [NemoTextProcessing, Diarizer]
+  # The phone's voice: Gradium's Phonon on the Neural Engine (Apps/Client/Voice.swift), through
+  # Gradium's Swift package vendored at its tag with its compiled core fetched by
+  # scripts/fetch-phonon.sh, which has to have run before this project resolves. The iOS app only.
+  PhononTTS:
+    path: Packages/PhononTTS
 targets:
   Topo:
     type: application
@@ -107,6 +113,7 @@ targets:
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
+      - package: PhononTTS
       - package: TopoUserland
       - package: TopoProxy
       - package: TopoProxy
@@ -117,6 +124,8 @@ targets:
       # The screen share's broadcast extension, embedded in the app.
       - target: TopoBroadcast
       - target: TopoShare
+      # The Background Assets downloader that fetches the voice's asset pack, embedded in the app.
+      - target: TopoAssets
       # The watch app rides inside the phone's (`Topo.app/Watch/`), so every build of the phone
       # app carries it and installing Topo on the phone offers it in the Watch app.
       - target: TopoWatch
@@ -124,24 +133,19 @@ targets:
         copyFiles:
           destination: productsDirectory
           subpath: $(CONTENTS_FOLDER_PATH)/Watch
-    # FluidAudio's LuxTTS lexicon is espeak-ng's output (GPL-3.0, no App Store waiver) and nothing
-    # in Topo reads it, so it leaves the product here (THIRD-PARTY, FluidAudio; docs/testflight.md).
-    # The phase changes the product's copy of the bundle in place, which the user-script sandbox
-    # cannot grant (it writes a declared output's own path, not the files in a folder), so this
-    # target runs its scripts unsandboxed (ENABLE_USER_SCRIPT_SANDBOXING below); this is its only one.
+    # The embed writes the voice's bundle into the product's resources folder, a folder's files and
+    # not a declared output's own path, which the user-script sandbox cannot grant, so this target
+    # runs its scripts unsandboxed (ENABLE_USER_SCRIPT_SANDBOXING below); this is its only one.
     postBuildScripts:
-      - name: Strip FluidAudio's LuxTTS lexicon
+      # The voice's bundle in the app itself, for the builds the install page serves
+      # (`TOPO_EMBED_VOICES=YES`, which publish-topo.sh alone passes). Every other build removes
+      # any copy an earlier build left in the product, so an archive for the App Store never
+      # carries one; `scripts/check-built-assets.sh` reads the product either way.
+      - name: Embed the voice's bundle (install-page builds)
         basedOnDependencyAnalysis: false
-        # The bundle is an input so the phase runs after the task that copies it into the app: as
-        # the last phase alone it can run before an incremental build's copy of the bundle, which
-        # puts the lexicon back. Nothing is declared as output, since the phase edits the bundle in
-        # place.
-        inputFiles:
-          - $(SRCROOT)/scripts/strip-luxtts.sh
-          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FluidAudio_LuxTtsG2pResources.bundle
         script: |
           set -e
-          "$SRCROOT/scripts/strip-luxtts.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/FluidAudio_LuxTtsG2pResources.bundle"
+          "$SRCROOT/scripts/embed-voice.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" "${TOPO_EMBED_VOICES:-NO}"
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -205,13 +209,21 @@ targets:
         # no setting generates it (Xcode has no INFOPLIST_KEY_ for it), and
         # `scripts/check-built-plist.sh` reads it off the product.
         NSAlarmKitUsageDescription: Topo sounds a timer you ask it for when it reaches zero, even with the phone locked or on silent.
+        # The voice's model is an Apple-hosted Background Assets pack (`phonon-40m-en`, essential,
+        # docs/voice.md), fetched by TopoAssets into the app group these name. None is a key Xcode
+        # generates, and `scripts/check-built-plist.sh` reads all three off the product.
+        BAAppGroupID: group.zone.hexagon.topo
+        BAHasManagedAssetPacks: true
+        BAUsesAppleHosting: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
-        # The LuxTTS strip edits the product's FluidAudio bundle in place (postBuildScripts above).
+        # The voice's embed writes into the product's resources folder (postBuildScripts above).
         ENABLE_USER_SCRIPT_SANDBOXING: false
         TOPO_SOURCE_COMMIT: ""
         TOPO_CHANNEL: ""
+        # YES copies the voice's bundle (build/phonon, scripts/phonon-bundles.sh) into the app.
+        TOPO_EMBED_VOICES: NO
         # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
@@ -273,6 +285,31 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.widgets
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  # The voice's downloader (docs/voice.md): Background Assets' own managed extension for the
+  # Apple-hosted pack, downloading what the pack's manifest says and nothing else. It holds the
+  # app group the app names in `BAAppGroupID`, and no code of Topo's.
+  TopoAssets:
+    type: extensionkit-extension
+    platform: iOS
+    sources:
+      - Apps/Assets
+    info:
+      path: Apps/Assets/Info.plist
+      properties:
+        CFBundleDisplayName: Topo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.background-asset-downloader-extension
+    entitlements:
+      path: Apps/Assets/TopoAssets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.zone.hexagon.topo]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.assets
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   # Topo's screen share (docs/guest.md, `topo screen`): a ReplayKit broadcast upload extension the

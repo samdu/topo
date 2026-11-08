@@ -127,7 +127,7 @@ final class KeeperSoundsTests: XCTestCase {
         let sounds = KeeperSounds(audio: audio, defaults: defaults, bundle: Bundle(for: KeeperSounds.self),
                                   makePlayer: { players.make($0) }, sleep: { try await clock.sleep($0) })
         let voice = Voice(engine: ScriptedVoice())
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let cues = CueRecorder()
         let earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),

@@ -1027,7 +1027,7 @@ final class SpokenCallSpeakerTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
                                  deactivate: seams.deactivate, isActive: { [unowned self] in active })
         let voice = Voice(engine: ScriptedVoice())
-        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { [seams] in seams.makePlayEngine(rate: Voice.rate) }, ceiling: ceiling)
