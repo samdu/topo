@@ -410,9 +410,10 @@ prepare() {
   # The script keeps a framework whose inputs stamp matches.
   say "Build the guest's framework (scripts/build-ish.sh)"
   run "$RESULTS/build-ish.log" scripts/build-ish.sh || return 1
-  # The voice's compiled core (Packages/PhononTTS), fetched by checksum, never committed.
+  # The voice's compiled core (Packages/PhononTTS), fetched by checksum, never committed; its zip
+  # is kept in the cache, so a slot or a Mac's checkout made afresh takes it from there.
   say "Fetch the voice's core (scripts/fetch-phonon.sh)"
-  run "$RESULTS/fetch-phonon.log" scripts/fetch-phonon.sh || return 1
+  run "$RESULTS/fetch-phonon.log" scripts/fetch-phonon.sh "$cache/phonon" || return 1
   # The memory brake's refresh and the DNS stub's port are what the patches add and the app
   # sets: a library without them is a kernel built from the fork unpatched.
   local slice symbols symbol
