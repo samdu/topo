@@ -47,8 +47,9 @@
 #      is back in the line at once, in its own place, for its next suite here. The waits for
 #      another Mac are in no order. A run that reached the line
 #      within one look of another, one that came back to it from asking another Mac in the
-#      look it was freed, one that took its suite's name in the instant between a run ahead
-#      reading the line and taking that name can still take a slot out of turn.
+#      look it was freed, can still take a slot out of turn. Reading the line and taking a
+#      suite's name and a slot are one step, under the line's own lock
+#      (~/Library/Caches/topo-validate/queue.lock), so no name is taken while a run reads the line.
 #      With another Mac named (TOPO_VALIDATE_HOSTS="thicc-boi", or a line of
 #      ~/Library/Caches/topo-validate/hosts while the variable is not set, which is what
 #      scripts/validate-host.sh writes; neither by default)
@@ -109,6 +110,7 @@ logs_root="${TOPO_VALIDATE_LOGS:-$HOME/Library/Logs/topo-validate}"
 repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 LOCK_POLL="${LOCK_POLL:-5}"   # seconds between looks at a lock that is held
+QUEUE_WAIT="${QUEUE_WAIT:-60}"   # seconds to wait for the line's lock before looking again
 HOST_RETRY="${HOST_RETRY:-60}"   # seconds before a Mac found busy is asked again
 # When this run began, in microseconds: its place in the line for a slot, whenever it gets
 # there. By the clock that counts from this Mac's start and is never set, so no correction of
@@ -361,6 +363,9 @@ done_here() {
 }
 trap done_here EXIT
 # One suite of a name at a time: by its lock, and by the record of one a killed run left going.
+# The name and the slot are taken under the line'"'"'s lock, as a run here takes them.
+exec 5>> "$cache/queue.lock"
+lockf -s -t 60 5 || busy "the line here is being read"
 exec 6>> "$cache/suite-$suite.lock"
 lockf -s -t 0 6 || busy "another validation is running $suite"
 slots="$(cat "$cache/slots.count" 2>/dev/null)"
@@ -375,6 +380,7 @@ for n in $(seq "$slots"); do
   if lockf -s -t 0 9 && ! left_in "$cache/slots/$n"; then slot="$n"; break; fi
   exec 9>&-
 done
+exec 5>&-
 [ -n "$slot" ] || busy "every checkout ($slots) is held by another validation"
 rm -rf "$results"
 mkdir -p "$results" || refuse "could not make $results"
@@ -503,9 +509,11 @@ name_free() {  # name_free <name> <the names of the suites left going without th
   perl -MFcntl=:flock -e 'open(my $lock, ">>", shift) or exit 1; exit(flock($lock, LOCK_EX | LOCK_NB) ? 0 : 1)' "$cache/suite-$1.lock" 6>&- 7>&-
 }
 # first_free <the names of the suites left going without their script> <name>... — the first of
-# the names that is free here, as name_free judges each, printed; false when none is. Every lock
-# is asked in one process, microseconds apart, so a name changing hands between two of the
-# asks cannot make a ticket whose names are never all held at once read as wanting none.
+# the names that is free here, as name_free judges each, printed; false when none is. It is asked
+# under the line's lock (queue_in), which every run takes to take a name, so between two of the
+# asks a name can be let go and never taken: a ticket whose names are never all held at once
+# never reads as wanting none. FAKE_PROBE_HOLD is the test's: a name found held waits there,
+# while that file stands, for the test to move the names.
 first_free() {
   local left="$1"; shift
   perl -MFcntl=:flock -e '
@@ -516,6 +524,11 @@ first_free() {
       next if $left{$n};
       open(my $lock, ">>", "$dir/suite-$n.lock") or next;
       if (flock($lock, LOCK_EX | LOCK_NB)) { print "$n\n"; exit 0 }
+      my $hold = $ENV{FAKE_PROBE_HOLD};
+      if (defined $hold && -e $hold) {
+        open(my $r, ">", "$hold.reached"); close $r;
+        select(undef, undef, undef, 0.1) while -e $hold;
+      }
     }
     exit 1' "$cache" "$mine" "$left" "$@" 6>&- 7>&-
 }
@@ -554,13 +567,26 @@ ahead() {
 
 # A slot, if one is free and nobody is ahead in the line: the line is read first, always, and
 # only the run at its head, or one that finds it empty, asks for a slot's lock, without
-# waiting and again every LOCK_POLL. A run that arrived within one look of another can still
-# take a slot out of turn; otherwise the order is arrival's. The slot's lock is on descriptor 7
+# waiting and again every LOCK_POLL, still holding the line's lock it read the line under
+# (queue_in). A run that arrived within one look of another can still take a slot out of turn;
+# otherwise the order is arrival's. The slot's lock is on descriptor 7
 # until the suite it is taken for has ended (release_slot), dropped by the kernel when this
 # script dies. One with an orphan in its checkout is not taken.
 slot=""
 slot_held=""
-# Whether this run is first in the line, which it reads holding no lock: a lock it held would
+# The line's lock, on descriptor 5: held from reading the line to taking a name and a slot, so
+# the line is read and acted on as one step and no run takes a name while another reads it.
+# Released before any wait and before a suite runs. One that stays held past QUEUE_WAIT is no
+# answer: the run says the line is busy and looks again at its next look.
+queue_in() {
+  exec 5>> "$cache/queue.lock"
+  lockf -s -t "$QUEUE_WAIT" 5 && return 0
+  exec 5>&-
+  slot_held="the line, being read by another run"
+  return 1
+}
+queue_out() { exec 5>&-; }
+# Whether this run is first in the line, which it reads holding no suite's lock: a lock it held would
 # read as busy to a run behind it reading this run's ticket, which then passes it. Not first, it
 # is in the line and $slot_held says who is ahead.
 line_clear() {
@@ -698,7 +724,7 @@ if [ "$hold" = yes ]; then
   trap '[ -z "${ticket-}" ] || rm -f "$ticket"' EXIT
   trap 'exit 143' TERM INT HUP
   while [ -z "$slot" ]; do
-    take_slot
+    ! queue_in || { take_slot; queue_out; }
     [ -n "$slot" ] || waiting "a checkout" "$slot_held"
   done
   echo "Slot $slot is held for: ${hold_command[*]}" >&2
@@ -784,19 +810,26 @@ if [ "${#chosen[@]}" -gt 0 ]; then
           held="$held; $candidate: still running without its script, pid $orphan, end it with \`kill $orphan\`"
           continue
         fi
+        if ! queue_in; then
+          wanted="a checkout" held="; $slot_held"
+          break
+        fi
         mine="$name"
         if ! line_clear; then
+          queue_out
           mine="" wanted="a checkout" held="; $slot_held"
           break
         fi
         mine=""
         exec 6>> "$cache/suite-$name.lock"
         if ! lockf -s -t 0 6; then
+          queue_out
           exec 6>&-
           held="$held; $candidate: $(cat "$cache/suite-$name.holder" 2>/dev/null || echo unknown)"
           continue
         fi
         take_slot --line-read
+        queue_out
         if [ -n "$slot" ]; then
           checkout_slot
           suite="$what"

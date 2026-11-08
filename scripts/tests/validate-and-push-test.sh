@@ -1176,6 +1176,37 @@ is "a ps that answers nothing: no suite ran" "$(recorded suites)" ""
 [ -e "$q/0000000000000013-0000013" ] && ok "a ps that answers nothing: the ticket stands" || fail "a ps that answers nothing: the ticket was removed"
 kill "$still" 2>/dev/null; wait "$still" 2>/dev/null
 rm -f "$q/0000000000000013-0000013"
+# A ticket's names changing hands mid-look: the run ahead wants topo_unit or others, and while
+# the run behind reads it, topo_unit is let go and others taken, between the two asks. A run
+# takes a name only under the line's lock, as here, so the taking waits for the look to end and
+# the ticket is still read as wanting a name that is free.
+sleep 600 & still=$!
+printf '%s\n%s\n%s\n%s\n' "$still" "$(began "$still")" "race 0000014" "topo_unit others" > "$q/0000000000000014-0000014"
+mkdir -p "$work/race"
+lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_unit.lock" sh -c "echo \$\$ > '$work/race/unit-held'; exec sleep 600" & unit_lock=$!
+until_true reached "$work/race/unit-held" || fail "a ticket's names changing hands: topo_unit was never held"
+: > "$work/race/probe.hold"
+(cd "$repo" && exec env PATH="$work/bin:$PATH" FAKE_RECORD="$work/race/record" FAKE_PROBE_HOLD="$work/race/probe.hold" LOCK_WAIT=0 \
+  scripts/validate-and-push.sh --suites topo_ui > "$work/race/out" 2>&1) & behind=$!
+until_true test -e "$work/race/probe.hold.reached" || fail "a ticket's names changing hands: the look never asked topo_unit: $(cat "$work/race/out")"
+kill "$(cat "$work/race/unit-held")" 2>/dev/null; wait "$unit_lock" 2>/dev/null
+# others taken as a run takes a name: the line's lock, then the name, then the line's lock let go.
+perl -MFcntl=:flock -e '
+  my ($line, $name, $mark) = @ARGV;
+  open(my $l, ">>", $line) or die; flock($l, LOCK_EX) or die;
+  open(my $n, ">>", $name) or die; flock($n, LOCK_EX) or die;
+  close $l;
+  open(my $m, ">", $mark); print $m "$$\n"; close $m;
+  sleep 600' "$TOPO_VALIDATE_CACHE/queue.lock" "$TOPO_VALIDATE_CACHE/suite-others.lock" "$work/race/others-held" & others_lock=$!
+for _ in $(seq 20); do [ -s "$work/race/others-held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+rm -f "$work/race/probe.hold"
+wait "$behind"; status=$?; out="$(cat "$work/race/out")"
+until_true reached "$work/race/others-held" || fail "a ticket's names changing hands: others was never taken"
+kill "$others_lock" "$still" 2>/dev/null; wait "$others_lock" "$still" 2>/dev/null
+is "a ticket's names changing hands: the run behind exits 2" "$status" 2
+case "$out" in *"the first race 0000014, pid $still, for others"*) ok "a ticket's names changing hands: it waited behind the run ahead" ;; *) fail "a ticket's names changing hands: $out" ;; esac
+is "a ticket's names changing hands: no suite ran" "$(FAKE_RECORD="$work/race/record" recorded suites)" ""
+rm -f "$q/0000000000000014-0000014"
 
 # With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
 # out of the line for each asking and back under its own name, so a run that came later does
