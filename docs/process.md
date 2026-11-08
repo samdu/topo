@@ -113,7 +113,7 @@ Rounds are counted on the pipeline board, so a loop that is going badly is visib
 
 ## Dispatching a review
 
-The coordinator's dispatch to a reviewer says what changed and what to read, and nothing about what to conclude. "Don't flag X", "at most Minor", "this is intentional so ignore it" are not in it, and `.claude/hooks/review-dispatch.py` refuses a dispatch that carries one.
+The coordinator's dispatch to a reviewer says what changed and what to read, and nothing about what to conclude. "Don't flag X", "at most Minor", "this is intentional so ignore it" are not in it, and `.claude/hooks/review-dispatch.py` refuses a dispatch that carries one: an `adversarial-reviewer` agent's prompt, or a command that runs `plan-review.sh` or `codex exec`. A passage the dispatch quotes word for word from CLAUDE.md, the bar the reviewer reads anyway, is not steering, and nor is a sentence citing a recorded ruling with its date, the one thing that settles a finding in advance.
 
 A defect the plan itself mandated is still a defect: it is reported as Important, tagged `plan-mandated`, and adjudicated against the spec — often the plan was wrong. An implementer's rationale never downgrades a finding. Only the spec, or a ruling the coordinator recorded, does.
 
