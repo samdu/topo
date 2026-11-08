@@ -92,6 +92,9 @@ f="${2##*/}"; [ -f "${OPVAULT:-/nowhere}/$f" ] || exit 1
 cat "$OPVAULT/$f"
 FAKE
 chmod +x "$work/bin/xcodebuild" "$work/bin/xcrun" "$work/bin/security" "$work/bin/op"
+# The script takes dotfiles' op shim where it is installed; the run's home has the fake as its shim.
+mkdir -p "$work/home/.local/shims"
+cp "$work/bin/op" "$work/home/.local/shims/op"
 
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/key.p8" 2>/dev/null \
     || { echo "FAIL: could not make a key to test with" >&2; exit 1; }
@@ -100,7 +103,7 @@ hex="$(xxd -p "$work/key.p8" | tr -d '\n')"
 run() { # run <calls file> <arguments...>, with the environment the caller set
     local calls="$1"; shift
     : > "$calls"
-    CALLS="$calls" PATH="$work/bin:$PATH" BUILD=7 TMPDIR="$work/tmp" "$tree/scripts/archive-upload.sh" "$@" > "$work/out" 2>&1
+    CALLS="$calls" HOME="$work/home" PATH="$work/bin:$PATH" BUILD=7 TMPDIR="$work/tmp" "$tree/scripts/archive-upload.sh" "$@" > "$work/out" 2>&1
 }
 mkdir -p "$work/tmp"
 

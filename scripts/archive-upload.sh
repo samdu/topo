@@ -64,21 +64,26 @@ commit="$(git rev-parse HEAD)"
 [ -n "$(git branch -r --contains "$commit")" ] \
   || { echo "$commit is on no remote branch; push it first, since the About screen points at it" >&2; exit 1; }
 
-# The key: from the environment, the login keychain or 1Password, in that
-# order, and in whatever shape it was kept (scripts/asc-pem.sh). Over ssh the
-# keychain answers nothing and exits 0, so an empty answer is what sends the
-# read on to the item `Topo App Store Connect` in the Homelab vault, asked
-# only with a service account in the environment, since `op` on one never
-# stops on a prompt. Nothing here writes
-# it anywhere but a folder of its own, which is where altool looks and which
-# is taken away on the way out. With it xcodebuild registers a new target's
-# App ID and makes its profile with no Apple ID signed in to Xcode; without it
-# the archive is whatever Xcode's own accounts allow, and there is no upload.
+# The key: from the environment, the login keychain or 1Password, in that order,
+# and in whatever shape it was kept (scripts/asc-pem.sh). Over ssh the keychain
+# answers nothing and exits 0, so an empty answer is what sends the read on to
+# the item `Topo App Store Connect` in the Homelab vault, asked only with a
+# service account in the environment, through dotfiles' op shim where there is
+# one. Nothing here writes it anywhere but a folder of its own, which is where
+# altool looks and which is taken away on the way out. With it xcodebuild
+# registers a new target's App ID and makes its profile with no Apple ID signed
+# in to Xcode; without it the archive is whatever Xcode's own accounts allow,
+# and there is no upload.
+#
+# 1Password is asked through dotfiles' op shim where it is installed: run headless, the real op can stop
+# on a consent prompt for the 1Password app's container that nobody sees, and
+# the shim keeps it off that container (dotfiles shims/op).
+asc_op() { if [ -x "$HOME/.local/shims/op" ]; then printf '%s' "$HOME/.local/shims/op"; else printf op; fi; }
 asc_part() { # asc_part <the environment's value> <keychain service> <1Password field>
   local got="$1"
   [ -n "$got" ] || got="$(security find-generic-password -s "$2" -w 2>/dev/null || true)"
   if [ -z "$got" ] && [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
-    got="$(op read "op://Homelab/Topo App Store Connect/$3" 2>/dev/null || true)"
+    got="$("$(asc_op)" read "op://Homelab/Topo App Store Connect/$3" 2>/dev/null || true)"
   fi
   printf '%s' "$got"
 }
