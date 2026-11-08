@@ -2765,6 +2765,17 @@ class WholePass(unittest.TestCase):
         self.assertEqual(janitor.working([("s", "/w/a"), ("t", "/w/b/x/y"), ("u", "/w/c"), ("v", "/w/ab")], wts),
                          {"buddy/a", "buddy/b"})
 
+    def test_working_compares_real_paths(self):
+        # tmux reports a process's real path, git the path the worktree was added at.
+        with tempfile.TemporaryDirectory() as d:
+            real = os.path.join(d, "real")
+            os.makedirs(os.path.join(real, "wt", "sub"))
+            os.symlink(real, os.path.join(d, "link"))
+            wts = [{"path": os.path.join(d, "link", "wt"), "branch": "buddy/a"}]
+            self.assertEqual(janitor.working([("s", os.path.join(real, "wt", "sub"))], wts), {"buddy/a"})
+            self.assertEqual(janitor.working([("s", os.path.join(d, "link", "wt"))],
+                                             [{"path": os.path.join(real, "wt"), "branch": "buddy/a"}]), {"buddy/a"})
+
     def test_a_conflicted_pr_with_no_session_is_said_once_per_head(self):
         s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees="",
                           panes="topo-other\t/x")
