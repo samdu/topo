@@ -199,9 +199,13 @@ if [ "$hold" = no ]; then
     if open_pr="$(gh pr list --repo "$repo_slug" --head "$branch" --state open --json number,isDraft \
         --jq '.[0] | select(. != null) | "\(.number) \(.isDraft)"' 2>/dev/null)"; then
       if [ -n "$open_pr" ] && [ "${open_pr#* }" = false ]; then
+        # One JSON string a verdict, oldest first, so the newest is the last line whole, and its
+        # head is its second line alone, as scripts/review-prompt.sh reads it: a marker a finding
+        # quotes further down is the finding's, not the verdict's.
         if marks="$(gh api --paginate "repos/$repo_slug/issues/${open_pr%% *}/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- agent-review: codex -->"))) | .body' 2>/dev/null)"; then
-          read_at="$(sed -n 's/.*<!-- agent-review-sha: \([0-9a-f]*\) -->.*/\1/p' <<<"$marks" | tail -n 1)"
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- agent-review: codex -->"))) | .body | @json' 2>/dev/null)" \
+            && newest="$(tail -n 1 <<<"$marks" | jq -r 'select(. != null)' 2>/dev/null)"; then
+          read_at="$(sed -n '2s/^<!-- agent-review-sha: \([0-9a-f]*\) -->$/\1/p' <<<"$newest")"
           if [ -n "$read_at" ] && [ "$read_at" != "$sha" ]; then
             die "#${open_pr%% *} is ready and its newest Codex verdict read ${read_at:0:7}: a push of $short to it starts another review round. Ask the coordinator to put it back to draft (gh pr ready ${open_pr%% *} --undo), or pass --after-verdict to push it anyway."
           fi
