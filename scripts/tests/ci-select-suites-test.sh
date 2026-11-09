@@ -47,6 +47,8 @@ expected=(
   'Womble/* others'
   'docs/* none'
   '*.md none'
+  '.claude/hooks/review-dispatch.py scripts'
+  'scripts/tests/review-dispatch-test.sh scripts'
   '.claude/* none'
   'Distribution/* none'
   'scripts/archive-upload.sh none'
