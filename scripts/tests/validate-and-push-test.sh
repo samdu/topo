@@ -845,6 +845,14 @@ is "a host refused once: asked twice" "$(grep -c '^laptop bash -s' "$SSH_CALLS")
 is "a host refused once: the first suite ran here" "$(said_on topo_unit)" "$(hostname -s)"
 is "a host refused once: the next ran there" "$(said_on others)" laptop
 case "$out" in *"laptop cannot run it now, and is asked once more"*"lid is closed"*) ok "a host refused once: it is said, with why" ;; *) fail "a host refused once: $out" ;; esac
+# Refused at both asks: dropped after the second, and every suite runs here.
+scratch host-twice Packages/TopoLink/Package.swift Womble/x
+mkdir -p "$work/host-twice/home"
+TOPO_VALIDATE_LOGS="$work/host-twice/home/Library/Logs/topo-validate"
+HOME="$work/host-twice/home" HOST_RETRY=0 FAKE_CHECK="the lid is closed" TOPO_VALIDATE_HOSTS=laptop validate --suites "topo_unit others scripts"
+is "a host refused twice: exits 0" "$status" 0
+is "a host refused twice: asked twice and no more" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" 2
+is "a host refused twice: every suite ran here" "$(said_on others) $(said_on scripts)" "$(hostname -s) $(hostname -s)"
 # A pass the connection did not outlive is no result: the suite runs here, and is not red.
 scratch host-drop Packages/TopoLink/Package.swift
 FAKE_DROP=1 TOPO_VALIDATE_HOSTS=laptop validate
