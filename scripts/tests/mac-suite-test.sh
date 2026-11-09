@@ -187,6 +187,8 @@ is "green: the hold is running when the lane starts and when it stops" "$(grep '
 hold_pid="$(cat "$CALLS.hold")"
 for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
+is "green: the voice's core is fetched with its zip kept in the cache" \
+  "$(grep '^fetch-phonon.sh' "$CALLS" | sort -u | sed "s|$work/cache|<cache>|")" "fetch-phonon.sh <cache>/phonon"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
 # Every test action, the four of them, runs without the simulator diagnostics xcodebuild
 # gathers after the last test, whose log archive is the 600 s stall a run cannot end.
