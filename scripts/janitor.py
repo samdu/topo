@@ -331,15 +331,15 @@ def pick_run(runs, number):
 OWN_VALIDATION = re.compile(r"^(\.github/|scripts/review-|scripts/ci-select-)")
 
 
-def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, files=()):
+def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, files=(), occupied=frozenset()):
     """What one open PR wants from this pass.
 
     Returns a list of dicts: {"kind": merge|rerun|report, "key": ..., "text": ...}.
     `run` is the newest pull_request validate run for the PR's head, or None;
     `jobs` its jobs as [{name, conclusion, id, steps}]. `sessions` is the set of
-    tmux session names standing on this Mac, with the owner names of every
-    branch a pane stands in the worktree of (`working`), or None when they
-    could not be read. `files` are the paths the PR changes at its head, or None when they
+    tmux session names standing on this Mac, or None when they could not be
+    read; `occupied` the branches a pane stands in the worktree of
+    (`working`), empty when the worktrees could not be read. `files` are the paths the PR changes at its head, or None when they
     could not be read whole. Pure: nothing is read or done.
     """
     n, head = pr["number"], pr["headRefOid"]
@@ -365,7 +365,8 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
     # until somebody merges main in; with no session of its engineer standing,
     # nobody will.
     # A ticked device box is Sam's test of this head: its conflict is said whoever stands.
-    abandoned = sessions is not None and not owners(pr["headRefName"]) & sessions
+    abandoned = (sessions is not None and not owners(pr["headRefName"]) & sessions
+                 and pr["headRefName"] not in occupied)
     if pr.get("mergeStateStatus") == "DIRTY" and abandoned:
         report("dirty", f"{title}: conflicts with main at {short}, so no workflow runs on it, and no session "
                         f"{' or '.join(sorted(owners(pr['headRefName'])))} stands to merge main in.")
@@ -1668,14 +1669,15 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         say("prs:read", f"could not read the open PRs: {ex}")
         require_label = None
     prs_whole = prs_ok
-    # The engineers' sessions standing on this Mac, for a PR that conflicts with main.
+    # The engineers' sessions standing on this Mac, and the branches a pane
+    # stands in the worktree of, for a PR that conflicts with main.
+    occupied = set()
     try:
         panes = sh.tmux_panes()
         sessions = {name for name, _ in panes}
         state["fired"].pop("sessions:read", None)
         try:
-            for branch in working(panes, sh.worktrees(checkout)):
-                sessions |= owners(branch)
+            occupied = working(panes, sh.worktrees(checkout))
         except RuntimeError:
             pass   # the worktrees go unread: the sessions' names alone say who stands
     except RuntimeError as ex:
@@ -1694,7 +1696,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     files = sh.changed_files(head)
                 except RuntimeError:
                     files = None
-            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions, files)
+            wants = decide_pr(pr, run, jobs or [], state, now, require_label, sessions, files, occupied)
         except RuntimeError as ex:
             say(f"{n}:read:{head}", f"#{n}: could not read its runs: {ex}")
             if "rate limit" in str(ex).lower():
