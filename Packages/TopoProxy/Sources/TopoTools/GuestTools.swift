@@ -90,22 +90,69 @@ public enum GuestTools {
     public static let bodyMark = "<!-- topo -->"
 
     /// Writes the scripts (executable: the guest sees the host's mode bits), the converter and the
-    /// skills under `home`, replacing whatever is there.
+    /// skills under `home`, replacing whatever is at each name. The home is the guest's to write
+    /// too, and a link the guest makes there is a host link to wherever its target reaches from
+    /// where it stands, so every folder is opened by descriptor one name at a time with no link
+    /// followed: a link in the way of a folder is refused, naming it, and a link where a file goes
+    /// is replaced by the file rather than written through.
     public static func install(home: URL) throws {
-        let files = FileManager.default
         let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser), (appleDocPath, appleDoc)]
         let plain = [(skillPath, skill), (appleDocsSkillPath, appleDocsSkill), (doccToMarkdownPath, doccToMarkdown)]
-        for (path, _) in scripts + plain {
-            try files.createDirectory(at: home.appendingPathComponent(path).deletingLastPathComponent(), withIntermediateDirectories: true)
+        for (path, text) in scripts { try place(Data(text.utf8), at: path, mode: 0o755, under: home) }
+        for (path, text) in plain { try place(Data(text.utf8), at: path, mode: 0o644, under: home) }
+    }
+
+    /// Why an install stopped, naming the path under the home.
+    public struct InstallFailure: Error, CustomStringConvertible {
+        public let description: String
+        init(_ path: String, _ why: String, _ code: Int32 = errno) {
+            description = "\(path) in the guest's home \(why): \(String(cString: strerror(code)))"
         }
-        for (path, text) in scripts {
-            let url = home.appendingPathComponent(path)
-            try Data(text.utf8).write(to: url, options: .atomic)
-            try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    /// `data` at `path` under `home`, written under a hidden name, given its mode, and renamed over
+    /// whatever has the name, so the name never holds half a file.
+    private static func place(_ data: Data, at path: String, mode: mode_t, under home: URL) throws {
+        var names = path.split(separator: "/").map(String.init)
+        let name = names.removeLast()
+        var folder = open(home.resolvingSymlinksInPath().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard folder >= 0 else { throw InstallFailure(".", "cannot be opened") }
+        defer { close(folder) }
+        var walked: [String] = []
+        for next in names {
+            walked.append(next)
+            if mkdirat(folder, next, 0o755) != 0, errno != EEXIST {
+                throw InstallFailure(walked.joined(separator: "/"), "cannot be made")
+            }
+            let opened = openat(folder, next, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard opened >= 0 else {
+                let code = errno
+                throw InstallFailure(walked.joined(separator: "/"),
+                                     code == ELOOP || code == ENOTDIR ? "is not a folder" : "cannot be opened", code)
+            }
+            close(folder)
+            folder = opened
         }
-        for (path, text) in plain {
-            try Data(text.utf8).write(to: home.appendingPathComponent(path), options: .atomic)
+        let part = ".\(name).\(UUID().uuidString).part"
+        let file = openat(folder, part, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard file >= 0 else { throw InstallFailure(path, "cannot be written") }
+        var placed = false
+        defer { if !placed { _ = unlinkat(folder, part, 0) } }
+        let wrote = data.withUnsafeBytes { buffer -> Bool in
+            var written = 0
+            while written < buffer.count {
+                let count = write(file, buffer.baseAddress?.advanced(by: written), buffer.count - written)
+                guard count > 0 else { return false }
+                written += count
+            }
+            return true
         }
+        let moded = wrote && fchmod(file, mode) == 0
+        let code = errno
+        close(file)
+        guard moded else { throw InstallFailure(path, "cannot be written", code) }
+        guard renameat(folder, part, folder, name) == 0 else { throw InstallFailure(path, "cannot be replaced") }
+        placed = true
     }
 
     /// `topo`: carries its arguments to the app and prints what the app says, with its status. No
