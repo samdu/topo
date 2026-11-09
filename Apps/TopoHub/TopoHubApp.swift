@@ -203,6 +203,10 @@ struct SurfacesList: View {
                 Label("Not serving screen pages: \(failure)", systemImage: "exclamationmark.triangle")
                     .font(.caption2).foregroundStyle(.secondary)
             }
+            if let trouble = hub.pages.tokenTrouble {
+                Label("Screens' addresses: \(trouble)", systemImage: "exclamationmark.triangle")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 

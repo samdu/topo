@@ -49,6 +49,7 @@ The token is the whole of the access control, and it has to be: this is a person
 - Revocable, in the app, and revoked by default when the screen is taken off the roster.
 - Bound to what that screen may see. A token is a screen, not an account: it is the household board and the transcript of whoever registered it, and nothing else.
 - Refused when unknown, with a 404 and no hint of whether the token was ever real.
+- Kept in the hub's keychain (`SurfaceTokenKeeper`), and a keychain that cannot be read is not an empty one: while it cannot be, the hub serves no token, mints none and writes nothing over what is kept, asks again at every pass, and says so in its menu, so the screens' addresses and revocations are back once it reads. A change the keychain would not keep stands while the hub runs, is said in the menu, and is written again at the next pass.
 
 A token in a path is in the browser's history and in any proxy's logs, so the hub serves this on the LAN only, over the local network interfaces, and never through the tunnel.
 

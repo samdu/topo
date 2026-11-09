@@ -4,6 +4,7 @@ import Foundation
 import Observation
 import os
 import Security
+import TopoAuth
 import TopoCore
 import TopoCoreTesting
 import TopoLink
@@ -27,7 +28,11 @@ final class HubModel {
         case cloudKit, memory
     }
 
-    let device: DeviceID
+    /// This Mac's device ID, read from the keychain at launch and, while it
+    /// cannot be, at every try of `bringUp`; nothing registers, claims or
+    /// serves until it is read.
+    private(set) var device: DeviceID
+    private var identityRead: Bool
     let name: String
     let store: Store
     private(set) var status: Status = .starting
@@ -57,7 +62,14 @@ final class HubModel {
     /// testing package's in-memory store: an unsigned build runs, shows every
     /// screen and takes the lease against itself, and says which it is.
     init() {
-        device = HubIdentity.deviceID
+        do {
+            device = try HubIdentity.deviceID()
+            identityRead = true
+        } catch {
+            device = DeviceID("")
+            identityRead = false
+            Self.log.error("hub identity unreadable: \(String(describing: error), privacy: .public)")
+        }
         name = Host.current().localizedName ?? "Mac"
         if ProcessInfo.processInfo.environment["TOPO_STORE"] != "memory", HubIdentity.hasCloudKitEntitlement {
             store = .cloudKit
@@ -133,6 +145,7 @@ final class HubModel {
             await surfaces.refresh()
             // A screen this hub is on the roster of is a screen it serves a
             // page to, however it got there: the tap happened in the room.
+            pages.reload()
             for surface in surfaces.surfaces where surfaces.isRegistered(device, with: surface) {
                 pages.mint(for: surface.device, named: surface.name)
             }
@@ -144,6 +157,10 @@ final class HubModel {
     /// makes the lease. Each step keeps what it made, so a retry after a
     /// failure picks up where it stopped.
     private func bringUp() async throws {
+        if !identityRead {
+            device = try HubIdentity.deviceID()
+            identityRead = true
+        }
         if let ck = database as? CloudKitRecordDatabase { try await ck.ensureZone() }
         if server == nil {
             let server = try LeaseProbeServer(advertising: device) { [weak self] holder, epoch in
@@ -156,7 +173,7 @@ final class HubModel {
         }
         let endpoints = HubIdentity.addresses().map { "\($0):\(port ?? 0)" }
         let record = try await directory.register(Device(
-            id: device, name: name, kind: .mac, publicKey: HubIdentity.publicKey,
+            id: device, name: name, kind: .mac, publicKey: try HubIdentity.publicKey(),
             endpoints: endpoints, registeredAt: Date(), seenAt: Date()))
         pairingCode = PairingCode(record)
         if lease == nil {
@@ -214,30 +231,36 @@ final class HubModel {
 }
 
 /// What this Mac is to the database: a stable device ID and a key pair,
-/// made once and kept in the keychain.
+/// made once and kept in the keychain. A keychain that cannot be read is an
+/// error and never a reason to make either again: a new ID is another device
+/// beside the lease's, and a new key another pairing code.
 enum HubIdentity {
     static let service = "zone.hexagon.topo.hub"
 
-    static var deviceID: DeviceID {
-        if let existing = KeychainItem.read(service: service, account: "device"), let id = String(data: existing, encoding: .utf8) {
-            return DeviceID(id)
+    struct Unreadable: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    static func deviceID() throws -> DeviceID {
+        let data = try KeychainItem(service: service, account: "device")
+            .readOrMake { Data(("mac-" + UUID().uuidString.lowercased()).utf8) }
+        guard let id = String(data: data, encoding: .utf8) else {
+            throw Unreadable(description: "the hub's device ID in the keychain is not text")
         }
-        let id = "mac-" + UUID().uuidString.lowercased()
-        KeychainItem.write(service: service, account: "device", data: Data(id.utf8))
         return DeviceID(id)
     }
 
-    static var privateKey: Curve25519.KeyAgreement.PrivateKey {
-        if let raw = KeychainItem.read(service: service, account: "key"),
-           let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
-            return key
+    static func privateKey() throws -> Curve25519.KeyAgreement.PrivateKey {
+        let raw = try KeychainItem(service: service, account: "key")
+            .readOrMake { Curve25519.KeyAgreement.PrivateKey().rawRepresentation }
+        do {
+            return try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw)
+        } catch {
+            throw Unreadable(description: "the hub's key in the keychain is not a key")
         }
-        let key = Curve25519.KeyAgreement.PrivateKey()
-        KeychainItem.write(service: service, account: "key", data: key.rawRepresentation)
-        return key
     }
 
-    static var publicKey: String { privateKey.publicKey.rawRepresentation.base64EncodedString() }
+    static func publicKey() throws -> String { try privateKey().publicKey.rawRepresentation.base64EncodedString() }
 
     static var hasCloudKitEntitlement: Bool {
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
@@ -262,34 +285,5 @@ enum HubIdentity {
             }
         }
         return out
-    }
-}
-
-enum KeychainItem {
-    static func read(service: String, account: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
-    }
-
-    static func write(service: String, account: String, data: Data) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        if SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
-            var add = query
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(add as CFDictionary, nil)
-        }
     }
 }
