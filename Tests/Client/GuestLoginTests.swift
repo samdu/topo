@@ -103,6 +103,31 @@ final class GuestLoginTests: XCTestCase {
         try GuestResident.makeHome(home)
     }
 
+    /// A link the guest left at `~/.claude` is a real link on the host: the home is refused, naming
+    /// it, and nothing is made or protected where it points.
+    func testALinkAtClaudeIsRefusedAndWhatItNamesIsLeftAlone() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("login-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let claude = home.appendingPathComponent(".claude")
+        for target in ["../outside/made", "../outside"] {
+            try? FileManager.default.removeItem(at: claude)
+            try FileManager.default.createSymbolicLink(atPath: claude.path, withDestinationPath: target)
+            var asked: [String] = []
+            XCTAssertThrowsError(try GuestResident.makeHome(home) { _, path in asked.append(path) }, target) { error in
+                XCTAssertTrue("\(error)".contains(".claude"), "the refusal names the link: \(error)")
+            }
+            XCTAssertFalse(asked.contains(claude.path), "nothing is protected through the link to \(target)")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("made").path), target)
+            if target == "../outside/made" {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: outside.path), "no folder is made where the link points")
+                try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            }
+        }
+    }
+
     /// The guest's files are out of `Documents`, which Finder's file sharing shows: the standard
     /// place is Application Support.
     func testTheGuestsFilesAreOutOfDocuments() {
