@@ -5,10 +5,10 @@
 # which of them the PR's paths need, `test` reads those statuses off the PR
 # head and is red on one that is missing or failed, and Codex reviews every
 # non-draft PR whose `test` is green; its verdict is what gates. `review_gate`
-# and `test` are the required status checks on main, and automerge.yaml merges
-# on this workflow's latest pull_request run concluding green — so a suite
-# that did not pass on the Mac holds the merge by both routes, and spends no
-# reviewer round. Every job here runs on `vm-linux`, the pool of ephemeral
+# and `test` are the required status checks on main, and the janitor merges
+# on this workflow's latest pull_request run concluding green
+# (scripts/janitor.py, step 1) — so a suite that did not pass on the Mac holds
+# the merge by both routes, and spends no reviewer round. Every job here runs on `vm-linux`, the pool of ephemeral
 # arm64 Ubuntu VMs on the Macs (dotfiles tools/vm-runner): a fresh guest per
 # job, so nothing one job leaves is seen by the next.
 #
@@ -392,7 +392,7 @@ jobs:
   # scripts/review-verdicts.sh) and at four sets `capped`: codex does not
   # run, and reviewer_ran and review_gate read the cap
   # as neither a missing verdict nor a blocking one. review_gate stays red, so
-  # automerge does not merge a capped PR: it merges on Sam's word, or goes
+  # the janitor does not merge a capped PR: it merges on Sam's word, or goes
   # back to draft for a replan. The script posts one comment saying so, under
   # its own marker and never the codex one. A count it cannot read or a
   # comment it cannot post fails this job, so codex does not run and
@@ -1015,7 +1015,7 @@ jobs:
   #   gh api repos/OWNER/REPO/actions/runs/RUNID/jobs \
   #     -q '.jobs[]|"\(.name): \(.conclusion) steps=\(.steps|length)"'
   #
-  # Both fail closed and neither can be skipped into green. automerge merges
+  # Both fail closed and neither can be skipped into green. The janitor merges
   # only on this workflow concluding `completed success`, so either job red
   # holds the merge — and a `cancelled` or `skipped` conclusion holds it too:
   # concurrency cancels a superseded run, `!cancelled()` skips both jobs, and
