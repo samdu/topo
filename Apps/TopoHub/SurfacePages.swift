@@ -16,7 +16,11 @@ import TopoLink
 @MainActor
 @Observable
 final class SurfacePages {
-    private(set) var tokens = SurfaceTokens.load()
+    private var keeper = SurfaceTokenKeeper.keychain()
+    /// The tokens this hub serves under; none while the keychain cannot be read.
+    var tokens: SurfaceTokens { keeper.tokens ?? SurfaceTokens() }
+    /// Why the screens' tokens cannot be read or were not kept, if so.
+    var tokenTrouble: String? { keeper.trouble }
     private(set) var port: UInt16?
     /// Why the page is not being served, if it is not.
     private(set) var failure: String?
@@ -70,16 +74,18 @@ final class SurfacePages {
     }
 
     func mint(for surface: DeviceID, named name: String) {
-        guard tokens.token(for: surface) == nil, !tokens.isRevoked(surface) else { return }
-        tokens.mint(for: surface, named: name)
-        tokens.save()
+        guard let tokens = keeper.tokens, tokens.token(for: surface) == nil, !tokens.isRevoked(surface) else { return }
+        keeper.change { _ = $0.mint(for: surface, named: name) }
     }
+
+    /// Asks a keychain that could not be read again, and keeps a change that
+    /// did not land: once a pass.
+    func reload() { keeper.reload() }
 
     /// Serves a screen somebody revoked, under a new token. The old address
     /// is gone for good; this is a fresh decision and a fresh one of those.
     func serveAgain(_ surface: DeviceID, named name: String) {
-        tokens.serveAgain(surface, named: name)
-        tokens.save()
+        keeper.change { $0.serveAgain(surface, named: name) }
     }
 
     func isRevoked(_ surface: DeviceID) -> Bool { tokens.isRevoked(surface) }
@@ -90,8 +96,7 @@ final class SurfacePages {
     /// remembered as revoked so the hub's next pass does not quietly mint it
     /// another one.
     func revoke(_ surface: DeviceID) {
-        tokens.revoke(surface)
-        tokens.save()
+        keeper.change { $0.revoke(surface) }
     }
 
     /// `Womble/Web` as the hub bundles it. A build that left the files out

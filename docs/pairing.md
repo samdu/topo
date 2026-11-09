@@ -16,7 +16,7 @@ The hub writes one record about itself at every launch, type `Device`, name `dev
 | `registeredAt` | First launch against this database |
 | `seenAt` | Last launch or refresh |
 
-The ID is made once per install and kept in the keychain (`mac-<uuid>` on the hub). The record is created if absent and otherwise updated with the current name, kind, key, endpoints and `seenAt`; `pairedWith` and `registeredAt` survive the update. Roles are not stored: primary is whoever holds the lease, the hub is the device of kind `mac`, and everything else is a viewer or a limb by what it can do.
+The ID is made once per install and kept in the keychain (`mac-<uuid>` on the hub); a keychain that cannot be read makes neither the ID nor the key again (`KeychainItem.readOrMake`), and the hub registers nothing until it reads. The record is created if absent and otherwise updated with the current name, kind, key, endpoints and `seenAt`; `pairedWith` and `registeredAt` survive the update. Roles are not stored: primary is whoever holds the lease, the hub is the device of kind `mac`, and everything else is a viewer or a limb by what it can do.
 
 Womble writes no record. Its access is the Apple ID it is signed into, which is all a viewer needs to read the log, so it is a reader of these records and not a party to them.
 

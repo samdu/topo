@@ -53,6 +53,16 @@ public struct KeychainItem: Sendable {
         return data
     }
 
+    /// The item's bytes, making them with `make` and writing them only where there is no item. A
+    /// read that failed is thrown and never taken for no item, so a value that is there is never
+    /// replaced by a new one: a device's name or key made again is another device.
+    public func readOrMake(_ make: () throws -> Data) throws -> Data {
+        if let existing = try read() { return existing }
+        let made = try make()
+        try write(made)
+        return made
+    }
+
     public func write(_ data: Data) throws {
         let query = try query()
         let update: [String: Any] = [kSecValueData as String: data]
