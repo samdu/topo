@@ -101,7 +101,9 @@ final class BadgeRenderTests: XCTestCase {
         let underOwn = try picture(TopoBadge(), look: own)
         let leak = distance(plain, underResting)
         let cast = distance(plain, underOwn)
-        XCTAssertGreaterThan(cast, 1, "the badge's own jewel does not reach it, so this test measures nothing")
+        guard cast > 1 else {
+            return XCTFail("the badge's own jewel moved it by \(cast) levels a channel, so this test measures nothing")
+        }
         if leak * 50 >= cast {
             attach(plain, "badge")
             attach(underResting, "badge with the resting jewel cast")
