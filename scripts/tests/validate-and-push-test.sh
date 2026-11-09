@@ -975,18 +975,19 @@ is "a host refused once: asked twice" "$(grep -c '^laptop bash -s' "$SSH_CALLS")
 is "a host refused once: the first suite ran here" "$(said_on topo_unit)" "$(hostname -s)"
 is "a host refused once: the next ran there" "$(said_on others)" laptop
 case "$out" in *"laptop cannot run it now, and is asked once more"*"lid is closed"*) ok "a host refused once: it is said, with why" ;; *) fail "a host refused once: $out" ;; esac
-# The same with a cooldown of 3 s and suites of 2 s: no second ask before the 3 s are up, and
-# the suites go on here meanwhile; the first one asked for after them goes there.
+# The same with a cooldown of 5 s and suites of 3 s: no second ask before it ends, and the
+# suites go on here meanwhile; the first one asked for after it goes there. SECONDS counts whole
+# seconds, so a cooldown of N can end anywhere past N-1: the gap asserted is 4.
 scratch host-cooldown Packages/TopoLink/Package.swift Womble/x
 mkdir -p "$work/host-cooldown/home"
 TOPO_VALIDATE_LOGS="$work/host-cooldown/home/Library/Logs/topo-validate"
 : > "$work/host-cooldown/times"
-HOME="$work/host-cooldown/home" HOST_RETRY=3 FAKE_SUITE_SLOW=2 FAKE_CHECK_TIMES="$work/host-cooldown/times" FAKE_CHECK_ONCE="$work/host-cooldown/refused" \
+HOME="$work/host-cooldown/home" HOST_RETRY=5 FAKE_SUITE_SLOW=3 FAKE_CHECK_TIMES="$work/host-cooldown/times" FAKE_CHECK_ONCE="$work/host-cooldown/refused" \
   TOPO_VALIDATE_HOSTS=laptop validate --suites "topo_unit others scripts"
 is "a host in its cooldown: exits 0" "$status" 0
 is "a host in its cooldown: asked twice" "$(wc -l < "$work/host-cooldown/times" | tr -d ' ')" 2
-gap="$(awk 'NR == 1 { a = $1 } NR == 2 { print ($1 - a >= 3) ? "after" : "before" }' "$work/host-cooldown/times")"
-is "a host in its cooldown: asked again only once the 3 s were up" "$gap" after
+gap="$(awk 'NR == 1 { a = $1 } NR == 2 { print ($1 - a >= 4) ? "after" : "before" }' "$work/host-cooldown/times")"
+is "a host in its cooldown: asked again only once the cooldown was up" "$gap" after
 is "a host in its cooldown: the suites went on here meanwhile" "$(said_on topo_unit) $(said_on others)" "$(hostname -s) $(hostname -s)"
 is "a host in its cooldown: the next went there" "$(said_on scripts)" laptop
 # Refused at both asks: dropped after the second, and every suite runs here.
