@@ -15,6 +15,8 @@ struct ControlTool: Tool {
     /// A clear of the control secrets the keychain refused at a sign-out, which refuses a new one
     /// until the app has cleared them (it tries again at each launch).
     var leftBehind = ConnectionsLeftBehind()
+    /// The login a secret is kept under: a set lands only while the epoch it took still stands.
+    var login: @MainActor @Sendable () -> LoginLife = { .shared }
     /// A toggle's state set by the mind, told to the runs in flight (`WidgetActions.confirm`).
     var confirm: @MainActor @Sendable (_ on: Bool, _ slot: String, _ revision: Int) -> Void = { on, slot, revision in
         (WidgetIntents.handler as? WidgetTaps)?.actions.confirm(on, slot: ControlSlot.stored(slot), control: ControlSlot.control,

@@ -72,6 +72,8 @@ final class ControlToolTests: XCTestCase {
 
     private var store: SurfaceStore { SurfaceStore(folder: folder) }
 
+    private let life = LoginLife()
+
     private func tool(loaded: Bool = true) async throws -> ControlTool {
         let fake = LoadedHome()
         let access = HomeAccess {
@@ -93,7 +95,7 @@ final class ControlToolTests: XCTestCase {
                                        schedule: { [unowned self] _, body in scheduled.append(body) })
         let store = store
         return ControlTool(judge: WidgetRunJudge(home: homeTool, notify: nil, reminders: nil), store: { store }, reloader: { reloader },
-                           secrets: secrets, leftBehind: leftBehind,
+                           secrets: secrets, leftBehind: leftBehind, login: { [life] in life },
                            confirm: { [unowned self] on, slot, revision in confirmed.append("\(slot) \(on) \(revision)") },
                            askLocal: { [unowned self] in asked.append($0) }, localState: { .notAsked })
     }
@@ -229,6 +231,22 @@ final class ControlToolTests: XCTestCase {
         XCTAssertFalse(listed.text.contains("SENTINEL"))
         _ = await tool.run(["secret", "clear", "ha"])
         XCTAssertNil(try secrets.read("ha"))
+    }
+
+    /// A set already on its way when the login ends keeps nothing: the sign-out's clear runs while
+    /// the call is in flight (the task is made here and starts only once the test awaits it), and
+    /// what the call would have written after it is refused rather than outliving the login.
+    func testASetInFlightAcrossASignOutKeepsNothing() async throws {
+        let tool = try await tool()
+        let call = Task { await tool.run(["secret", "set", "ha", "tok-SENTINEL-9"]) }
+        // A sign-out's steps, in its order: the epoch moved, the login's teardowns, the clear.
+        life.moveEpoch()
+        life.runTeardowns()
+        try secrets.clearAll()
+        let reply = await call.value
+        XCTAssertNil(try secrets.read("ha"), "the secret outlived the sign-out")
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertFalse(reply.text.contains("SENTINEL"), reply.text)
     }
 
     /// A clear of the control secrets refused at a sign-out: no secret is kept and none is listed
