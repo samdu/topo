@@ -30,7 +30,11 @@ extension ControlRequest {
         // holds is an earlier login's, so a request naming one sends nothing.
         if !form.secrets.isEmpty, leftBehind.controlSecrets != nil { return Answer(status: ToolReply.failed) }
         // A reference to a missing secret sends nothing.
-        guard let request = form.urlRequest(secret: { try? secrets.read($0) }) else { return Answer(status: ToolReply.failed) }
+        let names = form.secrets
+        let values = names.isEmpty ? [:] : ((try? await secrets.offThePool { secrets in
+            names.reduce(into: [String: String]()) { found, name in found[name] = try? secrets.read(name) }
+        }) ?? [:])
+        guard let request = form.urlRequest(secret: { values[$0] }) else { return Answer(status: ToolReply.failed) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
@@ -137,6 +141,17 @@ struct ControlSecrets: Sendable {
     func clear(_ name: String) throws {
         calling()
         try item(name).delete()
+    }
+
+    /// `work`, which makes synchronous Security calls, on a queue of its own and not on the
+    /// cooperative pool an async caller is on.
+    func offThePool<T: Sendable>(_ work: @escaping @Sendable (ControlSecrets) throws -> T) async throws -> T {
+        let secrets = self
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result { try work(secrets) })
+            }
+        }
     }
 
     /// The names held, never their values.
