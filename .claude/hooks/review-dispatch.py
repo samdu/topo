@@ -13,7 +13,9 @@ Bash command whose text, with its line continuations joined and its quotes and
 backslashes taken out, names the plan reviewer, or ``codex`` with ``exec``, ``e``
 or ``review`` later on the same line (``INVOKES``): such a command is read whole. No shell is
 parsed, so prose that names the invocation is read too, and a name put together
-when the command runs is not. Two things in a dispatch are not steering: a
+when the command runs is not. Steering is read both in the text and in the text
+with its quotes and backslashes taken out, so quotes splitting a phrase do not
+hide it. Two things in a dispatch are not steering: a
 passage quoted word for word from the project's CLAUDE.md (a sentence, or a
 quoted string's contents, that is CLAUDE.md's and runs QUOTED characters past
 the match on each side), which the reviewer reads anyway, and a sentence citing
@@ -94,6 +96,12 @@ def sentence(text, m):
     return text[a:b]
 
 
+def dequoted(text):
+    """The text with its quotes and backslashes out, and where each character left came from."""
+    keep = [i for i, c in enumerate(text) if c not in SHELL_QUOTES + "\\"]
+    return "".join(text[i] for i in keep), keep
+
+
 def refuse(why, said):
     print(f"Review dispatch guard: {why} (“{said}”). Say what changed and what "
           "to read; a plan-mandated defect is reported Important and tagged, and a "
@@ -115,13 +123,22 @@ def judge(d):
     else:
         return
     rules = None
+    plain, at = dequoted(text)
     for pat, why in STEER:
-        for m in pat.finditer(text):
+        found = list(pat.finditer(text))
+        for m in found:
             if rules is None:
                 rules = project_rules()
             if quoted(text, m, rules, quotes) or RULING.search(sentence(text, m)):
                 continue
             refuse(why, m.group(0))
+        # Steering split by quotes or backslashes (do not "flag") reads as one
+        # phrase once they are out; a match the raw text already had is judged above.
+        for m in pat.finditer(plain):
+            a, b = at[m.start()], at[m.end() - 1] + 1
+            if any(r.start() < b and a < r.end() for r in found) or RULING.search(sentence(plain, m)):
+                continue
+            refuse(why, text[a:b])
 
 
 def main():
