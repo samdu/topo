@@ -8,8 +8,11 @@ import Foundation
 /// runs on cannot drift apart.
 ///
 /// A store's tags and tokens carry its `store` id, so a tag or a token from a store with another
-/// id is never honoured: a tag is a stale save, a token an expired one. Each journal has an id
-/// of its own; every `InMemoryRecordDatabase` shares one.
+/// id is never honoured: a tag is a stale save, a token an expired one. Each journal and each
+/// `InMemoryRecordDatabase` has an id of its own.
+///
+/// An empty string or asset list is saved as no field, as the CloudKit adapter leaves it off the
+/// wire and the server answers it absent.
 package struct RecordStoreCore: Sendable {
     /// What one mutation did, as it is replayed: the records as saved (their new tags on them),
     /// or the records deleted with their types.
@@ -66,6 +69,13 @@ package struct RecordStoreCore: Sendable {
             next += 1
             var saved = record
             saved.changeTag = "\(store)-\(next)"
+            saved.fields = saved.fields.filter { _, value in
+                switch value {
+                case .strings(let list): !list.isEmpty
+                case .assets(let list): !list.isEmpty
+                default: true
+                }
+            }
             return saved
         })
     }
