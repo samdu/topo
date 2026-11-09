@@ -9,22 +9,27 @@ Important, tagged plan-mandated — and adjudicated against the spec.
 
 Reads the PreToolUse JSON on stdin; exit 2 with a reason on stderr blocks.
 Applies to an ``Agent`` dispatch of a reviewer agent (``REVIEWERS``), and to a
-Bash command that runs the plan reviewer or Codex (``RUNS``): not to every
+Bash command that runs the plan reviewer or Codex (``runs``): not to every
 prompt or command that mentions a review. Two things in a dispatch are not
-steering: a passage quoted word for word from the project's CLAUDE.md, which
-the reviewer reads anyway, and a sentence citing a recorded ruling (a ruling
+steering: a passage quoted word for word from the project's CLAUDE.md (the
+sentence holding the match, or the quotation within it, with QUOTED characters
+of it either side of the match), which the reviewer reads anyway, and a sentence citing a recorded ruling (a ruling
 or a ledger line, with its date), which is the one thing docs/process.md lets
 settle a finding in advance.
 """
 import json
 import os
 import re
+import shlex
 import sys
 
 REVIEWERS = {"adversarial-reviewer"}
-RUNS = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(?:plan-review\.sh\b|codex\s+(?:exec|review)\b)")
-RULING = re.compile(r"\b(?:rul(?:ing|ed)|ledger)\b[^.\n]*\b\d{4}-\d{2}-\d{2}|\b\d{4}-\d{2}-\d{2}\b[^.\n]*\b(?:rul(?:ing|ed)|ledger)\b", re.I)
-QUOTED = 20   # characters either side of a match that must also be CLAUDE.md's for it to be a quotation
+SHELLS = {"bash", "sh", "zsh"}
+ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+ENDS = ".!?\n"          # what ends a sentence
+QUOTES = '"\u201c\u201d`'  # what bounds a quotation inside one
+RULING = re.compile(r"\b(?:rul(?:ing|ed)|ledger)\b[^.!?\n]*\b\d{4}-\d{2}-\d{2}|\b\d{4}-\d{2}-\d{2}\b[^.!?\n]*\b(?:rul(?:ing|ed)|ledger)\b", re.I)
+QUOTED = 20   # characters of the quotation either side of a match, for it to be a quotation
 STEER = [
     (re.compile(r"\b(don'?t|do not|no need to|needn'?t)\s+(flag|report|raise|mention)\b", re.I),
      "it tells the reviewer what not to report"),
@@ -53,26 +58,72 @@ def project_rules():
         return ""
 
 
+def span(text, m, ends):
+    """The run of text holding the match, bounded by any character of ``ends``."""
+    a = max(text.rfind(c, 0, m.start()) for c in ends) + 1
+    after = [i for i in (text.find(c, m.end()) for c in ends) if i >= 0]
+    return a, min(after) if after else len(text)
+
+
 def quoted(text, m, rules):
-    """Whether the match is inside a passage of CLAUDE.md the dispatch quotes:
-    the run of the dispatch around it that is CLAUDE.md's word for word, grown
-    a character at a time either way, reaches QUOTED characters past it."""
-    def held(a, b):
-        return squash(text[a:b]) in rules
-    a, b = m.start(), m.end()
-    if not rules or not held(a, b):
+    """Whether the match is inside a passage the dispatch quotes from CLAUDE.md:
+    the sentence holding it, or the quotation within that sentence, is
+    CLAUDE.md's word for word, and runs QUOTED characters past the match on
+    each side."""
+    if not rules:
         return False
-    while a > 0 and held(a - 1, b):
-        a -= 1
-    while b < len(text) and held(a, b + 1):
-        b += 1
-    return (m.start() - a) + (b - m.end()) >= QUOTED
+    a, b = span(text, m, ENDS + QUOTES)
+    return (squash(text[a:b]).strip() in rules
+            and len(text[a:m.start()].strip()) >= QUOTED
+            and len(text[m.end():b].strip()) >= QUOTED)
 
 
 def sentence(text, m):
-    a = max(text.rfind(".", 0, m.start()), text.rfind("\n", 0, m.start())) + 1
-    ends = [i for i in (text.find(".", m.end()), text.find("\n", m.end())) if i >= 0]
-    return text[a:min(ends) if ends else len(text)]
+    a, b = span(text, m, ENDS)
+    return text[a:b]
+
+
+def segments(command):
+    """The simple commands of a shell command line, each as its words: split at
+    ; & | ( ) and newlines outside quotes, quotes taken off."""
+    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    lex.commenters = ""
+    words = []
+    for tok in lex:
+        if tok and all(c in ";&|()\n" for c in tok):
+            if words:
+                yield words
+            words = []
+        else:
+            words.append(tok)
+    if words:
+        yield words
+
+
+def runs(command, depth=0):
+    """The text of each part of the command that runs the plan reviewer or
+    Codex, read by its command word, so an argument that names them is not."""
+    try:
+        parts = list(segments(command))
+    except ValueError:  # an unclosed quote: read the whole line
+        return [command] if re.search(r"plan-review\.sh|codex", command) else []
+    found = []
+    for words in parts:
+        while words and ASSIGN.match(words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        name = os.path.basename(words[0])
+        if name == "plan-review.sh" or (name == "codex" and words[1:2] in (["exec"], ["review"])):
+            found.append(" ".join(words))
+        elif name in SHELLS and depth < 3:
+            for i, w in enumerate(words[1:-1], 1):
+                if w.startswith("-") and "c" in w[1:]:
+                    found += runs(words[i + 1], depth + 1)
+                    break
+    return found
 
 
 def main():
@@ -84,8 +135,8 @@ def main():
             return
         text = str(ti.get("prompt") or "")
     elif tool == "Bash":
-        text = str(ti.get("command") or "")
-        if not RUNS.search(text):
+        text = "\n".join(runs(str(ti.get("command") or "")))
+        if not text:
             return
     else:
         return
