@@ -129,6 +129,8 @@ if [ "$check" = yes ]; then
   echo "check ${suites[*]}" >> "$FAKE_RECORD.checks"
   [ -z "${FAKE_CHECK_SLOW-}" ] || perl -e "select(undef,undef,undef,3)"
   [ -z "${FAKE_CHECK-}" ] || { echo "error: $FAKE_CHECK" >&2; exit 1; }
+  # As the real check refuses a bash that crashes: here, one in a directory named crashbin.
+  case "$(command -v bash)" in *crashbin*) echo "error: the bash env finds, $(command -v bash), crashes" >&2; exit 1 ;; esac
   # Refused at the first ask alone, as a lid shut for a minute is.
   [ -z "${FAKE_CHECK_ONCE-}" ] || [ -e "$FAKE_CHECK_ONCE" ] || { : > "$FAKE_CHECK_ONCE"; echo "error: the lid is closed." >&2; exit 1; }
   exit 0
@@ -901,6 +903,17 @@ for case in "not reached|FAKE_UNREACHABLE=laptop" "cannot run it|FAKE_CHECK=no i
   is "a host ${case%%|*}: asked to run a suite at most once" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" "$([ "${case%%|*}" = "not reached" ] && echo 0 || echo 1)"
   rm -rf "$work/host-unusable"
 done
+# The check runs in a login shell, as the suite does: a bash only the host's profile puts first is
+# the one judged, though the caller's PATH finds a good one.
+scratch host-profile Packages/TopoLink/Package.swift
+mkdir -p "$FAKE_HOSTS/laptop/crashbin"
+printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$FAKE_HOSTS/laptop/crashbin/bash"; chmod +x "$FAKE_HOSTS/laptop/crashbin/bash"
+echo 'PATH="$HOME/crashbin:$PATH"' > "$FAKE_HOSTS/laptop/.bash_profile"
+HOST_RETRY=0 TOPO_VALIDATE_HOSTS=laptop validate
+is "a host whose profile finds a crashing bash: exits 0" "$status" 0
+is "a host whose profile finds a crashing bash: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+case "$out" in *"laptop"*"cannot run it"*"crashbin/bash"*) ok "a host whose profile finds a crashing bash: it is said, with the bash" ;; *) fail "a host whose profile finds a crashing bash: $out" ;; esac
+rm -rf "$FAKE_HOSTS/laptop/crashbin" "$FAKE_HOSTS/laptop/.bash_profile"
 # A Mac whose --check refuses once and then passes: asked again after HOST_RETRY, and the suite
 # it then takes runs there; the one asked of it the first time ran here.
 scratch host-once Packages/TopoLink/Package.swift Womble/x
