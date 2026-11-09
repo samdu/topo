@@ -706,12 +706,36 @@ is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen 
 [ ! -e "$work/can.results" ] && ok "check: no results are written" || fail "check: results were written"
 # A bash that dies in a forked subshell giving a command its locale: refused, named, for every
 # suite. The script itself runs under this shell's bash; only what env finds is the fake.
+# The fake is the real bash, but a command given LC_ALL=C in a forked subshell kills that
+# subshell from its third time on, as 5.3.15's crash comes at no fixed moment: a probe that
+# runs once, or runs no such command, passes it. FAKE_BASH_CALLS counts those commands.
 mkdir -p "$work/crashbin"
-printf '#!/bin/sh\ncase "$1" in --version) echo "GNU bash, version 5.3.15(1)-release" ;; *) kill -SEGV $$ ;; esac\n' > "$work/crashbin/bash"
-chmod +x "$work/crashbin/bash"
+cat > "$work/crashbin/locale-command" <<'CMD'
+#!/bin/sh
+[ "${LC_ALL-}" = C ] || exit 0
+n=$(($(cat "$FAKE_BASH_CALLS" 2>/dev/null || echo 0) + 1)); echo "$n" > "$FAKE_BASH_CALLS"
+[ "$n" -lt 3 ] || kill -SEGV "$PPID"
+CMD
+cat > "$work/crashbin/bash" <<CRASH
+#!/bin/sh
+[ "\$1" != --version ] || { echo "GNU bash, version 5.3.15(1)-release"; exit 0; }
+if [ "\$1" = -c ]; then shift; exec "$BASH" -c "\$(printf '%s' "\$1" | sed 's|/usr/bin/true|$work/crashbin/locale-command|g')" "\$@"; fi
+exec "$BASH" "\$@"
+CRASH
+chmod +x "$work/crashbin/bash" "$work/crashbin/locale-command"
+export FAKE_BASH_CALLS="$work/crashbin/calls"
+rm -f "$FAKE_BASH_CALLS"
 said="$(cd "$tree" && PATH="$work/crashbin:$work/bin:$PATH" "$BASH" scripts/mac-suite.sh --check --cache "$work/cache" scripts 2>&1)" && status=0 || status=$?
 is "check, a bash that crashes: exits 1" "$status" 1
 names "check, a bash that crashes: named, with its version" "the bash env finds ($work/crashbin/bash, GNU bash, version 5.3.15(1)-release) dies"
+is "check, a bash that crashes: the form was run until it died, at the third" "$(cat "$FAKE_BASH_CALLS" 2>/dev/null)" 3
+# The same bash with the crash past twenty runs passes: the probe is twenty runs of the form.
+sed -i '' 's/-lt 3 ]/-lt 21 ]/' "$work/crashbin/locale-command"
+rm -f "$FAKE_BASH_CALLS"
+said="$(cd "$tree" && PATH="$work/crashbin:$work/bin:$PATH" "$BASH" scripts/mac-suite.sh --check --cache "$work/cache" scripts 2>&1)" && status=0 || status=$?
+case "$said" in *"the bash env finds"*) fail "check, a bash that lasts twenty: refused: $said" ;; *) ok "check, a bash that lasts twenty: not refused for its bash" ;; esac
+is "check, a bash that lasts twenty: the form ran twenty times" "$(cat "$FAKE_BASH_CALLS" 2>/dev/null)" 20
+unset FAKE_BASH_CALLS
 FAKE_XCODE=26.4 check xcode others
 is "check, another Xcode: exits 1" "$status" 1
 names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
