@@ -6,7 +6,7 @@ A fresh build reaches Sam's devices by push: buddybox is paired over the local n
 
 ## Install from the page
 
-1. On the iPhone, open Safari (it must be Safari) at https://experiments.hexagon.zone/ota/files/623f17f9f38db5b81d0b/ and tap **Install Topo**, then **Install** on the system prompt.
+1. On the iPhone, open Safari (it must be Safari) at https://topo.hexagon.zone/ and tap **Install main**, or for a PR's test build the **Install #<PR>** button of the PR you want (the page shows **Install dev** in their place only when no PR's build is published), then **Install** on the system prompt.
 2. Wait for the icon to finish loading on the Home Screen. A first install of an unsigned-by-the-store developer app may ask, on launch, to trust the developer: Settings › General › VPN & Device Management › Apple Development: Sam du Rose › Trust.
 3. Open Topo. It reads the CloudKit container on the phone's iCloud account (`iCloud.zone.hexagon.topo`, development environment), so iCloud Drive must be on for the account, and the first device to launch becomes primary and shows Sign in with Claude.
 
