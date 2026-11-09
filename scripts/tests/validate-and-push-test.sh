@@ -91,6 +91,10 @@ case "$*" in
   "api repos/samdu/topo/actions/workflows/pr-validate.yaml/runs?head_sha="*) printf '%s\n' "${FAKE_RUN-}" ;;
   "api repos/samdu/topo/actions/runs/99/jobs?"*) printf '%s\n' "${FAKE_TEST_JOB-}" ;;
   "run rerun --repo samdu/topo --job 4242") ;;
+  # The branch's open PRs and a PR's comments as GitHub's JSON (FAKE_PRS, FAKE_COMMENTS), put
+  # through the script's own --jq query, its last argument, as gh does.
+  "pr list --repo samdu/topo --head topic --state open "*) [ "${FAKE_PR_LIST-}" != fail ] || exit 1; jq -r "${@: -1}" <<<"${FAKE_PRS:-[]}" ;;
+  "api --paginate repos/samdu/topo/issues/7/comments "*) [ "${FAKE_COMMENTS_READ-}" != fail ] || exit 1; jq -r "${@: -1}" <<<"${FAKE_COMMENTS:-[]}" ;;
   *) echo "unexpected gh call: $*" >&2; exit 64 ;;
 esac
 GH
@@ -222,7 +226,7 @@ validate
 is "docs: exits 0" "$status" 0
 is "docs: pushed" "$(origin_head)" "$sha"
 is "docs: no suite ran" "$(recorded head)" ""
-is "docs: no gh call but the look for a red test job" "$(grep -vc 'actions/workflows' "$GH_CALLS")" 0
+is "docs: no gh call but the PR's state and the look for a red test job" "$(grep -vcE 'actions/workflows|^pr list ' "$GH_CALLS")" 0
 
 # An app change off the voice path: every suite, the fast lane, at the commit and nothing else.
 scratch app Apps/Client/SettingsView.swift
@@ -373,6 +377,43 @@ is "a push that never lands: exits 2" "$status" 2
 is "a push that never lands: tried three times" "$(cat "$work/downpush/origin.git/hooks/pre-receive.count")" 3
 is "a push that never lands: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
 grep -q 'The suites passed' <<<"$out" && ok "a push that never lands: says the suites passed" || fail "a push that never lands: $out"
+
+# A ready PR whose newest verdict read an earlier head: refused before any suite runs, unless
+# --after-verdict says the push is meant. A draft, or a ready PR with no verdict yet, pushes.
+# comments <login> <body> [<login> <body>...] — a PR's comments, oldest first, as GitHub's JSON.
+comments() { local out="[]"; while [ $# -gt 1 ]; do out="$(jq -c --arg l "$1" --arg b "$2" '. + [{user: {login: $l}, body: $b}]' <<<"$out")"; shift 2; done; echo "$out"; }
+bot="github-actions[bot]"
+verdict() { printf '<!-- agent-review: codex -->\n<!-- agent-review-sha: %s -->\n%s' "$1" "${2:-### Codex review}"; }
+ready_pr='[{"number": 7, "isDraft": false}]'
+scratch ready Packages/TopoLink/Package.swift
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 1111111aaaa old)" "$bot" "$(verdict 2222222bbbb)" samdu "$(verdict 3333333cccc 'a person quoting a header, newest')")" validate
+is "ready, a verdict stands: exits 2" "$status" 2
+is "ready, a verdict stands: no suite ran" "$(recorded suites)" ""
+is "ready, a verdict stands: nothing pushed" "$(origin_head)" ""
+grep -q 'newest Codex verdict read 2222222' <<<"$out" && grep -q -- '--after-verdict' <<<"$out" && ok "ready, a verdict stands: names the newest verdict's head and the flag, not a person's comment" || fail "ready, a verdict stands: $out"
+# A finding that quotes the commit being pushed as a marker is the finding's: the verdict's head is its second line.
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb "- [P1] the body carried <!-- agent-review-sha: $sha -->")")" validate
+is "a verdict quoting this commit's marker: exits 2" "$status" 2
+grep -q 'newest Codex verdict read 2222222' <<<"$out" && ok "a verdict quoting this commit's marker: its own head is read" || fail "a verdict quoting this commit's marker: $out"
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb)")" validate --after-verdict
+is "ready, a verdict stands, --after-verdict: pushed" "$(origin_head)" "$sha"
+# Pushed already: origin's branch is at this commit, so the run posts and starts no round.
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb)")" validate
+is "already pushed, an older verdict: exits 0" "$status" 0
+scratch ready-draft Packages/TopoLink/Package.swift
+FAKE_PRS='[{"number": 7, "isDraft": true}]' FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb)")" validate
+is "a draft with a verdict: pushed" "$(origin_head)" "$sha"
+scratch ready-unread Packages/TopoLink/Package.swift
+FAKE_PRS="$ready_pr" validate
+is "ready with no verdict yet: pushed" "$(origin_head)" "$sha"
+scratch ready-noread Packages/TopoLink/Package.swift
+FAKE_PRS="$ready_pr" FAKE_COMMENTS_READ=fail validate
+is "a comments read that fails: pushed" "$(origin_head)" "$sha"
+grep -q "could not read #7's comments" <<<"$out" && ok "a comments read that fails: says so" || fail "a comments read that fails: $out"
+scratch ready-unknown Packages/TopoLink/Package.swift
+FAKE_PR_LIST=fail validate
+is "a PR list that fails: pushed" "$(origin_head)" "$sha"
+grep -q "could not ask GitHub for topic's open PR" <<<"$out" && ok "a PR list that fails: says so" || fail "a PR list that fails: $out"
 
 # A status GitHub does not take: exit 2, and it says how to post again.
 scratch nopost Packages/TopoLink/Package.swift
