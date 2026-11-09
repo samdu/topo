@@ -16,7 +16,7 @@
 #      choice left out (the two read different diffs once main has moved under the branch).
 #      With `topo_ui` chosen it asks whether this shell holds the microphone grant the audio
 #      lane needs, and exits 2 at once when it does not, as a shell started over ssh never
-#      does: such a run is started from buddy's tmux server (docs/simulator.md).
+#      does: such a run is started in a session of its own on buddy's tmux server (docs/testing.md).
 #   2. Takes a slot for each suite it runs here, which is a checkout: one of
 #      TOPO_VALIDATE_SLOTS directories under ~/Library/Caches/topo-validate/slots, each with a
 #      lock held for that suite alone and a validation worktree of this repository, detached
@@ -274,7 +274,7 @@ if [ "$hold" = no ]; then
       mic="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSBundle.bundleWithPath("/System/Library/Frameworks/AVFoundation.framework").load; ObjC.unwrap($.NSClassFromString("AVCaptureDevice").authorizationStatusForMediaType("soun"))' 2>/dev/null || true)"
       case "$mic" in
         3) ;;
-        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run from buddy's tmux server: ssh buddybox tmux new-window -d 'cd <worktree> && scripts/validate-and-push.sh > <log> 2>&1' (docs/simulator.md). Nothing is pushed or posted." ;;
+        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run in a session of its own on buddy's tmux server: ssh buddybox 'tmux -N new-session -d -s validate-<topic> -c <worktree> \"scripts/validate-and-push.sh > <log> 2>&1\"' (docs/testing.md). Nothing is pushed or posted." ;;
         *) echo "warning: could not ask whether this shell holds the microphone grant topo_ui's audio lane needs (got '$mic'); going on." >&2 ;;
       esac
       ;;
