@@ -1214,7 +1214,9 @@ elif tool == "claude":
     sys.exit(answer.get("exit", 0))
 elif tool == "git":
     if "log" in a: out(S.get("commits", ""))
-    if "worktree" in a and "list" in a: out(S["worktrees"])
+    if "worktree" in a and "list" in a:
+        if S.get("worktrees_fail"): print("fatal: not a git repository", file=sys.stderr); sys.exit(128)
+        out(S["worktrees"])
     if "status" in a: out(S.get("status", {}).get(a[a.index("-C") + 1], ""))
     if "rev-parse" in a: out(S.get("tip", "2222"))
     if "update-ref" in a and S.get("ref_moved"): print("cannot lock ref: is at 3333 but expected 2222", file=sys.stderr); sys.exit(1)
@@ -2814,6 +2816,51 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         self.run_pass(s)
         self.assertEqual(self.texts().count("could not read the dev slots"), 1)
+
+    def test_a_pane_in_the_branchs_worktree_owns_its_pr_whatever_its_session_is_called(self):
+        wt = "worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\nworktree /w/topo-gone\nHEAD 2222\nbranch refs/heads/buddy/gone\n\n"
+        s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees=wt,
+                          panes="topo-other-name\t/w/topo-gone/Packages")
+        self.run_pass(s)
+        self.assertNotIn("stands to merge main in", self.texts())
+        s["panes"] = "topo-other-name\t/w/topo-gone-2"
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, "a sibling path is not the worktree")
+
+    def test_working_is_the_branches_a_pane_stands_in(self):
+        wts = [{"path": "/w/a", "branch": "buddy/a"}, {"path": "/w/b", "branch": "buddy/b"}, {"path": "/w/c"}]
+        self.assertEqual(janitor.working([("s", "/w/a"), ("t", "/w/b/x/y"), ("u", "/w/c")], wts),
+                         {"buddy/a", "buddy/b"})
+        self.assertEqual(janitor.working([("v", "/w/ab")], wts), set(), "a sibling path is not the worktree")
+
+    def test_a_pane_owns_only_its_worktrees_branch_and_no_session_name(self):
+        # A pane in buddy/a's worktree is buddy/a's, not a session called a or topo-a,
+        # so a PR on buddy/topo-a with neither its session nor its worktree occupied is abandoned.
+        wt = "worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\nworktree /w/topo-a\nHEAD 2222\nbranch refs/heads/buddy/a\n\n"
+        s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/topo-a")], runs={}, worktrees=wt,
+                          panes="unrelated\t/w/topo-a")
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, self.texts())
+
+    def test_worktrees_unread_leave_the_session_names_to_judge(self):
+        prs = [pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")]
+        s = self.scripted(prs=prs, runs={}, worktrees="", worktrees_fail=True, panes="topo-gone\t/anywhere")
+        self.run_pass(s)
+        self.assertNotIn("stands to merge main in", self.texts(), "its named session stands")
+        s["panes"] = "topo-other\t/anywhere"
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, "an unrelated session is not its engineer")
+
+    def test_working_compares_real_paths(self):
+        # tmux reports a process's real path, git the path the worktree was added at.
+        with tempfile.TemporaryDirectory() as d:
+            real = os.path.join(d, "real")
+            os.makedirs(os.path.join(real, "wt", "sub"))
+            os.symlink(real, os.path.join(d, "link"))
+            wts = [{"path": os.path.join(d, "link", "wt"), "branch": "buddy/a"}]
+            self.assertEqual(janitor.working([("s", os.path.join(real, "wt", "sub"))], wts), {"buddy/a"})
+            self.assertEqual(janitor.working([("s", os.path.join(d, "link", "wt"))],
+                                             [{"path": os.path.join(real, "wt"), "branch": "buddy/a"}]), {"buddy/a"})
 
     def test_a_conflicted_pr_with_no_session_is_said_once_per_head(self):
         s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees="",

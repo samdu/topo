@@ -16,7 +16,7 @@
 #      choice left out (the two read different diffs once main has moved under the branch).
 #      With `topo_ui` chosen it asks whether this shell holds the microphone grant the audio
 #      lane needs, and exits 2 at once when it does not, as a shell started over ssh never
-#      does: such a run is started from buddy's tmux server (docs/simulator.md).
+#      does: such a run is started in a session of its own on buddy's tmux server (docs/testing.md).
 #   2. Takes a slot for each suite it runs here, which is a checkout: one of
 #      TOPO_VALIDATE_SLOTS directories under ~/Library/Caches/topo-validate/slots, each with a
 #      lock held for that suite alone and a validation worktree of this repository, detached
@@ -274,7 +274,7 @@ if [ "$hold" = no ]; then
       mic="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSBundle.bundleWithPath("/System/Library/Frameworks/AVFoundation.framework").load; ObjC.unwrap($.NSClassFromString("AVCaptureDevice").authorizationStatusForMediaType("soun"))' 2>/dev/null || true)"
       case "$mic" in
         3) ;;
-        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run from buddy's tmux server: ssh buddybox tmux new-window -d 'cd <worktree> && scripts/validate-and-push.sh > <log> 2>&1' (docs/simulator.md). Nothing is pushed or posted." ;;
+        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run in a session of its own on buddy's tmux server: ssh buddybox 'tmux -N new-session -d -s validate-<topic> -c <worktree> \"scripts/validate-and-push.sh > <log> 2>&1\"' (docs/testing.md). Nothing is pushed or posted." ;;
         *) echo "warning: could not ask whether this shell holds the microphone grant topo_ui's audio lane needs (got '$mic'); going on." >&2 ;;
       esac
       ;;
@@ -484,14 +484,25 @@ run_on() {
           kill "$suite_pid" 2>/dev/null || true; wait "$suite_pid" 2>/dev/null || true
         fi
         exit 143' TERM INT HUP
-  logged="$(wc -l < "$logs/mac-suite.log" 2>/dev/null || echo 0)"
+  logged=0; [ ! -e "$logs/mac-suite.log" ] || logged="$(wc -l < "$logs/mac-suite.log")"
   ssh_to "$at" bash -s -- "$sha" "$lane" "$suite" "$run" <<<"$on_host" >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- &
   suite_pid=$!
   wait "$suite_pid" || status=$?
   trap 'exit 143' TERM INT HUP
   case "$status" in
     75) echo "$suite: $at is busy with another validation."; return 1 ;;
-    76) echo "$suite: $at cannot run it and runs nothing of this validation:"; tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 2 ;;
+    76)
+      # What --check refuses is often a moment's (a lid shut, a screen locked, a simulator
+      # still being made): the Mac is asked again once, HOST_RETRY seconds on, and only then
+      # dropped. The suites run here meanwhile.
+      case " $refused_once " in
+        *" $at "*)
+          echo "$suite: $at cannot run it again and runs nothing more of this validation:"
+          tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 2 ;;
+      esac
+      refused_once="$refused_once $at"
+      echo "$suite: $at cannot run it now, and is asked once more in $HOST_RETRY s:"
+      tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 1 ;;
   esac
   mkdir -p "$logs/$at"
   if ! rsync -a --exclude '*.xcresult' -e "ssh $ssh_options" "$at:$there/logs/$run/" "$logs/$at/" 2>/dev/null; then
@@ -798,6 +809,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     case "$remaining" in *" topo_ui "*) remaining="${remaining/ topo_ui / topo_ui:quiet }topo_ui:mic " ;; esac
   fi
   hosts_at=0   # when a host found busy is asked again
+  refused_once=""   # the hosts whose --check has refused a suite once already
   while [ "$remaining" != " " ]; do
     suite=""
     # Another Mac first, when any is named: the first that is free takes the first suite still
