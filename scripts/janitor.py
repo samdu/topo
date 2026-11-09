@@ -317,6 +317,17 @@ def pick_run(runs, number):
 OWN_VALIDATION = re.compile(r"^(\.github/|scripts/review-|scripts/ci-select-)")
 
 
+def review_capped(jobs):
+    """Whether a run met the review cap and posted no verdict: codex skipped,
+    or post_feedback's recount holding the post (its 'Report Codex feedback'
+    step skipped)."""
+    return any((j["name"] == "codex" and j.get("conclusion") == "skipped")
+               or (j["name"] == "post_feedback" and j.get("conclusion") == "success"
+                   and any(s.get("name") == "Report Codex feedback" and s.get("conclusion") == "skipped"
+                           for s in j.get("steps") or []))
+               for j in jobs)
+
+
 def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, files=()):
     """What one open PR wants from this pass.
 
@@ -337,9 +348,18 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
     # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
-    # waits for ready, and nothing about its runs is the janitor's to say. One
-    # with a ticked device box went back to draft after Sam tested it.
+    # waits for ready, and nothing else about its runs is the janitor's to say. Two
+    # things are: a verdict that blocked its head, since a blocking verdict puts
+    # the PR back to draft and its review lands where no session on this Mac
+    # reads it (codex ran on the head, so the verdict is this head's), and a
+    # ticked device box, a draft Sam tested. A run at the review cap posted no
+    # verdict, so it blocked nothing.
     if pr["isDraft"]:
+        names = {j["name"]: j.get("conclusion") for j in jobs}
+        if (run and run["status"] == "completed" and names.get("codex") == "success"
+                and names.get("review_gate") in NOT_GREEN and names.get("reviewer_ran") not in NOT_GREEN
+                and not review_capped(jobs)):
+            report("verdict", f"{title}: the reviewer blocked {short}, and it is back to draft; the verdict is on the PR.")
         if ticked_device(pr.get("body")):
             report("draft", f"{title} is a draft at {short}, so nothing merges it.")
             if pr.get("mergeStateStatus") == "DIRTY":
@@ -426,11 +446,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
     # reviewer_ran with no verdict posted this run — codex skipped, or
     # post_feedback's recount holding the post: no finding to fix, a
     # decision to make.
-    capped = any((j["name"] == "codex" and j.get("conclusion") == "skipped")
-                 or (j["name"] == "post_feedback" and j.get("conclusion") == "success"
-                     and any(s.get("name") == "Report Codex feedback" and s.get("conclusion") == "skipped"
-                             for s in j.get("steps") or []))
-                 for j in jobs)
+    capped = review_capped(jobs)
     if "review_gate" in red_names and "reviewer_ran" not in red_names:
         if capped:
             report("cap", f"{title}: the review cap is reached on {short}, four Codex verdicts; it merges on Sam's word or goes back to draft for a replan.")
@@ -1672,10 +1688,8 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     for pr in prs:
         n, head = pr["number"], pr["headRefOid"]
         try:
-            run = jobs = None
-            if not pr["isDraft"]:
-                run = sh.newest_run(head, n)
-                jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
+            run = sh.newest_run(head, n)
+            jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
             files = ()
             if run and run["status"] == "completed" and run.get("conclusion") == "success":
                 try:
