@@ -63,7 +63,7 @@ trap 'rm -rf "$work"' EXIT
 # names what it means. A wait no case bounds is a minute, so a lock left held fails a case
 # and does not hang the test.
 unset TOPO_VALIDATE_SLOTS TOPO_VALIDATE_HOSTS TOPO_VALIDATE_REPO TOPO_VALIDATE_CACHE TOPO_VALIDATE_LOGS POST_RETRY \
-  FAKE_MIC FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
+  FAKE_MIC FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_CHECK_ONCE FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
 export LOCK_WAIT=60 LOCK_POLL=1
 # A Mac with a way into its login session is not asked for it by a fake suite.
 export TOPO_VALIDATE_SESSION_RUN=
@@ -129,6 +129,8 @@ if [ "$check" = yes ]; then
   echo "check ${suites[*]}" >> "$FAKE_RECORD.checks"
   [ -z "${FAKE_CHECK_SLOW-}" ] || perl -e "select(undef,undef,undef,3)"
   [ -z "${FAKE_CHECK-}" ] || { echo "error: $FAKE_CHECK" >&2; exit 1; }
+  # Refused at the first ask alone, as a lid shut for a minute is.
+  [ -z "${FAKE_CHECK_ONCE-}" ] || [ -e "$FAKE_CHECK_ONCE" ] || { : > "$FAKE_CHECK_ONCE"; echo "error: the lid is closed." >&2; exit 1; }
   exit 0
 fi
 echo $$ > "$results/mac-suite.pids"
@@ -899,6 +901,25 @@ for case in "not reached|FAKE_UNREACHABLE=laptop" "cannot run it|FAKE_CHECK=no i
   is "a host ${case%%|*}: asked to run a suite at most once" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" "$([ "${case%%|*}" = "not reached" ] && echo 0 || echo 1)"
   rm -rf "$work/host-unusable"
 done
+# A Mac whose --check refuses once and then passes: asked again after HOST_RETRY, and the suite
+# it then takes runs there; the one asked of it the first time ran here.
+scratch host-once Packages/TopoLink/Package.swift Womble/x
+mkdir -p "$work/host-once/home"
+TOPO_VALIDATE_LOGS="$work/host-once/home/Library/Logs/topo-validate"
+HOME="$work/host-once/home" HOST_RETRY=0 FAKE_CHECK_ONCE="$work/host-once/refused" TOPO_VALIDATE_HOSTS=laptop validate --suites "topo_unit others"
+is "a host refused once: exits 0" "$status" 0
+is "a host refused once: asked twice" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" 2
+is "a host refused once: the first suite ran here" "$(said_on topo_unit)" "$(hostname -s)"
+is "a host refused once: the next ran there" "$(said_on others)" laptop
+case "$out" in *"laptop cannot run it now, and is asked once more"*"lid is closed"*) ok "a host refused once: it is said, with why" ;; *) fail "a host refused once: $out" ;; esac
+# Refused at both asks: dropped after the second, and every suite runs here.
+scratch host-twice Packages/TopoLink/Package.swift Womble/x
+mkdir -p "$work/host-twice/home"
+TOPO_VALIDATE_LOGS="$work/host-twice/home/Library/Logs/topo-validate"
+HOME="$work/host-twice/home" HOST_RETRY=0 FAKE_CHECK="the lid is closed" TOPO_VALIDATE_HOSTS=laptop validate --suites "topo_unit others scripts"
+is "a host refused twice: exits 0" "$status" 0
+is "a host refused twice: asked twice and no more" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" 2
+is "a host refused twice: every suite ran here" "$(said_on others) $(said_on scripts)" "$(hostname -s) $(hostname -s)"
 # A pass the connection did not outlive is no result: the suite runs here, and is not red.
 scratch host-drop Packages/TopoLink/Package.swift
 FAKE_DROP=1 TOPO_VALIDATE_HOSTS=laptop validate
