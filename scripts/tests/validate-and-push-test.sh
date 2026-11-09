@@ -63,7 +63,7 @@ trap 'rm -rf "$work"' EXIT
 # names what it means. A wait no case bounds is a minute, so a lock left held fails a case
 # and does not hang the test.
 unset TOPO_VALIDATE_SLOTS TOPO_VALIDATE_HOSTS TOPO_VALIDATE_REPO TOPO_VALIDATE_CACHE TOPO_VALIDATE_LOGS POST_RETRY \
-  FAKE_MIC FAKE_DROP FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_CHECK_ONCE FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
+  FAKE_MIC FAKE_DROP FAKE_CHECK_TIMES FAKE_SUITE_SLOW FAKE_LSTART FAKE_CHECK_SLOW FAKE_SUITES FAKE_HOLD FAKE_HOLD_SUITE FAKE_LEAVE FAKE_CHECK FAKE_CHECK_ONCE FAKE_LOST_IN FAKE_UNREACHABLE FAKE_POST FAKE_RUN FAKE_TEST_JOB
 export LOCK_WAIT=60 LOCK_POLL=1
 # A Mac with a way into its login session is not asked for it by a fake suite.
 export TOPO_VALIDATE_SESSION_RUN=
@@ -127,6 +127,7 @@ while [ $# -gt 0 ]; do
 done
 if [ "$check" = yes ]; then
   echo "check ${suites[*]}" >> "$FAKE_RECORD.checks"
+  [ -z "${FAKE_CHECK_TIMES-}" ] || perl -MTime::HiRes=time -e "printf q(%.2f), time; print qq(\\n)" >> "$FAKE_CHECK_TIMES"
   [ -z "${FAKE_CHECK_SLOW-}" ] || perl -e "select(undef,undef,undef,3)"
   [ -z "${FAKE_CHECK-}" ] || { echo "error: $FAKE_CHECK" >&2; exit 1; }
   # As the real check refuses a bash that crashes: here, one in a directory named crashbin.
@@ -143,6 +144,8 @@ before="$(sed -n "s/^suites=//p" "$FAKE_RECORD" 2>/dev/null)"
 { echo "head=$(git rev-parse HEAD)"; echo "gitconfig=${GIT_CONFIG_GLOBAL-}"; echo "lane=$lane"; echo "suites=$before${before:+ }${suites[*]}"; echo "checkout=$(pwd -P)"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD.new"
 mv -f "$FAKE_RECORD.new" "$FAKE_RECORD"
 [ "${FAKE_SUITES-}" != died ] || exit 1
+# A suite that takes this many seconds.
+[ -z "${FAKE_SUITE_SLOW-}" ] || perl -e "select(undef,undef,undef,$FAKE_SUITE_SLOW)"
 # Left running after the suite, with whatever descriptors the suite was given.
 [ -z "${FAKE_LEAVE-}" ] || { nohup perl -e "sleep 60" > /dev/null 2>&1 & echo $! > "$FAKE_LEAVE"; }
 # Held in every suite, or in each FAKE_HOLD_SUITE names, for as long as the marker has its
@@ -407,6 +410,38 @@ is "a push that never lands: exits 2" "$status" 2
 is "a push that never lands: tried three times" "$(cat "$work/downpush/origin.git/hooks/pre-receive.count")" 3
 is "a push that never lands: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
 grep -q 'The suites passed' <<<"$out" && ok "a push that never lands: says the suites passed" || fail "a push that never lands: $out"
+
+# A push that lands and still answers with a failure (a connection dropped after the ref
+# moved): origin is at the commit, so it counts as pushed, is not tried again, and is posted.
+scratch landed Packages/TopoLink/Package.swift
+mkdir -p "$work/landed/bin"
+real_git="$(command -v git)"
+printf '#!/bin/sh\n"%s" "$@"; rc=$?\ncase "$1" in push) echo push >> "%s"; exit 1 ;; esac\nexit $rc\n' "$real_git" "$work/landed/pushes" > "$work/landed/bin/git"
+chmod +x "$work/landed/bin/git"
+PATH="$work/landed/bin:$PATH" POST_RETRY=0 validate
+is "a push that lands but fails: exits 0" "$status" 0
+is "a push that lands but fails: pushed" "$(origin_head)" "$sha"
+is "a push that lands but fails: tried once" "$(wc -l < "$work/landed/pushes" | tr -d ' ')" 1
+is "a push that lands but fails: posted" "$(posted)" "local/others=success "
+grep -q "answered with a failure, and origin's topic is at it" <<<"$out" && ok "a push that lands but fails: it is said" || fail "a push that lands but fails: $out"
+
+# The backoff between tries is the try times POST_RETRY: a sleep that records, in place of
+# the one that waits.
+mkdir -p "$work/sleeps"
+printf '#!/bin/sh\necho "$*" >> "$SLEEPS"\n' > "$work/sleeps/sleep"; chmod +x "$work/sleeps/sleep"
+scratch backoff-push Packages/TopoLink/Package.swift
+mkdir -p "$work/backoff-push/origin.git/hooks"
+printf '#!/bin/sh\nexit 1\n' > "$work/backoff-push/origin.git/hooks/pre-receive"
+chmod +x "$work/backoff-push/origin.git/hooks/pre-receive"
+git -C "$work/backoff-push/origin.git" config core.hooksPath "$work/backoff-push/origin.git/hooks"
+SLEEPS="$work/backoff-push/sleeps" PATH="$work/sleeps:$PATH" POST_RETRY=5 validate
+is "a push that never lands, backing off: exits 2" "$status" 2
+is "a push that never lands, backing off: 5 s, then 10, and none after the third" "$(tr '\n' ' ' < "$work/backoff-push/sleeps" 2>/dev/null)" "5 10 "
+grep -q 'trying again in 5 s' <<<"$out" && grep -q 'trying again in 10 s' <<<"$out" && ok "a push that never lands, backing off: each wait is said" || fail "a push backing off: $out"
+scratch backoff-post Packages/TopoLink/Package.swift
+SLEEPS="$work/backoff-post/sleeps" PATH="$work/sleeps:$PATH" FAKE_POST=fail POST_RETRY=5 validate
+is "a status never posted, backing off: exits 2" "$status" 2
+is "a status never posted, backing off: 5 s, 10, then 15" "$(tr '\n' ' ' < "$work/backoff-post/sleeps" 2>/dev/null)" "5 10 15 "
 
 # A ready PR whose newest verdict read an earlier head: refused before any suite runs, unless
 # --after-verdict says the push is meant. A draft, or a ready PR with no verdict yet, pushes.
@@ -914,6 +949,21 @@ is "a host whose profile finds a crashing bash: exits 0" "$status" 0
 is "a host whose profile finds a crashing bash: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 case "$out" in *"laptop"*"cannot run it"*"crashbin/bash"*) ok "a host whose profile finds a crashing bash: it is said, with the bash" ;; *) fail "a host whose profile finds a crashing bash: $out" ;; esac
 rm -rf "$FAKE_HOSTS/laptop/crashbin" "$FAKE_HOSTS/laptop/.bash_profile"
+# Through a way into the login session, the check is the session's user's: here the wrapper
+# runs it in another home, whose profile finds a crashing bash, and the ssh user's finds none.
+scratch host-session Packages/TopoLink/Package.swift
+mkdir -p "$work/host-session/bin" "$work/host-session/gui/crashbin"
+printf '#!/bin/sh\n[ "$1" != -n ] || shift\nexec "$@"\n' > "$work/host-session/bin/sudo"
+printf '#!/bin/sh\necho "session $*" >> "%s"\nHOME="%s" exec "$@"\n' "$work/host-session/calls" "$work/host-session/gui" > "$work/host-session/session-run"
+printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$work/host-session/gui/crashbin/bash"
+echo "PATH=\"$work/host-session/gui/crashbin:\$PATH\"" > "$work/host-session/gui/.bash_profile"
+chmod +x "$work/host-session/bin/sudo" "$work/host-session/session-run" "$work/host-session/gui/crashbin/bash"
+PATH="$work/host-session/bin:$PATH" TOPO_VALIDATE_SESSION_RUN="$work/host-session/session-run" HOST_RETRY=0 TOPO_VALIDATE_HOSTS=laptop validate
+is "a host whose session's user finds a crashing bash: exits 0" "$status" 0
+grep -q '^session /bin/bash -lc .*mac-suite.sh --check' "$work/host-session/calls" 2>/dev/null \
+  && ok "a host whose session's user finds a crashing bash: the check ran through the way in" || fail "the check did not run through the way in: $(cat "$work/host-session/calls" 2>&1)"
+case "$out" in *"laptop"*"cannot run it"*"gui/crashbin/bash"*) ok "a host whose session's user finds a crashing bash: refused, naming that user's bash" ;; *) fail "a host whose session's user finds a crashing bash: $out" ;; esac
+is "a host whose session's user finds a crashing bash: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 # A Mac whose --check refuses once and then passes: asked again after HOST_RETRY, and the suite
 # it then takes runs there; the one asked of it the first time ran here.
 scratch host-once Packages/TopoLink/Package.swift Womble/x
@@ -925,6 +975,21 @@ is "a host refused once: asked twice" "$(grep -c '^laptop bash -s' "$SSH_CALLS")
 is "a host refused once: the first suite ran here" "$(said_on topo_unit)" "$(hostname -s)"
 is "a host refused once: the next ran there" "$(said_on others)" laptop
 case "$out" in *"laptop cannot run it now, and is asked once more"*"lid is closed"*) ok "a host refused once: it is said, with why" ;; *) fail "a host refused once: $out" ;; esac
+# The same with a cooldown of 5 s and suites of 3 s: no second ask before it ends, and the
+# suites go on here meanwhile; the first one asked for after it goes there. SECONDS counts whole
+# seconds, so a cooldown of N can end anywhere past N-1: the gap asserted is 4.
+scratch host-cooldown Packages/TopoLink/Package.swift Womble/x
+mkdir -p "$work/host-cooldown/home"
+TOPO_VALIDATE_LOGS="$work/host-cooldown/home/Library/Logs/topo-validate"
+: > "$work/host-cooldown/times"
+HOME="$work/host-cooldown/home" HOST_RETRY=5 FAKE_SUITE_SLOW=3 FAKE_CHECK_TIMES="$work/host-cooldown/times" FAKE_CHECK_ONCE="$work/host-cooldown/refused" \
+  TOPO_VALIDATE_HOSTS=laptop validate --suites "topo_unit others scripts"
+is "a host in its cooldown: exits 0" "$status" 0
+is "a host in its cooldown: asked twice" "$(wc -l < "$work/host-cooldown/times" | tr -d ' ')" 2
+gap="$(awk 'NR == 1 { a = $1 } NR == 2 { print ($1 - a >= 4) ? "after" : "before" }' "$work/host-cooldown/times")"
+is "a host in its cooldown: asked again only once the cooldown was up" "$gap" after
+is "a host in its cooldown: the suites went on here meanwhile" "$(said_on topo_unit) $(said_on others)" "$(hostname -s) $(hostname -s)"
+is "a host in its cooldown: the next went there" "$(said_on scripts)" laptop
 # Refused at both asks: dropped after the second, and every suite runs here.
 scratch host-twice Packages/TopoLink/Package.swift Womble/x
 mkdir -p "$work/host-twice/home"
@@ -1168,6 +1233,48 @@ kill "$alive"; wait "$alive" 2>/dev/null
 LOCK_WAIT=0 validate
 is "the process ahead ended: the run waits for nothing" "$status" 0
 is "the process ahead ended: its ticket is removed" "$(tickets)" ""
+# A ticket written in the very second its process began, its start read back nonblank and
+# matching, is a live run: the later run waits behind it, by name.
+# The ps on PATH says every live process began in the one second FAKE_LSTART names, this run
+# and the ticket's included, so the ticket is of this run's own second whatever the clock does.
+mkdir -p "$work/onesecond"
+cat > "$work/onesecond/ps" <<'PS'
+#!/bin/sh
+if [ "$1 $2 $3" = "-o lstart= -p" ]; then kill -0 "$4" 2>/dev/null && echo "$FAKE_LSTART"; exit 0; fi
+exec /bin/ps "$@"
+PS
+chmod +x "$work/onesecond/ps"
+export FAKE_LSTART="Mon Nov  9 08:00:00 2026"
+sleep 30 & fresh=$!
+printf '%s\n%s\n%s\n' "$fresh" "$FAKE_LSTART" "fresh 0000009" > "$q/0000000000000009-0000009"
+PATH="$work/onesecond:$PATH" LOCK_WAIT=2 validate
+unset FAKE_LSTART
+kill "$fresh"; wait "$fresh" 2>/dev/null
+is "a ticket of this second: exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout (1 ahead in the line, the first fresh 0000009, pid $fresh)"*) ok "a ticket of this second: its run is live, and waited behind" ;; *) fail "a ticket of this second: $out" ;; esac
+rm -f "$q/0000000000000009-0000009"
+# The line's lock held past QUEUE_WAIT, and nothing else moving: each look that cannot have it
+# is charged QUEUE_WAIT and sleeps no LOCK_POLL of its own, so with LOCK_WAIT 10, QUEUE_WAIT 1
+# and LOCK_POLL 30 the run gives up after ten looks, about ten seconds on. Charged LOCK_POLL it
+# would give up at its second look, two seconds on; sleeping it, past thirty.
+perl -MFcntl=:flock -e 'open(my $l, ">>", $ARGV[0]) or die; flock($l, LOCK_EX) or die; open(my $m, ">", $ARGV[1]); print $m "$$\n"; close $m; sleep 600' \
+  "$TOPO_VALIDATE_CACHE/queue.lock" "$work/line/queue-held" & queue_lock=$!
+until_true reached "$work/line/queue-held" || fail "the line's lock held: never taken"
+began_at=$SECONDS
+LOCK_WAIT=10 QUEUE_WAIT=1 LOCK_POLL=30 validate
+took=$((SECONDS - began_at))
+is "the line's lock held: exits 2" "$status" 2
+case "$out" in *"gave up after waiting 0 min, the last of it for a checkout (the line, being read by another run)"*) ok "the line's lock held: it gives up, saying the line is being read" ;; *) fail "the line's lock held: $out" ;; esac
+[ "$took" -ge 10 ] && [ "$took" -lt 25 ] && ok "the line's lock held: each look is charged QUEUE_WAIT" || fail "the line's lock held: gave up in $took s"
+is "the line's lock held: no suite ran" "$(recorded suites)" ""
+began_at=$SECONDS
+held_out="$(cd "$work" && PATH="$work/bin:$PATH" LOCK_WAIT=10 QUEUE_WAIT=1 LOCK_POLL=30 "$repo/scripts/validate-and-push.sh" --hold -- sh -c 'echo held' 2>&1)" && status=0 || status=$?
+took=$((SECONDS - began_at)); out="$held_out"
+is "a hold, the line's lock held: exits 2" "$status" 2
+case "$held_out" in *held) fail "a hold, the line's lock held: its command ran" ;; *"gave up after waiting 0 min, the last of it for a checkout (the line, being read by another run)"*) ok "a hold, the line's lock held: it gives up, saying the line is being read" ;; *) fail "a hold, the line's lock held: $held_out" ;; esac
+[ "$took" -ge 10 ] && [ "$took" -lt 25 ] && ok "a hold, the line's lock held: each look is charged QUEUE_WAIT" || fail "a hold, the line's lock held: gave up in $took s"
+kill "$queue_lock"; wait "$queue_lock" 2>/dev/null
+is "the line's lock held: no ticket is left" "$(tickets)" ""
 # A line that moves: two runs ahead, each served in a little over half the allowance, so the
 # whole wait is longer than the allowance and no part of it is. The run keeps its place and
 # has the checkout, where a run sent away at the allowance would come back behind every run

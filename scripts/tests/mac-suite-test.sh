@@ -138,8 +138,10 @@ fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 # The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
-fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
-fake "$work/bin/df" 'echo "Filesystem 1G-blocks Used Available Capacity Mounted"; echo "/dev/disk3s5 460 400 ${FAKE_DF:-60} 87% /"'
+# Finder's figure, which FAKE_FREE set empty leaves empty; and df's, with no volume line at all
+# when FAKE_DF is `none`.
+fake "$work/bin/osascript" 'echo "${FAKE_FREE-60}"'
+fake "$work/bin/df" 'echo "Filesystem 1G-blocks Used Available Capacity Mounted"; [ "${FAKE_DF-}" = none ] || echo "/dev/disk3s5 460 400 ${FAKE_DF:-60} 87% /"'
 # As long as the real one's answer, the state near its head: a reader that stops early closes the pipe on it.
 fake "$work/bin/fdesetup" 'echo "FileVault is ${FAKE_VAULT:-Off}."'
 fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=${FAKE_OTHER_CONSOLE:-No},\"kCGSSessionUserNameKey\"=\"another\"${FAKE_OTHER_UNLOCKED:-,\"CGSSessionScreenIsLocked\"=Yes}},{\"kCGSSessionOnConsoleKey\"=${FAKE_AWAY:-Yes},\"kCGSSessionUserNameKey\"=\"$(id -un)\"${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"; echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
@@ -709,7 +711,9 @@ is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen 
 # suite. The script itself runs under this shell's bash; only what env finds is the fake.
 # The fake is the real bash, but a command given LC_ALL=C in a forked subshell kills that
 # subshell from its third time on, as 5.3.15's crash comes at no fixed moment: a probe that
-# runs once, or runs no such command, passes it. FAKE_BASH_CALLS counts those commands.
+# runs once, or runs no such command, passes it. Only the shell's own assignment
+# (`LC_ALL=C cmd`) is the crash's form; `env LC_ALL=C cmd` is left the real command, so a
+# probe written with env passes this bash too. FAKE_BASH_CALLS counts the crash's form.
 mkdir -p "$work/crashbin"
 cat > "$work/crashbin/locale-command" <<'CMD'
 #!/bin/sh
@@ -720,7 +724,7 @@ CMD
 cat > "$work/crashbin/bash" <<CRASH
 #!/bin/sh
 [ "\$1" != --version ] || { echo "GNU bash, version 5.3.15(1)-release"; exit 0; }
-if [ "\$1" = -c ]; then shift; exec "$BASH" -c "\$(printf '%s' "\$1" | sed 's|/usr/bin/true|$work/crashbin/locale-command|g')" "\$@"; fi
+if [ "\$1" = -c ]; then shift; exec "$BASH" -c "\$(printf '%s' "\$1" | sed -e 's|env LC_ALL=C /usr/bin/true|ENVFORM|g' -e 's|LC_ALL=C /usr/bin/true|LC_ALL=C $work/crashbin/locale-command|g' -e 's|ENVFORM|env LC_ALL=C /usr/bin/true|g')" "\$@"; fi
 exec "$BASH" "\$@"
 CRASH
 chmod +x "$work/crashbin/bash" "$work/crashbin/locale-command"
@@ -757,12 +761,24 @@ FAKE_FREE=0 check disk-zero topo_unit
 is "check, Finder's figure 0 with room by df: exits 0" "$status" 0
 FAKE_FREE=0 FAKE_DF=3 check disk-zero-full topo_unit
 is "check, Finder's figure 0 and df's full: exits 1" "$status" 1
-names "check, Finder's figure 0 and df's full: df's figure named" "3 GB available under $work/cache (df's figure, purgeable space left out, as Finder's read 0)"
+names "check, Finder's figure 0 and df's full: df's figure named" "3 GB available under $work/cache (df's figure, purgeable space left out, as Finder's read 0), and a suite wants 10."
+asked_df() { grep -c "^df -g $work/cache\$" "$CALLS"; }
+is "check, Finder's figure 0 and df's full: df is asked of the cache's own volume" "$(asked_df)" 1
 FAKE_FREE=NaN check disk-unread topo_unit
 is "check, Finder's figure unread with room by df: exits 0" "$status" 0
+FAKE_FREE= check disk-empty topo_unit
+is "check, Finder's figure empty with room by df: exits 0" "$status" 0
+is "check, Finder's figure empty: df is asked of the cache's own volume" "$(asked_df)" 1
+FAKE_FREE= FAKE_DF=3 check disk-empty-full topo_unit
+is "check, Finder's figure empty and df's full: exits 1" "$status" 1
+names "check, Finder's figure empty and df's full: named, as Finder's read nothing" "3 GB available under $work/cache (df's figure, purgeable space left out, as Finder's read nothing), and a suite wants 10."
+FAKE_FREE=NaN FAKE_DF=none check disk-neither topo_unit
+is "check, neither figure read: exits 1" "$status" 1
+names "check, neither figure read: named" "could not read the disk's available space under $work/cache."
 FAKE_FREE=9 check disk topo_unit
 is "check, a full disk: exits 1" "$status" 1
-names "check, a full disk: named" "9 GB available"
+names "check, a full disk: named as Finder's figure" "9 GB available under $work/cache (Finder's figure, purgeable space included), and a suite wants 10."
+is "check, a full disk by Finder's figure: df is not asked" "$(grep -c '^df ' "$CALLS")" 0
 FAKE_LID=Yes check lid topo_unit
 is "check, the lid closed: exits 1" "$status" 1
 names "check, the lid closed: named" "lid is closed"

@@ -14,6 +14,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 failures=0
+# A service account in the caller's environment is no part of any case: each that wants one sets it.
+unset OP_SERVICE_ACCOUNT_TOKEN
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 
 tree="$work/tree"
@@ -74,6 +76,8 @@ cat > "$work/bin/xcrun" <<'FAKE'
 state=none
 [ -z "${API_PRIVATE_KEYS_DIR:-}" ] || state="$(ls "$API_PRIVATE_KEYS_DIR")"
 echo "xcrun [$state] $*" >> "$CALLS"
+# Which key altool was given, by its public half, so a case can say whose key it was.
+[ -z "${API_PRIVATE_KEYS_DIR:-}" ] || echo "xcrun key $(openssl pkey -in "$API_PRIVATE_KEYS_DIR"/*.p8 -pubout 2>/dev/null | shasum | cut -d' ' -f1)" >> "$CALLS"
 FAKE
 # The keychain: an item is a file under $KEYCHAIN named for its service, and with none set it
 # holds nothing.
@@ -86,7 +90,8 @@ FAKE
 # `Topo App Store Connect` in Homelab; with none set it reads nothing.
 cat > "$work/bin/op" <<'FAKE'
 #!/usr/bin/env bash
-echo "op $*" >> "${OPCALLS:-/dev/null}"
+case "$0" in */.local/shims/*) who=shim ;; *) who=path ;; esac
+echo "$who op $*" >> "${OPCALLS:-/dev/null}"
 case "$*" in "read op://Homelab/Topo App Store Connect/"*) ;; *) exit 1 ;; esac
 f="${2##*/}"; [ -f "${OPVAULT:-/nowhere}/$f" ] || exit 1
 cat "$OPVAULT/$f"
@@ -140,8 +145,14 @@ for item in topo-asc-key-id topo-asc-issuer-id topo-asc-private-key; do : > "$wo
 printf 'KEYID12345\n' > "$work/vault/key_id"
 printf 'an-issuer\n' > "$work/vault/issuer_id"
 cp "$work/key.p8" "$work/vault/private_key"
-KEYCHAIN="$work/blank" OPVAULT="$work/vault" OP_SERVICE_ACCOUNT_TOKEN=ops_fake run "$work/vaulted" --validate \
+pub() { openssl pkey -in "$1" -pubout 2>/dev/null | shasum | cut -d' ' -f1; }
+: > "$work/opcalls"
+KEYCHAIN="$work/blank" OPVAULT="$work/vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake run "$work/vaulted" --validate \
     || fail "a validation with 1Password's key failed: $(cat "$work/out")"
+[ "$(grep -c '^shim op read ' "$work/opcalls")" = 3 ] && ! grep -q '^path op ' "$work/opcalls" \
+    || fail "1Password was not asked through the shim, three times: $(cat "$work/opcalls")"
+grep -qx "xcrun key $(pub "$work/key.p8")" "$work/vaulted" || fail "altool was not given 1Password's key: $(grep '^xcrun key' "$work/vaulted")"
+[ "$(grep -c '^xcodebuild \[key\] ' "$work/vaulted")" = 2 ] || fail "the archive and the export were not each handed 1Password's key as a key: $(grep '^xcodebuild' "$work/vaulted")"
 grep -q '^xcrun \[AuthKey_KEYID12345.p8\] altool --validate-app .* --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/vaulted" \
     || fail "altool was not given 1Password's key: $(cat "$work/vaulted")"
 [ -z "$(ls "$work/tmp")" ] || fail "1Password's key outlived the run: $(ls "$work/tmp")"
@@ -159,6 +170,58 @@ if KEYCHAIN="$work/blank" OPVAULT="$work/vault" OP_SERVICE_ACCOUNT_TOKEN=ops_fak
 fi
 [ ! -s "$work/partial" ] || fail "a key in part built something: $(cat "$work/partial")"
 grep -q 'incomplete: the environment, the keychain and 1Password gave no issuer id' "$work/out" || fail "a key in part is not said: $(cat "$work/out")"
+printf 'an-issuer\n' > "$work/vault/issuer_id"
+# With no shim installed, 1Password is asked through the op on PATH.
+mkdir -p "$work/home-bare"
+: > "$work/opcalls"
+KEYCHAIN="$work/blank" OPVAULT="$work/vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake \
+  CALLS="$work/bare" HOME="$work/home-bare" PATH="$work/bin:$PATH" BUILD=7 TMPDIR="$work/tmp" "$tree/scripts/archive-upload.sh" --validate > "$work/out" 2>&1 \
+    || fail "with no shim, a validation with 1Password's key failed: $(cat "$work/out")"
+[ "$(grep -c '^path op read ' "$work/opcalls")" = 3 ] && ! grep -q '^shim op ' "$work/opcalls" \
+    || fail "with no shim, 1Password was not asked through PATH's op: $(cat "$work/opcalls")"
+# Each part from the first source that has it: the key id from the environment, the issuer
+# from the keychain, the private key from 1Password alone; and 1Password, holding its own
+# key id and issuer, is asked only for the part the others lack.
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/other.p8" 2>/dev/null
+mkdir -p "$work/mixed-keychain" "$work/mixed-vault"
+printf 'kc-issuer\n' > "$work/mixed-keychain/topo-asc-issuer-id"
+printf 'KEYCHAINID\n' > "$work/mixed-keychain/topo-asc-key-id"
+printf 'VAULTID000\n' > "$work/mixed-vault/key_id"
+printf 'vault-issuer\n' > "$work/mixed-vault/issuer_id"
+cp "$work/other.p8" "$work/mixed-vault/private_key"
+: > "$work/opcalls"
+ASC_KEY_ID=ENVKEYID00 KEYCHAIN="$work/mixed-keychain" OPVAULT="$work/mixed-vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake run "$work/mixed" --validate \
+    || fail "a key from three sources failed: $(cat "$work/out")"
+grep -q '^xcrun \[AuthKey_ENVKEYID00.p8\] altool --validate-app .* --apiKey ENVKEYID00 --apiIssuer kc-issuer$' "$work/mixed" \
+    || fail "the environment's key id and the keychain's issuer did not win: $(grep '^xcrun' "$work/mixed")"
+grep -qx "xcrun key $(pub "$work/other.p8")" "$work/mixed" || fail "altool was not given 1Password's private key: $(grep '^xcrun key' "$work/mixed")"
+[ "$(cat "$work/opcalls")" = "shim op read op://Homelab/Topo App Store Connect/private_key" ] \
+    || fail "1Password was asked for more than the part the others lack: $(cat "$work/opcalls")"
+
+# Each part with a value in all three sources: the environment's wins, and 1Password is not
+# asked. Then without the environment's: the keychain's wins over 1Password's.
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/kc.p8" 2>/dev/null
+mkdir -p "$work/all-keychain" "$work/all-vault"
+printf 'KEYCHAINID\n' > "$work/all-keychain/topo-asc-key-id"
+printf 'kc-issuer\n' > "$work/all-keychain/topo-asc-issuer-id"
+xxd -p "$work/kc.p8" | tr -d '\n' > "$work/all-keychain/topo-asc-private-key"
+printf 'VAULTID000\n' > "$work/all-vault/key_id"
+printf 'vault-issuer\n' > "$work/all-vault/issuer_id"
+cp "$work/other.p8" "$work/all-vault/private_key"
+: > "$work/opcalls"
+ASC_KEY_ID=ENVKEYID00 ASC_ISSUER_ID=env-issuer ASC_PRIVATE_KEY="$hex" KEYCHAIN="$work/all-keychain" OPVAULT="$work/all-vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake \
+  run "$work/all-env" --validate || fail "every part from three sources failed: $(cat "$work/out")"
+grep -q '^xcrun \[AuthKey_ENVKEYID00.p8\] altool --validate-app .* --apiKey ENVKEYID00 --apiIssuer env-issuer$' "$work/all-env" \
+    || fail "the environment's issuer did not win over the keychain's and 1Password's: $(grep '^xcrun' "$work/all-env")"
+grep -qx "xcrun key $(pub "$work/key.p8")" "$work/all-env" || fail "the environment's private key did not win over the keychain's and 1Password's: $(grep '^xcrun key' "$work/all-env")"
+[ ! -s "$work/opcalls" ] || fail "1Password was asked with every part in the environment: $(cat "$work/opcalls")"
+: > "$work/opcalls"
+KEYCHAIN="$work/all-keychain" OPVAULT="$work/all-vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake \
+  run "$work/all-kc" --validate || fail "every part from the keychain and 1Password failed: $(cat "$work/out")"
+grep -q '^xcrun \[AuthKey_KEYCHAINID.p8\] altool --validate-app .* --apiKey KEYCHAINID --apiIssuer kc-issuer$' "$work/all-kc" \
+    || fail "the keychain's issuer did not win over 1Password's: $(grep '^xcrun' "$work/all-kc")"
+grep -qx "xcrun key $(pub "$work/kc.p8")" "$work/all-kc" || fail "the keychain's private key did not win over 1Password's: $(grep '^xcrun key' "$work/all-kc")"
+[ ! -s "$work/opcalls" ] || fail "1Password was asked with every part in the keychain: $(cat "$work/opcalls")"
 
 # A key that is no key stops it before anything is built.
 if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY=deadbeef run "$work/bad"; then
