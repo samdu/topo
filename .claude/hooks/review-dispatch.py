@@ -9,26 +9,27 @@ Important, tagged plan-mandated — and adjudicated against the spec.
 
 Reads the PreToolUse JSON on stdin; exit 2 with a reason on stderr blocks.
 Applies to an ``Agent`` dispatch of a reviewer agent (``REVIEWERS``), and to a
-Bash command that runs the plan reviewer or Codex (``runs``): not to every
-prompt or command that mentions a review. Two things in a dispatch are not
-steering: a passage quoted word for word from the project's CLAUDE.md (the
-sentence holding the match, or the quotation within it, with QUOTED characters
-of it either side of the match), which the reviewer reads anyway, and a sentence citing a recorded ruling (a ruling
-or a ledger line, with its date), which is the one thing docs/process.md lets
-settle a finding in advance.
+Bash command whose text, with quotes and backslashes taken out, names the plan
+reviewer or Codex's (``INVOKES``): such a command is read whole. No shell is
+parsed, so prose that names the invocation is read too, and a name put together
+when the command runs is not. Two things in a dispatch are not steering: a
+passage quoted word for word from the project's CLAUDE.md (a sentence, or a
+quoted string's contents, that is CLAUDE.md's and runs QUOTED characters past
+the match on each side), which the reviewer reads anyway, and a sentence citing
+a recorded ruling (a ruling or a ledger line, with its date), which is the one
+thing docs/process.md lets settle a finding in advance. Anything that goes
+wrong while reading a dispatch refuses it.
 """
 import json
 import os
 import re
-import shlex
 import sys
 
 REVIEWERS = {"adversarial-reviewer"}
-SHELLS = {"bash", "sh", "zsh"}
-WRAPPERS = {"env", "exec", "command", "nohup", "time", "nice", "sudo", "{", "!"}  # run the word after them
-ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-ENDS = ".!?\n"          # what ends a sentence
-QUOTES = '"\u201c\u201d`'  # what bounds a quotation inside one
+INVOKES = re.compile(r"\bcodex\W*(?:exec|review)\b|plan-review\.sh", re.I)
+ENDS = ".!?\n"                 # what ends a sentence
+QUOTES = '"“”`'      # what bounds a quotation in a prompt
+SHELL_QUOTES = QUOTES + "'"    # and in a command, where ' quotes too
 RULING = re.compile(r"\b(?:rul(?:ing|ed)|ledger)\b[^.!?\n]*\b\d{4}-\d{2}-\d{2}|\b\d{4}-\d{2}-\d{2}\b[^.!?\n]*\b(?:rul(?:ing|ed)|ledger)\b", re.I)
 QUOTED = 20   # characters of the quotation either side of a match, for it to be a quotation
 STEER = [
@@ -45,6 +46,8 @@ STEER = [
     (re.compile(r"\b(ignore|skip|leave out)\s+(any|all|the)\s+(findings?|issues?|concerns?)\b", re.I),
      "it tells the reviewer what not to report"),
 ]
+
+
 
 
 def squash(text):
@@ -66,17 +69,19 @@ def span(text, m, ends):
     return a, min(after) if after else len(text)
 
 
-def quoted(text, m, rules):
+def quoted(text, m, rules, quotes):
     """Whether the match is inside a passage the dispatch quotes from CLAUDE.md:
-    the sentence holding it, or the quotation within that sentence, is
-    CLAUDE.md's word for word, and runs QUOTED characters past the match on
-    each side."""
+    the sentence holding it, or the quoted string holding it, is CLAUDE.md's word
+    for word and runs QUOTED characters past the match on each side."""
     if not rules:
         return False
-    a, b = span(text, m, ENDS + QUOTES)
-    return (squash(text[a:b]).strip() in rules
-            and len(text[a:m.start()].strip()) >= QUOTED
-            and len(text[m.end():b].strip()) >= QUOTED)
+    for ends in (ENDS,):
+        a, b = span(text, m, ends)
+        if (squash(text[a:b]).strip() in rules
+                and len(text[a:m.start()].strip()) >= QUOTED
+                and len(text[m.end():b].strip()) >= QUOTED):
+            return True
+    return False
 
 
 def sentence(text, m):
@@ -84,62 +89,23 @@ def sentence(text, m):
     return text[a:b]
 
 
-def segments(command):
-    """The simple commands of a shell command line, each as its words: split at
-    ; & | ( ) and newlines outside quotes, quotes taken off."""
-    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
-    lex.whitespace = " \t\r"
-    lex.whitespace_split = True
-    lex.commenters = ""
-    words = []
-    for tok in lex:
-        if tok and all(c in ";&|()\n" for c in tok):
-            if words:
-                yield words
-            words = []
-        else:
-            words.append(tok)
-    if words:
-        yield words
+def refuse(why, said):
+    print(f"Review dispatch guard: {why} (“{said}”). Say what changed and what "
+          "to read; a plan-mandated defect is reported Important and tagged, and a "
+          "disagreement is a recorded ruling, cited with its date (docs/process.md).", file=sys.stderr)
+    sys.exit(2)
 
 
-def runs(command, depth=0):
-    """The text of each part of the command that runs the plan reviewer or
-    Codex, read by its command word, so an argument that names them is not."""
-    try:
-        parts = list(segments(command))
-    except ValueError:  # an unclosed quote: read the whole line
-        return [command] if re.search(r"plan-review\.sh|codex", command) else []
-    found = []
-    for words in parts:
-        while words and (ASSIGN.match(words[0]) or words[0] in WRAPPERS):
-            words = words[1:]
-            while words and (words[0].startswith("-") or words[0].isdigit()):
-                words = words[1:]  # a wrapper's own options
-        if not words:
-            continue
-        name = os.path.basename(words[0])
-        if name == "plan-review.sh" or (name == "codex" and words[1:2] in (["exec"], ["review"])):
-            found.append(" ".join(words))
-        elif name in SHELLS and depth < 3:
-            for i, w in enumerate(words[1:-1], 1):
-                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", w):
-                    found += runs(words[i + 1], depth + 1)
-                    break
-    return found
-
-
-def main():
-    d = json.load(sys.stdin)
+def judge(d):
     tool = d.get("tool_name", "")
     ti = d.get("tool_input") or {}
     if tool == "Agent":
         if ti.get("subagent_type") not in REVIEWERS:
             return
-        text = str(ti.get("prompt") or "")
+        text, quotes = str(ti.get("prompt") or ""), QUOTES
     elif tool == "Bash":
-        text = "\n".join(runs(str(ti.get("command") or "")))
-        if not text:
+        text, quotes = str(ti.get("command") or ""), SHELL_QUOTES
+        if not INVOKES.search(re.sub(r"['\"\\]", "", text)):
             return
     else:
         return
@@ -148,12 +114,18 @@ def main():
         for m in pat.finditer(text):
             if rules is None:
                 rules = project_rules()
-            if quoted(text, m, rules) or RULING.search(sentence(text, m)):
+            if quoted(text, m, rules, quotes) or RULING.search(sentence(text, m)):
                 continue
-            print(f"Review dispatch guard: {why} (“{m.group(0)}”). Say what changed and what "
-                  "to read; a plan-mandated defect is reported Important and tagged, and a "
-                  "disagreement is a recorded ruling, cited with its date (docs/process.md).", file=sys.stderr)
-            sys.exit(2)
+            refuse(why, m.group(0))
+
+
+def main():
+    try:
+        judge(json.load(sys.stdin))
+    except SystemExit:
+        raise
+    except Exception as e:  # a dispatch the guard could not read is not let through
+        refuse(f"it could not be read ({type(e).__name__})", "")
 
 
 if __name__ == "__main__":
