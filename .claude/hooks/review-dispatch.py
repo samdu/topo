@@ -75,7 +75,7 @@ def quoted(text, m, rules, quotes):
     for word and runs QUOTED characters past the match on each side."""
     if not rules:
         return False
-    for ends in (ENDS,):
+    for ends in (ENDS, ENDS + quotes):
         a, b = span(text, m, ends)
         if (squash(text[a:b]).strip() in rules
                 and len(text[a:m.start()].strip()) >= QUOTED
