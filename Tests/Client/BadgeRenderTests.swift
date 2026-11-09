@@ -51,10 +51,19 @@ final class BadgeRenderTests: XCTestCase {
         return Double(total) / Double(a.bytes.count)
     }
 
+    /// Kept with the result of a test that fails, whichever check fails it, and dropped from one
+    /// that passes.
     private func attach(_ picture: Picture, _ name: String) {
-        let attachment = XCTAttachment(image: picture.image)
+        keep(XCTAttachment(image: picture.image), name)
+    }
+
+    private func attach(_ text: String, _ name: String) {
+        keep(XCTAttachment(string: text), name)
+    }
+
+    private func keep(_ attachment: XCTAttachment, _ name: String) {
         attachment.name = name
-        attachment.lifetime = .keepAlways
+        attachment.lifetime = .deleteOnSuccess
         add(attachment)
     }
 
@@ -101,13 +110,14 @@ final class BadgeRenderTests: XCTestCase {
         let underOwn = try picture(TopoBadge(), look: own)
         let leak = distance(plain, underResting)
         let cast = distance(plain, underOwn)
+        attach(plain, "badge")
+        attach(underResting, "badge with the resting jewel cast")
+        attach(underOwn, "badge with its own jewel cast")
+        attach("the resting jewel moved the badge by \(leak) levels a channel; its own jewel by \(cast)", "distances")
         guard cast > 1 else {
             return XCTFail("the badge's own jewel moved it by \(cast) levels a channel, so this test measures nothing")
         }
         if leak * 50 >= cast {
-            attach(plain, "badge")
-            attach(underResting, "badge with the resting jewel cast")
-            attach(underOwn, "badge with its own jewel cast")
             XCTFail("the resting jewel reached the badge, which has a stone of its own: it moved the badge by \(leak) levels a channel, against \(cast) for the badge's own jewel")
         }
     }
