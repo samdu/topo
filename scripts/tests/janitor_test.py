@@ -347,6 +347,14 @@ class Decisions(unittest.TestCase):
 
     def test_a_ready_pr_with_no_run_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), None, [], {}, NOW)), ["report:norun"])
+        self.assertIn("a push starts one", janitor.decide_pr(pr(), None, [], {}, NOW)[0]["text"])
+
+    def test_a_stacked_pr_with_no_run_is_told_to_retarget(self):
+        w = janitor.decide_pr(pr(baseRefName="buddy/below"), None, [], {}, NOW)
+        self.assertEqual(kinds(w), ["report:norun"])
+        self.assertIn("none starts on a PR into buddy/below, since PR validate runs on PRs into main; "
+                      "retarget it and mark it ready again, since a retarget starts no run "
+                      "(gh pr edit 7 --base main && gh pr ready 7 --undo && gh pr ready 7)", w[0]["text"])
 
     def test_report_keys_repeat_only_after_the_repeat_window(self):
         self.assertGreaterEqual(janitor.REPEAT, timedelta(hours=24))
