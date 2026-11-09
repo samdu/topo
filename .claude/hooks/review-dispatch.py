@@ -9,8 +9,9 @@ Important, tagged plan-mandated — and adjudicated against the spec.
 
 Reads the PreToolUse JSON on stdin; exit 2 with a reason on stderr blocks.
 Applies to an ``Agent`` dispatch of a reviewer agent (``REVIEWERS``), and to a
-Bash command whose text, with quotes and backslashes taken out, names the plan
-reviewer or Codex's (``INVOKES``): such a command is read whole. No shell is
+Bash command whose text, with its line continuations joined and its quotes and
+backslashes taken out, names the plan reviewer, or ``codex`` with ``exec``, ``e``
+or ``review`` later on the same line (``INVOKES``): such a command is read whole. No shell is
 parsed, so prose that names the invocation is read too, and a name put together
 when the command runs is not. Two things in a dispatch are not steering: a
 passage quoted word for word from the project's CLAUDE.md (a sentence, or a
@@ -26,7 +27,9 @@ import re
 import sys
 
 REVIEWERS = {"adversarial-reviewer"}
-INVOKES = re.compile(r"\bcodex\W*(?:exec|review)\b|plan-review\.sh", re.I)
+# The plan reviewer, or Codex with exec, its alias e or review later on the same line
+# (options between included). Case-sensitive, so prose about "the Codex reviewer" is not it.
+INVOKES = re.compile(r"\bcodex\b.*?\b(?:exec|e|review)\b|plan-review\.sh")
 ENDS = ".!?\n"                 # what ends a sentence
 QUOTES = '"“”`'      # what bounds a quotation in a prompt
 SHELL_QUOTES = QUOTES + "'"    # and in a command, where ' quotes too
@@ -72,10 +75,12 @@ def span(text, m, ends):
 def quoted(text, m, rules, quotes):
     """Whether the match is inside a passage the dispatch quotes from CLAUDE.md:
     the sentence holding it, or the quoted string holding it, is CLAUDE.md's word
-    for word and runs QUOTED characters past the match on each side."""
+    for word and runs QUOTED characters past the match on each side. In a command
+    a quoted string is bounded by ' too, and is also read as bounded by double
+    quotes alone, so an apostrophe inside a double-quoted passage does not cut it."""
     if not rules:
         return False
-    for ends in (ENDS, ENDS + quotes):
+    for ends in (ENDS, ENDS + QUOTES, ENDS + quotes):
         a, b = span(text, m, ends)
         if (squash(text[a:b]).strip() in rules
                 and len(text[a:m.start()].strip()) >= QUOTED
@@ -105,7 +110,7 @@ def judge(d):
         text, quotes = str(ti.get("prompt") or ""), QUOTES
     elif tool == "Bash":
         text, quotes = str(ti.get("command") or ""), SHELL_QUOTES
-        if not INVOKES.search(re.sub(r"['\"\\]", "", text)):
+        if not INVOKES.search(re.sub(r"['\"\\]", "", text.replace("\\\n", ""))):
             return
     else:
         return
