@@ -2,12 +2,12 @@ import Foundation
 import os
 import TopoCore
 
-/// A database whose next save can be held unanswered, and whose bounded view
+/// A database whose next save or fetch can be held unanswered, and whose bounded view
 /// (`answering(within:)`) gives a request up at its bound as
 /// `CloudKitRecordDatabase` does: each save and fetch through the view races
 /// the request, a hold included, against the bound, and one the bound wins
-/// throws `unavailable`. The request is not ended by that; a held save stays
-/// held, and applies or not as the test says, until `release`.
+/// throws `unavailable`. The request is not ended by that; a held request
+/// stays held, and a save applies or not as the test says, until `release`.
 ///
 /// It is the bound the lease asks for (`LeaseTiming.patience`) firing by
 /// itself, where a hand-scripted stall shows only what the lease does once a
@@ -17,8 +17,13 @@ public final class HoldingDatabase: RecordDatabase, @unchecked Sendable {
     private struct State {
         var holdNext = false
         var landing = false
-        var waiter: CheckedContinuation<Void, Never>?
-        var released = false
+        var holdNextFetch = false
+        /// Held requests that have answered since they were let go.
+        var answered = 0
+        /// Every held request still waiting, each answered by the next `release`.
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        /// Releases so far: a request held before one and not yet waiting when it came answers at once.
+        var releases = 0
         var bounds: [TimeInterval] = []
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -34,21 +39,32 @@ public final class HoldingDatabase: RecordDatabase, @unchecked Sendable {
         state.withLock {
             $0.holdNext = true
             $0.landing = landing
-            $0.released = false
         }
     }
 
-    /// Whether a save is held now.
-    public var holding: Bool { state.withLock { $0.waiter != nil } }
+    /// The next fetch is held until `release`, and then reads the store.
+    public func holdNextFetch() {
+        state.withLock { $0.holdNextFetch = true }
+    }
 
-    /// Lets the held save answer: the store's answer if it landed, `unavailable` if not.
+    /// How many held requests have answered, the store's answer or `unavailable`, since a release
+    /// let them go.
+    public var answered: Int { state.withLock { $0.answered } }
+
+    /// How many requests are held now.
+    public var held: Int { state.withLock { $0.waiters.count } }
+
+    /// Whether a request is held now.
+    public var holding: Bool { held > 0 }
+
+    /// Lets every held request answer, a save with the store's answer if it landed, `unavailable` if not.
     public func release() {
-        let waiter = state.withLock { state -> CheckedContinuation<Void, Never>? in
-            state.released = true
-            defer { state.waiter = nil }
-            return state.waiter
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.releases += 1
+            defer { state.waiters = [] }
+            return state.waiters
         }
-        waiter?.resume()
+        waiters.forEach { $0.resume() }
     }
 
     public func answering(within seconds: TimeInterval) -> any RecordDatabase {
@@ -60,25 +76,41 @@ public final class HoldingDatabase: RecordDatabase, @unchecked Sendable {
     private struct NeverReached: Error {}
 
     public func save(_ records: [Record]) async throws -> [Record] {
-        let (hold, landing) = state.withLock { state -> (Bool, Bool) in
+        let (hold, landing, ticket) = state.withLock { state -> (Bool, Bool, Int) in
             defer { state.holdNext = false }
-            return (state.holdNext, state.landing)
+            return (state.holdNext, state.landing, state.releases)
         }
         guard hold else { return try await inner.save(records) }
         let saved = landing ? try await inner.save(records) : nil
-        await withCheckedContinuation { continuation in
-            let resumeNow = state.withLock { state -> Bool in
-                if state.released { return true }
-                state.waiter = continuation
-                return false
-            }
-            if resumeNow { continuation.resume() }
-        }
+        await wait(after: ticket)
         guard let saved else { throw RecordDatabaseError.unavailable(underlying: NeverReached()) }
         return saved
     }
 
-    public func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    public func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        let (hold, ticket) = state.withLock { state -> (Bool, Int) in
+            defer { state.holdNextFetch = false }
+            return (state.holdNextFetch, state.releases)
+        }
+        guard hold else { return try await inner.fetch(ids) }
+        await wait(after: ticket)
+        return try await inner.fetch(ids)
+    }
+
+    /// Waits for the first release after `ticket`, which is at once if one has already come, and
+    /// counts the request answered.
+    private func wait(after ticket: Int) async {
+        await withCheckedContinuation { continuation in
+            let resumeNow = state.withLock { state -> Bool in
+                if state.releases > ticket { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+        state.withLock { $0.answered += 1 }
+    }
+
     public func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
     public func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 
