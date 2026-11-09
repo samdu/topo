@@ -49,9 +49,11 @@ SSH
 # Two sessions: another user's, and this one's, which is on the screen unless FAKE_AWAY.
 cat > "$work/bin/ioreg" <<'IOREG'
 #!/usr/bin/env bash
+case "$*" in *AppleClamshellState*) echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; exit 0 ;; esac
 if [ -n "${FAKE_AWAY-}" ]; then theirs=Yes mine=No; else theirs=No mine=Yes; fi
 echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=$theirs,\"kCGSSessionUserNameKey\"=\"another\"},{\"kCGSSessionOnConsoleKey\"=$mine,\"kCGSSessionUserNameKey\"=\"$(id -un)\"${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"
 IOREG
+printf '#!/bin/sh\necho "FileVault is ${FAKE_VAULT:-On}."\n' > "$work/bin/fdesetup"; chmod +x "$work/bin/fdesetup"
 # The real one, with the pid it becomes on a list this test ends.
 cat > "$work/bin/nohup" <<'NOHUP'
 #!/usr/bin/env bash
@@ -95,7 +97,7 @@ is "on: named" "$(file)" "laptop|"
 is "on: held by the command it says, for the hour asked" "$(args "$first")" "/usr/bin/caffeinate -dimsu -t 3600"
 case "$out" in *"closed lid still sleeps it"*) ok "on: the lid is said" ;; *) fail "on: $out" ;; esac
 run status
-case "$out" in "laptop: held awake and unlocked for "[01]" h "*" min more, 1 at once") ok "status: held, for how long, and one validation at once unless said" ;; *) fail "status: $out" ;; esac
+case "$out" in "laptop: held awake for "[01]" h "*" min more, 1 at once; unlocked, its lid open") ok "status: held, for how long, and one validation at once unless said" ;; *) fail "status: $out" ;; esac
 count() { cat "$FAKE_HOSTS/$1/Library/Caches/topo-validate/slots.count" 2>/dev/null; }
 is "on: one validation at once, written there" "$(count laptop)" 1
 run on laptop 1 2
@@ -103,12 +105,25 @@ is "on, two at once: exits 0" "$status" 0
 is "on, two at once: written there" "$(count laptop)" 2
 case "$out" in *"2 validation(s) at once"*) ok "on, two at once: it is said" ;; *) fail "on, two at once: $out" ;; esac
 run status
-case "$out" in "laptop: held awake and unlocked for "*" min more, 2 at once") ok "status: two at once" ;; *) fail "status: $out" ;; esac
+case "$out" in "laptop: held awake for "*" min more, 2 at once; unlocked, its lid open") ok "status: two at once" ;; *) fail "status: $out" ;; esac
 
 run on laptop 1
 is "on again with no number: one at once, written over the two" "$(count laptop)" 1
 run status
-case "$out" in "laptop: held awake and unlocked for "*" min more, 1 at once") ok "status: one at once again" ;; *) fail "status after on with no number: $out" ;; esac
+case "$out" in "laptop: held awake for "*" min more, 1 at once; unlocked, its lid open") ok "status: one at once again" ;; *) fail "status after on with no number: $out" ;; esac
+# A hold keeps neither the screen unlocked nor the lid open: status reads both now.
+held_for='laptop: held awake for [01] h * min more, 1 at once; '
+me="$(id -un)"
+locked_encrypted="its disk is encrypted and the session of $me is locked, or is not the one on the screen, so topo_unit and topo_ui:quiet do not run there until it is unlocked"
+shut="its lid is closed, which sleeps it, so no suite runs there until it is opened"
+FAKE_LOCKED=1 run status
+case "$out" in $held_for"but $locked_encrypted") ok "status: a held, encrypted Mac since locked names the two suites a lock stops" ;; *) fail "status, locked since: $out" ;; esac
+FAKE_LOCKED=1 FAKE_VAULT=Off run status
+case "$out" in $held_for"but the session of $me is locked, or is not the one on the screen, which stops no suite there, since its disk is not encrypted") ok "status: a lock on a Mac with no FileVault is said to stop no suite" ;; *) fail "status, locked, no FileVault: $out" ;; esac
+FAKE_LID=Yes run status
+case "$out" in $held_for"but $shut") ok "status: a held Mac whose lid is since closed is said" ;; *) fail "status, lid closed since: $out" ;; esac
+FAKE_LID=Yes FAKE_LOCKED=1 run status
+case "$out" in $held_for"but $shut; and $locked_encrypted") ok "status: a Mac both shut and locked names both" ;; *) fail "status, shut and locked: $out" ;; esac
 run on laptop 1
 second="$(awake laptop)"
 settled "$second"

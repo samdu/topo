@@ -18,7 +18,8 @@
 #
 # `off` takes the name out and ends that `caffeinate`: the one whose pid, hours and end `on`
 # left on record there, and only while that pid is still that command and its hours are not
-# up. `status` says which Macs are named and how each is held. `on` again starts the hours
+# up. `status` says which Macs are named, how each is held, and whether each is unlocked with
+# its lid open now, which a hold does not keep so. `on` again starts the hours
 # afresh. One `on` or `off` runs at a time on this Mac.
 set -euo pipefail
 
@@ -73,16 +74,27 @@ held() {
     && [ "$(ps -o args= -p "$pid" 2>/dev/null)" = "/usr/bin/caffeinate -dimsu -t $secs" ]
 }
 release() { if held; then kill "$pid" 2>/dev/null; fi; rm -f "$cache/awake"; }
+# Whether the session of the user this reaches is the one on the screen and not locked, as
+# scripts/mac-suite.sh --check reads it.
+session_open() {
+  sessions="$(ioreg -n Root -d1 2>/dev/null | tr "}" "\n" || true)"
+  mine="$(grep -F "\"kCGSSessionUserNameKey\"=\"$(id -un)\"" <<<"$sessions" || true)"
+  case "$mine" in
+    *"\"CGSSessionScreenIsLocked\"=Yes"*) return 1 ;;
+    *"\"kCGSSessionOnConsoleKey\"=Yes"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# Whether a lid is shut, which sleeps the Mac whatever holds it awake. Read whole, as --check does.
+lid_closed() {
+  case "$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null || true)" in
+    *"\"AppleClamshellState\" = Yes"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 case "$what" in
   on)
-    sessions="$(ioreg -n Root -d1 2>/dev/null | tr "}" "\n" || true)"
-    mine="$(grep -F "\"kCGSSessionUserNameKey\"=\"$(id -un)\"" <<<"$sessions" || true)"
-    case "$mine" in
-      *"\"CGSSessionScreenIsLocked\"=Yes"*) open=no ;;
-      *"\"kCGSSessionOnConsoleKey\"=Yes"*) open=yes ;;
-      *) open=no ;;
-    esac
-    if [ "$open" = no ]; then
+    if ! session_open; then
       echo "error: on $(hostname -s) the session of $(id -un) is locked, or is not the one on the screen; unlock it there, then run this again." >&2
       exit 76
     fi
@@ -96,7 +108,19 @@ case "$what" in
   status)
     if held; then
       left=$((ends - $(date +%s)))
-      echo "held awake and unlocked for $((left / 3600)) h $((left % 3600 / 60)) min more, $(cat "$cache/slots.count" 2>/dev/null || echo 1) at once"
+      # Each thing that stops a suite there, as --check judges it: a closed lid stops every
+      # suite; a locked session only topo_unit and topo_ui:quiet, and only on an encrypted disk.
+      state=""
+      ! lid_closed || state="its lid is closed, which sleeps it, so no suite runs there until it is opened"
+      if ! session_open; then
+        case "$(fdesetup status 2>/dev/null || true)" in
+          *"FileVault is On"*) lock="its disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen, so topo_unit and topo_ui:quiet do not run there until it is unlocked" ;;
+          *) lock="the session of $(id -un) is locked, or is not the one on the screen, which stops no suite there, since its disk is not encrypted" ;;
+        esac
+        state="${state:+$state; and }$lock"
+      fi
+      state="${state:+but }${state:-unlocked, its lid open}"
+      echo "held awake for $((left / 3600)) h $((left % 3600 / 60)) min more, $(cat "$cache/slots.count" 2>/dev/null || echo 1) at once; $state"
     else
       echo "not held awake"
     fi
@@ -128,7 +152,7 @@ case "${1-}" in
       [ ! -s "$cache/hosts" ] || [ -z "$(tail -c 1 "$cache/hosts")" ] || echo >> "$cache/hosts"
       echo "$host" >> "$cache/hosts"
     fi
-    echo "$host is named in $cache/hosts and held awake and unlocked for $hours hours, $slots validation(s) at once; a closed lid still sleeps it. \`$0 off $host\` ends both."
+    echo "$host is named in $cache/hosts and held awake for $hours hours with its display on, so it does not lock for idleness, $slots validation(s) at once; a closed lid still sleeps it and a lock by hand stops it, and \`$0 status\` says so. \`$0 off $host\` ends both."
     ;;
   off)
     host="${2-}"
