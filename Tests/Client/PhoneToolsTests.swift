@@ -155,6 +155,24 @@ private struct Place: Locator {
 final class PhoneToolsTests: XCTestCase {
     private let noon = ISO8601DateFormatter().date(from: "2026-09-26T19:00:00Z")!
 
+    // MARK: The bound
+
+    /// A `work` still running at the bound is told it is no longer wanted: a geocode or a read
+    /// that honours cancellation stops there rather than running on with its answer going nowhere.
+    func testWorkStillRunningAtTheBoundIsCancelled() async {
+        let stopped = expectation(description: "the work saw its cancellation")
+        let cancelled = OSAllocatedUnfairLock(initialState: false)
+        let reply: Int? = await PhoneTool.within(.milliseconds(50)) {
+            try? await Task.sleep(for: .seconds(30))
+            cancelled.withLock { $0 = Task.isCancelled }
+            stopped.fulfill()
+            return 1
+        }
+        XCTAssertNil(reply)
+        await fulfillment(of: [stopped], timeout: 5)
+        XCTAssertTrue(cancelled.withLock { $0 })
+    }
+
     // MARK: Permission first
 
     /// Review focus 12: a refusal says so, and never reaches the store as an empty answer.
