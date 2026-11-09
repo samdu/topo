@@ -240,7 +240,7 @@ if [ "$hold" = no ]; then
       mic="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSBundle.bundleWithPath("/System/Library/Frameworks/AVFoundation.framework").load; ObjC.unwrap($.NSClassFromString("AVCaptureDevice").authorizationStatusForMediaType("soun"))' 2>/dev/null || true)"
       case "$mic" in
         3) ;;
-        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run in a session of its own on buddy's tmux server: ssh buddybox 'tmux ls > /dev/null && tmux new-session -d -s validate-<topic> -c <worktree> \"scripts/validate-and-push.sh > <log> 2>&1\"' (docs/testing.md). Nothing is pushed or posted." ;;
+        0 | 1 | 2) die "topo_ui's audio lane would hear silence: this shell holds no microphone grant (auth=$mic), which a shell started over ssh never does. Start the run in a session of its own on buddy's tmux server: ssh buddybox 'tmux -N new-session -d -s validate-<topic> -c <worktree> \"scripts/validate-and-push.sh > <log> 2>&1\"' (docs/testing.md). Nothing is pushed or posted." ;;
         *) echo "warning: could not ask whether this shell holds the microphone grant topo_ui's audio lane needs (got '$mic'); going on." >&2 ;;
       esac
       ;;

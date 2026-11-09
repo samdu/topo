@@ -259,7 +259,14 @@ is "app, second commit: pushed" "$(origin_head)" "$sha"
 scratch no-mic Apps/Client/SettingsView.swift
 FAKE_MIC=0 LOCK_WAIT=0 validate
 is "no microphone grant: exits 2" "$status" 2
-case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"tmux new-session -d -s validate-"*"docs/testing.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"tmux -N new-session -d -s validate-"*"docs/testing.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+# The recipe's -N: with no server on the socket (one that ended after any check), new-session
+# fails and starts none, so a run is never begun on a server ssh made.
+tmux_sock="$work/tmux-none"
+if tmux -N -S "$tmux_sock" new-session -d -s validate-probe true 2>/dev/null; then
+  fail "the recipe's -N: new-session started a server"; tmux -S "$tmux_sock" kill-server 2>/dev/null
+elif [ -e "$tmux_sock" ]; then fail "the recipe's -N: a socket was made"
+else ok "the recipe's -N: with no server, new-session fails and starts none"; fi
 is "no microphone grant: no suite ran" "$(recorded suites)" ""
 is "no microphone grant: nothing pushed" "$(origin_head)" ""
 is "no microphone grant: no status" "$(posted)" ""

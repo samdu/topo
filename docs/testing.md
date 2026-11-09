@@ -29,10 +29,10 @@ scripts/validate-and-push.sh --suites all --lane full
 A run that may take `topo_ui` needs the microphone grant, which only a shell in buddy's tmux server holds (`docs/simulator.md`), so it is started there, in a tmux session of its own named for the branch:
 
 ```sh
-ssh buddybox 'tmux ls > /dev/null && tmux new-session -d -s validate-<topic> -c <worktree> "scripts/validate-and-push.sh > <log> 2>&1"'
+ssh buddybox 'tmux -N new-session -d -s validate-<topic> -c <worktree> "scripts/validate-and-push.sh > <log> 2>&1"'
 ```
 
-`tmux ls` fails when no server is running, so this never starts one over ssh (a server started there has neither the grant nor the login keychain). A bare `tmux new-window` puts the run's window in whichever session tmux used last, which is another session's, and a `kill-session` of that session ends the validation with it.
+`-N` makes `new-session` fail rather than start a server when none is running, so this never starts one over ssh (a server started there has neither the grant nor the login keychain); a check first (`tmux ls`) would not, since the server can end between the check and the command. A bare `tmux new-window` puts the run's window in whichever session tmux used last, which is another session's, and a `kill-session` of that session ends the validation with it.
 
 - **What runs is the commit.** The suites run in one of the Mac's validation worktrees, a slot (`~/Library/Caches/topo-validate/slots/<n>/checkout`, a detached worktree of the checkout), checked out at the commit and cleaned of untracked files, so an uncommitted change or a stray file in the engineer's worktree is not in the result, and XcodeGen's regenerated projects are not written over the engineer's. A slot's path never changes, so its DerivedData, the guest's framework and `build/` stay warm between runs.
 - **The toolchain is pinned.** `scripts/mac-suite.sh` holds every suite that builds to Xcode 27.2, the iOS and watchOS 27.2 simulator runtimes, and XcodeGen 2.46.0, and fails each suite asked for on a Mac without them. The Xcode is the selected one when that is the pin; otherwise the suite finds the `Xcode*.app` under `/Applications` (`TOPO_XCODE_APPS`) whose `version.plist` and `xcodebuild -version` both name the pin, and runs everything under `DEVELOPER_DIR` set to it, so a Mac keeps whichever Xcode other work has selected. The log of every suite but `scripts`, which builds nothing and asks for no Xcode, names the `DEVELOPER_DIR` it ran under; with no pinned Xcode it is refused, naming the versions it found.
