@@ -73,8 +73,8 @@ struct ControlTool: Tool {
         case ("example", 2):
             guard let kind = ControlSlot.Kind(rawValue: arguments[1]) else { return .usage("topo: example takes button or toggle\n") }
             return .ok(Self.example(kind) + "\n")
-        case ("secret", 4) where arguments[1] == "set": return setSecret(arguments[2], arguments[3])
-        case ("secret", 3) where arguments[1] == "clear": return clearSecret(arguments[2])
+        case ("secret", 4) where arguments[1] == "set": return await setSecret(arguments[2], arguments[3])
+        case ("secret", 3) where arguments[1] == "clear": return await clearSecret(arguments[2])
         default: break
         }
         guard let store = store() else {
@@ -113,7 +113,7 @@ struct ControlTool: Tool {
         if let words = leftBehind.controlSecrets {
             lines.append("secrets: not used: at an earlier sign-out \(words); the app tries again at each launch")
         } else {
-            let names = (try? secrets.names()).map { $0.isEmpty ? "none" : $0.joined(separator: ", ") } ?? "the keychain could not be read"
+            let names = (try? await secrets.offThePool { try $0.names() }).map { $0.isEmpty ? "none" : $0.joined(separator: ", ") } ?? "the keychain could not be read"
             lines.append("secrets: " + names)
         }
         lines.append("local network: " + (await MainActor.run { localState() }).rawValue)
@@ -243,7 +243,7 @@ struct ControlTool: Tool {
 
     // MARK: Secrets
 
-    private func setSecret(_ name: String, _ value: String) -> ToolReply {
+    private func setSecret(_ name: String, _ value: String) async -> ToolReply {
         guard ControlSecrets.isName(name) else {
             return ToolReply(status: ToolReply.refused, text: "topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
         }
@@ -252,19 +252,19 @@ struct ControlTool: Tool {
             return .failed("topo: no secret is kept: at an earlier sign-out \(words). The app tries again at each launch.\n")
         }
         do {
-            try secrets.set(value, name: name)
+            try await secrets.offThePool { try $0.set(value, name: name) }
         } catch {
             return .failed("topo: the keychain did not keep it\n")
         }
         return .ok("secret set: \(name)\n")
     }
 
-    private func clearSecret(_ name: String) -> ToolReply {
+    private func clearSecret(_ name: String) async -> ToolReply {
         guard ControlSecrets.isName(name) else {
             return ToolReply(status: ToolReply.refused, text: "topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
         }
         do {
-            try secrets.clear(name)
+            try await secrets.offThePool { try $0.clear(name) }
         } catch {
             return .failed("topo: the keychain did not remove it\n")
         }

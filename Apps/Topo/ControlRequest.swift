@@ -30,7 +30,11 @@ extension ControlRequest {
         // holds is an earlier login's, so a request naming one sends nothing.
         if !form.secrets.isEmpty, leftBehind.controlSecrets != nil { return Answer(status: ToolReply.failed) }
         // A reference to a missing secret sends nothing.
-        guard let request = form.urlRequest(secret: { try? secrets.read($0) }) else { return Answer(status: ToolReply.failed) }
+        let names = form.secrets
+        let values = names.isEmpty ? [:] : ((try? await secrets.offThePool { secrets in
+            names.reduce(into: [String: String]()) { found, name in found[name] = try? secrets.read(name) }
+        }) ?? [:])
+        guard let request = form.urlRequest(secret: { values[$0] }) else { return Answer(status: ToolReply.failed) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
@@ -115,6 +119,8 @@ struct ControlSecrets: Sendable {
     static func isName(_ name: String) -> Bool { name.wholeMatch(of: /[A-Za-z0-9_.-]{1,64}/) != nil }
 
     var service = ControlSecrets.service
+    /// Called on the queue each keychain call runs on, just before it: a test's view of where.
+    var calling: @Sendable () -> Void = {}
 
     struct Failure: Error, Equatable {
         var status: OSStatus
@@ -123,19 +129,34 @@ struct ControlSecrets: Sendable {
     private func item(_ name: String) -> KeychainItem { KeychainItem(service: service, account: name) }
 
     func read(_ name: String) throws -> String? {
-        try item(name).read().map { String(decoding: $0, as: UTF8.self) }
+        calling()
+        return try item(name).read().map { String(decoding: $0, as: UTF8.self) }
     }
 
     func set(_ value: String, name: String) throws {
+        calling()
         try item(name).write(Data(value.utf8))
     }
 
     func clear(_ name: String) throws {
+        calling()
         try item(name).delete()
+    }
+
+    /// `work`, which makes synchronous Security calls, on a queue of its own and not on the
+    /// cooperative pool an async caller is on.
+    func offThePool<T: Sendable>(_ work: @escaping @Sendable (ControlSecrets) throws -> T) async throws -> T {
+        let secrets = self
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result { try work(secrets) })
+            }
+        }
     }
 
     /// The names held, never their values.
     func names() throws -> [String] {
+        calling()
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll]
         var result: CFTypeRef?
