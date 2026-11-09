@@ -250,9 +250,22 @@ if [ "$check" = yes ] && [ "$builds" = yes ]; then
   # What the disk has for a write that matters, the figure Finder shows: `df` leaves out what
   # macOS purges as the room is wanted, which on a laptop is most of it.
   free="$(osascript -l JavaScript -e 'ObjC.import("Foundation"); function run(argv) { var value = $(); $.NSURL.fileURLWithPath(argv[0]).getResourceValueForKeyError(value, "NSURLVolumeAvailableCapacityForImportantUsageKey", null); return Math.floor(ObjC.unwrap(value) / 1e9); }' "$cache" 2>/dev/null)"
+  figure="Finder's figure, purgeable space included"
+  # That figure can come back 0, or not at all, for a volume that has room (a cache another
+  # user owns, a volume the key is not answered for): the volume's own count is then asked, as
+  # df gives it, and named as the figure judged.
+  case "$free" in
+    "" | 0 | *[!0-9]*)
+      df_free="$(df -g "$cache" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+      case "$df_free" in
+        "" | *[!0-9]*) ;;
+        *) figure="df's figure, purgeable space left out, as Finder's read ${free:-nothing}"; free="$df_free" ;;
+      esac
+      ;;
+  esac
   case "$free" in
     "" | *[!0-9]*) err "could not read the disk's available space under $cache."; lacks=1 ;;
-    *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache, purgeable space included (Finder's figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
+    *) [ "$free" -ge "$MIN_FREE_GB" ] || { err "$free GB available under $cache ($figure), and a suite wants $MIN_FREE_GB."; lacks=1; } ;;
   esac
 fi
 if [ "$check" = yes ]; then
@@ -401,9 +414,10 @@ prepare() {
   # The script keeps a framework whose inputs stamp matches.
   say "Build the guest's framework (scripts/build-ish.sh)"
   run "$RESULTS/build-ish.log" scripts/build-ish.sh || return 1
-  # The voice's compiled core (Packages/PhononTTS), fetched by checksum, never committed.
+  # The voice's compiled core (Packages/PhononTTS), fetched by checksum, never committed; its zip
+  # is kept in the cache, so a slot or a Mac's checkout made afresh takes it from there.
   say "Fetch the voice's core (scripts/fetch-phonon.sh)"
-  run "$RESULTS/fetch-phonon.log" scripts/fetch-phonon.sh || return 1
+  run "$RESULTS/fetch-phonon.log" scripts/fetch-phonon.sh "$cache/phonon" || return 1
   # The memory brake's refresh and the DNS stub's port are what the patches add and the app
   # sets: a library without them is a kernel built from the fork unpatched.
   local slice symbols symbol

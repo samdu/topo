@@ -265,6 +265,9 @@ jobs:
             scripts/tests/review-prompt-test.sh scripts
             scripts/review-verdicts.sh scripts
             scripts/tests/review-verdict-test.sh scripts
+            scripts/tests/simulator-run-test.sh scripts
+            scripts/tests/ci-audio-lane-test.sh scripts
+            scripts/tests/ci-require-tests-test.sh scripts
         run: |
           set -euo pipefail
           # A diff that cannot be read selects every suite, inside the script.

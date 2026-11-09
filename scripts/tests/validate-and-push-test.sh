@@ -10,8 +10,10 @@
 # untracked files; a green run pushes that commit and then posts `success` for each suite to that
 # commit and no other, with `local/real_ear` only beside a green `topo_ui` on the full lane; a
 # red suite pushes nothing and posts nothing, unless origin's branch was already at the commit,
-# when it posts what happened; a suite that wrote no result is a failure; a push origin refuses
-# and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
+# when it posts what happened; a suite that wrote no result is a failure; a push that fails is
+# tried three times, and one that lands on a later try is posted; a push origin refuses (its branch
+# moved past the commit), one that never lands and a status GitHub refuses post nothing more and
+# exit 2; --no-push refuses a commit origin's
 # branch is not at before any suite runs; a suite with two results is red; a description keeps
 # the logs' path; a head run again keeps the earlier run's logs, five runs a commit; and the
 # `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
@@ -89,6 +91,10 @@ case "$*" in
   "api repos/samdu/topo/actions/workflows/pr-validate.yaml/runs?head_sha="*) printf '%s\n' "${FAKE_RUN-}" ;;
   "api repos/samdu/topo/actions/runs/99/jobs?"*) printf '%s\n' "${FAKE_TEST_JOB-}" ;;
   "run rerun --repo samdu/topo --job 4242") ;;
+  # The branch's open PRs and a PR's comments as GitHub's JSON (FAKE_PRS, FAKE_COMMENTS), put
+  # through the script's own --jq query, its last argument, as gh does.
+  "pr list --repo samdu/topo --head topic --state open "*) [ "${FAKE_PR_LIST-}" != fail ] || exit 1; jq -r "${@: -1}" <<<"${FAKE_PRS:-[]}" ;;
+  "api --paginate repos/samdu/topo/issues/7/comments "*) [ "${FAKE_COMMENTS_READ-}" != fail ] || exit 1; jq -r "${@: -1}" <<<"${FAKE_COMMENTS:-[]}" ;;
   *) echo "unexpected gh call: $*" >&2; exit 64 ;;
 esac
 GH
@@ -220,7 +226,7 @@ validate
 is "docs: exits 0" "$status" 0
 is "docs: pushed" "$(origin_head)" "$sha"
 is "docs: no suite ran" "$(recorded head)" ""
-is "docs: no gh call but the look for a red test job" "$(grep -vc 'actions/workflows' "$GH_CALLS")" 0
+is "docs: no gh call but the PR's state and the look for a red test job" "$(grep -vcE 'actions/workflows|^pr list ' "$GH_CALLS")" 0
 
 # An app change off the voice path: every suite, the fast lane, at the commit and nothing else.
 scratch app Apps/Client/SettingsView.swift
@@ -259,7 +265,33 @@ is "app, second commit: pushed" "$(origin_head)" "$sha"
 scratch no-mic Apps/Client/SettingsView.swift
 FAKE_MIC=0 LOCK_WAIT=0 validate
 is "no microphone grant: exits 2" "$status" 2
-case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"docs/simulator.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"tmux -N new-session -d -s validate-"*"docs/testing.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+# The recipe's -N: with no server on the socket (one that ended after any check), new-session
+# fails and starts none, so a run is never begun on a server ssh made.
+# Each on a socket of this test's own, with no configuration read; and beside a server that
+# is running, the same recipe makes its session, so the refusal above is -N's and not a
+# tmux that cannot run it.
+if ! command -v tmux > /dev/null; then
+  echo "SKIP the recipe's -N: no tmux on this Mac's PATH, so the recipe is not tried here"
+else
+  tmux_sock="$work/tmux-none"
+  if tmux -f /dev/null -N -S "$tmux_sock" new-session -d -s validate-probe true 2> "$work/tmux-none.err"; then
+    fail "the recipe's -N: new-session started a server"; tmux -S "$tmux_sock" kill-server 2>/dev/null
+  elif [ -e "$tmux_sock" ]; then fail "the recipe's -N: a socket was made"
+  else
+    case "$(cat "$work/tmux-none.err")" in
+      "error connecting to $tmux_sock (No such file or directory)") ok "the recipe's -N: with no server, new-session fails for want of one and starts none" ;;
+      *) fail "the recipe's -N: new-session failed for another reason: $(cat "$work/tmux-none.err")" ;;
+    esac
+  fi
+  tmux_live="$work/tmux-live"
+  tmux -f /dev/null -S "$tmux_live" new-session -d -s standing "sleep 60"
+  if tmux -f /dev/null -N -S "$tmux_live" new-session -d -s validate-probe "sleep 60" 2> "$work/tmux-live.err" \
+    && tmux -S "$tmux_live" has-session -t =validate-probe 2>/dev/null; then
+    ok "the recipe's -N: beside a running server, new-session makes the session"
+  else fail "the recipe's -N: beside a running server, no session: $(cat "$work/tmux-live.err")"; fi
+  tmux -S "$tmux_live" kill-server 2>/dev/null
+fi
 is "no microphone grant: no suite ran" "$(recorded suites)" ""
 is "no microphone grant: nothing pushed" "$(origin_head)" ""
 is "no microphone grant: no status" "$(posted)" ""
@@ -346,6 +378,68 @@ g -C "$work/refused/other" checkout -q -b topic && echo z > "$work/refused/other
 validate
 is "refused push: exits 2" "$status" 2
 is "refused push: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+grep -q 'does not carry' <<<"$out" && ! grep -q 'try 1 of 3' <<<"$out" && ok "refused push: not tried again, saying why" || fail "refused push: $out"
+
+# A push GitHub fails and then takes (a 500): tried again, pushed and posted.
+scratch flaky Packages/TopoLink/Package.swift
+mkdir -p "$work/flaky/origin.git/hooks"
+printf '#!/bin/sh\nn=$(cat "$0.count" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.count"\n[ "$n" -ge 1 ] || { echo "HTTP 500" >&2; exit 1; }\n' > "$work/flaky/origin.git/hooks/pre-receive"
+chmod +x "$work/flaky/origin.git/hooks/pre-receive"
+git -C "$work/flaky/origin.git" config core.hooksPath "$work/flaky/origin.git/hooks"
+POST_RETRY=0 validate
+is "a push that fails once: exits 0" "$status" 0
+is "a push that fails once: pushed" "$(origin_head)" "$sha"
+is "a push that fails once: tried twice" "$(cat "$work/flaky/origin.git/hooks/pre-receive.count")" 2
+is "a push that fails once: posted" "$(posted)" "local/others=success "
+
+# A push that never lands: three tries, nothing posted, and it says the suites passed.
+scratch downpush Packages/TopoLink/Package.swift
+mkdir -p "$work/downpush/origin.git/hooks"
+printf '#!/bin/sh\nn=$(cat "$0.count" 2>/dev/null || echo 0); echo $((n + 1)) > "$0.count"; exit 1\n' > "$work/downpush/origin.git/hooks/pre-receive"
+chmod +x "$work/downpush/origin.git/hooks/pre-receive"
+git -C "$work/downpush/origin.git" config core.hooksPath "$work/downpush/origin.git/hooks"
+POST_RETRY=0 validate
+is "a push that never lands: exits 2" "$status" 2
+is "a push that never lands: tried three times" "$(cat "$work/downpush/origin.git/hooks/pre-receive.count")" 3
+is "a push that never lands: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+grep -q 'The suites passed' <<<"$out" && ok "a push that never lands: says the suites passed" || fail "a push that never lands: $out"
+
+# A ready PR whose newest verdict read an earlier head: refused before any suite runs, unless
+# --after-verdict says the push is meant. A draft, or a ready PR with no verdict yet, pushes.
+# comments <login> <body> [<login> <body>...] — a PR's comments, oldest first, as GitHub's JSON.
+comments() { local out="[]"; while [ $# -gt 1 ]; do out="$(jq -c --arg l "$1" --arg b "$2" '. + [{user: {login: $l}, body: $b}]' <<<"$out")"; shift 2; done; echo "$out"; }
+bot="github-actions[bot]"
+verdict() { printf '<!-- agent-review: codex -->\n<!-- agent-review-sha: %s -->\n%s' "$1" "${2:-### Codex review}"; }
+ready_pr='[{"number": 7, "isDraft": false}]'
+scratch ready Packages/TopoLink/Package.swift
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 1111111aaaa old)" "$bot" "$(verdict 2222222bbbb)" samdu "$(verdict 3333333cccc 'a person quoting a header, newest')")" validate
+is "ready, a verdict stands: exits 2" "$status" 2
+is "ready, a verdict stands: no suite ran" "$(recorded suites)" ""
+is "ready, a verdict stands: nothing pushed" "$(origin_head)" ""
+grep -q 'newest Codex verdict read 2222222' <<<"$out" && grep -q -- '--after-verdict' <<<"$out" && ok "ready, a verdict stands: names the newest verdict's head and the flag, not a person's comment" || fail "ready, a verdict stands: $out"
+# A finding that quotes the commit being pushed as a marker is the finding's: the verdict's head is its second line.
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb "- [P1] the body carried <!-- agent-review-sha: $sha -->")")" validate
+is "a verdict quoting this commit's marker: exits 2" "$status" 2
+grep -q 'newest Codex verdict read 2222222' <<<"$out" && ok "a verdict quoting this commit's marker: its own head is read" || fail "a verdict quoting this commit's marker: $out"
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb)")" validate --after-verdict
+is "ready, a verdict stands, --after-verdict: pushed" "$(origin_head)" "$sha"
+# Pushed already: origin's branch is at this commit, so the run posts and starts no round.
+FAKE_PRS="$ready_pr" FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb)")" validate
+is "already pushed, an older verdict: exits 0" "$status" 0
+scratch ready-draft Packages/TopoLink/Package.swift
+FAKE_PRS='[{"number": 7, "isDraft": true}]' FAKE_COMMENTS="$(comments "$bot" "$(verdict 2222222bbbb)")" validate
+is "a draft with a verdict: pushed" "$(origin_head)" "$sha"
+scratch ready-unread Packages/TopoLink/Package.swift
+FAKE_PRS="$ready_pr" validate
+is "ready with no verdict yet: pushed" "$(origin_head)" "$sha"
+scratch ready-noread Packages/TopoLink/Package.swift
+FAKE_PRS="$ready_pr" FAKE_COMMENTS_READ=fail validate
+is "a comments read that fails: pushed" "$(origin_head)" "$sha"
+grep -q "could not read #7's comments" <<<"$out" && ok "a comments read that fails: says so" || fail "a comments read that fails: $out"
+scratch ready-unknown Packages/TopoLink/Package.swift
+FAKE_PR_LIST=fail validate
+is "a PR list that fails: pushed" "$(origin_head)" "$sha"
+grep -q "could not ask GitHub for topic's open PR" <<<"$out" && ok "a PR list that fails: says so" || fail "a PR list that fails: $out"
 
 # A status GitHub does not take: exit 2, and it says how to post again.
 scratch nopost Packages/TopoLink/Package.swift
@@ -1157,6 +1251,56 @@ case "$out" in *"the first still 0000011, pid $still, for "*) ok "a flickering l
 is "a flickering line that stands still: gave up within the allowance" "$(looks)" 3
 is "a flickering line that stands still: no suite ran" "$(recorded suites)" ""
 rm -f "$q/0000000000000011-0000011"
+# A `ps` that answers nothing for a run that is still going, as a loaded Mac's can: the ticket
+# is that run's still, and the run behind waits for it rather than taking it for dead.
+sleep 600 & still=$!
+printf '%s\n%s\n%s\n' "$still" "$(began "$still")" "still 0000013" > "$q/0000000000000013-0000013"
+mkdir -p "$work/blankps"
+cat > "$work/blankps/ps" <<PS
+#!/usr/bin/env bash
+case " \$* " in *" -p $still "*) exit 1 ;; esac
+exec /bin/ps "\$@"
+PS
+chmod +x "$work/blankps/ps"
+export POLLS="$work/blankps.looks"; : > "$POLLS"
+PATH="$work/blankps:$work/pollbin:$PATH" LOCK_WAIT=3 validate
+is "a ps that answers nothing: exits 2" "$status" 2
+case "$out" in *"still 0000013, pid $still"*) ok "a ps that answers nothing: it waited behind the run ahead" ;; *) fail "a ps that answers nothing: $out" ;; esac
+is "a ps that answers nothing: no suite ran" "$(recorded suites)" ""
+[ -e "$q/0000000000000013-0000013" ] && ok "a ps that answers nothing: the ticket stands" || fail "a ps that answers nothing: the ticket was removed"
+kill "$still" 2>/dev/null; wait "$still" 2>/dev/null
+rm -f "$q/0000000000000013-0000013"
+# A ticket's names changing hands mid-look: the run ahead wants topo_unit or others, and while
+# the run behind reads it, topo_unit is let go and others taken, between the two asks. A run
+# takes a name only under the line's lock, as here, so the taking waits for the look to end and
+# the ticket is still read as wanting a name that is free.
+sleep 600 & still=$!
+printf '%s\n%s\n%s\n%s\n' "$still" "$(began "$still")" "race 0000014" "topo_unit others" > "$q/0000000000000014-0000014"
+mkdir -p "$work/race"
+lockf -k "$TOPO_VALIDATE_CACHE/suite-topo_unit.lock" sh -c "echo \$\$ > '$work/race/unit-held'; exec sleep 600" & unit_lock=$!
+until_true reached "$work/race/unit-held" || fail "a ticket's names changing hands: topo_unit was never held"
+: > "$work/race/probe.hold"
+(cd "$repo" && exec env PATH="$work/bin:$PATH" FAKE_RECORD="$work/race/record" FAKE_PROBE_HOLD="$work/race/probe.hold" LOCK_WAIT=0 \
+  scripts/validate-and-push.sh --suites topo_ui > "$work/race/out" 2>&1) & behind=$!
+until_true test -e "$work/race/probe.hold.reached" || fail "a ticket's names changing hands: the look never asked topo_unit: $(cat "$work/race/out")"
+kill "$(cat "$work/race/unit-held")" 2>/dev/null; wait "$unit_lock" 2>/dev/null
+# others taken as a run takes a name: the line's lock, then the name, then the line's lock let go.
+perl -MFcntl=:flock -e '
+  my ($line, $name, $mark) = @ARGV;
+  open(my $l, ">>", $line) or die; flock($l, LOCK_EX) or die;
+  open(my $n, ">>", $name) or die; flock($n, LOCK_EX) or die;
+  close $l;
+  open(my $m, ">", $mark); print $m "$$\n"; close $m;
+  sleep 600' "$TOPO_VALIDATE_CACHE/queue.lock" "$TOPO_VALIDATE_CACHE/suite-others.lock" "$work/race/others-held" & others_lock=$!
+for _ in $(seq 20); do [ -s "$work/race/others-held" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+rm -f "$work/race/probe.hold"
+wait "$behind"; status=$?; out="$(cat "$work/race/out")"
+until_true reached "$work/race/others-held" || fail "a ticket's names changing hands: others was never taken"
+kill "$others_lock" "$still" 2>/dev/null; wait "$others_lock" "$still" 2>/dev/null
+is "a ticket's names changing hands: the run behind exits 2" "$status" 2
+case "$out" in *"the first race 0000014, pid $still, for others"*) ok "a ticket's names changing hands: it waited behind the run ahead" ;; *) fail "a ticket's names changing hands: $out" ;; esac
+is "a ticket's names changing hands: no suite ran" "$(FAKE_RECORD="$work/race/record" recorded suites)" ""
+rm -f "$q/0000000000000014-0000014"
 
 # With another Mac named and busy, a run waits here in the line and asks the Mac again: it is
 # out of the line for each asking and back under its own name, so a run that came later does

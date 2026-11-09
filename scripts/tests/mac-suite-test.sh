@@ -138,6 +138,7 @@ fake "$work/bin/xcode-select" '[ -z "${FAKE_NO_TOOLS-}" ]'
 fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
 fake "$work/bin/osascript" 'echo "${FAKE_FREE:-60}"'
+fake "$work/bin/df" 'echo "Filesystem 1G-blocks Used Available Capacity Mounted"; echo "/dev/disk3s5 460 400 ${FAKE_DF:-60} 87% /"'
 # As long as the real one's answer, the state near its head: a reader that stops early closes the pipe on it.
 fake "$work/bin/fdesetup" 'echo "FileVault is ${FAKE_VAULT:-Off}."'
 fake "$work/bin/ioreg" 'echo "    \"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=${FAKE_OTHER_CONSOLE:-No},\"kCGSSessionUserNameKey\"=\"another\"${FAKE_OTHER_UNLOCKED:-,\"CGSSessionScreenIsLocked\"=Yes}},{\"kCGSSessionOnConsoleKey\"=${FAKE_AWAY:-Yes},\"kCGSSessionUserNameKey\"=\"$(id -un)\"${FAKE_LOCKED:+,\"CGSSessionScreenIsLocked\"=Yes}})"; echo "    \"AppleClamshellState\" = ${FAKE_LID:-No}"; for _ in $(seq 400); do printf "%0100d\n" 0 || exit 141; done'
@@ -186,6 +187,8 @@ is "green: the hold is running when the lane starts and when it stops" "$(grep '
 hold_pid="$(cat "$CALLS.hold")"
 for _ in $(seq 20); do kill -0 "$hold_pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 kill -0 "$hold_pid" 2>/dev/null && fail "green: the hold outlived the script" || ok "green: the hold ends with the script"
+is "green: the voice's core is fetched with its zip kept in the cache" \
+  "$(grep '^fetch-phonon.sh' "$CALLS" | sort -u | sed "s|$work/cache|<cache>|")" "fetch-phonon.sh <cache>/phonon"
 is "green: every simulator made is deleted" "$(calls 'xcrun simctl delete')" "$(calls 'xcrun simctl create')"
 # Every test action, the four of them, runs without the simulator diagnostics xcodebuild
 # gathers after the last test, whose log archive is the 600 s stall a run cannot end.
@@ -716,6 +719,14 @@ names "check, no pinned runtime: the phone's is named" "no iPhone simulator of c
 names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-2"
 FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
 case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
+# Finder's figure read as 0 for a volume with room: df's is judged, and a full one is named as df's.
+FAKE_FREE=0 check disk-zero topo_unit
+is "check, Finder's figure 0 with room by df: exits 0" "$status" 0
+FAKE_FREE=0 FAKE_DF=3 check disk-zero-full topo_unit
+is "check, Finder's figure 0 and df's full: exits 1" "$status" 1
+names "check, Finder's figure 0 and df's full: df's figure named" "3 GB available under $work/cache (df's figure, purgeable space left out, as Finder's read 0)"
+FAKE_FREE=NaN check disk-unread topo_unit
+is "check, Finder's figure unread with room by df: exits 0" "$status" 0
 FAKE_FREE=9 check disk topo_unit
 is "check, a full disk: exits 1" "$status" 1
 names "check, a full disk: named" "9 GB available"

@@ -139,6 +139,17 @@ class Decisions(unittest.TestCase):
         self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(), jobs(test="success"), {}, NOW), [])
         j = jobs(test="success", reviewer_ran="failure", review_gate="failure")
         self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "a draft's missing verdict is not rerun")
+        j = jobs(test="success", codex="skipped", reviewer_ran="success", review_gate="failure")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "codex skipped on a draft: no verdict")
+
+    def test_a_draft_whose_head_the_reviewer_blocked_is_reported(self):
+        j = jobs(test="success", codex="success", post_feedback="success", reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:verdict"])
+        self.assertIn(f"blocked {HEAD[:7]}, and it is back to draft", w[0]["text"])
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("success"), jobs(test="success", codex="success",
+                         reviewer_ran="success", review_gate="success"), {}, NOW), [], "a passing verdict says nothing")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(None, status="in_progress"), [], {}, NOW), [])
 
     def test_a_pr_fingerprint_moves_with_the_pr_and_not_with_time_or_a_comment(self):
         j = jobs(test="success", reviewer_ran="success", review_gate="failure")
@@ -336,6 +347,14 @@ class Decisions(unittest.TestCase):
 
     def test_a_ready_pr_with_no_run_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), None, [], {}, NOW)), ["report:norun"])
+        self.assertIn("a push starts one", janitor.decide_pr(pr(), None, [], {}, NOW)[0]["text"])
+
+    def test_a_stacked_pr_with_no_run_is_told_to_retarget(self):
+        w = janitor.decide_pr(pr(baseRefName="buddy/below"), None, [], {}, NOW)
+        self.assertEqual(kinds(w), ["report:norun"])
+        self.assertIn("none starts on a PR into buddy/below, since PR validate runs on PRs into main; "
+                      "retarget it and mark it ready again, since a retarget starts no run "
+                      "(gh pr edit 7 --base main && gh pr ready 7 --undo && gh pr ready 7)", w[0]["text"])
 
     def test_report_keys_repeat_only_after_the_repeat_window(self):
         self.assertGreaterEqual(janitor.REPEAT, timedelta(hours=24))
@@ -708,12 +727,17 @@ class TickedFirst(unittest.TestCase):
 
     def test_every_hold_but_more_boxes_leads_and_only_with_a_ticked_box(self):
         ticked, unticked = pr(body=self.TICKED), pr(body="- [x] suite\n- [ ] device: the phone")
-        for cond in ("verdict", "cap", "red", "cancelled", "norun", "idle", "dirty", "draft", "label"):
+        for cond in ("verdict", "cap", "red", "cancelled", "norun", "idle", "dirty", "label"):
             self.assertTrue(janitor.leads(ticked, [cond]), cond)
             self.assertTrue(janitor.leads(ticked, ["boxes", cond]), cond)
             self.assertFalse(janitor.leads(unticked, [cond]), cond)
         self.assertFalse(janitor.leads(ticked, ["boxes"]))
         self.assertFalse(janitor.leads(ticked, []))
+
+    def test_a_ticked_draft_never_leads(self):
+        draft = pr(isDraft=True, body="- [x] device: one\n- [x] device: two\n- [ ] device: three")
+        for cond in ("draft", "dirty"):
+            self.assertFalse(janitor.leads(draft, [cond]), cond)
 
     def test_a_device_box_ticked_since_moves_the_fingerprint_at_the_same_count(self):
         before = pr(body="- [x] suite\n- [ ] device: phone")
@@ -1190,7 +1214,9 @@ elif tool == "claude":
     sys.exit(answer.get("exit", 0))
 elif tool == "git":
     if "log" in a: out(S.get("commits", ""))
-    if "worktree" in a and "list" in a: out(S["worktrees"])
+    if "worktree" in a and "list" in a:
+        if S.get("worktrees_fail"): print("fatal: not a git repository", file=sys.stderr); sys.exit(128)
+        out(S["worktrees"])
     if "status" in a: out(S.get("status", {}).get(a[a.index("-C") + 1], ""))
     if "rev-parse" in a: out(S.get("tip", "2222"))
     if "update-ref" in a and S.get("ref_moved"): print("cannot lock ref: is at 3333 but expected 2222", file=sys.stderr); sys.exit(1)
@@ -1206,6 +1232,9 @@ elif tool == "curl":
         out(json.dumps(S.get("slots", [])))
     if S.get("page_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
     out(json.dumps({"commit": S["published"]}))
+elif tool == "bash" and a[0].endswith("topo-final-gate.sh"):
+    code = S.get("final", {}).get(a[1], 0)
+    print({0: "final: fake", 1: "not final: fake"}.get(code, "unread: fake")); sys.exit(code)
 elif tool == "bash" and a[0].endswith("topo-suites-gate.sh"):
     code = S.get("gate", {}).get(a[2], 1)
     print({0: "green: fake", 1: "not green: fake"}.get(code, "unread: fake")); sys.exit(code)
@@ -1916,13 +1945,30 @@ class WholePass(unittest.TestCase):
         self.run_pass(red)
         self.assertEqual(Bridge.received[n:], [], "red, rerun by hand, red the same: said once")
 
-    def test_a_draft_is_never_read_or_said(self):
+    def test_a_draft_with_no_blocking_verdict_is_never_said(self):
         s = self.scripted(prs=[pr(isDraft=True, updatedAt=ago(timedelta(days=2)))], worktrees=self.QUIET)
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("head_sha", calls, "a draft's runs are not read")
         self.assertEqual(Bridge.received, [])
         self.assertEqual(self.said("pr:"), set())
+
+    def test_a_draft_at_the_review_cap_is_not_said_blocked(self):
+        # post_feedback's recount met the cap and held the post: no verdict this run.
+        j = jobs(test="success", codex="success", reviewer_ran="success", review_gate="failure")
+        j.append(job("post_feedback", "success", "Report Codex feedback", 9, step_conclusion="skipped"))
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET, jobs=j)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertFalse(any("the reviewer blocked" in t for t in texts), texts)
+
+    def test_a_draft_the_reviewer_blocked_is_said_once_per_head(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET,
+                          jobs=jobs(test="success", codex="success", post_feedback="success",
+                                    reviewer_ran="success", review_gate="failure"))
+        self.run_pass(s)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertEqual(sum("and it is back to draft" in t for t in texts), 1, texts)
 
     def test_one_digest_a_day_names_what_still_stands_and_none_when_nothing_does(self):
         s = self.scripted(prs=[pr(body="- [ ] device: phone")], worktrees=self.QUIET, issues=[issue(40, "Stands")])
@@ -2713,7 +2759,8 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f"topo-suites-gate.sh /r/topo {HEAD}", calls)
-        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}", self.texts())
+        self.assertIn("topo-final-gate.sh 7", calls)
+        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}, which is final", self.texts())
         n = len(Bridge.received)
         p, calls = self.run_pass(s)
         self.assertNotIn("dev build", self.texts(n))
@@ -2734,6 +2781,31 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("topo-suites-gate", calls)
         self.assertNotIn("dev build", self.texts())
 
+    def test_a_behind_build_on_a_pr_in_review_says_nothing_and_is_judged_again(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, final={"7": 1}, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("topo-final-gate.sh 7", calls)
+        self.assertNotIn("topo-suites-gate", calls, "not final: the suites are not asked")
+        self.assertNotIn("dev build", self.texts())
+        s["final"] = {"7": 0}
+        self.run_pass(s)
+        self.assertIn("which is final and has passed its suites", self.texts(), "final now: said")
+
+    def test_a_final_gate_that_cannot_judge_is_said_once_while_it_stands_and_again_when_it_comes_back(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, final={"7": 2}, worktrees="")
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1, "said once while it stands")
+        s["final"] = {"7": 1}
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1, "a judgement clears it")
+        s["final"] = {"7": 2}
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 2, "said again when it comes back")
+
     def test_a_gate_that_cannot_judge_or_slots_that_do_not_answer_are_said_once(self):
         s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
                           gate={HEAD: 2}, worktrees="")
@@ -2744,6 +2816,51 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         self.run_pass(s)
         self.assertEqual(self.texts().count("could not read the dev slots"), 1)
+
+    def test_a_pane_in_the_branchs_worktree_owns_its_pr_whatever_its_session_is_called(self):
+        wt = "worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\nworktree /w/topo-gone\nHEAD 2222\nbranch refs/heads/buddy/gone\n\n"
+        s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees=wt,
+                          panes="topo-other-name\t/w/topo-gone/Packages")
+        self.run_pass(s)
+        self.assertNotIn("stands to merge main in", self.texts())
+        s["panes"] = "topo-other-name\t/w/topo-gone-2"
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, "a sibling path is not the worktree")
+
+    def test_working_is_the_branches_a_pane_stands_in(self):
+        wts = [{"path": "/w/a", "branch": "buddy/a"}, {"path": "/w/b", "branch": "buddy/b"}, {"path": "/w/c"}]
+        self.assertEqual(janitor.working([("s", "/w/a"), ("t", "/w/b/x/y"), ("u", "/w/c")], wts),
+                         {"buddy/a", "buddy/b"})
+        self.assertEqual(janitor.working([("v", "/w/ab")], wts), set(), "a sibling path is not the worktree")
+
+    def test_a_pane_owns_only_its_worktrees_branch_and_no_session_name(self):
+        # A pane in buddy/a's worktree is buddy/a's, not a session called a or topo-a,
+        # so a PR on buddy/topo-a with neither its session nor its worktree occupied is abandoned.
+        wt = "worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\nworktree /w/topo-a\nHEAD 2222\nbranch refs/heads/buddy/a\n\n"
+        s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/topo-a")], runs={}, worktrees=wt,
+                          panes="unrelated\t/w/topo-a")
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, self.texts())
+
+    def test_worktrees_unread_leave_the_session_names_to_judge(self):
+        prs = [pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")]
+        s = self.scripted(prs=prs, runs={}, worktrees="", worktrees_fail=True, panes="topo-gone\t/anywhere")
+        self.run_pass(s)
+        self.assertNotIn("stands to merge main in", self.texts(), "its named session stands")
+        s["panes"] = "topo-other\t/anywhere"
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("stands to merge main in"), 1, "an unrelated session is not its engineer")
+
+    def test_working_compares_real_paths(self):
+        # tmux reports a process's real path, git the path the worktree was added at.
+        with tempfile.TemporaryDirectory() as d:
+            real = os.path.join(d, "real")
+            os.makedirs(os.path.join(real, "wt", "sub"))
+            os.symlink(real, os.path.join(d, "link"))
+            wts = [{"path": os.path.join(d, "link", "wt"), "branch": "buddy/a"}]
+            self.assertEqual(janitor.working([("s", os.path.join(real, "wt", "sub"))], wts), {"buddy/a"})
+            self.assertEqual(janitor.working([("s", os.path.join(d, "link", "wt"))],
+                                             [{"path": os.path.join(real, "wt"), "branch": "buddy/a"}]), {"buddy/a"})
 
     def test_a_conflicted_pr_with_no_session_is_said_once_per_head(self):
         s = self.scripted(prs=[pr(mergeStateStatus="DIRTY", headRefName="buddy/gone")], runs={}, worktrees="",
@@ -2866,12 +2983,12 @@ class WholePass(unittest.TestCase):
         got = self.report_lines()
         self.assertTrue(got[0].startswith("- first, Sam's device test is ticked and it is not merging: #7: merge refused"), got)
 
-    def test_a_ticked_draft_leads_once_per_head(self):
+    def test_a_ticked_draft_is_said_once_per_head_and_does_not_lead(self):
         s = self.scripted(prs=[pr(isDraft=True, body="- [x] device: the phone shows it")], runs={}, worktrees="")
         self.run_pass(s)
         self.run_pass(s)
         self.assertEqual(sum("is a draft at" in l for l in self.report_lines()), 1)
-        self.assertTrue(self.report_lines()[0].startswith("- first,"))
+        self.assertFalse(any(l.startswith("- first,") for l in self.report_lines()), self.report_lines())
         s = self.scripted(prs=[pr(isDraft=True, headRefOid="fff0000", body="- [x] device: the phone shows it")],
                           runs={}, worktrees="")
         self.run_pass(s)
@@ -2882,7 +2999,9 @@ class WholePass(unittest.TestCase):
         self.run_pass(self.scripted(prs=[pr(isDraft=True, body=body)], runs={}, worktrees=""))
         n = len(Bridge.received)
         self.run_pass(self.scripted(prs=[pr(isDraft=True, body=body, mergeStateStatus="DIRTY")], runs={}, worktrees=""))
-        self.assertTrue(any("conflicts with main" in l and l.startswith("- first,") for l in self.report_lines(n)))
+        got = self.report_lines(n)
+        self.assertTrue(any("conflicts with main" in l for l in got), got)
+        self.assertFalse(any(l.startswith("- first,") for l in got), got)
 
     def test_ticked_drafts_on_a_first_run_are_one_digest_line(self):
         os.remove(self.state)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Holds scripts/ci-require-tests.sh's xcresult, named and absent modes against a fake `xcrun` that answers
-# `xcresulttool get test-results tests` with a result tree written here: a skipped test fails
-# both, a test that is absent fails `named`, a target that is absent fails `xcresult`, and a
+# `xcresulttool get test-results tests` with a result tree written here: a skipped test and an
+# expected failure each fail both, a test that is absent fails `named`, a target that is absent fails `xcresult`, and a
 # bundle whose every test passed passes both. So the fast lane, which deselects the real-ear
 # test rather than letting it skip, still fails on a skip anywhere, and the full lane's check by
 # name fails when the test did not run. `absent` fails on any test case of the suite named, and
@@ -60,6 +60,11 @@ expect pass "named: a whole suite passed" "2 test cases, all passed" named "$gre
 skipped="$(bundle skipped Skipped Passed)"
 expect fail "xcresult: the real-ear test skipped" '"Skipped":1' xcresult "$skipped" TopoUITests
 expect fail "named: the real-ear test skipped" "did not pass" named "$skipped" "$ear"
+
+# An expected failure (XCTExpectFailure) is a test that did not prove what it names, as a skip is.
+expected="$(bundle expected "Expected Failure" Passed)"
+expect fail "xcresult: the real-ear test an expected failure" '"Expected Failure":1' xcresult "$expected" TopoUITests
+expect fail "named: the real-ear test an expected failure" "did not pass" named "$expected" "$ear"
 
 other="$(bundle other absent Skipped)"
 expect fail "xcresult: another test skipped, the real ear deselected" '"Skipped":1' xcresult "$other" TopoUITests
