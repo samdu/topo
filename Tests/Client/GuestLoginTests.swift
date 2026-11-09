@@ -177,6 +177,23 @@ final class GuestLoginTests: XCTestCase {
         XCTAssertEqual(GuestLogin.credentialsFiles.first, GuestLogin.credentialsFile)
     }
 
+    /// A link the guest left at `.claude` is a real link on the host: a sign-out removes nothing
+    /// through it, and does not say the credential is gone, since what stands behind the link is
+    /// not a place the app can see.
+    func testSignOutRemovesNothingThroughALinkAtClaude() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("credentials-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.appendingPathComponent("outside/.credentials.json")
+        try write("someone else's", to: outside)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: home.appendingPathComponent(".claude").path, withDestinationPath: "../outside")
+        XCTAssertFalse(GuestLogin.removeCredentials([home.appendingPathComponent(".claude/.credentials.json")]))
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "someone else's", "nothing is removed through the link")
+        // No folder at all is no credential.
+        XCTAssertTrue(GuestLogin.removeCredentials([root.appendingPathComponent("none/.claude/.credentials.json")]))
+    }
+
     /// One in the new place is the one; a copy left in `Documents` is stale and is taken away.
     func testTheNewPlaceWinsAndTheOldCopyGoes() throws {
         let (files, root) = try placedFiles()
