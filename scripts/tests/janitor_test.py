@@ -342,7 +342,8 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(baseRefName="buddy/below"), None, [], {}, NOW)
         self.assertEqual(kinds(w), ["report:norun"])
         self.assertIn("none starts on a PR into buddy/below, since PR validate runs on PRs into main; "
-                      "retarget it (gh pr edit 7 --base main)", w[0]["text"])
+                      "retarget it and mark it ready again, since a retarget starts no run "
+                      "(gh pr edit 7 --base main && gh pr ready 7 --undo && gh pr ready 7)", w[0]["text"])
 
     def test_report_keys_repeat_only_after_the_repeat_window(self):
         self.assertGreaterEqual(janitor.REPEAT, timedelta(hours=24))
