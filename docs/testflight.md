@@ -51,7 +51,7 @@ security add-generic-password -a "$USER" -s topo-asc-private-key -w "$(cat ~/Dow
 rm ~/Downloads/AuthKey_THEKEYID.p8
 ```
 
-`ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_PRIVATE_KEY` in the environment work too, and win over the keychain.
+`ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_PRIVATE_KEY` in the environment work too, and win over the keychain. Over ssh the login keychain answers nothing, with no error, so where it gives a part empty and `OP_SERVICE_ACCOUNT_TOKEN` is set, the script reads that part from 1Password: the item `Topo App Store Connect` in the Homelab vault, fields `key_id`, `issuer_id` and `private_key`. A key found in part (one of the three from nowhere) stops the script and names what is missing.
 
 The key is read in whatever shape it was kept (`scripts/asc-pem.sh`): the `.p8` as Apple gave it, the hex `security -w` prints for a secret that holds newlines, or the one line a password manager's field makes of it. Where the key is there, the archive and the export are given it too, so xcodebuild registers a new target's App ID and makes its profile with no Apple ID signed in to Xcode. A change to Apple's Program License Agreement stops that until the Account Holder has agreed to it at developer.apple.com/account.
 
