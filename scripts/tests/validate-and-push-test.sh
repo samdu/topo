@@ -378,6 +378,38 @@ is "a push that never lands: tried three times" "$(cat "$work/downpush/origin.gi
 is "a push that never lands: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
 grep -q 'The suites passed' <<<"$out" && ok "a push that never lands: says the suites passed" || fail "a push that never lands: $out"
 
+# A push that lands and still answers with a failure (a connection dropped after the ref
+# moved): origin is at the commit, so it counts as pushed, is not tried again, and is posted.
+scratch landed Packages/TopoLink/Package.swift
+mkdir -p "$work/landed/bin"
+real_git="$(command -v git)"
+printf '#!/bin/sh\n"%s" "$@"; rc=$?\ncase "$1" in push) echo push >> "%s"; exit 1 ;; esac\nexit $rc\n' "$real_git" "$work/landed/pushes" > "$work/landed/bin/git"
+chmod +x "$work/landed/bin/git"
+PATH="$work/landed/bin:$PATH" POST_RETRY=0 validate
+is "a push that lands but fails: exits 0" "$status" 0
+is "a push that lands but fails: pushed" "$(origin_head)" "$sha"
+is "a push that lands but fails: tried once" "$(wc -l < "$work/landed/pushes" | tr -d ' ')" 1
+is "a push that lands but fails: posted" "$(posted)" "local/others=success "
+grep -q "answered with a failure, and origin's topic is at it" <<<"$out" && ok "a push that lands but fails: it is said" || fail "a push that lands but fails: $out"
+
+# The backoff between tries is the try times POST_RETRY: a sleep that records, in place of
+# the one that waits.
+mkdir -p "$work/sleeps"
+printf '#!/bin/sh\necho "$*" >> "$SLEEPS"\n' > "$work/sleeps/sleep"; chmod +x "$work/sleeps/sleep"
+scratch backoff-push Packages/TopoLink/Package.swift
+mkdir -p "$work/backoff-push/origin.git/hooks"
+printf '#!/bin/sh\nexit 1\n' > "$work/backoff-push/origin.git/hooks/pre-receive"
+chmod +x "$work/backoff-push/origin.git/hooks/pre-receive"
+git -C "$work/backoff-push/origin.git" config core.hooksPath "$work/backoff-push/origin.git/hooks"
+SLEEPS="$work/backoff-push/sleeps" PATH="$work/sleeps:$PATH" POST_RETRY=5 validate
+is "a push that never lands, backing off: exits 2" "$status" 2
+is "a push that never lands, backing off: 5 s, then 10, and none after the third" "$(tr '\n' ' ' < "$work/backoff-push/sleeps" 2>/dev/null)" "5 10 "
+grep -q 'trying again in 5 s' <<<"$out" && grep -q 'trying again in 10 s' <<<"$out" && ok "a push that never lands, backing off: each wait is said" || fail "a push backing off: $out"
+scratch backoff-post Packages/TopoLink/Package.swift
+SLEEPS="$work/backoff-post/sleeps" PATH="$work/sleeps:$PATH" FAKE_POST=fail POST_RETRY=5 validate
+is "a status never posted, backing off: exits 2" "$status" 2
+is "a status never posted, backing off: 5 s, 10, then 15" "$(tr '\n' ' ' < "$work/backoff-post/sleeps" 2>/dev/null)" "5 10 15 "
+
 # A ready PR whose newest verdict read an earlier head: refused before any suite runs, unless
 # --after-verdict says the push is meant. A draft, or a ready PR with no verdict yet, pushes.
 # comments <login> <body> [<login> <body>...] — a PR's comments, oldest first, as GitHub's JSON.
@@ -1108,6 +1140,37 @@ kill "$alive"; wait "$alive" 2>/dev/null
 LOCK_WAIT=0 validate
 is "the process ahead ended: the run waits for nothing" "$status" 0
 is "the process ahead ended: its ticket is removed" "$(tickets)" ""
+# A ticket written in the very second its process began, its start read back nonblank and
+# matching, is a live run: the later run waits behind it, by name.
+sleep 30 & fresh=$!
+printf '%s\n%s\n%s\n' "$fresh" "$(began "$fresh")" "fresh 0000009" > "$q/0000000000000009-0000009"
+LOCK_WAIT=2 validate
+kill "$fresh"; wait "$fresh" 2>/dev/null
+is "a ticket of this second: exits 2" "$status" 2
+case "$out" in *"Waiting for a checkout (1 ahead in the line, the first fresh 0000009, pid $fresh)"*) ok "a ticket of this second: its run is live, and waited behind" ;; *) fail "a ticket of this second: $out" ;; esac
+rm -f "$q/0000000000000009-0000009"
+# The line's lock held past QUEUE_WAIT, and nothing else moving: each look that cannot have it
+# is charged QUEUE_WAIT and sleeps no LOCK_POLL of its own, so with LOCK_WAIT 10, QUEUE_WAIT 1
+# and LOCK_POLL 30 the run gives up after ten looks, about ten seconds on. Charged LOCK_POLL it
+# would give up at its second look, two seconds on; sleeping it, past thirty.
+perl -MFcntl=:flock -e 'open(my $l, ">>", $ARGV[0]) or die; flock($l, LOCK_EX) or die; open(my $m, ">", $ARGV[1]); print $m "$$\n"; close $m; sleep 600' \
+  "$TOPO_VALIDATE_CACHE/queue.lock" "$work/line/queue-held" & queue_lock=$!
+until_true reached "$work/line/queue-held" || fail "the line's lock held: never taken"
+began_at=$SECONDS
+LOCK_WAIT=10 QUEUE_WAIT=1 LOCK_POLL=30 validate
+took=$((SECONDS - began_at))
+is "the line's lock held: exits 2" "$status" 2
+case "$out" in *"gave up after waiting 0 min, the last of it for a checkout (the line, being read by another run)"*) ok "the line's lock held: it gives up, saying the line is being read" ;; *) fail "the line's lock held: $out" ;; esac
+[ "$took" -ge 10 ] && [ "$took" -lt 25 ] && ok "the line's lock held: each look is charged QUEUE_WAIT" || fail "the line's lock held: gave up in $took s"
+is "the line's lock held: no suite ran" "$(recorded suites)" ""
+began_at=$SECONDS
+held_out="$(cd "$work" && PATH="$work/bin:$PATH" LOCK_WAIT=10 QUEUE_WAIT=1 LOCK_POLL=30 "$repo/scripts/validate-and-push.sh" --hold -- sh -c 'echo held' 2>&1)" && status=0 || status=$?
+took=$((SECONDS - began_at)); out="$held_out"
+is "a hold, the line's lock held: exits 2" "$status" 2
+case "$held_out" in *held) fail "a hold, the line's lock held: its command ran" ;; *"gave up after waiting 0 min, the last of it for a checkout (the line, being read by another run)"*) ok "a hold, the line's lock held: it gives up, saying the line is being read" ;; *) fail "a hold, the line's lock held: $held_out" ;; esac
+[ "$took" -ge 10 ] && [ "$took" -lt 25 ] && ok "a hold, the line's lock held: each look is charged QUEUE_WAIT" || fail "a hold, the line's lock held: gave up in $took s"
+kill "$queue_lock"; wait "$queue_lock" 2>/dev/null
+is "the line's lock held: no ticket is left" "$(tickets)" ""
 # A line that moves: two runs ahead, each served in a little over half the allowance, so the
 # whole wait is longer than the allowance and no part of it is. The run keeps its place and
 # has the checkout, where a run sent away at the allowance would come back behind every run
