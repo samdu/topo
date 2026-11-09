@@ -85,11 +85,14 @@ enum PhoneTool {
         text.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
-    /// What `work` answers if it answers within `bound`, and nil at the bound otherwise, without
-    /// waiting for a `work` that does not stop when it is no longer wanted.
+    /// What `work` answers if it answers within `bound`, and nil at the bound otherwise. Whichever
+    /// loses is cancelled: a `work` still running at the bound is told it is no longer wanted, and
+    /// one that does not stop then is not waited for, its answer going nowhere.
     static func within<T: Sendable>(_ bound: Duration, _ work: @escaping @Sendable () async -> T?) async -> T? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
-            let answered = OSAllocatedUnfairLock(initialState: false)
+        let answered = OSAllocatedUnfairLock(initialState: false)
+        var tasks: [Task<Void, Never>] = []
+        defer { tasks.forEach { $0.cancel() } }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
             let answer: @Sendable (T?) -> Void = { value in
                 let first = answered.withLock { done in
                     defer { done = true }
@@ -97,11 +100,11 @@ enum PhoneTool {
                 }
                 if first { continuation.resume(returning: value) }
             }
-            Task { answer(await work()) }
-            Task {
-                try? await Task.sleep(for: bound)
+            tasks.append(Task { answer(await work()) })
+            tasks.append(Task {
+                guard (try? await Task.sleep(for: bound)) != nil else { return }
                 answer(nil)
-            }
+            })
         }
     }
 
