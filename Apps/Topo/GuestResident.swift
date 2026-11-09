@@ -227,6 +227,9 @@ final class GuestResident {
     /// its Claude.ai credential in it (`.claude/.credentials.json`), and readable from the first
     /// unlock after a restart on, as the keychain item it replaces was. `.claude` is made with the
     /// same protection, so the credential written into it takes the class it is made under.
+    /// The guest writes the home too, and a link it made there is a real link on the host, so
+    /// anything but a folder at `.claude` is refused rather than followed. Nothing in the guest
+    /// writes the home while this runs: it is made before the home is mounted.
     /// `set` is how the protection is put on a path: the simulator keeps no protection class, so
     /// a test reads what was asked for there.
     nonisolated static func makeHome(
@@ -236,6 +239,11 @@ final class GuestResident {
         let files = FileManager.default
         let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         let claude = home.appendingPathComponent(".claude", isDirectory: true)
+        try files.createDirectory(at: home, withIntermediateDirectories: true, attributes: protection)
+        // attributesOfItem does not follow a link at the last name.
+        if let type = try? files.attributesOfItem(atPath: claude.path)[.type] as? FileAttributeType, type != .typeDirectory {
+            throw GuestBridgeError.notReady(".claude in the guest's home is not a folder")
+        }
         try files.createDirectory(at: claude, withIntermediateDirectories: true, attributes: protection)
         try set(protection, home.path)
         try set(protection, claude.path)
