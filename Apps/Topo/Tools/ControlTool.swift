@@ -253,12 +253,24 @@ struct ControlTool: Tool {
         if let words = leftBehind.controlSecrets {
             return .failed("topo: no secret is kept: at an earlier sign-out \(words). The app tries again at each launch.\n")
         }
-        do {
-            try await secrets.offThePool { try $0.set(value, name: name) }
-        } catch {
-            return .failed("topo: the keychain did not keep it\n")
+        // The write and the login's end are one executor's: a sign-out clears the secrets on the
+        // main actor, so the check that the login the call began under still stands and the write
+        // are one main-actor section, and a set either lands before the clear takes it or keeps
+        // nothing. So this keychain call runs on the main actor, where the others take a queue
+        // of their own: a read or a delete across the clear leaves nothing behind, a write would.
+        let login = login
+        let epoch = await MainActor.run { login().epoch }
+        let secrets = secrets
+        let kept = await MainActor.run { () -> ToolReply in
+            guard epoch.isCurrent else { return .failed("topo: the login ended while this ran; no secret is kept\n") }
+            do {
+                try secrets.set(value, name: name)
+            } catch {
+                return .failed("topo: the keychain did not keep it\n")
+            }
+            return .ok("secret set: \(name)\n")
         }
-        return .ok("secret set: \(name)\n")
+        return kept
     }
 
     private func clearSecret(_ name: String) async -> ToolReply {
