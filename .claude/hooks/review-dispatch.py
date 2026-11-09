@@ -25,6 +25,7 @@ import sys
 
 REVIEWERS = {"adversarial-reviewer"}
 SHELLS = {"bash", "sh", "zsh"}
+WRAPPERS = {"env", "exec", "command", "nohup", "time", "nice", "sudo", "{", "!"}  # run the word after them
 ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 ENDS = ".!?\n"          # what ends a sentence
 QUOTES = '"\u201c\u201d`'  # what bounds a quotation inside one
@@ -111,8 +112,10 @@ def runs(command, depth=0):
         return [command] if re.search(r"plan-review\.sh|codex", command) else []
     found = []
     for words in parts:
-        while words and ASSIGN.match(words[0]):
+        while words and (ASSIGN.match(words[0]) or words[0] in WRAPPERS):
             words = words[1:]
+            while words and (words[0].startswith("-") or words[0].isdigit()):
+                words = words[1:]  # a wrapper's own options
         if not words:
             continue
         name = os.path.basename(words[0])
@@ -120,7 +123,7 @@ def runs(command, depth=0):
             found.append(" ".join(words))
         elif name in SHELLS and depth < 3:
             for i, w in enumerate(words[1:-1], 1):
-                if w.startswith("-") and "c" in w[1:]:
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", w):
                     found += runs(words[i + 1], depth + 1)
                     break
     return found
