@@ -108,9 +108,18 @@ case "$what" in
   status)
     if held; then
       left=$((ends - $(date +%s)))
-      state="unlocked, its lid open"
-      session_open || state="but the session of $(id -un) is locked, or is not the one on the screen, so no suite runs there until it is unlocked"
-      ! lid_closed || state="but its lid is closed, which sleeps it, so no suite runs there until it is opened"
+      # Each thing that stops a suite there, as --check judges it: a closed lid stops every
+      # suite; a locked session only topo_unit and topo_ui:quiet, and only on an encrypted disk.
+      state=""
+      ! lid_closed || state="its lid is closed, which sleeps it, so no suite runs there until it is opened"
+      if ! session_open; then
+        case "$(fdesetup status 2>/dev/null || true)" in
+          *"FileVault is On"*) lock="its disk is encrypted and the session of $(id -un) is locked, or is not the one on the screen, so topo_unit and topo_ui:quiet do not run there until it is unlocked" ;;
+          *) lock="the session of $(id -un) is locked, or is not the one on the screen, which stops no suite there, since its disk is not encrypted" ;;
+        esac
+        state="${state:+$state; and }$lock"
+      fi
+      state="${state:+but }${state:-unlocked, its lid open}"
       echo "held awake for $((left / 3600)) h $((left % 3600 / 60)) min more, $(cat "$cache/slots.count" 2>/dev/null || echo 1) at once; $state"
     else
       echo "not held awake"
