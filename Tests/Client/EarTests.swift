@@ -87,7 +87,11 @@ final class EarTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()), engine: engine)
         ear.load(parakeet: URL(fileURLWithPath: "/parakeet"), ctc: URL(fileURLWithPath: "/ctc"))
         await settle { ear.state == .ready }
-        await settle { ear.trouble == nil && ear.summary == "Parakeet resident" }
+        // `.ready` lands before the rebuild it starts has reached the engine, and `trouble` is nil
+        // before either, so the wait is for the rebuild itself.
+        await settle { await !engine.rebuilds.isEmpty }
+        XCTAssertNil(ear.trouble)
+        XCTAssertEqual(ear.summary, "Parakeet resident")
         let rebuilds = await engine.rebuilds
         XCTAssertEqual(rebuilds, [[]], "the load ends in one rebuild over the list as it is")
     }
