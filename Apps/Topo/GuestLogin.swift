@@ -159,7 +159,7 @@ struct GuestLogin: ClaudeLogin {
     }
 
     private static func removed(_ file: URL) -> Bool {
-        let folder = open(file.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        let folder = Darwin.open(file.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard folder >= 0 else {
             let failure = errno
             if failure == ENOENT { return true }
