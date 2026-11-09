@@ -265,7 +265,33 @@ is "app, second commit: pushed" "$(origin_head)" "$sha"
 scratch no-mic Apps/Client/SettingsView.swift
 FAKE_MIC=0 LOCK_WAIT=0 validate
 is "no microphone grant: exits 2" "$status" 2
-case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"docs/simulator.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+case "$out" in *"no microphone grant (auth=0)"*"buddy's tmux server"*"tmux -N new-session -d -s validate-"*"docs/testing.md"*) ok "no microphone grant: the cause and the fix are said" ;; *) fail "no microphone grant: $out" ;; esac
+# The recipe's -N: with no server on the socket (one that ended after any check), new-session
+# fails and starts none, so a run is never begun on a server ssh made.
+# Each on a socket of this test's own, with no configuration read; and beside a server that
+# is running, the same recipe makes its session, so the refusal above is -N's and not a
+# tmux that cannot run it.
+if ! command -v tmux > /dev/null; then
+  echo "SKIP the recipe's -N: no tmux on this Mac's PATH, so the recipe is not tried here"
+else
+  tmux_sock="$work/tmux-none"
+  if tmux -f /dev/null -N -S "$tmux_sock" new-session -d -s validate-probe true 2> "$work/tmux-none.err"; then
+    fail "the recipe's -N: new-session started a server"; tmux -S "$tmux_sock" kill-server 2>/dev/null
+  elif [ -e "$tmux_sock" ]; then fail "the recipe's -N: a socket was made"
+  else
+    case "$(cat "$work/tmux-none.err")" in
+      "error connecting to $tmux_sock (No such file or directory)") ok "the recipe's -N: with no server, new-session fails for want of one and starts none" ;;
+      *) fail "the recipe's -N: new-session failed for another reason: $(cat "$work/tmux-none.err")" ;;
+    esac
+  fi
+  tmux_live="$work/tmux-live"
+  tmux -f /dev/null -S "$tmux_live" new-session -d -s standing "sleep 60"
+  if tmux -f /dev/null -N -S "$tmux_live" new-session -d -s validate-probe "sleep 60" 2> "$work/tmux-live.err" \
+    && tmux -S "$tmux_live" has-session -t =validate-probe 2>/dev/null; then
+    ok "the recipe's -N: beside a running server, new-session makes the session"
+  else fail "the recipe's -N: beside a running server, no session: $(cat "$work/tmux-live.err")"; fi
+  tmux -S "$tmux_live" kill-server 2>/dev/null
+fi
 is "no microphone grant: no suite ran" "$(recorded suites)" ""
 is "no microphone grant: nothing pushed" "$(origin_head)" ""
 is "no microphone grant: no status" "$(posted)" ""
