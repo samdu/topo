@@ -15,8 +15,8 @@ judgement:
      the automerge label when the repository requires one, nothing changed
      under the paths its own validation runs from — on the first pass that
      reads it so, pinned to the head the green run was read for. Nothing else
-     merges unattended: no workflow holds a token that can, and main's
-     ruleset lets only an admin move it (docs/janitor.md);
+     merges unattended, because main's ruleset lets only an admin move it,
+     and no workflow's token is an admin's (docs/janitor.md);
   2. reruns the reviewer once per head when a red validate run has no
      verdict: `reviewer_ran` red and nothing red outside the reviewer chain.
      It reruns one job, the first red one in the chain, and with
