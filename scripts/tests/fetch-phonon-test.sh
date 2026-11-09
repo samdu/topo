@@ -50,7 +50,54 @@ mkdir -p "$pinned/scripts"
 stand="$(shasum -a 256 "$work/core.zip" | cut -d' ' -f1)"
 sed "s/^sha=.*/sha=$stand/" "$root/scripts/fetch-phonon.sh" > "$pinned/scripts/fetch-phonon.sh"
 chmod +x "$pinned/scripts/fetch-phonon.sh"
+# curl is recorded, so a case that says nothing was fetched can say curl was never called; cp
+# is recorded too, and fails partway into the cache when FAKE_CP_CACHE_FAILS is set, leaving
+# the half it wrote.
+mkdir -p "$work/bin"
+cat > "$work/bin/curl" <<'CURL'
+#!/bin/sh
+echo "curl $*" >> "$CALLS"
+exec /usr/bin/curl "$@"
+CURL
+cat > "$work/bin/cp" <<'CP'
+#!/bin/sh
+for dest; do :; done
+case "$dest" in "$CACHE_DIR"/*)
+  if [ -n "${FAKE_CP_CACHE_FAILS-}" ]; then head -c 100 "$1" > "$dest"; exit 1; fi ;;
+esac
+exec /bin/cp "$@"
+CP
+chmod +x "$work/bin/curl" "$work/bin/cp"
+export CALLS="$work/calls" CACHE_DIR="$work/cache"
+run() { PATH="$work/bin:$PATH" "$@"; }
+curled() { grep -c '^curl ' "$CALLS" 2>/dev/null || true; }
+
+# A fresh install with no cache named: fetched, installed, stamped, and nothing kept anywhere.
+nocache="$work/nocache"
+mkdir -p "$nocache/scripts" && cp "$pinned/scripts/fetch-phonon.sh" "$nocache/scripts/"
+: > "$CALLS"
+if PHONON_CORE_URL="file://$work/core.zip" run "$nocache/scripts/fetch-phonon.sh" >"$work/out" 2>&1; then
+  [ -f "$nocache/Packages/PhononTTS/Frameworks/PhononCore.xcframework/Info.plist" ] && [ "$(cat "$nocache/Packages/PhononTTS/Frameworks/.fetched")" = "$stand" ] \
+    && ok "with no cache named, a fresh checkout fetches, installs and stamps the pin" || fail "no cache: $(cat "$work/out")"
+  [ "$(curled)" = 1 ] && ok "with no cache named, curl is called once" || fail "no cache: curl called $(curled) times"
+  [ -z "$(find "$work" -name "$stand.zip" 2>/dev/null)" ] && ok "with no cache named, no zip is kept" || fail "no cache: kept $(find "$work" -name "$stand.zip")"
+else
+  fail "with no cache named, a zip at the pin is refused: $(cat "$work/out")"
+fi
+
 cache="$work/cache"
+# A cache write that fails partway leaves nothing under the zip's name, and the install goes on.
+partial="$work/partial"
+mkdir -p "$partial/scripts" && cp "$pinned/scripts/fetch-phonon.sh" "$partial/scripts/"
+if FAKE_CP_CACHE_FAILS=1 PHONON_CORE_URL="file://$work/core.zip" run "$partial/scripts/fetch-phonon.sh" "$cache" >"$work/out" 2>&1; then
+  [ -d "$partial/Packages/PhononTTS/Frameworks/PhononCore.xcframework" ] && grep -q "could not keep the zip" "$work/out" \
+    && ok "a cache write that fails is said, and the install goes on" || fail "a failed cache write: $(cat "$work/out")"
+  [ ! -e "$cache/$stand.zip" ] && ok "a cache write that fails partway leaves no zip under its name" || fail "a half zip stands at $cache/$stand.zip"
+  ls "$cache"/"$stand".zip.* > /dev/null 2>&1 && ok "the half it wrote is beside the name, not at it" || fail "the failing cp wrote nowhere: $(ls -A "$cache" 2>&1)"
+else
+  fail "a cache write that fails stops the install: $(cat "$work/out")"
+fi
+rm -rf "$cache"
 if PHONON_CORE_URL="file://$work/core.zip" "$pinned/scripts/fetch-phonon.sh" "$cache" >"$work/out" 2>&1; then
   [ -f "$pinned/Packages/PhononTTS/Frameworks/PhononCore.xcframework/Info.plist" ] && ok "a fetched zip is installed" || fail "nothing installed: $(cat "$work/out")"
   [ "$(shasum -a 256 "$cache/$stand.zip" 2>/dev/null | cut -d' ' -f1)" = "$stand" ] && ok "and kept in the cache under its sha256" || fail "the cache holds: $(ls "$cache" 2>&1)"
@@ -62,9 +109,11 @@ fi
 # A checkout made afresh, with the network gone: the cache's zip is what installs.
 fresh="$work/fresh"
 mkdir -p "$fresh/scripts" && cp "$pinned/scripts/fetch-phonon.sh" "$fresh/scripts/"
-if PHONON_CORE_URL="file://$work/nothing-here.zip" "$fresh/scripts/fetch-phonon.sh" "$cache" >"$work/out" 2>&1; then
+: > "$CALLS"
+if PHONON_CORE_URL="file://$work/nothing-here.zip" run "$fresh/scripts/fetch-phonon.sh" "$cache" >"$work/out" 2>&1; then
   [ -d "$fresh/Packages/PhononTTS/Frameworks/PhononCore.xcframework" ] && grep -q "from $cache" "$work/out" \
-    && ok "a fresh checkout installs from the cache, fetching nothing" || fail "from the cache: $(cat "$work/out")"
+    && ok "a fresh checkout installs from the cache" || fail "from the cache: $(cat "$work/out")"
+  [ "$(curled)" = 0 ] && ok "a cache hit calls curl not at all" || fail "a cache hit called curl: $(cat "$CALLS")"
 else
   fail "a fresh checkout with the zip cached still fetched: $(cat "$work/out")"
 fi
