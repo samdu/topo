@@ -1,4 +1,5 @@
 import HomeKit
+import os
 import TopoTools
 import XCTest
 
@@ -104,6 +105,22 @@ final class ControlToolTests: XCTestCase {
     private func action(_ slot: String) -> ControlAction? { store.readControl(slot: slot)?.document.action }
 
     // MARK: The round trip
+
+    /// Every keychain call a control's secret takes is a synchronous Security call, so it runs on
+    /// a queue of its own and never on the cooperative pool the tool service's task is on.
+    func testTheSecretsKeychainCallsRunOffTheCooperativePool() async throws {
+        let queues = OSAllocatedUnfairLock(initialState: [String]())
+        secrets.calling = { queues.withLock { $0.append(String(cString: __dispatch_queue_get_label(nil))) } }
+        let tool = try await tool()
+        _ = await tool.run(["secret", "set", "ha", "Bearer x"])
+        _ = await tool.run([])
+        _ = await tool.run(["secret", "clear", "ha"])
+        _ = await ControlRequest.perform(.init(method: "GET", url: "http://127.0.0.1:9/", headers: [.init(name: "Authorization", value: "${secret:ha}")]),
+                                         secrets: secrets, deadline: .milliseconds(200))
+        let seen = queues.withLock { $0 }
+        XCTAssertEqual(seen.count, 4, "set, list, clear and the request's read each reached the keychain: \(seen)")
+        for label in seen { XCTAssertFalse(label.contains("cooperative"), label) }
+    }
 
     func testSetThenListPrintsItBack() async throws {
         let tool = try await tool(loaded: false)

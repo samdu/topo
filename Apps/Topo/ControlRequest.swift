@@ -115,6 +115,8 @@ struct ControlSecrets: Sendable {
     static func isName(_ name: String) -> Bool { name.wholeMatch(of: /[A-Za-z0-9_.-]{1,64}/) != nil }
 
     var service = ControlSecrets.service
+    /// Called on the queue each keychain call runs on, just before it: a test's view of where.
+    var calling: @Sendable () -> Void = {}
 
     struct Failure: Error, Equatable {
         var status: OSStatus
@@ -123,19 +125,23 @@ struct ControlSecrets: Sendable {
     private func item(_ name: String) -> KeychainItem { KeychainItem(service: service, account: name) }
 
     func read(_ name: String) throws -> String? {
-        try item(name).read().map { String(decoding: $0, as: UTF8.self) }
+        calling()
+        return try item(name).read().map { String(decoding: $0, as: UTF8.self) }
     }
 
     func set(_ value: String, name: String) throws {
+        calling()
         try item(name).write(Data(value.utf8))
     }
 
     func clear(_ name: String) throws {
+        calling()
         try item(name).delete()
     }
 
     /// The names held, never their values.
     func names() throws -> [String] {
+        calling()
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll]
         var result: CFTypeRef?
