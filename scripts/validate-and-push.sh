@@ -443,10 +443,13 @@ git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 9>&- && git -C 
   || refuse "could not check $sha out in $checkout"
 [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
 cd "$checkout" || refuse "could not enter $checkout"
-scripts/mac-suite.sh --check --cache "$cache" "$suite" 6>&- 9>&- || exit 76
+# The check runs as the suite will: a login shell, as the session'"'"'s user where the Mac has a
+# way into it, so the bash, jq and node it finds are the ones the suite'"'"'s will.
+session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
+as_suite() { if [ -n "$session" ] && [ -x "$session" ]; then sudo -n "$session" "$@"; else "$@"; fi; }
+as_suite /bin/bash -lc "cd \"$checkout\" && exec scripts/mac-suite.sh --check --cache \"$cache\" $suite" 6>&- 9>&- || exit 76
 ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do going "$old" || rm -rf "${cache:?}/logs/$old"; done
 command="cd \"$checkout\" && exec env GIT_CONFIG_GLOBAL=/dev/null scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
-session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
   sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 6>&- 9>&- &
 else
@@ -481,14 +484,25 @@ run_on() {
           kill "$suite_pid" 2>/dev/null || true; wait "$suite_pid" 2>/dev/null || true
         fi
         exit 143' TERM INT HUP
-  logged="$(wc -l < "$logs/mac-suite.log" 2>/dev/null || echo 0)"
+  logged=0; [ ! -e "$logs/mac-suite.log" ] || logged="$(wc -l < "$logs/mac-suite.log")"
   ssh_to "$at" bash -s -- "$sha" "$lane" "$suite" "$run" <<<"$on_host" >> "$logs/mac-suite.log" 2>&1 6>&- 7>&- &
   suite_pid=$!
   wait "$suite_pid" || status=$?
   trap 'exit 143' TERM INT HUP
   case "$status" in
     75) echo "$suite: $at is busy with another validation."; return 1 ;;
-    76) echo "$suite: $at cannot run it and runs nothing of this validation:"; tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 2 ;;
+    76)
+      # What --check refuses is often a moment's (a lid shut, a screen locked, a simulator
+      # still being made): the Mac is asked again once, HOST_RETRY seconds on, and only then
+      # dropped. The suites run here meanwhile.
+      case " $refused_once " in
+        *" $at "*)
+          echo "$suite: $at cannot run it again and runs nothing more of this validation:"
+          tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 2 ;;
+      esac
+      refused_once="$refused_once $at"
+      echo "$suite: $at cannot run it now, and is asked once more in $HOST_RETRY s:"
+      tail -n "+$((logged + 1))" "$logs/mac-suite.log" | sed -n '/^error: /p' | tail -n 12; return 1 ;;
   esac
   mkdir -p "$logs/$at"
   if ! rsync -a --exclude '*.xcresult' -e "ssh $ssh_options" "$at:$there/logs/$run/" "$logs/$at/" 2>/dev/null; then
@@ -795,6 +809,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     case "$remaining" in *" topo_ui "*) remaining="${remaining/ topo_ui / topo_ui:quiet }topo_ui:mic " ;; esac
   fi
   hosts_at=0   # when a host found busy is asked again
+  refused_once=""   # the hosts whose --check has refused a suite once already
   while [ "$remaining" != " " ]; do
     suite=""
     # Another Mac first, when any is named: the first that is free takes the first suite still
