@@ -139,6 +139,17 @@ class Decisions(unittest.TestCase):
         self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(), jobs(test="success"), {}, NOW), [])
         j = jobs(test="success", reviewer_ran="failure", review_gate="failure")
         self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "a draft's missing verdict is not rerun")
+        j = jobs(test="success", codex="skipped", reviewer_ran="success", review_gate="failure")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "codex skipped on a draft: no verdict")
+
+    def test_a_draft_whose_head_the_reviewer_blocked_is_reported(self):
+        j = jobs(test="success", codex="success", post_feedback="success", reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:verdict"])
+        self.assertIn(f"blocked {HEAD[:7]}, and it is back to draft", w[0]["text"])
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("success"), jobs(test="success", codex="success",
+                         reviewer_ran="success", review_gate="success"), {}, NOW), [], "a passing verdict says nothing")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(None, status="in_progress"), [], {}, NOW), [])
 
     def test_a_pr_fingerprint_moves_with_the_pr_and_not_with_time_or_a_comment(self):
         j = jobs(test="success", reviewer_ran="success", review_gate="failure")
@@ -1924,13 +1935,30 @@ class WholePass(unittest.TestCase):
         self.run_pass(red)
         self.assertEqual(Bridge.received[n:], [], "red, rerun by hand, red the same: said once")
 
-    def test_a_draft_is_never_read_or_said(self):
+    def test_a_draft_with_no_blocking_verdict_is_never_said(self):
         s = self.scripted(prs=[pr(isDraft=True, updatedAt=ago(timedelta(days=2)))], worktrees=self.QUIET)
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("head_sha", calls, "a draft's runs are not read")
         self.assertEqual(Bridge.received, [])
         self.assertEqual(self.said("pr:"), set())
+
+    def test_a_draft_at_the_review_cap_is_not_said_blocked(self):
+        # post_feedback's recount met the cap and held the post: no verdict this run.
+        j = jobs(test="success", codex="success", reviewer_ran="success", review_gate="failure")
+        j.append(job("post_feedback", "success", "Report Codex feedback", 9, step_conclusion="skipped"))
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET, jobs=j)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertFalse(any("the reviewer blocked" in t for t in texts), texts)
+
+    def test_a_draft_the_reviewer_blocked_is_said_once_per_head(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET,
+                          jobs=jobs(test="success", codex="success", post_feedback="success",
+                                    reviewer_ran="success", review_gate="failure"))
+        self.run_pass(s)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertEqual(sum("and it is back to draft" in t for t in texts), 1, texts)
 
     def test_one_digest_a_day_names_what_still_stands_and_none_when_nothing_does(self):
         s = self.scripted(prs=[pr(body="- [ ] device: phone")], worktrees=self.QUIET, issues=[issue(40, "Stands")])
