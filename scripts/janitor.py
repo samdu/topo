@@ -73,8 +73,9 @@ judgement:
      `allowed_pr()` is every write the step can make. It merges nothing:
      the box is what automerge and step 1 were waiting on;
   9. reports, once per head, an open PR whose dev slot (slots.json) carries
-     another commit than its head while the head has passed its suites
-     (`GATE`, the gate publish-topo.sh builds behind): a build never recut.
+     another commit than its head while the PR is final (`FINAL_GATE`) and
+     the head has passed its suites (`GATE`), the two gates publish-topo.sh
+     builds behind: a build never recut. A PR in review is not final.
 
 Step 2 takes a run cancelled inside the reviewer chain alone (codex past its
 time limit) as a reviewer that never ran, and reruns any other cancelled run
@@ -132,6 +133,7 @@ DEV_SLOTS = "https://topo.hexagon.zone/files/dfb52de461975ddf6837/slots.json"
 DEV_TREES = "~/github/topo-ota-dev.pr"   # pr-N.lock stands there while that PR's build is being cut
 # Whether a head passed the suites its PR needs, as `test` concludes it, with or without a `test` run.
 GATE = "~/github/experiments/ota/topo-suites-gate.sh"
+FINAL_GATE = "~/github/experiments/ota/topo-final-gate.sh"
 CHECKOUT = "~/github/topo"
 # The coordinator (docs/process.md): the session REPORT_TO on the host whose
 # bridge is REPORT_HOST. topo-coordinator runs on toolbox, whose bridge's mesh
@@ -331,6 +333,17 @@ def pick_run(runs, number):
 OWN_VALIDATION = re.compile(r"^(\.github/|scripts/review-|scripts/ci-select-)")
 
 
+def review_capped(jobs):
+    """Whether a run met the review cap and posted no verdict: codex skipped,
+    or post_feedback's recount holding the post (its 'Report Codex feedback'
+    step skipped)."""
+    return any((j["name"] == "codex" and j.get("conclusion") == "skipped")
+               or (j["name"] == "post_feedback" and j.get("conclusion") == "success"
+                   and any(s.get("name") == "Report Codex feedback" and s.get("conclusion") == "skipped"
+                           for s in j.get("steps") or []))
+               for j in jobs)
+
+
 def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, files=(), occupied=frozenset()):
     """What one open PR wants from this pass.
 
@@ -352,9 +365,18 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
     # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
-    # waits for ready, and nothing about its runs is the janitor's to say. One
-    # with a ticked device box went back to draft after Sam tested it.
+    # waits for ready, and nothing else about its runs is the janitor's to say. Two
+    # things are: a verdict that blocked its head, since a blocking verdict puts
+    # the PR back to draft and its review lands where no session on this Mac
+    # reads it (codex ran on the head, so the verdict is this head's), and a
+    # ticked device box, a draft Sam tested. A run at the review cap posted no
+    # verdict, so it blocked nothing.
     if pr["isDraft"]:
+        names = {j["name"]: j.get("conclusion") for j in jobs}
+        if (run and run["status"] == "completed" and names.get("codex") == "success"
+                and names.get("review_gate") in NOT_GREEN and names.get("reviewer_ran") not in NOT_GREEN
+                and not review_capped(jobs)):
+            report("verdict", f"{title}: the reviewer blocked {short}, and it is back to draft; the verdict is on the PR.")
         if ticked_device(pr.get("body")):
             report("draft", f"{title} is a draft at {short}, so nothing merges it.")
             if pr.get("mergeStateStatus") == "DIRTY":
@@ -442,11 +464,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
     # reviewer_ran with no verdict posted this run — codex skipped, or
     # post_feedback's recount holding the post: no finding to fix, a
     # decision to make.
-    capped = any((j["name"] == "codex" and j.get("conclusion") == "skipped")
-                 or (j["name"] == "post_feedback" and j.get("conclusion") == "success"
-                     and any(s.get("name") == "Report Codex feedback" and s.get("conclusion") == "skipped"
-                             for s in j.get("steps") or []))
-                 for j in jobs)
+    capped = review_capped(jobs)
     if "review_gate" in red_names and "reviewer_ran" not in red_names:
         if capped:
             report("cap", f"{title}: the review cap is reached on {short}, four Codex verdicts; it merges on Sam's word or goes back to draft for a replan.")
@@ -1366,6 +1384,15 @@ class Shell:
             return p.returncode == 0
         raise RuntimeError(f"the suites gate could not judge {sha[:7]}: {(p.stdout + p.stderr).strip()[-200:]}")
 
+    def pr_final(self, number):
+        """The final gate on one PR (ready, no conflict, its last review
+        passed): True when final, False when not, a RuntimeError when it
+        could not judge."""
+        p = self.run(["bash", os.path.expanduser(FINAL_GATE), str(number)], timeout=120, check=False)
+        if p.returncode in (0, 1):
+            return p.returncode == 0
+        raise RuntimeError(f"the final gate could not judge #{number}: {(p.stdout + p.stderr).strip()[-200:]}")
+
     def publish(self):
         script = os.path.expanduser(PUBLISH)
         p = self.run(["bash", script, "origin/main"], timeout=self.publish_timeout, check=False, mutating=True)
@@ -1686,10 +1713,8 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     for pr in prs:
         n, head = pr["number"], pr["headRefOid"]
         try:
-            run = jobs = None
-            if not pr["isDraft"]:
-                run = sh.newest_run(head, n)
-                jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
+            run = sh.newest_run(head, n)
+            jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
             files = ()
             if run and run["status"] == "completed" and run.get("conclusion") == "success":
                 try:
@@ -1805,8 +1830,10 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         state["fired"] = {k: v for k, v in state["fired"].items() if not (k.startswith("build") and k.endswith(":read"))}
 
     # 9: a dev build left behind its PR. A slot serving another commit than
-    # the head, while that head has passed its suites, is a build nobody recut:
-    # said once per head. A build being cut (its lock stands) is not yet one.
+    # the head, while the PR is final and its head has passed its suites, is a
+    # build nobody recut: said once per head. A PR still in review is not
+    # final, since its build is cut only after its last round (docs/process.md,
+    # Device checks), and a build being cut (its lock stands) is not yet one.
     if prs_ok:
         try:
             stale = decide_slots(prs, sh.dev_slots())
@@ -1821,6 +1848,15 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     quiet.append(f"#{n}: its dev build is being cut")
                     continue
                 try:
+                    final = sh.pr_final(n)
+                    state["fired"].pop(f"{n}:final:{head}", None)
+                except RuntimeError as ex:
+                    say(f"{n}:final:{head}", f"#{n}: its dev build carries {served}, not its head {head[:7]}, and {ex}")
+                    continue
+                if not final:
+                    quiet.append(f"#{n}: its dev build is behind, and it is not final")
+                    continue
+                try:
                     green = sh.suites_green(checkout, head)
                     state["fired"].pop(f"{n}:gate:{head}", None)
                 except RuntimeError as ex:
@@ -1830,7 +1866,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     quiet.append(f"#{n}: its dev build is behind, and {head[:7]} has not passed its suites")
                     continue
                 lines.append(f"#{n} ({pr['headRefName']}): its dev build carries {served}, but its head is {head[:7]}, "
-                             f"which has passed its suites; the build was never recut (publish-topo.sh --dev {n}).")
+                             f"which is final and has passed its suites; the build was never recut (publish-topo.sh --dev {n}).")
                 state["fired"][key] = now.isoformat()
         except RuntimeError as ex:
             say("slots:read", f"could not read the dev slots: {ex}")

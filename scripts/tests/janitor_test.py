@@ -139,6 +139,17 @@ class Decisions(unittest.TestCase):
         self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(), jobs(test="success"), {}, NOW), [])
         j = jobs(test="success", reviewer_ran="failure", review_gate="failure")
         self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "a draft's missing verdict is not rerun")
+        j = jobs(test="success", codex="skipped", reviewer_ran="success", review_gate="failure")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "codex skipped on a draft: no verdict")
+
+    def test_a_draft_whose_head_the_reviewer_blocked_is_reported(self):
+        j = jobs(test="success", codex="success", post_feedback="success", reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:verdict"])
+        self.assertIn(f"blocked {HEAD[:7]}, and it is back to draft", w[0]["text"])
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("success"), jobs(test="success", codex="success",
+                         reviewer_ran="success", review_gate="success"), {}, NOW), [], "a passing verdict says nothing")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(None, status="in_progress"), [], {}, NOW), [])
 
     def test_a_pr_fingerprint_moves_with_the_pr_and_not_with_time_or_a_comment(self):
         j = jobs(test="success", reviewer_ran="success", review_gate="failure")
@@ -1213,6 +1224,9 @@ elif tool == "curl":
         out(json.dumps(S.get("slots", [])))
     if S.get("page_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
     out(json.dumps({"commit": S["published"]}))
+elif tool == "bash" and a[0].endswith("topo-final-gate.sh"):
+    code = S.get("final", {}).get(a[1], 0)
+    print({0: "final: fake", 1: "not final: fake"}.get(code, "unread: fake")); sys.exit(code)
 elif tool == "bash" and a[0].endswith("topo-suites-gate.sh"):
     code = S.get("gate", {}).get(a[2], 1)
     print({0: "green: fake", 1: "not green: fake"}.get(code, "unread: fake")); sys.exit(code)
@@ -1923,13 +1937,30 @@ class WholePass(unittest.TestCase):
         self.run_pass(red)
         self.assertEqual(Bridge.received[n:], [], "red, rerun by hand, red the same: said once")
 
-    def test_a_draft_is_never_read_or_said(self):
+    def test_a_draft_with_no_blocking_verdict_is_never_said(self):
         s = self.scripted(prs=[pr(isDraft=True, updatedAt=ago(timedelta(days=2)))], worktrees=self.QUIET)
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("head_sha", calls, "a draft's runs are not read")
         self.assertEqual(Bridge.received, [])
         self.assertEqual(self.said("pr:"), set())
+
+    def test_a_draft_at_the_review_cap_is_not_said_blocked(self):
+        # post_feedback's recount met the cap and held the post: no verdict this run.
+        j = jobs(test="success", codex="success", reviewer_ran="success", review_gate="failure")
+        j.append(job("post_feedback", "success", "Report Codex feedback", 9, step_conclusion="skipped"))
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET, jobs=j)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertFalse(any("the reviewer blocked" in t for t in texts), texts)
+
+    def test_a_draft_the_reviewer_blocked_is_said_once_per_head(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={HEAD: [run("failure")]}, worktrees=self.QUIET,
+                          jobs=jobs(test="success", codex="success", post_feedback="success",
+                                    reviewer_ran="success", review_gate="failure"))
+        self.run_pass(s)
+        self.run_pass(s)
+        texts = [r["body"]["text"] for r in Bridge.received]
+        self.assertEqual(sum("and it is back to draft" in t for t in texts), 1, texts)
 
     def test_one_digest_a_day_names_what_still_stands_and_none_when_nothing_does(self):
         s = self.scripted(prs=[pr(body="- [ ] device: phone")], worktrees=self.QUIET, issues=[issue(40, "Stands")])
@@ -2720,7 +2751,8 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f"topo-suites-gate.sh /r/topo {HEAD}", calls)
-        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}", self.texts())
+        self.assertIn("topo-final-gate.sh 7", calls)
+        self.assertIn(f"#7 (buddy/x): its dev build carries 2ebe731, but its head is {HEAD[:7]}, which is final", self.texts())
         n = len(Bridge.received)
         p, calls = self.run_pass(s)
         self.assertNotIn("dev build", self.texts(n))
@@ -2740,6 +2772,31 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertNotIn("topo-suites-gate", calls)
         self.assertNotIn("dev build", self.texts())
+
+    def test_a_behind_build_on_a_pr_in_review_says_nothing_and_is_judged_again(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, final={"7": 1}, worktrees="")
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("topo-final-gate.sh 7", calls)
+        self.assertNotIn("topo-suites-gate", calls, "not final: the suites are not asked")
+        self.assertNotIn("dev build", self.texts())
+        s["final"] = {"7": 0}
+        self.run_pass(s)
+        self.assertIn("which is final and has passed its suites", self.texts(), "final now: said")
+
+    def test_a_final_gate_that_cannot_judge_is_said_once_while_it_stands_and_again_when_it_comes_back(self):
+        s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
+                          gate={HEAD: 0}, final={"7": 2}, worktrees="")
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1, "said once while it stands")
+        s["final"] = {"7": 1}
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 1, "a judgement clears it")
+        s["final"] = {"7": 2}
+        self.run_pass(s)
+        self.assertEqual(self.texts().count("the final gate could not judge #7"), 2, "said again when it comes back")
 
     def test_a_gate_that_cannot_judge_or_slots_that_do_not_answer_are_said_once(self):
         s = self.scripted(prs=[pr(isDraft=True)], runs={}, slots=[{"slot": "pr-7", "commit": "2ebe731"}],
