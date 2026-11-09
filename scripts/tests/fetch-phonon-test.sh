@@ -72,11 +72,16 @@ export CALLS="$work/calls" CACHE_DIR="$work/cache"
 run() { PATH="$work/bin:$PATH" "$@"; }
 curled() { grep -c '^curl ' "$CALLS" 2>/dev/null || true; }
 
-# A fresh install with no cache named: fetched, installed, stamped, and nothing kept anywhere.
+# A fresh install with no cache named: fetched, installed, stamped, and nothing kept anywhere,
+# the zip it downloaded included: the directory curl wrote it into is gone after the run.
+# (macOS's mktemp -t ignores TMPDIR, so the download's directory is read off curl's call.)
 nocache="$work/nocache"
 mkdir -p "$nocache/scripts" && cp "$pinned/scripts/fetch-phonon.sh" "$nocache/scripts/"
 : > "$CALLS"
 if PHONON_CORE_URL="file://$work/core.zip" run "$nocache/scripts/fetch-phonon.sh" >"$work/out" 2>&1; then
+  download="$(sed -n 's/^curl .* -o \([^ ]*\) .*/\1/p' "$CALLS")"
+  [ -n "$download" ] && [ ! -e "$(dirname "$download")" ] && ok "with no cache named, nothing downloaded outlives the run" \
+    || fail "no cache: the download's directory is left: ${download:-no curl -o in $(cat "$CALLS")}"
   [ -f "$nocache/Packages/PhononTTS/Frameworks/PhononCore.xcframework/Info.plist" ] && [ "$(cat "$nocache/Packages/PhononTTS/Frameworks/.fetched")" = "$stand" ] \
     && ok "with no cache named, a fresh checkout fetches, installs and stamps the pin" || fail "no cache: $(cat "$work/out")"
   [ "$(curled)" = 1 ] && ok "with no cache named, curl is called once" || fail "no cache: curl called $(curled) times"

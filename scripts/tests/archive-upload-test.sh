@@ -198,6 +198,31 @@ grep -qx "xcrun key $(pub "$work/other.p8")" "$work/mixed" || fail "altool was n
 [ "$(cat "$work/opcalls")" = "shim op read op://Homelab/Topo App Store Connect/private_key" ] \
     || fail "1Password was asked for more than the part the others lack: $(cat "$work/opcalls")"
 
+# Each part with a value in all three sources: the environment's wins, and 1Password is not
+# asked. Then without the environment's: the keychain's wins over 1Password's.
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$work/kc.p8" 2>/dev/null
+mkdir -p "$work/all-keychain" "$work/all-vault"
+printf 'KEYCHAINID\n' > "$work/all-keychain/topo-asc-key-id"
+printf 'kc-issuer\n' > "$work/all-keychain/topo-asc-issuer-id"
+xxd -p "$work/kc.p8" | tr -d '\n' > "$work/all-keychain/topo-asc-private-key"
+printf 'VAULTID000\n' > "$work/all-vault/key_id"
+printf 'vault-issuer\n' > "$work/all-vault/issuer_id"
+cp "$work/other.p8" "$work/all-vault/private_key"
+: > "$work/opcalls"
+ASC_KEY_ID=ENVKEYID00 ASC_ISSUER_ID=env-issuer ASC_PRIVATE_KEY="$hex" KEYCHAIN="$work/all-keychain" OPVAULT="$work/all-vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake \
+  run "$work/all-env" --validate || fail "every part from three sources failed: $(cat "$work/out")"
+grep -q '^xcrun \[AuthKey_ENVKEYID00.p8\] altool --validate-app .* --apiKey ENVKEYID00 --apiIssuer env-issuer$' "$work/all-env" \
+    || fail "the environment's issuer did not win over the keychain's and 1Password's: $(grep '^xcrun' "$work/all-env")"
+grep -qx "xcrun key $(pub "$work/key.p8")" "$work/all-env" || fail "the environment's private key did not win over the keychain's and 1Password's: $(grep '^xcrun key' "$work/all-env")"
+[ ! -s "$work/opcalls" ] || fail "1Password was asked with every part in the environment: $(cat "$work/opcalls")"
+: > "$work/opcalls"
+KEYCHAIN="$work/all-keychain" OPVAULT="$work/all-vault" OPCALLS="$work/opcalls" OP_SERVICE_ACCOUNT_TOKEN=ops_fake \
+  run "$work/all-kc" --validate || fail "every part from the keychain and 1Password failed: $(cat "$work/out")"
+grep -q '^xcrun \[AuthKey_KEYCHAINID.p8\] altool --validate-app .* --apiKey KEYCHAINID --apiIssuer kc-issuer$' "$work/all-kc" \
+    || fail "the keychain's issuer did not win over 1Password's: $(grep '^xcrun' "$work/all-kc")"
+grep -qx "xcrun key $(pub "$work/kc.p8")" "$work/all-kc" || fail "the keychain's private key did not win over 1Password's: $(grep '^xcrun key' "$work/all-kc")"
+[ ! -s "$work/opcalls" ] || fail "1Password was asked with every part in the keychain: $(cat "$work/opcalls")"
+
 # A key that is no key stops it before anything is built.
 if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY=deadbeef run "$work/bad"; then
     fail "what is not a key was taken as one"
