@@ -147,22 +147,34 @@ struct GuestLogin: ClaudeLogin {
         return left.standardizedFileURL.path == credentialsFile.standardizedFileURL.path ? [credentialsFile] : [credentialsFile, left]
     }
 
-    /// True when every one of `files` is gone, which a removal that threw because there was none
-    /// also is.
+    /// True when every one of `files` is gone, which a file with no folder also is. The guest
+    /// writes `.claude` too, and a link it made there is a real link on the host, so each file is
+    /// removed through its folder opened with no link followed: behind a link is no place the app
+    /// can see, so nothing is removed through it and the credential is not said to be gone.
     @discardableResult
     static func removeCredentials(_ files: [URL] = credentialsFiles) -> Bool {
         var gone = true
-        for file in files {
-            do {
-                try FileManager.default.removeItem(at: file)
-            } catch {
-                if FileManager.default.fileExists(atPath: file.path) {
-                    GuestResident.log("login: the credentials file would not go: \(error)")
-                }
-            }
-            if FileManager.default.fileExists(atPath: file.path) { gone = false }
-        }
+        for file in files where !removed(file) { gone = false }
         return gone
+    }
+
+    private static func removed(_ file: URL) -> Bool {
+        let folder = open(file.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard folder >= 0 else {
+            let failure = errno
+            if failure == ENOENT { return true }
+            GuestResident.log(failure == ELOOP || failure == ENOTDIR
+                ? "login: .claude in the guest's home is not a folder; the credentials file is not removed through it"
+                : "login: the credentials file's folder cannot be opened: \(String(cString: strerror(failure)))")
+            return false
+        }
+        defer { close(folder) }
+        let name = file.lastPathComponent
+        if unlinkat(folder, name, 0) != 0, errno != ENOENT {
+            GuestResident.log("login: the credentials file would not go: \(String(cString: strerror(errno)))")
+        }
+        var status = stat()
+        return fstatat(folder, name, &status, AT_SYMLINK_NOFOLLOW) != 0 && errno == ENOENT
     }
 
     /// `claude <arguments>`, from the home, as the resident is started.
