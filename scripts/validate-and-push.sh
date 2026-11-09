@@ -443,10 +443,13 @@ git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 9>&- && git -C 
   || refuse "could not check $sha out in $checkout"
 [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
 cd "$checkout" || refuse "could not enter $checkout"
-scripts/mac-suite.sh --check --cache "$cache" "$suite" 6>&- 9>&- || exit 76
+# The check runs as the suite will: a login shell, as the session'"'"'s user where the Mac has a
+# way into it, so the bash, jq and node it finds are the ones the suite'"'"'s will.
+session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
+as_suite() { if [ -n "$session" ] && [ -x "$session" ]; then sudo -n "$session" "$@"; else "$@"; fi; }
+as_suite /bin/bash -lc "cd \"$checkout\" && exec scripts/mac-suite.sh --check --cache \"$cache\" $suite" 6>&- 9>&- || exit 76
 ls -1t "$cache/logs" 2>/dev/null | tail -n +6 | while IFS= read -r old; do going "$old" || rm -rf "${cache:?}/logs/$old"; done
 command="cd \"$checkout\" && exec env GIT_CONFIG_GLOBAL=/dev/null scripts/mac-suite.sh --lane $lane --results \"$results\" --cache \"$cache\" $suite"
-session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 if [ -n "$session" ] && [ -x "$session" ]; then
   sudo -n "$session" /usr/bin/caffeinate -di /bin/bash -lc "$command" 6>&- 9>&- &
 else
