@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-LEDGERS = os.path.expanduser("~/Desktop/topo-plans/progress-*.md")
+LEDGERS = os.path.expanduser("~/topo-plans/progress-*.md")
 TAIL = 12          # lines of each ledger, newest last
 MAX_LEDGERS = 6    # the newest few; an old plan's tail is not what a compaction lost
 
@@ -36,7 +36,9 @@ def main():
         d = {}
     if d.get("source") == "startup":
         return  # a fresh session reads the ledgers itself, as the brief tells it to
-    paths = sorted(glob.glob(LEDGERS), key=os.path.getmtime, reverse=True)[:MAX_LEDGERS]
+    # Syncthing's conflict copies match the glob too, and hold an older ledger.
+    paths = [p for p in glob.glob(LEDGERS) if ".sync-conflict-" not in p]
+    paths = sorted(paths, key=os.path.getmtime, reverse=True)[:MAX_LEDGERS]
     out = [t for t in (tail_of(p) for p in paths) if t]
     if not out:
         return

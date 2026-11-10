@@ -699,7 +699,7 @@ final class GuestSessionTests: XCTestCase {
 
         await session.use(model: "claude-opus-5")
         // Give the actor every chance to act on the change while the turn is in flight.
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertFalse(first.terminated, "the model change ended the process mid-turn")
         XCTAssertEqual(launcher.processes.count, 1)
 
@@ -749,7 +749,7 @@ final class GuestSessionTests: XCTestCase {
         await session.foreground()
         try await session.ready()
         await session.use(model: "claude-sonnet-5")
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertEqual(launcher.processes.count, 1, "the same model restarted the process")
         await session.use(model: "claude-fable-5-1")
         await eventually("replaced") { launcher.processes.count == 2 }
@@ -771,7 +771,7 @@ final class GuestSessionTests: XCTestCase {
         await eventually("written") { first.turns.count == 1 }
 
         await session.use(compactAt: 60)
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertFalse(first.terminated, "the threshold change ended the process mid-turn")
         XCTAssertEqual(launcher.processes.count, 1)
 
@@ -785,7 +785,7 @@ final class GuestSessionTests: XCTestCase {
 
         try await session.ready()
         await session.use(compactAt: 60)
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertEqual(launcher.processes.count, 2, "the same threshold restarted the process")
         await session.use(compactAt: nil)
         await eventually("replaced for Claude Code's own") { launcher.processes.count == 3 }
@@ -816,13 +816,13 @@ final class GuestSessionTests: XCTestCase {
         let launchesAtTakeAway = Launches()
         let forgetting = Task {
             await session.forgetSession {
-                for _ in 0..<50 { await Task.yield() }
+                await settle()
                 launchesAtTakeAway.set(launcher.processes.count)
             }
         }
         await eventually("the old process is being ended") { old.terminationHeld }
         let waiting = Task { try await session.ready() }
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         old.release()
         let termination = await forgetting.value
         XCTAssertEqual(termination?.status, 137)
@@ -837,7 +837,7 @@ final class GuestSessionTests: XCTestCase {
     func testASignOutWithNobodyWaitingStartsNothing() async throws {
         let (session, _) = try await resident()
         await session.forgetSession()
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         XCTAssertEqual(launcher.processes.count, 1, "a sign-out started a process nobody asked for")
         try await session.ready()
         XCTAssertEqual(launcher.processes.count, 2)
@@ -858,14 +858,14 @@ final class GuestSessionTests: XCTestCase {
                 endedBeforeBody.set(old.terminated ? 1 : 0)
                 // Held here until the test has asked for a process, so that ask lands under the hold.
                 while release.value == nil { await Task.yield() }
-                for _ in 0..<50 { await Task.yield() }
+                await settle()
                 launchesInBody.set(launcher.processes.count)
                 return 7
             }
         }
         await eventually("the body ran") { endedBeforeBody.value != nil }
         let waiting = Task { try await session.ready() }
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         release.set(1)
         let answer = await login.value
         XCTAssertEqual(answer, 7)
@@ -880,7 +880,7 @@ final class GuestSessionTests: XCTestCase {
     func testALoginWithNobodyWaitingStartsNothing() async throws {
         let (session, _) = try await resident()
         await session.withoutResident {}
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         XCTAssertEqual(launcher.processes.count, 1, "a login started a process nobody asked for")
         try await session.ready()
         XCTAssertEqual(launcher.processes.count, 2)
@@ -901,10 +901,10 @@ final class GuestSessionTests: XCTestCase {
         old.holdNextTermination()
         let forgetting = Task { await session.forgetSession() }
         await eventually("the old process is being ended") { old.terminationHeld }
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         let returned = Settled()
         Task { _ = await forgetting.value; returned.mark() }
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         XCTAssertFalse(returned.done, "the sign-out answered before the process it ended had gone")
         old.release()
         let termination = await forgetting.value
@@ -920,7 +920,7 @@ final class GuestSessionTests: XCTestCase {
         await eventually("the launch is pending") { launcher.launchHeld }
         let returned = Settled()
         let forgetting = Task { let end = await session.forgetSession(); returned.mark(); return end }
-        for _ in 0..<50 { await Task.yield() }
+        await settle()
         XCTAssertFalse(returned.done, "the sign-out answered with a start still pending")
         launcher.release()
         let termination = await forgetting.value
@@ -936,7 +936,7 @@ final class GuestSessionTests: XCTestCase {
         await session.foreground()
         try await session.ready()
         await session.use(memory: false)
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertEqual(launcher.memories, [false], "the same memory restarted the process")
 
         await session.use(memory: true)
@@ -970,7 +970,7 @@ final class GuestSessionTests: XCTestCase {
         let (turn, done) = collect(try await session.send("a long one"))
         await eventually("written") { first.turns.count == 1 }
         await session.use(memory: false)
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertEqual(launcher.processes.count, 1, "the process was replaced mid-turn")
         answer(first, "done", session: "S")
         await done.value
@@ -999,7 +999,7 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(turn.ends, [.abandoned], "the turn outlived the sign-out")
         await eventually("the old process ended at once") { old.terminationHeld }
         answer(old, "done", session: "OLD")
-        for _ in 0..<20 { await Task.yield() }
+        await settle()
         XCTAssertNil(store.load(), "a forgotten conversation's process wrote its session back")
 
         old.release()
@@ -1023,6 +1023,13 @@ private final class Times: @unchecked Sendable {
     var next: @Sendable () -> Date {
         { [self] in lock.withLock { dates.count > 1 ? dates.removeFirst() : dates[0] } }
     }
+}
+
+/// Gives a wrong answer its chance to appear before a negative is read: real time, since a
+/// count of yields is not a promise that an actor hop or a task the session started has run on a
+/// loaded pool. It asserts nothing.
+private func settle() async {
+    try? await Task.sleep(for: .milliseconds(200))
 }
 
 /// What a session logged, in order.

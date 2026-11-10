@@ -148,6 +148,29 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.turns.map(\.text), ["Anything from Helen?"])
     }
 
+    /// A read in flight across a sign-out, a demotion or a takeover's adoption reads a log that
+    /// belonged to what came before: it lands on nothing, and `hasRead` stays as the change left
+    /// it, so the first run is not decided from it (`FirstRun.asks`).
+    func testAReadInFlightAcrossASignOutOrAnAdoptionIsNotARead() async throws {
+        for ending in ["forget", "adopt"] {
+            let db = InMemoryRecordDatabase()
+            let held = HeldReads(db)
+            let harness = harness(held, defaults: makeDefaults(), transport: ScriptedTransport())
+            await held.holdNext()
+            let read = Task { await harness.refresh() }
+            try await eventually("\(ending): the read to be held") { await held.holding }
+            if ending == "forget" {
+                await harness.forget()
+            } else {
+                harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked))
+            }
+            await held.release()
+            let answered = await read.value
+            XCTAssertFalse(answered, "\(ending): a read from before was answered")
+            XCTAssertFalse(harness.hasRead, "\(ending): a read from before was taken for the log")
+        }
+    }
+
     // MARK: The first run
 
     /// The first-run question is asked over a log that was read and found empty, and never over a
@@ -2379,6 +2402,42 @@ private actor ReadFailingDatabase: RecordDatabase {
 
     func records(ofType type: String) async throws -> [Record] {
         try check()
+        return try await wrapped.records(ofType: type)
+    }
+}
+
+/// A database whose next read waits until `release()`.
+private actor HeldReads: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    private var holdingNext = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+
+    func holdNext() { holdingNext = true }
+    var holding: Bool { waiter != nil }
+    func release() {
+        waiter?.resume()
+        waiter = nil
+    }
+
+    private func gate() async {
+        guard holdingNext else { return }
+        holdingNext = false
+        await withCheckedContinuation { waiter = $0 }
+    }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        await gate()
+        return try await wrapped.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        await gate()
+        return try await wrapped.query(query)
+    }
+    func records(ofType type: String) async throws -> [Record] {
+        await gate()
         return try await wrapped.records(ofType: type)
     }
 }

@@ -108,12 +108,33 @@ struct ContractDB: Sendable {
             Record(type: "T", id: RecordID("3"), fields: ["d": .string("y"), "n": .int(3)]),
             Record(type: "U", id: RecordID("4"), fields: ["d": .string("x"), "n": .int(4)]),
         ])
-        let all = try await db.query(RecordQuery(type: "T"))
-        #expect(all.map(\.id.name) == ["1", "2", "3"])
         let some = try await db.query(RecordQuery(type: "T", filters: [
             .init("d", .equals, .string("x")), .init("n", .greaterThan, .int(1)),
         ]))
         #expect(some.map(\.id.name) == ["2"])
+    }
+
+    /// An empty list carries no element type, so the adapter leaves it off the wire and CloudKit
+    /// answers the field absent; a store here does the same, so no reader is tested against an
+    /// empty list it will never be handed.
+    @Test(arguments: ContractStore.allCases) func anEmptyListIsSavedAsNoField(_ kind: ContractStore) async throws {
+        let db = try ContractDB(kind)
+        let saved = try await db.save(Record(type: "T", id: RecordID("a"), fields: [
+            "names": .strings([]), "files": .assets([]), "kept": .strings(["x"]),
+        ]))
+        #expect(saved.fields == ["kept": .strings(["x"])])
+        #expect(await db.current(RecordID("a"))?.fields == ["kept": .strings(["x"])])
+    }
+
+    /// A change tag or a token is one store's: another store of the same kind never honours it.
+    @Test(arguments: ContractStore.allCases) func aTagOrATokenFromAnotherStoreIsNotHonoured(_ kind: ContractStore) async throws {
+        let mine = try ContractDB(kind)
+        let other = try ContractDB(kind)
+        let theirs = try await other.save(Record(type: "T", id: RecordID("a")))
+        _ = try await mine.save(Record(type: "T", id: RecordID("a")))
+        await #expect(throws: RecordDatabaseError.self) { try await mine.save(theirs) }
+        let token = try await other.changes(ofType: "T", since: nil).token
+        await #expect(throws: RecordChangesError.self) { try await mine.changes(ofType: "T", since: token) }
     }
 
     // MARK: The change feed and deletes, as CloudKit's

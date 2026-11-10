@@ -56,6 +56,7 @@ struct TopoApp: App {
         #endif
         let signIn = SignIn(login: GuestLogin(), signInAgain: signInAgain, accept: accept)
         _signIn = State(initialValue: signIn)
+        signIn.beginning = { LoginLife.shared.began() }
         GuestResident.shared.booted = { await signIn.refresh() }
         Harness.recordsWhere = { await AppRecords.recordsWhere() }
         let harness = Harness.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)

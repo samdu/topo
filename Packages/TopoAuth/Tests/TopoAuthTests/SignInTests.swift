@@ -325,6 +325,33 @@ func settle() async {
         #expect(!cache.isSignedIn)
     }
 
+    /// A login's beginning is heard before the cache says signed in, at a sign-in and at a refresh
+    /// that finds a login the screen did not have; a refresh of a login already standing begins
+    /// nothing.
+    @Test func aLoginBeginsBeforeTheCacheSaysSignedIn() async {
+        let login = FakeLogin()
+        let cache = cache()
+        var heard: [Bool] = []
+        let signIn = await ready(login, cache: cache)
+        signIn.beginning = { heard.append(cache.isSignedIn) }
+        signIn.start()
+        await until("the login began") { login.attempts.count == 1 }
+        login.answer(claudeAI)
+        login.attempts[0].heard(.ended(.succeeded))
+        await until("signed in") { signIn.phase == .signedIn }
+        #expect(heard == [false])
+        await signIn.refresh()
+        #expect(heard == [false], "a refresh of a standing login began one")
+
+        let stale = self.cache()
+        let found = SignIn(login: login, cache: stale)
+        var foundHeard: [Bool] = []
+        found.beginning = { foundHeard.append(stale.isSignedIn) }
+        await found.refresh()
+        #expect(found.phase == .signedIn)
+        #expect(foundHeard == [false])
+    }
+
     @Test func aStatusThatCannotBeReadChangesNothing() async {
         let login = FakeLogin()
         let cache = cache()

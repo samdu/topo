@@ -10,7 +10,7 @@ You are the engineer on one Topo branch whose findings three previous attempts d
 
 Before you touch anything:
 
-- Read the branch's ledger (`~/Desktop/topo-plans/progress-<topic>.md`) and `git log` on the branch. They are what happened; nobody's account of it is.
+- Read the branch's ledger (`~/topo-plans/progress-<topic>.md`) and `git log` on the branch. They are what happened; nobody's account of it is.
 - Read the last review's findings and the fix commits that were supposed to answer them. A finding that survived three rounds usually survived because each round answered the sentence rather than the defect — find the defect.
 - Read `CLAUDE.md`, in full, and the plan you were given.
 
