@@ -54,6 +54,10 @@ public final class SignIn {
     }
 
     public private(set) var phase: Phase
+    /// Called as a login begins (the phase coming to signed in from anything else), before the
+    /// cache says signed in: whatever starts once the cache says so — a launch of the resident,
+    /// which checks it — runs under the login this marks, never one the next render marks after it.
+    public var beginning: (@MainActor () -> Void)?
     public private(set) var sheet: Sheet?
     /// A phone signed in under the login before Claude Code's own: the sign-in screen says why it
     /// asks again, until the next sign-in.
