@@ -268,7 +268,9 @@ struct ControlTool: Tool {
         // own: a read or a delete across the clear leaves nothing behind, a write would.
         let secrets = secrets
         let kept = await MainActor.run { () -> ToolReply in
-            guard epoch.isCurrent else { return .failed("topo: the login ended while this ran; no secret is kept\n") }
+            guard epoch.isCurrent else {
+                return .failed("topo: the login this call came from is not the one signed in now (a sign-out since the resident started); no secret is kept\n")
+            }
             do {
                 try secrets.set(value, name: name)
             } catch {
