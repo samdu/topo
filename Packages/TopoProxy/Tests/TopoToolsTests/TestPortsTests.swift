@@ -31,9 +31,8 @@ import TopoProxy
         #expect(port == free)
     }
 
-    /// A refusal comes only after as many tries as the range has ports, each one of the range: a
-    /// run of held ports never ends the search while one is free. (The ports are the ones handed
-    /// out meanwhile, so a parallel test's draw is one this walk skips, being in use.)
+    /// A refusal comes only after every port of the range is tried, once each: a run of held
+    /// ports never ends the search while one is free.
     @Test func everyPortOfTheRangeIsTriedBeforeARefusal() async throws {
         let tried = Tried()
         await #expect(throws: NWError.self) {
@@ -43,7 +42,7 @@ import TopoProxy
             }
         }
         #expect(tried.ports.count == TestPorts.range.count)
-        #expect(tried.ports.allSatisfy { TestPorts.range.contains($0) })
+        #expect(Set(tried.ports) == Set(TestPorts.range))
     }
 
     /// Every port held is the refusal, not a port of the system's choosing.

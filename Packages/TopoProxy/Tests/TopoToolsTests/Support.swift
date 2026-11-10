@@ -74,10 +74,12 @@ enum TestPorts {
         }
     }
 
-    /// `start` over the range's ports in turn, from the next to be handed out, past each one
-    /// something outside the run already holds.
+    /// `start` over every port of the range in turn, from the next to be handed out, past each
+    /// one already held. It spends one draw: a port held outside the run moves the start on to
+    /// the next, which may be another test's, and that bind is refused and passed over too.
     static func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
-        try await first(over: (0..<range.count).lazy.map { _ in take() }, start)
+        let from = Int(take() - range.lowerBound)
+        return try await first(over: (0..<range.count).lazy.map { range.lowerBound + UInt16((from + $0) % range.count) }, start)
     }
 
     /// `start` over `ports` in turn, past each one already held; that refusal if every one is.
