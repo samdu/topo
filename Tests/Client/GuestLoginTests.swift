@@ -236,6 +236,34 @@ final class GuestLoginTests: XCTestCase {
         XCTAssertTrue(GuestLogin.removeCredentials([root.appendingPathComponent("none/.claude/.credentials.json")]))
     }
 
+    /// A file at `.claude` is no folder to remove the credential from: a sign-out does not say it
+    /// is gone, and leaves the file as it was.
+    func testSignOutDoesNotCountAFileAtClaudeAsTheCredentialGone() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("credentials-file-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let claude = root.appendingPathComponent("home/.claude")
+        try write("the guest's own", to: claude)
+        XCTAssertFalse(GuestLogin.removeCredentials([claude.appendingPathComponent(".credentials.json")]))
+        XCTAssertEqual(try String(contentsOf: claude, encoding: .utf8), "the guest's own")
+    }
+
+    /// A link at `.credentials.json` that a sign-out could not remove still stands, whatever it
+    /// points at: one pointing nowhere is not the credential gone.
+    func testSignOutCountsADanglingLinkItCouldNotRemoveAsStanding() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("credentials-dangling-\(UUID().uuidString)", isDirectory: true)
+        let claude = root.appendingPathComponent("home/.claude", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        let credential = claude.appendingPathComponent(".credentials.json")
+        try FileManager.default.createSymbolicLink(atPath: credential.path, withDestinationPath: "nowhere")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: claude.path)
+        XCTAssertFalse(GuestLogin.removeCredentials([credential]))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: credential.path), "nowhere")
+    }
+
     /// One in the new place is the one; a copy left in `Documents` is stale and is taken away.
     func testTheNewPlaceWinsAndTheOldCopyGoes() throws {
         let (files, root) = try placedFiles()
