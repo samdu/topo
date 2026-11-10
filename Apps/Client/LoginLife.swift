@@ -17,7 +17,7 @@ final class LoginLife {
 
     /// A login's mark: current until the login it was taken under ends.
     @MainActor
-    struct Epoch {
+    struct Epoch: Sendable {
         fileprivate let value: Int
         fileprivate let life: LoginLife
 
