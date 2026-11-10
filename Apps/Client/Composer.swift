@@ -364,11 +364,7 @@ struct Composer: View {
         let tint = look.composer.tint.opacity(mic.open ? look.composer.tintOpacity : 0)
         switch look.composer.surface {
         case .glass:
-            if #available(iOS 26, *) {
-                Color.clear.glassEffect(.regular.tint(tint), in: shape)
-            } else {
-                shape.fill(.ultraThinMaterial).overlay(shape.fill(tint))
-            }
+            Color.clear.glassEffect(.regular.tint(tint), in: shape)
         case .material:
             shape.fill(.regularMaterial).overlay(shape.fill(tint))
         case .flat:

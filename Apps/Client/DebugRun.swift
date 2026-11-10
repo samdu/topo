@@ -512,7 +512,7 @@ extension DebugRun {
         /// How much of a pane the composer's pane is drawn as (`PanePresence`).
         var presence: Double?
         /// Where the transcript's content ends, measured down from its own top edge, which a
-        /// scroll moves (iOS 18; nil before it is measured).
+        /// scroll moves (nil before it is measured).
         var contentBottom: Double?
         /// The addresses a tap on a reply's link asked to be opened, in order, over a fixture
         /// transcript (`TOPO_DEBUG_TRANSCRIPT`), where they are recorded and not opened.

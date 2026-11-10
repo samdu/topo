@@ -205,20 +205,14 @@ struct ChatCanvas: View {
                 .toolbar {
                     if !models.isEmpty {
                         ToolbarItem(placement: .topBarLeading) { ChatBar.Mute(readsAloud: readsAloud) }
-                        if #available(iOS 26, *) {
-                            ToolbarSpacer(.fixed, placement: .topBarLeading)
-                        }
+                        ToolbarSpacer(.fixed, placement: .topBarLeading)
                         ToolbarItem(placement: .topBarLeading) {
                             ChatBar.ModelButton(chosen: models.first { $0.id == chosen }?.name ?? "", open: modelsOpen)
                         }
                     }
-                    // The same bar the chat puts the badge in: from iOS 26 on it puts none of
-                    // its own glass behind the jewel, which is the whole of the control.
-                    if #available(iOS 26, *) {
-                        badgeItem.sharedBackgroundVisibility(.hidden)
-                    } else {
-                        badgeItem
-                    }
+                    // The same bar the chat puts the badge in: it puts none of its own glass
+                    // behind the jewel, which is the whole of the control.
+                    badgeItem.sharedBackgroundVisibility(.hidden)
                 }
                 .safeAreaInset(edge: .bottom) {
                     Composer(draft: draft, mic: mic)

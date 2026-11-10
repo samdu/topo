@@ -1067,7 +1067,6 @@ extension TimerSoundTests {
 }
 
 /// The plan as AlarmKit's attributes and timing, which the widget and the system draw from.
-@available(iOS 26, *)
 final class AlarmKitPlanTests: XCTestCase {
     private func plan(_ when: TimerPlan.When) -> TimerPlan {
         TimerPlan(when: when, label: "Plank", title: "Done", pausedTitle: "Held", buttonColor: .token(.text), tint: .token(.primary))

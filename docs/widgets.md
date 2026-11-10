@@ -41,7 +41,7 @@ A toggle turns to the opposite of its stored state, not of the state the tapped 
 
 ## Controls
 
-Two kinds in the controls gallery (iOS 18): **Topo Button** ("A button Topo sets up") and **Topo Toggle** ("A switch Topo sets up"), `TopoButtonControl` and `TopoToggleControl` in `Apps/Widgets/TopoControls.swift`, of the control kinds `zone.hexagon.topo.control.button` and `.toggle`, a contract since a placed control is lost if its kind changes. Each is configured with one of its kind's six slots, listed "Button 1"…"Button 6" and "Toggle 1"…"Toggle 6" (`button-1`…, `toggle-1`…), a fixed list so a slot can be placed before or after the mind fills it; one with no slot picked is slot 1. The person places, removes and orders them; Topo cannot put one anywhere or learn where one is.
+Two kinds in the controls gallery: **Topo Button** ("A button Topo sets up") and **Topo Toggle** ("A switch Topo sets up"), `TopoButtonControl` and `TopoToggleControl` in `Apps/Widgets/TopoControls.swift`, of the control kinds `zone.hexagon.topo.control.button` and `.toggle`, a contract since a placed control is lost if its kind changes. Each is configured with one of its kind's six slots, listed "Button 1"…"Button 6" and "Toggle 1"…"Toggle 6" (`button-1`…, `toggle-1`…), a fixed list so a slot can be placed before or after the mind fills it; one with no slot picked is slot 1. The person places, removes and orders them; Topo cannot put one anywhere or learn where one is.
 
 ### The document
 
