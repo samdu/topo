@@ -47,6 +47,7 @@
 		0F18DAF1CCB4AF3DD9F0532E /* DownloadWatchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE401C13B7D8F3D497875DFC /* DownloadWatchdog.swift */; };
 		0FEE95E130EFDE926BB8CB0F /* GuestDNSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE4006DA9780D0A37EBCACB7 /* GuestDNSTests.swift */; };
 		10356762FE3EC781DA7DB5B8 /* SurfaceTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */; };
+		10507D867F492EB5635BF1EA /* InMemoryBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB0EC4398EEE02968CFDD97 /* InMemoryBookmarkStore.swift */; };
 		10D6FD035A102C6FBE532658 /* MarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 999383D4C5743811758B9CEF /* MarkdownTests.swift */; };
 		1116DAB18DB4D2364E776127 /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDAC8EACAE809E951210532 /* Fixture.swift */; };
 		111725BB3766B410D0622B4A /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
@@ -926,6 +927,7 @@
 		3C73B06423A3D15D5A7B7093 /* WebAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuth.swift; sourceTree = "<group>"; };
 		3C85E2F26724D2DFDA22E0E7 /* ClaudeCodeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeInstallerTests.swift; sourceTree = "<group>"; };
 		3D72844A55F06897475F5B93 /* licence-apache-2.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "licence-apache-2.0.txt"; sourceTree = "<group>"; };
+		3DB0EC4398EEE02968CFDD97 /* InMemoryBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InMemoryBookmarkStore.swift; sourceTree = "<group>"; };
 		3DB9C361CC5667B26445644C /* MascotCadenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotCadenceTests.swift; sourceTree = "<group>"; };
 		3EA598B0990C965B7E3F0F6A /* TopoMoment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoMoment.swift; sourceTree = "<group>"; };
 		3EC5770ED2DCA16F30AA7C93 /* crossing-up.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crossing-up.json"; sourceTree = "<group>"; };
@@ -1808,6 +1810,7 @@
 				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
+				3DB0EC4398EEE02968CFDD97 /* InMemoryBookmarkStore.swift */,
 				4EFB3A55ECF2E11770887D4D /* KeeperSoundsTests.swift */,
 				AD04045E8FD99A454E729BBF /* KeptInputTests.swift */,
 				F38D6DA5F2D24CAB99BB2FA7 /* LaunchPortsTests.swift */,
@@ -3097,6 +3100,7 @@
 				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
+				10507D867F492EB5635BF1EA /* InMemoryBookmarkStore.swift in Sources */,
 				B8DD0500CC65FA3290AE2758 /* KeeperSoundsTests.swift in Sources */,
 				F33A6BE10C3A6405CA0A7681 /* KeptInputTests.swift in Sources */,
 				3DBFBA399C354755BB11316F /* LaunchPortsTests.swift in Sources */,
