@@ -29,7 +29,7 @@ final class LoginLife {
 
     private var count = 0
     /// Whether the login's end has yet to run its teardowns: false from a sign-out's teardowns
-    /// until the phase is next signed in. No epoch is current meanwhile, and the phase leaving
+    /// until the next sign-in begins. No epoch is current meanwhile, and the phase leaving
     /// signed in at that sign-out's last step does not end the login a second time.
     private(set) var standing = true
     private var teardowns: [@MainActor () -> Void] = []
@@ -71,7 +71,8 @@ final class LoginLife {
         runTeardowns()
     }
 
-    /// The phase is signed in again: the next leaving of it is a login's end to run. The epoch
+    /// A login begins (`SignIn.beginning`, before the cache says signed in and the phase moves):
+    /// the next leaving of signed in is a login's end to run. The epoch
     /// moves too, so nothing taken while no login stood becomes current with this one.
     func began() {
         moveEpoch()

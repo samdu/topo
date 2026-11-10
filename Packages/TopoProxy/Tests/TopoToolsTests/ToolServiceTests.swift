@@ -256,7 +256,7 @@ import TopoProxy
     /// port other than the old one.
     @Test func relistenStartsANewListenerWhateverBecameOfTheOldPort() async throws {
         let tool = ScriptedTool()
-        let (service, first, _) = try await startedService([tool])
+        let (service, first, _) = try await startedServiceOnTestPort([tool])
         defer { Task { await service.stop() } }
         let token = await service.token
         await service.set(hearsLoss: false)
@@ -279,7 +279,7 @@ import TopoProxy
     /// listener holds.
     @Test func relistenOnTakesTheSamePortBackAndNeverAnotherListeners() async throws {
         let tool = ScriptedTool()
-        let (service, first, _) = try await startedService([tool])
+        let (service, first, _) = try await startedServiceOnTestPort([tool])
         defer { Task { await service.stop() } }
         let token = await service.token
         await service.set(hearsLoss: false)

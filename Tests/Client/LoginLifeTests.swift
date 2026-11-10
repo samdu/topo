@@ -49,6 +49,8 @@ final class LoginLifeTests: XCTestCase {
         surface.follow(from: .signedIn, to: .idle, latest: nil)
         XCTAssertEqual(ran, 1, "the sign-out's teardowns ran a second time at the phase's change")
         XCTAssertEqual(everything, 0, "the surfaces were cleared a second time")
+        // The next sign-in: `SignIn.beginning`, then the phase's change.
+        login.began()
         surface.follow(from: .idle, to: .signedIn, latest: nil)
         let held = login.epoch
         surface.follow(from: .signedIn, to: .idle, latest: nil)
@@ -67,6 +69,32 @@ final class LoginLifeTests: XCTestCase {
         login.began()
         XCTAssertFalse(between.isCurrent, "work begun with no login became the next login's")
         XCTAssertTrue(login.epoch.isCurrent)
+    }
+
+    /// A login begins before the cache says signed in, so work begun once it says so — a resident
+    /// the foreground launches, before the phase's change has reached its observers — is the
+    /// login's and stays current through that change: on a phone's first sign-in of the process,
+    /// and after a sign-out.
+    func testWorkBegunOnceTheCacheSaysSignedInIsTheLoginsThroughThePhasesChange() async {
+        for signedOutFirst in [false, true] {
+            let login = LoginLife()
+            if signedOutFirst { login.end() }
+            let cache = LoginCache(defaults: UserDefaults(suiteName: "login-life-\(UUID().uuidString)")!)
+            let signIn = SignIn(login: FoundLogin(), cache: cache)
+            signIn.beginning = { login.began() }
+            let was = signIn.phase
+            XCTAssertNotEqual(was, .signedIn)
+            // A boot's refresh finds Claude Code signed in, which the cache did not say.
+            await signIn.refresh()
+            XCTAssertTrue(cache.isSignedIn)
+            // What the launch takes, once the cache says signed in and before the next render.
+            let launched = login.epoch
+            // What TopoApp's `onChange(of: signIn.phase)` does at that render.
+            DefaultSurface(store: { nil }, reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
+                                                                       reloadEveryControl: {}, schedule: { _, _ in }),
+                           login: login).follow(from: was, to: signIn.phase, latest: nil)
+            XCTAssertTrue(launched.isCurrent, "signed out first: \(signedOutFirst): a launch once the cache said signed in was not the login's")
+        }
     }
 
     /// `SigningOut.midFlight` fails a test whose work never reached its gate, and not one whose
@@ -182,6 +210,15 @@ final class LoginLifeTests: XCTestCase {
         XCTAssertFalse(sync.owesForget)
         XCTAssertNil(TurnImages.cached(image), "a picture outlived the login")
     }
+}
+
+/// A Claude Code signed in with Claude.ai.
+private struct FoundLogin: ClaudeLogin {
+    func prepare(progress: @escaping @Sendable (String) -> Void) async throws {}
+    func begin(_ heard: @escaping @Sendable (LoginEvent) -> Void) async throws -> any LoginAttempt { throw CancellationError() }
+    func status() async throws -> ClaudeLoginStatus { ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai", subscriptionType: "max") }
+    func logout() async -> Bool { true }
+    func discardCredential() {}
 }
 
 /// A Claude Code whose login has gone: `auth status` says signed out.

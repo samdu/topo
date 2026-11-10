@@ -230,6 +230,9 @@ final class Harness {
     /// Counts sign-outs and demotions. A pass or a loop begun under an earlier count belongs to a
     /// login that has gone: it shows nothing and writes nothing, and the loop ends.
     private var login = 0
+    /// Counts what makes a read of the log in flight say nothing of the log now: a sign-out, a
+    /// demotion and a takeover's adoption. A read begun under an earlier count lands on nothing.
+    private var reads = 0
 
     /// What the person said that is not settled yet, oldest first, each under the nonce it was
     /// first attempted with and written to disk before any attempt. So a relaunch after a lost
@@ -487,6 +490,7 @@ final class Harness {
     /// anything once it wakes. The runner checks its task before each reply it appends.
     private func stopAnswering() {
         login += 1
+        reads += 1
         inFlight?.cancel()
         inFlight = nil
         passes.forEach { $0.cancel() }
@@ -596,9 +600,11 @@ final class Harness {
     /// Only `withdraw` asks; everything else refreshes for the screen's sake.
     @discardableResult
     func refresh() async -> Bool {
+        let reads = self.reads
         await readUnsaved()
         do {
             let transcript = try await log.read()
+            guard self.reads == reads else { return false }
             let dropped = turns.filter { transcript[$0.ref] == nil }.count
             if dropped > 0 { Perf.mark("chat.refresh.dropped \(dropped)") }
             turns = transcript.ordered
@@ -609,6 +615,7 @@ final class Harness {
             clearReadFailure()
             return true
         } catch {
+            guard self.reads == reads else { return false }
             lastRead = nil
             guard !TopoCloudKit.meansNoLogYet(error) else {
                 turns = []
@@ -1376,6 +1383,7 @@ final class Harness {
         // decided again until it has been read again.
         hasRead = false
         lastRead = nil
+        reads += 1
     }
 
     private func makeRunner() async throws -> TurnRunner {
