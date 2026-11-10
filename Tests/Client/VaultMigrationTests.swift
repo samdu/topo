@@ -51,12 +51,13 @@ final class VaultMigrationTests: XCTestCase {
     }
 
     private func memory(_ database: any RecordDatabase, on device: Device,
-                        bookmarks: InMemoryBookmarkStore = InMemoryBookmarkStore()) -> Memory {
+                        bookmarks: InMemoryBookmarkStore = InMemoryBookmarkStore(),
+                        login: LoginLife = LoginLife()) -> Memory {
         let ubiquity = device.ubiquityRoot.standardizedFileURL.path
         return Memory(directory: device.local, store: MemoryStore(database: database), device: phone,
                       isSignedIn: { true }, bookmarks: bookmarks, ubiquityRoot: device.ubiquityRoot,
                       isUbiquitous: { $0.standardizedFileURL.path.hasPrefix(ubiquity) },
-                      warm: { _ in VaultDownloads.Report() }, ensureZone: {}, now: { [t0] in t0 })
+                      warm: { _ in VaultDownloads.Report() }, ensureZone: {}, now: { [t0] in t0 }, login: login)
     }
 
     // MARK: Looking at folders
@@ -206,6 +207,44 @@ final class VaultMigrationTests: XCTestCase {
         await memory.removeStranded()
         XCTAssertNil(memory.stranded)
         XCTAssertNil(contents(of: device.local))
+    }
+
+    /// A retry of the old copy's removal that a sign-out lands under writes nothing back: the row
+    /// and the folder's grant were the login's that went.
+    func testARetryLandingAfterASignOutBringsNoOldCopyBack() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: VaultPath("notes/today.md")!, in: database, as: hub, at: t0)
+        let login = LoginLife()
+        let memory = memory(database, on: device, login: login)
+        await memory.sync()
+        let shut = device.local.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: shut.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        }
+        _ = await memory.keepInICloudDrive(device.obsidianVault)
+        XCTAssertNotNil(memory.stranded)
+
+        let parked = Parked()
+        memory.emptyAgain = { _, names, _ in
+            await parked.wait()
+            return (left: names, removed: false)
+        }
+        let retry = Task { await memory.removeStranded() }
+        let deadline = Date().addingTimeInterval(10)
+        while !(await parked.waiting) {
+            guard Date() < deadline else { return XCTFail("timed out waiting for the retry to be parked") }
+            await Task.yield()
+        }
+        // A sign-out's steps, as `SignOut` takes them.
+        login.moveEpoch()
+        memory.forget()
+        login.runTeardowns()
+        await parked.release()
+        await retry.value
+        XCTAssertNil(memory.stranded, "the last login's old copy came back after the sign-out")
+        XCTAssertNil(memory.moveError)
     }
 
     /// A name the transfer skipped on purpose was never the memory's to move, so it does not
@@ -603,5 +642,16 @@ final class VaultMigrationTests: XCTestCase {
 
         XCTAssertEqual(memory.lastReport?.files, 1)
         XCTAssertFalse(memory.offersICloudDrive(answered: false))
+    }
+}
+
+/// A call that waits until `release()`.
+private actor Parked {
+    private var waiter: CheckedContinuation<Void, Never>?
+    var waiting: Bool { waiter != nil }
+    func wait() async { await withCheckedContinuation { waiter = $0 } }
+    func release() {
+        waiter?.resume()
+        waiter = nil
     }
 }

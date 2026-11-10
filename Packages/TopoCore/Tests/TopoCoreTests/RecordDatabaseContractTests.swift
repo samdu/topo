@@ -45,9 +45,10 @@ struct ContractDB: Sendable {
         let id = RecordID("r")
         let saved = try await db.save(Record(type: "T", id: id, fields: ["v": .int(1)]))
         #expect(saved.changeTag != nil)
-        await #expect(throws: RecordDatabaseError.self) {
+        let refused = await #expect(throws: RecordDatabaseError.self) {
             try await db.save(Record(type: "T", id: id, fields: ["v": .int(2)]))
         }
+        #expect(refused?.case == .serverRecordChanged)
         #expect(await db.current(id)?.int("v") == 1)
     }
 
@@ -81,18 +82,20 @@ struct ContractDB: Sendable {
 
     @Test(arguments: ContractStore.allCases) func taggedSaveOfMissingRecordIsUnknownItem(_ kind: ContractStore) async throws {
         let db = try ContractDB(kind)
-        await #expect(throws: RecordDatabaseError.self) {
+        let refused = await #expect(throws: RecordDatabaseError.self) {
             try await db.save(Record(type: "T", id: RecordID("gone"), changeTag: "x"))
         }
+        #expect(refused?.case == .unknownItem)
     }
 
     @Test(arguments: ContractStore.allCases) func batchIsAllOrNothing(_ kind: ContractStore) async throws {
         let db = try ContractDB(kind)
         let a = RecordID("a"), b = RecordID("b")
         let stored = try await db.save(Record(type: "T", id: b))
-        await #expect(throws: RecordDatabaseError.self) {
+        let refused = await #expect(throws: RecordDatabaseError.self) {
             try await db.save([Record(type: "T", id: a), Record(type: "T", id: b)])
         }
+        #expect(refused?.case == .serverRecordChanged)
         #expect(await db.current(a) == nil)
         #expect(await db.current(b)?.changeTag == stored.changeTag, "the record the batch failed on is untouched")
     }
@@ -181,7 +184,8 @@ struct ContractDB: Sendable {
         try await db.delete([saved.id])
         #expect(await db.current(saved.id) == nil)
         // A tag from before the delete no longer names anything, as on the server.
-        await #expect(throws: RecordDatabaseError.self) { try await db.save(saved) }
+        let refused = await #expect(throws: RecordDatabaseError.self) { try await db.save(saved) }
+        #expect(refused?.case == .unknownItem)
     }
 }
 

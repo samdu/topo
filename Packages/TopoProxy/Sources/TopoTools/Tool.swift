@@ -86,3 +86,10 @@ public struct ToolTable: Sendable {
         return await tool.run(Array(argv.dropFirst()))
     }
 }
+
+/// What a call carries from the listener that accepted it, which the app handed the listener when
+/// it was started (`ToolService.relisten(context:)`); nil for a call that came by no listener.
+/// Fixed for the call's whole run, whatever the service has started since.
+public enum ToolCall {
+    @TaskLocal public static var context: (any Sendable)?
+}
