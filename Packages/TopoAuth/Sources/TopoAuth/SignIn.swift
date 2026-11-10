@@ -54,6 +54,10 @@ public final class SignIn {
     }
 
     public private(set) var phase: Phase
+    /// Called as a login begins (the phase coming to signed in from anything else), before the
+    /// cache says signed in: whatever starts once the cache says so — a launch of the resident,
+    /// which checks it — runs under the login this marks, never one the next render marks after it.
+    public var beginning: (@MainActor () -> Void)?
     public private(set) var sheet: Sheet?
     /// A phone signed in under the login before Claude Code's own: the sign-in screen says why it
     /// asks again, until the next sign-in.
@@ -139,6 +143,7 @@ public final class SignIn {
               self.generation == generation, !signOutOwed else { return }
         if case .approving = phase { return }
         if accept(status) {
+            if phase != .signedIn { beginning?() }
             cache.save(status)
             phase = .signedIn
         } else if phase == .signedIn {
@@ -213,6 +218,7 @@ public final class SignIn {
             phase = .failed("Claude Code finished the sign-in but does not say it is signed in with Claude.")
             return
         }
+        beginning?()
         cache.save(status)
         // The new credential is not the one a sign-out owed.
         cache.defaults.removeObject(forKey: Self.signOutOwedKey)
