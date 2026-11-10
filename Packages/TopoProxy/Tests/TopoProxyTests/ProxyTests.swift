@@ -447,7 +447,7 @@ import Testing
     /// and what reaches that port reaches this proxy.
     @Test func aPortBoundAgainByAnotherListenerIsNeverHandedOut() async throws {
         let upstream = StubUpstream()
-        let (proxy, first, _) = try await startedProxy(upstream)
+        let (proxy, first, _) = try await startedProxyOnTestPort(upstream)
         defer { Task { await proxy.stop() } }
         await proxy.set(hearsLoss: false)
         await proxy.listener?.cancel()
@@ -468,7 +468,7 @@ import Testing
     /// its listener went, connections and all, and what reaches it reaches this proxy.
     @Test func relistenOnTakesTheSamePortBack() async throws {
         let upstream = StubUpstream()
-        let (proxy, first, _) = try await startedProxy(upstream)
+        let (proxy, first, _) = try await startedProxyOnTestPort(upstream)
         defer { Task { await proxy.stop() } }
         let held = try await WireClient(port: first)
         try await held.send(post("/v1/messages", body: #"{"model":"claude-haiku-4-5-20251001"}"#))
@@ -487,7 +487,7 @@ import Testing
     /// A port another listener holds is never shared: `relisten(on:)` fails, holds no port, and
     /// the other listener still has it.
     @Test func relistenOnAPortAnotherListenerHoldsFails() async throws {
-        let (proxy, first, _) = try await startedProxy(StubUpstream())
+        let (proxy, first, _) = try await startedProxyOnTestPort(StubUpstream())
         defer { Task { await proxy.stop() } }
         await proxy.set(hearsLoss: false)
         await proxy.listener?.cancel()
