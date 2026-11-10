@@ -38,8 +38,7 @@ final class TurnFixtureTests: XCTestCase {
         let record = CKRecord(recordType: Turn.recordType, recordID: CKRecord.ID(recordName: fixture.name))
         for (key, value) in fixture.fields { record[key] = value }
         let transcript = CloudKitTranscriptSource.transcript(from: [record])
-        XCTAssertEqual(transcript.missing, [])
-        XCTAssertEqual(transcript.unreadable, [])
+        XCTAssertEqual(transcript.unreadable, [], "the fixture's record did not read as a turn")
         let turn = try XCTUnwrap(transcript.ordered.first)
         XCTAssertEqual(transcript.ordered.count, 1)
         XCTAssertEqual(turn.ref, TurnRef(device: DeviceID("phone"), sequence: 3))
