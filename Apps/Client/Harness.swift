@@ -342,14 +342,6 @@ final class Harness {
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
             pending = saved
         }
-        // The single unsent turn an earlier build kept under its own key heads the line.
-        let singleKey = "topo.harness.outgoing"
-        if let data = defaults.data(forKey: singleKey) {
-            if let single = try? JSONDecoder().decode(Outgoing.self, from: data), !pending.contains(single) {
-                pending.insert(single, at: 0)
-            }
-            defaults.removeObject(forKey: singleKey)
-        }
     }
 
     /// The app's harness: the shared CloudKit log and Claude Code in the guest as the brain, on
@@ -474,8 +466,6 @@ final class Harness {
         failedRetries = 0
         retryNotBefore = nil
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
-        // An answer an earlier build kept under its own key is the last login's too.
-        UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         // What the guest kept of the last login's conversation goes with it.
         leaving += 1
         await brain.forget()
