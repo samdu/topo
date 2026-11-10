@@ -29,6 +29,19 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 - A debug build only ever talks to Haiku 5.5, because every debug build here is signed into a real subscription: the pin is in the resident's launch (`ClaudeModel.effective`, its `--model`) and at the wire in the guest's proxy (`APIProxy.pinnedModel`), never only at the model slider (`docs/simulator.md`, *The one rule*).
 - Topo holds no Claude.ai token: the login is Claude Code's own, run in the guest, and its credential rests in the guest's home (`docs/auth.md`). A connection's token (GitHub, 1Password) is held by the app in the device keychain, never synced, never in the guest's home or the resident's environment; the guest asks for it per command over the tool service.
 - A feature that holds work under a login registers its teardown with `LoginLife.onEnd`, which every way a login ends runs, and guards a completion that lands after an await with the epoch it took before (`let epoch = login.epoch … guard epoch.isCurrent`) rather than a counter of its own; a teardown never checks the epoch. Its sign-out test is `SigningOut.midFlight` (`docs/auth.md`, *What a feature holds under the login*).
+- **An app-wide event reaches its listeners through one hook.** Where the table names a hook, a new listener registers on it and not on another route (an `.onChange` of the state the hook follows, a step of its own in a sign-out's sequence, a notification of its own); the paths that fire a hook are not listeners. Where it says *no hook yet*, a new listener joins one of the routes there are and its PR says which, rather than adding one.
+
+| Event | Fired by | The one hook | Listeners still outside it |
+|---|---|---|---|
+| A login ends | `SignOut`, `Takeover`, `ViewerArrival` (their `runTeardowns` step) and `DefaultSurface.follow` (`LoginLife.end()`) | `LoginLife.onEnd` / `onEnd(awaiting:)`; `tornDown()` waits for the awaiting ones | the sequences' own steps (shares, harness, memory, surfaces, connections, login), ordered by `docs/auth.md` and kept there by design |
+| Work under a login lands after an await | — | `LoginLife.shared.epoch`, `epoch.isCurrent` | `SurfaceSync.signOuts`, `TurnImages.age`; `GuestImages`' age, and the generations of `Connections`, `Memory` and the harness, which also move on events no login's end is |
+| A login begins | `SignIn.beginning` (`LoginLife.began()`), before the cache says signed in | no hook yet: `began()` registers nothing | the phase's followers (`ShareInbox.follow`, `ControlDefaults.follow`, `DefaultSurface.follow`) |
+| The role changes (primary ↔ viewer) | `RoleSelector` | no hook yet | `RoleSelector.acceptDemotion` and the sequences that call it, the harness's demotion |
+| The scene goes active or to the background | SwiftUI | no hook yet | `.onChange(of: scenePhase)` in `TopoApp` and `ChatView`; `GuestResident`'s lifecycle |
+| Media services reset | the system | no hook yet: `AudioSession` owns validity and observes it | separate observers in `Speaker` and `VoiceInput`, in no specified order |
+| The memory's home moves or mounts | `Memory` | no hook yet | `Memory`'s generation and move waiters, `GuestImages`' mount epoch |
+| A reply lands | `Harness` | `Harness.onLanded`, one closure, set once in `TopoApp` | `SpokenReply.follow` and the mascot's own follow of the turns |
+
 - A block handed to the system from a main-actor context and called back off the main thread (the input tap, on the audio thread) is written `@Sendable`: without it the closure is main-actor-isolated by inference, and Swift 6 opens it with an executor check that traps off the main thread, past any `catch`.
 
 ## Before you touch it, read
