@@ -29,5 +29,18 @@ import TopoAuth
         #expect(made == 0, "a value was made for a keychain that is not there")
         #expect(!FileManager.default.fileExists(atPath: path))
     }
+
+    /// A keychain whose file goes while the store points at it (the system keeps the open keychain
+    /// cached and goes on reading from it) is refused from then on, not read from the cache.
+    @Test func aKeychainWhoseFileIsRemovedIsRefusedFromThen() throws {
+        let keychain = try TemporaryKeychain()
+        defer { keychain.delete() }
+        let item = item(at: keychain.path)
+        try item.write(Data("kept".utf8))
+        #expect(try item.read() == Data("kept".utf8))
+        try FileManager.default.removeItem(atPath: keychain.path)
+        let read = #expect(throws: KeychainItem.Error.self) { try item.read() }
+        #expect(read?.status == errSecNoSuchKeychain)
+    }
 }
 #endif
