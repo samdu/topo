@@ -163,6 +163,13 @@ final class Memory {
     /// it writing to the screen, and stops one login's cleanup taking away the next one's
     /// folder.
     private var generation = 0
+    /// The login the memory is held under: a retry of the old copy's removal that lands after
+    /// it ended keeps nothing (`removeStranded`).
+    private let login: LoginLife
+    /// What `removeStranded` runs over the old copy; a test parks it to put a sign-out under it.
+    @ObservationIgnored var emptyAgain: @Sendable (URL, [String], Bool) async throws -> (left: [String], removed: Bool) = {
+        try await VaultMigration.emptyAgain($0, of: $1, removingFolder: $2)
+    }
 
     init(directory: URL, store: MemoryStore, device: DeviceID = DeviceIdentity.current,
          isSignedIn: @escaping @Sendable () -> Bool,
@@ -171,7 +178,7 @@ final class Memory {
          isUbiquitous: @escaping @Sendable (URL) -> Bool = VaultHome.isUbiquitous,
          warm: @escaping @Sendable (URL) async -> VaultDownloads.Report = { await VaultDownloads.warm($0) },
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() }, login: LoginLife = .shared) {
         self.localDirectory = directory
         self.store = store
         self.device = device
@@ -182,6 +189,7 @@ final class Memory {
         self.warm = warm
         self.ensureZone = ensureZone
         self.now = now
+        self.login = login
         home = readHome()
     }
 
@@ -693,8 +701,7 @@ final class Memory {
         let started = stranded.scope?.startAccessingSecurityScopedResource() == true
         defer { if started, let scope = stranded.scope { scope.stopAccessingSecurityScopedResource() } }
         do {
-            let outcome = try await VaultMigration.emptyAgain(stranded.folder, of: stranded.names,
-                                                              removingFolder: stranded.isLocal)
+            let outcome = try await emptyAgain(stranded.folder, stranded.names, stranded.isLocal)
             if outcome.left.isEmpty {
                 self.stranded = nil
                 moveError = nil
