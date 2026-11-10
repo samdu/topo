@@ -69,11 +69,10 @@ struct TimerStatus: Equatable, Sendable {
     var left: TimeInterval?
 }
 
-/// The system's alarms: AlarmKit on iOS 26 (`AlarmKitScheduler`), a fake in the suites, nothing
-/// below iOS 26 (`NoAlarms`).
+/// The system's alarms: AlarmKit (`AlarmKitScheduler`), a fake in the suites.
 protocol AlarmScheduler: Sendable {
-    /// The permission AlarmKit asks for, or nil where the phone has no AlarmKit.
-    var authorizer: (any Authorizer)? { get }
+    /// The permission AlarmKit asks for.
+    var authorizer: any Authorizer { get }
     func schedule(id: UUID, plan: TimerPlan) async throws
     /// Topo's alarms (AlarmKit lists only the app's own).
     func alarms() async throws -> [TimerStatus]
@@ -96,18 +95,6 @@ protocol ThrowingPrompt: Authorizer {
 /// AlarmKit's refusal of one alarm more than it holds, said so the mind can ask which to drop.
 struct AlarmLimit: Error {
     let reason = "the phone already holds as many of Topo's alarms as AlarmKit allows"
-}
-
-/// Below iOS 26: no AlarmKit, so no timer.
-struct NoAlarms: AlarmScheduler {
-    var authorizer: (any Authorizer)? { nil }
-    func schedule(id: UUID, plan: TimerPlan) async throws {}
-    func alarms() async throws -> [TimerStatus] { [] }
-    func pause(id: UUID) async throws {}
-    func resume(id: UUID) async throws {}
-    func again(id: UUID) async throws {}
-    func stop(id: UUID) async throws {}
-    func cancel(id: UUID) async throws {}
 }
 
 /// What each alarm was set as, which AlarmKit's `Alarm` does not carry, kept on disk by its id so
@@ -143,10 +130,7 @@ final class TimerRecords: Sendable {
 
     static let shared = TimerRecords(folder: URL.applicationSupportDirectory.appendingPathComponent("Timers", isDirectory: true))
 
-    /// AlarmKit where the phone has it.
-    static var scheduler: any AlarmScheduler {
-        if #available(iOS 26, *) { AlarmKitScheduler() } else { NoAlarms() }
-    }
+    static var scheduler: any AlarmScheduler { AlarmKitScheduler() }
 
     let folder: URL
     private let lock = OSAllocatedUnfairLock()
@@ -494,10 +478,9 @@ struct TimerTool: Tool {
     }
 
     func run(_ arguments: [String]) async -> ToolReply {
-        let alarms = scheduler.authorizer
-        let asking = alarms.map { OnScreen(alarms: $0, state: state, asked: asked) }
+        let asking = OnScreen(alarms: scheduler.authorizer, state: state, asked: asked)
         let inFront = await state() != .background
-        // Only a start needs the permission; one below iOS 26 has none to ask and is answered in `start`.
+        // Only a start needs the permission.
         let reply = await PhoneTool.run({ (call: Call) -> (any Authorizer)? in
             if case .start = call { asking } else { nil }
         }, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
@@ -594,8 +577,6 @@ struct TimerTool: Tool {
         }
     }
 
-    static let noAlarmKit = ToolReply(status: ToolReply.failed, text:
-        "topo: nothing was set: this phone's iOS has no AlarmKit (it needs iOS 26), so Topo cannot set an alarm here. Ask the person what it was for.\n")
     static let offScreen = ToolReply(status: ToolReply.failed, text:
         "topo: nothing was set: Topo asks once to allow alarms, and can ask only while it is on the screen. Ask the person to open Topo, then set it again.\n")
 
@@ -610,7 +591,6 @@ struct TimerTool: Tool {
         "topo: nothing was set: the prompt to allow alarms closed and AlarmKit kept no answer, so alarms are neither allowed nor refused. Ask the person to set it again with Topo on the screen, and to answer the prompt.\n")
 
     private func start(_ plan: TimerPlan, tell: String?, onStop: String?, soundPath: String?) async -> ToolReply {
-        guard scheduler.authorizer != nil else { return Self.noAlarmKit }
         // A turn is kept under the login the alarm was set under, so one set while signed out
         // would carry words no press could ever send.
         let login = login()

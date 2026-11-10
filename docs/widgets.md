@@ -69,7 +69,7 @@ The app declares `NSAllowsArbitraryLoads`, since a request may be plain `http` o
 
 ### Limits
 
-A control draws a symbol, a title, a second line and a tint and nothing else; at the small size, the symbol alone, and the tint is the system's to honour. It shows what the system last read of it, and the system decides when it reads again. No control intent asks for Face ID, so a press on the lock screen or the Action button runs as pressed. On iOS 18 to 25 there is no dynamic foreground: a turn's cue is recorded and drained in the background and nothing comes forward, and an `open` control does nothing visible. HomeKit is not available to the extension, so a toggle's state is what the mind and the runs set, never a live read.
+A control draws a symbol, a title, a second line and a tint and nothing else; at the small size, the symbol alone, and the tint is the system's to honour. It shows what the system last read of it, and the system decides when it reads again. No control intent asks for Face ID, so a press on the lock screen or the Action button runs as pressed. HomeKit is not available to the extension, so a toggle's state is what the mind and the runs set, never a live read.
 
 ## The default
 
