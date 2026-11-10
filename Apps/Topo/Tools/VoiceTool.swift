@@ -46,7 +46,7 @@ struct VoiceTool: Tool {
     topo voice working [status]             what a spoken turn sounds like while you work on it
     topo voice working off                  nothing until the reply
     topo voice working receipts             a short tone as you search the web, run a command or write prose, and one when the turn fails (the earcons' own, when they are on)
-    topo voice working sounds               the tones over a soft working bed while nothing else is heard, until the reply
+    topo voice working sounds               the tones over a soft working bed whenever you are not speaking, until the reply is read
 
     Sounds unless changed. The sounds are the spoken turn's: nothing sounds unless one is being
     waited for aloud. A change applies from the next sound, on this phone only, and they can

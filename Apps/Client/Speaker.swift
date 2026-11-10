@@ -665,6 +665,9 @@ final class Speaker {
         // replay, which answers no turn, has no bed under it at all.
         answering = nonce != nil
         voiceGap = answering
+        // A spoken turn's reply keeps the bed to its first frame; a replay takes it away now, so
+        // a bed a wait or a release has up is not under the replay's sentences.
+        askForBed()
         Perf.mark("speak.begin")
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
@@ -1028,7 +1031,8 @@ final class Speaker {
 
     private func drained() {
         guard making == 0 else { return }
-        if written?.live == true { heardOut() } else { finished() }
+        // A drain that reached main after the next sentence's frames were queued is no gap.
+        if written?.live == true { if queue.isIdle { heardOut() } } else { finished() }
     }
 
     /// The voice has said everything it has and the guest is still writing: the bed fills the

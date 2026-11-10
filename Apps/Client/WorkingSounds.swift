@@ -369,9 +369,9 @@ final class KeeperSounds {
     // MARK: - The bed
 
     /// The speaker wants the bed, or does not: it fades in under `sounds`, with replies read
-    /// aloud, while a turn's hold stands and the voice is not audible, and out otherwise. Off goes through whatever the mode, so a bed begun
-    /// under `sounds` is still faded out at its wait's end after the mode changed under it (a
-    /// change applies at the next sound; the bed plays on to the end of the wait it was for).
+    /// aloud, while a turn's hold stands and the voice is not audible, and out otherwise. The mode
+    /// is read at every ask, so a change applies at the next one; off goes through whatever the
+    /// mode, so a bed begun under `sounds` is still faded out after the mode changed under it.
     func working(_ on: Bool) {
         dropStale()
         // Never under a sentence: a wait taken while Topo is reading wants no bed.
@@ -432,9 +432,11 @@ final class KeeperSounds {
     }
 
     /// The call's session is changing hands (placed, taken by a phone call, or over): the bed's
-    /// player is stopped before the session changes and stays wanted, so the activation's resume
-    /// (`resume`) plays it again. Nothing is asked of the session and no hold is taken; a fade
-    /// still to be paused is paused by its own `park`.
+    /// player is stopped before Topo's session moves for it — before `callPlaced` sets the call's
+    /// category, and before `callDeactivated` and `callOver`'s hand-back (the system has already
+    /// taken the session at those two) — and stays wanted, so the activation's resume (`resume`)
+    /// plays it again. Nothing is asked of the session and no hold is taken; a fade is stopped
+    /// where it is, and its hold goes at its own `park`.
     func pause(_ why: String) {
         dropStale()
         guard let bed, bed.isPlaying else { return }

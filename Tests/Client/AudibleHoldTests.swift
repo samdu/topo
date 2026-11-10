@@ -236,7 +236,9 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(heard, "purple elephants")
         XCTAssertEqual(takes.count, 1, "the take was told other than once")
         XCTAssertEqual(takes.first?.sunk, 0, "the sink still held audio when the take was told")
-        XCTAssertEqual(takes.first?.listening, true, "the take was told after the decode, not before it")
+        // `listening` stands until the session is torn down, after the decode: told while it
+        // stands, the take is not after the teardown.
+        XCTAssertEqual(takes.first?.listening, true, "the take was told after the teardown")
     }
 
     /// Review Focus 1: a release whose send took no wait fades the bed before its hold goes, and
@@ -297,6 +299,22 @@ final class AudibleHoldTests: XCTestCase {
         try await render(rig, "the first frame") { bed.fades.last == 0 }
         try await render(rig, "the reply to end") { !rig.speaker.speaking }
         XCTAssertEqual(bed.fades, [KeeperSounds.bedVolume, 0], "the bed came back after a reply with nothing standing")
+    }
+
+    /// A replay begun over a bed that a turn's wait has up takes the bed away at once, before its
+    /// first sentence; once it is read with the wait still standing, the bed comes back.
+    func testAReplayOverAWaitsBedTakesItAway() async throws {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertTrue(rig.speaker.speak("Paris is the capital."))
+        XCTAssertEqual(bed.fades, [KeeperSounds.bedVolume, 0], "the bed stayed up under the replay")
+        await settle("the sentence to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the replay to end") { !rig.speaker.speaking }
+        XCTAssertEqual(bed.fades.last, KeeperSounds.bedVolume, "the wait's bed did not come back after the replay")
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"])
+        rig.speaker.endAwaiting("turn", "the test is done")
     }
 
     /// A replay answers no turn, so it has no bed under it, gap or not.
@@ -396,10 +414,20 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(bed.moments.last?.what, "play")
         XCTAssertEqual(bed.moments.last?.call, .active)
 
+        // A phone call takes the session with the call standing: paused before Topo marks it
+        // taken, and back at the next activation.
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(rig.audio.call, .deactivated)
+        XCTAssertFalse(bed.isPlaying, "the bed played on with the session taken")
+        XCTAssertEqual(bed.moments.last?.what, "pause")
+        XCTAssertEqual(bed.moments.last?.call, .active, "the bed was paused after Topo marked the session taken")
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        XCTAssertTrue(bed.isPlaying, "the bed did not come back after the session was given back")
+
         call.end()
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
         let pauses = bed.moments.filter { $0.what == "pause" }
-        XCTAssertEqual(pauses.count, 2, "the call's end did not pause the bed")
+        XCTAssertEqual(pauses.count, 3, "the call's end did not pause the bed")
         XCTAssertNotEqual(pauses.last?.call, AudioSession.CallPhase.none, "the bed was paused after the call was over")
         rig.speaker.endAwaiting("turn", "the test is done")
     }
