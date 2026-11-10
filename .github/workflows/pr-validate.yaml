@@ -151,8 +151,9 @@ jobs:
   # need none, a change only the hub, watch, TV, Womble or TopoLink compile
   # needs `others` alone, a change to the harness alone — a script whose own
   # test fakes everything it touches, named below one by one — needs
-  # `scripts` alone, which is those tests with no simulator and no build, and
-  # anything else — the app, a package the app links, the tests, the project,
+  # `scripts` alone, which is those tests with no simulator and no build, a
+  # test file alone needs the suites that compile or load it, and anything
+  # else — the app, a package the app links, a test file no rule names, the project,
   # this workflow, a script the product suites are what prove, a path no rule
   # names, or a diff that cannot be read — needs `topo_unit`, `topo_ui` and
   # `others`. `others` runs the scripts' tests too, so `scripts` is `false`
@@ -227,6 +228,15 @@ jobs:
           # run there. The watch's suite
           # also builds Apps/Widgets, Apps/Shared, Apps/Client and TopoCore,
           # which `all` already sends to `others`.
+          #
+          # A test file is skipped only by a suite that never compiles or
+          # loads it: TopoTests compiles Tests/Client, and TopoWatchTests
+          # WidgetDocumentTests.swift beside Tests/Watch; TopoUITests compiles
+          # Tests/ClientUI and takes Tests/Client/Widgets and Tests/Fixtures as
+          # resources; TopoTests bundles Tests/Fixtures/licences; the Topo
+          # scheme runs TopoUserland's tests, `swift test` in `others` every
+          # other package's; and smartturn-mel-test.sh, run in `others`, reads
+          # its chirp. Tests/ClientTalk, which no PR suite runs, stays `all`.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
             .github/* none
@@ -236,8 +246,16 @@ jobs:
             Apps/TopoWatchWidgets/* others
             Apps/* all
             Packages/TopoLink/* others
+            Packages/TopoUserland/Tests/* topo_unit
+            Packages/*/Tests/* others
             Packages/* all
             Tests/Watch/* others
+            Tests/Client/WidgetDocumentTests.swift topo_unit others
+            Tests/Client/Widgets/* topo_unit topo_ui
+            Tests/Client/* topo_unit
+            Tests/ClientUI/* topo_ui
+            Tests/Fixtures/smartturn-mel-chirp.bin all
+            Tests/Fixtures/* topo_unit topo_ui
             Tests/* all
             Womble/* others
             docs/* none
