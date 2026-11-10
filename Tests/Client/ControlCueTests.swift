@@ -235,6 +235,31 @@ final class ControlCueTests: XCTestCase {
         XCTAssertEqual(store.cues(), [])
     }
 
+    /// A cue whose turn is already in the log — an earlier drain sent it and its record was not
+    /// removed — drained by a harness that has not read the log: the drain reads the log first,
+    /// finds the cue's nonce there, and neither sets the toggle again (it was turned back off
+    /// since) nor puts the turn on the line a second time.
+    func testACueAlreadyInTheLogIsReadFirstAndNotActedOnAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let revision = try set("toggle-1", #"{"title": "Fan", "on": false, "action": {"kind": "turn", "say": "fan"}}"#)
+        let nonce = UUID().uuidString
+        let log = TurnLog(database: db)
+        let writer = try await log.writer(for: phone)
+        _ = try await writer.append(.person, "control toggle-1: fan on", continuing: try await log.read(), nonce: nonce)
+        try store.appendCue(SurfaceStore.Cue(nonce: nonce, slot: ControlSlot.stored("toggle-1"), id: ControlSlot.control,
+                                             revision: revision, turningOn: true, time: Date(), resolved: true))
+        // The zone is not made, so nothing on the line is sent: what the drain put there stays.
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        XCTAssertFalse(harness.hasRead)
+        await taps(harness).cues.drain()
+        XCTAssertTrue(harness.hasRead, "the drain did not read the log first")
+        XCTAssertEqual(store.readControl(slot: "toggle-1")?.document.on, false, "a cue already sent set its toggle again")
+        XCTAssertFalse(harness.owed.contains { $0.nonce == nonce }, "a cue already sent went on the line again")
+        let said = (try await log.read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.nonce), [nonce])
+        XCTAssertEqual(store.cues(), [])
+    }
+
     /// Signed out there are no documents: the value is "Sign in", and a tap on any revision comes
     /// forward and records and runs nothing.
     func testSignedOutTapRunsNothing() async throws {
