@@ -15,8 +15,6 @@ struct ControlTool: Tool {
     /// A clear of the control secrets the keychain refused at a sign-out, which refuses a new one
     /// until the app has cleared them (it tries again at each launch).
     var leftBehind = ConnectionsLeftBehind()
-    /// The login a secret is kept under: a set lands only while the epoch it took still stands.
-    var login: @MainActor @Sendable () -> LoginLife = { .shared }
     /// Awaited once a set has its login's mark and before it writes: a test parks the call there.
     var parked: @Sendable () async -> Void = {}
     /// A toggle's state set by the mind, told to the runs in flight (`WidgetActions.confirm`).
@@ -255,14 +253,19 @@ struct ControlTool: Tool {
         if let words = leftBehind.controlSecrets {
             return .failed("topo: no secret is kept: at an earlier sign-out \(words). The app tries again at each launch.\n")
         }
-        // The write and the login's end are one executor's: a sign-out clears the secrets on the
-        // main actor, so the check that the login the call began under still stands and the write
-        // are one main-actor section, and a set either lands before the clear takes it or keeps
-        // nothing. So this keychain call runs on the main actor, where the others take a queue
-        // of their own: a read or a delete across the clear leaves nothing behind, a write would.
-        let login = login
-        let epoch = await MainActor.run { login().epoch }
+        // The login a secret is kept under is the one the call came from: the mark its launch was
+        // started under, which the tool service's listener hands every call it accepts
+        // (`LaunchPorts`, `ToolCall.context`). One taken here would be taken at the first hop to
+        // the main actor, which a sign-out and the next sign-in can both run ahead of.
+        guard let epoch = ToolCall.context as? LoginLife.Epoch else {
+            return .failed("topo: this call carries no login; no secret is kept\n")
+        }
         await parked()
+        // The write and the login's end are one executor's: a sign-out clears the secrets on the
+        // main actor, so the check that the call's login still stands and the write are one
+        // main-actor section, and a set either lands before the clear takes it or keeps nothing.
+        // So this keychain call runs on the main actor, where the others take a queue of their
+        // own: a read or a delete across the clear leaves nothing behind, a write would.
         let secrets = secrets
         let kept = await MainActor.run { () -> ToolReply in
             guard epoch.isCurrent else { return .failed("topo: the login ended while this ran; no secret is kept\n") }

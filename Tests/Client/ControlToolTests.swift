@@ -95,7 +95,7 @@ final class ControlToolTests: XCTestCase {
                                        schedule: { [unowned self] _, body in scheduled.append(body) })
         let store = store
         return ControlTool(judge: WidgetRunJudge(home: homeTool, notify: nil, reminders: nil), store: { store }, reloader: { reloader },
-                           secrets: secrets, leftBehind: leftBehind, login: { [life] in life },
+                           secrets: secrets, leftBehind: leftBehind,
                            confirm: { [unowned self] on, slot, revision in confirmed.append("\(slot) \(on) \(revision)") },
                            askLocal: { [unowned self] in asked.append($0) }, localState: { .notAsked })
     }
