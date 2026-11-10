@@ -233,6 +233,47 @@ func startedProxy(_ upstream: any Upstream) async throws -> (APIProxy, UInt16, L
     return (proxy, port, lines)
 }
 
+/// A proxy over `upstream`, started on a port of `TestPorts`, with its log captured.
+func startedProxyOnTestPort(_ upstream: any Upstream) async throws -> (APIProxy, UInt16, LogLines) {
+    try await TestPorts.first { port in
+        let lines = LogLines()
+        let proxy = try APIProxy(upstream: upstream, log: lines.log)
+        await proxy.set(requestedPort: port)
+        let bound: UInt16
+        do { bound = try await proxy.start() } catch { await proxy.stop(); throw error }
+        // Asked for once: a later start or `relisten` picks a port of its own, as in the app.
+        await proxy.set(requestedPort: .any)
+        return (proxy, bound, lines)
+    }
+}
+
+/// A port for a test that lets its listener go and then needs that port again: a squatter bound
+/// on it, or `relisten(on:)`. Every other listener and connection in the run is on a port the
+/// system picks from its ephemeral range (49152–65535, `net.inet.ip.portrange.first`), and a
+/// port it has just freed is one it can pick next, which hands a parallel test the port this one
+/// was about to take back. These are below that range, so nothing in the run is handed one, and
+/// each is given out once per run, from a random start so two runs at once seldom meet.
+enum TestPorts {
+    static let range: ClosedRange<UInt16> = 40000...43999
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var next = Int.random(in: 0..<range.count)
+
+    static func take() -> UInt16 {
+        lock.withLock {
+            defer { next += 1 }
+            return range.lowerBound + UInt16(next % range.count)
+        }
+    }
+
+    /// `start` over the ports in turn, past one something outside the run already holds.
+    static func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
+        for _ in 1..<20 {
+            do { return try await start(NWEndpoint.Port(rawValue: take())!) } catch NWError.posix(.EADDRINUSE) {}
+        }
+        return try await start(NWEndpoint.Port(rawValue: take())!)
+    }
+}
+
 func post(_ path: String, body: String, headers: [String] = []) -> String {
     let extra = headers.map { $0 + "\r\n" }.joined()
     return "POST \(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\(extra)Content-Length: \(body.utf8.count)\r\n\r\n\(body)"

@@ -40,6 +40,47 @@ func startedService(_ tools: [any Tool], bound: Duration = ToolService.defaultBo
     return (service, port, logs)
 }
 
+/// A service over `tools`, started on a port of `TestPorts`, with its log captured.
+func startedServiceOnTestPort(_ tools: [any Tool]) async throws -> (service: ToolService, port: UInt16, logs: LogLines) {
+    try await TestPorts.first { port in
+        let logs = LogLines()
+        let service = try ToolService(tools: tools, log: { logs.add($0) })
+        await service.set(requestedPort: port)
+        let bound: UInt16
+        do { bound = try await service.start() } catch { await service.stop(); throw error }
+        // Asked for once: a later start or `relisten` picks a port of its own, as in the app.
+        await service.set(requestedPort: .any)
+        return (service, bound, logs)
+    }
+}
+
+/// A port for a test that lets its listener go and then needs that port again: a squatter bound
+/// on it, or `relisten(on:)`. Every other listener and connection in the run is on a port the
+/// system picks from its ephemeral range (49152–65535, `net.inet.ip.portrange.first`), and a
+/// port it has just freed is one it can pick next, which hands a parallel test the port this one
+/// was about to take back. These are below that range, so nothing in the run is handed one, and
+/// each is given out once per run, from a random start so two runs at once seldom meet.
+enum TestPorts {
+    static let range: ClosedRange<UInt16> = 44000...47999
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var next = Int.random(in: 0..<range.count)
+
+    static func take() -> UInt16 {
+        lock.withLock {
+            defer { next += 1 }
+            return range.lowerBound + UInt16(next % range.count)
+        }
+    }
+
+    /// `start` over the ports in turn, past one something outside the run already holds.
+    static func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
+        for _ in 1..<20 {
+            do { return try await start(NWEndpoint.Port(rawValue: take())!) } catch NWError.posix(.EADDRINUSE) {}
+        }
+        return try await start(NWEndpoint.Port(rawValue: take())!)
+    }
+}
+
 /// One raw request on a fresh connection, and the status and body that came back — or nil status
 /// when the connection closed with nothing said.
 func exchange(port: UInt16, _ head: String, body: Data = Data(), host: NWEndpoint.Host = "127.0.0.1")
