@@ -33,7 +33,7 @@ extension Guest: GuestMounts {}
 /// mounted; one that does not is made not executable, so no mount this process already made can
 /// run it either.
 public struct ClaudeCodeInstaller: Sendable {
-    public enum Failure: Error, Equatable, CustomStringConvertible {
+    public enum Failure: PinMismatch, Equatable, CustomStringConvertible {
         case wrongSize(expected: Int64, got: Int64)
         case wrongDigest
         case unreadable(String)
@@ -102,14 +102,7 @@ public struct ClaudeCodeInstaller: Sendable {
     }
 
     func verify() throws {
-        let size: Int64
-        do {
-            size = (try FileManager.default.attributesOfItem(atPath: binary.path)[.size] as? Int64) ?? -1
-        } catch {
-            throw Failure.unreadable(error.localizedDescription)
-        }
-        guard size == pin.size else { throw Failure.wrongSize(expected: pin.size, got: size) }
-        guard try digest(binary) == pin.sha256.lowercased() else { throw Failure.wrongDigest }
+        try PinnedFile.verify(binary, size: pin.size, sha256: pin.sha256, as: Failure.self, digest: digest)
     }
 
     /// The guest sees the host's mode bits through the mount, and its kernel refuses to exec a
