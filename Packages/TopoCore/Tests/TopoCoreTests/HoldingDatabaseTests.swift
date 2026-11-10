@@ -21,7 +21,8 @@ import TopoCoreTesting
         held.release()
         let answered = await #expect(throws: RecordDatabaseError.self) { try await second.value }
         #expect(unavailable(answered), "a save held unlanded answers unavailable")
-        try await until("a held save left suspended") { held.held == 0 }
+        try await until("a held save left suspended") { held.held == 0 && held.answered == 2 }
+        #expect(held.answered == 2, "both held saves answered the one release")
     }
 
     /// A landing save is in the store at once; the bounded view gives the answer up at its
@@ -51,16 +52,20 @@ import TopoCoreTesting
         #expect(saved.first?.changeTag != nil, "the answer is the stored record, tag and all")
     }
 
-    /// A held fetch is given up at the view's bound and still out until the release, which lets
-    /// it read the store.
+    /// A held fetch is given up at the view's bound, no sooner and not at some bound of its own,
+    /// and still out until the release, which lets it read the store.
     @Test func aHeldFetchGivesUpAtItsBound() async throws {
         let inner = InMemoryRecordDatabase()
         _ = try await inner.save([Record(type: "T", id: RecordID("a"))])
         let held = HoldingDatabase(inner)
         held.holdNextFetch()
-        let bounded = held.answering(within: 0.05)
+        let bounded = held.answering(within: 0.2)
+        let start = ContinuousClock.now
         let ranOut = await givenUp(held) { try await bounded.fetch([RecordID("a")]) }
+        let waited = ContinuousClock.now - start
         #expect(unavailable(ranOut))
+        #expect(waited >= .milliseconds(200), "given up before its bound, after \(waited)")
+        #expect(waited < .milliseconds(900), "given up long after its bound, after \(waited)")
         try await until("the fetch the bound gave up is still out") { held.held == 1 }
         #expect(held.answered == 0)
         held.release()
