@@ -239,8 +239,10 @@ jobs:
           # Tests/ClientUI and takes Tests/Client/Widgets and Tests/Fixtures as
           # resources; TopoTests bundles Tests/Fixtures/licences; the Topo
           # scheme runs TopoUserland's tests, `swift test` in `others` every
-          # other package's; and smartturn-mel-test.sh, run in `others`, reads
-          # its chirp. Tests/ClientTalk, which no PR suite runs, stays `all`.
+          # other package's; smartturn-mel-test.sh, run in `others`, reads
+          # its chirp; and mac-suite-test.sh, run in `scripts` (and so in
+          # `others`), scans the repository's own Tests/ClientUI. Tests/ClientTalk,
+          # which no PR suite runs, stays `all`.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
             .github/* none
@@ -257,7 +259,7 @@ jobs:
             Tests/Client/WidgetDocumentTests.swift topo_unit others
             Tests/Client/Widgets/* topo_unit topo_ui
             Tests/Client/* topo_unit
-            Tests/ClientUI/* topo_ui
+            Tests/ClientUI/* topo_ui scripts
             Tests/Fixtures/smartturn-mel-chirp.bin all
             Tests/Fixtures/* topo_unit topo_ui
             Tests/* all

@@ -48,7 +48,7 @@ expected=(
   'Tests/Client/WidgetDocumentTests.swift topo_unit others'
   'Tests/Client/Widgets/* topo_unit topo_ui'
   'Tests/Client/* topo_unit'
-  'Tests/ClientUI/* topo_ui'
+  'Tests/ClientUI/* topo_ui scripts'
   'Tests/Fixtures/smartturn-mel-chirp.bin all'
   'Tests/Fixtures/* topo_unit topo_ui'
   'Tests/* all'
@@ -126,7 +126,8 @@ for rule in "${expected[@]}"; do
       for suite in topo_unit topo_ui others; do
         case "$want" in *" $suite "*) flags+=(true) ;; *) flags+=(false) ;; esac
       done
-      selects "${flags[@]}" "$glob alone ($example)" "$example"$'\n' ;;
+      case "$want" in *" scripts "*) flags+=(true) ;; *) flags+=(false) ;; esac
+      selects "${flags[0]}" "${flags[1]}" "${flags[2]}" "$glob alone ($example)" "$example"$'\n' "${flags[3]}" ;;
   esac
 done
 
@@ -181,7 +182,7 @@ selects true true true "a path no rule names" $'Somewhere/New.swift\n'
 
 # A test file alone: only the suites that compile or load it.
 selects true false false "the unit tests" $'Tests/Client/LookToolTests.swift\n'
-selects false true false "the UI tests" $'Tests/ClientUI/MicrophonePressTests.swift\n'
+selects false true false "the UI tests, and the scripts' test that scans them" $'Tests/ClientUI/MicrophonePressTests.swift\n' true
 selects true false true "the widget document's tests, which the watch's suite compiles too" $'Tests/Client/WidgetDocumentTests.swift\n'
 selects true true false "a widget's layout, which the UI tests take as a resource" $'Tests/Client/Widgets/systemSmall.json\n'
 selects true true false "a widget's reference image" $'Tests/Client/Widgets/References/systemSmall.png\n'
@@ -192,7 +193,7 @@ selects false false true "a package's tests" $'Packages/TopoCore/Tests/TopoCoreT
 selects true false false "the guest's tests, which the Topo scheme runs" $'Packages/TopoUserland/Tests/TopoUserlandTests/RootfsTests.swift\n'
 selects true true true "TopoCore's test double, which is source" $'Packages/TopoCore/Sources/TopoCoreTesting/HoldingDatabase.swift\n'
 selects true true true "a package's manifest" $'Packages/TopoCore/Package.swift\n'
-selects true true false "the unit and UI tests together" $'Tests/Client/LookToolTests.swift\nTests/ClientUI/MicrophonePressTests.swift\n'
+selects true true false "the unit and UI tests together" $'Tests/Client/LookToolTests.swift\nTests/ClientUI/MicrophonePressTests.swift\n' true
 selects true false true "the unit tests beside a package's" $'Tests/Client/LookToolTests.swift\nPackages/TopoProxy/Tests/TopoProxyTests/ProxyTests.swift\n'
 selects true true true "a test beside the app" $'Tests/Client/LookToolTests.swift\nApps/Client/Ear.swift\n'
 
