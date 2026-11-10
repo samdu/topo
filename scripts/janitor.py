@@ -14,7 +14,8 @@ judgement:
      pull_request validate run green, no unchecked box in the description,
      the automerge label when the repository requires one, nothing changed
      under the paths its own validation runs from — on the first pass that
-     reads it so, pinned to the head the green run was read for. Nothing else
+     reads it so, pinned to the head the green run was read for, with `--admin`,
+     since gh itself refuses a PR the ruleset leaves BLOCKED. Nothing else
      merges unattended, because main's ruleset lets only an admin move it,
      and no workflow's token is an admin's (docs/janitor.md);
   2. reruns the reviewer once per head when a red validate run has no
@@ -1244,7 +1245,10 @@ class Shell:
         return [p for f in listed for p in (f.get("filename"), f.get("previous_filename")) if p]
 
     def merge(self, number, head):
-        self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",
+        """`--admin` only skips gh's own refusal of a PR whose merge state is BLOCKED, which
+        main's ruleset makes every PR's; GitHub judges the merge as it would any admin's.
+        `--match-head-commit` has GitHub refuse it once the head is not the one read."""
+        self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch", "--admin",
                   "--match-head-commit", head], mutating=True)
 
     def rerun(self, job_id):
