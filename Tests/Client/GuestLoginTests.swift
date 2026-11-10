@@ -117,7 +117,8 @@ final class GuestLoginTests: XCTestCase {
             try FileManager.default.createSymbolicLink(atPath: claude.path, withDestinationPath: target)
             var asked: [String] = []
             XCTAssertThrowsError(try GuestResident.makeHome(home) { _, path in asked.append(path) }, target) { error in
-                XCTAssertTrue("\(error)".contains(".claude"), "the refusal names the link: \(error)")
+                XCTAssertEqual(error as? GuestBridgeError, .notReady(".claude in the guest's home is not a folder"),
+                               "the refusal is the home's own, naming the link: \(error)")
             }
             XCTAssertFalse(asked.contains(claude.path), "nothing is protected through the link to \(target)")
             XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("made").path), target)
@@ -126,6 +127,22 @@ final class GuestLoginTests: XCTestCase {
                 try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
             }
         }
+    }
+
+    /// A file the guest left at `~/.claude` is refused the same way, and is left as it was.
+    func testAFileAtClaudeIsRefusedAndLeftAsItWas() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("login-file-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let claude = home.appendingPathComponent(".claude")
+        try Data("the guest's own".utf8).write(to: claude)
+        var asked: [String] = []
+        XCTAssertThrowsError(try GuestResident.makeHome(home) { _, path in asked.append(path) }) { error in
+            XCTAssertEqual(error as? GuestBridgeError, .notReady(".claude in the guest's home is not a folder"),
+                           "the refusal is the home's own, naming the file: \(error)")
+        }
+        XCTAssertFalse(asked.contains(claude.path), "the file was given the folder's protection")
+        XCTAssertEqual(try Data(contentsOf: claude), Data("the guest's own".utf8))
     }
 
     /// The guest's files are out of `Documents`, which Finder's file sharing shows: the standard
