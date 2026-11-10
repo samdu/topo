@@ -81,6 +81,20 @@ expected=(
   'scripts/tests/simulator-run-test.sh scripts'
   'scripts/tests/ci-audio-lane-test.sh scripts'
   'scripts/tests/ci-require-tests-test.sh scripts'
+  'scripts/tests/agent-simulator-test.sh scripts'
+  'scripts/tests/archive-upload-test.sh scripts'
+  'scripts/tests/asc-pem-test.sh scripts'
+  'scripts/tests/build-ish-test.sh scripts'
+  'scripts/tests/check-built-assets-test.sh scripts'
+  'scripts/tests/check-built-plist-test.sh scripts'
+  'scripts/tests/fetch-phonon-test.sh scripts'
+  'scripts/tests/mac-suite-test.sh scripts'
+  'scripts/tests/maps-opens-nothing-test.sh scripts'
+  'scripts/tests/model-manifest-test.sh scripts'
+  'scripts/tests/perf-run-test.sh scripts'
+  'scripts/tests/phonon-bundles-test.sh scripts'
+  'scripts/tests/smartturn-mel-test.sh scripts'
+  'scripts/tests/suite-gate-test.sh scripts'
 )
 
 failures=0
@@ -154,6 +168,8 @@ selects false false false "the simulator run's and the audio lane's tests alone"
 selects true true true "the simulator run's script beside its test" $'scripts/simulator-run.sh\nscripts/tests/simulator-run-test.sh\n'
 selects false false false "the suite gate's test alone" $'scripts/tests/ci-require-tests-test.sh\n' true
 selects true true true "the suite gate beside its test" $'scripts/ci-require-tests.sh\nscripts/tests/ci-require-tests-test.sh\n'
+selects false false false "a build script's test alone" $'scripts/tests/build-ish-test.sh\n' true
+selects true true true "the build script beside its test" $'scripts/build-ish.sh\nscripts/tests/build-ish-test.sh\n'
 selects true true true "the audio lane's script beside its test" $'scripts/ci-audio-lane.sh\nscripts/tests/ci-audio-lane-test.sh\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
@@ -176,7 +192,7 @@ selects true true true "this workflow" $'.github/workflows/pr-validate.yaml\n'
 selects true true true "the Mac suites' script" $'scripts/mac-suite.sh\n'
 selects true true true "the audio lane's script" $'scripts/ci-audio-lane.sh\n'
 selects true true true "the script that reads the suites' results" $'scripts/ci-require-tests.sh\n'
-selects true true true "a script's test" $'scripts/tests/suite-gate-test.sh\n'
+selects false false false "a script's test, which the scripts suite runs" $'scripts/tests/suite-gate-test.sh\n' true
 selects true true true "a build script" $'scripts/build-ish.sh\n'
 selects true true true "a path no rule names" $'Somewhere/New.swift\n'
 
