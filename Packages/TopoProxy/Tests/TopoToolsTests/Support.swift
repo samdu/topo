@@ -40,8 +40,8 @@ func startedService(_ tools: [any Tool], bound: Duration = ToolService.defaultBo
     return (service, port, logs)
 }
 
-/// A service over `tools`, started on a port of `TestPorts`, with its log captured.
-func startedServiceOnTestPort(_ tools: [any Tool], over ports: [UInt16]? = nil) async throws -> (service: ToolService, port: UInt16, logs: LogLines) {
+/// A service over `tools`, started on the first port `ports` draws that is free, with its log captured.
+func startedServiceOnTestPort(_ tools: [any Tool], from ports: TestPorts = .shared) async throws -> (service: ToolService, port: UInt16, logs: LogLines) {
     let start = { (port: NWEndpoint.Port) in
         let logs = LogLines()
         let service = try ToolService(tools: tools, log: { logs.add($0) })
@@ -52,8 +52,7 @@ func startedServiceOnTestPort(_ tools: [any Tool], over ports: [UInt16]? = nil) 
         await service.set(requestedPort: .any)
         return (service, bound, logs)
     }
-    if let ports { return try await TestPorts.first(over: ports, start) }
-    return try await TestPorts.first(start)
+    return try await ports.first(start)
 }
 
 /// A port for a test that lets its listener go and then needs that port again: a squatter bound
@@ -62,29 +61,52 @@ func startedServiceOnTestPort(_ tools: [any Tool], over ports: [UInt16]? = nil) 
 /// port it has just freed is one it can pick next, which hands a parallel test the port this one
 /// was about to take back. These are below that range, so nothing in the run is handed one, and
 /// each is given out once per run, from a random start so two runs at once seldom meet.
-enum TestPorts {
+final class TestPorts: @unchecked Sendable {
     static let range: ClosedRange<UInt16> = 44000...47999
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var next = Int.random(in: 0..<range.count)
+    /// The suites' one allocator: every port a test binds through `first` comes out of it.
+    static let shared = TestPorts(offset: Int.random(in: 0..<range.count))
 
-    static func take() -> UInt16 {
-        lock.withLock {
-            defer { next += 1 }
-            return range.lowerBound + UInt16(next % range.count)
+    private let lock = NSLock()
+    private var handing: [UInt16]
+    private let parent: TestPorts?
+    private let offset: Int?
+    private var drawn = 0
+
+    /// The range from `offset`, each port once and none twice: draw n is the port `offset + n`
+    /// round the range, and the draw after the range's count of them is nil.
+    init(offset: Int) {
+        handing = []
+        parent = nil
+        self.offset = offset
+    }
+
+    /// `ports` in turn, then what `parent` draws; with no parent, nil once `ports` are spent.
+    /// A test hands only a port it drew from `shared` itself, so whatever this binds came out of
+    /// `shared` once.
+    init(handing ports: [UInt16], then parent: TestPorts? = nil) {
+        handing = ports
+        self.parent = parent
+        offset = nil
+    }
+
+    /// The next port, consumed whether or not it is bound: nil when there is none.
+    func draw() -> UInt16? {
+        let own = lock.withLock { () -> UInt16?? in
+            if !handing.isEmpty { return .some(handing.removeFirst()) }
+            guard let offset else { return .none }
+            guard drawn < Self.range.count else { return .some(nil) }
+            defer { drawn += 1 }
+            return .some(Self.range.lowerBound + UInt16((offset + drawn) % Self.range.count))
         }
+        if let own { return own }
+        return parent?.draw()
     }
 
-    /// `start` over every port of the range in turn, from the next to be handed out, past each
-    /// one already held. It spends one draw: a port held outside the run moves the start on to
-    /// the next, which may be another test's, and that bind is refused and passed over too.
-    static func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
-        let from = Int(take() - range.lowerBound)
-        return try await first(over: (0..<range.count).lazy.map { range.lowerBound + UInt16((from + $0) % range.count) }, start)
-    }
-
-    /// `start` over `ports` in turn, past each one already held; that refusal if every one is.
-    static func first<T>(over ports: some Sequence<UInt16>, _ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
-        for port in ports {
+    /// `start` on the next port, and on the next after each one already held, every port tried
+    /// consumed so no later draw is handed it, a fallback's included; that refusal once there is
+    /// no port left to draw.
+    func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
+        while let port = draw() {
             do { return try await start(NWEndpoint.Port(rawValue: port)!) } catch NWError.posix(.EADDRINUSE) {}
         }
         throw NWError.posix(.EADDRINUSE)
@@ -180,16 +202,22 @@ func squat(_ port: UInt16) async throws -> NWListener {
     let listener = try NWListener(using: parameters)
     listener.newConnectionHandler = { $0.cancel() }
     let once = SquatReady()
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        once.continuation = continuation
-        listener.stateUpdateHandler = { state in
-            switch state {
-            case .ready: once.resume(nil)
-            case .failed(let error), .waiting(let error): once.resume(error)
-            default: break
+    do {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            once.continuation = continuation
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready: once.resume(nil)
+                case .failed(let error), .waiting(let error): once.resume(error)
+                default: break
+                }
             }
+            listener.start(queue: DispatchQueue(label: "test.squat"))
         }
-        listener.start(queue: DispatchQueue(label: "test.squat"))
+    } catch {
+        // A squat refused lets its listener go, so a search past held ports leaves none behind.
+        listener.cancel()
+        throw error
     }
     return listener
 }
