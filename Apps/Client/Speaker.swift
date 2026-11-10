@@ -163,7 +163,9 @@ final class Speaker {
         // A cue is never played into an open microphone, and whether one is open or opening is
         // this object's answer.
         self.earcons?.microphoneOpen = { [weak self] in self?.microphoneBusy ?? false }
-        sounds?.voiceSpeaking = { [weak self] in self?.speaking ?? false }
+        // The voice is audible while it is reading and not in one of its gaps: the bed fills a
+        // gap and never a sentence.
+        sounds?.voiceSpeaking = { [weak self] in self.map { $0.speaking && !$0.voiceGap } ?? false }
         // Receipts sound into an open microphone, as Daphne's do: the conversation shuts its gate
         // under each, and with noise suppression on the input's voice processing ducks them. Whether
         // one is open or opening sets the working bed's level, asked rather than told at the press
@@ -201,6 +203,9 @@ final class Speaker {
         call.onStart = { [weak self] in
             guard let self else { return }
             onCall?(.placing)
+            // The bed's player is a handle on the session too: paused before the category
+            // changes, kept wanted, and played again by the activation's resume.
+            sounds?.pause("the call is being placed")
             // The session is the system's from here until it activates it: a frame scheduled
             // meanwhile would be heard twice once the activation's rebuild puts it back, so the
             // engine is dead and what is owed waits, as at an interruption.
@@ -220,6 +225,7 @@ final class Speaker {
             // A phone call took the session with ours still standing: the engine is dead and
             // the hold stands, as at an interruption, until the system activates again.
             AudioLog.say("the call's session was taken; the engine is dead, the hold stands")
+            sounds?.pause("the call's session was taken")
             audio.callDeactivated()
             queue.interrupted()
             onCall?(.taken)
@@ -236,6 +242,9 @@ final class Speaker {
             // A call refused before the system performed its start never took the session: the
             // keeper is where it was, on a session that was never the system's.
             guard audio.call != .none else { return }
+            // Before the call's end can hand the session back, which a player still running
+            // on it would make a hand-back under live I/O.
+            sounds?.pause("the call is over")
             audio.callOver()
             // The system's deactivation took the session with the engine on it: what is owed is
             // kept and the engine is rebuilt over a session activated afresh, in front where that
@@ -374,7 +383,7 @@ final class Speaker {
             return Wait(spoken: true, held: false)
         }
         waits[nonce] = ceilingWait(nonce)
-        sounds?.working(true)
+        askForBed()
         return Wait(spoken: true, held: true)
     }
 
@@ -473,7 +482,10 @@ final class Speaker {
         if sending == token { sending = nil }
         guard let bound = releases.removeValue(forKey: token) else { return }
         bound.cancel()
+        taken.remove(token)
         AudioLog.say("release \(token) let go: \(why)")
+        // Before the hold drops, so the bed's fade-out is held through where this was the last.
+        askForBed()
         audio.wantAlive(false, for: .releasing(token))
     }
 
@@ -485,7 +497,7 @@ final class Speaker {
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
         // Before the hold drops, so the bed's fade-out is held through where this was the last.
-        if waits.isEmpty { sounds?.working(false) }
+        askForBed()
         audio.wantAlive(false, for: .awaitingReply(nonce))
     }
 
@@ -604,7 +616,6 @@ final class Speaker {
     /// `reading` reads `text` from here; without it the caller queues the sentences itself.
     private func begin(_ text: String, answering nonce: String?, reply: TurnRef?, reading: Bool) -> Bool {
         cancel()
-        replyBegan = false
         readingFailed = false
         guard voice.ready else {
             #if DEBUG
@@ -650,6 +661,10 @@ final class Speaker {
             return false
         }
         speaking = true
+        // A reply to a spoken turn is quiet until its first frame, and the bed fills that; a
+        // replay, which answers no turn, has no bed under it at all.
+        answering = nonce != nil
+        voiceGap = answering
         Perf.mark("speak.begin")
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
@@ -690,8 +705,10 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
-    /// The keeper's sounds (`KeeperSounds`): the bed from the release to the reply's first frame,
-    /// dipped while a microphone is open, and back at an interruption's end (`resumeAudio`). The
+    /// The keeper's sounds (`KeeperSounds`): the bed wherever a turn's hold stands and the voice
+    /// is not heard (`askForBed`), dipped while a microphone is open, paused while the call's
+    /// session changes hands, and back at an interruption's end and the call's activation
+    /// (`resumeAudio`). The
     /// app's to give; a speaker given none sounds nothing, which is every suite's but theirs.
     let sounds: KeeperSounds?
 
@@ -712,9 +729,17 @@ final class Speaker {
     /// under one ends on the conversation's go-ahead rather than `done`, where the go-ahead can
     /// sound (`KeeperSounds.saysGoAhead`).
     var conversing = false
-    /// Whether this reply's first frame has been scheduled, so the bed goes out once per reply
-    /// and not at every sentence's first frame.
-    private var replyBegan = false
+    /// Whether the reply being read is a spoken turn's, which is what the bed fills the voice's
+    /// gaps for: a replay answers no turn and gets none.
+    private var answering = false
+    /// The voice's gap inside a reading of a spoken turn's reply: from `begin` to the first
+    /// frame, and again from the moment the voice has said everything it has with the guest
+    /// still writing — the guest at its tools — to the next frame scheduled. A drain with a
+    /// sentence still being made is the pause between two sentences, not a gap.
+    private(set) var voiceGap = false
+    /// The releases whose utterance `VoiceInput` has taken (`utteranceTaken`): only those want
+    /// the bed, so its onset is never in input still being collected.
+    private var taken: Set<Int> = []
 
     /// The cues a spoken exchange sounds (`Earcons`), on this speaker's session: the chat's press
     /// plays the microphone's and the release's, this object plays `done` as a reply ends, or `failed` for one its turn's failure cut short. The
@@ -931,10 +956,10 @@ final class Speaker {
                 guard !frame.samples.isEmpty else { continue }
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
-                if !replyBegan {
-                    // The reply's first frame: the bed gives way to the voice.
-                    replyBegan = true
-                    sounds?.working(false)
+                if voiceGap {
+                    // The voice is heard again: the bed gives way to it.
+                    voiceGap = false
+                    askForBed()
                 }
                 if first == nil {
                     first = now() - started
@@ -995,11 +1020,41 @@ final class Speaker {
     /// two sentences and the last sentence is made while the queue is still full.
     private func made() {
         making -= 1
-        if making == 0, queue.isIdle, written?.live != true { finished() }
+        guard making == 0, queue.isIdle else { return }
+        // The other order from `drained`'s: the queue drained while this sentence was still
+        // being made, and it ended with no frame after it, so no drain is coming to say so.
+        if written?.live == true { heardOut() } else { finished() }
     }
 
     private func drained() {
-        if making == 0, written?.live != true { finished() }
+        guard making == 0 else { return }
+        if written?.live == true { heardOut() } else { finished() }
+    }
+
+    /// The voice has said everything it has and the guest is still writing: the bed fills the
+    /// gap until the next frame.
+    private func heardOut() {
+        guard speaking, answering, !voiceGap else { return }
+        voiceGap = true
+        AudioLog.say("the voice is heard out with the guest still writing")
+        askForBed()
+    }
+
+    /// Whether the bed is wanted, asked of the keeper's sounds wherever the answer can change and
+    /// before any hold that changed it drops: while a release whose utterance is taken, a turn's
+    /// wait, or a gap of the voice in a spoken turn's reading stands. The keeper's sounds judge
+    /// the rest — the mode, the mute, a turn's hold, the voice — and fade it out otherwise.
+    private func askForBed() {
+        sounds?.working(!taken.isEmpty || !waits.isEmpty || (speaking && voiceGap))
+    }
+
+    /// `VoiceInput` has taken a release's utterance: its tap is off or its gate shut, so the bed
+    /// can begin under the decode and the send without the ear hearing it. Every release standing
+    /// has had its utterance taken by now.
+    func utteranceTaken() {
+        guard !releases.isEmpty else { return }
+        taken.formUnion(releases.keys)
+        askForBed()
     }
 
     /// A frame was scheduled or heard: the reply is getting somewhere, so its bound starts again.
@@ -1056,6 +1111,11 @@ final class Speaker {
     /// this — `made` and `drained` both have to agree before either calls it.
     private func done() {
         speaking = false
+        voiceGap = false
+        answering = false
+        // Before `.speaking` drops: a wait or a release still standing has the bed back now the
+        // voice is done, and one that wants none is faded out under the reading's hold.
+        askForBed()
         reading?.cancel()
         reading = nil
         audio.wantScreenAwake(false, for: .speaking)

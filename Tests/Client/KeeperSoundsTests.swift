@@ -112,7 +112,8 @@ final class KeeperSoundsTests: XCTestCase {
 
     /// `speakerCenter` puts the speaker's notifications on a center of their own, so a test posts
     /// a reset to the session's handler and the speaker's one at a time, in the order it chooses.
-    private func rig(mode: WorkingSounds.Mode? = nil, earcons: Bool = false, isActive: Bool = true,
+    /// The mode is Receipts unless a test names one; nil leaves the store never asked.
+    private func rig(mode: WorkingSounds.Mode? = .receipts, earcons: Bool = false, isActive: Bool = true,
                      heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
                      speakerCenter: NotificationCenter? = nil) async -> Rig {
         let seams = Seams()
@@ -425,19 +426,20 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
-    /// Review Focus 12: a value kept that is no mode — a word nobody chose, a Boolean — reads as
-    /// `receipts`; a phone never asked reads as `receipts`.
+    /// A value kept that is no mode — a word nobody chose, a Boolean — reads as `sounds`, and so
+    /// does a phone never asked; Receipts and Off kept are kept.
     func testAnUnknownKeptValueIsTheStandard() {
         let defaults = makeDefaults()
-        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
-        defaults.set("loud", forKey: WorkingSounds.key)
-        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
-        defaults.set(true, forKey: WorkingSounds.key)
-        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
-        defaults.set(false, forKey: WorkingSounds.key)
-        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
-        defaults.set("sounds", forKey: WorkingSounds.key)
+        XCTAssertEqual(WorkingSounds.standard, .sounds)
         XCTAssertEqual(WorkingSounds.mode(defaults), .sounds)
+        defaults.set("loud", forKey: WorkingSounds.key)
+        XCTAssertEqual(WorkingSounds.mode(defaults), .sounds)
+        defaults.set(true, forKey: WorkingSounds.key)
+        XCTAssertEqual(WorkingSounds.mode(defaults), .sounds)
+        defaults.set(false, forKey: WorkingSounds.key)
+        XCTAssertEqual(WorkingSounds.mode(defaults), .sounds)
+        defaults.set("receipts", forKey: WorkingSounds.key)
+        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
         defaults.set("off", forKey: WorkingSounds.key)
         XCTAssertEqual(WorkingSounds.mode(defaults), .off)
     }
@@ -676,8 +678,8 @@ final class KeeperSoundsTests: XCTestCase {
     }
 
     /// With a second turn's wait standing, the first's reply does not end the bed at its landing
-    /// — the wait it ends is not the last — but at its first frame, so the bed is not under the
-    /// voice. It is not brought back for the second wait once the reply is read.
+    /// but at its first frame, so the bed is not under the voice; once the reply is read the bed
+    /// comes back for the second wait (`AudibleHoldTests` holds the coming back).
     func testTheBedGivesWayAtTheFirstFrameUnderASecondWait() async throws {
         let rig = await rig(mode: .sounds, heard: .dataRendered)
         _ = rig.speaker.awaitReply("first", readAloud: true)
@@ -688,7 +690,8 @@ final class KeeperSoundsTests: XCTestCase {
         XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.bedVolume], "the bed faded at the reply's landing, under a wait still standing")
         await settle("the reply to start") { rig.speaker.report.started }
         try await renderUntil(rig, "the reply to be made") { rig.speaker.report.finished }
-        XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.bedVolume, 0], "the bed played on under the voice")
+        XCTAssertEqual(bed.fades.map(\.to), [KeeperSounds.bedVolume, 0, KeeperSounds.bedVolume],
+                       "the bed played on under the voice, or did not come back for the second wait")
         rig.speaker.endAwaiting("second", "the test is done")
     }
 

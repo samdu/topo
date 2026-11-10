@@ -20,8 +20,10 @@ enum WorkingSounds {
     }
 
     static let key = "workingSounds"
-    /// Receipts for a phone never asked.
-    static let standard = Mode.receipts
+    /// Sounds for a phone never asked: a spoken turn's hold is heard, from the release to the
+    /// reply, as audio playback and not silence keeping the process (App Review 2.5.4,
+    /// `docs/testflight.md`). Receipts and Off are the person's to pick.
+    static let standard = Mode.sounds
 
     /// The one reader: anything kept that is not one of the cases — a word nobody chose, a Boolean,
     /// which `string(forKey:)` hands back as a digit — is the standard.
@@ -78,10 +80,12 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// delegate's result comes back, `error` for a result marked an error and when the guest's turn
 /// fails. The open microphone has the go-ahead (`speak`) and no tone at an utterance's onset, and a
 /// press heard behind a turn on its way bleeps (`queue`). The bed is `thinking_bed.wav`, an 8 s
-/// loop under −20 dBFS at `bedVolume`, faded in from the release and out when the wait it was for
-/// ends (a reply landing ends its own wait before its first frame) or at the reply's first frame
-/// under a second wait, never begun under a sentence, and paused rather than stopped so the next
-/// wait picks it up where the last left it. The mode is `WorkingSounds`: `off` sounds nothing,
+/// loop under −20 dBFS at `bedVolume`, asked for by the speaker (`working`) while a turn's own
+/// hold stands with the voice not audible — from the release's utterance taken, through the wait,
+/// to the reply's first frame, again in a reading's gaps while the guest works, and again after a
+/// reading with another turn's wait standing — never begun under a sentence or with replies muted
+/// (`Mute`), paused rather than stopped so the next wait picks it up where the last left it, and
+/// paused under the call's session changing hands (`pause`). The mode is `WorkingSounds`: `off` sounds nothing,
 /// `receipts` the tones, `sounds` the tones over the bed.
 ///
 /// The receipts and the bleep are the keeper's, so they sound only while a hold that is not a
@@ -364,14 +368,16 @@ final class KeeperSounds {
 
     // MARK: - The bed
 
-    /// The speaker is waiting for a reply, or has stopped: the bed fades in under `sounds` while
-    /// a hold stands, and out otherwise. Off goes through whatever the mode, so a bed begun
+    /// The speaker wants the bed, or does not: it fades in under `sounds`, with replies read
+    /// aloud, while a turn's hold stands and the voice is not audible, and out otherwise. Off goes through whatever the mode, so a bed begun
     /// under `sounds` is still faded out at its wait's end after the mode changed under it (a
     /// change applies at the next sound; the bed plays on to the end of the wait it was for).
     func working(_ on: Bool) {
         dropStale()
         // Never under a sentence: a wait taken while Topo is reading wants no bed.
-        let want = on && WorkingSounds.mode(defaults) == .sounds && audio.heldForATurn && !voiceSpeaking()
+        // Muted, nothing is read and nothing is waited for aloud, so nothing is played for it.
+        let want = on && WorkingSounds.mode(defaults) == .sounds && Mute.readsAloud(defaults)
+            && audio.heldForATurn && !voiceSpeaking()
         // An interruption stops the player under a bed that is still wanted, so "already on" has
         // to mean "still playing" too.
         if want == bedWanted, !want || bed?.isPlaying == true { return }
@@ -423,6 +429,17 @@ final class KeeperSounds {
         bed?.pause()
         AudioLog.say("the working bed is paused")
         release(.fade, "the working bed is paused")
+    }
+
+    /// The call's session is changing hands (placed, taken by a phone call, or over): the bed's
+    /// player is stopped before the session changes and stays wanted, so the activation's resume
+    /// (`resume`) plays it again. Nothing is asked of the session and no hold is taken; a fade
+    /// still to be paused is paused by its own `park`.
+    func pause(_ why: String) {
+        dropStale()
+        guard let bed, bed.isPlaying else { return }
+        bed.pause()
+        AudioLog.say("the working bed is paused: \(why)")
     }
 
     /// The speaker's engine is back after an interruption: a bed still wanted and not playing

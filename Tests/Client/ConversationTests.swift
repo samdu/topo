@@ -179,6 +179,8 @@ final class ConversationTests: XCTestCase {
             addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
             let defaults = UserDefaults(suiteName: name)!
             defaults.set(true, forKey: EarconsSetting.key)
+            // The receipts alone: these tests count tones, and the bed is `KeeperSoundsTests`'.
+            defaults.set(WorkingSounds.Mode.receipts.rawValue, forKey: WorkingSounds.key)
             let tones = tones, cues = cues
             sounds = KeeperSounds(audio: audio, defaults: defaults, bundle: Bundle(for: KeeperSounds.self),
                                   makePlayer: { tones.make($0) })

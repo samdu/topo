@@ -151,6 +151,7 @@
 		346669CC3EA1309F1E3A20EE /* TopoAlarmMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54B18265182AC56C06E8B76 /* TopoAlarmMetadata.swift */; };
 		3535E85112598C5CFC84FDF5 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
 		35A13060991707C182C92CE6 /* ActivityDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833FF800AF0B74BA2F57AC39 /* ActivityDocument.swift */; };
+		35D09EBCECEF145B5C91BFFD /* AudibleHoldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 455614E9D4F91DEA0B6F0EA1 /* AudibleHoldTests.swift */; };
 		366808E32D484A6F8AB966CE /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		36FA82004111FA847ABEF59F /* ScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69B83668827B1468B16F8E0 /* ScreenStore.swift */; };
 		372127583C36D4B8503AF498 /* ScreenSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E23900C549F79062FA7DB56B /* ScreenSampler.swift */; };
@@ -941,6 +942,7 @@
 		43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacesModel.swift; sourceTree = "<group>"; };
 		4449A2BC546425D8D0480134 /* UserlandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserlandTests.swift; sourceTree = "<group>"; };
 		4510D4DDF14428B3573BFB10 /* GuestFreezeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestFreezeTests.swift; sourceTree = "<group>"; };
+		455614E9D4F91DEA0B6F0EA1 /* AudibleHoldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudibleHoldTests.swift; sourceTree = "<group>"; };
 		45A790C5DC880D6BBF044F6A /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		460C5C5620D24E4F80E9E415 /* GuestResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResolver.swift; sourceTree = "<group>"; };
 		46425616D224D5EDABBDE93E /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
@@ -1774,6 +1776,7 @@
 				036F2F6BC0F954DF2E0DB34D /* ActivityFakes.swift */,
 				32B6B8A430213F1BC18FBD60 /* ActivityKeeperTests.swift */,
 				77906425CE9467DCBC47C566 /* ActivityToolTests.swift */,
+				455614E9D4F91DEA0B6F0EA1 /* AudibleHoldTests.swift */,
 				680EA7BD55CA0D2F27D81FE8 /* BadgeRenderTests.swift */,
 				120004CDCCF5376B2A39259D /* ChatBarTests.swift */,
 				766030764883BAAC87FAA3B1 /* ChatNoticesRenderTests.swift */,
@@ -3063,6 +3066,7 @@
 				49678793151C98590A604A5B /* ActivityFakes.swift in Sources */,
 				669AB84BADAA72DF1DFA4564 /* ActivityKeeperTests.swift in Sources */,
 				24B040D63DE3B72667EF7483 /* ActivityToolTests.swift in Sources */,
+				35D09EBCECEF145B5C91BFFD /* AudibleHoldTests.swift in Sources */,
 				1C280B2522CCAE406145B8E1 /* BadgeRenderTests.swift in Sources */,
 				6CB93F2B85FB4DF31A6B5CB2 /* ChatBarTests.swift in Sources */,
 				2F93822585092FA85502C0F9 /* ChatNoticesRenderTests.swift in Sources */,
