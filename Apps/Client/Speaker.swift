@@ -315,6 +315,9 @@ final class Speaker {
         // activates it again rather than trusting the one this object last saw work.
         audio.invalidate()
         queue.interrupted()
+        // Under an active call the session stays live through the `.began` the lock posts, and
+        // the system holds it: a bed it stopped is played again now, since no `.ended` need come.
+        if audio.call == .active { sounds?.resume() }
     }
 
     /// Something says the audio can run again. The queue puts back what it owed on a fresh engine
@@ -665,9 +668,6 @@ final class Speaker {
         // replay, which answers no turn, has no bed under it at all.
         answering = nonce != nil
         voiceGap = answering
-        // A spoken turn's reply keeps the bed to its first frame; a replay takes it away now, so
-        // a bed a wait or a release has up is not under the replay's sentences.
-        askForBed()
         Perf.mark("speak.begin")
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
@@ -681,6 +681,10 @@ final class Speaker {
             return false
         }
         progressed()
+        // With the reading's hold taken: a spoken turn's reply keeps the bed to its first frame,
+        // or has it begun where nothing else had it up; a replay takes it away now, so a bed a
+        // wait or a release has up is not under the replay's sentences.
+        askForBed()
         // Where and how loud the reply is about to be heard, so a run that sounded quiet says
         // which of the session's states it was read under: the call's or not, its mode, the
         // voice processing the session is configured for, the route and the system's volume.

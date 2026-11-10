@@ -38,6 +38,9 @@ final class PhasedPlayer: WorkingPlayer {
         fades.append(volume)
         self.volume = volume
     }
+
+    /// The system stopped the player under whoever wanted it, as an interruption does.
+    func interrupted() { isPlaying = false }
 }
 
 /// A voice whose every sentence waits for the test to let it go, and then yields the frames the
@@ -94,6 +97,7 @@ final class AudibleHoldTests: XCTestCase {
         let clock: PausedSleep
         let players: Players
         let voice: GatedSentences
+        let center: NotificationCenter
     }
 
     @MainActor final class Players {
@@ -146,7 +150,7 @@ final class AudibleHoldTests: XCTestCase {
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
                               heard: .dataRendered, sounds: sounds)
         return Rig(speaker: speaker, sounds: sounds, audio: audio, seams: seams, defaults: defaults,
-                   clock: clock, players: players, voice: engine)
+                   clock: clock, players: players, voice: engine, center: center)
     }
 
     private func render(_ rig: Rig, _ what: String, file: StaticString = #filePath, line: UInt = #line,
@@ -412,6 +416,14 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(rig.audio.call, .active)
         XCTAssertTrue(bed.isPlaying, "the activation did not bring the bed back")
         XCTAssertEqual(bed.moments.last?.what, "play")
+        XCTAssertEqual(bed.moments.last?.call, .active)
+
+        // The lock's `.began` under the active call stops the player; the session stays live and
+        // the bed is played again at once.
+        bed.interrupted()
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        await settle("the bed to be played again under the call") { bed.isPlaying }
         XCTAssertEqual(bed.moments.last?.call, .active)
 
         // A phone call takes the session with the call standing: paused before Topo marks it
