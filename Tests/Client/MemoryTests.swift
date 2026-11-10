@@ -45,11 +45,11 @@ final class MemoryTests: XCTestCase {
         try await writer.write(text, to: path, continuing: store.read(), at: when)
     }
 
-    /// Lets everything that can run, run. Nothing here waits on time or on iCloud, so a
-    /// handful of turns is the whole of what any of it needs; this asserts nothing, because
-    /// what it is used for is to give a wrong answer its chance to appear.
-    private func settle(_ turns: Int = 400) async {
-        for _ in 0..<turns { await Task.yield() }
+    /// Gives a wrong answer its chance to appear before a negative is read. The mirror hands its
+    /// coordinated reads and writes to a queue of its own, which no number of yields advances, so
+    /// this waits real time; it asserts nothing.
+    private func settle() async {
+        try? await Task.sleep(for: .milliseconds(200))
     }
 
     /// Waits for something the test can observe, failing rather than hanging when it never comes.
@@ -295,6 +295,7 @@ final class MemoryTests: XCTestCase {
         let after = Task { await memory.sync() }
         try await eventually("the second sync to ask") { memory.requests == 2 }
         await settle()
+        XCTAssertEqual(memory.passes, 1, "the sync after the sign-in began a pass beside the one before it")
         XCTAssertNil(text("Meeting notes.md", in: directory),
                      "the sync after the sign-in ran beside the one before it, over the same folder")
 
