@@ -23,7 +23,7 @@ The rest is what changes, why, and what proves it. The proof section is explicit
 
 ## The ledger
 
-One `progress.md` per plan, beside the plan (`~/Desktop/topo-plans/progress-<topic>.md`, on the Desktop syncthing carries to every host), append-only: nothing in it is ever edited or removed, because its whole value is that it is not a memory. It opens with two header lines and then carries one line per event, newest last, timestamps in UTC:
+One `progress.md` per plan, beside the plan (`~/topo-plans/progress-<topic>.md`, in the `topo-plans` Syncthing folder shared between toolbox and buddybox only), append-only: nothing in it is ever edited or removed, because its whole value is that it is not a memory. It opens with two header lines and then carries one line per event, newest last, timestamps in UTC:
 
 ```
 branch: buddy/stone-marks
