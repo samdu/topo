@@ -17,6 +17,8 @@ struct ControlTool: Tool {
     var leftBehind = ConnectionsLeftBehind()
     /// The login a secret is kept under: a set lands only while the epoch it took still stands.
     var login: @MainActor @Sendable () -> LoginLife = { .shared }
+    /// Awaited once a set has its login's mark and before it writes: a test parks the call there.
+    var parked: @Sendable () async -> Void = {}
     /// A toggle's state set by the mind, told to the runs in flight (`WidgetActions.confirm`).
     var confirm: @MainActor @Sendable (_ on: Bool, _ slot: String, _ revision: Int) -> Void = { on, slot, revision in
         (WidgetIntents.handler as? WidgetTaps)?.actions.confirm(on, slot: ControlSlot.stored(slot), control: ControlSlot.control,
@@ -260,6 +262,7 @@ struct ControlTool: Tool {
         // of their own: a read or a delete across the clear leaves nothing behind, a write would.
         let login = login
         let epoch = await MainActor.run { login().epoch }
+        await parked()
         let secrets = secrets
         let kept = await MainActor.run { () -> ToolReply in
             guard epoch.isCurrent else { return .failed("topo: the login ended while this ran; no secret is kept\n") }

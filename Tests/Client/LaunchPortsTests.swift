@@ -71,6 +71,52 @@ final class LaunchPortsTests: XCTestCase {
         await ports.tools.stop()
     }
 
+    /// Every call a launch's tool service accepts carries the login that launch was started
+    /// under, the frozen resident's taken back on its ports included; a launch after the next
+    /// sign-in carries that one, and the earlier mark no longer stands.
+    func testACallCarriesTheLoginItsLaunchWasStartedUnder() async throws {
+        let life = LoginLife()
+        let tools = try ToolService(tools: [Carried()])
+        let ports = LaunchPorts(proxy: try APIProxy(log: { _ in }), tools: tools, login: life)
+        let token = await tools.token
+        let first = try await ports.ports().tools
+        let firstSaid = try await Self.said(port: first, token: token)
+        XCTAssertEqual(firstSaid, "current")
+        let reclaimed = await ports.reclaim()
+        XCTAssertTrue(reclaimed)
+        let reclaimedSaid = try await Self.said(port: first, token: token)
+        XCTAssertEqual(reclaimedSaid, "current")
+        life.runTeardowns()
+        life.began()
+        let staleSaid = try await Self.said(port: first, token: token)
+        XCTAssertEqual(staleSaid, "stale", "a call of the launch before the sign-in carried the login after it")
+        let next = try await ports.ports().tools
+        let nextSaid = try await Self.said(port: next, token: token)
+        XCTAssertEqual(nextSaid, "current")
+        await ports.proxy.stop()
+        await tools.stop()
+    }
+
+    /// Says whether the login its call carries still stands.
+    private struct Carried: Tool {
+        let name = "carried"
+        let summary = "the login a call carries"
+        let usage = "topo carried"
+        func run(_ arguments: [String]) async -> ToolReply {
+            guard let epoch = ToolCall.context as? LoginLife.Epoch else { return .ok("none") }
+            return .ok(await MainActor.run { epoch.isCurrent } ? "current" : "stale")
+        }
+    }
+
+    private static func said(port: UInt16, token: String) async throws -> String {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(ToolService.path)")!)
+        request.httpMethod = "POST"
+        request.httpBody = ToolRequest.body(token: token, ["carried"])
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let text = String(decoding: data, as: UTF8.self)
+        return ["current", "stale", "none"].first { text.contains($0) } ?? text
+    }
+
     private final class Zone: @unchecked Sendable {
         private let lock = NSLock()
         private var identifier: String

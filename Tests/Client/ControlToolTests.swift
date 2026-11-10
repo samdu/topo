@@ -100,6 +100,12 @@ final class ControlToolTests: XCTestCase {
                            askLocal: { [unowned self] in asked.append($0) }, localState: { .notAsked })
     }
 
+    /// A call as the tool service hands it on: carrying the mark of the login its launch was
+    /// started under (`LaunchPorts`, `ToolCall.context`), here the standing one.
+    private func underLogin(_ tool: ControlTool, _ arguments: [String]) async -> ToolReply {
+        await ToolCall.$context.withValue(life.epoch) { await tool.run(arguments) }
+    }
+
     private static func run(_ argv: [String]) -> String {
         String(decoding: try! JSONSerialization.data(withJSONObject: ["title": "Go", "action": ["kind": "run", "topo": argv]]), as: UTF8.self)
     }
@@ -115,7 +121,7 @@ final class ControlToolTests: XCTestCase {
         let queues = OSAllocatedUnfairLock(initialState: [String]())
         secrets.calling = { queues.withLock { $0.append(String(cString: __dispatch_queue_get_label(nil))) } }
         let tool = try await tool()
-        _ = await tool.run(["secret", "set", "ha", "Bearer x"])
+        _ = await underLogin(tool, ["secret", "set", "ha", "Bearer x"])
         _ = await tool.run([])
         _ = await tool.run(["secret", "clear", "ha"])
         _ = await ControlRequest.perform(.init(method: "GET", url: "http://127.0.0.1:9/", headers: [.init(name: "Authorization", value: "${secret:ha}")]),
@@ -221,11 +227,11 @@ final class ControlToolTests: XCTestCase {
 
     func testSecretsAreKeptByName() async throws {
         let tool = try await tool()
-        let set = await tool.run(["secret", "set", "ha", "tok-SENTINEL-9"])
+        let set = await underLogin(tool, ["secret", "set", "ha", "tok-SENTINEL-9"])
         XCTAssertEqual(set.status, ToolReply.ok)
         XCTAssertFalse(set.text.contains("SENTINEL"))
         XCTAssertEqual(try secrets.read("ha"), "tok-SENTINEL-9")
-        let badName = await tool.run(["secret", "set", "bad name", "x"])
+        let badName = await underLogin(tool, ["secret", "set", "bad name", "x"])
         XCTAssertEqual(badName.status, ToolReply.refused)
         let listed = await tool.run([])
         XCTAssertTrue(listed.text.contains("secrets: ha"), listed.text)
@@ -234,20 +240,55 @@ final class ControlToolTests: XCTestCase {
         XCTAssertNil(try secrets.read("ha"))
     }
 
-    /// A set already on its way when the login ends keeps nothing: the sign-out's clear runs while
-    /// the call is in flight (the task is made here and starts only once the test awaits it), and
-    /// what the call would have written after it is refused rather than outliving the login.
-    func testASetInFlightAcrossASignOutKeepsNothing() async throws {
+    /// A set carries the login its launch was started under, not the one standing when it first
+    /// reaches the main actor: a call made under a login that ends, and whose first hop runs only
+    /// once the next login has begun, keeps nothing under the next one.
+    func testASetFromALoginThatEndedKeepsNothingUnderTheNext() async throws {
         let tool = try await tool()
-        let call = Task { await tool.run(["secret", "set", "ha", "tok-SENTINEL-9"]) }
-        // A sign-out's steps, in its order: the epoch moved, the login's teardowns, the clear.
+        let launched = life.epoch
+        let call = Task { await ToolCall.$context.withValue(launched) { await tool.run(["secret", "set", "ha", "tok-SENTINEL-9"]) } }
+        // A sign-out's steps, in its order (the epoch moved, the login's teardowns, the clear),
+        // then the next sign-in, all before the call has run at all.
         life.moveEpoch()
         life.runTeardowns()
         try secrets.clearAll()
+        life.began()
+        let reply = await call.value
+        XCTAssertNil(try secrets.read("ha"), "a secret of the login that ended was kept under the next")
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertFalse(reply.text.contains("SENTINEL"), reply.text)
+    }
+
+    /// A set already holding its login's mark when the login ends keeps nothing: it is parked
+    /// there while the sign-out's steps run, and the next login begins, and only then goes on to
+    /// its write.
+    func testASetParkedAcrossASignOutAndTheNextSignInKeepsNothing() async throws {
+        let gate = Gate()
+        var parking = try await tool()
+        parking.parked = { await gate.park() }
+        let tool = parking
+        let launched = life.epoch
+        let call = Task { await ToolCall.$context.withValue(launched) { await tool.run(["secret", "set", "ha", "tok-SENTINEL-9"]) } }
+        await gate.reached()
+        life.moveEpoch()
+        life.runTeardowns()
+        try secrets.clearAll()
+        life.began()
+        await gate.release()
         let reply = await call.value
         XCTAssertNil(try secrets.read("ha"), "the secret outlived the sign-out")
         XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
         XCTAssertFalse(reply.text.contains("SENTINEL"), reply.text)
+    }
+
+    /// A call that carries no login (one the service accepted on a listener no launch was told)
+    /// keeps nothing, and says why.
+    func testASetCarryingNoLoginKeepsNothing() async throws {
+        let tool = try await tool()
+        let reply = await tool.run(["secret", "set", "ha", "tok-SENTINEL-9"])
+        XCTAssertNil(try secrets.read("ha"))
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertTrue(reply.text.contains("no login"), reply.text)
     }
 
     /// A clear of the control secrets refused at a sign-out: no secret is kept and none is listed
@@ -256,7 +297,7 @@ final class ControlToolTests: XCTestCase {
         let tool = try await tool()
         try secrets.set("earlier", name: "ha")
         leftBehind.controlSecrets = "the controls' secrets could not be removed"
-        let set = await tool.run(["secret", "set", "webhook", "tok"])
+        let set = await underLogin(tool, ["secret", "set", "webhook", "tok"])
         XCTAssertEqual(set.status, ToolReply.failed)
         XCTAssertTrue(set.text.contains("could not be removed"), set.text)
         XCTAssertNil(try secrets.read("webhook"))
@@ -336,5 +377,29 @@ final class ControlToolTests: XCTestCase {
                      "iOS 18 to 25", "Face ID"] {
             XCTAssertTrue(help.text.contains(word), "help lacks \(word)")
         }
+    }
+}
+
+/// Where a call waits: `park` holds it until `release`, and `reached` returns once it is held.
+private actor Gate {
+    private var parked: CheckedContinuation<Void, Never>?
+    private var arrived: CheckedContinuation<Void, Never>?
+    private var isParked = false
+
+    func park() async {
+        isParked = true
+        arrived?.resume()
+        arrived = nil
+        await withCheckedContinuation { parked = $0 }
+    }
+
+    func reached() async {
+        if isParked { return }
+        await withCheckedContinuation { arrived = $0 }
+    }
+
+    func release() {
+        parked?.resume()
+        parked = nil
     }
 }

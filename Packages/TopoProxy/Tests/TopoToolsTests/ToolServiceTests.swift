@@ -410,3 +410,33 @@ private final class HeldAnswer: @unchecked Sendable {
         #expect(BuildFacts.environment(info: ["CFBundleVersion": 7]).isEmpty)
     }
 }
+
+/// What a call carries from the listener that accepted it (`ToolCall.context`).
+@Suite struct ToolCallContextTests {
+    /// A tool that answers with the context its call carries.
+    struct Says: Tool {
+        let name = "says"
+        let summary = "the call's context"
+        let usage = "topo says"
+        func run(_ arguments: [String]) async -> ToolReply {
+            .ok("\(ToolCall.context.map { "\($0)" } ?? "none")\n")
+        }
+    }
+
+    /// Each listener's calls carry the context it was started with, and one started since carries
+    /// its own; a listener started with none hands none on.
+    @Test func aCallCarriesItsListenersContext() async throws {
+        let (service, plain, _) = try await startedService([Says()])
+        defer { Task { await service.stop() } }
+        let token = await service.token
+        func said(_ port: UInt16) async throws -> String? {
+            let (head, body) = call(port: port, token: token, ["says"])
+            return try await exchange(port: port, head, body: body).body
+        }
+        #expect(try await said(plain)?.hasSuffix("none\n") == true)
+        let first = try await service.relisten(context: "launch 1")
+        #expect(try await said(first)?.hasSuffix("launch 1\n") == true)
+        let second = try await service.relisten(context: "launch 2")
+        #expect(try await said(second)?.hasSuffix("launch 2\n") == true)
+    }
+}

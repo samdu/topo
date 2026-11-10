@@ -307,12 +307,15 @@ final class LaunchPorts {
     let proxy: APIProxy
     let tools: ToolService
     private let zone: @Sendable () -> String
+    private let login: LoginLife
 
     init(proxy: APIProxy, tools: ToolService,
-         zone: @escaping @Sendable () -> String = { NSTimeZone.resetSystemTimeZone(); return TimeZone.current.identifier }) {
+         zone: @escaping @Sendable () -> String = { NSTimeZone.resetSystemTimeZone(); return TimeZone.current.identifier },
+         login: LoginLife = .shared) {
         self.proxy = proxy
         self.tools = tools
         self.zone = zone
+        self.login = login
     }
 
     /// The ports the last launch was told, which a frozen resident still holds in its environment.
@@ -321,10 +324,18 @@ final class LaunchPorts {
     /// to date: the zone its runtime read once and keeps for its life.
     private(set) var toldZone: String?
 
-    /// The ports to tell the next launch: each service's, on a listener started for it.
+    /// The login the last launch was started under, which every call its tool service's listener
+    /// accepts carries (`ToolCall.context`): taken here, on the main actor and before the listener
+    /// is started, so no call of that launch can carry a login begun after it.
+    private(set) var toldLogin: LoginLife.Epoch?
+
+    /// The ports to tell the next launch: each service's, on a listener started for it, the tool
+    /// service's carrying the standing login's mark to every call it accepts.
     func ports() async throws -> (proxy: UInt16, tools: UInt16) {
-        let now = (try await proxy.relisten(), try await tools.relisten())
+        let epoch = login.epoch
+        let now = (try await proxy.relisten(), try await tools.relisten(context: epoch))
         told = now
+        toldLogin = epoch
         toldZone = zone()
         return now
     }
@@ -340,10 +351,10 @@ final class LaunchPorts {
     /// resident on its way back; false when either cannot be taken back (another process bound it
     /// while the app was away) or no launch was told any.
     func reclaim() async -> Bool {
-        guard let told else { return false }
+        guard let told, let toldLogin else { return false }
         do {
             _ = try await proxy.relisten(on: told.proxy)
-            _ = try await tools.relisten(on: told.tools)
+            _ = try await tools.relisten(on: told.tools, context: toldLogin)
             return true
         } catch {
             GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error))")
