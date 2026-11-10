@@ -1045,6 +1045,9 @@ final class Speaker {
     /// wait, or a gap of the voice in a spoken turn's reading stands. The keeper's sounds judge
     /// the rest — the mode, the mute, a turn's hold, the voice — and fade it out otherwise.
     private func askForBed() {
+        // Nothing is built inside the reset handler: the players are dead, and the next ask after
+        // it makes its own.
+        guard !resetting else { return }
         sounds?.working(!taken.isEmpty || !waits.isEmpty || (speaking && voiceGap))
     }
 
