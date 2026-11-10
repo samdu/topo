@@ -5,10 +5,10 @@
 # which of them the PR's paths need, `test` reads those statuses off the PR
 # head and is red on one that is missing or failed, and Codex reviews every
 # non-draft PR whose `test` is green; its verdict is what gates. `review_gate`
-# and `test` are the required status checks on main, and automerge.yaml merges
-# on this workflow's latest pull_request run concluding green — so a suite
-# that did not pass on the Mac holds the merge by both routes, and spends no
-# reviewer round. Every job here runs on `vm-linux`, the pool of ephemeral
+# and `test` are the required status checks on main, and the janitor merges
+# on this workflow's latest pull_request run concluding green
+# (scripts/janitor.py, step 1) — so a suite that did not pass on the Mac holds
+# the merge by both routes, and spends no reviewer round. Every job here runs on `vm-linux`, the pool of ephemeral
 # arm64 Ubuntu VMs on the Macs (dotfiles tools/vm-runner): a fresh guest per
 # job, so nothing one job leaves is seen by the next.
 #
@@ -151,8 +151,10 @@ jobs:
   # need none, a change only the hub, watch, TV, Womble or TopoLink compile
   # needs `others` alone, a change to the harness alone — a script whose own
   # test fakes everything it touches, named below one by one — needs
-  # `scripts` alone, which is those tests with no simulator and no build, and
-  # anything else — the app, a package the app links, the tests, the project,
+  # `scripts` alone, which is those tests with no simulator and no build, a
+  # test file alone needs the suites that load it, or compile it where no
+  # other chosen suite does, and anything
+  # else — the app, a package the app links, a test file no rule names, the project,
   # this workflow, a script the product suites are what prove, a path no rule
   # names, or a diff that cannot be read — needs `topo_unit`, `topo_ui` and
   # `others`. `others` runs the scripts' tests too, so `scripts` is `false`
@@ -227,6 +229,20 @@ jobs:
           # run there. The watch's suite
           # also builds Apps/Widgets, Apps/Shared, Apps/Client and TopoCore,
           # which `all` already sends to `others`.
+          #
+          # A test file is skipped only by a suite that never loads it and
+          # whose every compile of it a chosen suite runs too: topo_unit and
+          # topo_ui each build the Topo scheme for testing, so both compile
+          # every iOS test bundle and each loads only its own. TopoTests
+          # compiles Tests/Client, and TopoWatchTests
+          # WidgetDocumentTests.swift beside Tests/Watch; TopoUITests compiles
+          # Tests/ClientUI and takes Tests/Client/Widgets and Tests/Fixtures as
+          # resources; TopoTests bundles Tests/Fixtures/licences; the Topo
+          # scheme runs TopoUserland's tests, `swift test` in `others` every
+          # other package's; smartturn-mel-test.sh, run in `others`, reads
+          # its chirp; and mac-suite-test.sh, run in `scripts` (and so in
+          # `others`), scans the repository's own Tests/ClientUI. Tests/ClientTalk,
+          # which no PR suite runs, stays `all`.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
             .github/* none
@@ -236,8 +252,16 @@ jobs:
             Apps/TopoWatchWidgets/* others
             Apps/* all
             Packages/TopoLink/* others
+            Packages/TopoUserland/Tests/* topo_unit
+            Packages/*/Tests/* others
             Packages/* all
             Tests/Watch/* others
+            Tests/Client/WidgetDocumentTests.swift topo_unit others
+            Tests/Client/Widgets/* topo_unit topo_ui
+            Tests/Client/* topo_unit
+            Tests/ClientUI/* topo_ui scripts
+            Tests/Fixtures/smartturn-mel-chirp.bin all
+            Tests/Fixtures/* topo_unit topo_ui
             Tests/* all
             Womble/* others
             docs/* none
@@ -392,7 +416,7 @@ jobs:
   # scripts/review-verdicts.sh) and at four sets `capped`: codex does not
   # run, and reviewer_ran and review_gate read the cap
   # as neither a missing verdict nor a blocking one. review_gate stays red, so
-  # automerge does not merge a capped PR: it merges on Sam's word, or goes
+  # the janitor does not merge a capped PR: it merges on Sam's word, or goes
   # back to draft for a replan. The script posts one comment saying so, under
   # its own marker and never the codex one. A count it cannot read or a
   # comment it cannot post fails this job, so codex does not run and
@@ -1015,7 +1039,7 @@ jobs:
   #   gh api repos/OWNER/REPO/actions/runs/RUNID/jobs \
   #     -q '.jobs[]|"\(.name): \(.conclusion) steps=\(.steps|length)"'
   #
-  # Both fail closed and neither can be skipped into green. automerge merges
+  # Both fail closed and neither can be skipped into green. The janitor merges
   # only on this workflow concluding `completed success`, so either job red
   # holds the merge — and a `cancelled` or `skipped` conclusion holds it too:
   # concurrency cancels a superseded run, `!cancelled()` skips both jobs, and

@@ -979,6 +979,30 @@ import TopoCoreTesting
         #expect(asked.unbounded == 0, "a read or write of the lease went round the bound")
     }
 
+    /// The bound the lease asks for fires by itself: a renewal held unanswered is given up at
+    /// `LeaseTiming.patience`, the request still out, and the next one goes through.
+    @Test func aRenewalHeldUnansweredIsGivenUpAtThePatience() async throws {
+        let held = HoldingDatabase(db)
+        let timing = LeaseTiming(duration: 3, heartbeat: 1)
+        let h = PrimaryLease(database: held, device: hub, endpoint: nil, probe: StubProbe.allDead,
+                             timing: timing, now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        #expect(held.bounds == [timing.patience])
+        _ = try await h.acquire()
+        held.holdNextSave()
+        // A lease that did not bound the request would wait on it for ever; this lets it go late,
+        // so that lease fails on the time it took rather than hangs.
+        let late = Task { try await Task.sleep(for: .seconds(timing.patience * 3)); held.release() }
+        defer { late.cancel() }
+        let began = ContinuousClock.now
+        await #expect(throws: RecordDatabaseError.self) { try await h.takeOver() }
+        let took = ContinuousClock.now - began
+        #expect(took >= .seconds(timing.patience), "given up before its bound: \(took)")
+        #expect(took < .seconds(timing.patience * 3), "not given up at its bound: \(took)")
+        #expect(held.holding, "the request is still out: only the lease gave it up")
+        held.release()
+        guard case .primary = try await h.takeOver() else { Issue.record("the renewal after the one given up did not go through"); return }
+    }
+
     @Test func aRequestThatStallsAndIsGivenUpDoesNotCostAHealthyHolderTheLease() async throws {
         let stalls = Stalls(db), ticker = Ticker()
         let h = lease(hub, on: stalls, ticker: ticker)

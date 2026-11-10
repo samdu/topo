@@ -41,8 +41,16 @@ expected=(
   'Apps/TopoWatchWidgets/* others'
   'Apps/* all'
   'Packages/TopoLink/* others'
+  'Packages/TopoUserland/Tests/* topo_unit'
+  'Packages/*/Tests/* others'
   'Packages/* all'
   'Tests/Watch/* others'
+  'Tests/Client/WidgetDocumentTests.swift topo_unit others'
+  'Tests/Client/Widgets/* topo_unit topo_ui'
+  'Tests/Client/* topo_unit'
+  'Tests/ClientUI/* topo_ui scripts'
+  'Tests/Fixtures/smartturn-mel-chirp.bin all'
+  'Tests/Fixtures/* topo_unit topo_ui'
   'Tests/* all'
   'Womble/* others'
   'docs/* none'
@@ -107,14 +115,19 @@ selects() {
 
 # Each rule with a path under it, alone: the suites it names.
 for rule in "${expected[@]}"; do
-  glob="${rule% *}"; want="${rule##* }"
+  glob="${rule%% *}"; want=" ${rule#* } "
   example="${glob//\*/Nested/Example.swift}"
   case "$want" in
-    all) selects true true true "$glob alone ($example)" "$example"$'\n' ;;
-    none) selects false false false "$glob alone ($example)" "$example"$'\n' ;;
-    others) selects false false true "$glob alone ($example)" "$example"$'\n' ;;
-    scripts) selects false false false "$glob alone ($example)" "$example"$'\n' true ;;
-    *) fail "no case for the rule '$rule'" ;;
+    " all ") selects true true true "$glob alone ($example)" "$example"$'\n' ;;
+    " none ") selects false false false "$glob alone ($example)" "$example"$'\n' ;;
+    " scripts ") selects false false false "$glob alone ($example)" "$example"$'\n' true ;;
+    *)
+      flags=()
+      for suite in topo_unit topo_ui others; do
+        case "$want" in *" $suite "*) flags+=(true) ;; *) flags+=(false) ;; esac
+      done
+      case "$want" in *" scripts "*) flags+=(true) ;; *) flags+=(false) ;; esac
+      selects "${flags[0]}" "${flags[1]}" "${flags[2]}" "$glob alone ($example)" "$example"$'\n' "${flags[3]}" ;;
   esac
 done
 
@@ -152,8 +165,7 @@ selects true true true "a markdown file the app bundles" $'Apps/Topo/Resources/s
 for package in TopoAuth TopoCore TopoMascot TopoProxy TopoTurn TopoUserland; do
   selects true true true "$package, which the app links" "Packages/$package/Sources/$package/File.swift"$'\n'
 done
-selects true true true "the unit tests" $'Tests/Client/LookToolTests.swift\n'
-selects true true true "the UI tests" $'Tests/ClientUI/MicrophonePressTests.swift\n'
+selects true true true "the talk suite, which no PR suite runs" $'Tests/ClientTalk/TalkTests.swift\n'
 selects true true true "the project" $'project.yml\n'
 selects true true true "the generated project" $'Topo.xcodeproj/project.pbxproj\n'
 selects true true true "the resolved packages" $'Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved\n'
@@ -167,6 +179,23 @@ selects true true true "the script that reads the suites' results" $'scripts/ci-
 selects true true true "a script's test" $'scripts/tests/suite-gate-test.sh\n'
 selects true true true "a build script" $'scripts/build-ish.sh\n'
 selects true true true "a path no rule names" $'Somewhere/New.swift\n'
+
+# A test file alone: only the suites that compile or load it.
+selects true false false "the unit tests" $'Tests/Client/LookToolTests.swift\n'
+selects false true false "the UI tests, and the scripts' test that scans them" $'Tests/ClientUI/MicrophonePressTests.swift\n' true
+selects true false true "the widget document's tests, which the watch's suite compiles too" $'Tests/Client/WidgetDocumentTests.swift\n'
+selects true true false "a widget's layout, which the UI tests take as a resource" $'Tests/Client/Widgets/systemSmall.json\n'
+selects true true false "a widget's reference image" $'Tests/Client/Widgets/References/systemSmall.png\n'
+selects true true false "the licence texts, which both iOS suites bundle" $'Tests/Fixtures/licences/MIT.txt\n'
+selects true true false "the ear's fixture" $'Tests/Fixtures/purple-elephants.wav\n'
+selects true true true "the Smart Turn chirp, which a script's test reads" $'Tests/Fixtures/smartturn-mel-chirp.bin\n'
+selects false false true "a package's tests" $'Packages/TopoCore/Tests/TopoCoreTests/TurnLogTests.swift\n'
+selects true false false "the guest's tests, which the Topo scheme runs" $'Packages/TopoUserland/Tests/TopoUserlandTests/RootfsTests.swift\n'
+selects true true true "TopoCore's test double, which is source" $'Packages/TopoCore/Sources/TopoCoreTesting/HoldingDatabase.swift\n'
+selects true true true "a package's manifest" $'Packages/TopoCore/Package.swift\n'
+selects true true false "the unit and UI tests together" $'Tests/Client/LookToolTests.swift\nTests/ClientUI/MicrophonePressTests.swift\n' true
+selects true false true "the unit tests beside a package's" $'Tests/Client/LookToolTests.swift\nPackages/TopoProxy/Tests/TopoProxyTests/ProxyTests.swift\n'
+selects true true true "a test beside the app" $'Tests/Client/LookToolTests.swift\nApps/Client/Ear.swift\n'
 
 # A union: each path's suites.
 selects false false true "TopoLink beside documentation" $'docs/design.md\nPackages/TopoLink/Package.swift\n'

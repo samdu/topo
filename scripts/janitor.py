@@ -10,11 +10,14 @@ One pass reads the open PRs, their newest validate run and its jobs, the
 published install page and the checkout's worktrees, and does what needs no
 judgement:
 
-  1. merges a PR that meets every condition automerge.yaml merges on — ready,
-     on main, its newest pull_request validate run green, no unchecked box in
-     the description, the automerge label when the repository requires one —
-     and that automerge has left unmerged for `GRACE`, pinned to the head the
-     green run was read for;
+  1. merges a PR that meets every condition — ready, on main, its newest
+     pull_request validate run green, no unchecked box in the description,
+     the automerge label when the repository requires one, nothing changed
+     under the paths its own validation runs from — on the first pass that
+     reads it so, pinned to the head the green run was read for, with `--admin`,
+     since gh itself refuses a PR the ruleset leaves BLOCKED. Nothing else
+     merges unattended, because main's ruleset lets only an admin move it,
+     and no workflow's token is an admin's (docs/janitor.md);
   2. reruns the reviewer once per head when a red validate run has no
      verdict: `reviewer_ran` red and nothing red outside the reviewer chain.
      It reruns one job, the first red one in the chain, and with
@@ -71,7 +74,7 @@ judgement:
      Otherwise the box is unticked again and that is said
      (`tick_device_box`). A comment on the PR then cites the results;
      `allowed_pr()` is every write the step can make. It merges nothing:
-     the box is what automerge and step 1 were waiting on;
+     the box is what step 1 was waiting on;
   9. reports, once per head, an open PR whose dev slot (slots.json) carries
      another commit than its head while the PR is final (`FINAL_GATE`) and
      the head has passed its suites (`GATE`), the two gates publish-topo.sh
@@ -150,7 +153,7 @@ FROM = "topo-janitor"
 # and it holds the coordinator's queue to this host until it expires.
 NO_REPLY = "No reply is read: topo-janitor is a script with no session, so do not answer this."
 
-GRACE = timedelta(minutes=15)      # automerge's chance, a box's
+GRACE = timedelta(minutes=15)      # a box's, a lone run's, an issue's, before it is said
 SETTLE = timedelta(minutes=10)     # a red run is left this long before a rerun
 IDLE = timedelta(minutes=45)       # nothing moving, nothing running
 REPEAT = timedelta(hours=24)       # a failed read, a refusal, a worktree left: said again after this
@@ -164,7 +167,7 @@ PUBLISH_RETRY = timedelta(hours=2)  # a publish is not tried again for one commi
 PUBLISH_KEEP = timedelta(days=7)   # publish records older than this are forgotten
 PENDING_MAX = 200                  # report lines kept for a later delivery
 
-UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)   # automerge.yaml's own test
+UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)
 # The reviewer's jobs, in the order they run: each waits on the ones before it.
 REVIEW_CHAIN = ("review_cap", "codex", "post_feedback", "reviewer_ran", "review_gate")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
@@ -329,7 +332,7 @@ def pick_run(runs, number):
 
 # What PR validate runs from the PR's own copy: its workflow, and the scripts
 # its review jobs run from the checkout. A PR that changes one wrote its own
-# validation, so its green run proves nothing and automerge.yaml skips it.
+# validation, so its green run proves nothing and step 1 does not merge it.
 OWN_VALIDATION = re.compile(r"^(\.github/|scripts/review-|scripts/ci-select-)")
 
 
@@ -420,7 +423,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
         boxes = unchecked_boxes(pr.get("body"))
         if boxes:
             if since > GRACE:
-                report("boxes", f"{title}: validate green for {minutes(since)}, {boxes} Proof box{'es' if boxes > 1 else ''} unticked; automerge waits on them.")
+                report("boxes", f"{title}: validate green for {minutes(since)}, {boxes} Proof box{'es' if boxes > 1 else ''} unticked; the merge waits on them.")
             return out
         labels = {l["name"] for l in pr.get("labels") or []}
         if require_label is None:
@@ -440,9 +443,8 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
                 report("own", f"{title}: validate green, but it changes {', '.join(own[:3])}{' …' if len(own) > 3 else ''}, "
                               f"so its own copy validated it; the coordinator merges it after reading the review.")
             return out
-        if since > GRACE:
-            out.append({"kind": "merge", "key": f"{n}:merge:{head}", "head": head, "number": n,
-                        "text": f"merged {title}: validate green, no unchecked box, and automerge had not fired after {minutes(since)}."})
+        out.append({"kind": "merge", "key": f"{n}:merge:{head}", "head": head, "number": n,
+                    "text": f"merged {title}: validate green {minutes(since)} ago, no unchecked box."})
         return out
 
     red = [j for j in jobs if j.get("conclusion") in NOT_GREEN]
@@ -1187,7 +1189,7 @@ class Shell:
                            "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels,reviewDecision,mergeStateStatus")
 
     def require_label(self):
-        """automerge.yaml's label rule: True, False, or None when it cannot be read
+        """The label rule: True, False, or None when it cannot be read
         (a variable that is not set reads as an error too, and means False)."""
         p = self.run(["gh", "variable", "get", "AUTOMERGE_REQUIRE_LABEL", "--repo", REPO], check=False)
         if p.returncode == 0:
@@ -1243,7 +1245,10 @@ class Shell:
         return [p for f in listed for p in (f.get("filename"), f.get("previous_filename")) if p]
 
     def merge(self, number, head):
-        self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",
+        """`--admin` only skips gh's own refusal of a PR whose merge state is BLOCKED, which
+        main's ruleset makes every PR's; GitHub judges the merge as it would any admin's.
+        `--match-head-commit` has GitHub refuse it once the head is not the one read."""
+        self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch", "--admin",
                   "--match-head-commit", head], mutating=True)
 
     def rerun(self, job_id):

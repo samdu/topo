@@ -99,13 +99,15 @@ def job_id(js, name):
 
 
 class Decisions(unittest.TestCase):
-    def test_a_green_ready_pr_left_by_automerge_is_merged_at_its_head(self):
+    def test_a_green_ready_pr_is_merged_at_its_head(self):
         w = janitor.decide_pr(pr(), run(), jobs(test="success"), {}, NOW)
         self.assertEqual(kinds(w), ["merge"])
         self.assertEqual(w[0]["head"], HEAD)
 
-    def test_a_green_pr_inside_the_grace_is_left_for_automerge(self):
-        self.assertEqual(janitor.decide_pr(pr(), run(since=timedelta(minutes=3)), [], {}, NOW), [])
+    def test_a_green_pr_is_merged_on_the_first_pass_that_reads_it(self):
+        for since in (timedelta(0), timedelta(minutes=1), timedelta(minutes=3)):
+            w = janitor.decide_pr(pr(), run(since=since), jobs(test="success"), {}, NOW)
+            self.assertEqual(kinds(w), ["merge"], since)
 
     def test_an_unchecked_box_is_reported_and_never_merged(self):
         w = janitor.decide_pr(pr(body="- [x] suite\n- [ ] device: the phone"), run(), [], {}, NOW)
@@ -521,7 +523,7 @@ class Decisions(unittest.TestCase):
         self.assertEqual(janitor.digest_line({"issue:40": "put to Sam", "issue:41": ""}),
                          "still standing, unchanged since it was said: untriaged issues #40 (put to Sam), #41.")
 
-    def test_unchecked_boxes_match_automerges_test(self):
+    def test_unchecked_boxes_are_counted_wherever_the_list_marker_stands(self):
         self.assertEqual(janitor.unchecked_boxes("- [x] a\n  * [ ] b\n- [ ] c"), 2)
         self.assertEqual(janitor.unchecked_boxes(None), 0)
 
@@ -696,7 +698,7 @@ class Stuck(unittest.TestCase):
 
     # (d) A review that passed with P2s alone: Codex's verdict is `blocking: false`, so
     # review_gate is green, and a green run with every box ticked is merged.
-    def test_a_passed_review_with_every_box_ticked_left_by_automerge_is_merged(self):
+    def test_a_passed_review_with_every_box_ticked_is_merged(self):
         j = jobs(select="success", test="success", review_cap="success", codex="success", post_feedback="success",
                  reviewer_ran="success", review_gate="success")
         w = janitor.decide_pr(pr(body="- [x] suite\n- [x] device: the phone"), run(), j, {}, NOW)
@@ -960,7 +962,7 @@ class DeviceBoxes(unittest.TestCase):
         self.assertEqual([x["kind"] for x in self.ticks([result()], boxed(headRefOid=HEAD[:5]))], ["report"], "a head shorter than the check's is not the head it names")
         self.assertIsNone(janitor.tick_box(f"- [ ] device: {BOX}\n- [ ] device(2): {BOX}", " " + BOX), "two boxes of one text are neither")
         for line in ("- [ ] device: x", "- [ ] device(3): x"):
-            self.assertEqual(janitor.unchecked_boxes(line), 1, "automerge's own test still holds the merge")
+            self.assertEqual(janitor.unchecked_boxes(line), 1, "the box still holds the merge")
 
     def test_an_untick_changes_that_one_line_back(self):
         body = f"intro\r\n- [x] suite\r\n  * [ ] device(2): {BOX}  \r\n- [x] device: {BOX} and more\r\n"
@@ -1165,6 +1167,9 @@ if tool == "gh":
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
+    # GitHub's own check of --match-head-commit: a head pushed since the read refuses the merge.
+    if a[:2] == ["pr", "merge"] and S.get("head_now") and a[a.index("--match-head-commit") + 1] != S["head_now"]:
+        print("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)", file=sys.stderr); sys.exit(1)
     if a[:2] == ["run", "rerun"] and S.get("state_at_rerun"):
         at = open(S["state_at_rerun"]).read() if os.path.exists(S["state_at_rerun"]) else '{"rerun": {}}'
         open(S["state_at_rerun"] + ".at-rerun", "w").write(at)
@@ -1377,7 +1382,7 @@ class WholePass(unittest.TestCase):
     def test_a_pass_merges_pinned_to_the_head_sweeps_and_delivers_as_the_host_to_buddy_prime(self):
         p, calls = self.run_pass(self.scripted())
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --match-head-commit {HEAD}", calls)
+        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --admin --match-head-commit {HEAD}", calls)
         self.assertIn(f"git -C {self.wt} status --porcelain", calls)
         self.assertIn("tmux kill-session -t =topo-old", calls)
         self.assertEqual(calls.count("kill-session"), 1)
@@ -1485,6 +1490,16 @@ class WholePass(unittest.TestCase):
         self.assertIn("worktree remove", calls)
         self.assertIn("update-ref -d refs/heads/buddy/old 2222", calls)
         self.assertIn("the branch ref moved past 2222 and is kept", Bridge.received[-1]["body"]["text"])
+
+    def test_a_head_pushed_since_the_read_refuses_the_merge_and_nothing_merges_the_new_head(self):
+        moved = "f" * 40
+        p, calls = self.run_pass(self.scripted(head_now=moved))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(calls.count("gh pr merge"), 1, "the refused merge was asked again")
+        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --admin --match-head-commit {HEAD}", calls)
+        self.assertNotIn(moved, calls, "a head nobody read was merged")
+        self.assertIn("#7: merge refused: ", Bridge.received[-1]["body"]["text"])
+        self.assertIn("Head branch was modified", Bridge.received[-1]["body"]["text"])
 
     def test_another_prs_green_run_on_the_same_head_merges_nothing(self):
         s = self.scripted(prs=[pr(), pr(number=8, headRefName="buddy/y")], runs={HEAD: [run(number=8)]})
