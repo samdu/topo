@@ -6,15 +6,21 @@ import TopoCore
 /// each successful save mints a new tag. Tests and previews use it; nothing
 /// here talks to iCloud.
 ///
-/// It is more forgiving than CloudKit in four ways, each of which has shipped
-/// a bug: its query index is strongly consistent, where the server's lags and
-/// a newest record leaves no gap behind it; an empty filter list matches every
-/// record of the type, where the server refuses a match-all predicate without
-/// a queryable record-name index; a type nothing has saved answers `[]`, where
-/// the server answers `unknownItem`; and an empty string list saves, where the
-/// server refuses the whole batch with "Syntax error in request". A test
-/// passing here proves nothing about those four, which are exercised against a
-/// real container or not at all.
+/// It is more forgiving than CloudKit where the difference needs a real
+/// container to model:
+/// - its query index is strongly consistent, where the server's lags and a
+///   newest record leaves no gap behind it (`StaleTailDatabase` and
+///   `BlindQueryDatabase` in TopoCore's tests model the lag where it matters);
+/// - an empty filter list matches every record of the type, where the server
+///   refuses a match-all predicate without a queryable record-name index, so
+///   nothing here may rely on one;
+/// - it refuses no record or batch for its size, a duplicate ID in a batch or
+///   a record of another type under one ID;
+/// - the adapter's walk of an atomic batch's per-record results and a query's
+///   pagination (`CloudKitRecordDatabase`) are reached by no suite.
+/// A test passing here proves nothing about those. A type nothing has saved
+/// answers `[]` and an empty list is saved as no field, as the adapter makes
+/// CloudKit's answers, and a tag from another store is never honoured.
 ///
 /// `beforeSave` runs inside `save` before the tags are checked. Because the
 /// actor suspends at that await, a test can hold one writer there while
@@ -22,7 +28,7 @@ import TopoCore
 public actor InMemoryRecordDatabase: ZoneDatabase {
     /// The semantics, shared with the store a phone with no iCloud account runs on
     /// (`LocalRecordDatabase`), so the two cannot drift apart.
-    private var core = RecordStoreCore(store: "tag")
+    private var core = RecordStoreCore(store: "tag-\(UUID().uuidString)")
     private var beforeSave: (@Sendable ([Record]) async -> Void)?
 
     /// Every record ever saved, in save order. A record ID appearing twice
