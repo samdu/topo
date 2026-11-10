@@ -497,7 +497,7 @@ struct TimerTool: Tool {
         // The outcome is taken before the standing is read again, so a prompt begun meanwhile
         // cannot write over it.
         let outcome = asked.last
-        if reply.status == ToolReply.denied, let alarms, await alarms.access() == .undetermined {
+        if reply.status == ToolReply.denied, await scheduler.authorizer.access() == .undetermined {
             switch outcome {
             case .declined: return inFront ? Self.leftBeforeThePrompt : Self.offScreen
             case let .failed(reason): return Self.promptFailed(reason)
