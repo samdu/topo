@@ -41,8 +41,8 @@ func startedService(_ tools: [any Tool], bound: Duration = ToolService.defaultBo
 }
 
 /// A service over `tools`, started on a port of `TestPorts`, with its log captured.
-func startedServiceOnTestPort(_ tools: [any Tool]) async throws -> (service: ToolService, port: UInt16, logs: LogLines) {
-    try await TestPorts.first { port in
+func startedServiceOnTestPort(_ tools: [any Tool], over ports: [UInt16]? = nil) async throws -> (service: ToolService, port: UInt16, logs: LogLines) {
+    let start = { (port: NWEndpoint.Port) in
         let logs = LogLines()
         let service = try ToolService(tools: tools, log: { logs.add($0) })
         await service.set(requestedPort: port)
@@ -52,6 +52,8 @@ func startedServiceOnTestPort(_ tools: [any Tool]) async throws -> (service: Too
         await service.set(requestedPort: .any)
         return (service, bound, logs)
     }
+    if let ports { return try await TestPorts.first(over: ports, start) }
+    return try await TestPorts.first(start)
 }
 
 /// A port for a test that lets its listener go and then needs that port again: a squatter bound
@@ -72,12 +74,18 @@ enum TestPorts {
         }
     }
 
-    /// `start` over the ports in turn, past one something outside the run already holds.
+    /// `start` over the range's ports in turn, from the next to be handed out, past each one
+    /// something outside the run already holds.
     static func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
-        for _ in 1..<20 {
-            do { return try await start(NWEndpoint.Port(rawValue: take())!) } catch NWError.posix(.EADDRINUSE) {}
+        try await first(over: (0..<range.count).lazy.map { _ in take() }, start)
+    }
+
+    /// `start` over `ports` in turn, past each one already held; that refusal if every one is.
+    static func first<T>(over ports: some Sequence<UInt16>, _ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
+        for port in ports {
+            do { return try await start(NWEndpoint.Port(rawValue: port)!) } catch NWError.posix(.EADDRINUSE) {}
         }
-        return try await start(NWEndpoint.Port(rawValue: take())!)
+        throw NWError.posix(.EADDRINUSE)
     }
 }
 

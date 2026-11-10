@@ -234,8 +234,8 @@ func startedProxy(_ upstream: any Upstream) async throws -> (APIProxy, UInt16, L
 }
 
 /// A proxy over `upstream`, started on a port of `TestPorts`, with its log captured.
-func startedProxyOnTestPort(_ upstream: any Upstream) async throws -> (APIProxy, UInt16, LogLines) {
-    try await TestPorts.first { port in
+func startedProxyOnTestPort(_ upstream: any Upstream, over ports: [UInt16]? = nil) async throws -> (APIProxy, UInt16, LogLines) {
+    let start = { (port: NWEndpoint.Port) in
         let lines = LogLines()
         let proxy = try APIProxy(upstream: upstream, log: lines.log)
         await proxy.set(requestedPort: port)
@@ -245,6 +245,8 @@ func startedProxyOnTestPort(_ upstream: any Upstream) async throws -> (APIProxy,
         await proxy.set(requestedPort: .any)
         return (proxy, bound, lines)
     }
+    if let ports { return try await TestPorts.first(over: ports, start) }
+    return try await TestPorts.first(start)
 }
 
 /// A port for a test that lets its listener go and then needs that port again: a squatter bound
@@ -265,12 +267,18 @@ enum TestPorts {
         }
     }
 
-    /// `start` over the ports in turn, past one something outside the run already holds.
+    /// `start` over the range's ports in turn, from the next to be handed out, past each one
+    /// something outside the run already holds.
     static func first<T>(_ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
-        for _ in 1..<20 {
-            do { return try await start(NWEndpoint.Port(rawValue: take())!) } catch NWError.posix(.EADDRINUSE) {}
+        try await first(over: (0..<range.count).lazy.map { _ in take() }, start)
+    }
+
+    /// `start` over `ports` in turn, past each one already held; that refusal if every one is.
+    static func first<T>(over ports: some Sequence<UInt16>, _ start: (NWEndpoint.Port) async throws -> T) async throws -> T {
+        for port in ports {
+            do { return try await start(NWEndpoint.Port(rawValue: port)!) } catch NWError.posix(.EADDRINUSE) {}
         }
-        return try await start(NWEndpoint.Port(rawValue: take())!)
+        throw NWError.posix(.EADDRINUSE)
     }
 }
 
