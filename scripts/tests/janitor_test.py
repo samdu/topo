@@ -1167,6 +1167,9 @@ if tool == "gh":
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] and S.get("merge_refused"): print(S["merge_refused"], file=sys.stderr); sys.exit(1)
+    # GitHub's own check of --match-head-commit: a head pushed since the read refuses the merge.
+    if a[:2] == ["pr", "merge"] and S.get("head_now") and a[a.index("--match-head-commit") + 1] != S["head_now"]:
+        print("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)", file=sys.stderr); sys.exit(1)
     if a[:2] == ["run", "rerun"] and S.get("state_at_rerun"):
         at = open(S["state_at_rerun"]).read() if os.path.exists(S["state_at_rerun"]) else '{"rerun": {}}'
         open(S["state_at_rerun"] + ".at-rerun", "w").write(at)
@@ -1379,7 +1382,7 @@ class WholePass(unittest.TestCase):
     def test_a_pass_merges_pinned_to_the_head_sweeps_and_delivers_as_the_host_to_buddy_prime(self):
         p, calls = self.run_pass(self.scripted())
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --match-head-commit {HEAD}", calls)
+        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --admin --match-head-commit {HEAD}", calls)
         self.assertIn(f"git -C {self.wt} status --porcelain", calls)
         self.assertIn("tmux kill-session -t =topo-old", calls)
         self.assertEqual(calls.count("kill-session"), 1)
@@ -1487,6 +1490,16 @@ class WholePass(unittest.TestCase):
         self.assertIn("worktree remove", calls)
         self.assertIn("update-ref -d refs/heads/buddy/old 2222", calls)
         self.assertIn("the branch ref moved past 2222 and is kept", Bridge.received[-1]["body"]["text"])
+
+    def test_a_head_pushed_since_the_read_refuses_the_merge_and_nothing_merges_the_new_head(self):
+        moved = "f" * 40
+        p, calls = self.run_pass(self.scripted(head_now=moved))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(calls.count("gh pr merge"), 1, "the refused merge was asked again")
+        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --admin --match-head-commit {HEAD}", calls)
+        self.assertNotIn(moved, calls, "a head nobody read was merged")
+        self.assertIn("#7: merge refused: ", Bridge.received[-1]["body"]["text"])
+        self.assertIn("Head branch was modified", Bridge.received[-1]["body"]["text"])
 
     def test_another_prs_green_run_on_the_same_head_merges_nothing(self):
         s = self.scripted(prs=[pr(), pr(number=8, headRefName="buddy/y")], runs={HEAD: [run(number=8)]})
