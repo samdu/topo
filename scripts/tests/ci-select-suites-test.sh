@@ -95,6 +95,7 @@ expected=(
   'scripts/tests/phonon-bundles-test.sh scripts'
   'scripts/tests/smartturn-mel-test.sh scripts'
   'scripts/tests/suite-gate-test.sh scripts'
+  'scripts/tests/lib.sh scripts'
 )
 
 failures=0
@@ -193,6 +194,7 @@ selects true true true "the Mac suites' script" $'scripts/mac-suite.sh\n'
 selects true true true "the audio lane's script" $'scripts/ci-audio-lane.sh\n'
 selects true true true "the script that reads the suites' results" $'scripts/ci-require-tests.sh\n'
 selects false false false "a script's test, which the scripts suite runs" $'scripts/tests/suite-gate-test.sh\n' true
+selects false false false "the script tests' shared helpers" $'scripts/tests/lib.sh\n' true
 selects true true true "a build script" $'scripts/build-ish.sh\n'
 selects true true true "a path no rule names" $'Somewhere/New.swift\n'
 

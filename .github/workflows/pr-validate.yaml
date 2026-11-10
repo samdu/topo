@@ -306,6 +306,7 @@ jobs:
             scripts/tests/phonon-bundles-test.sh scripts
             scripts/tests/smartturn-mel-test.sh scripts
             scripts/tests/suite-gate-test.sh scripts
+            scripts/tests/lib.sh scripts
         run: |
           set -euo pipefail
           # A diff that cannot be read selects every suite, inside the script.
