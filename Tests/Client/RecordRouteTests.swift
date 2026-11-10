@@ -363,3 +363,48 @@ final class RecordRouteTests: XCTestCase {
                        "iCloud refused the read. Check you're signed in on this device.")
     }
 }
+
+/// The stalled debug store (`TOPO_DEBUG_STORE=stalled`) asked bounded runs out as CloudKit does
+/// under a bound: a save and a fetch by ID throw `unavailable` at the bound, so the lease's
+/// requests give up at its patience rather than waiting for good; unbounded, it never answers.
+final class StalledRecordDatabaseTests: XCTestCase {
+    func testASaveAndAFetchAskedBoundedRunOutAtTheBound() async throws {
+        let bounded = StalledRecordDatabase().answering(within: 0.05)
+        let record = Record(type: "T", id: RecordID("a"))
+        for (name, call) in [("save", { _ = try await bounded.save([record]) }),
+                             ("fetch", { _ = try await bounded.fetch([record.id]) })] as [(String, @Sendable () async throws -> Void)] {
+            // Raced against 5 s of its own, so a store that never answers fails here and does not hang.
+            let outcome = await withTaskGroup(of: String.self) { group -> String in
+                group.addTask {
+                    do {
+                        try await call()
+                        return "answered"
+                    } catch RecordDatabaseError.unavailable {
+                        return "unavailable"
+                    } catch {
+                        return "\(error)"
+                    }
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(5))
+                    return "still waiting after 5 s"
+                }
+                let first = await group.next() ?? "nothing"
+                group.cancelAll()
+                return first
+            }
+            XCTAssertEqual(outcome, "unavailable", name)
+        }
+    }
+
+    func testUnboundedItIsNeverAnswered() async throws {
+        let stalled = StalledRecordDatabase()
+        let save = Task { try await stalled.save([Record(type: "T", id: RecordID("a"))]) }
+        try await Task.sleep(for: .milliseconds(300))
+        save.cancel()
+        let result = await save.result
+        guard case .failure(let error) = result, error is CancellationError else {
+            return XCTFail("the unbounded save ended other than by its cancellation: \(result)")
+        }
+    }
+}

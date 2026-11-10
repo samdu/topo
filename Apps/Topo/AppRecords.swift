@@ -83,7 +83,7 @@ enum AppRecords {
 
 #if DEBUG
 /// A record store whose every call waits until it is cancelled, and is never answered.
-private struct StalledRecordDatabase: ZoneDatabase {
+struct StalledRecordDatabase: ZoneDatabase {
     static func never() async throws -> Never {
         while true { try await Task.sleep(for: .seconds(3600)) }
     }
