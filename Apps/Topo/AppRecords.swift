@@ -12,9 +12,10 @@ import TopoCoreTesting
 /// nothing then waits on iCloud or the network, so a UI suite's first screen on a freshly booted
 /// simulator is not as slow as CloudKit is (#434). Every part takes the same instance, so the role
 /// a launch decides is the one the harness and the sweep read. The hub's unsigned build does the
-/// same with `TOPO_STORE=memory`. `TOPO_DEBUG_STORE=stalled` gets a store that never answers and
-/// a zone that is never made: CloudKit at its slowest, for seeing what the first screen does while
-/// iCloud keeps it waiting (#436).
+/// same with `TOPO_STORE=memory`. `TOPO_DEBUG_STORE=stalled` gets a store that never answers
+/// (but runs out at a bound asked of it, as CloudKit does) and a zone that is never made:
+/// CloudKit at its slowest, for seeing what the first screen does while iCloud keeps it waiting
+/// (#436).
 enum AppRecords {
     #if DEBUG
     static let storeVariable = "TOPO_DEBUG_STORE"
