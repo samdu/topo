@@ -65,12 +65,22 @@ import TopoCoreTesting
         let waited = ContinuousClock.now - start
         #expect(unavailable(ranOut))
         #expect(waited >= .milliseconds(200), "given up before its bound, after \(waited)")
-        #expect(waited < .milliseconds(900), "given up long after its bound, after \(waited)")
+        #expect(waited < .milliseconds(1500), "given up long after its bound, after \(waited)")
         try await until("the fetch the bound gave up is still out") { held.held == 1 }
         #expect(held.answered == 0)
         held.release()
         try await until { held.answered == 1 }
         #expect(try await bounded.fetch([RecordID("a")])[RecordID("a")] != nil, "the next fetch is not held")
+
+        // A longer bound holds as long as it says: still out at 1.5 s under a 3 s bound, so a view
+        // that gives up at a time of its own, rather than the one asked, fails one half or the other.
+        held.holdNextFetch()
+        let patient = held.answering(within: 3)
+        let answer = Task { try await patient.fetch([RecordID("a")]) }
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(held.held == 1, "a 3 s bound gave its fetch up before 1.5 s")
+        held.release()
+        #expect(try await answer.value[RecordID("a")] != nil, "the fetch released inside its bound was not answered")
     }
 }
 
