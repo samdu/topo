@@ -66,8 +66,9 @@ final class WorkingRecorder {
 
 /// The keeper's sounds over a real `Speaker` on the audio seams and the guest activity as the
 /// harness tells it, with the players the suite's. What is held: each tool class sounds its tone
-/// and only while a hold stands, so a typed turn is silent; the bed only under `sounds`, in from
-/// the release and out at the reply's first frame, paused not stopped; off goes through in every
+/// and only while a hold stands, so a typed turn is silent; the bed only under `sounds`, in under a
+/// turn's wait and out at the reply's first frame, paused not stopped (its whole span is
+/// `AudibleHoldTests`'); off goes through in every
 /// mode; a value kept that is no mode reads as `sounds`; nothing on a session that will not
 /// activate; a hold that extends a standing one and never holds
 /// alone; and the players dropped, not rebuilt, at a reset.
