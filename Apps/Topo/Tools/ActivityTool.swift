@@ -11,6 +11,9 @@ struct ActivityTool: Tool {
     var keeper: @MainActor @Sendable () -> ActivityKeeper
     var fetcher: TrackerFetcher = URLTrackerFetcher()
     var now: @Sendable () -> Date = { Date() }
+    /// Awaited by a start, an update or an end before it goes to the main actor: a test parks the
+    /// call there.
+    var parked: @Sendable () async -> Void = {}
 
     let name = "activity"
     let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, or a countdown with no sound (a timer that sounds is topo timer)"
@@ -56,10 +59,13 @@ struct ActivityTool: Tool {
         case ("example", 1):
             return .ok(Self.example(now: now()) + "\n")
         case ("start", 3):
+            await parked()
             return await start(slot: arguments[1], json: arguments[2])
         case ("update", 3):
+            await parked()
             return await update(id: arguments[1], json: arguments[2])
         case ("end", let count) where (2...5).contains(count):
+            await parked()
             return await end(Array(arguments.dropFirst()))
         default:
             return .usage("topo: activity takes nothing, start, update, end or example\n\n\(usage)\n")
