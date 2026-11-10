@@ -1884,16 +1884,16 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(heard.texts, [], "nothing spoken was owed a reading")
     }
 
-    /// The chat's own handler, as the screen installs it: the mark is the decision, so a reply
-    /// whose turn is marked is read whatever the setting reads now.
+    /// The chat's own handler, as the screen installs it (`SpokenReply.read`): the mark is the
+    /// decision, so a reply whose turn is marked is read whatever the setting reads now. `said`
+    /// hears each reply the speaker took.
     @MainActor
     private func install(_ harness: Harness, _ speaker: Speaker, _ said: Said) {
         harness.onReply = { reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            guard speaker.speak(reply.text, answering: asked) else { return false }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
+            let before = speaker.report.speaks
+            let done = SpokenReply.read(reply, harness: harness, speaker: speaker)
+            if speaker.report.speaks > before { said.add(reply.text) }
+            return done
         }
     }
 
@@ -2217,13 +2217,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
 
         let said = Said()
-        harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            guard speaker.speak(reply.text, answering: asked) else { return false }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
-        }
+        install(harness, speaker, said)
 
         // The release: the wait stands and the keeper is rendering for it.
         let nonce = harness.willSend("what is the capital of France")
@@ -2271,13 +2265,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         // What the chat installs: only a reply the speaker took is done with.
         let said = Said()
-        harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            guard speaker.speak(reply.text, answering: asked) else { return false }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
-        }
+        install(harness, speaker, said)
 
         // The session will not activate while the reply lands.
         seams.activationError = Seams.Refused()
@@ -2305,13 +2293,13 @@ final class HarnessIntegrationTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let transport = ScriptedTransport((200, reply("Paris.")), (200, reply("Rome.")))
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
         let said = Said()
-        harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
-        }
+        install(harness, speaker, said)
 
         // Spoken: the press said so when it put the words on the line.
         harness.markSpoken(harness.willSend("what is the capital of France"))
