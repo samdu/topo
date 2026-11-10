@@ -143,6 +143,7 @@ public final class SignIn {
               self.generation == generation, !signOutOwed else { return }
         if case .approving = phase { return }
         if accept(status) {
+            if phase != .signedIn { beginning?() }
             cache.save(status)
             phase = .signedIn
         } else if phase == .signedIn {
@@ -217,6 +218,7 @@ public final class SignIn {
             phase = .failed("Claude Code finished the sign-in but does not say it is signed in with Claude.")
             return
         }
+        beginning?()
         cache.save(status)
         // The new credential is not the one a sign-out owed.
         cache.defaults.removeObject(forKey: Self.signOutOwedKey)

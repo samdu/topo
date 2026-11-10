@@ -49,7 +49,8 @@ final class DefaultSurface {
     /// arrival have already run both by the time their last step moves the phase
     /// (`LoginLife.standing` is false), so they are not run a second time. Only a login ending: a
     /// launch that finds no token (the keychain unreadable before the first unlock included)
-    /// takes nothing away. Signed in, the default is written for the newest reply.
+    /// takes nothing away. Signed in, the default is written for the newest reply; the login's
+    /// beginning is `SignIn.beginning`'s, which runs before the cache says signed in.
     func follow(from was: SignIn.Phase, to phase: SignIn.Phase, latest reply: Turn?) {
         if was == .signedIn, phase != .signedIn {
             if login.standing {
@@ -59,7 +60,6 @@ final class DefaultSurface {
             forget()
         }
         if phase == .signedIn {
-            if was != .signedIn { login.began() }
             launched(latest: reply)
         }
     }
