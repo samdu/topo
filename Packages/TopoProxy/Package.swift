@@ -18,7 +18,9 @@ let package = Package(
     targets: [
         .target(name: "TopoProxy", dependencies: [.product(name: "TopoCore", package: "TopoCore")]),
         .target(name: "TopoTools", dependencies: ["TopoProxy", .product(name: "TopoCore", package: "TopoCore")]),
-        .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy"]),
-        .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy"]),
+        // What both test targets probe a loopback port with: whether it answers, and a squatter on it.
+        .target(name: "TopoProxyTestSupport", path: "Tests/TopoProxyTestSupport"),
+        .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy", "TopoProxyTestSupport"]),
+        .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy", "TopoProxyTestSupport"]),
     ]
 )

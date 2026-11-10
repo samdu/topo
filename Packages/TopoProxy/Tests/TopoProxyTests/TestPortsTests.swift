@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Testing
 @testable import TopoProxy
+import TopoProxyTestSupport
 
 /// The ports the listener-loss tests take back: below the ephemeral range, each examined once per
 /// run, one already held passed over, and a port a test was given never handed to another.

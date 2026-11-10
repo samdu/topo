@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Testing
 import TopoProxy
+import TopoProxyTestSupport
 @testable import TopoTools
 
 @Suite struct ToolServiceTests {
