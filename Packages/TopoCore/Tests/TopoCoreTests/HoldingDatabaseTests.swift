@@ -14,7 +14,7 @@ import TopoCoreTesting
         held.holdNextSave()
         let ranOut = await givenUp(held) { try await bounded.save([Record(type: "T", id: RecordID("a"))]) }
         #expect(unavailable(ranOut))
-        #expect(held.held == 1, "the save the bound gave up is still out")
+        try await until("the save the bound gave up is still out") { held.held == 1 }
         held.holdNextSave()
         let second = Task { try await held.save([Record(type: "T", id: RecordID("b"))]) }
         try await until { held.held == 2 }
@@ -33,8 +33,8 @@ import TopoCoreTesting
         let bounded = held.answering(within: 0.05)
         let ranOut = await givenUp(held) { try await bounded.save([Record(type: "T", id: RecordID("a"))]) }
         #expect(unavailable(ranOut))
+        try await until("the request is still out after the bound gave it up") { held.holding }
         #expect(try await inner.fetch([RecordID("a")])[RecordID("a")] != nil, "the save landed")
-        #expect(held.holding, "the request is still out after the bound gave it up")
         held.release()
         try await until { !held.holding }
     }
@@ -61,7 +61,7 @@ import TopoCoreTesting
         let bounded = held.answering(within: 0.05)
         let ranOut = await givenUp(held) { try await bounded.fetch([RecordID("a")]) }
         #expect(unavailable(ranOut))
-        #expect(held.held == 1, "the fetch the bound gave up is still out")
+        try await until("the fetch the bound gave up is still out") { held.held == 1 }
         #expect(held.answered == 0)
         held.release()
         try await until { held.answered == 1 }
