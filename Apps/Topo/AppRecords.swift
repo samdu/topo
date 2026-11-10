@@ -82,7 +82,9 @@ enum AppRecords {
 }
 
 #if DEBUG
-/// A record store whose every call waits until it is cancelled, and is never answered.
+/// A record store whose every call waits until it is cancelled, and is never answered. Asked
+/// bounded (`answering(within:)`), its saves and fetches by ID run out at the bound and throw
+/// `unavailable`, as CloudKit's do with the bound as their request's timeout; the rest wait on.
 struct StalledRecordDatabase: ZoneDatabase {
     static func never() async throws -> Never {
         while true { try await Task.sleep(for: .seconds(3600)) }
@@ -93,5 +95,21 @@ struct StalledRecordDatabase: ZoneDatabase {
     func records(ofType type: String) async throws -> [Record] { try await Self.never() }
     func delete(_ ids: [RecordID]) async throws { try await Self.never() }
     func changes(ofType type: String, since token: Data?) async throws -> RecordChanges { try await Self.never() }
+    func answering(within seconds: TimeInterval) -> any RecordDatabase { Bounded(seconds: seconds) }
+
+    struct RanOut: Error {}
+
+    private struct Bounded: RecordDatabase {
+        let seconds: TimeInterval
+        func ranOut() async throws -> Never {
+            try await Task.sleep(for: .seconds(seconds))
+            throw RecordDatabaseError.unavailable(underlying: RanOut())
+        }
+        func save(_ records: [Record]) async throws -> [Record] { try await ranOut() }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await ranOut() }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await StalledRecordDatabase.never() }
+        func records(ofType type: String) async throws -> [Record] { try await StalledRecordDatabase.never() }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase { Bounded(seconds: seconds) }
+    }
 }
 #endif
