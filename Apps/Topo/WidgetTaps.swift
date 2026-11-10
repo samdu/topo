@@ -7,59 +7,13 @@ import TopoTools
 final class WidgetTaps: WidgetTapHandler {
     let cues: WidgetCues
     let actions: WidgetActions
-    /// Whether a control's turn tap holds its intent open until the drain has sent the turn. Before
-    /// iOS 26 the intent does not bring Topo forward, and a process launched in the background for
-    /// it has nothing else keeping it alive once `perform` returns; from iOS 26 the app comes
-    /// forward and the drain runs on there.
-    let holdsForTheDrain: Bool
-    /// How long a held tap waits on its drain: a read and a write of the log, inside the time the
-    /// system gives an intent.
-    static let drainBound: Duration = .seconds(20)
-    let drainBound: Duration
+    /// The drain the last turn tap started, which runs on after the intent has returned; kept for
+    /// a test to await.
+    private(set) var draining: Task<Void, Never>?
 
-    init(cues: WidgetCues, actions: WidgetActions, holdsForTheDrain: Bool = WidgetTaps.drainIsHeld,
-         drainBound: Duration = WidgetTaps.drainBound) {
+    init(cues: WidgetCues, actions: WidgetActions) {
         self.cues = cues
         self.actions = actions
-        self.holdsForTheDrain = holdsForTheDrain
-        self.drainBound = drainBound
-    }
-
-    /// Returns when `task` ends or `bound` has passed, whichever is first, and leaves `task`
-    /// running: a race on a continuation, since a task group waits for every child, and a child
-    /// awaiting another task's value does not end when cancelled.
-    static func wait(for task: Task<Void, Never>, atMost bound: Duration) async {
-        let once = Once()
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            once.set(continuation)
-            let timer = Task {
-                try? await Task.sleep(for: bound)
-                once.resume()
-            }
-            Task {
-                await task.value
-                timer.cancel()
-                once.resume()
-            }
-        }
-    }
-
-    /// A continuation resumed by the first of two racers and never again.
-    private final class Once: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Void, Never>?
-        func set(_ continuation: CheckedContinuation<Void, Never>) { lock.withLock { self.continuation = continuation } }
-        func resume() {
-            let taken = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-                defer { continuation = nil }
-                return continuation
-            }
-            taken?.resume()
-        }
-    }
-
-    static var drainIsHeld: Bool {
-        if #available(iOS 26, *) { false } else { true }
     }
 
     /// The intent returns once the cue is recorded and the app is coming forward: the drain, and
@@ -91,8 +45,7 @@ final class WidgetTaps: WidgetTapHandler {
             let cue = SurfaceStore.Cue(nonce: UUID().uuidString, slot: stored, id: ControlSlot.control, revision: revision,
                                        turningOn: turningOn, time: Date())
             guard (try? store.recordCue(cue)) == true else { return .foreground }
-            let draining = Task { await cues.drain() }
-            if holdsForTheDrain { await Self.wait(for: draining, atMost: drainBound) }
+            draining = Task { await cues.drain() }
             return .foreground
         case .open:
             return .foreground
