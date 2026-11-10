@@ -83,8 +83,7 @@ expected=(
   'scripts/tests/ci-require-tests-test.sh scripts'
 )
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 declared=()
 while IFS= read -r line; do
@@ -250,36 +249,19 @@ run_step() {
   fi
 }
 
-# repo <dir> <path>... — a scratch repository whose last commit adds each path.
-repo() {
-  local dir="$1"; shift
-  mkdir -p "$dir/scripts"
-  cp "$script" "$dir/scripts/ci-select-suites.sh"
-  git -C "$dir" init -q -b scratch
-  git -C "$dir" config core.hooksPath /dev/null
-  git -C "$dir" -c user.name=t -c user.email=t@t add -A
-  git -C "$dir" -c user.name=t -c user.email=t@t commit -qm base
-  local path
-  for path in "$@"; do mkdir -p "$dir/$(dirname "$path")"; echo x > "$dir/$path"; done
-  if [ "$#" -gt 0 ]; then
-    git -C "$dir" -c user.name=t -c user.email=t@t add -A
-    git -C "$dir" -c user.name=t -c user.email=t@t commit -qm change
-  fi
-}
-
-repo "$scratch/docs" docs/design.md README.md
+repo "$script" "$scratch/docs" docs/design.md README.md
 run_step "a documentation change" "$scratch/docs" "false false false false" "none of the 2 changed paths needs a suite"
-repo "$scratch/link" Packages/TopoLink/Sources/TopoLink/Probe.swift
+repo "$script" "$scratch/link" Packages/TopoLink/Sources/TopoLink/Probe.swift
 run_step "a TopoLink change" "$scratch/link" "false false true false" "others for Packages/TopoLink/Sources/TopoLink/Probe.swift"
-repo "$scratch/app" Apps/Client/Ear.swift
+repo "$script" "$scratch/app" Apps/Client/Ear.swift
 run_step "an app change" "$scratch/app" "true true true false" "topo_unit, topo_ui, others for Apps/Client/Ear.swift"
-repo "$scratch/harness" scripts/validate-and-push.sh scripts/tests/validate-and-push-test.sh
+repo "$script" "$scratch/harness" scripts/validate-and-push.sh scripts/tests/validate-and-push-test.sh
 run_step "a harness change" "$scratch/harness" "false false false true" "scripts for scripts/"
-repo "$scratch/shallow"
+repo "$script" "$scratch/shallow"
 run_step "a diff producer that fails (no HEAD^1)" "$scratch/shallow" "true true true false" "changed paths are unknown"
 
 # A rename out of the app: the source is the path that needs the suites.
-repo "$scratch/rename" Apps/Client/Ear.swift
+repo "$script" "$scratch/rename" Apps/Client/Ear.swift
 mkdir -p "$scratch/rename/docs"
 git -C "$scratch/rename" mv Apps/Client/Ear.swift docs/Ear.swift
 git -C "$scratch/rename" -c user.name=t -c user.email=t@t commit -qm rename

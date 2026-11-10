@@ -21,9 +21,7 @@ script="$here/../review-cap.sh"
 work="$(mktemp -d -t review-cap-test)"
 trap 'rm -rf "$work"' EXIT
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-pass() { echo "ok   $*"; }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 MARKER='<!-- agent-review: codex -->'
 CAP_MARKER='<!-- topo-review-cap -->'
@@ -84,7 +82,7 @@ expect() {
   elif [ "$got" != "$posts" ]; then
     fail "$name: posted $got cap comments, not $posts"
   else
-    pass "$name: capped=$capped, $posts cap comment(s) posted"
+    ok "$name: capped=$capped, $posts cap comment(s) posted"
   fi
 }
 
@@ -98,7 +96,7 @@ expect_error() {
   elif ! grep -q -- "::error::.*$pattern" "$work/$name.err"; then
     fail "$name: stderr does not say why: $(cat "$work/$name.err")"
   else
-    pass "$name: failed with no capped line, and said why"
+    ok "$name: failed with no capped line, and said why"
   fi
 }
 
@@ -118,7 +116,7 @@ expect four true 1
 posted="$(jq -r . "$work/four.posts" 2>/dev/null)"
 if [ "$(head -n 1 <<<"$posted")" = "$CAP_MARKER" ] && ! grep -qF -- "$MARKER" <<<"$posted" \
   && grep -q "4 Codex verdicts" <<<"$posted" && grep -q "Sam's word" <<<"$posted"; then
-  pass "four: the cap comment opens with its own marker, never the codex one, and names the count and the way out"
+  ok "four: the cap comment opens with its own marker, never the codex one, and names the count and the way out"
 else
   fail "four: the cap comment is not as it should be: $posted"
 fi
