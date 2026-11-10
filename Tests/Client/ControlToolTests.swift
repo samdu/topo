@@ -131,6 +131,28 @@ final class ControlToolTests: XCTestCase {
         for label in seen { XCTAssertFalse(label.contains("cooperative"), label) }
     }
 
+    /// A request naming two secrets reads both in one hop off the pool, not a hop a name: the
+    /// request's own task runs on an executor that sees every job it is handed, and none comes
+    /// between the first read and the second, as one would where a read's answer came back to the
+    /// task before the next was asked for.
+    func testARequestsSecretsAreReadInOneHopOffThePool() async throws {
+        try secrets.set("Bearer a", name: "ha")
+        try secrets.set("b", name: "hb")
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let between = OSAllocatedUnfairLock(initialState: false)
+        secrets.calling = { reads.withLock { $0 += 1 } }
+        let executor = WatchingExecutor { if reads.withLock({ $0 }) == 1 { between.withLock { $0 = true } } }
+        let form = ControlRequest.Form(method: "GET", url: "http://127.0.0.1:9/",
+                                       headers: [.init(name: "Authorization", value: "${secret:ha}"), .init(name: "X-Other", value: "${secret:hb}")])
+        XCTAssertEqual(form.secrets, ["ha", "hb"])
+        let secrets = secrets!
+        _ = await Task(executorPreference: executor) {
+            await ControlRequest.perform(form, secrets: secrets, deadline: .milliseconds(200))
+        }.value
+        XCTAssertEqual(reads.withLock { $0 }, 2, "each secret the request names is read once")
+        XCTAssertFalse(between.withLock { $0 }, "the request's task ran between its two secrets' reads: a hop a name")
+    }
+
     func testSetThenListPrintsItBack() async throws {
         let tool = try await tool(loaded: false)
         let button = await tool.run(["set", "button-1", ControlTool.button])
@@ -401,5 +423,19 @@ private actor Gate {
     func release() {
         parked?.resume()
         parked = nil
+    }
+}
+
+/// A task executor that runs its jobs on a queue of its own, telling `enqueued` of each before it
+/// runs: a test's view of when a task it runs comes back from a hop.
+private final class WatchingExecutor: TaskExecutor, @unchecked Sendable {
+    private let queue = DispatchQueue(label: "test.watching-executor")
+    private let enqueued: @Sendable () -> Void
+    init(enqueued: @escaping @Sendable () -> Void) { self.enqueued = enqueued }
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        enqueued()
+        let job = UnownedJob(job)
+        queue.async { job.runSynchronously(on: self.asUnownedTaskExecutor()) }
     }
 }
