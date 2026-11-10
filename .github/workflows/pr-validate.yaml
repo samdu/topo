@@ -152,7 +152,8 @@ jobs:
   # needs `others` alone, a change to the harness alone — a script whose own
   # test fakes everything it touches, named below one by one — needs
   # `scripts` alone, which is those tests with no simulator and no build, a
-  # test file alone needs the suites that compile or load it, and anything
+  # test file alone needs the suites that load it, or compile it where no
+  # other chosen suite does, and anything
   # else — the app, a package the app links, a test file no rule names, the project,
   # this workflow, a script the product suites are what prove, a path no rule
   # names, or a diff that cannot be read — needs `topo_unit`, `topo_ui` and
@@ -229,8 +230,11 @@ jobs:
           # also builds Apps/Widgets, Apps/Shared, Apps/Client and TopoCore,
           # which `all` already sends to `others`.
           #
-          # A test file is skipped only by a suite that never compiles or
-          # loads it: TopoTests compiles Tests/Client, and TopoWatchTests
+          # A test file is skipped only by a suite that never loads it and
+          # whose every compile of it a chosen suite runs too: topo_unit and
+          # topo_ui each build the Topo scheme for testing, so both compile
+          # every iOS test bundle and each loads only its own. TopoTests
+          # compiles Tests/Client, and TopoWatchTests
           # WidgetDocumentTests.swift beside Tests/Watch; TopoUITests compiles
           # Tests/ClientUI and takes Tests/Client/Widgets and Tests/Fixtures as
           # resources; TopoTests bundles Tests/Fixtures/licences; the Topo
