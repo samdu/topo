@@ -11,7 +11,7 @@ The list agreed at open is the sprint's scope, and it is written once. Nothing t
 - **Planned** items are the list.
 - **Discovered** items are work found during the sprint. One that blocks a planned item (that item cannot merge, or its suites cannot pass, without it) is done in the sprint and recorded as discovered, with its parent. Anything else found, a reviewer's non-blocking finding, a neighbouring weakness, tidying, is filed as an issue labelled `backlog` and recorded as found; it is a candidate for a later sprint, not work for this one.
 - A discovered item whose parent is itself discovered (a follow-up of a follow-up) is not started without Sam's word in the coordinator's thread *(provisional, Q3)*. The ask names the chain.
-- Sam can add to the list mid-sprint. That is recorded as an `add` with his words quoted, so growth is always visible and never silent.
+- Sam can add to the list mid-sprint. That is an `item` line with `origin: planned` and his words quoted in `words`, so growth is always visible and never silent.
 
 ## The ledger
 
@@ -22,14 +22,13 @@ Every line has `at` (UTC, `2026-11-10T17:40Z`) and `kind`. The kinds:
 | kind | fields | written when |
 |---|---|---|
 | `open` | `goal`, `ends` (UTC), `scope` (list of item ids), `agreed` (Sam's words, quoted) | the sprint opens; the first line, written once |
-| `item` | `id`, `title`, `origin` (`planned` or `discovered`), `parent` (list of item ids or `#PR`s; empty for planned), `plan` (plan file, if any) | an item is first recorded: every planned item straight after `open`, a discovered one when it is found to block |
-| `add` | `id`, `words` (Sam's, quoted) | Sam adds an item mid-sprint; its `item` line follows with `origin: planned` |
-| `status` | `id`, `status`, `pr` (once there is one), `sha` (where there is one) | an item moves |
+| `item` | `id`, `title`, `origin` (`planned` or `discovered`), `parent` (list of item ids, `#PR`s or `#issue`s; empty for work nobody's PR turned up), `plan` (plan file, if any), `words` (Sam's, quoted, on an item he added mid-sprint) | an item is first recorded: every planned item straight after `open`, an added or discovered one when it is |
+| `status` | `id`, `status`, `pr` (once there is one), `sha` (where there is one), `why` (on `dropped`), `rounds` (on `merged`: the Codex verdicts `scripts/review-cap.sh` counts on its PR) | an item moves |
 | `found` | `issue`, `title`, `parent` | work is found and sent to the backlog |
 | `env` | `what`, `cost`, `fixed` (bool) | an environment failure is worked around or fixed (CLAUDE.md, *Working here*) |
-| `close` | `reason` (`done`, `time`), `tokens`, `review` (path of the review) | the sprint closes; the last line |
+| `close` | `reason` (`done`, `time`), `review` (path of the review) | the sprint closes; the last line |
 
-`status` is one of `todo`, `building`, `draft`, `ready`, `merged`, `dropped` (with a `why`) and `rolled` (carried to the next sprint at close). An item's `pr` is its PR on samdu/topo; an item that becomes more than one PR is more than one item. Ids are `<sprint>.<n>`, numbered as recorded (`s1.7`), so an id says which sprint found it.
+`status` is one of `todo`, `building`, `draft`, `ready`, `merged`, `dropped` (with a `why`) and `rolled` (carried to the next sprint at close). An item's `pr` is its PR on samdu/topo. A backlog issue picked up in a later sprint is an `item` whose `parent` holds that issue, which is how a chain is followed across sprints; an item that becomes more than one PR is more than one item. Ids are `<sprint>.<n>`, numbered as recorded (`s1.7`), so an id says which sprint found it.
 
 ```jsonl
 {"at":"2026-11-11T17:05Z","kind":"open","goal":"Land the audit's built fixes","ends":"2026-11-14T01:00Z","scope":["s1.1","s1.2"],"agreed":"yes, those two and nothing else"}
@@ -64,7 +63,7 @@ A sprint closes when every item is `merged` or `dropped`, or at `ends`, whicheve
 
 ## The review
 
-What Sam reads at the close. It is short, it leads with the numbers, and every figure in it is a fold of the ledger, so it can be checked.
+What Sam reads at the close. It is short and leads with the numbers, and each figure has one source, so it can be checked: counts and days are folds of the ledger; Codex rounds the sum of `rounds` on the merged items; suite-minutes the sum of the minutes the `local/*` statuses on the sprint's PRs carry (`docs/testing.md`, *The statuses*); tokens the usage session-store holds for the sessions the sprint ran (the coordinator's and each engineer's). A figure whose source cannot be read is left out and said to be, never estimated.
 
 ```markdown
 # s1: Land the audit's built fixes — closed 2026-11-13, done

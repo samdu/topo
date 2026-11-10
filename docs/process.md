@@ -40,7 +40,7 @@ plan: plan-stone-marks.md — Stone marks under the composer
 
 The kinds are `stage:` (`planned`, `reviewed` with `rounds=N`, `building`), `task:`, `fix:`, `deferred:`, `ruling:`, `escalated:` and `merged:`, each ending in the commit SHA where there is one. The coordinator writes the line as the thing happens, not in a batch at the end, because the event a compaction eats is the one that was never written down.
 
-After a compaction the ledger and `git log` are what the branch has done, and the coordinator's recollection is not evidence: work that is not in the ledger is work to check for in `git log` before dispatching it again. `.claude/hooks/ledger-recall.py` reads the tail of every ledger whose branch is unmerged back into a session in the checkout on a compaction and on a resume, so the memory arrives without being asked for.
+After a compaction the ledger and `git log` are what the branch has done, and the coordinator's recollection is not evidence: work that is not in the ledger is work to check for in `git log` before dispatching it again. `.claude/hooks/ledger-recall.py` reads the tail of every ledger whose branch is unmerged, and the open sprint's scope and items (`docs/sprints.md`), back into a session in the checkout on a compaction and on a resume, so the memory arrives without being asked for.
 
 The board reads the ledgers too (`wiki/team-pane.md`): the stage, the plan-review rounds and the rulings on a branch's row come from the file rather than from anything posted by hand, so a row is as current as the ledger and survives a restart of either side.
 
