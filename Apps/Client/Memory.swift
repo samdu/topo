@@ -698,10 +698,13 @@ final class Memory {
     /// control that took a whole folder away would take those with it.
     func removeStranded() async {
         guard let stranded, !moving else { return }
+        let epoch = login.epoch
         let started = stranded.scope?.startAccessingSecurityScopedResource() == true
         defer { if started, let scope = stranded.scope { scope.stopAccessingSecurityScopedResource() } }
         do {
             let outcome = try await emptyAgain(stranded.folder, stranded.names, stranded.isLocal)
+            // A sign-out since cleared the row; what the retry found was the last login's.
+            guard epoch.isCurrent else { return }
             if outcome.left.isEmpty {
                 self.stranded = nil
                 moveError = nil
@@ -711,6 +714,7 @@ final class Memory {
                 moveError = "\(outcome.left.count) of the old copy would still not go"
             }
         } catch {
+            guard epoch.isCurrent else { return }
             moveError = Self.describe(error)
         }
     }
