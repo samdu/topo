@@ -13,8 +13,8 @@
 #     with a cap comment at five posted beside the one at three, saying the second chance is spent;
 #     and six is capped too, so no grant reaches a sixth round;
 #   - a cap comment that cannot be posted, comments that cannot be read, and labels that cannot be
-#     read each exit nonzero with no `capped` line and an `::error::` on stderr, so the step fails
-#     and nothing reads the cap.
+#     read after the retries each exit nonzero with no `capped` line and an `::error::` on stderr, so
+#     the step fails and nothing reads the cap; a label read that fails once is tried again.
 #
 #   scripts/tests/review-cap-test.sh
 set -uo pipefail
@@ -39,8 +39,9 @@ cat > "$work/bin/gh" <<'SH'
 # page, applying the expression to each page as gh does; `gh api <endpoint> --jq <expr>` for the
 # issue itself answers an issue whose labels are $FAKE_GH_LABELS, comma-separated names.
 # `gh api --method POST … -f body=<text>` appends the body to $FAKE_GH_POSTS as one JSON string.
-# FAKE_GH_FAIL=1 fails every comment read, FAKE_GH_LABELS_FAIL=1 the issue read, and
-# FAKE_GH_POST_FAIL=1 every post.
+# FAKE_GH_FAIL=1 fails every comment read, FAKE_GH_LABELS_FAIL=1 every issue read,
+# FAKE_GH_LABELS_FAIL_ONCE=<file> the first issue read (it makes the file), and FAKE_GH_POST_FAIL=1
+# every post.
 if [ "${2:-}" = --method ]; then
   [ -z "${FAKE_GH_POST_FAIL:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   while [ "$#" -gt 0 ]; do
@@ -55,6 +56,9 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "${endpoint%/comments}" = "$endpoint" ]; then
   [ -z "${FAKE_GH_LABELS_FAIL:-}" ] || { echo "HTTP 504: Gateway Timeout" >&2; exit 1; }
+  if [ -n "${FAKE_GH_LABELS_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_GH_LABELS_FAIL_ONCE" ]; then
+    : > "$FAKE_GH_LABELS_FAIL_ONCE"; echo "HTTP 502: Bad Gateway" >&2; exit 1
+  fi
   jq -nc --arg l "${FAKE_GH_LABELS:-}" '{number: 7, labels: ($l | split(",") | map(select(. != "")) | map({name: .}))}' \
     | jq -r "$expr"
   exit 0
@@ -187,7 +191,10 @@ run read-fails "$work/three.json" FAKE_GH_FAIL=1
 expect_error read-fails "could not read this PR's comments after 4 attempts.*HTTP 502"
 
 run labels-fail "$work/two.json" FAKE_GH_LABELS_FAIL=1
-expect_error labels-fail "could not read this PR's labels.*HTTP 504"
+expect_error labels-fail "could not read this PR's labels after 4 attempts.*HTTP 504"
+
+run labels-retried "$work/granted-four.json" FAKE_GH_LABELS=second-chance FAKE_GH_LABELS_FAIL_ONCE="$work/labels-once"
+expect labels-retried false 0
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures failure(s)"

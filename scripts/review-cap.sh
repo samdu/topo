@@ -28,11 +28,22 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { echo "review-cap: $*" >&2; }
 
-if ! granted="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER" \
-    --jq "[.labels[].name] | index(\"$SECOND_CHANCE_LABEL\") != null" 2>&1)"; then
-  log "::error::could not read this PR's labels, so the cap is unknown; re-run the job: $(head -n 1 <<<"$granted")"
-  exit 1
-fi
+# Tried as scripts/review-verdicts.sh tries its read.
+GH_ATTEMPTS="${REVIEW_GH_ATTEMPTS:-4}"
+GH_BACKOFF="${REVIEW_GH_BACKOFF:-5}"
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+attempt=1
+until granted="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER" \
+    --jq "any(.labels[]; .name == \"$SECOND_CHANCE_LABEL\")" 2>"$err")"; do
+  if [ "$attempt" -ge "$GH_ATTEMPTS" ]; then
+    log "::error::could not read this PR's labels after $GH_ATTEMPTS attempts, so the cap is unknown; re-run the job: $(head -n 1 "$err")"
+    exit 1
+  fi
+  log "could not read this PR's labels (attempt $attempt of $GH_ATTEMPTS), retrying in $(( GH_BACKOFF * attempt ))s: $(head -n 1 "$err")"
+  sleep "$(( GH_BACKOFF * attempt ))"
+  attempt=$(( attempt + 1 ))
+done
 case "$granted" in
   true) CAP=$(( BASE + 2 )) ;;
   false) CAP="$BASE" ;;
