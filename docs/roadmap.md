@@ -82,7 +82,7 @@ Struck through: shipped, then removed, with the reason.
 **Pipeline**
 
 - Suites run on buddybox before the push by `validate-and-push.sh`, chosen by the paths a PR changes, one suite at a time in order of arrival, a Mac lent by hand (#335, #401, #402, #404, #412, #430); every hosted job on `vm-linux` (#431); a suite with no microphone says so, and a no-mic shell is refused at preflight (#450, #509); a moving line does not run out a run's wait (#496); the Mac gate pinned to Xcode 27.2 (#527)
-- The Codex reviewer and its gate (#2, #156, #437); the janitor and its triage (#202, #303); device checks as one build and one topo-link issue (#361); Xcode's MCP tools, advisory (#379); `pm-guard` denies code edits only in the main checkout (#473)
+- The Codex reviewer and its gate (#2, #156, #437); the janitor and its triage (#202, #303); device checks as one build and one topo-link issue (#361); Xcode's MCP tools, advisory (#379)
 - The friction pass: what made the pipeline slow or wrong for the sessions working in it, fixed where it was met — `validate-and-push.sh`, the janitor, `mac-suite.sh`'s checks, the suite selection and the review dispatch (#630, #632–#652) — and the docs that had drifted from them (#631)
 
 ## Next, in order
