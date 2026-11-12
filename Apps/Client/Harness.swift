@@ -466,6 +466,8 @@ final class Harness {
         failedRetries = 0
         retryNotBefore = nil
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
+        // An answer an earlier build kept under its own key is the last login's too.
+        UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         // What the guest kept of the last login's conversation goes with it.
         leaving += 1
         await brain.forget()
