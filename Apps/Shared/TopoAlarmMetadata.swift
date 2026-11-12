@@ -7,7 +7,6 @@ import Foundation
 /// screen and in the Dynamic Island (`TopoAlarmWidget`): the label it draws, and the Cancel button
 /// the mind asked for, which is the widget's own control and not one of AlarmKit's presentation.
 /// The system's own alert says the alert presentation's title.
-@available(iOS 26, *)
 nonisolated struct TopoAlarmMetadata: AlarmMetadata {
     var label: String
     /// A Cancel button beside the countdown and the paused time. Absent on an alarm set before
