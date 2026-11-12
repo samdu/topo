@@ -13,8 +13,7 @@ import TopoTools
 struct AlarmKitScheduler: AlarmScheduler {
     private let manager = Confined(AlarmManager.shared, label: "zone.hexagon.topo.alarms")
 
-    var available: Bool { true }
-    var authorizer: (any Authorizer)? { AlarmAuthorizer() }
+    var authorizer: any Authorizer { AlarmAuthorizer() }
 
     func schedule(id: UUID, plan: TimerPlan) async throws {
         do {

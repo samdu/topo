@@ -741,9 +741,6 @@ final class Speaker {
     /// A reply is waiting for the microphone to close.
     var waitingForMicrophone: Bool { deferred != nil }
 
-    /// Whether a wait stands for the spoken turn `nonce`.
-    func isAwaiting(_ nonce: String) -> Bool { waits[nonce] != nil }
-
     /// Whether any spoken turn's wait stands.
     var awaitingAny: Bool { !waits.isEmpty }
 
