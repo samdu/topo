@@ -424,8 +424,11 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(bed.fades.last, KeeperSounds.bedVolume, "no bed in the gap")
         XCTAssertEqual(rig.speaker.awaiting, [], "a wait stands in the gap")
         XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"))
+        // The first frame's fade is over and its hold gone, so the reading's is the one hold left.
+        rig.clock.fire()
+        await settle("the first frame's fade's hold to go") { !rig.sounds.holdingASound }
+        XCTAssertTrue(bed.isPlaying, "the gap's bed went with the first frame's fade")
 
-        // The first frame's fade asked for its own sleeps: the reading's end asks for one more.
         let parks = rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count
         rig.speaker.writingEnded("turn")
         XCTAssertFalse(rig.speaker.speaking, "the reading did not end with the guest's writing")
