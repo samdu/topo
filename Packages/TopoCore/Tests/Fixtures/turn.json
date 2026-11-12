@@ -1,0 +1,13 @@
+{
+  "type": "Turn",
+  "name": "turn/phone/3",
+  "fields": {
+    "device": "phone",
+    "sequence": 3,
+    "parents": ["hub/2", "phone/2"],
+    "role": "person",
+    "text": "hello",
+    "at": {"date": 1793000000},
+    "nonce": "nonce-3"
+  }
+}

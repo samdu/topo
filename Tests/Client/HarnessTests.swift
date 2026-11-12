@@ -124,6 +124,24 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertFalse(harness.hasRead)
     }
 
+    /// A sign-out takes the first-run answer with the login: `firstRunAnswered`, and the answer a
+    /// build before #386 kept in the person's own words under `firstRunAnswer`, which nothing
+    /// reads now but a device that has not signed out since may still hold.
+    func testASignOutClearsTheFirstRunAnswerAndTheWordsAnEarlierBuildKept() async throws {
+        let standard = UserDefaults.standard
+        addTeardownBlock {
+            standard.removeObject(forKey: "firstRunAnswered")
+            standard.removeObject(forKey: "firstRunAnswer")
+        }
+        standard.set(true, forKey: "firstRunAnswered")
+        standard.set("Call me Sam, and keep it short.", forKey: "firstRunAnswer")
+        let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(), transport: ScriptedTransport())
+        await harness.refresh()
+        await harness.forget()
+        XCTAssertNil(standard.object(forKey: "firstRunAnswered"), "the answer outlived the sign-out")
+        XCTAssertNil(standard.object(forKey: "firstRunAnswer"), "an earlier build's words outlived the sign-out")
+    }
+
     /// A read that threw is not a read: with no connection on a launch over a log that holds
     /// turns, `hasRead` stays false and the transcript empty, so Topo is not placed into a page
     /// about to fill; the first read that gets through marks it and brings the turns.
@@ -152,23 +170,85 @@ final class HarnessIntegrationTests: XCTestCase {
     /// belonged to what came before: it lands on nothing, and `hasRead` stays as the change left
     /// it, so the first run is not decided from it (`FirstRun.asks`).
     func testAReadInFlightAcrossASignOutOrAnAdoptionIsNotARead() async throws {
-        for ending in ["forget", "adopt"] {
+        for ending in ["forget", "adopt", "demote"] {
             let db = InMemoryRecordDatabase()
             let held = HeldReads(db)
             let harness = harness(held, defaults: makeDefaults(), transport: ScriptedTransport())
             await held.holdNext()
             let read = Task { await harness.refresh() }
             try await eventually("\(ending): the read to be held") { await held.holding }
-            if ending == "forget" {
-                await harness.forget()
-            } else {
-                harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked))
+            switch ending {
+            case "forget": await harness.forget()
+            case "demote": await harness.demote()
+            default: harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked))
             }
             await held.release()
             let answered = await read.value
             XCTAssertFalse(answered, "\(ending): a read from before was answered")
             XCTAssertFalse(harness.hasRead, "\(ending): a read from before was taken for the log")
         }
+    }
+
+    /// A read from before a sign-out or an adoption that fails lands on nothing either: one out
+    /// of reach does not put the log's failure on the bar, and one that finds no log yet does not
+    /// mark the log read.
+    func testAReadInFlightAcrossASignOutOrAnAdoptionThatFailsLandsOnNothing() async throws {
+        let failures: [(String, any Error)] = [
+            ("out of reach", RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet))),
+            ("no log yet", RecordDatabaseError.unavailable(underlying: CKError(.zoneNotFound))),
+        ]
+        for ending in ["forget", "adopt"] {
+            for (name, failure) in failures {
+                let db = InMemoryRecordDatabase()
+                let held = HeldReads(db)
+                let harness = harness(held, defaults: makeDefaults(), transport: ScriptedTransport())
+                await held.holdNext()
+                let read = Task { await harness.refresh() }
+                try await eventually("\(ending), \(name): the read to be held") { await held.holding }
+                if ending == "forget" {
+                    await harness.forget()
+                } else {
+                    harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked))
+                }
+                XCTAssertNil(harness.error, "\(ending), \(name)")
+                await held.release(throwing: failure)
+                let answered = await read.value
+                XCTAssertFalse(answered, "\(ending), \(name): a read from before was answered")
+                XCTAssertNil(harness.error, "\(ending), \(name): a read from before put its failure on the bar")
+                XCTAssertFalse(harness.hasRead, "\(ending), \(name): a read from before was taken for the log")
+            }
+        }
+    }
+
+    /// What a read from before brings is not drawn: an earlier login's turns stay off the screen a
+    /// sign-out cleared, and a read from before an adoption does not draw over a read made since.
+    func testAReadInFlightAcrossASignOutOrAnAdoptionDrawsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        try await limb(db, "the last login's")
+        let held = HeldReads(db)
+        let signedOut = harness(held, defaults: makeDefaults(), transport: ScriptedTransport())
+        await held.holdNext()
+        let before = Task { await signedOut.refresh() }
+        try await eventually("the read to be held") { await held.holding }
+        await signedOut.forget()
+        await held.release()
+        _ = await before.value
+        XCTAssertEqual(signedOut.turns.map(\.text), [], "a read from before the sign-out drew the last login's turns")
+
+        let adopting = harness(held, defaults: makeDefaults(), transport: ScriptedTransport())
+        await held.holdNext(afterReading: true)
+        let stale = Task { await adopting.refresh() }
+        try await eventually("the read to be held with what it read") { await held.holding }
+        adopting.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked))
+        try await limb(db, "said since")
+        let fresh = await adopting.refresh()
+        XCTAssertTrue(fresh)
+        XCTAssertEqual(adopting.turns.map(\.text), ["the last login's", "said since"])
+        await held.release()
+        _ = await stale.value
+        XCTAssertEqual(adopting.turns.map(\.text), ["the last login's", "said since"],
+                       "a read from before the adoption drew over the read made since")
+        XCTAssertTrue(adopting.hasRead)
     }
 
     // MARK: The first run
@@ -1884,16 +1964,16 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(heard.texts, [], "nothing spoken was owed a reading")
     }
 
-    /// The chat's own handler, as the screen installs it: the mark is the decision, so a reply
-    /// whose turn is marked is read whatever the setting reads now.
+    /// The chat's own handler, as the screen installs it (`SpokenReply.read`): the mark is the
+    /// decision, so a reply whose turn is marked is read whatever the setting reads now. `said`
+    /// hears each reply the speaker took.
     @MainActor
     private func install(_ harness: Harness, _ speaker: Speaker, _ said: Said) {
         harness.onReply = { reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            guard speaker.speak(reply.text, answering: asked) else { return false }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
+            let before = speaker.report.speaks
+            let done = SpokenReply.read(reply, harness: harness, speaker: speaker)
+            if speaker.report.speaks > before { said.add(reply.text) }
+            return done
         }
     }
 
@@ -2217,13 +2297,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
 
         let said = Said()
-        harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            guard speaker.speak(reply.text, answering: asked) else { return false }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
-        }
+        install(harness, speaker, said)
 
         // The release: the wait stands and the keeper is rendering for it.
         let nonce = harness.willSend("what is the capital of France")
@@ -2271,13 +2345,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         // What the chat installs: only a reply the speaker took is done with.
         let said = Said()
-        harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            guard speaker.speak(reply.text, answering: asked) else { return false }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
-        }
+        install(harness, speaker, said)
 
         // The session will not activate while the reply lands.
         seams.activationError = Seams.Refused()
@@ -2305,13 +2373,13 @@ final class HarnessIntegrationTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let transport = ScriptedTransport((200, reply("Paris.")), (200, reply("Rome.")))
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
         let said = Said()
-        harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-            harness.answeredAloud(asked)
-            said.add(reply.text)
-            return true
-        }
+        install(harness, speaker, said)
 
         // Spoken: the press said so when it put the words on the line.
         harness.markSpoken(harness.willSend("what is the capital of France"))
@@ -2406,39 +2474,56 @@ private actor ReadFailingDatabase: RecordDatabase {
     }
 }
 
-/// A database whose next read waits until `release()`.
+/// A database whose next read waits until `release()`, which can answer it with an error. Held
+/// `afterReading`, a listing of records reads the store first and waits with what it read, so
+/// what it answers is the store as it stood when it was asked.
 private actor HeldReads: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
     private var holdingNext = false
+    private var afterReading = false
+    private var failure: (any Error)?
     private var waiter: CheckedContinuation<Void, Never>?
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
-    func holdNext() { holdingNext = true }
+    func holdNext(afterReading: Bool = false) {
+        holdingNext = true
+        self.afterReading = afterReading
+    }
     var holding: Bool { waiter != nil }
-    func release() {
+    func release(throwing error: (any Error)? = nil) {
+        failure = error
         waiter?.resume()
         waiter = nil
     }
 
-    private func gate() async {
+    private func gate() async throws {
         guard holdingNext else { return }
         holdingNext = false
         await withCheckedContinuation { waiter = $0 }
+        if let failure {
+            self.failure = nil
+            throw failure
+        }
     }
 
     func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
-        await gate()
+        try await gate()
         return try await wrapped.fetch(ids)
     }
     func query(_ query: RecordQuery) async throws -> [Record] {
-        await gate()
+        try await gate()
         return try await wrapped.query(query)
     }
     func records(ofType type: String) async throws -> [Record] {
-        await gate()
-        return try await wrapped.records(ofType: type)
+        guard holdingNext, afterReading else {
+            try await gate()
+            return try await wrapped.records(ofType: type)
+        }
+        let read = try await wrapped.records(ofType: type)
+        try await gate()
+        return read
     }
 }
 

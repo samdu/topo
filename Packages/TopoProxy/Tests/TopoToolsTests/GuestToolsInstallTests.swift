@@ -33,18 +33,43 @@ final class GuestToolsInstallTests: XCTestCase {
         try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty
     }
 
+    /// The install's own refusal, naming `path` and saying why, and not some other error that
+    /// happens to mention it.
+    private func assertRefused(_ path: String, _ why: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try GuestTools.install(home: home), file: file, line: line) { error in
+            guard let failure = error as? GuestTools.InstallFailure else {
+                return XCTFail("not the install's refusal: \(error)", file: file, line: line)
+            }
+            XCTAssertTrue(failure.description.hasPrefix("\(path) in the guest's home \(why)"),
+                          "the refusal names \(path) and says it \(why): \(failure)", file: file, line: line)
+        }
+    }
+
     func testAFolderTheGuestLinkedOutTheHomeIsRefusedAndNothingIsWrittenThere() throws {
         try link(".topo/bin", to: "../../outside")
-        XCTAssertThrowsError(try GuestTools.install(home: home)) { error in
-            XCTAssertTrue("\(error)".contains(".topo/bin"), "the refusal names the link: \(error)")
-        }
+        assertRefused(".topo/bin", "is not a folder")
         XCTAssertTrue(try outsideIsEmpty())
     }
 
     func testAFolderNearerTheHomeLinkedOutIsRefusedToo() throws {
         try link(".claude", to: "../outside")
-        XCTAssertThrowsError(try GuestTools.install(home: home))
+        assertRefused(".claude", "is not a folder")
         XCTAssertTrue(try outsideIsEmpty())
+    }
+
+    /// A folder where a file goes cannot be renamed over: the install says so, naming the file,
+    /// leaves the folder and what is in it as they were, and leaves no hidden name behind.
+    func testAFolderWhereAFileGoesIsRefusedLeftAloneAndNoPartIsLeft() throws {
+        let folder = home.appendingPathComponent(GuestTools.scriptPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let inside = folder.appendingPathComponent("the guest's own")
+        try Data("kept".utf8).write(to: inside)
+        assertRefused(GuestTools.scriptPath, "cannot be replaced")
+        var isFolder: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path, isDirectory: &isFolder) && isFolder.boolValue)
+        XCTAssertEqual(try String(contentsOf: inside, encoding: .utf8), "kept")
+        let left = try FileManager.default.subpathsOfDirectory(atPath: home.path).filter { ($0 as NSString).lastPathComponent.hasSuffix(".part") }
+        XCTAssertEqual(left, [], "a hidden name is left behind")
     }
 
     func testALinkWhereAFileGoesIsReplacedAndWhatItNamedIsLeftAlone() throws {

@@ -66,7 +66,7 @@ private final class AlarmPermission: ThrowingPrompt, @unchecked Sendable {
 
 private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     private let lock = NSLock()
-    let permission: (any Authorizer)?
+    let permission: any Authorizer
     private var scheduled: [(id: UUID, plan: TimerPlan)] = []
     private var states: [UUID: TimerStatus.State] = [:]
     private(set) var acts: [(TimerTool.Act, UUID)] = []
@@ -84,9 +84,9 @@ private final class FakeAlarms: AlarmScheduler, @unchecked Sendable {
     var fires: [UUID: Date] = [:]
     var left: [UUID: TimeInterval] = [:]
 
-    init(_ permission: (any Authorizer)?) { self.permission = permission }
+    init(_ permission: any Authorizer) { self.permission = permission }
 
-    var authorizer: (any Authorizer)? { permission }
+    var authorizer: any Authorizer { permission }
     var count: Int { lock.withLock { scheduled.count } }
     var last: TimerPlan? { lock.withLock { scheduled.last?.plan } }
     func set(_ id: UUID, _ state: TimerStatus.State) { lock.withLock { states[id] = state } }
@@ -330,6 +330,13 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.count, 1)
     }
 
+    /// The usage the mind reads names no iOS older than the one every install runs.
+    func testUsageNamesNoOlderIOS() {
+        let usage = tool(FakeAlarms(AlarmPermission(.granted))).usage
+        XCTAssertTrue(usage.contains("status 5"), usage)
+        XCTAssertFalse(usage.contains("iOS"), usage)
+    }
+
     func testAWhitespaceLabelIsRefused() async {
         let alarms = FakeAlarms(AlarmPermission(.granted))
         let reply = await tool(alarms).run(["5m", "   "])
@@ -424,7 +431,7 @@ final class TimerToolTests: XCTestCase {
     }
 
     /// Refused at the prompt or before (AlarmKit has no restricted state), nothing is set and nothing stands in for it: the reply
-    /// says where alarms are allowed, which is not what a phone without AlarmKit says.
+    /// says where alarms are allowed.
     func testARefusalSetsNothingAndSaysWhereToAllowIt() async {
         let cases = [(AlarmPermission(.denied), AppState(.active)), (AlarmPermission(.undetermined, answer: false), AppState(.active)),
                      (AlarmPermission(.denied), AppState(.background))]
@@ -436,15 +443,6 @@ final class TimerToolTests: XCTestCase {
             XCTAssertFalse(reply.text.contains("sounds"), reply.text)
             XCTAssertEqual(alarms.count, 0)
         }
-    }
-
-    func testAPhoneWithoutAlarmKitSetsNothingAndSaysWhy() async {
-        let alarms = FakeAlarms(nil)
-        let reply = await tool(alarms).run(["1m"])
-        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
-        XCTAssertEqual(alarms.count, 0)
-        XCTAssertTrue(reply.text.contains("iOS 26"), reply.text)
-        XCTAssertFalse(reply.text.contains("Settings"), reply.text)
     }
 
     /// The label and the time are the record's, on disk, so a relaunch still lists them; the
@@ -911,7 +909,7 @@ final class TimerPressTests: XCTestCase {
         let login = try XCTUnwrap(store.door()?.login)
         try records.write(.init(label: "Plank", tell: "start the other side", onStop: "log the session",
                                 second: "Next", login: login), for: id)
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.holds(id, .sounding)
         let outcome = await press(.second, alarms)
         XCTAssertEqual(outcome, .kept(nonce: "00000000-0000-0000-0000-0000000000aa"))
@@ -930,7 +928,7 @@ final class TimerPressTests: XCTestCase {
         try store.open(files: false)
         let login = try XCTUnwrap(store.door()?.login)
         try records.write(.init(label: "Plank", again: 60, tell: "next", onStop: "log it", second: "Again", login: login), for: id)
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.holds(id, .sounding)
         _ = await press(.second, alarms, restarts: true)
         XCTAssertTrue(alarms.acts.isEmpty)
@@ -942,7 +940,7 @@ final class TimerPressTests: XCTestCase {
 
     func testAPressAfterASignOutOrAnotherLoginSendsNothing() async throws {
         try records.write(.init(label: "Plank", tell: "next", login: "old-login"), for: id)
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.holds(id, .sounding)
         let signedOut = await press(.second, alarms)
         XCTAssertEqual(signedOut, .refused(.signedOut))
@@ -957,7 +955,7 @@ final class TimerPressTests: XCTestCase {
 
     /// A press whose alarm is no longer sounding (AlarmKit restarted it, or the person stopped it) stops nothing.
     func testAPressStopsOnlyASoundingAlarm() async throws {
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.holds(id, .counting)
         _ = await press(.second, alarms)
         XCTAssertTrue(alarms.acts.isEmpty)
@@ -968,7 +966,7 @@ final class TimerPressTests: XCTestCase {
     func testStopsIntentAfterTheAppsOwnStopIsNoSecondTurn() async throws {
         try store.open(files: false)
         try records.write(.init(label: "Plank", tell: "next", onStop: "log it", login: store.door()?.login), for: id)
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.holds(id, .sounding)
         _ = await press(.second, alarms)
         let echo = await TimerPresses.press(id, .stop, records: records, scheduler: alarms, store: store, drain: nil, landed: nil,
@@ -982,7 +980,7 @@ final class TimerPressTests: XCTestCase {
     func testAFailedStopLeavesThePersonsStopTheirs() async throws {
         try store.open(files: false)
         try records.write(.init(label: "Plank", tell: "next", onStop: "log it", login: store.door()?.login), for: id)
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         alarms.holds(id, .sounding)
         alarms.actFails = true
         _ = await press(.second, alarms)
@@ -994,7 +992,7 @@ final class TimerPressTests: XCTestCase {
 
     func testAPressWithNoWordsSendsNothing() async throws {
         try store.open(files: false)
-        let alarms = FakeAlarms(nil)
+        let alarms = FakeAlarms(AlarmPermission(.granted))
         let none = await press(.stop, alarms)
         XCTAssertEqual(none, .nothing)
         try records.write(.init(label: "Plank", tell: "next", login: store.door()?.login), for: id)

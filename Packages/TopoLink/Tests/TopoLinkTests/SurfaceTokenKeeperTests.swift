@@ -14,11 +14,14 @@ import TopoLink
         var readFails = false
         var writeFails = false
         var writes = 0
+        /// Every write asked for, refused ones included.
+        var attempts = 0
         func read() throws -> Data? {
             if readFails { throw Refused() }
             return data
         }
         func write(_ new: Data) throws {
+            attempts += 1
             if writeFails { throw Refused() }
             writes += 1
             data = new
@@ -58,6 +61,23 @@ import TopoLink
         }
         #expect(!changed)
         #expect(store.data == before, "what the keychain held is still what it holds")
+    }
+
+    /// Written never is no write asked for, not only no bytes changed: a locked keychain refuses
+    /// the write as it refused the read, so a save tried over it would leave the bytes as they
+    /// were and still be a save over somebody's tokens.
+    @Test func aStoreThatCannotBeReadIsAskedForNoWrite() throws {
+        let (store, _) = try kept()
+        let before = store.attempts
+        store.readFails = true
+        store.writeFails = true
+        var keeper = keeper(store)
+        #expect(store.attempts == before, "a write was asked for at the start")
+        #expect(!keeper.change { _ = $0.mint(for: wall, named: "Wall") })
+        #expect(store.attempts == before, "a write was asked for by a refused change")
+        keeper.reload()
+        #expect(keeper.tokens == nil)
+        #expect(store.attempts == before, "a write was asked for by a reload that still could not read")
     }
 
     @Test func onceTheStoreReadsAgainTheOldAddressesAndRevocationsAreBack() throws {
