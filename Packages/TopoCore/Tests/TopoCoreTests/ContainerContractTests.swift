@@ -28,8 +28,11 @@ import TopoCore
         #expect(lines.count == 1, "\(path): \(lines.count) lines with \(prefix)")
         let line = try #require(lines.first, "\(path): no line with \(prefix)")
         let rest = try #require(line.range(of: prefix).map { line[$0.upperBound...] })
+        // One literal and nothing after it but the end of the line or an argument's comma.
         let quoted = rest.split(separator: "\"", omittingEmptySubsequences: false)
-        return try #require(quoted.count >= 3 ? String(quoted[1]) : nil, "\(path): no literal after \(prefix)")
+        let after = quoted.count == 3 ? quoted[2].trimmingCharacters(in: .whitespaces) : "?"
+        return try #require(after.isEmpty || after == "," ? String(quoted[1]) : nil,
+                            "\(path): not one literal after \(prefix): \(rest)")
     }
 
     /// Every file under `top` with the extension, past what a build or a checkout keeps of its own.
@@ -37,9 +40,10 @@ import TopoCore
         let walk = try #require(FileManager.default.enumerator(at: top, includingPropertiesForKeys: [.isDirectoryKey]))
         var found: [URL] = []
         for case let url as URL in walk {
-            // A skip asked at a file (a worktree's `.git` is one) skips the rest of its folder.
+            // Skipped only at a folder: asked at a file (a worktree's `.git` is one), the
+            // enumerator skips the children of the next folder it visits instead.
             let folder = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if folder, [".build", "build", ".git", "DerivedData", "node_modules"].contains(url.lastPathComponent) {
+            if folder, [".build", "build", ".git", ".claude", "DerivedData", "node_modules"].contains(url.lastPathComponent) {
                 walk.skipDescendants()
             } else if url.pathExtension == ext {
                 found.append(url)
@@ -71,17 +75,23 @@ import TopoCore
         let base = Self.root.standardizedFileURL.path + "/"
         for url in try Self.files(under: Self.root, ext: "entitlements") {
             let path = url.standardizedFileURL.path
-            guard let text = try? String(contentsOf: url, encoding: .utf8),
-                  text.contains("com.apple.developer.icloud-container-identifiers") else { continue }
+            let data = try Data(contentsOf: url)
+            let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            guard plist?["com.apple.developer.icloud-container-identifiers"] != nil else { continue }
             named.insert(String(path.dropFirst(base.count)))
         }
         #expect(named == known)
     }
 
-    /// The hub's entitlements are written from `project.yml` on every generate.
+    /// The hub's entitlements are written from `project.yml` on every generate, and its entry is
+    /// the one line there, comments aside, that names iCloud containers.
     @Test func theHubsProjectEntryNamesTheContainer() throws {
-        let line = try #require(try Self.text("project.yml").split(separator: "\n")
-            .first { $0.contains("com.apple.developer.icloud-container-identifiers:") })
+        let lines = try Self.text("project.yml").split(separator: "\n").filter {
+            !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#")
+                && $0.contains("com.apple.developer.icloud-container-identifiers:")
+        }
+        #expect(lines.count == 1, "\(lines)")
+        let line = try #require(lines.first)
         let list = try #require(line.split(separator: "[").last?.split(separator: "]").first)
         let items = list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         #expect(items.contains(Self.container), "\(items)")
@@ -95,19 +105,41 @@ import TopoCore
         #expect(try Self.literal(after: "logContainer: String =", in: selfTest) == Self.container)
     }
 
-    /// The Swift that links TopoCore spells neither identifier but through the constant.
-    @Test func theConstantIsTheOnlySpellingInTheSwiftThatLinksTopoCore() throws {
-        var spelled: [String] = []
+    /// Every container literal and every zone given as a literal (`zoneName = "…"`,
+    /// `zoneName: "…"`) in the Swift outside the tests, by the file it is in.
+    static func literals(_ pattern: String) throws -> Set<String> {
+        let regex = try NSRegularExpression(pattern: pattern)
+        let base = root.standardizedFileURL.path + "/"
+        var found: Set<String> = []
         for top in ["Apps", "Packages"] {
-            for url in try Self.files(under: Self.root.appendingPathComponent(top), ext: "swift") {
-                if url.standardizedFileURL.path.contains("/Tests/") { continue }
+            for url in try files(under: root.appendingPathComponent(top), ext: "swift") {
+                let path = String(url.standardizedFileURL.path.dropFirst(base.count))
+                if path.contains("/Tests/") { continue }
                 let text = try String(contentsOf: url, encoding: .utf8)
-                if text.contains("\"\(Self.container)\"") || text.contains("zoneName = \"\(Self.zone)\"") {
-                    spelled.append(url.lastPathComponent)
+                for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                    found.insert("\(path): \((text as NSString).substring(with: match.range(at: 1)))")
                 }
             }
         }
-        #expect(spelled == ["CloudKitRecordDatabase.swift"])
+        return found
+    }
+
+    /// The log's container and zone are spelled in `CloudKitRecordDatabase` alone; the one other
+    /// container and zone are the board's.
+    @Test func theConstantIsTheOnlySpellingInTheSwiftThatLinksTopoCore() throws {
+        let database = "Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift"
+        let app = "Apps/Shared/TopoCloudKit.swift"
+        #expect(try Self.literals(#""(iCloud\.[^"]*)""#)
+                == ["\(database): \(Self.container)", "\(app): iCloud.zone.hexagon.topo.board"])
+        #expect(try Self.literals(#"zoneName\b[^"\n]*?[:=]\s*"([^"]*)""#)
+                == ["\(database): \(Self.zone)", "\(app): Board"])
+    }
+
+    /// The app's own names for the log's container and zone are the constant's.
+    @Test func theAppsNamesAreTheConstant() throws {
+        let text = try Self.text("Apps/Shared/TopoCloudKit.swift")
+        #expect(text.contains("static let containerIdentifier = CloudKitRecordDatabase.containerIdentifier\n"))
+        #expect(text.contains("static let zoneName = CloudKitRecordDatabase.zoneName\n"))
     }
 }
 #endif

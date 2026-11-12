@@ -12,7 +12,7 @@ A turn's round trips before its person's turn is in the log, on a device whose l
 
 ## The schema
 
-What the code writes and asks for, and so what each environment's schema has to hold. `iCloud.zone.hexagon.topo` is the private database's zone `Topo`, named in Swift once, as `CloudKitRecordDatabase.containerIdentifier` and `.zoneName`, which the app's `TopoCloudKit` reads; Womble, the entitlements and `project.yml` cannot read a Swift constant and keep copies of their own, which `ContainerContractTests` (TopoCore) holds to it by reading each file; `iCloud.zone.hexagon.topo.board` is the zone `Board`, in the private database of whoever made it and the shared database of everyone else. Promoting it to production is `docs/testflight.md`, *The CloudKit schema*.
+What the code writes and asks for, and so what each environment's schema has to hold. `iCloud.zone.hexagon.topo` is the private database's zone `Topo`, named in Swift once, as `CloudKitRecordDatabase.containerIdentifier` and `.zoneName`, which the app's `TopoCloudKit` reads; Womble, which does not link TopoCore, the entitlements and `project.yml` keep copies of their own, which `ContainerContractTests` (TopoCore) holds to it by reading each file; `iCloud.zone.hexagon.topo.board` is the zone `Board`, in the private database of whoever made it and the shared database of everyone else. Promoting it to production is `docs/testflight.md`, *The CloudKit schema*.
 
 | Container | Type | Fields | Indexed |
 |---|---|---|---|
