@@ -132,7 +132,7 @@ final class KeptInputTests: XCTestCase {
         utterance(into: rig.voice.sink)
         // Held past a tap, which would leave the microphone open and send nothing.
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+        await rig.press.gesture(false, held: true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 dictating: dictating, speaks: speaks, calls: { calls }) { text in
             // As the chat's send: nothing heard is no turn (`sendSpoken`).
             guard !text.isEmpty else { return }
@@ -179,7 +179,7 @@ final class KeptInputTests: XCTestCase {
         utterance(into: rig.voice.sink)
         // Held past a tap, which would leave the microphone open and send nothing.
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+        await rig.press.gesture(false, held: true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { text in
             rig.sent.add(text)
             _ = rig.speaker.awaitReply("a-turn", readAloud: true)

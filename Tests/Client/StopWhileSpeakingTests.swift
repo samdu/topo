@@ -245,7 +245,7 @@ final class StopWhileSpeakingTests: XCTestCase {
 
         // A hold, not a tap: the release sends what was said.
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["purple elephants"], "the release did not send the recording")
         XCTAssertFalse(voice.listening)
         await settle("the reply to start once the microphone closed") { speaker.report.started }
@@ -286,7 +286,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(speaker.report.speaks, 0)
 
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["purple elephants"], "the release did not send the recording")
         await settle("the reply to start once the microphone closed") { speaker.report.started }
         XCTAssertEqual(speaker.report.speaks, 1)
@@ -315,7 +315,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         seams.playEngineRefusals = 1
         utterance(into: voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["purple elephants"])
         XCTAssertFalse(speaker.speaking, "nothing renders, so nothing is read")
         XCTAssertTrue(speaker.waitingForMicrophone, "the refused reply was dropped")
@@ -331,7 +331,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(speaker.awaiting, ["earlier"], "the press ended the wait of a reply still owed")
         utterance(into: voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         await settle("the reply to start") { speaker.report.started }
         XCTAssertFalse(speaker.waitingForMicrophone)
         XCTAssertEqual(settled.texts, ["earlier"])
@@ -365,7 +365,7 @@ final class StopWhileSpeakingTests: XCTestCase {
 
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
         utterance(into: voice.sink)
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         await settle("the newer reply to start") { speaker.report.started }
         XCTAssertEqual(speaker.report.text, "Rome.")
         XCTAssertEqual(speaker.awaiting, [], "a wait outlived the reply it was for")
@@ -510,7 +510,7 @@ final class StopWhileSpeakingTests: XCTestCase {
 
         var heldAtTheSend = false
         var releasesPastTheWait = -1
-        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+        let up = press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
             heldAtTheSend = self.audio.holding
             _ = speaker.awaitReply("turn", readAloud: true)
             // The send goes on past its wait, as `sendSpoken`'s drain of the line does: the
@@ -608,7 +608,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         utterance(into: voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
         var held2 = false
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { _ in
             held2 = speaker.awaitReply("second", readAloud: true).held
         }?.value
         XCTAssertEqual(system.ends.count, 0, "the release ended the call the next turn needed")
@@ -632,7 +632,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         utterance(into: voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { text in
+        let up = press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { text in
             sent.add(text)
             _ = speaker.awaitReply("turn", readAloud: true)
         }
@@ -663,7 +663,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         utterance(into: voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        let up = press.gesture(false, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { sent.add($0) }
+        let up = press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice, speaks: true) { sent.add($0) }
         await settle("the release's decode to start") { decode.decoding }
         await settle("the release's bound to be waited on") { clock.waiting == 1 }
         XCTAssertEqual(clock.asked, [Speaker.releaseBound])
@@ -825,7 +825,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
         let first = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { _ in }?.value
         let second = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { _ in }
         await drain()
         call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
@@ -869,7 +869,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
         let down = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
         await down?.value
         await drain()

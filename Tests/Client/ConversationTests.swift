@@ -232,7 +232,7 @@ final class ConversationTests: XCTestCase {
     /// A tap: the microphone open hands-free for the chat, as the glass leaves it.
     private func tap(_ voice: VoiceInput) async {
         _ = await voice.pressDown(as: .chat)
-        _ = await voice.pressUp(as: .chat)
+        _ = await voice.pressUp(as: .chat, held: false)
         XCTAssertTrue(voice.listening && voice.handsFree, "the tap did not leave the microphone open hands-free")
     }
 
@@ -1959,7 +1959,7 @@ extension ConversationTests {
         XCTAssertFalse(conversation.on, "the session the press ended the conversation on began another")
         speaker.stop()
         _ = await voice.pressDown(as: .chat)
-        _ = await voice.pressUp(as: .chat)
+        _ = await voice.pressUp(as: .chat, held: false)
         await drain()
         XCTAssertFalse(conversation.on)
     }

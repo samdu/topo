@@ -2204,7 +2204,7 @@ final class HarnessIntegrationTests: XCTestCase {
         // The release sends what was held; the session refuses the reading.
         seams.playEngineRefusals = 1
         try await hold()
-        await press.gesture(false, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["and of Italy"])
         XCTAssertFalse(speaker.speaking)
         XCTAssertTrue(speaker.waitingForMicrophone, "the refused reply was dropped")
@@ -2218,7 +2218,7 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(speaker.waitingForMicrophone, "the press on the idle microphone dropped the unheard reply")
         XCTAssertEqual(owed(), [asked], "the press settled the turn with its reply unheard")
         try await hold()
-        await press.gesture(false, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, held: true, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["and of Italy", "and of Italy"])
         try await eventually("the reply to be read") { speaker.report.started }
         XCTAssertEqual(speaker.report.text, "Paris.")

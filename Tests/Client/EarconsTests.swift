@@ -155,8 +155,8 @@ final class EarconsTests: XCTestCase {
     }
 
     /// The thumb on the microphone, through the chat's own routing.
-    private func press(_ rig: Rig, _ down: Bool, _ sent: Sent, dictating: Bool = false) async {
-        await rig.press.gesture(down, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+    private func press(_ rig: Rig, _ down: Bool, _ sent: Sent, held: Bool = false, dictating: Bool = false) async {
+        await rig.press.gesture(down, held: held, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 dictating: dictating) { sent.add($0) }?.value
     }
 
@@ -205,7 +205,7 @@ final class EarconsTests: XCTestCase {
 
         utterance(into: rig.voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press(rig, false, sent)
+        await press(rig, false, sent, held: true)
         XCTAssertEqual(sent.texts, ["purple elephants"])
         XCTAssertEqual(rig.earcons.played, [.listening, .sent])
         XCTAssertEqual(rig.cues.files, ["earcon_listening", "earcon_sent"])
@@ -219,7 +219,7 @@ final class EarconsTests: XCTestCase {
 
         await press(rig, true, sent)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press(rig, false, sent)
+        await press(rig, false, sent, held: true)
         XCTAssertFalse(rig.voice.listening)
         XCTAssertEqual(rig.earcons.played, [.listening, .failed])
         XCTAssertEqual(rig.cues.files, ["earcon_listening", "earcon_failed"])
@@ -235,7 +235,7 @@ final class EarconsTests: XCTestCase {
         XCTAssertEqual(rig.earcons.played, [.listening])
         utterance(into: rig.voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press(rig, false, sent, dictating: true)
+        await press(rig, false, sent, held: true, dictating: true)
         XCTAssertEqual(sent.texts, ["purple elephants"], "the words were not handed to the row")
         XCTAssertEqual(rig.earcons.played, [.listening], "a release into the row sounded")
     }
