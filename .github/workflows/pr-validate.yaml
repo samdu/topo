@@ -67,8 +67,9 @@
 # into the branch is not shown as the fix. The re-review verifies
 # each earlier finding as closed, still open or moot in `summary`, then
 # reviews the change since; a finding in code the change since does not touch
-# is reported and does not block. Four verdicts is the cap, and `review_cap`
-# holds the reviewer from a fifth. No earlier verdict, one
+# is reported and does not block. Three verdicts is the cap (five once the PR
+# carries `second-chance`), and `review_cap` holds the reviewer from one past
+# it. No earlier verdict, one
 # with no SHA marker, or a SHA that is not an ancestor is a first review,
 # said in the prompt step's log; a `gh` that still fails after its retries
 # fails the step, since the review round rests on what it reads.
@@ -268,6 +269,8 @@ jobs:
             *.md none
             .claude/hooks/review-dispatch.py scripts
             scripts/tests/review-dispatch-test.sh scripts
+            .claude/hooks/ledger-recall.py scripts
+            scripts/tests/ledger-recall-test.sh scripts
             .claude/* none
             Distribution/* none
             scripts/archive-upload.sh none
@@ -425,15 +428,16 @@ jobs:
             sleep 15
           done
 
-  # The review cap (docs/process.md, *The fix loop*): four Codex verdicts on a
-  # PR and the reviewer does not run again. scripts/review-cap.sh counts them
-  # the way scripts/review-prompt.sh counts the round (both read
-  # scripts/review-verdicts.sh) and at four sets `capped`: codex does not
+  # The review cap (docs/process.md, *The fix loop*): three Codex verdicts on a
+  # PR, or five once it carries the `second-chance` label, and the reviewer
+  # does not run again. scripts/review-cap.sh reads the label and counts the
+  # verdicts the way scripts/review-prompt.sh counts the round (both read
+  # scripts/review-verdicts.sh), and at the cap sets `capped`: codex does not
   # run, and reviewer_ran and review_gate read the cap
   # as neither a missing verdict nor a blocking one. review_gate stays red, so
-  # the janitor does not merge a capped PR: it merges on Sam's word, or goes
-  # back to draft for a replan. The script posts one comment saying so, under
-  # its own marker and never the codex one. A count it cannot read or a
+  # the janitor does not merge a capped PR: the PM rules on it. The script
+  # posts one comment per cap saying so, under its own marker and never the
+  # codex one. A label read that fails fails the job as a count read does. A count it cannot read or a
   # comment it cannot post fails this job, so codex does not run and
   # reviewer_ran reports it as re-runnable. post_feedback runs the same script
   # again immediately before it posts, which is the guard on the write side.
@@ -1232,13 +1236,13 @@ jobs:
             exit "$3"
           }
 
-          # The review cap: four verdicts, and the reviewer deliberately not run
+          # The review cap: three verdicts (five with the second chance), and the reviewer deliberately not run
           # again. Not a pass, so the merge is held; not a fresh block, so
           # nothing here is a finding to fix. The status pane has no state for
           # it, so it reads as block with the cap for its summary.
           if [ "${CAPPED:-}" = "true" ]; then
-            echo "::error::Review cap reached: this PR carries four Codex verdicts and is not reviewed again. It merges on Sam's word, or goes back to draft for a replan — not a new review decision."
-            finish block "review cap reached: four Codex verdicts; merges on Sam's word or goes back to draft for a replan" 1
+            echo "::error::Review cap reached: this PR is not reviewed again. The PM rules on it (docs/process.md, *When the rounds run out*) — not a new review decision."
+            finish block "review cap reached; the PM rules on it" 1
           fi
 
           if [ "$CODEX_RESULT" != "success" ]; then
