@@ -221,6 +221,13 @@ public struct Transcript: Sendable {
                 if pending[child] == 0 { ready.insert(child) }
             }
         }
+        // A damaged record can name parents in a cycle, which leaves its turns with a parent
+        // that never places. They are still turns somebody wrote, so they go on the end rather
+        // than off the screen.
+        if out.count < refs.count {
+            let placed = Set(out.map(\.ref))
+            out += refs.compactMap { placed.contains($0) ? nil : turns[$0] }.sorted { ($0.at, $0.ref) < ($1.at, $1.ref) }
+        }
         return out
     }
 }

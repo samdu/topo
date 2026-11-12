@@ -298,6 +298,16 @@ import TopoCoreTesting
         let t = Transcript(turns: [root, child])
         #expect(t.exclusive(to: t.heads[0]).map(\.text) == ["root", "child"])
     }
+
+    /// Nothing writes a cycle, but a damaged record can name one, and its turns are still turns
+    /// somebody wrote: each is drawn once, after every turn that places, oldest first.
+    @Test func turnsInAParentCycleAreOrderedOnceAfterTheRest() async throws {
+        let root = Turn(ref: .ref("phone", 1), parents: [], role: .person, text: "root", at: tA)
+        let a = Turn(ref: .ref("phone", 2), parents: [.ref("phone", 3)], role: .assistant, text: "a", at: tA + 1)
+        let b = Turn(ref: .ref("phone", 3), parents: [.ref("phone", 2)], role: .person, text: "b", at: tA + 2)
+        let t = Transcript(turns: [b, root, a])
+        #expect(t.ordered.map(\.text) == ["root", "a", "b"])
+    }
 }
 
 @Suite struct TurnWriterRecoveryTests {

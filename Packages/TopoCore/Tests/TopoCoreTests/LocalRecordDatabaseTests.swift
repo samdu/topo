@@ -23,7 +23,8 @@ import Testing
         next.fields["v"] = .int(2)
         let moved = try await again.save(next)
         #expect(moved.changeTag != saved.changeTag)
-        await #expect(throws: RecordDatabaseError.self) { try await again.save(saved) }
+        let refused = await #expect(throws: RecordDatabaseError.self) { try await again.save(saved) }
+        #expect(refused?.case == .serverRecordChanged)
     }
 
     @Test func aTokenStillReadsAcrossAReopen() async throws {
@@ -212,7 +213,8 @@ import Testing
         let other = try LocalRecordDatabase(file: file.deletingLastPathComponent().appending(path: "other.journal"))
         let theirs = try await other.save(Record(type: "T", id: RecordID("a")))
         _ = try await mine.save(Record(type: "T", id: RecordID("a")))
-        await #expect(throws: RecordDatabaseError.self) { try await mine.save(theirs) }
+        let refused = await #expect(throws: RecordDatabaseError.self) { try await mine.save(theirs) }
+        #expect(refused?.case == .serverRecordChanged)
         let token = try await other.changes(ofType: "T", since: nil).token
         await #expect(throws: RecordChangesError.self) { try await mine.changes(ofType: "T", since: token) }
     }
@@ -336,7 +338,8 @@ import Testing
         _ = try await db.save(Record(type: "T", id: RecordID("a")))
         let before = try Data(contentsOf: file)
         faults.next(partial: true)
-        await #expect(throws: RecordDatabaseError.self) { try await db.save(Record(type: "T", id: RecordID("lost"))) }
+        let failed = await #expect(throws: RecordDatabaseError.self) { try await db.save(Record(type: "T", id: RecordID("lost"))) }
+        #expect(failed?.case == .unavailable)
         #expect(try Data(contentsOf: file) == before, "the half frame is cut away")
         #expect(await db.current(RecordID("lost")) == nil)
         _ = try await db.save(Record(type: "T", id: RecordID("after")))
@@ -354,7 +357,8 @@ import Testing
         let db = try LocalRecordDatabase(file: file, io: faults.io)
         _ = try await db.save(Record(type: "T", id: RecordID("a")))
         faults.next(partial: true, cutFails: true)
-        await #expect(throws: RecordDatabaseError.self) { try await db.save(Record(type: "T", id: RecordID("lost"))) }
+        let failed = await #expect(throws: RecordDatabaseError.self) { try await db.save(Record(type: "T", id: RecordID("lost"))) }
+        #expect(failed?.case == .unavailable)
         faults.next()
         do {
             _ = try await db.save(Record(type: "T", id: RecordID("refused")))

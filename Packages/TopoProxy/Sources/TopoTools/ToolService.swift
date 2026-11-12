@@ -47,6 +47,9 @@ public actor ToolService {
     private let table: ToolTable
     private let bound: Duration
     private let log: Log
+    /// What the app hands each call the next listener accepts (`ToolCall.context`), fixed for that
+    /// listener when it is made: the login a launch's listener was started under, say.
+    private var context: (any Sendable)?
     /// The listener of the running generation; nil while down.
     private(set) var listener: NWListener?
     /// Bumped by every start and every stop or loss, so a late state from a listener that is no
@@ -110,9 +113,10 @@ public actor ToolService {
             let listener = try NWListener(using: parameters)
             generation += 1
             let current = generation
+            let context = self.context
             listener.newConnectionHandler = { [weak self] connection in
                 guard let self else { connection.cancel(); return }
-                Task { await self.accept(connection, generation: current) }
+                Task { await self.accept(connection, generation: current, context: context) }
             }
             listener.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
@@ -135,6 +139,18 @@ public actor ToolService {
         down()
         settle(.failure(CancellationError()))
         return try await start()
+    }
+
+    /// `relisten()`, with every call the new listener accepts carrying `context`.
+    public func relisten(context: (any Sendable)?) async throws -> UInt16 {
+        self.context = context
+        return try await relisten()
+    }
+
+    /// `relisten(on:)`, with every call the new listener accepts carrying `context`.
+    public func relisten(on port: UInt16, context: (any Sendable)?) async throws -> UInt16 {
+        self.context = context
+        return try await relisten(on: port)
     }
 
     /// Stops listening and closes every connection.
@@ -218,7 +234,7 @@ public actor ToolService {
         for start in starts { start.resume(with: result) }
     }
 
-    private func accept(_ connection: NWConnection, generation current: Int) {
+    private func accept(_ connection: NWConnection, generation current: Int, context: (any Sendable)?) {
         guard current == generation, let port else { connection.cancel(); return }
         let id = ObjectIdentifier(connection)
         connections[id] = connection
@@ -228,7 +244,9 @@ public actor ToolService {
         let table = table, bound = bound, log = log
         let deadline = ContinuousClock.now + bound
         Task.detached {
-            await Self.serve(inbound, gate: gate, table: table, deadline: deadline, bound: bound, log: log)
+            await ToolCall.$context.withValue(context) {
+                await Self.serve(inbound, gate: gate, table: table, deadline: deadline, bound: bound, log: log)
+            }
             connection.cancel()
             await self.forget(id)
         }

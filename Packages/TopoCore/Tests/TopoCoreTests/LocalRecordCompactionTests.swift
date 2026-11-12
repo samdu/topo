@@ -31,7 +31,8 @@ import Testing
         let saved = try await after.save(next)
         #expect(saved.changeTag != first.changeTag, "tag \(saved.changeTag ?? "") reissued")
         var stale = first; stale.fields["v"] = .int(-1)
-        await #expect(throws: RecordDatabaseError.self) { try await after.save(stale) }
+        let refused = await #expect(throws: RecordDatabaseError.self) { try await after.save(stale) }
+        #expect(refused?.case == .serverRecordChanged)
     }
 
     /// A token from before a compaction is refused at every later open, not only the compacting one.
