@@ -742,7 +742,7 @@ HOSTCRASH
 chmod +x "$work/hostcrash/bash" "$work/hostcrash/die"
 rm -f "$work/lastbin/calls"
 BARE_PATH="$work/hostcrash:$PATH" check host-crash topo_unit others
-is "check, a host bash that dies at the probe: a Mac with everything still exits 0" "$status" 0
+exits "check, a host bash that dies at the probe: a Mac with everything still exits 0" 0
 is "check, a host bash that dies at the probe: the probe's form was the one rewritten" "$(wc -l < "$work/lastbin/calls" 2>/dev/null | tr -d ' ')" 1
 # A bash that dies in a forked subshell giving a command its locale: refused, named, for every
 # suite. The script itself runs under this shell's bash; only what env finds is the fake.
