@@ -32,25 +32,26 @@ final class TurnRefTests: XCTestCase {
 }
 
 final class TurnParsingTests: XCTestCase {
+    private var fixture: [String: Any] = [:]
+
+    override func setUpWithError() throws {
+        fixture = try TurnFixture.load().fields
+    }
+
+    /// The log's own turn record (`TurnFixture`), with the overrides on top.
     private func fields(_ overrides: [String: Any?] = [:]) -> [String: Any] {
-        var fields: [String: Any] = [
-            "device": "phone",
-            "sequence": NSNumber(value: 1),
-            "parents": [String](),
-            "role": "person",
-            "text": "hello",
-            "at": Date(timeIntervalSince1970: 100),
-            "nonce": "n1",
-        ]
+        var fields = fixture
         for (key, value) in overrides {
             if let value = value { fields[key] = value } else { fields.removeValue(forKey: key) }
         }
         return fields
     }
 
+    private let named = "turn/phone/3"
+
     func testReadsATurn() {
-        let turn = Turn(recordName: "turn/phone/1", fields: fields(["parents": ["hub/2"]]))
-        XCTAssertEqual(turn?.ref, TurnRef(device: DeviceID("phone"), sequence: 1))
+        let turn = Turn(recordName: named, fields: fields(["parents": ["hub/2"]]))
+        XCTAssertEqual(turn?.ref, TurnRef(device: DeviceID("phone"), sequence: 3))
         XCTAssertEqual(turn?.parents, [TurnRef(device: DeviceID("hub"), sequence: 2)])
         XCTAssertEqual(turn?.role, .person)
         XCTAssertEqual(turn?.text, "hello")
@@ -59,21 +60,21 @@ final class TurnParsingTests: XCTestCase {
     func testAbsentParentsReadAsNone() {
         // CloudKit may drop an empty list, so a turn with no parents can
         // arrive with no field at all.
-        XCTAssertEqual(Turn(recordName: "turn/phone/1", fields: fields(["parents": nil]))?.parents, [])
+        XCTAssertEqual(Turn(recordName: named, fields: fields(["parents": nil]))?.parents, [])
     }
 
     func testRejectsAnUnparseableParent() {
         // Half a parent list is worse than none: it would render as a turn
         // that continues from somewhere it does not.
-        XCTAssertNil(Turn(recordName: "turn/phone/1", fields: fields(["parents": ["hub/2", "nonsense"]])))
+        XCTAssertNil(Turn(recordName: named, fields: fields(["parents": ["hub/2", "nonsense"]])))
     }
 
     func testRejectsMissingAndMalformedFields() {
-        XCTAssertNil(Turn(recordName: "turn/phone/1", fields: fields(["text": nil])))
-        XCTAssertNil(Turn(recordName: "turn/phone/1", fields: fields(["at": nil])))
-        XCTAssertNil(Turn(recordName: "turn/phone/1", fields: fields(["role": "narrator"])))
-        XCTAssertNil(Turn(recordName: "turn/phone/1", fields: fields(["sequence": NSNumber(value: 0)])))
-        XCTAssertNil(Turn(recordName: "phone/1", fields: fields()), "the record name must be a turn's")
+        XCTAssertNil(Turn(recordName: named, fields: fields(["text": nil])))
+        XCTAssertNil(Turn(recordName: named, fields: fields(["at": nil])))
+        XCTAssertNil(Turn(recordName: named, fields: fields(["role": "narrator"])))
+        XCTAssertNil(Turn(recordName: named, fields: fields(["sequence": NSNumber(value: 0)])))
+        XCTAssertNil(Turn(recordName: "phone/3", fields: fields()), "the record name must be a turn's")
     }
 
     func testTheNameAndTheFieldsMustAgree() {
@@ -81,12 +82,12 @@ final class TurnParsingTests: XCTestCase {
         // top of the turn that does, and the read would look complete.
         XCTAssertNil(Turn(recordName: "turn/hub/2", fields: fields()))
         XCTAssertNil(Turn(recordName: "turn/phone/2", fields: fields()))
-        XCTAssertNotNil(Turn(recordName: "turn/phone/1", fields: fields()))
+        XCTAssertNotNil(Turn(recordName: named, fields: fields()))
     }
 
     func testMissingNonceIsStillReadable() {
         // The nonce is a writer's business; a viewer never uses it, so its
         // absence must not hide a turn.
-        XCTAssertNotNil(Turn(recordName: "turn/phone/1", fields: fields(["nonce": nil])))
+        XCTAssertNotNil(Turn(recordName: named, fields: fields(["nonce": nil])))
     }
 }

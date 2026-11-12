@@ -396,9 +396,10 @@ final class ControlToolTests: XCTestCase {
         XCTAssertTrue(table.help.contains("control"))
         let help = await table.run(["help", "control"])
         for word in ["button-1", "toggle-6", "Topo Button", "Topo Toggle", "${secret:NAME}", "up to three times", "POST",
-                     "iOS 18 to 25", "Face ID"] {
+                     "Face ID"] {
             XCTAssertTrue(help.text.contains(word), "help lacks \(word)")
         }
+        XCTAssertFalse(help.text.contains("iOS 18"), "help names an iOS no install runs")
     }
 }
 

@@ -55,6 +55,8 @@ targets:
         buildPhase: resources
       - path: ../Design/topo-mark.svg
         buildPhase: resources
+      - path: ../Packages/TopoCore/Tests/Fixtures/turn.json
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.womble.tests
