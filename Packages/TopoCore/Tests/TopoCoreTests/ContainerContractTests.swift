@@ -22,17 +22,30 @@ import TopoCore
         try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
     }
 
-    /// The string literal after `prefix` on the one line of `path` that holds it.
-    static func literal(after prefix: String, in path: String) throws -> String {
-        let lines = try text(path).split(separator: "\n").filter { $0.contains(prefix) }
-        #expect(lines.count == 1, "\(path): \(lines.count) lines with \(prefix)")
-        let line = try #require(lines.first, "\(path): no line with \(prefix)")
-        let rest = try #require(line.range(of: prefix).map { line[$0.upperBound...] })
-        // One literal and nothing after it but the end of the line or an argument's comma.
-        let quoted = rest.split(separator: "\"", omittingEmptySubsequences: false)
-        let after = quoted.count == 3 ? quoted[2].trimmingCharacters(in: .whitespaces) : "?"
-        return try #require(after.isEmpty || after == "," ? String(quoted[1]) : nil,
-                            "\(path): not one literal after \(prefix): \(rest)")
+    /// The first group of every match of `pattern` in `text`, matched across lines with `^` and
+    /// `$` at each line's ends, in the order they are found.
+    static func matches(_ pattern: String, in text: String) throws -> [String] {
+        let regex = try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).map {
+            $0.numberOfRanges > 1 && $0.range(at: 1).location != NSNotFound
+                ? (text as NSString).substring(with: $0.range(at: 1)) : (text as NSString).substring(with: $0.range)
+        }
+    }
+
+    /// Every line of `text` that declares `name` as a static property, commented lines aside.
+    static func declarations(of name: String, in text: String) throws -> [String] {
+        try matches(#"^\s*(?:(?:public|private|fileprivate|internal)\s+)?static\s+(?:let|var)\s+"# + name + #"\b.*$"#,
+                    in: text)
+    }
+
+    /// The one literal `name` is declared as: its one declaration is `static let <name> = "…"`
+    /// and nothing more.
+    static func literal(declaring name: String, in path: String) throws -> String? {
+        let text = try text(path)
+        let all = try declarations(of: name, in: text)
+        let whole = try matches(#"^\s*static let "# + name + #" = "([^"\\]*)"\s*$"#, in: text)
+        #expect(all.count == 1 && whole.count == 1, "\(path): \(all)")
+        return all.count == 1 ? whole.first : nil
     }
 
     /// Every file under `top` with the extension, past what a build or a checkout keeps of its own.
@@ -86,60 +99,73 @@ import TopoCore
     /// The hub's entitlements are written from `project.yml` on every generate, and its entry is
     /// the one line there, comments aside, that names iCloud containers.
     @Test func theHubsProjectEntryNamesTheContainer() throws {
-        let lines = try Self.text("project.yml").split(separator: "\n").filter {
-            !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#")
-                && $0.contains("com.apple.developer.icloud-container-identifiers:")
-        }
+        let key = "com.apple.developer.icloud-container-identifiers:"
+        // A YAML comment runs from a `#` at the line's start or after a space to the line's end.
+        let lines = try Self.text("project.yml").split(separator: "\n").map { line -> String in
+            let text = String(line)
+            guard let hash = try? NSRegularExpression(pattern: #"(^|\s)#"#)
+                .firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return text }
+            return (text as NSString).substring(to: hash.range.location)
+        }.filter { $0.contains(key) }
         #expect(lines.count == 1, "\(lines)")
         let line = try #require(lines.first)
-        let list = try #require(line.split(separator: "[").last?.split(separator: "]").first)
+        let value = try #require(line.range(of: key).map { line[$0.upperBound...] })
+        let list = try #require(try Self.matches(#"^\s*\[([^\[\]]*)\]\s*$"#, in: String(value)).first,
+                                "not a flow list: \(value)")
         let items = list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         #expect(items.contains(Self.container), "\(items)")
     }
 
     @Test func wombleReadsTheSameContainerAndZone() throws {
         let store = "Womble/Sources/Log/CloudKitStore.swift"
-        #expect(try Self.literal(after: "static let containerIdentifier =", in: store) == Self.container)
-        #expect(try Self.literal(after: "static let zoneName =", in: store) == Self.zone)
-        let selfTest = "Womble/Sources/Diagnostics/CloudKitSelfTest.swift"
-        #expect(try Self.literal(after: "logContainer: String =", in: selfTest) == Self.container)
+        #expect(try Self.literal(declaring: "containerIdentifier", in: store) == Self.container)
+        #expect(try Self.literal(declaring: "zoneName", in: store) == Self.zone)
+        // The self-test's default is the first argument of the one `steps` there is.
+        let selfTest = try Self.text("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
+        #expect(try Self.matches(#"logContainer\s*:"#, in: selfTest).count == 1)
+        #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = "([^"\\]*)",\s*$"#, in: selfTest)
+                == [Self.container])
     }
 
-    /// Every container literal and every zone given as a literal (`zoneName = "…"`,
-    /// `zoneName: "…"`) in the Swift outside the tests, by the file it is in.
-    static func literals(_ pattern: String) throws -> Set<String> {
-        let regex = try NSRegularExpression(pattern: pattern)
+    /// Every container literal, and every zone given as a literal (`zoneName = "…"`,
+    /// `zoneName: "…"`, `zoneName: String = "…"`, across lines or not), in the Swift outside the
+    /// tests, by the file it is in, once for each time it is spelled.
+    static func literals(_ pattern: String) throws -> [String] {
         let base = root.standardizedFileURL.path + "/"
-        var found: Set<String> = []
+        var found: [String] = []
         for top in ["Apps", "Packages"] {
             for url in try files(under: root.appendingPathComponent(top), ext: "swift") {
                 let path = String(url.standardizedFileURL.path.dropFirst(base.count))
                 if path.contains("/Tests/") { continue }
-                let text = try String(contentsOf: url, encoding: .utf8)
-                for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                    found.insert("\(path): \((text as NSString).substring(with: match.range(at: 1)))")
-                }
+                found += try matches(pattern, in: String(contentsOf: url, encoding: .utf8)).map { "\(path): \($0)" }
             }
         }
-        return found
+        return found.sorted()
     }
 
-    /// The log's container and zone are spelled in `CloudKitRecordDatabase` alone; the one other
-    /// container and zone are the board's.
+    /// The log's container and zone are spelled once, in `CloudKitRecordDatabase`; the one other
+    /// container and zone are the board's, once each.
     @Test func theConstantIsTheOnlySpellingInTheSwiftThatLinksTopoCore() throws {
         let database = "Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift"
         let app = "Apps/Shared/TopoCloudKit.swift"
         #expect(try Self.literals(#""(iCloud\.[^"]*)""#)
-                == ["\(database): \(Self.container)", "\(app): iCloud.zone.hexagon.topo.board"])
-        #expect(try Self.literals(#"zoneName\b[^"\n]*?[:=]\s*"([^"]*)""#)
-                == ["\(database): \(Self.zone)", "\(app): Board"])
+                == ["\(app): iCloud.zone.hexagon.topo.board", "\(database): \(Self.container)"])
+        #expect(try Self.literals(#"zoneName\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*"([^"]*)""#)
+                == ["\(app): Board", "\(database): \(Self.zone)"])
+        let text = try Self.text(database)
+        #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"]*)"\s*$"#, in: text) == [Self.container])
+        #expect(try Self.matches(#"^\s*public static let zoneName = "([^"]*)"\s*$"#, in: text) == [Self.zone])
     }
 
-    /// The app's own names for the log's container and zone are the constant's.
+    /// The app's own names for the log's container and zone are the constant's: of the two
+    /// declarations of each in `TopoCloudKit.swift`, the log's and the board's, the log's reads it.
     @Test func theAppsNamesAreTheConstant() throws {
         let text = try Self.text("Apps/Shared/TopoCloudKit.swift")
-        #expect(text.contains("static let containerIdentifier = CloudKitRecordDatabase.containerIdentifier\n"))
-        #expect(text.contains("static let zoneName = CloudKitRecordDatabase.zoneName\n"))
+        for name in ["containerIdentifier", "zoneName"] {
+            #expect(try Self.declarations(of: name, in: text).count == 2, "\(name)")
+            #expect(try Self.matches(#"^\s*static let "# + name + #" = CloudKitRecordDatabase\."# + name + #"\s*$"#,
+                                     in: text).count == 1, "\(name)")
+        }
     }
 }
 #endif
