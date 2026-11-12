@@ -165,9 +165,6 @@ final class MascotDriver {
 
     /// The facing in force, as the engine draws it now.
     var facingInForce: String { engine.facing }
-
-    /// The head in force, as the engine was last handed it: 1 the smallest.
-    var headInForce: Double { engine.state.level }
     #endif
 }
 
