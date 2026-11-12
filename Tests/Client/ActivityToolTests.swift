@@ -274,7 +274,9 @@ final class ActivityToolTests: XCTestCase {
         let ended = Task { await tool.run(["end", "A1", #"{"relevance": 7}"#]) }
         await settle()
         let keeper = self.keeper!
-        await SigningOut.midFlight(login, reached: { gate.held == 1 }, release: { gate.openUp() })
+        // The next login stands as the gate opens, so the queued calls are refused by the login they
+        // carry, not by finding none current.
+        await SigningOut.midFlight(login, reached: { gate.held == 1 }, release: { login.began(); gate.openUp() })
         _ = await first.value
         let update = await queued.value
         let end = await ended.value
