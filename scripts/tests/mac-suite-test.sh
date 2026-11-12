@@ -700,11 +700,16 @@ check() {  # check <case> [suite...] — its exit in $status, what it said in $s
   said="$(cd "$tree" && TOPO_XCODE_APPS="${XCODE_APPS:-$TOPO_XCODE_APPS}" PATH="$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
 }
 names() { case "$said" in *"error: "*"$2"*) ok "$1" ;; *) fail "$1: $said" ;; esac; }
+# A check case's exit, with what the check said kept on a failure: a refusal the case did not
+# expect names its cause, where the exit alone names nothing.
+exits() {  # exits <case> <want>
+  if [ "$status" = "$2" ]; then ok "$1"; else fail "$1: got '$status', wanted '$2': $said"; fi
+}
 mkdir -p "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
 fake "$tree/scripts/build-ish.sh" '[ "${1-}" != inputs ] || echo digest'
 echo digest > "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
 check can topo_unit others
-is "check: a Mac with everything exits 0" "$status" 0
+exits "check: a Mac with everything exits 0" 0
 is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen generate|xcodebuild (build|test)|xcrun simctl (create|boot)|build-ish.sh$|ci-audio-lane)' "$CALLS")" 0
 [ ! -e "$work/can.results" ] && ok "check: no results are written" || fail "check: results were written"
 # A bash that dies in a forked subshell giving a command its locale: refused, named, for every
@@ -731,7 +736,7 @@ chmod +x "$work/crashbin/bash" "$work/crashbin/locale-command"
 export FAKE_BASH_CALLS="$work/crashbin/calls"
 rm -f "$FAKE_BASH_CALLS"
 said="$(cd "$tree" && PATH="$work/crashbin:$work/bin:$PATH" "$BASH" scripts/mac-suite.sh --check --cache "$work/cache" scripts 2>&1)" && status=0 || status=$?
-is "check, a bash that crashes: exits 1" "$status" 1
+exits "check, a bash that crashes: exits 1" 1
 names "check, a bash that crashes: named, with its version" "the bash env finds ($work/crashbin/bash, GNU bash, version 5.3.15(1)-release) dies"
 is "check, a bash that crashes: the form was run until it died, at the third" "$(cat "$FAKE_BASH_CALLS" 2>/dev/null)" 3
 # The same bash with the crash past twenty runs passes: the probe is twenty runs of the form.
@@ -742,64 +747,64 @@ case "$said" in *"the bash env finds"*) fail "check, a bash that lasts twenty: r
 is "check, a bash that lasts twenty: the form ran twenty times" "$(cat "$FAKE_BASH_CALLS" 2>/dev/null)" 20
 unset FAKE_BASH_CALLS
 FAKE_XCODE=26.4 check xcode others
-is "check, another Xcode: exits 1" "$status" 1
+exits "check, another Xcode: exits 1" 1
 names "check, another Xcode: named" "selected Xcode is 'Xcode 26.4'"
 FAKE_XCODE=26.4 XCODE_APPS="$work/apps-beside" check xcode-beside others
-is "check, the pinned Xcode beside the selected one: exits 0" "$status" 0
+exits "check, the pinned Xcode beside the selected one: exits 0" 0
 FAKE_XCODE=26.4 XCODE_APPS="$work/apps-other" check xcode-none others
-is "check, no pinned Xcode: exits 1" "$status" 1
+exits "check, no pinned Xcode: exits 1" 1
 names "check, no pinned Xcode: what was found is named" "(found: Xcode-99.app 99.0; Xcode.app 26.4)"
 FAKE_NO_RUNTIMES=1 FAKE_FREE=9 check runtimes others
 names "check, no pinned runtime and a full disk: the disk is named too" "9 GB available"
-is "check, no pinned runtime: exits 1" "$status" 1
+exits "check, no pinned runtime: exits 1" 1
 names "check, no pinned runtime: the phone's is named" "no iPhone simulator of com.apple.CoreSimulator.SimRuntime.iOS-27-2"
 names "check, no pinned runtime: the watch's is named for others" "no Apple Watch simulator of com.apple.CoreSimulator.SimRuntime.watchOS-27-2"
 FAKE_NO_RUNTIMES=1 check runtimes-unit topo_unit
 case "$said" in *"Apple Watch"*) fail "check, topo_unit alone: the watch's runtime is asked for: $said" ;; *) ok "check, topo_unit alone: the watch's runtime is not asked for" ;; esac
 # Finder's figure read as 0 for a volume with room: df's is judged, and a full one is named as df's.
 FAKE_FREE=0 check disk-zero topo_unit
-is "check, Finder's figure 0 with room by df: exits 0" "$status" 0
+exits "check, Finder's figure 0 with room by df: exits 0" 0
 FAKE_FREE=0 FAKE_DF=3 check disk-zero-full topo_unit
-is "check, Finder's figure 0 and df's full: exits 1" "$status" 1
+exits "check, Finder's figure 0 and df's full: exits 1" 1
 names "check, Finder's figure 0 and df's full: df's figure named" "3 GB available under $work/cache (df's figure, purgeable space left out, as Finder's read 0), and a suite wants 10."
 asked_df() { grep -c "^df -g $work/cache\$" "$CALLS"; }
 is "check, Finder's figure 0 and df's full: df is asked of the cache's own volume" "$(asked_df)" 1
 FAKE_FREE=NaN check disk-unread topo_unit
-is "check, Finder's figure unread with room by df: exits 0" "$status" 0
+exits "check, Finder's figure unread with room by df: exits 0" 0
 FAKE_FREE= check disk-empty topo_unit
-is "check, Finder's figure empty with room by df: exits 0" "$status" 0
+exits "check, Finder's figure empty with room by df: exits 0" 0
 is "check, Finder's figure empty: df is asked of the cache's own volume" "$(asked_df)" 1
 FAKE_FREE= FAKE_DF=3 check disk-empty-full topo_unit
-is "check, Finder's figure empty and df's full: exits 1" "$status" 1
+exits "check, Finder's figure empty and df's full: exits 1" 1
 names "check, Finder's figure empty and df's full: named, as Finder's read nothing" "3 GB available under $work/cache (df's figure, purgeable space left out, as Finder's read nothing), and a suite wants 10."
 FAKE_FREE=NaN FAKE_DF=none check disk-neither topo_unit
-is "check, neither figure read: exits 1" "$status" 1
+exits "check, neither figure read: exits 1" 1
 names "check, neither figure read: named" "could not read the disk's available space under $work/cache."
 FAKE_FREE=9 check disk topo_unit
-is "check, a full disk: exits 1" "$status" 1
+exits "check, a full disk: exits 1" 1
 names "check, a full disk: named as Finder's figure" "9 GB available under $work/cache (Finder's figure, purgeable space included), and a suite wants 10."
 is "check, a full disk by Finder's figure: df is not asked" "$(grep -c '^df ' "$CALLS")" 0
 FAKE_LID=Yes check lid topo_unit
-is "check, the lid closed: exits 1" "$status" 1
+exits "check, the lid closed: exits 1" 1
 names "check, the lid closed: named" "lid is closed"
 FAKE_LOCKED=1 FAKE_VAULT=On check locked topo_unit
-is "check, locked and encrypted: exits 1" "$status" 1
+exits "check, locked and encrypted: exits 1" 1
 names "check, locked and encrypted: named" "is locked, or is not the one on the screen"
 FAKE_AWAY=No FAKE_OTHER_CONSOLE=Yes FAKE_OTHER_UNLOCKED= FAKE_VAULT=On check away topo_unit
-is "check, encrypted and another user's session on the screen: exits 1" "$status" 1
+exits "check, encrypted and another user's session on the screen: exits 1" 1
 FAKE_LOCKED=1 FAKE_VAULT=On check locked-others others
-is "check, locked and encrypted, others: exits 0" "$status" 0
+exits "check, locked and encrypted, others: exits 0" 0
 FAKE_LOCKED=1 check locked-plain topo_unit
-is "check, locked and not encrypted: exits 0" "$status" 0
+exits "check, locked and not encrypted: exits 0" 0
 # `scripts` alone asks a Mac for jq, node, python3 and an open lid, whatever else it lacks.
 FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 FAKE_LOCKED=1 FAKE_VAULT=On check scripts-bare scripts
-is "check, scripts alone on a Mac with no toolchain, runtime or room: exits 0" "$status" 0
+exits "check, scripts alone on a Mac with no toolchain, runtime or room: exits 0" 0
 is "check, scripts alone: nothing asked of Xcode, simctl or the disk" "$(grep -cE '^(xcodebuild|xcodegen|xcrun|osascript)' "$CALLS")" 0
 # A Mac with what macOS has and nothing installed: no node, and a python3 that is a stub.
 mkdir -p "$work/stock" && for tool in bash env dirname basename cat grep sed tr uname id git; do ln -sf "$(command -v "$tool")" "$work/stock/$tool"; done
 ln -sf "$(command -v jq)" "$work/stock/jq"
 BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check scripts-stock scripts
-is "check, scripts alone, no node and no developer tools: exits 1" "$status" 1
+exits "check, scripts alone, no node and no developer tools: exits 1" 1
 names "check, scripts alone, no node: named" "node is not installed"
 names "check, scripts alone, python3 a stub: named" "python3 is the stub"
 BARE_PATH="$work/stock:/usr/bin:/bin" FAKE_NO_TOOLS=1 check others-stock others
@@ -821,36 +826,36 @@ without() {
 without python3
 for asked_suite in scripts others; do
   BARE_PATH="$work/no-python3" check "no-python-$asked_suite" "$asked_suite"
-  is "check, $asked_suite, no python3: exits 1" "$status" 1
+  exits "check, $asked_suite, no python3: exits 1" 1
   names "check, $asked_suite, no python3: named" "python3 is not installed"
   mkdir -p "$work/broken" && printf '#!/bin/sh\nexit 1\n' > "$work/broken/python3" && chmod +x "$work/broken/python3"
   BARE_PATH="$work/broken:$work/no-python3" check "broken-python-$asked_suite" "$asked_suite"
-  is "check, $asked_suite, a python3 that exits 1: exits 1" "$status" 1
+  exits "check, $asked_suite, a python3 that exits 1: exits 1" 1
   names "check, $asked_suite, a python3 that exits 1: named" "does not run"
 done
 # A Mac with no jq.
 without jq
 BARE_PATH="$work/no-jq" check scripts-no-jq scripts
-is "check, scripts alone, no jq: exits 1" "$status" 1
+exits "check, scripts alone, no jq: exits 1" 1
 names "check, scripts alone, no jq: named" "jq is not installed"
 case "$said" in *"node is not"*) fail "check, no jq: node there and refused: $said" ;; *) ok "check, no jq: nothing else is named" ;; esac
 FAKE_LID=Yes check scripts-lid scripts
-is "check, scripts alone, the lid closed: exits 1" "$status" 1
+exits "check, scripts alone, the lid closed: exits 1" 1
 FAKE_XCODE=26.4 check scripts-beside scripts others
-is "check, scripts beside others on another Xcode: exits 1" "$status" 1
+exits "check, scripts beside others on another Xcode: exits 1" 1
 FAKE_VAULT=On check unlocked topo_unit
-is "check, encrypted and unlocked, another session locked: exits 0" "$status" 0
+exits "check, encrypted and unlocked, another session locked: exits 0" 0
 check ui topo_ui
-is "check, topo_ui: exits 1" "$status" 1
+exits "check, topo_ui: exits 1" 1
 names "check, topo_ui: named" "topo_ui runs on buddybox alone"
 check ui-mic topo_ui:mic
-is "check, the microphone part: exits 1" "$status" 1
+exits "check, the microphone part: exits 1" 1
 names "check, the microphone part: named" "topo_ui:mic runs on buddybox alone"
 # The quiet part is asked what topo_unit is, the unlocked session too.
 check ui-quiet topo_ui:quiet
 is "check, the quiet part: exits 0" "$status:$said" "0:this Mac can run topo_ui:quiet."
 FAKE_LOCKED=1 FAKE_VAULT=On check ui-quiet-locked topo_ui:quiet
-is "check, the quiet part, encrypted and locked: exits 1" "$status" 1
+exits "check, the quiet part, encrypted and locked: exits 1" 1
 names "check, the quiet part, encrypted and locked: named" "is locked"
 FAKE_XCODE=26.4 FAKE_NO_RUNTIMES=1 FAKE_FREE=1 check ui-quiet-bare topo_ui:quiet
 names "check, the quiet part: the Xcode is asked" "selected Xcode"
@@ -859,7 +864,7 @@ names "check, the quiet part: the room is asked" "GB available"
 # The framework there is of other inputs: the tools that build it are asked for.
 echo other > "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework/.inputs"
 PATH="$work/bin:/usr/bin:/bin" check tools topo_unit
-is "check, a stale framework and no tools: exits 1" "$status" 1
+exits "check, a stale framework and no tools: exits 1" 1
 names "check, a stale framework and no tools: meson is named" "meson is not installed"
 names "check, a stale framework and no tools: llvm and lld are named" "llvm and lld are not installed"
 fake "$tree/scripts/build-ish.sh" 'exit 0'
