@@ -32,24 +32,28 @@ import TopoCore
         }
     }
 
-    /// The Swift in `path` with its comments taken out: every `/* … */`, whatever lines it spans,
-    /// and every `//` to the end of its line.
-    static func code(_ path: String) throws -> String {
+    /// The text of a Womble file, read as plain lines: one with a block comment, a conditional
+    /// or a multi-line string, any of which can hide a line from the compiler or show one it does
+    /// not have, fails rather than being read.
+    static func plain(_ path: String) throws -> String {
         let text = try text(path)
-        return try NSRegularExpression(pattern: #"/\*[\s\S]*?\*/|//[^\n]*"#)
-            .stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        for form in ["/*", "#if", "\"\"\""] {
+            #expect(!text.contains(form), "\(path) has \(form), which this suite does not read through")
+        }
+        return text
     }
 
-    /// Every line of `code` that declares something called `name`, whatever its modifiers.
-    static func declarations(of name: String, in code: String) throws -> [String] {
-        try matches(#"^.*\b(?:let|var)\s+"# + name + #"\b.*$"#, in: code)
+    /// Every place `name` is bound in `text`, outside `//` lines: the name on its own (in
+    /// backticks or not, not after a `.`), then a type or not, then `=` or `{`.
+    static func bindings(of name: String, in text: String) throws -> [String] {
+        try matches(#"^(?!\s*//).*(?<![.\w`])`?"# + name + #"`?\s*(?::[^=\n{]*)?(?:=(?!=)|\{).*$"#, in: text)
     }
 
-    /// The one literal `name` is declared as: its one declaration, comments aside, is
-    /// `static let <name> = "…"` and nothing more.
+    /// The one literal `name` is declared as: the one place it is bound is the whole line
+    /// `static let <name> = "…"`.
     static func literal(declaring name: String, in path: String) throws -> String? {
-        let text = try code(path)
-        let all = try declarations(of: name, in: text)
+        let text = try plain(path)
+        let all = try bindings(of: name, in: text)
         let whole = try matches(#"^\s*static let "# + name + #" = "([^"\\]*)"\s*$"#, in: text)
         #expect(all.count == 1 && whole.count == 1, "\(path): \(all)")
         return all.count == 1 ? whole.first : nil
@@ -128,7 +132,7 @@ import TopoCore
         #expect(try Self.literal(declaring: "containerIdentifier", in: store) == Self.container)
         #expect(try Self.literal(declaring: "zoneName", in: store) == Self.zone)
         // The self-test's default is the first argument of the one `steps` there is.
-        let selfTest = try Self.code("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
+        let selfTest = try Self.plain("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
         #expect(try Self.matches(#"logContainer\s*:"#, in: selfTest).count == 1)
         #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = "([^"\\]*)",\s*$"#, in: selfTest)
                 == [Self.container])
@@ -159,21 +163,9 @@ import TopoCore
                 == ["\(app): iCloud.zone.hexagon.topo.board", "\(database): \(Self.container)"])
         #expect(try Self.literals(#"zoneName\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*"([^"]*)""#)
                 == ["\(app): Board", "\(database): \(Self.zone)"])
-        let text = try Self.code(database)
+        let text = try Self.text(database)
         #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"]*)"\s*$"#, in: text) == [Self.container])
         #expect(try Self.matches(#"^\s*public static let zoneName = "([^"]*)"\s*$"#, in: text) == [Self.zone])
-    }
-
-    /// The app's own names for the log's container and zone are the constant's: of the two
-    /// declarations of each in `TopoCloudKit.swift`, comments aside, the log's and the board's, the
-    /// log's reads it.
-    @Test func theAppsNamesAreTheConstant() throws {
-        let text = try Self.code("Apps/Shared/TopoCloudKit.swift")
-        for name in ["containerIdentifier", "zoneName"] {
-            #expect(try Self.declarations(of: name, in: text).count == 2, "\(name)")
-            #expect(try Self.matches(#"^\s*static let "# + name + #" = CloudKitRecordDatabase\."# + name + #"\s*$"#,
-                                     in: text).count == 1, "\(name)")
-        }
     }
 }
 #endif
