@@ -1,5 +1,5 @@
 """scripts/janitor.py: the decisions over scripted readings, and whole passes
-against a fake gh, git, tmux, curl and claude with the coordinator's bridge played by a
+against a fake gh, git, tmux, curl and claude with the PM's bridge played by a
 loopback HTTP server. No network beyond loopback, no repository, no session.
 
     scripts/tests/janitor-test.sh
@@ -1254,7 +1254,7 @@ print("unscripted: " + tool + " " + " ".join(a), file=sys.stderr); sys.exit(1)
 
 
 class ReportTarget(unittest.TestCase):
-    """Where a report goes: the coordinator's session on its host's bridge by
+    """Where a report goes: the PM's session on its host's bridge by
     default, and another session or host by the environment alone."""
 
     def target(self, **env):
@@ -1266,8 +1266,8 @@ class ReportTarget(unittest.TestCase):
                              capture_output=True, text=True, check=True).stdout.split()
         return tuple(out)
 
-    def test_default_is_topo_coordinator_on_toolbox(self):
-        self.assertEqual(self.target(), ("topo-coordinator", "http://192.168.1.201/mesh/daphne/deliver"))
+    def test_default_is_topo_pm_through_daphne(self):
+        self.assertEqual(self.target(), ("topo-pm", "http://192.168.1.201/mesh/daphne/deliver"))
 
     def test_session_and_host_are_set_by_the_environment(self):
         self.assertEqual(self.target(TOPO_JANITOR_REPORT_TO="buddy-prime", TOPO_JANITOR_REPORT_HOST="buddy-prime"),
@@ -1275,7 +1275,7 @@ class ReportTarget(unittest.TestCase):
 
 
 class Bridge(http.server.BaseHTTPRequestHandler):
-    """The coordinator's bridge, as far as /deliver goes: records every body and
+    """The PM's bridge, as far as /deliver goes: records every body and
     bearer, answers what the test scripted."""
     status = 200
     received = []
@@ -1399,7 +1399,7 @@ class WholePass(unittest.TestCase):
         got = Bridge.received[0]
         self.assertEqual(got["auth"], "Bearer tok-buddybox")
         self.assertEqual(got["path"], "/mesh/daphne/deliver")
-        self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "topo-coordinator"))
+        self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "topo-pm"))
         self.assertTrue(got["body"]["id"])
         self.assertIn("merged #7", got["body"]["text"])
         self.assertIn("swept worktree topo-old", got["body"]["text"])
@@ -2524,7 +2524,7 @@ class WholePass(unittest.TestCase):
             return f.read().split("\n=====\n")[:-1]
 
     def test_a_verified_device_box_is_ticked_in_the_body_read_just_before_and_cited(self):
-        later = dict(boxed(), body=boxed()["body"] + "- [x] a line the coordinator added since the list was read\r\n")
+        later = dict(boxed(), body=boxed()["body"] + "- [x] a line the engineer added since the list was read\r\n")
         p, calls = self.run_pass(self.device_pass(pr_now={"7": later}))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.written("edit"), [later["body"].replace(f"- [ ] device: {BOX}", f"- [x] device: {BOX}")])
@@ -2578,12 +2578,12 @@ class WholePass(unittest.TestCase):
         self.assertEqual(sh.wrote, [])
 
     def test_an_edit_made_between_the_read_and_the_write_leaves_the_box_unticked_and_is_said(self):
-        """Finding 3. The janitor's write puts the coordinator's edit back to
+        """Finding 3. The janitor's write puts the engineer's edit back to
         what it was, and GitHub has no write that would not: so the count of
         the description's edits is read with it and read back, and when more
         than the janitor's own landed the box is unticked again, which holds
         the merge until a person has read the PR, and that is said."""
-        mine = dict(boxed(), body=boxed()["body"] + "- [x] by eye: the coordinator unticks this as the janitor writes\r\n")
+        mine = dict(boxed(), body=boxed()["body"] + "- [x] by eye: the engineer unticks this as the janitor writes\r\n")
         theirs = ["- [x] by eye", "- [ ] by eye"]
         ticked = mine["body"].replace(self.UNTICKED, self.TICKED)
         for i, earlier in enumerate((0, 1, 35)):   # never edited, edited once, and more edits than any page of the history
