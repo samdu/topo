@@ -124,6 +124,24 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertFalse(harness.hasRead)
     }
 
+    /// A sign-out takes the first-run answer with the login: `firstRunAnswered`, and the answer a
+    /// build before #386 kept in the person's own words under `firstRunAnswer`, which nothing
+    /// reads now but a device that has not signed out since may still hold.
+    func testASignOutClearsTheFirstRunAnswerAndTheWordsAnEarlierBuildKept() async throws {
+        let standard = UserDefaults.standard
+        addTeardownBlock {
+            standard.removeObject(forKey: "firstRunAnswered")
+            standard.removeObject(forKey: "firstRunAnswer")
+        }
+        standard.set(true, forKey: "firstRunAnswered")
+        standard.set("Call me Sam, and keep it short.", forKey: "firstRunAnswer")
+        let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(), transport: ScriptedTransport())
+        await harness.refresh()
+        await harness.forget()
+        XCTAssertNil(standard.object(forKey: "firstRunAnswered"), "the answer outlived the sign-out")
+        XCTAssertNil(standard.object(forKey: "firstRunAnswer"), "an earlier build's words outlived the sign-out")
+    }
+
     /// A read that threw is not a read: with no connection on a launch over a log that holds
     /// turns, `hasRead` stays false and the transcript empty, so Topo is not placed into a page
     /// about to fill; the first read that gets through marks it and brings the turns.
