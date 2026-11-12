@@ -57,6 +57,8 @@ expected=(
   '*.md none'
   '.claude/hooks/review-dispatch.py scripts'
   'scripts/tests/review-dispatch-test.sh scripts'
+  '.claude/hooks/ledger-recall.py scripts'
+  'scripts/tests/ledger-recall-test.sh scripts'
   '.claude/* none'
   'Distribution/* none'
   'scripts/archive-upload.sh none'
@@ -134,7 +136,7 @@ done
 # Nothing: documentation, the other workflows, tooling no suite covers.
 selects false false false "documentation and root markdown" $'docs/design.md\nREADME.md\nCLAUDE.md\nDesign/README.md\n'
 selects false false false "the automerge workflow" $'.github/workflows/automerge.yaml\n'
-selects false false false "agent hooks and TestFlight tooling" $'.claude/hooks/review-dispatch.py\nscripts/plan-review.sh\nscripts/archive-upload.sh\nDistribution/ExportOptions.plist\n'
+selects false false false "agent hooks and TestFlight tooling" $'.claude/settings.json\nscripts/plan-review.sh\nscripts/archive-upload.sh\nDistribution/ExportOptions.plist\n'
 
 # `others` alone: what only the hub, watch, TV, Womble and TopoLink compile.
 selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.swift\ndocs/pairing.md\n'
