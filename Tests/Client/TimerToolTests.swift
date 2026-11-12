@@ -330,6 +330,13 @@ final class TimerToolTests: XCTestCase {
         XCTAssertEqual(alarms.count, 1)
     }
 
+    /// The usage the mind reads names no iOS older than the one every install runs.
+    func testUsageNamesNoOlderIOS() {
+        let usage = tool(FakeAlarms(AlarmPermission(.granted))).usage
+        XCTAssertTrue(usage.contains("status 5"), usage)
+        XCTAssertFalse(usage.contains("iOS"), usage)
+    }
+
     func testAWhitespaceLabelIsRefused() async {
         let alarms = FakeAlarms(AlarmPermission(.granted))
         let reply = await tool(alarms).run(["5m", "   "])

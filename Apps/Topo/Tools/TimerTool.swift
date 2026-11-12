@@ -215,10 +215,9 @@ actor TimerGate {
 /// through silent mode, with every control AlarmKit offers for the mind to compose: Pause and
 /// Resume on the countdown, a second button at the alert that starts the next countdown or hands
 /// Topo a turn, a turn at Stop, Cancel on the countdown, its words, symbols and colours, a sound,
-/// and an alarm at a moment or on chosen days. Where alarms are refused or the phone has no
-/// AlarmKit, nothing is set and the reply says why, so the mind asks the person what they wanted
-/// rather than setting something lesser. An alarm outlives a sign-out; the turns its buttons hand
-/// Topo do not.
+/// and an alarm at a moment or on chosen days. Where alarms are refused, nothing is set and the
+/// reply says why, so the mind asks the person what they wanted rather than setting something
+/// lesser. An alarm outlives a sign-out; the turns its buttons hand Topo do not.
 struct TimerTool: Tool {
     let scheduler: any AlarmScheduler
     let records: TimerRecords
@@ -286,8 +285,8 @@ struct TimerTool: Tool {
     every button on the lock screen without unlocking, so a --tell turn arrives from a locked phone:
     WORDS are your own, read back to you, saying what the press means. A turn is sent only while the
     login the alarm was set under is signed in. Topo asks once to allow alarms, with Topo on the
-    screen. Where alarms are not allowed (status 5) or the phone's iOS is older than 26 (status 1),
-    nothing is set: ask the person what it was for, rather than setting something else in its place.
+    screen. Where alarms are not allowed (status 5), nothing is set: ask the person what it was for,
+    rather than setting something else in its place.
     """
 
     enum Call: Equatable {
