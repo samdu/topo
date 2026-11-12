@@ -21,7 +21,6 @@ final class CloudKitStore: TurnRecordStore {
     private let container: CKContainer
     private let database: CKDatabase
     private let zoneID: CKRecordZone.ID
-    private let accumulator = DispatchQueue(label: "zone.hexagon.topo.womble.read")
 
     init(container: CKContainer = CKContainer(identifier: CloudKitStore.containerIdentifier)) {
         self.container = container

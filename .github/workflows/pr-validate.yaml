@@ -240,9 +240,9 @@ jobs:
           # Tests/ClientUI and takes Tests/Client/Widgets and Tests/Fixtures as
           # resources; TopoTests bundles Tests/Fixtures/licences; the Topo
           # scheme runs TopoUserland's tests, `swift test` in `others` every
-          # other package's; smartturn-mel-test.sh, run in `others`, reads
-          # its chirp; and mac-suite-test.sh, run in `scripts` (and so in
-          # `others`), scans the repository's own Tests/ClientUI. Tests/ClientTalk,
+          # other package's; smartturn-mel-test.sh, run in `scripts` (and so
+          # in `others`), reads its chirp; and mac-suite-test.sh, run there
+          # too, scans the repository's own Tests/ClientUI. Tests/ClientTalk,
           # which no PR suite runs, stays `all`.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
@@ -295,6 +295,21 @@ jobs:
             scripts/tests/simulator-run-test.sh scripts
             scripts/tests/ci-audio-lane-test.sh scripts
             scripts/tests/ci-require-tests-test.sh scripts
+            scripts/tests/agent-simulator-test.sh scripts
+            scripts/tests/archive-upload-test.sh scripts
+            scripts/tests/asc-pem-test.sh scripts
+            scripts/tests/build-ish-test.sh scripts
+            scripts/tests/check-built-assets-test.sh scripts
+            scripts/tests/check-built-plist-test.sh scripts
+            scripts/tests/fetch-phonon-test.sh scripts
+            scripts/tests/mac-suite-test.sh scripts
+            scripts/tests/maps-opens-nothing-test.sh scripts
+            scripts/tests/model-manifest-test.sh scripts
+            scripts/tests/perf-run-test.sh scripts
+            scripts/tests/phonon-bundles-test.sh scripts
+            scripts/tests/smartturn-mel-test.sh scripts
+            scripts/tests/suite-gate-test.sh scripts
+            scripts/tests/lib.sh scripts
         run: |
           set -euo pipefail
           # A diff that cannot be read selects every suite, inside the script.
@@ -648,6 +663,33 @@ jobs:
             test actually fails when the behaviour is wrong. A test that
             cannot fail is a finding. A claim with no test behind it is a
             finding.
+
+            Ask of every new thing the diff adds whether the repository
+            already has one. For each type, closure list, counter, wait,
+            bound, listener, keychain or file writer, document reader, test
+            double or helper the diff introduces, search the checkout for
+            the existing thing it resembles; when there is one, name it with
+            its path and say whether the diff could have used it. The ones
+            this repository has include: `LoginLife.onEnd` for a teardown
+            at a login's end, and `LoginLife.shared.epoch` with
+            `isCurrent` for work that lands after an await under a login
+            (an integer generation of the diff's own is the copy);
+            `PhoneTool.run`, `Arguments`, `ToolReply` and `Confined` for a
+            tool in the app; `KeychainItem` for a keychain item; `HomeFile`
+            for a file the app places in the guest's home by a hidden
+            name; `WidgetReader` for judging a document's fields; `TopoLog`
+            for a log line (a `Logger(subsystem:)` of the diff's own is the
+            copy); `TopoCloudKit` and `CloudKitRecordDatabase` for the
+            container and the zone; `RecordDatabase.answering(within:)`,
+            which a wrapper of a database passes on;
+            `TranscriptStore.message(for:)` for an error in words; and in
+            the tests `InMemoryRecordDatabase` and `ScriptedGuest`. A copy
+            of one of these is a finding citing the new code's `path:line`
+            and the original's path. It does not block unless the copy
+            already behaves differently from the original in a way the
+            blocking rule below covers. That the diff does not touch the
+            original is not evidence that none exists, so search for the
+            name before saying so.
 
             Evidence rule: every finding cites `path:line` and names the
             concrete input or sequence that breaks the claim. A finding with

@@ -137,9 +137,6 @@ public final class GuestLifecycle {
         self.report = report
     }
 
-    /// Whether a background task is held.
-    public var holdsBackgroundTime: Bool { !tasks.isEmpty }
-
     /// Whether a continued-processing task is held.
     public var holdsContinuedTask: Bool { continued != nil }
 

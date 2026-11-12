@@ -271,8 +271,6 @@ final class ModelDownloads {
         /// The session has a task and no network its settings allow.
         case waiting
         case downloading(done: Int64, total: Int64)
-        /// Wanted, and held back until the models it was asked for after are on the phone.
-        case queued
         case verifying
         case present
         case failed(String)
@@ -297,15 +295,10 @@ final class ModelDownloads {
     /// The models something in this process has asked for; the rest of the manifest is left
     /// alone (a debug build given its models on the command line asks for none).
     private var wanted: Set<String> = []
-    /// The models each wanted model is held back for (`start(_:after:)`).
-    private var after: [String: [String]] = [:]
-    /// The models the last pass held back, so the arrival or failure that lets one go starts it.
-    private var heldBack: Set<String> = []
     private var reconciling = false
     /// The models whose first byte this process has marked (`download.firstByte`).
     private var flowed: Set<String> = []
-    /// Whether a `start` asked for a fresh attempt at what failed since the last pass ran. A
-    /// pass that only lets go of held models leaves a failed model to the next `start`.
+    /// Whether a `start` asked for a fresh attempt at what failed since the last pass ran.
     private var retrying = false
     /// What iOS gave `handleEventsForBackgroundURLSession`, called once the session has
     /// delivered the events it woke the app for.
@@ -381,13 +374,8 @@ final class ModelDownloads {
     /// Idempotent and called on every foreground: tasks the session already holds (from before a
     /// relaunch included) are left alone, and a file that failed is tried again. With no names,
     /// only the reconciliation runs, which is what a relaunch for a finished transfer needs.
-    ///
-    /// Models named in `after` go first: none of `ids` is asked for while any of those is wanted,
-    /// not on the phone and not failed (`held`), and once the last of them arrives or fails the
-    /// held ones start by themselves. Tasks the session already holds for a held model carry on.
-    func start(_ ids: [String] = [], after first: [String] = []) {
+    func start(_ ids: [String] = []) {
         wanted.formUnion(ids)
-        if !first.isEmpty { for id in ids { after[id] = first } }
         retrying = true
         reconcile()
     }
@@ -409,44 +397,19 @@ final class ModelDownloads {
         }
     }
 
-    /// Whether a model is held back: one of the models it was asked for after is wanted and not
-    /// on the phone, and none of them has failed. Any one failing lets it go, so a broken ear —
-    /// either of its two models — never costs the voice.
-    nonisolated static func held(_ id: String, after: [String: [String]], wanted: Set<String>,
-                                 present: Set<String>, failed: Set<String>) -> Bool {
-        let first = after[id] ?? []
-        guard !first.contains(where: failed.contains) else { return false }
-        return first.contains { wanted.contains($0) && !present.contains($0) }
-    }
-
-    /// What one pass does with the manifest's models, in its order: the ones it enqueues (wanted,
-    /// not on the phone, not held, and, for one that failed, only on a pass that retries) and the
-    /// ones it holds back. Holding is judged before any failure is cleared, so a model held for
-    /// one that failed goes on the same pass as that one's retry.
-    nonisolated static func plan(_ models: [String], after: [String: [String]], wanted: Set<String>,
-                                 present: Set<String>, failed: Set<String>, retry: Bool)
-        -> (enqueue: [String], holding: Set<String>) {
-        let holding = Set(models.filter {
-            wanted.contains($0) && held($0, after: after, wanted: wanted, present: present, failed: failed)
-        })
-        let enqueue = models.filter {
-            wanted.contains($0) && !present.contains($0) && !holding.contains($0) && (retry || !failed.contains($0))
-        }
-        return (enqueue, holding)
+    /// The manifest's models one pass enqueues, in its order: wanted, not on the phone, and, for
+    /// one that failed, only on a pass that retries.
+    nonisolated static func plan(_ models: [String], wanted: Set<String>, present: Set<String>,
+                                 failed: Set<String>, retry: Bool) -> [String] {
+        models.filter { wanted.contains($0) && !present.contains($0) && (retry || !failed.contains($0)) }
     }
 
     /// Whether any of these models' downloads has failed since it was last tried.
     func failed(_ ids: [String]) -> Bool { ids.contains { failures[$0] != nil } }
 
-    private func held(_ id: String) -> Bool {
-        Self.held(id, after: after, wanted: wanted, present: present, failed: Set(failures.keys))
-    }
-
     func enqueue(_ manifest: ModelManifest, excluding running: Set<String>, retry: Bool) {
-        let plan = Self.plan(manifest.models.map(\.id), after: after, wanted: wanted, present: present,
-                             failed: Set(failures.keys), retry: retry)
-        heldBack = plan.holding
-        let due = Set(plan.enqueue)
+        let due = Set(Self.plan(manifest.models.map(\.id), wanted: wanted, present: present,
+                                failed: Set(failures.keys), retry: retry))
         for model in manifest.models where due.contains(model.id) {
             failures[model.id] = nil
             let unverified = store.unverified(model)
@@ -604,7 +567,7 @@ final class ModelDownloads {
         let keys = model.files.map { Self.key(model, $0) }
         if keys.contains(where: { verifying.contains($0) }) { return .verifying }
         let flowing = keys.filter { inFlight[$0] != nil }
-        if flowing.isEmpty { return wanted.contains(id) && held(id) ? .queued : .absent }
+        if flowing.isEmpty { return .absent }
         if flowing.contains(where: waiting.contains), !flowing.contains(where: { (inFlight[$0] ?? 0) > 0 }) {
             return .waiting
         }
@@ -622,7 +585,6 @@ final class ModelDownloads {
         if statuses.contains(.waiting) { return "waiting for a network the data settings allow" }
         if statuses.contains(.verifying) { return "verifying the download" }
         if statuses.allSatisfy({ $0 == .present }) { return Self.downloaded }
-        if statuses.contains(.queued), !statuses.contains(where: Self.flowing) { return Self.queued }
         if statuses.allSatisfy({ $0 == .absent }) { return "not downloaded" }
         return Self.downloading(Self.bytes(sizes(ids), statuses))
     }
@@ -655,20 +617,12 @@ final class ModelDownloads {
     /// What `describe` says of models that are all on the phone.
     nonisolated static let downloaded = "downloaded"
 
-    /// What `describe` says of models held back for others, with nothing of theirs on its way.
-    nonisolated static let queued = "waiting for the ear to download first"
-
-    private nonisolated static func flowing(_ status: Status) -> Bool {
-        if case .downloading = status { return true }
-        return false
-    }
-
     /// Whether a set of models has a measure: some of it downloading, and none of it failed,
     /// waiting on a network or being verified.
     nonisolated static func measured(_ statuses: [Status]) -> Bool {
         let unmeasured = statuses.contains { status in
             if case .failed = status { return true }
-            return status == .waiting || status == .verifying || status == .queued
+            return status == .waiting || status == .verifying
         }
         return !unmeasured && !statuses.allSatisfy({ $0 == .present }) && !statuses.allSatisfy({ $0 == .absent })
     }
@@ -715,18 +669,6 @@ final class ModelDownloads {
         } else {
             waiters.add(ids, settlesOnFailure: true, body)
         }
-    }
-
-    /// A pass for the models an arrival or a failure has just let go, if any: one pass, at the
-    /// moment the last of what they wait on lands, and one that retries nothing, so a failure
-    /// does not ask for itself again. Only with the app in front: iOS starts a transfer created
-    /// in the background at its own discretion, so one let go there waits for the next
-    /// foreground's `start`, which creates it as any other.
-    private func releaseHeld() {
-        guard UIApplication.shared.applicationState == .active,
-              heldBack.contains(where: { !held($0) }) else { return }
-        heldBack = heldBack.filter(held)
-        reconcile()
     }
 
     private static func key(_ model: ModelManifest.Model, _ file: ModelManifest.File) -> String {
@@ -786,7 +728,6 @@ final class ModelDownloads {
                 present.insert(id)
                 if let manifest { store.sweep(manifest) }
                 waiters.present(present).forEach { $0(.success(())) }
-                releaseHeld()
             }
         case .failed(let key, let why):
             verifying.remove(key)
@@ -799,7 +740,6 @@ final class ModelDownloads {
             Perf.mark("download.failed \(id)")
             let failure = ModelDownloadFailure(id: id, why: why)
             waiters.failed(id).forEach { $0(.failure(failure)) }
-            releaseHeld()
         case .finished:
             let handler = completion
             completion = nil
