@@ -403,6 +403,7 @@
 		9294C1318A365C25A2DD50C4 /* PhoneTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 570E29C16DA2E655E25483F5 /* PhoneTool.swift */; };
 		92D2EA266F120A32F38C3889 /* ScreenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69B83668827B1468B16F8E0 /* ScreenStore.swift */; };
 		92D72F78C88069649826EF12 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
+		931C64CA25FDC54FC6360D6E /* Scratch703Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4DD23EC36896B85E6943A14 /* Scratch703Tests.swift */; };
 		933C2ACA157E32F124280DD4 /* systemMedium-light.png in Resources */ = {isa = PBXBuildFile; fileRef = C07F833992D5F5D8B519F030 /* systemMedium-light.png */; };
 		94196E785900B5F430651F59 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32589879904BE38084A9C102 /* ShareSheet.swift */; };
 		94794B5048B048E8C1EA40DE /* QuietLaneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */; };
@@ -1095,6 +1096,7 @@
 		A383104A833CDB1DFF33D305 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		A3A3C4700E7D184EF8B26C0A /* RootfsInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootfsInstallerTests.swift; sourceTree = "<group>"; };
 		A4C46F5E525959D03B1E4F61 /* systemSmall-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemSmall-dark.png"; sourceTree = "<group>"; };
+		A4DD23EC36896B85E6943A14 /* Scratch703Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scratch703Tests.swift; sourceTree = "<group>"; };
 		A50B8CE04F7718914028BE64 /* GuestStreamOffsetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestStreamOffsetTests.swift; sourceTree = "<group>"; };
 		A5B071283503C21838482589 /* systemLarge-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemLarge-light.png"; sourceTree = "<group>"; };
 		A64DF85F65D65AA39B2128BD /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
@@ -1852,6 +1854,7 @@
 				96CB2E5CB9CB248FD7D8ABC9 /* RecordRouteTests.swift */,
 				9C9A782EE9118805036640C7 /* ReplayTests.swift */,
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
+				A4DD23EC36896B85E6943A14 /* Scratch703Tests.swift */,
 				91557526B25922514E81F558 /* ScreenShareSectionTests.swift */,
 				E44B79001708E10FB628518D /* ScreenTests.swift */,
 				CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */,
@@ -3141,6 +3144,7 @@
 				C7A5E80BD0AE7624BF0ADF0C /* RecordRouteTests.swift in Sources */,
 				401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */,
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
+				931C64CA25FDC54FC6360D6E /* Scratch703Tests.swift in Sources */,
 				E16BE15E28A212D1C84D18C7 /* ScreenShareSectionTests.swift in Sources */,
 				982D916A57E63EA35F6C1B38 /* ScreenTests.swift in Sources */,
 				FDDAC9AC6854A658AF14E67C /* ScriptedGuest.swift in Sources */,
