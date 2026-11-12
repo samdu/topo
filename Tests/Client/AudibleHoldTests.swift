@@ -129,14 +129,14 @@ final class AudibleHoldTests: XCTestCase {
 
     /// The store never asked, unless a test keeps a mode, and the earcons off, so the players
     /// made are the keeper's.
-    private func rig(mode: WorkingSounds.Mode? = nil) async -> Rig {
+    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = defaults()
         if let mode { defaults.set(mode.rawValue, forKey: WorkingSounds.key) }
         defaults.set(false, forKey: EarconsSetting.key)
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
-                                 deactivate: seams.deactivate, isActive: { true })
+                                 deactivate: seams.deactivate, isActive: { isActive })
         let players = Players()
         players.phase = { [weak audio] in audio?.call ?? .none }
         let clock = PausedSleep()
@@ -259,6 +259,26 @@ final class AudibleHoldTests: XCTestCase {
         rig.clock.fire(KeeperSounds.parkAfter)
         await settle("the bed to be paused") { !bed.isPlaying }
         XCTAssertFalse(rig.audio.holding, "a hold outlived the release and the bed's fade")
+    }
+
+    /// Review Focus 1, behind the lock: the release's end takes the fade's hold before its own
+    /// drops, so the keeper never stops between the two and the process is not let go with the
+    /// bed's fade unheard.
+    func testTheFadesHoldIsTakenBeforeTheReleasesDrops() async throws {
+        let rig = await rig(isActive: false)
+        let release = try XCTUnwrap(rig.speaker.releasing())
+        rig.speaker.utteranceTaken()
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertTrue(bed.isPlaying)
+        rig.speaker.released(release, "its send took no wait")
+        XCTAssertEqual(bed.fades.last, 0, "the bed was not faded at the release's end")
+        XCTAssertTrue(rig.audio.holding, "the process was let go of with the bed's fade unheard")
+        XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"),
+                       "the keeper stopped between the release's hold and the fade's")
+        await settle("the fade's pause to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) }
+        rig.clock.fire(KeeperSounds.parkAfter)
+        await settle("the fade's hold to go") { !rig.audio.holding }
+        XCTAssertFalse(bed.isPlaying, "the session was let go with the bed still playing")
     }
 
     // MARK: - The mute
@@ -387,6 +407,33 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(bed.fades.last, KeeperSounds.bedVolume, "tool work under `.speaking` was left silent")
         XCTAssertTrue(bed.isPlaying)
         rig.speaker.stop()
+    }
+
+    /// Review Focus 1, behind the lock: a reply that ends in a gap — the voice heard out under the
+    /// bed, then the guest done writing — fades the bed under the reading's hold before that hold
+    /// drops, so the keeper never stops between the two and nothing is held once the bed is paused.
+    func testAReadingThatEndsInAGapFadesTheBedBeforeItsHoldGoes() async throws {
+        let rig = await rig(isActive: false)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        rig.speaker.speak(writing: "One. ", answering: "turn")
+        await settle("the sentence to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        XCTAssertEqual(bed.fades.last, KeeperSounds.bedVolume, "no bed in the gap")
+        XCTAssertEqual(rig.speaker.awaiting, [], "a wait stands in the gap")
+        XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"))
+
+        rig.speaker.writingEnded("turn")
+        XCTAssertFalse(rig.speaker.speaking, "the reading did not end with the guest's writing")
+        XCTAssertEqual(bed.fades.last, 0, "the bed was not faded at the reading's end")
+        XCTAssertTrue(rig.audio.holding, "the process was let go of with the bed's fade unheard")
+        XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"),
+                       "the keeper stopped between the reading's hold and the fade's")
+        await settle("the fade's pause to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) }
+        rig.clock.fire(KeeperSounds.parkAfter)
+        await settle("the fade's hold to go") { !rig.audio.holding }
+        XCTAssertFalse(bed.isPlaying, "the session was let go with the bed still playing")
     }
 
     // MARK: - The call
