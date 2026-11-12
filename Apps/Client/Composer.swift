@@ -348,9 +348,9 @@ struct Composer: View {
         .opacity(besideOpacity)
     }
 
-    /// The system's glass where there is any, a material of the same shape below it. The tint
-    /// is the same value at nothing while the microphone is shut, so what happens when it opens
-    /// is an animation of one value and not a swap of one view for another.
+    /// The system's glass, in the tint. The tint is the same value at nothing while the microphone
+    /// is shut, so what happens when it opens is an animation of one value and not a swap of one
+    /// view for another.
     ///
     /// Its corners are the geometry's: the short pane is the resting one scaled, so its radius is
     /// the resting radius at the same share as the well.
