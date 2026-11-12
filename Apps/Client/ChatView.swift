@@ -921,13 +921,11 @@ enum MicrophoneWatch {
     static func start(_ voice: VoiceInput, _ speaker: Speaker) {
         withObservationTracking {
             _ = voice.listening
-            _ = voice.opening
         } onChange: { [weak voice, weak speaker] in
-            // Called as the value is about to change, so the answer is read on the next turn. An
-            // open still in flight is neither: the microphone has closed once neither stands.
+            // Called as the value is about to change, so the answer is read on the next turn.
             Task { @MainActor in
                 guard let voice, let speaker else { return }
-                if voice.listening { speaker.microphoneListening() } else if !voice.opening { speaker.microphoneClosed() }
+                if voice.listening { speaker.microphoneListening() } else { speaker.microphoneClosed() }
                 start(voice, speaker)
             }
         }
@@ -1120,6 +1118,9 @@ final class MicPress {
         let keeps = release != nil && calls() && speaker.callIdle
         return Task {
             defer { release.map { speaker.released($0, "its send took no wait") } }
+            #if DEBUG
+            DebugRun.stallPress()
+            #endif
             let heard = await voice.pressDown(as: .chat, keepingInput: keeps)
             speaker.microphoneOpened(counted: opens)
             guard let heard else {

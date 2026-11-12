@@ -59,6 +59,8 @@ final class VoiceInput {
     /// Every release the gesture handed over, whatever it ended: with `presses`, what says a press
     /// was the microphone's from the thumb coming down to its going up.
     private(set) var releases = 0
+    /// Releases the gesture called holds (`pressUp`'s `held`), for the debug report.
+    private(set) var holds = 0
     /// Why the last press started no microphone, in words; nil while it is running, and from
     /// the next press until that one is refused. The UI test reads it too, to tell a host with
     /// no input from a refusal that is a fault.
@@ -247,6 +249,7 @@ final class VoiceInput {
     /// sends (`inputKept`).
     func pressUp(as gate: Gate, held: Bool, keepingInput keeps: Bool = false) async -> String? {
         releases += 1
+        if held { holds += 1 }
         if ignoredWhileSettling > 0 {
             ignoredWhileSettling -= 1
             return nil
@@ -490,7 +493,7 @@ final class VoiceInput {
     /// verdict arrive while the microphone opens. A throw anywhere leaves the press refused with
     /// nothing running.
     private func startMicrophone(as gate: Gate, mine: Int) async throws {
-        let (suppress, resetsAt) = try prepareSession(as: gate)
+        let (suppress, resetsAt, session) = try prepareSession(as: gate)
         let resets = audio.resets
         // The generation as the open begins (`mine` on every path but a suite's): whatever moves
         // it before the open answers has torn the press down.
@@ -509,7 +512,9 @@ final class VoiceInput {
                 openingFor = nil
             }
         }
+        let handed = ContinuousClock.now
         let result = try await input.open(suppress: suppress, resetsAt: resetsAt, tap: tap)
+        let answered = ContinuousClock.now - handed
         // Cancelled while it opened (a release, a cancel, an interruption, a reset's handler):
         // whatever moved the generation tore it down, its engine stopped before it returned.
         guard generation == at, owner == gate else { throw Superseded() }
@@ -519,17 +524,19 @@ final class VoiceInput {
             input.drop()
             throw InputEngine.Refusal.reset
         }
-        opened(result, suppress: suppress, resuming: false, mine: mine)
+        opened(result, suppress: suppress, resuming: false, mine: mine,
+               main: "session \(Self.ms(session)), queue \(Self.ms(answered))")
     }
 
     /// A suspended session opened again on the session the call's activation made live: the same
     /// open, waited for, since its caller reads the answer at once.
     private func resumeMicrophone() throws {
-        let (suppress, resetsAt) = try prepareSession(as: owner ?? .chat)
+        let (suppress, resetsAt, session) = try prepareSession(as: owner ?? .chat)
         gate.open()
         let opened = try input.openNow(suppress: suppress, resetsAt: resetsAt, tap: tap)
         audio.microphone(open: true)
-        self.opened(opened, suppress: suppress, resuming: true, mine: generation)
+        self.opened(opened, suppress: suppress, resuming: true, mine: generation,
+                    main: "session \(Self.ms(session))")
     }
 
     /// What every open does on the main actor before the first handle: a kept input stopped (its
@@ -539,13 +546,14 @@ final class VoiceInput {
     /// record claim, and the session made active. Answers the voice processing the unit takes —
     /// the session's and not the setting's: under a hold the session's mode waits, and the unit
     /// waits with it — and the input's reset count read before the activation.
-    private func prepareSession(as gate: Gate) throws -> (suppress: Bool, resetsAt: Int) {
+    private func prepareSession(as gate: Gate) throws -> (suppress: Bool, resetsAt: Int, took: Duration) {
+        let began = ContinuousClock.now
         stopKeptInput("a press opens the microphone")
         audio.wantVoiceProcessing(NoiseSuppression.enabled(defaults))
         audio.wantRecord(true, for: gate == .chat ? .chat : .firstRun)
         let resetsAt = input.resets
         do { try audio.ensureActive() } catch { throw SessionInactive(underlying: error) }
-        return (audio.voiceProcessed, resetsAt)
+        return (audio.voiceProcessed, resetsAt, ContinuousClock.now - began)
     }
 
     /// What the tap hands its buffers to.
@@ -557,14 +565,21 @@ final class VoiceInput {
         #endif
     }
 
-    /// The engine is running with the tap on it: the microphone is open.
-    private func opened(_ result: InputEngine.Opened, suppress: Bool, resuming: Bool, mine: Int) {
+    /// The microphone's open in whole milliseconds, for its log line.
+    private static func ms(_ d: Duration) -> String {
+        "\(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000) ms"
+    }
+
+    /// The engine is running with the tap on it: the microphone is open. `main` is what the
+    /// open took on the main actor (the session) and in all on the queue, the queue's own steps
+    /// in `result`, so a slow press names which side it was slow on.
+    private func opened(_ result: InputEngine.Opened, suppress: Bool, resuming: Bool, mine: Int, main: String) {
         #if DEBUG
         DebugRun.say("press: session ok, client \(result.client.rate)/\(result.client.channels), " +
                      "hardware \(result.hardware.rate)/\(result.hardware.channels)")
         #endif
         let steps = result.steps
-        AudioLog.say("microphone \(resuming ? "resumed" : "open"): noise suppression \(suppress ? "on" : "off") (\(steps))")
+        AudioLog.say("microphone \(resuming ? "resumed" : "open"): noise suppression \(suppress ? "on" : "off") (\(main); \(steps))")
         listening = true
         if !resuming { sessions += 1 }
         audio.wantScreenAwake(true, for: .listening)
@@ -836,13 +851,14 @@ extension VoiceInput {
         var presses: Int
         var sessions: Int
         var releases = 0
+        var holds = 0
         var refusal: String?
         var ear: String
         var capture: Capture
     }
 
     var debugReport: String {
-        let report = Report(presses: presses, sessions: sessions, releases: releases, refusal: refusal,
+        let report = Report(presses: presses, sessions: sessions, releases: releases, holds: holds, refusal: refusal,
                             ear: "\(ear.state)", capture: capture)
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys

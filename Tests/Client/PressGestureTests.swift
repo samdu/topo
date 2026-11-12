@@ -102,7 +102,7 @@ final class PressGestureTests: XCTestCase {
                                formats: { seams.readFormats($0) },
                                permission: permission ?? { true }, permitted: { permitted },
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.listening || input.opening }
+        speaker.microphoneOpen = { input.listening }
         MicrophoneWatch.start(input, speaker)
         return Rig(speaker: speaker, voice: input, seams: seams, audio: audio, center: center, latch: latch)
     }
@@ -275,7 +275,14 @@ final class PressGestureTests: XCTestCase {
     private func opening(_ rig: Rig) async -> Task<String?, Never> {
         rig.latch.arm()
         let voice = rig.voice
-        let down = Task { await voice.pressDown(as: .chat) }
+        let speaker = rig.speaker
+        // As the chat's press does: the speaker told before the press, and after its answer.
+        speaker.microphoneOpening()
+        let down = Task {
+            let heard = await voice.pressDown(as: .chat)
+            speaker.microphoneOpened(counted: true)
+            return heard
+        }
         await settle("the open held on the queue") { rig.latch.waiting && voice.opening }
         return down
     }
