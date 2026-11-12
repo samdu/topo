@@ -239,6 +239,49 @@ final class ControlCueTests: XCTestCase {
         XCTAssertEqual(store.cues(), [])
     }
 
+    /// A cue whose turn is already in the log — an earlier drain sent it and its record was not
+    /// removed — drained by a harness that has not read the log: the drain reads the log first,
+    /// finds the cue's nonce there, and neither sets the toggle again (it was turned back off
+    /// since) nor puts the turn on the line a second time.
+    func testACueAlreadyInTheLogIsReadFirstAndNotActedOnAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let revision = try set("toggle-1", #"{"title": "Fan", "on": false, "action": {"kind": "turn", "say": "fan"}}"#)
+        let nonce = UUID().uuidString
+        let log = TurnLog(database: db)
+        let writer = try await log.writer(for: phone)
+        _ = try await writer.append(.person, "control toggle-1: fan on", continuing: try await log.read(), nonce: nonce)
+        try store.appendCue(SurfaceStore.Cue(nonce: nonce, slot: ControlSlot.stored("toggle-1"), id: ControlSlot.control,
+                                             revision: revision, turningOn: true, time: Date(), resolved: true))
+        // The zone is not made, so nothing on the line is sent: what the drain put there stays.
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        XCTAssertFalse(harness.hasRead)
+        await taps(harness).cues.drain()
+        XCTAssertTrue(harness.hasRead, "the drain did not read the log first")
+        XCTAssertEqual(store.readControl(slot: "toggle-1")?.document.on, false, "a cue already sent set its toggle again")
+        XCTAssertFalse(harness.owed.contains { $0.nonce == nonce }, "a cue already sent went on the line again")
+        let said = (try await log.read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.nonce), [nonce])
+        XCTAssertEqual(store.cues(), [])
+    }
+
+    /// A cue drained by a harness that has not read the log, over a log whose read fails with
+    /// something other than "no log yet": a read that failed is not an answer, so the drain acts on
+    /// nothing — the cue stays in the app group and nothing goes on the line.
+    func testACueIsNotActedOnWhenTheLogCannotBeRead() async throws {
+        let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
+        let nonce = UUID().uuidString
+        try store.appendCue(SurfaceStore.Cue(nonce: nonce, slot: ControlSlot.stored("button-1"), id: ControlSlot.control,
+                                             revision: revision, turningOn: nil, time: Date()))
+        let harness = harness(UnreadableDatabase(), defaults: makeDefaults(), transport: ScriptedTransport(),
+                              ensureZone: { throw Unexpected() })
+        XCTAssertFalse(harness.hasRead)
+        await taps(harness).cues.drain()
+        XCTAssertFalse(harness.hasRead, "a read that failed was taken as a read")
+        XCTAssertEqual(store.cues().map(\.nonce), [nonce], "the drain dropped a cue it could not check against the log")
+        XCTAssertEqual(harness.owed.count, 0, "the drain put a turn on the line without reading the log")
+        XCTAssertEqual(store.taps(), [])
+    }
+
     /// Signed out there are no documents: the value is "Sign in", and a tap on any revision comes
     /// forward and records and runs nothing.
     func testSignedOutTapRunsNothing() async throws {
@@ -299,6 +342,15 @@ private final class ScriptedTransport: Transport, @unchecked Sendable {
 
 
 private struct Unexpected: Error {}
+
+/// A log that cannot be read, for a reason that is not "no log yet": every call is unavailable.
+private struct UnreadableDatabase: RecordDatabase {
+    private var refusal: RecordDatabaseError { .unavailable(underlying: Unexpected()) }
+    func save(_ records: [Record]) async throws -> [Record] { throw refusal }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { throw refusal }
+    func query(_ query: RecordQuery) async throws -> [Record] { throw refusal }
+    func records(ofType type: String) async throws -> [Record] { throw refusal }
+}
 
 /// A heartbeat loop that never beats inside a test: the lease is renewed by the turns themselves.
 private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }

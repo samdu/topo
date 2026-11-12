@@ -1501,6 +1501,20 @@ class WholePass(unittest.TestCase):
         self.assertIn("#7: merge refused: ", Bridge.received[-1]["body"]["text"])
         self.assertIn("Head branch was modified", Bridge.received[-1]["body"]["text"])
 
+    def test_a_refused_merge_leaves_the_next_eligible_pr_to_merge_in_the_same_pass(self):
+        moved = "f" * 40
+        s = self.scripted(prs=[pr(), pr(number=8, headRefName="buddy/y", headRefOid=moved)],
+                          runs={HEAD: [run()], moved: [run(number=8)]}, head_now=moved)
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"gh pr merge 7 --repo samdu/topo --squash --delete-branch --admin --match-head-commit {HEAD}", calls)
+        self.assertIn(f"gh pr merge 8 --repo samdu/topo --squash --delete-branch --admin --match-head-commit {moved}", calls,
+                      "a refused merge ended the pass's merges")
+        self.assertEqual(calls.count("gh pr merge"), 2, "a merge was asked twice")
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertIn("#7: merge refused: ", text)
+        self.assertNotIn("#8: merge refused", text)
+
     def test_another_prs_green_run_on_the_same_head_merges_nothing(self):
         s = self.scripted(prs=[pr(), pr(number=8, headRefName="buddy/y")], runs={HEAD: [run(number=8)]})
         p, calls = self.run_pass(s)
