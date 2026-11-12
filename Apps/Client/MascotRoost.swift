@@ -76,8 +76,8 @@ extension View {
 
 /// Reports a text's lines as it lays them out. `Text.Layout` is read by a `TextRenderer`, which
 /// is handed it at drawing time and nowhere else (iOS 18); the lines it read are kept here and
-/// reported as rects in the text's own space, and until they have been read, or on iOS 17, the
-/// text's whole frame is.
+/// reported as rects in the text's own space, and until they have been read, or on a watch before
+/// watchOS 11 or a TV before tvOS 18, the text's whole frame is.
 private struct MascotLines: ViewModifier {
     let reported: Bool
     @State private var lines: [CGRect] = []

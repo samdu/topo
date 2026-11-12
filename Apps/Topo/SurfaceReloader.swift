@@ -25,12 +25,8 @@ final class SurfaceReloader {
     private var scheduled: Set<String> = []
     init(reloadKind: @escaping @MainActor (String) -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: $0) },
          reloadEverything: @escaping @MainActor () -> Void = { WidgetCenter.shared.reloadAllTimelines() },
-         reloadControlKind: @escaping @MainActor (String) -> Void = { kind in
-             if #available(iOS 18, *) { ControlCenter.shared.reloadControls(ofKind: kind) }
-         },
-         reloadEveryControl: @escaping @MainActor () -> Void = {
-             if #available(iOS 18, *) { ControlCenter.shared.reloadAllControls() }
-         },
+         reloadControlKind: @escaping @MainActor (String) -> Void = { ControlCenter.shared.reloadControls(ofKind: $0) },
+         reloadEveryControl: @escaping @MainActor () -> Void = { ControlCenter.shared.reloadAllControls() },
          schedule: @escaping Schedule = { delay, body in
              Task { @MainActor in
                  try? await Task.sleep(for: delay)

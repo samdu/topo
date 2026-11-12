@@ -9,7 +9,6 @@ import TopoTools
 /// `AlarmScheduler` over AlarmKit. `schedule` and the prompt are asynchronous and called as they
 /// are; `alarms`, `pause`, `resume`, `countdown`, `stop` and `cancel` are synchronous calls into
 /// the system, reached only through `Confined`, whose queue is not the cooperative pool.
-@available(iOS 26, *)
 struct AlarmKitScheduler: AlarmScheduler {
     private let manager = Confined(AlarmManager.shared, label: "zone.hexagon.topo.alarms")
 
@@ -130,7 +129,6 @@ struct AlarmKitScheduler: AlarmScheduler {
 }
 
 /// AlarmKit's permission, asked at a timer's start and nowhere else (`PermissionBroker`).
-@available(iOS 26, *)
 struct AlarmAuthorizer: ThrowingPrompt {
     let name = "Alarms"
 

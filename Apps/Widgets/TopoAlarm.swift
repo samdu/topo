@@ -12,7 +12,6 @@ import WidgetKit
 /// paused title, the time held, Resume and Cancel; and sounding, with the alert's title. AlarmKit's
 /// own Pause and Resume show only in the system's templated presentation, so these are the widget's
 /// buttons (`TimerControlIntent`), drawn in the words, symbols and colours the mind gave them.
-@available(iOS 26, *)
 struct TopoAlarmWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AlarmAttributes<TopoAlarmMetadata>.self) { context in
