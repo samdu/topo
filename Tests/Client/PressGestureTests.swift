@@ -42,10 +42,36 @@ final class PressGestureTests: XCTestCase {
         XCTAssertTrue(condition(), "waited ten seconds for \(what)")
     }
 
+    /// Holds the input's open on its queue until the test lets it go.
+    private final class Latch: @unchecked Sendable {
+        private let lock = NSLock()
+        private let semaphore = DispatchSemaphore(value: 0)
+        private var armed = false
+        private var reached = false
+        func arm() { lock.withLock { armed = true } }
+        var waiting: Bool { lock.withLock { reached } }
+        func pass() {
+            guard lock.withLock({ armed }) else { return }
+            lock.withLock { reached = true }
+            semaphore.wait()
+        }
+        func open() {
+            let wasArmed = lock.withLock { () -> Bool in
+                let was = armed
+                armed = false
+                return was
+            }
+            if wasArmed { semaphore.signal() }
+        }
+    }
+
     @MainActor private struct Rig {
         let speaker: Speaker
         let voice: VoiceInput
         let seams: Seams
+        let audio: AudioSession
+        let center: NotificationCenter
+        let latch: Latch
         func showing() -> Composer.MicState { Composer.MicState(voice, speaking: speaker.speaking) }
     }
 
@@ -66,16 +92,19 @@ final class PressGestureTests: XCTestCase {
         let nowhere = URL(fileURLWithPath: "/dev/null")
         ear.load(parakeet: nowhere, ctc: nowhere)
         await settle("the ear") { ear.ready }
+        let latch = Latch()
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: {
                                    if openTakes > 0 { Thread.sleep(forTimeInterval: openTakes) }
+                                   latch.pass()
                                    return seams.makeEngine()
                                },
                                formats: { seams.readFormats($0) },
                                permission: permission ?? { true }, permitted: { permitted },
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.listening }
-        return Rig(speaker: speaker, voice: input, seams: seams)
+        speaker.microphoneOpen = { input.listening || input.opening }
+        MicrophoneWatch.start(input, speaker)
+        return Rig(speaker: speaker, voice: input, seams: seams, audio: audio, center: center, latch: latch)
     }
 
     /// A second and a half of tone at the ear's rate.
@@ -202,5 +231,151 @@ final class PressGestureTests: XCTestCase {
         await down?.value
         XCTAssertFalse(rig.voice.listening, "a release during the prompt opened the microphone")
         XCTAssertEqual(rig.voice.sessions, 0)
+    }
+
+    // MARK: - The open, off the main actor
+
+    /// The main actor goes on running while a half-second open is in flight: the gesture's events
+    /// and the long press's verdict arrive on it. A ticker on the main actor never waits as long as
+    /// the open takes.
+    func testTheMainActorRunsWhileTheMicrophoneOpens() async {
+        let rig = await rig(openTakes: 0.5)
+        defer { rig.voice.cancel() }
+        let press = MicPress()
+        var ticks: [ContinuousClock.Instant] = []
+        let ticker = Task { @MainActor in
+            while !Task.isCancelled {
+                ticks.append(.now)
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        await press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice) { _ in }?.value
+        ticker.cancel()
+        XCTAssertTrue(rig.voice.listening)
+        let gaps = zip(ticks, ticks.dropFirst()).map { $1 - $0 }
+        XCTAssertLessThan(gaps.max() ?? .zero, .milliseconds(250), "the main actor stopped for the open")
+    }
+
+    /// The open runs in its one safe order on the input's queue and not the main thread: the
+    /// session made active first, then the engine, voice processing, the formats read once and the
+    /// tap on the format the guard judged.
+    func testTheOpenRunsInOrderOffTheMainThread() async {
+        let rig = await rig()
+        defer { rig.voice.cancel() }
+        _ = await rig.voice.pressDown(as: .chat)
+        XCTAssertTrue(rig.voice.listening)
+        XCTAssertEqual(rig.seams.lines, ["activate ok", "engine made", "formats read"])
+        XCTAssertEqual(rig.seams.offMain, [true, true, true], "a step of the open ran on the main thread")
+        XCTAssertEqual(rig.seams.formatReads, 1)
+        XCTAssertEqual(rig.seams.processing.map(\.formatReads), [0], "voice processing was set after the formats were read")
+        XCTAssertTrue(CapturingInputNode.installed === rig.seams.lastClient, "the tap was not installed on the format the guard judged")
+    }
+
+    /// Starts a press and holds its open on the queue, with the microphone opening.
+    private func opening(_ rig: Rig) async -> Task<String?, Never> {
+        rig.latch.arm()
+        let voice = rig.voice
+        let down = Task { await voice.pressDown(as: .chat) }
+        await settle("the open held on the queue") { rig.latch.waiting && voice.opening }
+        return down
+    }
+
+    /// A cancel while the open is in flight: it returns only once the engine the open started is
+    /// stopped, and the open's answer reaches nothing.
+    func testACancelWhileTheMicrophoneOpensStopsWhatTheOpenStarted() async {
+        let rig = await rig()
+        let down = await opening(rig)
+        let latch = rig.latch
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
+        rig.voice.cancel()
+        XCTAssertFalse(rig.voice.inputRunning, "the cancel returned with the engine still running")
+        XCTAssertFalse(rig.voice.inputTapped)
+        _ = await down.value
+        XCTAssertFalse(rig.voice.listening)
+        XCTAssertFalse(rig.voice.opening)
+        XCTAssertEqual(rig.voice.sessions, 0)
+        XCTAssertFalse(rig.voice.inputRunning)
+    }
+
+    /// An interruption's start while the open is in flight ends the press, carried or not: an
+    /// engine started on the session the interruption took is the crash the rule is there for.
+    func testAnInterruptionWhileTheMicrophoneOpensEndsThePress() async {
+        let rig = await rig()
+        rig.voice.carries = { true }
+        let down = await opening(rig)
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        let latch = rig.latch
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { latch.open() }
+        _ = await down.value
+        await settle("the interruption's handler") { !rig.voice.opening }
+        XCTAssertFalse(rig.voice.listening, "the microphone opened across the interruption")
+        XCTAssertFalse(rig.voice.suspended)
+        XCTAssertFalse(rig.voice.inputRunning)
+    }
+
+    /// The call's placing while the open is in flight ends the press: the session is the
+    /// system's from here, and an engine started on it is the call's defect. The cancel returns
+    /// only once what the open started has stopped.
+    func testACallPlacedWhileTheMicrophoneOpensEndsThePress() async {
+        let rig = await rig()
+        let down = await opening(rig)
+        let latch = rig.latch
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
+        rig.voice.call(.placing)
+        XCTAssertFalse(rig.voice.inputRunning, "the placing returned with the engine still running")
+        XCTAssertFalse(rig.voice.opening)
+        _ = await down.value
+        XCTAssertFalse(rig.voice.listening, "the microphone opened under the call's placing")
+        XCTAssertEqual(rig.voice.sessions, 0)
+        XCTAssertFalse(rig.voice.inputRunning)
+    }
+
+    /// A media services reset while the open is in flight: no handle is made on the dead server
+    /// once the open sees it, and whatever it made is dropped; nothing listens.
+    func testAResetWhileTheMicrophoneOpensLeavesNothingRunning() async {
+        let rig = await rig()
+        let down = await opening(rig)
+        rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        rig.latch.open()
+        _ = await down.value
+        await settle("the reset's handlers") { !rig.voice.opening }
+        XCTAssertFalse(rig.voice.listening, "the microphone opened across a media services reset")
+        XCTAssertFalse(rig.voice.inputRunning)
+        XCTAssertEqual(rig.voice.sessions, 0)
+    }
+
+    /// While the open is in flight the session is kept as for an open microphone: a change of
+    /// voice processing waits and is applied once the microphone has closed.
+    func testTheSessionIsNotReconfiguredUnderAnOpenInFlight() async {
+        let rig = await rig()
+        let down = await opening(rig)
+        let configures = rig.seams.records.count
+        rig.audio.wantVoiceProcessing(!rig.audio.voiceProcessed)
+        XCTAssertEqual(rig.seams.records.count, configures, "the session was reconfigured under an open in flight")
+        rig.latch.open()
+        _ = await down.value
+        XCTAssertTrue(rig.voice.listening)
+        XCTAssertEqual(rig.seams.records.count, configures, "the session was reconfigured under the open microphone")
+        rig.voice.cancel()
+        XCTAssertGreaterThan(rig.seams.records.count, configures, "what waited was not applied at the close")
+    }
+
+    /// A reply landing while the open is in flight is not read into the opening microphone: it
+    /// waits, and is read once the microphone has closed.
+    func testAReplyLandingWhileTheMicrophoneOpensWaits() async {
+        let rig = await rig()
+        defer { rig.speaker.stop() }
+        let down = await opening(rig)
+        XCTAssertTrue(rig.speaker.speak("Paris is the capital.", answering: "earlier"))
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(rig.speaker.speaking, "the reply was read into the opening microphone")
+        XCTAssertTrue(rig.speaker.waitingForMicrophone)
+        rig.latch.open()
+        _ = await down.value
+        XCTAssertTrue(rig.voice.listening)
+        XCTAssertFalse(rig.speaker.speaking)
+        rig.voice.cancel()
+        await settle("the reply to be read once the microphone closed") { rig.speaker.report.started }
     }
 }

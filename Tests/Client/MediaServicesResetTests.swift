@@ -11,34 +11,41 @@ import XCTest
 /// microphone's and the play queue's alike), and the reader of the input node's two formats.
 @MainActor
 final class Seams {
-    /// What ran, in the order it ran.
-    private(set) var lines: [String] = []
+    /// What ran, in the order it ran. Written from the input's queue too (`makeEngine`,
+    /// `readFormats`), under `lock`; the suite reads it on the main actor once the open has answered.
+    nonisolated(unsafe) private(set) var lines: [String] = []
+    /// Guards what the input's queue writes.
+    nonisolated let lock = NSRecursiveLock()
     /// The record flag each configure was asked for, which is how a released claim is seen.
-    private(set) var records: [Bool] = []
+    nonisolated(unsafe) private(set) var records: [Bool] = []
     /// Whether each configure was asked for the voice processing mode, beside `records`.
     private(set) var modes: [Bool] = []
     /// Set to make the configure step throw, as an activation refused behind Settings does.
     var activationError: Error?
     /// What the format reader reports in place of the engine's own formats; nil leaves it
     /// reading the node, which is how a test that installs a tap gets a format the node accepts.
-    var stubFormats: (client: AVAudioFormat, hardware: AVAudioFormat)?
+    nonisolated(unsafe) var stubFormats: (client: AVAudioFormat, hardware: AVAudioFormat)?
     /// The client format the reader last handed over, which is the object the tap must carry.
-    private(set) var lastClient: AVAudioFormat?
-    private(set) var engines: [AVAudioEngine] = []
+    nonisolated(unsafe) private(set) var lastClient: AVAudioFormat?
+    nonisolated(unsafe) private(set) var engines: [AVAudioEngine] = []
+    /// Whether each input engine was made, its formats read and its voice processing set off the
+    /// main thread, in the order they ran.
+    nonisolated(unsafe) private(set) var offMain: [Bool] = []
     /// The microphone's engines made, play engines left out.
     var inputEngines: Int { engines.filter { $0 is CapturingEngine }.count }
-    private(set) var formatReads = 0
+    nonisolated(unsafe) private(set) var formatReads = 0
     /// Each voice processing a press asked its engine for, with the format reads, whether the
     /// engine was running and how many configures the session had been asked for at that moment: the offline engine has no voice unit to turn on.
-    private(set) var processing: [(on: Bool, formatReads: Int, running: Bool, configures: Int)] = []
+    nonisolated(unsafe) private(set) var processing: [(on: Bool, formatReads: Int, running: Bool, configures: Int)] = []
     /// Set to make the voice processing step throw, as a node that will not take the unit does.
-    var processingError: Error?
+    nonisolated(unsafe) var processingError: Error?
 
     struct Refused: Error {}
 
     /// Drops what has been logged, so a test asserts on the order of the part it is about rather
     /// than on the setup in front of it.
     func forget() {
+        lock.lock(); defer { lock.unlock() }
         lines = []
         records = []
         modes = []
@@ -47,6 +54,7 @@ final class Seams {
     }
 
     func configure(_ record: Bool, _ processed: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
         records.append(record)
         modes.append(processed)
         if let activationError {
@@ -63,6 +71,7 @@ final class Seams {
     var categoryError: Error?
 
     func setCategory(_ record: Bool, _ processed: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
         categories.append((record, processed))
         if let categoryError {
             lines.append("category failed")
@@ -77,6 +86,7 @@ final class Seams {
     var deactivationError: Error?
 
     func deactivate(_ notifyingOthers: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
         if let deactivationError {
             lines.append("deactivate failed")
             throw deactivationError
@@ -88,7 +98,9 @@ final class Seams {
     /// An engine in offline manual rendering: it starts, and its input node hands over a format
     /// and takes a tap, on a host with no audio device at all. Its input node records the format
     /// each tap is installed with.
-    func makeEngine() -> AVAudioEngine {
+    nonisolated func makeEngine() -> AVAudioEngine {
+        lock.lock(); defer { lock.unlock() }
+        offMain.append(!Thread.isMainThread)
         lines.append("engine made")
         let engine = CapturingEngine()
         let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
@@ -97,12 +109,16 @@ final class Seams {
         return engine
     }
 
-    func process(_ engine: AVAudioEngine, _ on: Bool) throws {
+    nonisolated func process(_ engine: AVAudioEngine, _ on: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        offMain.append(!Thread.isMainThread)
         processing.append((on, formatReads, engine.isRunning, records.count))
         if let processingError { throw processingError }
     }
 
-    func readFormats(_ engine: AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat) {
+    nonisolated func readFormats(_ engine: AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat) {
+        lock.lock(); defer { lock.unlock() }
+        offMain.append(!Thread.isMainThread)
         lines.append("formats read")
         formatReads += 1
         let read = stubFormats ?? (engine.inputNode.outputFormat(forBus: 0),
@@ -121,6 +137,7 @@ final class Seams {
     /// The play queue's engine: offline manual rendering, so it starts and plays on a host with
     /// no audio device, and its player reclassed so every buffer scheduled on it is counted.
     func makePlayEngine(rate: Int) -> AVAudioEngine {
+        lock.lock(); defer { lock.unlock() }
         lines.append("engine made")
         let engine = CapturingPlayEngine()
         engine.seams = self
@@ -603,10 +620,10 @@ final class MediaServicesResetTests: XCTestCase {
         let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         XCTAssertEqual(seams.engines.count, 0, "nothing is built in the handler")
-        voice.press(as: .chat, mine: 1)
+        await voice.press(as: .chat, mine: 1)
         XCTAssertEqual(seams.lines, ["activate ok", "engine made", "formats read"])
         XCTAssertNil(voice.refusal)
-        XCTAssertTrue(voice.tapped, "the tap is installed only after all three")
+        XCTAssertTrue(voice.inputTapped, "the tap is installed only after all three")
         XCTAssertTrue(voice.listening)
         voice.cancel()
     }
@@ -618,8 +635,8 @@ final class MediaServicesResetTests: XCTestCase {
         let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         CapturingInputNode.installed = nil
-        voice.press(as: .chat, mine: 1)
-        XCTAssertTrue(voice.tapped)
+        await voice.press(as: .chat, mine: 1)
+        XCTAssertTrue(voice.inputTapped)
         XCTAssertEqual(seams.formatReads, 1, "the input node's format is read once and no more")
         XCTAssertTrue(CapturingInputNode.installed === seams.lastClient,
                       "a second read could be a route change later, which is what installTap raises on")
@@ -634,16 +651,16 @@ final class MediaServicesResetTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         seams.activationError = Seams.Refused()
-        voice.press(as: .chat, mine: 1)
+        await voice.press(as: .chat, mine: 1)
         XCTAssertEqual(seams.engines.count, 0, "no engine is built under a dead session")
         XCTAssertEqual(seams.formatReads, 0, "no format is read from one either")
-        XCTAssertFalse(voice.tapped)
+        XCTAssertFalse(voice.inputTapped)
         XCTAssertEqual(voice.refusal?.hasPrefix("the audio session did not activate:"), true)
         XCTAssertNil(voice.owner)
         XCTAssertFalse(voice.listening)
         XCTAssertEqual(seams.records.last, false, "the record claim is released")
         let tried = seams.lines.count
-        voice.press(as: .chat, mine: 2)
+        await voice.press(as: .chat, mine: 2)
         XCTAssertGreaterThan(seams.lines.count, tried, "the next press configures again")
         XCTAssertEqual(seams.engines.count, 0)
     }
@@ -681,14 +698,14 @@ final class MediaServicesResetTests: XCTestCase {
             audio.wantRecord(true, for: .warm)
             seams.forget()
             seams.stubFormats = (client, hardware)
-            voice.press(as: .chat, mine: 1)
-            XCTAssertFalse(voice.tapped, name)
+            await voice.press(as: .chat, mine: 1)
+            XCTAssertFalse(voice.inputTapped, name)
             XCTAssertEqual(voice.refusal, VoiceInput.noInput, name)
             XCTAssertNil(voice.owner, name)
             XCTAssertFalse(voice.listening, name)
             XCTAssertEqual(seams.lines, ["engine made", "formats read"], name)
             // The next press finds neither the engine nor the session it just refused on.
-            voice.press(as: .chat, mine: 2)
+            await voice.press(as: .chat, mine: 2)
             XCTAssertEqual(seams.lines, ["engine made", "formats read",
                                          "activate ok", "engine made", "formats read"],
                            "\(name): the engine was dropped and the session invalidated")
@@ -704,7 +721,7 @@ final class MediaServicesResetTests: XCTestCase {
         let voice = await voiceInput(seams, audio, center)
         audio.wantRecord(true, for: .warm)
         seams.forget()
-        voice.press(as: .chat, mine: 1)
+        await voice.press(as: .chat, mine: 1)
         XCTAssertTrue(voice.listening)
         XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
         XCTAssertEqual(seams.engines.count, 1)
@@ -713,9 +730,9 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "the press was torn down")
         XCTAssertNil(voice.owner)
         XCTAssertFalse(voice.handsFree)
-        XCTAssertFalse(voice.tapped)
+        XCTAssertFalse(voice.inputTapped)
         XCTAssertEqual(seams.engines.count, 1, "no engine is built in the handler")
-        voice.press(as: .chat, mine: 2)
+        await voice.press(as: .chat, mine: 2)
         XCTAssertEqual(seams.engines.count, 2, "the next press builds one")
         voice.cancel()
     }
@@ -730,7 +747,7 @@ final class MediaServicesResetTests: XCTestCase {
                     userInfo: [AVAudioSessionInterruptionTypeKey: began])
         await drain()
         XCTAssertEqual(seams.engines.count, 0, "a teardown with no press builds and reads nothing")
-        XCTAssertFalse(voice.tapped)
+        XCTAssertFalse(voice.inputTapped)
     }
 
     // MARK: Speaker
