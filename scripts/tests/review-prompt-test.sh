@@ -262,7 +262,7 @@ scoped_is() {
     "A new finding in the change since, and an earlier finding still open, block by the ordinary rule." \
     "A finding in code the change since does not touch does not block, whatever it is" \
     "reported, says in its text that it is not blocking, and does not by itself set \`blocking\`." \
-    "The coordinator writes it to the ledger as deferred, and it does not extend the loop."; do
+    "The PM writes it to the ledger as deferred, and it does not extend the loop."; do
     if grep -qF -- "$clause" <<<"$text"; then present="$present [$clause]"; else missing="$missing [$clause]"; fi
   done
   if grep -qF -- "read the whole PR again" <<<"$text"; then
