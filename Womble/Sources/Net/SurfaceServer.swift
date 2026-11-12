@@ -33,8 +33,6 @@ final class SurfaceServer {
         roster.rosterChanged = { [weak self] in self?.republish() }
     }
 
-    var isAdvertising: Bool { listener != nil && failure == nil }
-
     func start() {
         guard listener == nil else { return }
         let listener: NWListener

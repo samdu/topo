@@ -4,7 +4,6 @@ import Foundation
 /// size read in, and a reply of that header, that question and whole resource records written out
 /// (names uncompressed).
 public struct DNSQuery: Equatable, Sendable {
-    public static let typeCNAME: UInt16 = 5
     public static let typeOPT: UInt16 = 41
     public static let typeANY: UInt16 = 255
     public static let classIN: UInt16 = 1
