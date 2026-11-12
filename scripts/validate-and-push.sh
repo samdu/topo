@@ -153,9 +153,10 @@ die() { echo "error: $*" >&2; exit 2; }
 # When a pid began, as ps's lstart gives it in one zone and one locale whatever the caller's are,
 # so two runs from two sessions read the same words. Empty for a pid that is not running.
 # A command is given its locale through env, never as an assignment of the shell's own: bash
-# sets its own locale again after such an assignment, and a Homebrew bash (5.3.15) linked to
-# gettext asks CoreFoundation for the preferred languages to do it, which in a forked subshell
-# can segfault the subshell (a keeper that dies reads as a red suite).
+# sets its own locale again after such an assignment, and a Homebrew bash linked to gettext's
+# libintl, with LANG and LC_ALL unset, asks CoreFoundation for the preferred languages to do
+# it, which inside a forked subshell (`$( … )`) on an account whose AppleLocale carries a
+# region override (`@rg=`) can segfault the subshell (a keeper that dies reads as a red suite).
 began_of() { env LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null || true; }
 # A run's mark on its logs, its pid and when that began: true while that run is going. A pid
 # alone can be another process's by then.
@@ -444,7 +445,7 @@ git -C "$checkout" checkout --quiet --force --detach "$sha" 6>&- 9>&- && git -C 
 [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || refuse "$checkout is not at $sha"
 cd "$checkout" || refuse "could not enter $checkout"
 # The check runs as the suite will: a login shell, as the session'"'"'s user where the Mac has a
-# way into it, so the bash, jq and node it finds are the ones the suite'"'"'s will.
+# way into it, so the jq, node and python3 it finds are the ones the suite'"'"'s will.
 session="${TOPO_VALIDATE_SESSION_RUN-/usr/local/libexec/gui-session-run}"
 as_suite() { if [ -n "$session" ] && [ -x "$session" ]; then sudo -n "$session" "$@"; else "$@"; fi; }
 as_suite /bin/bash -lc "cd \"$checkout\" && exec scripts/mac-suite.sh --check --cache \"$cache\" $suite" 6>&- 9>&- || exit 76
