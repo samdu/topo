@@ -38,6 +38,8 @@ final class FakeWorkingPlayer: WorkingPlayer {
         isPlaying = false
     }
 
+    func stop() { isPlaying = false }
+
     func setVolume(_ volume: Float, fadeDuration: TimeInterval) {
         fades.append((volume, fadeDuration))
         self.volume = volume

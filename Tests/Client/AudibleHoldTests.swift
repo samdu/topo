@@ -39,8 +39,17 @@ final class PhasedPlayer: WorkingPlayer {
         self.volume = volume
     }
 
+    func stop() {
+        moments.append(("stop", phase()))
+        isPlaying = false
+    }
+
     /// The system stopped the player under whoever wanted it, as an interruption does.
     func interrupted() { isPlaying = false }
+
+    /// The player says it is playing with nothing heard of it, as one made on a session that
+    /// changed hands under it can.
+    func readsAsPlaying() { isPlaying = true }
 }
 
 /// A voice whose every sentence waits for the test to let it go, and then yields the frames the
@@ -103,7 +112,9 @@ final class AudibleHoldTests: XCTestCase {
     @MainActor final class Players {
         private(set) var made: [PhasedPlayer] = []
         var phase: @MainActor () -> AudioSession.CallPhase = { .none }
-        var bed: PhasedPlayer? { made.first { $0.name == KeeperSounds.bedFile } }
+        /// The bed's players, in the order made: one is made again at a call's activation.
+        var beds: [PhasedPlayer] { made.filter { $0.name == KeeperSounds.bedFile } }
+        var bed: PhasedPlayer? { beds.last }
         func make(_ url: URL) -> PhasedPlayer {
             let player = PhasedPlayer(url: url)
             player.phase = phase
@@ -448,55 +459,98 @@ final class AudibleHoldTests: XCTestCase {
     // MARK: - The call
 
     /// Review Focus 3: the call's placing pauses the bed before `callPlaced` sets the category,
-    /// and that category is the one change the session sees until the activation, which plays the
-    /// bed again; at the call's end the bed is paused before `callOver`.
+    /// and that category is the one change the session sees until the activation, which stops
+    /// the player made before it and plays a new one on the activated session; at the call's end
+    /// the bed is paused before `callOver`.
     func testTheCallsSessionChangingHandsPausesTheBedFirst() async throws {
         let rig = await rig()
         let system = FakeCallSystem()
         let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
         rig.speaker.attach(call)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        let bed = try XCTUnwrap(rig.players.bed)
-        XCTAssertTrue(bed.isPlaying)
+        let first = try XCTUnwrap(rig.players.bed)
+        XCTAssertTrue(first.isPlaying)
         rig.seams.forget()
 
         call.start()
         call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
         XCTAssertEqual(rig.audio.call, .placed)
-        XCTAssertFalse(bed.isPlaying, "the bed played on while the call's session changed hands")
-        XCTAssertEqual(bed.moments.last?.what, "pause")
-        XCTAssertEqual(bed.moments.last?.call, AudioSession.CallPhase.none, "the bed was paused after the category changed")
+        XCTAssertFalse(first.isPlaying, "the bed played on while the call's session changed hands")
+        XCTAssertEqual(first.moments.last?.what, "pause")
+        XCTAssertEqual(first.moments.last?.call, AudioSession.CallPhase.none, "the bed was paused after the category changed")
         XCTAssertEqual(rig.seams.lines, ["category set"], "the session was touched beside the placing's category")
 
         call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
         XCTAssertEqual(rig.audio.call, .active)
-        XCTAssertTrue(bed.isPlaying, "the activation did not bring the bed back")
-        XCTAssertEqual(bed.moments.last?.what, "play")
-        XCTAssertEqual(bed.moments.last?.call, .active)
+        let activated = try XCTUnwrap(rig.players.bed)
+        XCTAssertFalse(activated === first, "the activation played the player made before the session changed hands")
+        XCTAssertEqual(first.moments.last?.what, "stop")
+        XCTAssertTrue(activated.isPlaying, "the activation did not bring the bed back")
+        XCTAssertEqual(activated.moments.last?.what, "play")
+        XCTAssertEqual(activated.moments.last?.call, .active)
 
         // The lock's `.began` under the active call stops the player; the session stays live and
         // the bed is played again at once.
-        bed.interrupted()
+        activated.interrupted()
         rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
-        await settle("the bed to be played again under the call") { bed.isPlaying }
-        XCTAssertEqual(bed.moments.last?.call, .active)
+        await settle("the bed to be played again under the call") { rig.players.bed?.isPlaying == true }
+        let locked = try XCTUnwrap(rig.players.bed)
+        XCTAssertEqual(locked.moments.last?.call, .active)
 
         // A phone call takes the session with the call standing: paused before Topo marks it
         // taken, and back at the next activation.
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
         XCTAssertEqual(rig.audio.call, .deactivated)
-        XCTAssertFalse(bed.isPlaying, "the bed played on with the session taken")
-        XCTAssertEqual(bed.moments.last?.what, "pause")
-        XCTAssertEqual(bed.moments.last?.call, .active, "the bed was paused after Topo marked the session taken")
+        XCTAssertFalse(locked.isPlaying, "the bed played on with the session taken")
+        XCTAssertEqual(locked.moments.last?.what, "pause")
+        XCTAssertEqual(locked.moments.last?.call, .active, "the bed was paused after Topo marked the session taken")
         call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
-        XCTAssertTrue(bed.isPlaying, "the bed did not come back after the session was given back")
+        XCTAssertTrue(rig.players.bed?.isPlaying == true, "the bed did not come back after the session was given back")
 
         call.end()
         call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
-        let pauses = bed.moments.filter { $0.what == "pause" }
+        let pauses = rig.players.beds.flatMap { $0.moments.filter { $0.what == "pause" } }
         XCTAssertEqual(pauses.count, 3, "the call's end did not pause the bed")
         XCTAssertNotEqual(pauses.last?.call, AudioSession.CallPhase.none, "the bed was paused after the call was over")
+        XCTAssertEqual(rig.players.beds.filter(\.isPlaying).count, 1, "more than one bed player is playing after the call")
+        rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// The device's order behind the lock: the bed begins under a release's decode, the lock's
+    /// `.began` stops it, the call is placed for the release, the send's wait is taken while the
+    /// call is placed, and the player made before the session changed hands says it is playing
+    /// with nothing heard. The activation stops it and plays a new one at the bed's level.
+    func testAReleasesCallBringsTheBedBackAtItsActivation() async throws {
+        let rig = await rig(isActive: false)
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        let release = try XCTUnwrap(rig.speaker.releasing())
+        rig.speaker.utteranceTaken()
+        let first = try XCTUnwrap(rig.players.bed)
+        XCTAssertTrue(first.isPlaying)
+
+        first.interrupted()
+        rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                        userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        await settle("the lock's interruption to reach the speaker") { rig.speaker.keeperTransitions.contains("stopped") }
+
+        call.start()
+        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
+        XCTAssertEqual(rig.audio.call, .placed)
+        rig.speaker.sending(under: release)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        first.readsAsPlaying()
+
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(rig.audio.call, .active)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertFalse(bed === first, "the activation trusted the player made before the session changed hands")
+        XCTAssertFalse(first.isPlaying, "the player made before the session changed hands was left running")
+        XCTAssertTrue(bed.isPlaying, "the activation did not bring the bed back")
+        XCTAssertEqual(bed.moments.last?.call, .active)
+        XCTAssertEqual(bed.volume, KeeperSounds.bedVolume, "the bed came back silent")
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 

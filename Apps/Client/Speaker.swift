@@ -204,7 +204,7 @@ final class Speaker {
             guard let self else { return }
             onCall?(.placing)
             // The bed's player is a handle on the session too: paused before the category
-            // changes, kept wanted, and played again by the activation's resume.
+            // changes and kept wanted; the activation plays the bed on a new player.
             sounds?.pause("the call is being placed")
             // The session is the system's from here until it activates it: a frame scheduled
             // meanwhile would be heard twice once the activation's rebuild puts it back, so the
@@ -215,7 +215,11 @@ final class Speaker {
         call.onActive = { [weak self] in
             guard let self else { return }
             audio.callActivated()
+            // The bed's player was made on the session before the system took it.
+            sounds?.renew("the call's session is active")
             resumeAudio("the call's session is active")
+            // Asked again from what stands, not from what the bed last remembered.
+            askForBed()
             // A reply that landed while the session was changing hands is read now.
             readWhatWaited()
             onCall?(.active)
@@ -317,7 +321,11 @@ final class Speaker {
         queue.interrupted()
         // Under an active call the session stays live through the `.began` the lock posts, and
         // the system holds it: a bed it stopped is played again now, since no `.ended` need come.
-        if audio.call == .active { sounds?.resume() }
+        if audio.call == .active {
+            sounds?.renew("the lock's interruption under the call")
+            sounds?.resume()
+            askForBed()
+        }
     }
 
     /// Something says the audio can run again. The queue puts back what it owed on a fresh engine
@@ -1036,13 +1044,18 @@ final class Speaker {
     private func drained() {
         guard making == 0 else { return }
         // A drain that reached main after the next sentence's frames were queued is no gap.
-        if written?.live == true { if queue.isIdle { heardOut() } } else { finished() }
+        if written?.live == true {
+            if queue.isIdle { heardOut() } else { AudioLog.say("a drain with frames still queued: no gap") }
+        } else { finished() }
     }
 
     /// The voice has said everything it has and the guest is still writing: the bed fills the
     /// gap until the next frame.
     private func heardOut() {
-        guard speaking, answering, !voiceGap else { return }
+        guard speaking, answering, !voiceGap else {
+            if !answering { AudioLog.say("the voice is heard out under a reading that answers no turn: no bed") }
+            return
+        }
         voiceGap = true
         AudioLog.say("the voice is heard out with the guest still writing")
         askForBed()

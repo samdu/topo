@@ -42,6 +42,7 @@ protocol WorkingPlayer: AnyObject {
     var isPlaying: Bool { get }
     @discardableResult func play() -> Bool
     func pause()
+    func stop()
     func setVolume(_ volume: Float, fadeDuration: TimeInterval)
 }
 
@@ -70,6 +71,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
     var isPlaying: Bool { player.isPlaying }
     func play() -> Bool { player.play() }
     func pause() { player.pause() }
+    func stop() { player.stop() }
     func setVolume(_ volume: Float, fadeDuration: TimeInterval) { player.setVolume(volume, fadeDuration: fadeDuration) }
 }
 
@@ -381,6 +383,9 @@ final class KeeperSounds {
         // An interruption stops the player under a bed that is still wanted, so "already on" has
         // to mean "still playing" too.
         if want == bedWanted, !want || bed?.isPlaying == true { return }
+        // A bed wanted and asked for again with one of its conditions gone is said, so a device
+        // run names which: the call's pause and an interruption leave nothing else saying it.
+        if on, !want, bedWanted { AudioLog.say("the working bed is not wanted: \(whyNot)") }
         bedWanted = want
         parking?.cancel()
         parking = nil
@@ -403,7 +408,10 @@ final class KeeperSounds {
             bed.setVolume(target, fadeDuration: Self.fadeIn)
             AudioLog.say("the working bed fades in")
         } else {
-            guard let bed, bed.isPlaying else { return }
+            guard let bed, bed.isPlaying else {
+                AudioLog.say("the working bed is let go of with its player stopped")
+                return
+            }
             // Held through the fade, since the wait that wanted it is ending; then paused rather
             // than stopped, so the next wait picks the loop up where this one left it. The hold
             // is a sound's and asks the same of the session: on one that is not live (the
@@ -434,14 +442,29 @@ final class KeeperSounds {
     /// The call's session is changing hands (placed, taken by a phone call, or over): the bed's
     /// player is stopped before Topo's session moves for it — before `callPlaced` sets the call's
     /// category, and before `callDeactivated` and `callOver`'s hand-back (the system has already
-    /// taken the session at those two) — and stays wanted, so the activation's resume (`resume`)
-    /// plays it again. Nothing is asked of the session and no hold is taken; a fade is stopped
+    /// taken the session at those two) — and stays wanted, so the activation plays it again on a
+    /// new player (`renew`, then `resume`). Nothing is asked of the session and no hold is taken; a fade is stopped
     /// where it is, and its hold goes at its own `park`.
     func pause(_ why: String) {
         dropStale()
-        guard let bed, bed.isPlaying else { return }
+        guard let bed, bed.isPlaying else {
+            if bedWanted { AudioLog.say("the working bed was already stopped: \(why)") }
+            return
+        }
         bed.pause()
         AudioLog.say("the working bed is paused: \(why)")
+    }
+
+    /// The call's session is the system's and live: a bed player made on the session before it
+    /// changed hands is stopped and let go, since what it says of itself (`isPlaying`) is not to
+    /// be trusted across the change, and the resume after this makes one on the session as it now
+    /// is. Still wanted, so the resume plays it at the level the microphone asks for.
+    func renew(_ why: String) {
+        dropStale()
+        guard let bed else { return }
+        bed.stop()
+        self.bed = nil
+        AudioLog.say("the working bed's player is made again: \(why)")
     }
 
     /// The speaker's engine is back after an interruption: a bed still wanted and not playing
@@ -449,8 +472,12 @@ final class KeeperSounds {
     /// wanted for the next.
     func resume() {
         dropStale()
-        guard bedWanted, bed?.isPlaying != true else { return }
-        bedWanted = false
+        guard bedWanted, bed?.isPlaying != true else {
+            if bedWanted { AudioLog.say("the working bed plays on") } else if bed != nil { AudioLog.say("the working bed is not brought back: it is not wanted") }
+            return
+        }
+        // Still wanted and not playing, which `working` plays again; a condition gone since is
+        // said there and the bed let go.
         working(true)
     }
 
@@ -463,6 +490,14 @@ final class KeeperSounds {
         ducked = open
         guard bedWanted, let bed, bed.isPlaying else { return }
         bed.setVolume(open ? Self.duckedVolume : Self.bedVolume, fadeDuration: 0.15)
+    }
+
+    /// Which of the bed's conditions fails, for the line that says it is not wanted.
+    private var whyNot: String {
+        if WorkingSounds.mode(defaults) != .sounds { return "the mode is \(WorkingSounds.mode(defaults))" }
+        if !Mute.readsAloud(defaults) { return "replies are muted" }
+        if !audio.heldForATurn { return "no turn's hold stands" }
+        return "the voice is speaking"
     }
 
     private var target: Float { microphoneOpen() ? Self.duckedVolume : Self.bedVolume }
