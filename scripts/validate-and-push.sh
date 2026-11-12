@@ -191,8 +191,8 @@ if [ "$hold" = no ]; then
   fi
 
   # A push to a ready PR whose newest Codex verdict read an earlier head starts a review round
-  # nobody chose, out of the four the cap allows: a fix after a verdict goes to a draft, which the
-  # coordinator marks ready when it wants the round. Asked before any suite runs, so a refusal
+  # nobody chose, out of the three the cap allows: a fix after a verdict goes to a draft, which the
+  # engineer marks ready when it wants the round. Asked before any suite runs, so a refusal
   # costs no queue. --after-verdict is the push meant anyway. A PR list or a comment read that
   # fails is said and refuses nothing, since GitHub being slow is no reason to hold a push.
   if [ "$push" = yes ] && [ "$already_pushed" = no ] && [ "$after_verdict" = no ]; then
@@ -207,7 +207,7 @@ if [ "$hold" = no ]; then
             && newest="$(tail -n 1 <<<"$marks" | jq -r 'select(. != null)' 2>/dev/null)"; then
           read_at="$(sed -n '2s/^<!-- agent-review-sha: \([0-9a-f]*\) -->$/\1/p' <<<"$newest")"
           if [ -n "$read_at" ] && [ "$read_at" != "$sha" ]; then
-            die "#${open_pr%% *} is ready and its newest Codex verdict read ${read_at:0:7}: a push of $short to it starts another review round. Ask the coordinator to put it back to draft (gh pr ready ${open_pr%% *} --undo), or pass --after-verdict to push it anyway."
+            die "#${open_pr%% *} is ready and its newest Codex verdict read ${read_at:0:7}: a push of $short to it starts another review round. Put it back to draft first (gh pr ready ${open_pr%% *} --undo), or pass --after-verdict to push it anyway."
           fi
         else
           echo "warning: could not read #${open_pr%% *}'s comments to see whether a verdict stands; going on." >&2
