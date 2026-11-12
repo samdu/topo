@@ -11,6 +11,9 @@ struct ActivityTool: Tool {
     var keeper: @MainActor @Sendable () -> ActivityKeeper
     var fetcher: TrackerFetcher = URLTrackerFetcher()
     var now: @Sendable () -> Date = { Date() }
+    /// Awaited by a start, an update or an end before it goes to the main actor: a test parks the
+    /// call there.
+    var parked: @Sendable () async -> Void = {}
 
     let name = "activity"
     let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, or a countdown with no sound (a timer that sounds is topo timer)"
@@ -56,15 +59,32 @@ struct ActivityTool: Tool {
         case ("example", 1):
             return .ok(Self.example(now: now()) + "\n")
         case ("start", 3):
-            return await start(slot: arguments[1], json: arguments[2])
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            await parked()
+            return await start(slot: arguments[1], json: arguments[2], login: login)
         case ("update", 3):
-            return await update(id: arguments[1], json: arguments[2])
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            await parked()
+            return await update(id: arguments[1], json: arguments[2], login: login)
         case ("end", let count) where (2...5).contains(count):
-            return await end(Array(arguments.dropFirst()))
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            await parked()
+            return await end(Array(arguments.dropFirst()), login: login)
         default:
             return .usage("topo: activity takes nothing, start, update, end or example\n\n\(usage)\n")
         }
     }
+
+    /// The login a start, an update or an end acts under: the mark its launch was started under,
+    /// which the tool service's listener hands every call it accepts (`LaunchPorts`,
+    /// `ToolCall.context`). One taken at the call's first hop to the main actor could be taken
+    /// after a sign-out and the next sign-in both ran ahead of it, and would let the last login's
+    /// call act on the next one's activities.
+    private static func callLogin() -> LoginLife.Epoch? { ToolCall.context as? LoginLife.Epoch }
+
+    private static let loginEnded = ToolReply.failed("topo: the login this call came from has ended (a sign-out since the resident started); nothing changed\n")
+
+    private static let noLogin = ToolReply.failed("topo: this call carries no login; nothing changed\n")
 
     // MARK: Listing
 
@@ -93,7 +113,7 @@ struct ActivityTool: Tool {
     // MARK: Starting
 
     @MainActor
-    private func start(slot: String, json: String) async -> ToolReply {
+    private func start(slot: String, json: String, login: LoginLife.Epoch) async -> ToolReply {
         guard WidgetDocument.isSlot(slot) else {
             return .usage("topo: a slot is [a-z0-9-], at most 32 characters\n")
         }
@@ -104,8 +124,9 @@ struct ActivityTool: Tool {
             return .failed("topo: slot \(slot) is running as \(running.id); update or end it\n")
         }
         let keeper = keeper()
-        // Between a login's end and the next sign-in no epoch is current, and nothing starts.
-        guard keeper.login.epoch.isCurrent else {
+        // Between a login's end and the next sign-in no epoch is current, and nothing starts; nor
+        // does a call of a login that has ended, whatever stands now.
+        guard login.isCurrent else {
             return .failed("topo: the login has ended; nothing started\n")
         }
         // Held from here until the reply: a second start of the slot while this one fetches is refused.
@@ -114,7 +135,7 @@ struct ActivityTool: Tool {
         }
         // Released only under the login that reserved it: after the login ends the slot is another
         // start's to hold, and this one lets go of nothing.
-        let reserved = keeper.login.epoch
+        let reserved = login
         defer { if reserved.isCurrent { keeper.release(slot) } }
         let reading = ActivityDocument.read(json, now: now())
         guard case .read = reading.state else {
@@ -127,7 +148,7 @@ struct ActivityTool: Tool {
         // is the tracker drawn: it is what every later round draws too.
         if let poll = document.poll {
             if tracker != nil { notes.append(Self.trackerSetAside) }
-            let epoch = keeper.login.epoch
+            let epoch = login
             let data = await fetcher.fetch(poll)
             guard epoch.isCurrent else {
                 return .failed("topo: the login ended while the tracker was fetched; nothing started\n")
@@ -164,7 +185,7 @@ struct ActivityTool: Tool {
     // MARK: Updating
 
     @MainActor
-    private func update(id: String, json: String) async -> ToolReply {
+    private func update(id: String, json: String, login: LoginLife.Epoch) async -> ToolReply {
         let reading = ActivityDocument.read(json, now: now(), update: true)
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
@@ -172,7 +193,8 @@ struct ActivityTool: Tool {
         var notes = reading.notes
         if reading.document.poll != nil { notes.append(Self.pollStands) }
         let keeper = keeper()
-        let epoch = keeper.login.epoch
+        guard login.isCurrent else { return Self.loginEnded }
+        let epoch = login
         // Merged over the state the host holds when the gate opens, not as it was before the
         // wait, so a poll's round that passed first keeps its card.
         let reply = await keeper.changing(id) { record -> ToolReply in
@@ -198,7 +220,7 @@ struct ActivityTool: Tool {
     // MARK: Ending
 
     @MainActor
-    private func end(_ arguments: [String]) async -> ToolReply {
+    private func end(_ arguments: [String], login: LoginLife.Epoch) async -> ToolReply {
         let id = arguments[0]
         var rest = Array(arguments.dropFirst())
         var dismissal = ActivityDismissal.standard
@@ -229,7 +251,8 @@ struct ActivityTool: Tool {
         // else: a last document or the default dismissal is for one still running.
         let takesDown = reading == nil && dismissal != .standard
         let keeper = keeper()
-        let epoch = keeper.login.epoch
+        guard login.isCurrent else { return Self.loginEnded }
+        let epoch = login
         // Judged at the gate as the host then holds it: another end that passed first leaves this
         // one ended, and no second end is sent.
         let reply = await keeper.changing(id, ended: takesDown) { record -> ToolReply in

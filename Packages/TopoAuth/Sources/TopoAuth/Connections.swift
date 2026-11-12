@@ -73,7 +73,9 @@ public struct KeychainConnectionStore: ConnectionStore {
     }
 }
 
-/// For tests and previews.
+#if DEBUG
+/// For the tests, here rather than in a test target because the package's suite and the app's
+/// both use it, and the app's test bundle takes its packages from the app. A Release build has none.
 public final class InMemoryConnectionStore: ConnectionStore, @unchecked Sendable {
     private let lock = NSLock()
     private var connections: [ConnectionService: Connection]
@@ -86,3 +88,4 @@ public final class InMemoryConnectionStore: ConnectionStore, @unchecked Sendable
     }
     public func clear(_ service: ConnectionService) throws { _ = lock.withLock { connections.removeValue(forKey: service) } }
 }
+#endif
