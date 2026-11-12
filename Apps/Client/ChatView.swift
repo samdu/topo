@@ -920,12 +920,14 @@ enum ReadAloud {
 enum MicrophoneWatch {
     static func start(_ voice: VoiceInput, _ speaker: Speaker) {
         withObservationTracking {
-            _ = voice.listening
+            _ = voice.busy
         } onChange: { [weak voice, weak speaker] in
-            // Called as the value is about to change, so the answer is read on the next turn.
+            // Called as the value is about to change, so the answer is read on the next turn. An
+            // open still in flight is neither: the microphone has closed once neither stands, a
+            // reopen the speaker was never told of included.
             Task { @MainActor in
                 guard let voice, let speaker else { return }
-                if voice.listening { speaker.microphoneListening() } else { speaker.microphoneClosed() }
+                if voice.listening { speaker.microphoneListening() } else if !voice.busy { speaker.microphoneClosed() }
                 start(voice, speaker)
             }
         }

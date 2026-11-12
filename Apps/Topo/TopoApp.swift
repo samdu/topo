@@ -191,7 +191,7 @@ struct TopoApp: App {
         }
         // A reply is not read into an open microphone: one that lands while it is open waits for
         // it to close (`Speaker.speak`).
-        speaker.microphoneOpen = { voice.listening }
+        speaker.microphoneOpen = { voice.busy }
         // A press heard behind a turn on its way bleeps, whatever the press itself has ended.
         speaker.turnOnItsWay = { harness.turnOnItsWay }
         MicrophoneWatch.start(voice, speaker)

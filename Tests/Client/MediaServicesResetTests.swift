@@ -213,7 +213,29 @@ private final class CapturingPlayEngine: AVAudioEngine {
     }
 }
 
+/// The input engines running, counted by the engines themselves as they start and stop: read
+/// without going through `InputEngine`'s queue, so a stop that only queued itself shows.
+enum EngineWatch {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var count = 0
+    static var running: Int { lock.withLock { count } }
+    static func reset() { lock.withLock { count = 0 } }
+    fileprivate static func add(_ n: Int) { lock.withLock { count += n } }
+}
+
 private final class CapturingEngine: AVAudioEngine {
+    override func start() throws {
+        let was = isRunning
+        try super.start()
+        if !was, isRunning { EngineWatch.add(1) }
+    }
+
+    override func stop() {
+        let was = isRunning
+        super.stop()
+        if was, !isRunning { EngineWatch.add(-1) }
+    }
+
     override var inputNode: AVAudioInputNode {
         let node = super.inputNode
         object_setClass(node, CapturingInputNode.self)

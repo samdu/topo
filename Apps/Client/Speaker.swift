@@ -723,7 +723,7 @@ final class Speaker {
 
     /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
     /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
-    /// with `VoiceInput.listening`.
+    /// with `VoiceInput.busy`: open, or opening on the input's queue.
     var microphoneOpen: @MainActor () -> Bool = { false }
 
     /// The presses opening a microphone: counted at the press, before `VoiceInput` has awaited

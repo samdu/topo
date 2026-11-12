@@ -89,11 +89,13 @@ final class InputEngine: @unchecked Sendable {
     /// the guard judged, `prepare`, `start`. `resetsAt` is `resets` as read before the session was
     /// made active; a reset since refuses before the engine, the tap and the start. A refusal leaves
     /// nothing running: the tap off and the engine stopped, and dropped where its state is in doubt.
-    func open(suppress: Bool, resetsAt: Int, tap: Tap) async throws -> Opened {
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Opened, Error>) in
-            queue.async {
-                done.resume(with: Result { try self.openHere(suppress: suppress, resetsAt: resetsAt, tap: tap) })
-            }
+    ///
+    /// Put on the queue by the caller, synchronously, before it suspends: a teardown the caller
+    /// makes after this returns is behind the open on the queue, so its `stop` waits for it and
+    /// stops what it started. `done` is called on the queue.
+    func enqueueOpen(suppress: Bool, resetsAt: Int, tap: Tap, done: @escaping @Sendable (Result<Opened, Error>) -> Void) {
+        queue.async {
+            done(Result { try self.openHere(suppress: suppress, resetsAt: resetsAt, tap: tap) })
         }
     }
 

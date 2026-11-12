@@ -122,6 +122,7 @@ final class EarconsTests: XCTestCase {
     /// `hears`, sharing one audio session, with the speaker's earcons over the recorder's players.
     private func rig(hears: String = "", engine: any VoiceEngine = ScriptedVoice(),
                      permission: @escaping @MainActor () async -> Bool = { true },
+                     permitted: @escaping @MainActor () -> Bool = { true },
                      isActive: Bool = true,
                      heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
                      sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
@@ -147,9 +148,9 @@ final class EarconsTests: XCTestCase {
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
-                               permission: permission,
+                               permission: permission, permitted: permitted,
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.listening }
+        speaker.microphoneOpen = { input.busy }
         return Rig(speaker: speaker, voice: input, earcons: earcons, cues: cues, seams: seams,
                    audio: audio, center: center, defaults: defaults)
     }
@@ -322,7 +323,8 @@ final class EarconsTests: XCTestCase {
     /// and nothing sounds — not at the release, and not when the prompt is answered after it.
     func testAReleaseDuringThePermissionPromptSoundsNothing() async {
         let prompt = Prompt()
-        let rig = await rig(permission: { await prompt.answer() })
+        // Not yet granted, so the press asks: the system's prompt is up while the release lands.
+        let rig = await rig(permission: { await prompt.answer() }, permitted: { false })
         let sent = Sent()
         defer { rig.voice.cancel() }
 

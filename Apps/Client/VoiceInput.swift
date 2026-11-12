@@ -6,7 +6,8 @@ import Observation
 /// where it can be. The microphone opens as the thumb comes down; hold to talk and release to
 /// send, or tap to leave it open until the next press. Which a release is, is the gesture's word
 /// (`pressUp`'s `held`: SwiftUI's long press of `tapLimit` fired before the thumb came up), never
-/// a clock read here, so the time the app takes to open the microphone is no part of it. One object for the whole app, and one gate on its
+/// a clock read here; the open's engine work runs off the main thread so it does not delay that
+/// word, though a main thread stalled past `tapLimit` at the press makes a tap a hold. One object for the whole app, and one gate on its
 /// microphone, enforced: a surface that presses while another holds it is refused, because two
 /// gates on one input answer the same utterance twice. The microphone is asked for at the first press and nowhere earlier, and it is the only permission a press asks
 /// for: recognition is the phone's own.
@@ -84,10 +85,17 @@ final class VoiceInput {
     private let input: InputEngine
     /// True from a press handing its open to the input's queue until the open has answered: the
     /// microphone is opening, and a reply landing meanwhile waits for it as for an open one
-    /// (`Speaker.microphoneOpen`, which the app answers with `listening || opening`).
+    /// (`busy`).
     private(set) var opening = false
+    /// Whether the microphone is open or opening, whoever opened it — a thumb's press or a
+    /// conversation's reopen, which tells the speaker nothing else: what the app answers
+    /// `Speaker.microphoneOpen` with, and what `MicrophoneWatch` hears close.
+    var busy: Bool { listening || opening }
     /// The generation whose open `opening` stands for.
     private var openingFor: Int?
+    /// The generation of an open an interruption's start found in flight on a session the
+    /// conversation carries: it is suspended as it answers, its engine already dropped.
+    private var suspendWhenOpened: Int?
     /// The microphone prompt's answer: the system's in production, injected by the suite so a
     /// press can be driven through `pressDown` and `pressUp` without TCC.
     private let permission: @MainActor () async -> Bool
@@ -136,15 +144,16 @@ final class VoiceInput {
     /// press cancelled while it waited leaves nothing that reads as the next press's.
     private var settling: Int?
     /// The generation of a press whose tap's release came while its microphone was still opening
-    /// (the call's session settling): it opens hands-free once it is open.
+    /// (the call's session settling, the open in flight): it opens hands-free once it is open.
     private var tappedWhileOpening: Int?
     /// True while the press waits on the microphone prompt the system has put up: a release then
     /// is no verdict of the thumb's (the alert takes the touch), and it cancels the press.
     private var prompting = false
-    /// Presses `pressDown` ignored while a press waited out the call's session, whose releases
-    /// are owed nothing. Cleared at the next press that begins.
+    /// Presses `pressDown` ignored while another press was starting (the call's session settling,
+    /// the open in flight), whose releases are owed nothing. Cleared at the next press that begins.
     private var ignoredWhileSettling = 0
-    /// True from the press until the microphone is running: the permission prompts, mainly.
+    /// True from the press until the microphone is running: the permission prompt, the call's
+    /// session settling and the open on the input's queue.
     private var starting = false
     /// True from a release until the session is torn down: the wait for the last word.
     private(set) var ending = false
@@ -187,9 +196,15 @@ final class VoiceInput {
                 guard let self else { return }
                 // No input engine crosses a session event, a kept one included.
                 self.stopKeptInput("the interruption's start")
-                // An open in flight is not carried: it would start an engine on the session the
-                // interruption took. Its press is over; a conversation opens again on a live one.
-                if self.opening { return self.cancel() }
+                // An open in flight keeps no engine across the event: one it started is dropped
+                // as it answers. A session the conversation carries is suspended there, as an
+                // open one is below; any other press is over.
+                if self.opening {
+                    guard self.carries?() == true else { return self.cancel() }
+                    self.suspendWhenOpened = self.openingFor
+                    self.input.drop()
+                    return
+                }
                 // A session the conversation carries is suspended, never carried across the
                 // event on its engine: under the call's live session it is rebuilt at once
                 // (`Conversation`), otherwise at the call's activation.
@@ -307,6 +322,10 @@ final class VoiceInput {
     /// not running.
     func suspend(_ why: String) {
         guard listening, !ending, !starting, !suspended else { return }
+        suspendNow(why)
+    }
+
+    private func suspendNow(_ why: String) {
         suspended = true
         captioner?.cancel()
         captioner = nil
@@ -513,11 +532,18 @@ final class VoiceInput {
             }
         }
         let handed = ContinuousClock.now
-        let result = try await input.open(suppress: suppress, resetsAt: resetsAt, tap: tap)
+        let input = self.input, tap = self.tap
+        let answer: Result<InputEngine.Opened, Error> = await withCheckedContinuation { done in
+            // On the main actor, before the suspension: the open is on the queue ahead of any
+            // teardown made while this press waits for it.
+            input.enqueueOpen(suppress: suppress, resetsAt: resetsAt, tap: tap) { done.resume(returning: $0) }
+        }
         let answered = ContinuousClock.now - handed
         // Cancelled while it opened (a release, a cancel, an interruption, a reset's handler):
-        // whatever moved the generation tore it down, its engine stopped before it returned.
+        // whatever moved the generation tore it down, its engine stopped before it returned. A
+        // refusal from a superseded open is the newer press's business no more than a success.
         guard generation == at, owner == gate else { throw Superseded() }
+        let result = try answer.get()
         // A reset that landed while it opened, before this object's handler has run: the handles
         // just made are dead.
         guard audio.resets == resets else {
@@ -526,6 +552,10 @@ final class VoiceInput {
         }
         opened(result, suppress: suppress, resuming: false, mine: mine,
                main: "session \(Self.ms(session)), queue \(Self.ms(answered))")
+        if suspendWhenOpened == at {
+            suspendWhenOpened = nil
+            suspendNow("the interruption's start, while it opened")
+        }
     }
 
     /// A suspended session opened again on the session the call's activation made live: the same
