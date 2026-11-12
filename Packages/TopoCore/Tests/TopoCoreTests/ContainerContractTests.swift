@@ -32,16 +32,23 @@ import TopoCore
         }
     }
 
-    /// Every line of `text` that declares `name` as a static property, commented lines aside.
-    static func declarations(of name: String, in text: String) throws -> [String] {
-        try matches(#"^\s*(?:(?:public|private|fileprivate|internal)\s+)?static\s+(?:let|var)\s+"# + name + #"\b.*$"#,
-                    in: text)
+    /// The Swift in `path` with its comments taken out: every `/* … */`, whatever lines it spans,
+    /// and every `//` to the end of its line.
+    static func code(_ path: String) throws -> String {
+        let text = try text(path)
+        return try NSRegularExpression(pattern: #"/\*[\s\S]*?\*/|//[^\n]*"#)
+            .stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
     }
 
-    /// The one literal `name` is declared as: its one declaration is `static let <name> = "…"`
-    /// and nothing more.
+    /// Every line of `code` that declares something called `name`, whatever its modifiers.
+    static func declarations(of name: String, in code: String) throws -> [String] {
+        try matches(#"^.*\b(?:let|var)\s+"# + name + #"\b.*$"#, in: code)
+    }
+
+    /// The one literal `name` is declared as: its one declaration, comments aside, is
+    /// `static let <name> = "…"` and nothing more.
     static func literal(declaring name: String, in path: String) throws -> String? {
-        let text = try text(path)
+        let text = try code(path)
         let all = try declarations(of: name, in: text)
         let whole = try matches(#"^\s*static let "# + name + #" = "([^"\\]*)"\s*$"#, in: text)
         #expect(all.count == 1 && whole.count == 1, "\(path): \(all)")
@@ -121,7 +128,7 @@ import TopoCore
         #expect(try Self.literal(declaring: "containerIdentifier", in: store) == Self.container)
         #expect(try Self.literal(declaring: "zoneName", in: store) == Self.zone)
         // The self-test's default is the first argument of the one `steps` there is.
-        let selfTest = try Self.text("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
+        let selfTest = try Self.code("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
         #expect(try Self.matches(#"logContainer\s*:"#, in: selfTest).count == 1)
         #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = "([^"\\]*)",\s*$"#, in: selfTest)
                 == [Self.container])
@@ -152,15 +159,16 @@ import TopoCore
                 == ["\(app): iCloud.zone.hexagon.topo.board", "\(database): \(Self.container)"])
         #expect(try Self.literals(#"zoneName\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*"([^"]*)""#)
                 == ["\(app): Board", "\(database): \(Self.zone)"])
-        let text = try Self.text(database)
+        let text = try Self.code(database)
         #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"]*)"\s*$"#, in: text) == [Self.container])
         #expect(try Self.matches(#"^\s*public static let zoneName = "([^"]*)"\s*$"#, in: text) == [Self.zone])
     }
 
     /// The app's own names for the log's container and zone are the constant's: of the two
-    /// declarations of each in `TopoCloudKit.swift`, the log's and the board's, the log's reads it.
+    /// declarations of each in `TopoCloudKit.swift`, comments aside, the log's and the board's, the
+    /// log's reads it.
     @Test func theAppsNamesAreTheConstant() throws {
-        let text = try Self.text("Apps/Shared/TopoCloudKit.swift")
+        let text = try Self.code("Apps/Shared/TopoCloudKit.swift")
         for name in ["containerIdentifier", "zoneName"] {
             #expect(try Self.declarations(of: name, in: text).count == 2, "\(name)")
             #expect(try Self.matches(#"^\s*static let "# + name + #" = CloudKitRecordDatabase\."# + name + #"\s*$"#,
