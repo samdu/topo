@@ -133,6 +133,8 @@ final class ConversationTests: XCTestCase {
     private var audio: AudioSession!
     private var gate = GatedEngine("turn the lights off")
     private var seams: Seams!
+    /// Holds an open on the input's queue, at its one read of the formats, while armed.
+    private let openLatch = OpenLatch()
     private var permission = PermissionGate()
     private var spoken = HeldVoice()
     private var sounds: KeeperSounds?
@@ -195,10 +197,10 @@ final class ConversationTests: XCTestCase {
         await settle("the ear to load") { ear.ready }
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
-                               formats: { seams.readFormats($0) },
+                               formats: { [openLatch] in openLatch.pass(); return seams.readFormats($0) },
                                permission: { await permission.ask() }, permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.listening }
+        speaker.microphoneOpen = { input.busy }
         MicrophoneWatch.start(input, speaker)
         let conversation = Conversation(voice: input, speaker: speaker, endpoint: endpoint ?? Endpoint(detector: detector, judge: judge),
                                         enabled: { [unowned self] in enabled },
@@ -508,6 +510,25 @@ final class ConversationTests: XCTestCase {
     }
 
     // MARK: - The review's blockers
+
+    /// The lock's `.began` under the active call while the conversation's reopen is on the
+    /// input's queue: what the open starts is dropped, the session is suspended as it answers,
+    /// and the conversation rebuilds it on the call's live session as for a `.began` over an
+    /// open microphone; it is not ended.
+    func testAnInterruptionsStartWhileTheReopenOpensRebuildsTheMicrophone() async {
+        let (conversation, voice, _) = await begun()
+        defer { conversation.stop("test", sending: false) }
+        openLatch.arm()
+        voice.cancel(.chat)
+        await settle("the reopen's open held on the queue") { self.openLatch.waiting && voice.opening }
+        let engines = seams.inputEngines
+        beganInterruption()
+        let latch = openLatch
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { latch.open() }
+        await settle("rebuilt on the call's session") { voice.listening && !voice.suspended && !voice.opening && self.seams.inputEngines > engines }
+        XCTAssertTrue(conversation.on, "an interruption while the reopen opened ended the conversation")
+        XCTAssertEqual(ends, 0)
+    }
 
     /// The lock's `.began` under the active call: the session is suspended, never carried across
     /// it on its engine, and rebuilt at once on the call's live session.

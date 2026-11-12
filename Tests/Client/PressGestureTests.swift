@@ -42,36 +42,13 @@ final class PressGestureTests: XCTestCase {
         XCTAssertTrue(condition(), "waited ten seconds for \(what)")
     }
 
-    /// Holds the input's open on its queue until the test lets it go.
-    private final class Latch: @unchecked Sendable {
-        private let lock = NSLock()
-        private let semaphore = DispatchSemaphore(value: 0)
-        private var armed = false
-        private var reached = false
-        func arm() { lock.withLock { armed = true } }
-        var waiting: Bool { lock.withLock { reached } }
-        func pass() {
-            guard lock.withLock({ armed }) else { return }
-            lock.withLock { reached = true }
-            semaphore.wait()
-        }
-        func open() {
-            let wasArmed = lock.withLock { () -> Bool in
-                let was = armed
-                armed = false
-                return was
-            }
-            if wasArmed { semaphore.signal() }
-        }
-    }
-
     @MainActor private struct Rig {
         let speaker: Speaker
         let voice: VoiceInput
         let seams: Seams
         let audio: AudioSession
         let center: NotificationCenter
-        let latch: Latch
+        let latch: OpenLatch
         func showing() -> Composer.MicState { Composer.MicState(voice, speaking: speaker.speaking) }
     }
 
@@ -92,7 +69,7 @@ final class PressGestureTests: XCTestCase {
         let nowhere = URL(fileURLWithPath: "/dev/null")
         ear.load(parakeet: nowhere, ctc: nowhere)
         await settle("the ear") { ear.ready }
-        let latch = Latch()
+        let latch = OpenLatch()
         EngineWatch.reset()
         CapturingInputNode.installed = nil
         let input = VoiceInput(audio: audio, ear: ear, center: center,
@@ -297,6 +274,7 @@ final class PressGestureTests: XCTestCase {
         let latch = rig.latch
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
         rig.voice.cancel()
+        XCTAssertEqual(EngineWatch.starts, 1, "the cancel returned before the open it tore down had run")
         XCTAssertEqual(EngineWatch.running, 0, "the cancel returned with the engine still running")
         XCTAssertFalse(rig.voice.inputTapped)
         _ = await down.value
@@ -357,6 +335,7 @@ final class PressGestureTests: XCTestCase {
         let latch = rig.latch
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
         _ = await voice.pressUp(as: .chat, held: true)
+        XCTAssertEqual(EngineWatch.starts, 1, "the release returned before the open it tore down had run")
         XCTAssertEqual(EngineWatch.running, 0, "the release returned with the open's engine running")
         XCTAssertFalse(voice.inputTapped, "the release returned with the open's tap on")
         _ = await down.value
@@ -395,6 +374,7 @@ final class PressGestureTests: XCTestCase {
         let latch = rig.latch
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
         rig.voice.call(.placing)
+        XCTAssertEqual(EngineWatch.starts, 1, "the placing returned before the open it tore down had run")
         XCTAssertEqual(EngineWatch.running, 0, "the placing returned with the engine still running")
         XCTAssertFalse(rig.voice.opening)
         _ = await down.value
@@ -450,5 +430,29 @@ final class PressGestureTests: XCTestCase {
         XCTAssertFalse(rig.speaker.speaking)
         rig.voice.cancel()
         await settle("the reply to be read once the microphone closed") { rig.speaker.report.started }
+    }
+}
+
+/// Holds the input's open on its queue until the test lets it go: `pass` is called from a seam
+/// inside the open and waits there while armed.
+final class OpenLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var armed = false
+    private var reached = false
+    func arm() { lock.withLock { armed = true } }
+    var waiting: Bool { lock.withLock { reached } }
+    func pass() {
+        guard lock.withLock({ armed }) else { return }
+        lock.withLock { reached = true }
+        semaphore.wait()
+    }
+    func open() {
+        let wasArmed = lock.withLock { () -> Bool in
+            let was = armed
+            armed = false
+            return was
+        }
+        if wasArmed { semaphore.signal() }
     }
 }

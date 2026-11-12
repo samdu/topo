@@ -218,9 +218,12 @@ private final class CapturingPlayEngine: AVAudioEngine {
 enum EngineWatch {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var count = 0
+    nonisolated(unsafe) private static var startCount = 0
     static var running: Int { lock.withLock { count } }
-    static func reset() { lock.withLock { count = 0 } }
-    fileprivate static func add(_ n: Int) { lock.withLock { count += n } }
+    /// Every start since `reset`, so a test can tell an engine stopped from one never started.
+    static var starts: Int { lock.withLock { startCount } }
+    static func reset() { lock.withLock { count = 0; startCount = 0 } }
+    fileprivate static func add(_ n: Int) { lock.withLock { count += n; if n > 0 { startCount += n } } }
 }
 
 private final class CapturingEngine: AVAudioEngine {

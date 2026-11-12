@@ -94,6 +94,9 @@ final class InputEngine: @unchecked Sendable {
     /// makes after this returns is behind the open on the queue, so its `stop` waits for it and
     /// stops what it started. `done` is called on the queue.
     func enqueueOpen(suppress: Bool, resetsAt: Int, tap: Tap, done: @escaping @Sendable (Result<Opened, Error>) -> Void) {
+        // From the main actor, where every teardown is made: on any other thread the open could
+        // reach the queue after a teardown the main actor made since.
+        dispatchPrecondition(condition: .onQueue(.main))
         queue.async {
             done(Result { try self.openHere(suppress: suppress, resetsAt: resetsAt, tap: tap) })
         }
