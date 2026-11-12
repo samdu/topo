@@ -7,8 +7,8 @@ import TopoTools
 final class WidgetTaps: WidgetTapHandler {
     let cues: WidgetCues
     let actions: WidgetActions
-    /// The drain the last turn tap started, which runs on after the intent has returned; kept for
-    /// a test to await.
+    /// The drain the last turn tap started, which may still be running when the intent returns;
+    /// kept for a test to await.
     private(set) var draining: Task<Void, Never>?
 
     init(cues: WidgetCues, actions: WidgetActions) {
@@ -27,7 +27,7 @@ final class WidgetTaps: WidgetTapHandler {
     }
 
     /// A control's tap, as the slot's document at the tap's revision says: a turn's cue recorded
-    /// (under a nonce minted here, once) and drained, then Topo in front; `open` in front; a `run`
+    /// (under a nonce minted here, once) and a drain of it started, then Topo in front; `open` in front; a `run`
     /// through `WidgetActions`, in the background. A slot holding no document is a signed-out
     /// phone's, whose tap opens Topo and records nothing; a tap on another revision is
     /// `WidgetActions`' to refuse, whatever either revision's action is.

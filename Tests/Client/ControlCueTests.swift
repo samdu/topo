@@ -153,6 +153,39 @@ final class ControlCueTests: XCTestCase {
         XCTAssertEqual(ControlSlot.all.map { store.readControl(slot: $0)?.document.revision }, others, "a relaunch rewrote a slot")
     }
 
+    /// A turn tap whose intent ends while the log will not take the turn: the cue's words are in
+    /// the harness's outbox under the cue's nonce (`Harness.pending`, kept in the defaults) and the
+    /// cue is gone from the app group, so a later launch's harness sends them once, and the cue is
+    /// not said a second time.
+    func testATurnTheLogDidNotTakeBeforeTheProcessEndedIsSentOnceByTheNextLaunch() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let stalled = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                              ensureZone: { try await Task.sleep(for: .seconds(3600)) })
+        let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
+        let taps = taps(stalled)
+        let answer = await taps.controlTapped(slot: "button-1", revision: revision, turningOn: nil)
+        XCTAssertEqual(answer, .foreground)
+        // The drain is a main-actor task the tap started, so it has not run yet.
+        let cueNonce = try XCTUnwrap(store.cues().first?.nonce, "the tap recorded no cue")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while stalled.owed.isEmpty || !store.cues().isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(store.cues(), [], "the cue outlived its place on the line")
+        let nonce = try XCTUnwrap(stalled.owed.first?.nonce, "the drain put nothing on the line")
+        XCTAssertEqual(nonce, cueNonce, "the turn went on the line under a nonce that is not the cue's")
+
+        // The process ends here; the next launch's harness reads the same defaults.
+        let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport())
+        XCTAssertEqual(relaunched.owed.map(\.nonce), [nonce], "the outbox did not keep the turn")
+        await relaunched.refresh()
+        await relaunched.retry()
+        await self.taps(relaunched).cues.drain()
+        let said = (try await TurnLog(database: db).read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.text), ["control button-1: lights please"], "the turn was lost or said twice")
+    }
+
     /// A new login — the phase coming to signed in from anything else — keeps no slot an earlier
     /// login wrote: each is the default again, above the earlier revisions.
     func testANewLoginKeepsNoEarlierLoginsSlot() async throws {
