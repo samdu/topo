@@ -298,8 +298,7 @@ final class ModelDownloads {
     private var reconciling = false
     /// The models whose first byte this process has marked (`download.firstByte`).
     private var flowed: Set<String> = []
-    /// Whether a `start` asked for a fresh attempt at what failed since the last pass ran. A
-    /// pass that only lets go of held models leaves a failed model to the next `start`.
+    /// Whether a `start` asked for a fresh attempt at what failed since the last pass ran.
     private var retrying = false
     /// What iOS gave `handleEventsForBackgroundURLSession`, called once the session has
     /// delivered the events it woke the app for.
