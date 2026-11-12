@@ -419,6 +419,7 @@ final class AudibleHoldTests: XCTestCase {
         rig.speaker.speak(writing: "One. ", answering: "turn")
         await settle("the sentence to be asked for") { rig.voice.sentencesAsked == 1 }
         rig.voice.open(1)
+        try await render(rig, "the first frame") { bed.fades.last == 0 }
         try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
         XCTAssertEqual(bed.fades.last, KeeperSounds.bedVolume, "no bed in the gap")
         XCTAssertEqual(rig.speaker.awaiting, [], "a wait stands in the gap")
