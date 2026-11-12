@@ -693,11 +693,30 @@ rm -f "$work/bounded-signal.hold"
 is "signal during a bounded command: its pids file is gone" "$([ -e "$work/bounded-signal.results/mac-suite.pids" ] && echo there || echo gone)" gone
 
 # --check: a Mac with everything, the guest's framework current, is passed with nothing run.
+# The bash the check cases' probe finds is this one, ahead of the host's: the host's Homebrew
+# bash (5.3.20 on thicc-boi) segfaults on its first locale-giving fork about one time in
+# fifteen, which reddens whichever case expecting a pass it lands in, for nothing the case is
+# about. It runs the probe's shell form (`LC_ALL=C cmd`) as `env LC_ALL=C cmd`, which never
+# dies, and counts each probe it rewrote in $work/lastbin/calls; anything else is the real
+# bash. The cases about a bash that dies put their own fake ahead of it.
+mkdir -p "$work/lastbin"
+cat > "$work/lastbin/bash" <<'LASTING'
+#!/bin/sh
+form='$(LC_ALL=C /usr/bin/true;'
+if [ "$1" = -c ]; then
+  case "$2" in *"$form"*) echo rewritten >> "@CALLS@" ;; esac
+  script="$(printf '%s' "$2" | sed 's|\$(LC_ALL=C /usr/bin/true;|$(env LC_ALL=C /usr/bin/true;|g')"
+  shift 2; exec "@BASH@" -c "$script" "$@"
+fi
+exec "@BASH@" "$@"
+LASTING
+sed -i '' -e "s|@CALLS@|$work/lastbin/calls|" -e "s|@BASH@|$BASH|g" "$work/lastbin/bash"
+chmod +x "$work/lastbin/bash"
 check() {  # check <case> [suite...] — its exit in $status, what it said in $said
   local name="$1"; shift
   export CALLS="$work/$name.calls"
   : > "$CALLS"
-  said="$(cd "$tree" && TOPO_XCODE_APPS="${XCODE_APPS:-$TOPO_XCODE_APPS}" PATH="$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
+  said="$(cd "$tree" && TOPO_XCODE_APPS="${XCODE_APPS:-$TOPO_XCODE_APPS}" PATH="$work/lastbin:$work/bin:${BARE_PATH:-$PATH}" scripts/mac-suite.sh --check --cache "$work/cache" "$@" 2>&1)" && status=0 || status=$?
 }
 names() { case "$said" in *"error: "*"$2"*) ok "$1" ;; *) fail "$1: $said" ;; esac; }
 mkdir -p "$tree/Packages/TopoUserland/Frameworks/TopoIsh.xcframework"
@@ -707,11 +726,25 @@ check can topo_unit others
 is "check: a Mac with everything exits 0" "$status" 0
 is "check: nothing is generated, built, booted or made" "$(grep -cE '^(xcodegen generate|xcodebuild (build|test)|xcrun simctl (create|boot)|build-ish.sh$|ci-audio-lane)' "$CALLS")" 0
 [ ! -e "$work/can.results" ] && ok "check: no results are written" || fail "check: results were written"
+# A host whose bash dies at the probe's first form: the check cases' result is still their own.
+mkdir -p "$work/hostcrash"
+printf '#!/bin/sh\nkill -SEGV "$PPID"\n' > "$work/hostcrash/die"
+cat > "$work/hostcrash/bash" <<HOSTCRASH
+#!/bin/sh
+if [ "\$1" = -c ]; then shift; exec "$BASH" -c "\$(printf '%s' "\$1" | sed 's|LC_ALL=C /usr/bin/true|env LC_ALL=C $work/hostcrash/die|g')" "\$@"; fi
+exec "$BASH" "\$@"
+HOSTCRASH
+chmod +x "$work/hostcrash/bash" "$work/hostcrash/die"
+rm -f "$work/lastbin/calls"
+BARE_PATH="$work/hostcrash:$PATH" check host-crash topo_unit others
+is "check, a host bash that dies at the probe: a Mac with everything still exits 0" "$status" 0
+is "check, a host bash that dies at the probe: the probe's form was the one rewritten" "$(wc -l < "$work/lastbin/calls" 2>/dev/null | tr -d ' ')" 1
 # A bash that dies in a forked subshell giving a command its locale: refused, named, for every
 # suite. The script itself runs under this shell's bash; only what env finds is the fake.
 # The fake is the real bash, but a command given LC_ALL=C in a forked subshell kills that
 # subshell from its third time on, as 5.3.15's crash comes at no fixed moment: a probe that
-# runs once, or runs no such command, passes it. Only the shell's own assignment
+# runs once, or runs no such command, passes it. The real bash beneath is handed that command
+# through env, so the host's own crash is not the one counted. Only the shell's own assignment
 # (`LC_ALL=C cmd`) is the crash's form; `env LC_ALL=C cmd` is left the real command, so a
 # probe written with env passes this bash too. FAKE_BASH_CALLS counts the crash's form.
 mkdir -p "$work/crashbin"
@@ -724,7 +757,7 @@ CMD
 cat > "$work/crashbin/bash" <<CRASH
 #!/bin/sh
 [ "\$1" != --version ] || { echo "GNU bash, version 5.3.15(1)-release"; exit 0; }
-if [ "\$1" = -c ]; then shift; exec "$BASH" -c "\$(printf '%s' "\$1" | sed -e 's|env LC_ALL=C /usr/bin/true|ENVFORM|g' -e 's|LC_ALL=C /usr/bin/true|LC_ALL=C $work/crashbin/locale-command|g' -e 's|ENVFORM|env LC_ALL=C /usr/bin/true|g')" "\$@"; fi
+if [ "\$1" = -c ]; then shift; exec "$BASH" -c "\$(printf '%s' "\$1" | sed -e 's|env LC_ALL=C /usr/bin/true|ENVFORM|g' -e 's|LC_ALL=C /usr/bin/true|env LC_ALL=C $work/crashbin/locale-command|g' -e 's|ENVFORM|env LC_ALL=C /usr/bin/true|g')" "\$@"; fi
 exec "$BASH" "\$@"
 CRASH
 chmod +x "$work/crashbin/bash" "$work/crashbin/locale-command"
