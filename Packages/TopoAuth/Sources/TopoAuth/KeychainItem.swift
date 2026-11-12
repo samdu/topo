@@ -33,6 +33,12 @@ public struct KeychainItem: Sendable {
         ]
         #if os(macOS)
         if let keychainPath {
+            // SecKeychainOpen succeeds on a path with no file at it, and every query then reads no
+            // item, so the file is asked for first.
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: keychainPath, isDirectory: &isFolder), !isFolder.boolValue else {
+                throw Error(status: errSecNoSuchKeychain)
+            }
             var keychain: SecKeychain?
             let status = SecKeychainOpen(keychainPath, &keychain)
             guard status == errSecSuccess, let keychain else { throw Error(status: status) }
