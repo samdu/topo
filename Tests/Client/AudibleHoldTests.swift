@@ -425,14 +425,19 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(rig.speaker.awaiting, [], "a wait stands in the gap")
         XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"))
 
+        // The first frame's fade asked for its own sleeps: the reading's end asks for one more.
+        let parks = rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count
         rig.speaker.writingEnded("turn")
         XCTAssertFalse(rig.speaker.speaking, "the reading did not end with the guest's writing")
         XCTAssertEqual(bed.fades.last, 0, "the bed was not faded at the reading's end")
         XCTAssertTrue(rig.audio.holding, "the process was let go of with the bed's fade unheard")
         XCTAssertFalse(rig.speaker.keeperTransitions.contains("stopped"),
                        "the keeper stopped between the reading's hold and the fade's")
-        await settle("the fade's pause to be asked for") { rig.clock.asked.contains(KeeperSounds.parkAfter) }
-        rig.clock.fire(KeeperSounds.parkAfter)
+        await settle("the fade's pause to be asked for") {
+            rig.clock.asked.filter { $0 == KeeperSounds.parkAfter }.count > parks
+        }
+        // Every sleep standing, the first frame's fade's bound among them, which holds by itself.
+        rig.clock.fire()
         await settle("the fade's hold to go") { !rig.audio.holding }
         XCTAssertFalse(bed.isPlaying, "the session was let go with the bed still playing")
     }
