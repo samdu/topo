@@ -496,6 +496,8 @@ final class AudibleHoldTests: XCTestCase {
                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
         await settle("the bed to be played again under the call") { rig.players.bed?.isPlaying == true }
         let locked = try XCTUnwrap(rig.players.bed)
+        XCTAssertFalse(locked === activated, "the lock's interruption played the player it stopped")
+        XCTAssertEqual(activated.moments.last?.what, "stop")
         XCTAssertEqual(locked.moments.last?.call, .active)
 
         // A phone call takes the session with the call standing: paused before Topo marks it
@@ -552,6 +554,31 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertEqual(bed.moments.last?.call, .active)
         XCTAssertEqual(bed.volume, KeeperSounds.bedVolume, "the bed came back silent")
         rig.speaker.endAwaiting("turn", "the test is done")
+    }
+
+    /// The activation asks for the bed from what stands, not from what the bed last remembered:
+    /// a bed let go while the call was placed (the mode was Receipts for a moment, and a second
+    /// turn's wait asked under it) is played at the activation once the mode is Sounds again.
+    func testTheActivationAsksForTheBedFromWhatStands() async throws {
+        let rig = await rig(isActive: false)
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        XCTAssertTrue(rig.players.bed?.isPlaying == true)
+
+        call.start()
+        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
+        XCTAssertEqual(rig.audio.call, .placed)
+        rig.defaults.set(WorkingSounds.Mode.receipts.rawValue, forKey: WorkingSounds.key)
+        _ = rig.speaker.awaitReply("second", readAloud: true)
+        rig.defaults.set(WorkingSounds.Mode.sounds.rawValue, forKey: WorkingSounds.key)
+
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        XCTAssertTrue(rig.players.bed?.isPlaying == true, "the activation went by the bed's memory, not by the waits standing")
+        XCTAssertEqual(rig.players.bed?.moments.last?.call, .active)
+        rig.speaker.endAwaiting("turn", "the test is done")
+        rig.speaker.endAwaiting("second", "the test is done")
     }
 
     // MARK: - The person's choice
