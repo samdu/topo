@@ -17,8 +17,14 @@ let package = Package(
     ],
     targets: [
         .target(name: "TopoProxy", dependencies: [.product(name: "TopoCore", package: "TopoCore")]),
-        .target(name: "TopoTools", dependencies: ["TopoProxy", .product(name: "TopoCore", package: "TopoCore")]),
-        .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy"]),
-        .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy"]),
+        .target(name: "TopoTools", dependencies: ["TopoProxy", .product(name: "TopoCore", package: "TopoCore")],
+                resources: [.copy("docc2md.jq")]),
+        // What both test targets probe a loopback port with: whether it answers, and a squatter on it.
+        .target(name: "TopoProxyTestSupport", path: "Tests/TopoProxyTestSupport"),
+        .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy", "TopoProxyTestSupport"]),
+        // `Pages`: two of Apple's own pages as the site answered them (2026-11-12), and one made
+        // up of the block shapes no real page at hand has, for the converter's tests.
+        .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy", "TopoProxyTestSupport"],
+                    resources: [.copy("Pages")]),
     ]
 )

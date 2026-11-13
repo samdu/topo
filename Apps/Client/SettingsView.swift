@@ -68,7 +68,7 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier(SettingsView.workingSounds)
                 } footer: {
-                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed until the reply begins. Only while a spoken turn is waited for. Kept on this device.")
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed whenever Topo is not speaking, until the reply has been read. Only while a spoken turn is waited for. Kept on this device.")
                 }
                 Section {
                     Toggle("Earcons", isOn: $earcons)

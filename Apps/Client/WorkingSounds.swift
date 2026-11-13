@@ -20,8 +20,10 @@ enum WorkingSounds {
     }
 
     static let key = "workingSounds"
-    /// Receipts for a phone never asked.
-    static let standard = Mode.receipts
+    /// Sounds for a phone never asked: a spoken turn's hold is heard, from the release to the
+    /// reply, as audio playback and not silence keeping the process (App Review 2.5.4,
+    /// `docs/testflight.md`). Receipts and Off are the person's to pick.
+    static let standard = Mode.sounds
 
     /// The one reader: anything kept that is not one of the cases — a word nobody chose, a Boolean,
     /// which `string(forKey:)` hands back as a digit — is the standard.
@@ -40,6 +42,7 @@ protocol WorkingPlayer: AnyObject {
     var isPlaying: Bool { get }
     @discardableResult func play() -> Bool
     func pause()
+    func stop()
     func setVolume(_ volume: Float, fadeDuration: TimeInterval)
 }
 
@@ -68,6 +71,7 @@ final class WorkingAudioPlayer: WorkingPlayer {
     var isPlaying: Bool { player.isPlaying }
     func play() -> Bool { player.play() }
     func pause() { player.pause() }
+    func stop() { player.stop() }
     func setVolume(_ volume: Float, fadeDuration: TimeInterval) { player.setVolume(volume, fadeDuration: fadeDuration) }
 }
 
@@ -78,10 +82,12 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// delegate's result comes back, `error` for a result marked an error and when the guest's turn
 /// fails. The open microphone has the go-ahead (`speak`) and no tone at an utterance's onset, and a
 /// press heard behind a turn on its way bleeps (`queue`). The bed is `thinking_bed.wav`, an 8 s
-/// loop under −20 dBFS at `bedVolume`, faded in from the release and out when the wait it was for
-/// ends (a reply landing ends its own wait before its first frame) or at the reply's first frame
-/// under a second wait, never begun under a sentence, and paused rather than stopped so the next
-/// wait picks it up where the last left it. The mode is `WorkingSounds`: `off` sounds nothing,
+/// loop under −20 dBFS at `bedVolume`, asked for by the speaker (`working`) while a turn's own
+/// hold stands with the voice not audible — from the release's utterance taken, through the wait,
+/// to the reply's first frame, again in a reading's gaps while the guest works, and again after a
+/// reading with another turn's wait standing — never begun under a sentence or with replies muted
+/// (`Mute`), paused rather than stopped so the next wait picks it up where the last left it, and
+/// paused under the call's session changing hands (`pause`). The mode is `WorkingSounds`: `off` sounds nothing,
 /// `receipts` the tones, `sounds` the tones over the bed.
 ///
 /// The receipts and the bleep are the keeper's, so they sound only while a hold that is not a
@@ -364,17 +370,22 @@ final class KeeperSounds {
 
     // MARK: - The bed
 
-    /// The speaker is waiting for a reply, or has stopped: the bed fades in under `sounds` while
-    /// a hold stands, and out otherwise. Off goes through whatever the mode, so a bed begun
-    /// under `sounds` is still faded out at its wait's end after the mode changed under it (a
-    /// change applies at the next sound; the bed plays on to the end of the wait it was for).
+    /// The speaker wants the bed, or does not: it fades in under `sounds`, with replies read
+    /// aloud, while a turn's hold stands and the voice is not audible, and out otherwise. The mode
+    /// is read at every ask, so a change applies at the next one; off goes through whatever the
+    /// mode, so a bed begun under `sounds` is still faded out after the mode changed under it.
     func working(_ on: Bool) {
         dropStale()
         // Never under a sentence: a wait taken while Topo is reading wants no bed.
-        let want = on && WorkingSounds.mode(defaults) == .sounds && audio.heldForATurn && !voiceSpeaking()
+        // Muted, nothing is read and nothing is waited for aloud, so nothing is played for it.
+        let want = on && WorkingSounds.mode(defaults) == .sounds && Mute.readsAloud(defaults)
+            && audio.heldForATurn && !voiceSpeaking()
         // An interruption stops the player under a bed that is still wanted, so "already on" has
         // to mean "still playing" too.
         if want == bedWanted, !want || bed?.isPlaying == true { return }
+        // A bed wanted and asked for again with one of its conditions gone is said, so a device
+        // run names which: the call's pause and an interruption leave nothing else saying it.
+        if on, !want, bedWanted { AudioLog.say("the working bed is not wanted: \(whyNot)") }
         bedWanted = want
         parking?.cancel()
         parking = nil
@@ -397,7 +408,10 @@ final class KeeperSounds {
             bed.setVolume(target, fadeDuration: Self.fadeIn)
             AudioLog.say("the working bed fades in")
         } else {
-            guard let bed, bed.isPlaying else { return }
+            guard let bed, bed.isPlaying else {
+                AudioLog.say("the working bed is let go of with its player stopped")
+                return
+            }
             // Held through the fade, since the wait that wanted it is ending; then paused rather
             // than stopped, so the next wait picks the loop up where this one left it. The hold
             // is a sound's and asks the same of the session: on one that is not live (the
@@ -425,13 +439,45 @@ final class KeeperSounds {
         release(.fade, "the working bed is paused")
     }
 
+    /// The call's session is changing hands (placed, taken by a phone call, or over): the bed's
+    /// player is stopped before Topo's session moves for it — before `callPlaced` sets the call's
+    /// category, and before `callDeactivated` and `callOver`'s hand-back (the system has already
+    /// taken the session at those two) — and stays wanted, so the activation plays it again on a
+    /// new player (`renew`, then `resume`). Nothing is asked of the session and no hold is taken; a fade is stopped
+    /// where it is, and its hold goes at its own `park`.
+    func pause(_ why: String) {
+        dropStale()
+        guard let bed, bed.isPlaying else {
+            if bedWanted { AudioLog.say("the working bed was already stopped: \(why)") }
+            return
+        }
+        bed.pause()
+        AudioLog.say("the working bed is paused: \(why)")
+    }
+
+    /// The call's session is the system's and live: a bed player made on the session before it
+    /// changed hands is stopped and let go, since what it says of itself (`isPlaying`) is not to
+    /// be trusted across the change, and the resume after this makes one on the session as it now
+    /// is. Still wanted, so the resume plays it at the level the microphone asks for.
+    func renew(_ why: String) {
+        dropStale()
+        guard let bed else { return }
+        bed.stop()
+        self.bed = nil
+        AudioLog.say("the working bed's player is made again: \(why)")
+    }
+
     /// The speaker's engine is back after an interruption: a bed still wanted and not playing
     /// is played again, through the same refusal path as its start, and a refusal leaves it
     /// wanted for the next.
     func resume() {
         dropStale()
-        guard bedWanted, bed?.isPlaying != true else { return }
-        bedWanted = false
+        guard bedWanted, bed?.isPlaying != true else {
+            if bedWanted { AudioLog.say("the working bed plays on") } else if bed != nil { AudioLog.say("the working bed is not brought back: it is not wanted") }
+            return
+        }
+        // Still wanted and not playing, which `working` plays again; a condition gone since is
+        // said there and the bed let go.
         working(true)
     }
 
@@ -444,6 +490,14 @@ final class KeeperSounds {
         ducked = open
         guard bedWanted, let bed, bed.isPlaying else { return }
         bed.setVolume(open ? Self.duckedVolume : Self.bedVolume, fadeDuration: 0.15)
+    }
+
+    /// Which of the bed's conditions fails, for the line that says it is not wanted.
+    private var whyNot: String {
+        if WorkingSounds.mode(defaults) != .sounds { return "the mode is \(WorkingSounds.mode(defaults))" }
+        if !Mute.readsAloud(defaults) { return "replies are muted" }
+        if !audio.heldForATurn { return "no turn's hold stands" }
+        return "the voice is speaking"
     }
 
     private var target: Float { microphoneOpen() ? Self.duckedVolume : Self.bedVolume }

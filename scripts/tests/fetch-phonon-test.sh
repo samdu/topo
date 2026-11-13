@@ -9,9 +9,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d -t fetch-phonon-test)"
 trap 'rm -rf "$work"' EXIT
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-ok() { echo "ok   $*"; }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 tree="$work/tree"
 mkdir -p "$tree/scripts" "$work/zip/PhononCore.xcframework"

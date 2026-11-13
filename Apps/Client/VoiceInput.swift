@@ -107,6 +107,9 @@ final class VoiceInput {
     /// The microphone's samples at the ear's rate, filled by the tap. Internal so the suite can
     /// hand a release an utterance on a host with no audio device.
     let sink = SampleSink()
+    /// Told on main once a release's utterance has been taken (`end`), its tap off or its kept
+    /// input's gate shut: the speaker's working bed waits for it (`Speaker.utteranceTaken`).
+    var onTaken: (@MainActor () -> Void)?
     /// What the tap hands its buffers through: open while a session is listening, shut from its
     /// release, so the input kept running past a release (`inputKept`) feeds nothing.
     let gate = TapGate()
@@ -655,6 +658,9 @@ final class VoiceInput {
         capture.ended = "release"
         #endif
         let samples = sink.take()
+        // The utterance is taken and nothing more reaches the sink: the tap is off, or the kept
+        // input's gate shut. The speaker's bed may begin under the decode from here.
+        onTaken?()
         #if DEBUG
         capture.sunk = samples.count
         capture.sinkRMS = TapMeter.rms(samples)

@@ -36,8 +36,7 @@ workflow="${WORKFLOW:-$here/../../.github/workflows/pr-validate.yaml}"
 work="$(mktemp -d -t suite-gate-test)"
 trap 'rm -rf "$work"' EXIT
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # The structural checks, and the snippets written out for the runs below.
 ruby -ryaml - "$workflow" "$work" <<'RUBY' || failures=$((failures + 1))

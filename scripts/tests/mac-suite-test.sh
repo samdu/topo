@@ -56,12 +56,7 @@ trap finish EXIT
 # Deferred by bash until the scratch run in the foreground has ended.
 trap 'exit 143' TERM INT HUP
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-ok() { echo "ok   $*"; }
-is() {  # is <case> <got> <want>
-  if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: got '$2', wanted '$3'"; fi
-}
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 tree="$work/tree"
 mkdir -p "$tree/scripts" "$tree/Womble" "$work/bin"

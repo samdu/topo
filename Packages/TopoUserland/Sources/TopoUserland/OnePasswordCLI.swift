@@ -10,7 +10,7 @@ import Foundation
 /// directory `op` is mounted from, unmount it, or replace what `op`'s script runs, and so can obtain
 /// the token (`docs/guest.md`). It is not linked onto the guest's path.
 public struct OnePasswordInstaller: Sendable {
-    public enum Failure: Error, Equatable, CustomStringConvertible {
+    public enum Failure: PinMismatch, Equatable, CustomStringConvertible {
         case wrongSize(expected: Int64, got: Int64)
         case wrongDigest
         case unreadable(String)
@@ -87,14 +87,7 @@ public struct OnePasswordInstaller: Sendable {
     }
 
     func verify() throws {
-        let size: Int64
-        do {
-            size = (try FileManager.default.attributesOfItem(atPath: binary.path)[.size] as? Int64) ?? -1
-        } catch {
-            throw Failure.unreadable(error.localizedDescription)
-        }
-        guard size == pin.size else { throw Failure.wrongSize(expected: pin.size, got: size) }
-        guard try digest(binary) == pin.sha256.lowercased() else { throw Failure.wrongDigest }
+        try PinnedFile.verify(binary, size: pin.size, sha256: pin.sha256, as: Failure.self, digest: digest)
     }
 
     private func allowExecution() throws {
