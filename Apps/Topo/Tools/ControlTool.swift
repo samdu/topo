@@ -144,7 +144,7 @@ struct ControlTool: Tool {
     }
 
     private func taps(_ slot: String?, _ store: SurfaceStore) -> ToolReply {
-        if let slot, let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
+        if let slot, let refusal = Self.refusal(slot: slot) { return .refused("topo: \(refusal)\n") }
         let taps = store.taps().filter { tap in
             guard let control = ControlSlot.slot(stored: tap.slot) else { return false }
             return slot == nil || control == slot
@@ -159,7 +159,7 @@ struct ControlTool: Tool {
     // MARK: Writing
 
     private func set(_ slot: String, _ text: String, _ store: SurfaceStore) async -> ToolReply {
-        if let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
+        if let refusal = Self.refusal(slot: slot) { return .refused("topo: \(refusal)\n") }
         let reading = ControlDocument.read(text, slot: slot)
         if case .unreadable(let why) = reading.state { return .usage("topo: the document \(why); nothing was written\n") }
         var document = reading.document
@@ -201,12 +201,13 @@ struct ControlTool: Tool {
         var lines = ["set: \(slot), revision \(revision)"]
         lines += notes.map { "refused: \($0)" }
         lines += unchecked
-        return ToolReply(status: notes.isEmpty ? ToolReply.ok : ToolReply.refused, text: lines.joined(separator: "\n") + "\n")
+        let said = lines.joined(separator: "\n") + "\n"
+        return notes.isEmpty ? .ok(said) : .refused(said)
     }
 
     private func state(_ slot: String, _ word: String, _ store: SurfaceStore) async -> ToolReply {
         guard ControlSlot.kind(of: slot) == .toggle else {
-            return ToolReply(status: ToolReply.refused, text: "topo: \(slot) is not a toggle slot: toggle-1 to toggle-6\n")
+            return .refused("topo: \(slot) is not a toggle slot: toggle-1 to toggle-6\n")
         }
         guard ["on", "off"].contains(word) else { return .usage("topo: state takes on or off\n") }
         guard let reading = store.readControl(slot: slot), reading.readable else {
@@ -229,7 +230,7 @@ struct ControlTool: Tool {
     }
 
     private func clear(_ slot: String?, _ store: SurfaceStore) async -> ToolReply {
-        if let slot, let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
+        if let slot, let refusal = Self.refusal(slot: slot) { return .refused("topo: \(refusal)\n") }
         let slots = slot.map { [$0] } ?? ControlSlot.all
         do {
             for slot in slots { try ControlDefaults.write(slot: slot, store: store) }
@@ -245,7 +246,7 @@ struct ControlTool: Tool {
 
     private func setSecret(_ name: String, _ value: String) async -> ToolReply {
         guard ControlSecrets.isName(name) else {
-            return ToolReply(status: ToolReply.refused, text: "topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
+            return .refused("topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
         }
         guard !value.isEmpty else { return .usage("topo: a secret's value is not empty\n") }
         if let words = leftBehind.controlSecrets {
@@ -281,7 +282,7 @@ struct ControlTool: Tool {
 
     private func clearSecret(_ name: String) async -> ToolReply {
         guard ControlSecrets.isName(name) else {
-            return ToolReply(status: ToolReply.refused, text: "topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
+            return .refused("topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
         }
         do {
             try await secrets.offThePool { try $0.clear(name) }

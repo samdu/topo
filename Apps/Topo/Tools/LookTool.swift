@@ -89,7 +89,8 @@ struct LookTool: Tool {
             if kept > 0 {
                 lines.append("Worn now on this phone; Settings › Reset, or topo look reset, takes it back.")
             }
-            return ToolReply(status: refused == 0 ? ToolReply.ok : ToolReply.refused, text: lines.joined(separator: "\n") + "\n")
+            let said = lines.joined(separator: "\n") + "\n"
+            return refused == 0 ? .ok(said) : .refused(said)
         case "reset":
             let named = Array(arguments.dropFirst())
             if named.isEmpty {
@@ -107,7 +108,8 @@ struct LookTool: Tool {
                 case .refused(let why): refused = true; return "refused: \(why)"
                 }
             }
-            return ToolReply(status: refused ? ToolReply.refused : ToolReply.ok, text: lines.joined(separator: "\n") + "\n")
+            let said = lines.joined(separator: "\n") + "\n"
+            return refused ? .refused(said) : .ok(said)
         case let other?:
             return .usage("topo look: no \(other)\n\n\(usage)\n")
         }

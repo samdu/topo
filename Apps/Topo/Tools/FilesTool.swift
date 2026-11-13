@@ -126,7 +126,7 @@ struct FilesTool: Tool {
     }
 
     private func refused(_ why: String) -> ToolReply {
-        ToolReply(status: ToolReply.refused, text: "topo: \(why)\n")
+        .refused("topo: \(why)\n")
     }
 
     /// The folder a call names, or why it is not a call.
