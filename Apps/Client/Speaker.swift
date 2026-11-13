@@ -110,11 +110,12 @@ final class Speaker {
     /// call and how many of those are queued, and whether it is still being read. One that was
     /// stopped keeps its turn, so what is written after the stop is not read from the top.
     private var written: (nonce: String, settled: String, queued: Int, live: Bool)?
-    /// Whether `written`'s reading was heard out with the guest at its tools for the reading's
-    /// ceiling and let go of its hold (`progressed`): it is still live, and goes on at the next
-    /// sentence written, or with the rest of the reply as it lands, from where it was. A stop
-    /// meanwhile ends it for good, as it ends any reading.
-    private var parked = false
+    /// A reading heard out with the guest at its tools for the reading's ceiling, whose hold went
+    /// (`progressed`): it goes on from where it was at the next sentence written, or with the rest
+    /// of the reply as it lands, and is kept apart from `written` so the turn's end, which comes
+    /// straight after a landing that waits or is refused, does not take it. A stop ends it for
+    /// good, as it ends any reading: `cancel` makes it a stopped `written`.
+    private var parked: (nonce: String, settled: String, queued: Int)?
     /// A reply that landed while a microphone was open, to be read once it closes. Its wait stands
     /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
     /// each reply cuts off the one before it anyway.
@@ -285,6 +286,7 @@ final class Speaker {
         // its mark still stands on disk: it goes the same way, or a relaunch reads it at unlock.
         var hung = Set(waits.keys)
         if let written, written.live { hung.insert(written.nonce) }
+        if let parked { hung.insert(parked.nonce) }
         for nonce in hung.sorted() {
             // What the guest writes of this turn from here is not read either: the chat's
             // writing path was told the turn was spoken when it began, and nothing tells it
@@ -588,31 +590,30 @@ final class Speaker {
         // The reply to a turn whose reading began while it was written: what is not yet queued
         // of it is queued behind what is, and nothing is read twice. One stopped meanwhile was
         // stopped, and is not read again.
+        if let kept = parked, let nonce, kept.nonce == nonce {
+            let rest = Array(Self.spoken(text).dropFirst(kept.queued))
+            guard !rest.isEmpty else {
+                parked = nil
+                return true
+            }
+            if replyMustWait {
+                // Read through here again once that ends (`readWhatWaited`), still parked.
+                deferred = (text, nonce, reply)
+                AudioLog.say("the rest of the reply waits for \(microphoneBusy ? "the microphone to close" : "the call's session to be activated")")
+                return true
+            }
+            parked = nil
+            guard begin(text, answering: nonce, reply: reply, reading: false) else {
+                parked = kept
+                return false
+            }
+            AudioLog.say("the reading goes on with the rest of the reply")
+            enqueue(rest)
+            return true
+        }
         if let written, let nonce, written.nonce == nonce {
             self.written = nil
             guard written.live else { return true }
-            if parked {
-                let rest = Array(Self.spoken(text).dropFirst(written.queued))
-                guard !rest.isEmpty else {
-                    parked = false
-                    return true
-                }
-                if replyMustWait {
-                    // Read through here again once that ends (`readWhatWaited`), still parked.
-                    self.written = written
-                    deferred = (text, nonce, reply)
-                    AudioLog.say("the rest of the reply waits for \(microphoneBusy ? "the microphone to close" : "the call's session to be activated")")
-                    return true
-                }
-                guard begin(text, answering: nonce, reply: reply, reading: false) else {
-                    self.written = written
-                    parked = true
-                    return false
-                }
-                AudioLog.say("the reading goes on with the rest of the reply")
-                enqueue(rest)
-                return true
-            }
             self.reply = reply
             enqueue(Array(Self.spoken(text).dropFirst(written.queued)))
             if making == 0, queue.isIdle { finished() }
@@ -635,7 +636,22 @@ final class Speaker {
     func speak(writing text: String, answering nonce: String) {
         guard !hungUp.contains(nonce) else { return }
         let settled = Self.settled(text)
-        if written?.nonce != nonce {
+        if let kept = parked, kept.nonce == nonce {
+            // Nothing new settled: nothing to go on with yet.
+            let base = settled.hasPrefix(kept.settled) ? kept.queued : 0
+            guard Self.spoken(settled).count > base else { return }
+            if replyMustWait {
+                writingWaited = (text, nonce)
+                return
+            }
+            parked = nil
+            guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else {
+                parked = kept
+                return
+            }
+            AudioLog.say("the reading goes on with what the guest wrote next")
+            written = (kept.nonce, kept.settled, kept.queued, true)
+        } else if written?.nonce != nonce {
             guard !settled.isEmpty else { return }
             if replyMustWait {
                 if writingWaited?.nonce != nonce {
@@ -646,21 +662,6 @@ final class Speaker {
             }
             guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else { return }
             written = (nonce, "", 0, true)
-        } else if parked, let kept = written, kept.live {
-            // Nothing new settled: nothing to go on with yet.
-            let base = settled.hasPrefix(kept.settled) ? kept.queued : 0
-            guard Self.spoken(settled).count > base else { return }
-            if replyMustWait {
-                writingWaited = (text, nonce)
-                return
-            }
-            guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else {
-                written = kept
-                parked = true
-                return
-            }
-            AudioLog.say("the reading goes on with what the guest wrote next")
-            written = kept
         }
         guard var reading = written, reading.live else { return }
         if !settled.hasPrefix(reading.settled) { reading.queued = 0 }
@@ -680,7 +681,6 @@ final class Speaker {
         if writingWaited?.nonce == nonce { writingWaited = nil }
         guard let reading = written, reading.nonce == nonce else { return }
         written = nil
-        parked = false
         if reading.live, making == 0, queue.isIdle { finished() }
     }
 
@@ -886,14 +886,12 @@ final class Speaker {
         let waiting = deferred
         // A parked reading is sounding nothing for the microphone to hear, so it is no reason to
         // lose the rest of the reply either: it goes on once this one closes.
-        let kept = parked ? written : nil
+        let kept = parked
+        parked = nil
         deferred = nil
         cancel()
         deferred = waiting
-        if let kept {
-            written = kept
-            parked = true
-        }
+        parked = kept
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         openings += 1
         sounds?.duck()
@@ -946,7 +944,8 @@ final class Speaker {
         deferred = nil
         writingWaited = nil
         written?.live = false
-        parked = false
+        if let stopped = parked { written = (stopped.nonce, stopped.settled, stopped.queued, false) }
+        parked = nil
         generation += 1
         reply = nil
         chain = nil
@@ -1176,8 +1175,8 @@ final class Speaker {
                 }
                 AudioLog.say("the voice was heard out \(ceiling) ago with the guest still writing; its hold ends and the reading goes on at the next sentence")
                 self.stop()
-                self.written = kept
-                self.parked = true
+                self.written = nil
+                self.parked = (kept.nonce, kept.settled, kept.queued)
                 return
             }
             AudioLog.say("the reply made no progress for \(ceiling); it and its hold end")

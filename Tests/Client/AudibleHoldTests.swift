@@ -58,8 +58,11 @@ final class GatedSentences: VoiceEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var opened: [Int: [[Float]]] = [:]
     private var asked = 0
+    private var _texts: [String] = []
 
     var sentencesAsked: Int { lock.withLock { asked } }
+    /// The sentences asked for, in order.
+    var texts: [String] { lock.withLock { _texts } }
     /// Lets sentence `number` (from 1) go, with `frames` frames of tone.
     func open(_ number: Int, frames: Int = 1) {
         lock.withLock { opened[number] = Array(repeating: toneFrame(0.5), count: frames) }
@@ -68,7 +71,7 @@ final class GatedSentences: VoiceEngine, @unchecked Sendable {
     func load(folder: URL, temperature: Float) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
-        let mine = lock.withLock { asked += 1; return asked }
+        let mine = lock.withLock { asked += 1; _texts.append(text); return asked }
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var frames: [[Float]]?
@@ -414,7 +417,7 @@ final class AudibleHoldTests: XCTestCase {
         await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
         rig.voice.open(2)
         try await render(rig, "the next sentence heard") { !rig.speaker.voiceGap }
-        XCTAssertEqual(rig.voice.sentencesAsked, 2, "the part heard before the ceiling was read again")
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
         rig.speaker.stop()
     }
 
@@ -437,7 +440,29 @@ final class AudibleHoldTests: XCTestCase {
         await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
         rig.voice.open(2)
         try await render(rig, "the next sentence heard") { !rig.speaker.voiceGap }
-        XCTAssertEqual(rig.voice.sentencesAsked, 2, "the part heard before the press was read again")
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
+        rig.speaker.stop()
+    }
+
+    /// A parked reading's reply landing while a microphone is open waits for it, through the
+    /// turn's end straight after, and then goes on from where the reading was.
+    func testAParkedReadingsReplyLandingUnderAnOpenMicrophoneGoesOnFromWhereItWas() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
+        rig.speaker.microphoneOpening()
+        XCTAssertTrue(rig.speaker.speak("One moment.\n\nIt is on the shelf.", answering: "turn"), "the landing was refused")
+        rig.speaker.writingEnded("turn")
+        XCTAssertFalse(rig.speaker.speaking, "read into an open microphone")
+        rig.speaker.microphoneOpened(counted: true)
+        XCTAssertTrue(rig.speaker.speaking, "the rest of the reply was lost to the turn's end")
+        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
         rig.speaker.stop()
     }
 
