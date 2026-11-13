@@ -231,8 +231,9 @@ jobs:
           # which `others` alone runs (on its builds, and as `--check`). A
           # script no build and no product suite runs (the simulator run and
           # the voice's fetch, which the talk lane and the install page's
-          # builds run, the perf run, the agent's simulator, the Smart Turn
-          # filterbank's writer) is `scripts`, beside its test; one a build
+          # builds run, the perf run, the agent's simulator, the TestFlight
+          # upload and its key reader, the Smart Turn filterbank's writer) is
+          # `scripts`, beside its test; one a build
           # or a product suite runs has no rule and needs all three, and
           # ci-select-suites-test.sh names each. The watch's suite
           # also builds Apps/Widgets, Apps/Shared, Apps/Client and TopoCore,
@@ -280,7 +281,7 @@ jobs:
             scripts/tests/ledger-recall-test.sh scripts
             .claude/* none
             Distribution/* none
-            scripts/archive-upload.sh none
+            scripts/archive-upload.sh scripts
             scripts/plan-review.sh none
             .gitignore none
             scripts/janitor.py scripts

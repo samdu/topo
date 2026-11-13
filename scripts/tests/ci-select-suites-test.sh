@@ -63,7 +63,7 @@ expected=(
   'scripts/tests/ledger-recall-test.sh scripts'
   '.claude/* none'
   'Distribution/* none'
-  'scripts/archive-upload.sh none'
+  'scripts/archive-upload.sh scripts'
   'scripts/plan-review.sh none'
   '.gitignore none'
   'scripts/janitor.py scripts'
@@ -163,7 +163,7 @@ done
 # Nothing: documentation, the other workflows, tooling no suite covers.
 selects false false false "documentation and root markdown" $'docs/design.md\nREADME.md\nCLAUDE.md\nDesign/README.md\n'
 selects false false false "the automerge workflow" $'.github/workflows/automerge.yaml\n'
-selects false false false "agent hooks and TestFlight tooling" $'.claude/settings.json\nscripts/plan-review.sh\nscripts/archive-upload.sh\nDistribution/ExportOptions.plist\n'
+selects false false false "agent hooks and the plan review and TestFlight configuration" $'.claude/settings.json\nscripts/plan-review.sh\nDistribution/ExportOptions.plist\n'
 
 # `others` alone: what only the hub, watch, TV, Womble and TopoLink compile.
 selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.swift\ndocs/pairing.md\n'
@@ -183,6 +183,7 @@ selects false false false "the reviewer's scripts and their tests" $'scripts/rev
 selects false false false "the simulator run's and the audio lane's tests alone" $'scripts/tests/simulator-run-test.sh\nscripts/tests/ci-audio-lane-test.sh\n' true
 selects false false false "the simulator run's script beside its test" $'scripts/simulator-run.sh\nscripts/tests/simulator-run-test.sh\n' true
 selects false false false "the agent's simulator reservation, which only its test runs" $'scripts/agent-simulator.sh\n' true
+selects false false false "the TestFlight upload, which only its test runs" $'scripts/archive-upload.sh\n' true
 # The product checks run in `others` alone, on the builds it makes, beside their own tests.
 selects false false true "a product check alone" $'scripts/check-built-plist.sh\n'
 selects false false true "a product check beside its test" $'scripts/check-built-assets.sh\nscripts/tests/check-built-assets-test.sh\n'
