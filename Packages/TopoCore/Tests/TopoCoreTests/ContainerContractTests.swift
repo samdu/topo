@@ -93,6 +93,10 @@ import TopoCore
         "Apps/TopoHub/TopoHub.entitlements",
         "Womble/Sources/App/Womble.entitlements",
     ])
+    /// The hub's file is XcodeGen's, written from `project.yml` (`targets.TopoHub.entitlements`)
+    /// at every generate, and every validation generates before any suite runs
+    /// (`scripts/mac-suite.sh`, `prepare`), so what this reads of it there is what XcodeGen made
+    /// of the YAML as it now stands.
     func everyEntitlementNamesTheContainer(_ path: String) throws {
         let data = try Data(contentsOf: Self.root.appendingPathComponent(path))
         let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
@@ -117,26 +121,6 @@ import TopoCore
         #expect(named == known)
     }
 
-    /// The hub's entitlements are written from `project.yml` on every generate, and its entry is
-    /// the one line there, comments aside, that names iCloud containers.
-    @Test func theHubsProjectEntryNamesTheContainer() throws {
-        let key = "com.apple.developer.icloud-container-identifiers:"
-        // A YAML comment runs from a `#` at the line's start or after a space to the line's end.
-        let lines = try Self.text("project.yml").split(separator: "\n").map { line -> String in
-            let text = String(line)
-            guard let hash = try? NSRegularExpression(pattern: #"(^|\s)#"#)
-                .firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return text }
-            return (text as NSString).substring(to: hash.range.location)
-        }.filter { $0.contains(key) }
-        #expect(lines.count == 1, "\(lines)")
-        let line = try #require(lines.first)
-        let value = try #require(line.range(of: key).map { line[$0.upperBound...] })
-        let list = try #require(try Self.matches(#"^\s*\[([^\[\]]*)\]\s*$"#, in: String(value)).first,
-                                "not a flow list: \(value)")
-        let items = list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        #expect(items.contains(Self.container), "\(items)")
-    }
-
     @Test func wombleReadsTheSameContainerAndZone() throws {
         let store = "Womble/Sources/Log/CloudKitStore.swift"
         #expect(try Self.literal(declaring: "containerIdentifier", uses: 2, in: store) == Self.container)
@@ -150,7 +134,8 @@ import TopoCore
     }
 
     /// Every container literal, and every zone given as a literal (`zoneName = "…"`,
-    /// `zoneName: "…"`, `zoneName: String = "…"`, across lines or not), in the Swift outside the
+    /// `zoneName: "…"`, `zoneName: String = "…"`, the name in backticks or not, across lines or
+    /// not; a literal plain, raw (`#"…"#`) or multi-line), in the Swift outside the
     /// tests, by the file it is in, once for each time it is spelled.
     static func literals(_ pattern: String) throws -> [String] {
         let base = root.standardizedFileURL.path + "/"
@@ -176,9 +161,9 @@ import TopoCore
     @Test func theConstantIsTheOnlySpellingInTheSwiftThatLinksTopoCore() throws {
         let database = "Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift"
         let app = "Apps/Shared/TopoCloudKit.swift"
-        #expect(try Self.literals(#""(iCloud\.[^"]*)""#)
+        #expect(try Self.literals(#""(?:""\s*)?(iCloud\.[^"\n]*)"#)
                 == ["\(app): iCloud.zone.hexagon.topo.board", "\(database): \(Self.container)"])
-        #expect(try Self.literals(#"zoneName\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*"([^"]*)""#)
+        #expect(try Self.literals(#"`?zoneName`?\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*#*"(?:""\s*)?([^"\n]*)"#)
                 == ["\(app): Board", "\(database): \(Self.zone)"])
         let text = try Self.text(database)
         #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"]*)"\s*$"#, in: text) == [Self.container])
