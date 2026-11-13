@@ -39,7 +39,7 @@ judgement:
      PR itself changes: a verdict that blocks, a green PR with Proof boxes
      unticked, a ready PR with no validate run, a run cancelled again
      after its rerun, and a PR nothing has touched for `IDLE` while no run
-     is in progress. A draft is gate one's: its runs are never read by
+     is in progress. A draft is its engineer's: its runs are never read by
      this step, and it is reported only for a ticked device box;
   6. reports each open issue that is untriaged — no `triaged` label and no
      comment — once it is older than `GRACE`, and again only when its labels
@@ -95,7 +95,7 @@ what stands is recorded and named in that one line, never said item by item.
 Everything it decides is a function of what it read, the model's answer in
 step 7 included; everything it does is a `gh`, `git`, `tmux` or shell call
 behind `Shell`, so `--dry-run` prints the pass instead (the model is still
-asked: a question changes nothing). The report, when there is one, is posted to the coordinator's mesh
+asked: a question changes nothing). The report, when there is one, is posted to the PM's mesh
 bridge over the fleet's authenticated `/deliver` route with this host's own
 peer token, as `topo-janitor` on the host `buddy-janitor`; a report the far
 bridge does not take is kept in the state file and sent with the next. A
@@ -138,19 +138,20 @@ DEV_TREES = "~/github/topo-ota-dev.pr"   # pr-N.lock stands there while that PR'
 GATE = "~/github/experiments/ota/topo-suites-gate.sh"
 FINAL_GATE = "~/github/experiments/ota/topo-final-gate.sh"
 CHECKOUT = "~/github/topo"
-# The coordinator (docs/process.md): the session REPORT_TO on the host whose
-# bridge is REPORT_HOST. topo-coordinator runs on toolbox, whose bridge's mesh
-# name is `daphne`; the LAN Traefik routes /mesh/<host>/deliver to that bridge,
-# which writes the message into the local session named in `to`.
+# The Topo PM (docs/process.md): the session REPORT_TO reached through the
+# bridge whose mesh name is REPORT_HOST. topo-pm runs in its own cluster agent
+# pod and is reached through `daphne`'s bridge, as the decisions pane reaches
+# it; the LAN Traefik routes /mesh/<host>/deliver to that bridge, which writes
+# the message into the session named in `to`.
 REPORT_HOST = os.environ.get("TOPO_JANITOR_REPORT_HOST", "daphne")
-REPORT_TO = os.environ.get("TOPO_JANITOR_REPORT_TO", "topo-coordinator")
+REPORT_TO = os.environ.get("TOPO_JANITOR_REPORT_TO", "topo-pm")
 MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", f"http://192.168.1.201/mesh/{REPORT_HOST}/deliver")
 MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
 MESH_SELF = "buddy-janitor"   # this host's verified mesh name; the sender below is the janitor's
 FROM = "topo-janitor"
 # The receiving bridge ends every relayed message by asking for a reply. One
 # sent to a script is addressed to no session: buddybox's bridge refuses it,
-# and it holds the coordinator's queue to this host until it expires.
+# and it holds the PM's queue to this host until it expires.
 NO_REPLY = "No reply is read: topo-janitor is a script with no session, so do not answer this."
 
 GRACE = timedelta(minutes=15)      # a box's, a lone run's, an issue's, before it is said
@@ -174,7 +175,7 @@ NOT_GREEN = ("failure", "cancelled", "timed_out")
 ISSUES_PAGE = 100                  # issues read per GraphQL page
 ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
 ISSUE_LINES = 60                   # issue lines one pass says, so a report is mostly PR lines
-TRIAGED = "triaged"                # the coordinator has read it: planned, parked or put to Sam
+TRIAGED = "triaged"                # the PM has read it: planned, parked or put to Sam
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
 LINK = "samdu/topo-link"           # the mailbox repository: an issue per build that carries device checks
 BUILDS_LIMIT = 50                  # open issues read there; a list that fills it is not read as whole
@@ -367,11 +368,11 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
     def report(cond, text):
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
-    # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
+    # A draft is its engineer's: its `test` reads its suites, the reviewer
     # waits for ready, and nothing else about its runs is the janitor's to say. Two
     # things are: a verdict that blocked its head, since a blocking verdict puts
-    # the PR back to draft and its review lands where no session on this Mac
-    # reads it (codex ran on the head, so the verdict is this head's), and a
+    # the PR back to draft and the PM keeps a PR whose engineer has stopped in
+    # view by it (codex ran on the head, so the verdict is this head's), and a
     # ticked device box, a draft Sam tested. A run at the review cap posted no
     # verdict, so it blocked nothing.
     if pr["isDraft"]:
@@ -441,7 +442,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
         if own:
             if since > GRACE:
                 report("own", f"{title}: validate green, but it changes {', '.join(own[:3])}{' …' if len(own) > 3 else ''}, "
-                              f"so its own copy validated it; the coordinator merges it after reading the review.")
+                              f"so its own copy validated it; it is admin-merged at its reviewed head once its review is clean.")
             return out
         out.append({"kind": "merge", "key": f"{n}:merge:{head}", "head": head, "number": n,
                     "text": f"merged {title}: validate green {minutes(since)} ago, no unchecked box."})
@@ -476,7 +477,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False, sessions=None, fil
     capped = review_capped(jobs)
     if "review_gate" in red_names and "reviewer_ran" not in red_names:
         if capped:
-            report("cap", f"{title}: the review cap is reached on {short}, four Codex verdicts; it merges on Sam's word or goes back to draft for a replan.")
+            report("cap", f"{title}: the review cap is reached on {short}; the PM rules on it.")
         else:
             report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
     # No verdict: the reviewer chain is red and nothing outside it is — a red
@@ -706,7 +707,7 @@ LEAD = "first, Sam's device test is ticked and it is not merging: "
 def leads(pr, conds):
     """Whether a PR's report lines lead the report: a ready PR with a ticked
     device box, and something holding it other than more boxes still to tick.
-    A draft never leads: it is the coordinator's, who put it back knowing what
+    A draft never leads: it is its engineer's, who put it back knowing what
     Sam had ticked. Pure."""
     return (not pr.get("isDraft") and ticked_device(pr.get("body"))
             and bool(set(conds) - {"boxes"}))
@@ -1478,7 +1479,7 @@ def peer_token(path=MESH_ENV):
 
 
 def deliver(sh, state, now, dry=False, log=print, warn=None):
-    """The reports to the coordinator, through its bridge's /deliver as the fleet's
+    """The reports to the PM, through its bridge's /deliver as the fleet's
     bridges forward to each other: this host's verified name as `from`, the
     janitor as `sender`. This pass's lines become one message under a new id;
     messages the bridge has not answered for good stand in `undelivered` under

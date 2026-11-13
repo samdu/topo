@@ -231,14 +231,10 @@ struct ChatView: View {
             .toolbar {
                 bar
                 middle
-                // The jewel is the glass here, so from iOS 26 on the bar puts none of its own
-                // behind it. That is a shape the bar draws rather than a value the badge does,
-                // so it is an availability branch and not a `Look` field.
-                if #available(iOS 26, *) {
-                    badgeItem.sharedBackgroundVisibility(.hidden)
-                } else {
-                    badgeItem
-                }
+                // The jewel is the glass here, so the bar puts none of its own behind it. That is
+                // a shape the bar draws rather than a value the badge does, so it is not a `Look`
+                // field.
+                badgeItem.sharedBackgroundVisibility(.hidden)
             }
             .sheet(isPresented: $showSettings) { SettingsView(signOut: signOut) }
             // The diagnostics are the badge's own, held rather than tapped, so they open from
@@ -416,12 +412,9 @@ struct ChatView: View {
                              SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
                          })
         }
-        // From iOS 26 on the bar draws neighbouring items on one piece of glass; the room
-        // between them is the bar's to give, so this is an availability branch and not a `Look`
-        // field.
-        if #available(iOS 26, *) {
-            ToolbarSpacer(.fixed, placement: .topBarLeading)
-        }
+        // The bar draws neighbouring items on one piece of glass; the room between them is the
+        // bar's to give, so it is not a `Look` field.
+        ToolbarSpacer(.fixed, placement: .topBarLeading)
         ToolbarItem(placement: .topBarLeading) {
             ChatBar.ModelButton(chosen: harness.name(of: chosenModel), open: modelsOpen,
                                 setOpen: { open in
@@ -568,9 +561,7 @@ struct ChatView: View {
     /// The name of the space both edges are measured in.
     private static let space = "chat"
 
-    /// The transcript, and — from iOS 18, which is where there is a scroll geometry to read —
-    /// where its content ends and where its own top edge is. The branch for an OS before that, which
-    /// measures nothing and draws the pane whole, is below the deployment target and never runs.
+    /// The transcript, and where its content ends and where its own top edge is.
     @ViewBuilder private func transcript(_ draft: Draft) -> some View {
         let queued = row.queued(in: harness)
         let drawn = !shownTurns.isEmpty || draft.drawer == .row || !queued.before.isEmpty || !queued.after.isEmpty
@@ -594,23 +585,19 @@ struct ChatView: View {
             #if DEBUG
             .recordingLinks { debugOpened.append($0) }
             #endif
-        if #available(iOS 18, *) {
-            view
-                // Where the transcript stops drawing, measured down from the transcript's own
-                // top edge. `contentOffset` is the content's y at the top of the scroll view's
-                // frame, which reaches under the navigation bar; taking the top inset off puts
-                // the number back at the edge of the frame this view was laid out in, which is
-                // what `transcriptTop` is measured for. The stack's own trailing padding comes
-                // off with it: those points are content and draw nothing, so a pane over them
-                // is a pane over nothing.
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.contentSize.height - geometry.contentOffset.y
-                        - geometry.contentInsets.top - look.transcript.spacing
-                } action: { _, bottom in contentBottomInTranscript = bottom }
-                .topEdge(in: Self.space) { transcriptTop = $0 }
-        } else {
-            view
-        }
+        view
+            // Where the transcript stops drawing, measured down from the transcript's own
+            // top edge. `contentOffset` is the content's y at the top of the scroll view's
+            // frame, which reaches under the navigation bar; taking the top inset off puts
+            // the number back at the edge of the frame this view was laid out in, which is
+            // what `transcriptTop` is measured for. The stack's own trailing padding comes
+            // off with it: those points are content and draw nothing, so a pane over them
+            // is a pane over nothing.
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height - geometry.contentOffset.y
+                    - geometry.contentInsets.top - look.transcript.spacing
+            } action: { _, bottom in contentBottomInTranscript = bottom }
+            .topEdge(in: Self.space) { transcriptTop = $0 }
     }
 
     /// How much of a pane the pane is. One while any of the three edges is unmeasured, as a launch
@@ -676,11 +663,7 @@ struct ChatView: View {
                             focused: { focused = $0 },
                             room: room)
             .environment(\.composerMenu, composerMenu)
-        if #available(iOS 18, *) {
-            view.topEdge(in: Self.space) { paneTop = $0 }
-        } else {
-            view
-        }
+        view.topEdge(in: Self.space) { paneTop = $0 }
     }
 
     /// What the chat's harness says of the model and the context, for Topo: the model the debug
@@ -902,7 +885,6 @@ extension ChatNotices.Said {
     }
 }
 
-@available(iOS 18, *)
 private extension View {
     /// One view's top edge in a named space, reported as it moves. `onGeometryChange` rather
     /// than a `GeometryReader` behind the view: it is the view's own geometry, read after every

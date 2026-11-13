@@ -652,8 +652,8 @@ final class MapKitMaps: MapsStore {
             let span = 2 * Double(region.radius)
             request.region = MKCoordinateRegion(center: region.centre.coordinate, latitudinalMeters: span, longitudinalMeters: span)
             // Without this the region is a hint MapKit is free to ignore, and does: a search around
-            // one city answers with places in another. Before iOS 18 a hint is all there is.
-            if #available(iOS 18.0, *) { request.regionPriority = .required }
+            // one city answers with places in another.
+            request.regionPriority = .required
         }
         do {
             return try await answer(runner.search(request)) { $0.compactMap(Self.place) }

@@ -342,7 +342,7 @@ extension LogTool.Cursor {
 
 /// The unified log's own store, scoped to this process, read for the app's subsystem.
 struct UnifiedLogReader: LogReading {
-    var subsystem = "zone.hexagon.topo"
+    var subsystem = TopoLog.subsystem
 
     func lines(since: Date) throws -> [LogLine] {
         let store = try OSLogStore(scope: .currentProcessIdentifier)

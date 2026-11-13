@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Testing
 import TopoProxy
+import TopoProxyTestSupport
 @testable import TopoTools
 
 @Suite struct ToolServiceTests {
@@ -438,5 +439,65 @@ private final class HeldAnswer: @unchecked Sendable {
         #expect(try await said(first)?.hasSuffix("launch 1\n") == true)
         let second = try await service.relisten(context: "launch 2")
         #expect(try await said(second)?.hasSuffix("launch 2\n") == true)
+    }
+
+    /// A tool that waits at its start until let go, then keeps the context it reads.
+    final class Parked: Tool, @unchecked Sendable {
+        let name = "parked"
+        let summary = "the call's context, read once let go"
+        let usage = "topo parked"
+        private let lock = NSLock()
+        private var _arrived = false
+        private var _read: String?
+        private var gate: CheckedContinuation<Void, Never>?
+        private var released = false
+        var arrived: Bool { lock.withLock { _arrived } }
+        var read: String? { lock.withLock { _read } }
+
+        func letGo() {
+            let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                released = true
+                defer { gate = nil }
+                return gate
+            }
+            waiting?.resume()
+        }
+
+        func run(_ arguments: [String]) async -> ToolReply {
+            await withCheckedContinuation { continuation in
+                let now = lock.withLock { () -> Bool in
+                    _arrived = true
+                    if released { return true }
+                    gate = continuation
+                    return false
+                }
+                if now { continuation.resume() }
+            }
+            let context = ToolCall.context.map { "\($0)" } ?? "none"
+            lock.withLock { _read = context }
+            return .ok(context + "\n")
+        }
+    }
+
+    /// A call accepted under one launch carries that launch for its whole run: a listener started
+    /// for the next while it waits is not where its context comes from.
+    @Test func aCallParkedAcrossARelistenKeepsTheContextItWasAcceptedUnder() async throws {
+        let parked = Parked()
+        let (service, _, _) = try await startedService([parked, Says()])
+        defer { Task { await service.stop() } }
+        defer { parked.letGo() }
+        let token = await service.token
+        let first = try await service.relisten(context: "launch 1")
+        let (parkedHead, parkedBody) = call(port: first, token: token, ["parked"])
+        let parkedCall = Task { try? await exchange(port: first, parkedHead, body: parkedBody) }
+        defer { parkedCall.cancel() }
+        for _ in 0..<500 where !parked.arrived { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(parked.arrived, "the call never reached the tool")
+        let second = try await service.relisten(context: "launch 2")
+        parked.letGo()
+        for _ in 0..<500 where parked.read == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(parked.read == "launch 1")
+        let (head, body) = call(port: second, token: token, ["says"])
+        #expect(try await exchange(port: second, head, body: body).body.hasSuffix("launch 2\n"))
     }
 }

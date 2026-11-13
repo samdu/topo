@@ -260,7 +260,7 @@ scoped_is() {
     "A new finding in the change since, and an earlier finding still open, block by the ordinary rule." \
     "A finding in code the change since does not touch does not block, whatever it is" \
     "reported, says in its text that it is not blocking, and does not by itself set \`blocking\`." \
-    "The coordinator writes it to the ledger as deferred, and it does not extend the loop."; do
+    "The PM writes it to the ledger as deferred, and it does not extend the loop."; do
     if grep -qF -- "$clause" <<<"$text"; then present="$present [$clause]"; else missing="$missing [$clause]"; fi
   done
   if grep -qF -- "read the whole PR again" <<<"$text"; then
@@ -362,19 +362,30 @@ echo '[]' > "$work/none.json"
 run none "$work/none.json"
 first_review none "no previous Codex review"
 scoped_is none no
-# The whole paragraph, word for word: a sentence taken out of it is an instruction the reviewer no
-# longer gets.
+# Each paragraph whole, word for word: a sentence taken out of one is an instruction the reviewer
+# no longer gets.
 exhaustive='Be exhaustive. This is the one read the PR gets before it merges:
 report every finding that meets the evidence rule below, not the
 first few, ranked most serious first with the blocking ones
 first. A defect left for a later round costs a full CI run and a
 fix round to find.'
-if python3 -c 'import sys; sys.exit(0 if ("\n" + sys.argv[1] + "\n\n") in open(sys.argv[2]).read() else 1)' \
-    "$exhaustive" "$work/none.out"; then
-  ok "none: the first-review prompt carries the exhaustive paragraph whole"
-else
-  fail "none: the first-review prompt does not carry the exhaustive paragraph whole"
-fi
+platform="Ask the same of the platform. For each mechanism the diff writes
+of its own — a timer, a gate, a gesture's verdict, a lifecycle
+or audio step — ask whether a first-party API already does it:
+an Apple framework API, a SwiftUI gesture or modifier, a system
+service. When one does and the description does not name it as
+checked and say why it does not fit, that is a finding naming
+the API and the new code's \`path:line\`. It does not block unless
+the diff's own mechanism is itself a defect the blocking rule
+below covers."
+for paragraph in exhaustive platform; do
+  if python3 -c 'import sys; sys.exit(0 if ("\n" + sys.argv[1] + "\n\n") in open(sys.argv[2]).read() else 1)' \
+      "${!paragraph}" "$work/none.out"; then
+    ok "none: the first-review prompt carries the $paragraph paragraph whole"
+  else
+    fail "none: the first-review prompt does not carry the $paragraph paragraph whole"
+  fi
+done
 if grep -qx "api --paginate repos/samdu/topo/issues/7/comments --jq .*" "$work/none.gh"; then
   ok "none: read this PR's issue comments"
 else

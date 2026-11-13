@@ -67,8 +67,9 @@
 # into the branch is not shown as the fix. The re-review verifies
 # each earlier finding as closed, still open or moot in `summary`, then
 # reviews the change since; a finding in code the change since does not touch
-# is reported and does not block. Four verdicts is the cap, and `review_cap`
-# holds the reviewer from a fifth. No earlier verdict, one
+# is reported and does not block. Three verdicts is the cap (five once the PR
+# carries `second-chance`), and `review_cap` holds the reviewer from one past
+# it. No earlier verdict, one
 # with no SHA marker, or a SHA that is not an ancestor is a first review,
 # said in the prompt step's log; a `gh` that still fails after its retries
 # fails the step, since the review round rests on what it reads.
@@ -148,14 +149,14 @@ jobs:
   # The suites are the ones the changed paths need
   # (scripts/ci-select-suites.sh against SUITE_RULES below, whose test reads
   # the rules and runs that step): documentation and tooling no suite covers
-  # need none, a change only the hub, watch, TV, Womble or TopoLink compile
-  # needs `others` alone, a change to the harness alone — a script whose own
-  # test fakes everything it touches, named below one by one — needs
-  # `scripts` alone, which is those tests with no simulator and no build, a
-  # test file alone needs the suites that load it, or compile it where no
-  # other chosen suite does, and anything
+  # need none, a change only the hub, watch, TV, Womble or TopoLink compile,
+  # or to a check only `others` runs, needs `others` alone, a change to the
+  # harness alone — a script no product suite runs, named below one by one
+  # with its test — needs `scripts` alone, which is those tests with no
+  # simulator and no build, a test file alone needs the suites that load it,
+  # or compile it where no other chosen suite does, and anything
   # else — the app, a package the app links, a test file no rule names, the project,
-  # this workflow, a script the product suites are what prove, a path no rule
+  # this workflow, a script a build or a product suite runs, a path no rule
   # names, or a diff that cannot be read — needs `topo_unit`, `topo_ui` and
   # `others`. `others` runs the scripts' tests too, so `scripts` is `false`
   # beside it.
@@ -226,7 +227,15 @@ jobs:
           # stay `all`; the hub, watch and TV targets (the watch's widgets and
           # suite included), Womble and TopoLink are built and tested only in
           # `others`, as are the janitor and validate-and-push.sh, whose tests
-          # run there. The watch's suite
+          # run there, and the two product checks and the manifest's script,
+          # which `others` alone runs (on its builds, and as `--check`). A
+          # script no build and no product suite runs (the simulator run and
+          # the voice's fetch, which the talk lane and the install page's
+          # builds run, the perf run, the agent's simulator, the TestFlight
+          # upload and its key reader, the Smart Turn filterbank's writer) is
+          # `scripts`, beside its test; one a build
+          # or a product suite runs has no rule and needs all three, and
+          # ci-select-suites-test.sh names each. The watch's suite
           # also builds Apps/Widgets, Apps/Shared, Apps/Client and TopoCore,
           # which `all` already sends to `others`.
           #
@@ -239,9 +248,9 @@ jobs:
           # Tests/ClientUI and takes Tests/Client/Widgets and Tests/Fixtures as
           # resources; TopoTests bundles Tests/Fixtures/licences; the Topo
           # scheme runs TopoUserland's tests, `swift test` in `others` every
-          # other package's; smartturn-mel-test.sh, run in `others`, reads
-          # its chirp; and mac-suite-test.sh, run in `scripts` (and so in
-          # `others`), scans the repository's own Tests/ClientUI. Tests/ClientTalk,
+          # other package's; smartturn-mel-test.sh, run in `scripts` (and so
+          # in `others`), reads its chirp; and mac-suite-test.sh, run there
+          # too, scans the repository's own Tests/ClientUI. Tests/ClientTalk,
           # which no PR suite runs, stays `all`.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
@@ -268,9 +277,11 @@ jobs:
             *.md none
             .claude/hooks/review-dispatch.py scripts
             scripts/tests/review-dispatch-test.sh scripts
+            .claude/hooks/ledger-recall.py scripts
+            scripts/tests/ledger-recall-test.sh scripts
             .claude/* none
             Distribution/* none
-            scripts/archive-upload.sh none
+            scripts/archive-upload.sh scripts
             scripts/plan-review.sh none
             .gitignore none
             scripts/janitor.py scripts
@@ -289,9 +300,34 @@ jobs:
             scripts/tests/review-prompt-test.sh scripts
             scripts/review-verdicts.sh scripts
             scripts/tests/review-verdict-test.sh scripts
+            scripts/simulator-run.sh scripts
             scripts/tests/simulator-run-test.sh scripts
             scripts/tests/ci-audio-lane-test.sh scripts
             scripts/tests/ci-require-tests-test.sh scripts
+            scripts/agent-simulator.sh scripts
+            scripts/tests/agent-simulator-test.sh scripts
+            scripts/tests/archive-upload-test.sh scripts
+            scripts/asc-pem.sh scripts
+            scripts/tests/asc-pem-test.sh scripts
+            scripts/tests/build-ish-test.sh scripts
+            scripts/check-built-assets.sh others
+            scripts/tests/check-built-assets-test.sh scripts
+            scripts/check-built-plist.sh others
+            scripts/tests/check-built-plist-test.sh scripts
+            scripts/tests/fetch-phonon-test.sh scripts
+            scripts/tests/mac-suite-test.sh scripts
+            scripts/tests/maps-opens-nothing-test.sh scripts
+            scripts/model-manifest.sh others
+            scripts/tests/model-manifest-test.sh scripts
+            scripts/perf-run.sh scripts
+            scripts/tests/perf-run-test.sh scripts
+            scripts/phonon-bundles.sh scripts
+            scripts/tests/phonon-bundles-test.sh scripts
+            scripts/smartturn-mel.py scripts
+            scripts/vendor/whisper_features.py scripts
+            scripts/tests/smartturn-mel-test.sh scripts
+            scripts/tests/suite-gate-test.sh scripts
+            scripts/tests/lib.sh scripts
         run: |
           set -euo pipefail
           # A diff that cannot be read selects every suite, inside the script.
@@ -410,15 +446,16 @@ jobs:
             sleep 15
           done
 
-  # The review cap (docs/process.md, *The fix loop*): four Codex verdicts on a
-  # PR and the reviewer does not run again. scripts/review-cap.sh counts them
-  # the way scripts/review-prompt.sh counts the round (both read
-  # scripts/review-verdicts.sh) and at four sets `capped`: codex does not
+  # The review cap (docs/process.md, *The fix loop*): three Codex verdicts on a
+  # PR, or five once it carries the `second-chance` label, and the reviewer
+  # does not run again. scripts/review-cap.sh reads the label and counts the
+  # verdicts the way scripts/review-prompt.sh counts the round (both read
+  # scripts/review-verdicts.sh), and at the cap sets `capped`: codex does not
   # run, and reviewer_ran and review_gate read the cap
   # as neither a missing verdict nor a blocking one. review_gate stays red, so
-  # the janitor does not merge a capped PR: it merges on Sam's word, or goes
-  # back to draft for a replan. The script posts one comment saying so, under
-  # its own marker and never the codex one. A count it cannot read or a
+  # the janitor does not merge a capped PR: the PM rules on it. The script
+  # posts one comment per cap saying so, under its own marker and never the
+  # codex one. A label read that fails fails the job as a count read does. A count it cannot read or a
   # comment it cannot post fails this job, so codex does not run and
   # reviewer_ran reports it as re-runnable. post_feedback runs the same script
   # again immediately before it posts, which is the guard on the write side.
@@ -644,6 +681,43 @@ jobs:
             test actually fails when the behaviour is wrong. A test that
             cannot fail is a finding. A claim with no test behind it is a
             finding.
+
+            Ask of every new thing the diff adds whether the repository
+            already has one. For each type, closure list, counter, wait,
+            bound, listener, keychain or file writer, document reader, test
+            double or helper the diff introduces, search the checkout for
+            the existing thing it resembles; when there is one, name it with
+            its path and say whether the diff could have used it. The ones
+            this repository has include: `LoginLife.onEnd` for a teardown
+            at a login's end, and `LoginLife.shared.epoch` with
+            `isCurrent` for work that lands after an await under a login
+            (an integer generation of the diff's own is the copy);
+            `PhoneTool.run`, `Arguments`, `ToolReply` and `Confined` for a
+            tool in the app; `KeychainItem` for a keychain item; `HomeFile`
+            for a file the app places in the guest's home by a hidden
+            name; `WidgetReader` for judging a document's fields; `TopoLog`
+            for a log line (a `Logger(subsystem:)` of the diff's own is the
+            copy); `TopoCloudKit` and `CloudKitRecordDatabase` for the
+            container and the zone; `RecordDatabase.answering(within:)`,
+            which a wrapper of a database passes on;
+            `TranscriptStore.message(for:)` for an error in words; and in
+            the tests `InMemoryRecordDatabase` and `ScriptedGuest`. A copy
+            of one of these is a finding citing the new code's `path:line`
+            and the original's path. It does not block unless the copy
+            already behaves differently from the original in a way the
+            blocking rule below covers. That the diff does not touch the
+            original is not evidence that none exists, so search for the
+            name before saying so.
+
+            Ask the same of the platform. For each mechanism the diff writes
+            of its own — a timer, a gate, a gesture's verdict, a lifecycle
+            or audio step — ask whether a first-party API already does it:
+            an Apple framework API, a SwiftUI gesture or modifier, a system
+            service. When one does and the description does not name it as
+            checked and say why it does not fit, that is a finding naming
+            the API and the new code's `path:line`. It does not block unless
+            the diff's own mechanism is itself a defect the blocking rule
+            below covers.
 
             Evidence rule: every finding cites `path:line` and names the
             concrete input or sequence that breaks the claim. A finding with
@@ -1190,13 +1264,13 @@ jobs:
             exit "$3"
           }
 
-          # The review cap: four verdicts, and the reviewer deliberately not run
+          # The review cap: three verdicts (five with the second chance), and the reviewer deliberately not run
           # again. Not a pass, so the merge is held; not a fresh block, so
           # nothing here is a finding to fix. The status pane has no state for
           # it, so it reads as block with the cap for its summary.
           if [ "${CAPPED:-}" = "true" ]; then
-            echo "::error::Review cap reached: this PR carries four Codex verdicts and is not reviewed again. It merges on Sam's word, or goes back to draft for a replan — not a new review decision."
-            finish block "review cap reached: four Codex verdicts; merges on Sam's word or goes back to draft for a replan" 1
+            echo "::error::Review cap reached: this PR is not reviewed again. The PM rules on it (docs/process.md, *When the rounds run out*) — not a new review decision."
+            finish block "review cap reached; the PM rules on it" 1
           fi
 
           if [ "$CODEX_RESULT" != "success" ]; then

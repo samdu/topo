@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Holds scripts/review-cap.sh, and scripts/review-verdicts.sh under it, against a fake `gh` answering
-# from a fixture of issue comments. It holds that:
-#   - three verdicts by github-actions[bot] carrying the codex marker is `capped=false`, and nothing
+# from a fixture of issue comments and the PR's labels. It holds that:
+#   - two verdicts by github-actions[bot] carrying the codex marker is `capped=false`, and nothing
 #     is posted;
-#   - a comment by anyone else carrying the marker text, first line and all, is not a verdict: three
+#   - a comment by anyone else carrying the marker text, first line and all, is not a verdict: two
 #     by the bot and one by a person is still `capped=false`;
-#   - four by the bot is `capped=true`, and the cap comment is posted once, under its own marker and
-#     never the codex one;
-#   - with the bot's cap comment already on the PR, four is `capped=true` and nothing is posted, and
-#     a cap comment by anyone else does not count as said;
-#   - a cap comment that cannot be posted, and comments that cannot be read, each exit nonzero with
-#     no `capped` line and an `::error::` on stderr, so the step fails and nothing reads the cap.
+#   - three by the bot is `capped=true`, and the cap comment is posted once, under its own marker and
+#     never the codex one, at three, naming the PM's second chance;
+#   - with the bot's cap comment at three already on the PR, three is `capped=true` and nothing is
+#     posted, and a cap comment by anyone else does not count as said;
+#   - with the `second-chance` label, three and four are `capped=false` and five is `capped=true`,
+#     with a cap comment at five posted beside the one at three, saying the second chance is spent;
+#     and six is capped too, so no grant reaches a sixth round;
+#   - a cap comment that cannot be posted, comments that cannot be read, and labels that cannot be
+#     read after the retries each exit nonzero with no `capped` line and an `::error::` on stderr, so
+#     the step fails and nothing reads the cap; a label read that fails once is tried again.
 #
 #   scripts/tests/review-cap-test.sh
 set -uo pipefail
@@ -29,10 +33,13 @@ CAP_MARKER='<!-- topo-review-cap -->'
 mkdir -p "$work/bin"
 cat > "$work/bin/gh" <<'SH'
 #!/usr/bin/env bash
-# `gh api --paginate <endpoint> --jq <expr>` answers from $FAKE_GH_PAGES, one JSON array per page,
-# applying the expression to each page as gh does. `gh api --method POST … -f body=<text>` appends
-# the body to $FAKE_GH_POSTS as one JSON string. FAKE_GH_FAIL=1 fails every read;
-# FAKE_GH_POST_FAIL=1 fails every post.
+# `gh api --paginate <endpoint>/comments --jq <expr>` answers from $FAKE_GH_PAGES, one JSON array per
+# page, applying the expression to each page as gh does; `gh api <endpoint> --jq <expr>` for the
+# issue itself answers an issue whose labels are $FAKE_GH_LABELS, comma-separated names.
+# `gh api --method POST … -f body=<text>` appends the body to $FAKE_GH_POSTS as one JSON string.
+# FAKE_GH_FAIL=1 fails every comment read, FAKE_GH_LABELS_FAIL=1 every issue read,
+# FAKE_GH_LABELS_FAIL_ONCE=<file> the first issue read (it makes the file), and FAKE_GH_POST_FAIL=1
+# every post.
 if [ "${2:-}" = --method ]; then
   [ -z "${FAKE_GH_POST_FAIL:-}" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
   while [ "$#" -gt 0 ]; do
@@ -41,11 +48,20 @@ if [ "${2:-}" = --method ]; then
   echo '{"id": 99}'
   exit 0
 fi
-[ -z "${FAKE_GH_FAIL:-}" ] || { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
-expr=""
+expr="" endpoint=""
 while [ "$#" -gt 0 ]; do
-  case "$1" in --jq) expr="$2"; shift 2 ;; *) shift ;; esac
+  case "$1" in --jq) expr="$2"; shift 2 ;; repos/*) endpoint="$1"; shift ;; *) shift ;; esac
 done
+if [ "${endpoint%/comments}" = "$endpoint" ]; then
+  [ -z "${FAKE_GH_LABELS_FAIL:-}" ] || { echo "HTTP 504: Gateway Timeout" >&2; exit 1; }
+  if [ -n "${FAKE_GH_LABELS_FAIL_ONCE:-}" ] && [ ! -e "$FAKE_GH_LABELS_FAIL_ONCE" ]; then
+    : > "$FAKE_GH_LABELS_FAIL_ONCE"; echo "HTTP 502: Bad Gateway" >&2; exit 1
+  fi
+  jq -nc --arg l "${FAKE_GH_LABELS:-}" '{number: 7, labels: ($l | split(",") | map(select(. != "")) | map({name: .}))}' \
+    | jq -r "$expr"
+  exit 0
+fi
+[ -z "${FAKE_GH_FAIL:-}" ] || { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
 jq -r "$expr" < "$FAKE_GH_PAGES"
 SH
 chmod +x "$work/bin/gh"
@@ -100,44 +116,83 @@ expect_error() {
   fi
 }
 
-page "$work/three.json" "$(verdict 1)" "$(verdict 2)" "$(verdict 3)"
-run three "$work/three.json"
-expect three false 0
+# verdicts <file> <n> [comment json]... — a page of verdicts 1..n, then the comments given.
+verdicts() { local f="$1" n="$2" i; shift 2; local all=(); for i in $(seq 1 "$n"); do all+=("$(verdict "$i")"); done; page "$f" "${all[@]}" "$@"; }
+capsaid() { comment 'github-actions[bot]' "$CAP_MARKER
+<!-- topo-review-cap-at: $1 -->
+### Review cap reached"; }
 
-page "$work/three-and-a-person.json" "$(verdict 1)" "$(verdict 2)" "$(verdict 3)" \
-  "$(comment samdu "$MARKER
+verdicts "$work/two.json" 2
+run two "$work/two.json"
+expect two false 0
+
+verdicts "$work/two-and-a-person.json" 2 "$(comment samdu "$MARKER
 Quoting the marker by hand.")"
-run three-and-a-person "$work/three-and-a-person.json"
-expect three-and-a-person false 0
+run two-and-a-person "$work/two-and-a-person.json"
+expect two-and-a-person false 0
 
-page "$work/four.json" "$(verdict 1)" "$(verdict 2)" "$(comment samdu "Pushed the fixes.")" "$(verdict 3)" "$(verdict 4)"
-run four "$work/four.json"
-expect four true 1
-posted="$(jq -r . "$work/four.posts" 2>/dev/null)"
-if [ "$(head -n 1 <<<"$posted")" = "$CAP_MARKER" ] && ! grep -qF -- "$MARKER" <<<"$posted" \
-  && grep -q "4 Codex verdicts" <<<"$posted" && grep -q "Sam's word" <<<"$posted"; then
-  ok "four: the cap comment opens with its own marker, never the codex one, and names the count and the way out"
+page "$work/three.json" "$(verdict 1)" "$(comment samdu "Pushed the fixes.")" "$(verdict 2)" "$(verdict 3)"
+run three "$work/three.json"
+expect three true 1
+posted="$(jq -r . "$work/three.posts" 2>/dev/null)"
+if [ "$(head -n 1 <<<"$posted")" = "$CAP_MARKER" ] && [ "$(sed -n 2p <<<"$posted")" = "<!-- topo-review-cap-at: 3 -->" ] \
+  && ! grep -qF -- "$MARKER" <<<"$posted" && grep -q "3 Codex verdicts, and the cap is 3" <<<"$posted" \
+  && grep -q "second-chance" <<<"$posted"; then
+  ok "three: the cap comment opens with its own marker and the cap it was posted at, never the codex one, and names the count and the PM's ruling"
 else
-  fail "four: the cap comment is not as it should be: $posted"
+  fail "three: the cap comment is not as it should be: $posted"
 fi
 
-page "$work/four-said.json" "$(verdict 1)" "$(verdict 2)" "$(verdict 3)" "$(verdict 4)" \
-  "$(comment 'github-actions[bot]' "$CAP_MARKER
-### Review cap reached")"
-run four-said "$work/four-said.json"
-expect four-said true 0
+verdicts "$work/three-said.json" 3 "$(capsaid 3)"
+run three-said "$work/three-said.json"
+expect three-said true 0
 
-page "$work/four-said-by-a-person.json" "$(verdict 1)" "$(verdict 2)" "$(verdict 3)" "$(verdict 4)" \
-  "$(comment samdu "$CAP_MARKER
+verdicts "$work/three-said-by-a-person.json" 3 "$(comment samdu "$CAP_MARKER
+<!-- topo-review-cap-at: 3 -->
 not the bot")"
-run four-said-by-a-person "$work/four-said-by-a-person.json"
-expect four-said-by-a-person true 1
+run three-said-by-a-person "$work/three-said-by-a-person.json"
+expect three-said-by-a-person true 1
 
-run post-fails "$work/four.json" FAKE_GH_POST_FAIL=1
+run granted-three "$work/three-said.json" FAKE_GH_LABELS=automerge,second-chance
+expect granted-three false 0
+
+verdicts "$work/granted-four.json" 4 "$(capsaid 3)"
+run granted-four "$work/granted-four.json" FAKE_GH_LABELS=second-chance
+expect granted-four false 0
+
+verdicts "$work/granted-five.json" 5 "$(capsaid 3)"
+run granted-five "$work/granted-five.json" FAKE_GH_LABELS=second-chance
+expect granted-five true 1
+posted="$(jq -r . "$work/granted-five.posts" 2>/dev/null)"
+if [ "$(sed -n 2p <<<"$posted")" = "<!-- topo-review-cap-at: 5 -->" ] && grep -q "the cap is 5" <<<"$posted" \
+  && grep -q "second chance is spent" <<<"$posted"; then
+  ok "granted-five: the cap comment is posted again at five, and says the second chance is spent"
+else
+  fail "granted-five: the cap comment is not as it should be: $posted"
+fi
+
+verdicts "$work/granted-five-said.json" 5 "$(capsaid 3)" "$(capsaid 5)"
+run granted-five-said "$work/granted-five-said.json" FAKE_GH_LABELS=second-chance
+expect granted-five-said true 0
+
+verdicts "$work/granted-six.json" 6 "$(capsaid 3)" "$(capsaid 5)"
+run granted-six "$work/granted-six.json" FAKE_GH_LABELS=second-chance
+expect granted-six true 0
+
+run ungranted-five "$work/granted-five-said.json" FAKE_GH_LABELS=automerge
+expect ungranted-five true 0
+
+run post-fails "$work/three.json" FAKE_GH_POST_FAIL=1
 expect_error post-fails "could not post the review-cap comment.*HTTP 403"
 
-run read-fails "$work/four.json" FAKE_GH_FAIL=1
+run read-fails "$work/three.json" FAKE_GH_FAIL=1
 expect_error read-fails "could not read this PR's comments after 4 attempts.*HTTP 502"
+
+run labels-fail "$work/two.json" FAKE_GH_LABELS_FAIL=1
+expect_error labels-fail "could not read this PR's labels after 4 attempts.*HTTP 504"
+
+run labels-retried "$work/granted-four.json" FAKE_GH_LABELS=second-chance FAKE_GH_LABELS_FAIL_ONCE="$work/labels-once"
+expect labels-retried false 0
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures failure(s)"

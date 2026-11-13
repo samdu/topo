@@ -15,6 +15,11 @@ import XCTest
 /// colour is another picture; and each comparison is shown able to fail for the defect it claims,
 /// since the fixture with any one node taken out is another picture too.
 ///
+/// What a date or a number draws as follows the locale, calendar and time zone in the view's
+/// environment, which default to the simulator's own, and a simulator's are its Mac account's.
+/// So every picture here is drawn under `drawn(_:dark:)`, which fixes them at what the
+/// references were drawn under: US English, the Gregorian calendar, UTC.
+///
 /// `TEST_RUNNER_TOPO_RECORD_WIDGETS=1` writes the references afresh (into the source tree) and
 /// fails, so a recording is never a pass.
 @MainActor
@@ -30,6 +35,24 @@ final class WidgetSnapshotTests: XCTestCase {
     static let channelTolerance = 24
     static let changedTolerance = 0.0005
     static let scale: CGFloat = 2
+
+    /// The calendar the references were drawn under, and its locale and time zone.
+    static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
+
+    /// A picture's view as the references were drawn: in the appearance asked for, and in
+    /// `calendar`'s locale, calendar and time zone rather than the host's.
+    static func drawn(_ view: some View, dark: Bool) -> some View {
+        view
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .environment(\.locale, calendar.locale!)
+            .environment(\.calendar, calendar)
+            .environment(\.timeZone, calendar.timeZone)
+    }
 
     private var recording: Bool { ProcessInfo.processInfo.environment["TOPO_RECORD_WIDGETS"] == "1" }
 
@@ -57,8 +80,7 @@ final class WidgetSnapshotTests: XCTestCase {
             .padding(family.isAccessory ? 0 : 16)
             .frame(width: size.width, height: size.height)
             .background(Theme.surface)
-            .environment(\.colorScheme, dark ? .dark : .light)
-        let renderer = ImageRenderer(content: view)
+        let renderer = ImageRenderer(content: drawn(view, dark: dark))
         renderer.scale = scale
         return try XCTUnwrap(renderer.cgImage, "\(family.rawValue) rendered to nothing")
     }
@@ -172,8 +194,7 @@ final class WidgetSnapshotTests: XCTestCase {
             .padding(form == .lockScreen || form == .expanded ? 12 : 0)
             .frame(width: size.width, height: size.height)
             .background(Theme.surface)
-            .environment(\.colorScheme, dark ? .dark : .light)
-        let renderer = ImageRenderer(content: view)
+        let renderer = ImageRenderer(content: drawn(view, dark: dark))
         renderer.scale = scale
         return try XCTUnwrap(renderer.cgImage, "\(form) rendered to nothing")
     }

@@ -97,6 +97,26 @@ final class LaunchPortsTests: XCTestCase {
         await tools.stop()
     }
 
+    /// A frozen resident taken back on its ports after its login ended and the next began carries
+    /// the login it was launched under, not the one standing at the reclaim: its calls are stale.
+    func testAReclaimAfterTheNextSignInCarriesTheLoginTheLaunchWasStartedUnder() async throws {
+        let life = LoginLife()
+        let tools = try ToolService(tools: [Carried()])
+        let ports = LaunchPorts(proxy: try APIProxy(log: { _ in }), tools: tools, login: life)
+        let token = await tools.token
+        let first = try await ports.ports().tools
+        let firstSaid = try await Self.said(port: first, token: token)
+        XCTAssertEqual(firstSaid, "current")
+        life.runTeardowns()
+        life.began()
+        let reclaimed = await ports.reclaim()
+        XCTAssertTrue(reclaimed)
+        let reclaimedSaid = try await Self.said(port: first, token: token)
+        XCTAssertEqual(reclaimedSaid, "stale", "a reclaim after the next sign-in carried the login standing at the reclaim")
+        await ports.proxy.stop()
+        await tools.stop()
+    }
+
     /// Says whether the login its call carries still stands.
     private struct Carried: Tool {
         let name = "carried"

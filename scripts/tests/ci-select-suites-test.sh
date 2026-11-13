@@ -5,11 +5,13 @@
 # first match wins, so a rule deleted, added or moved in the workflow fails here rather than
 # silently changing what runs. Then each rule is exercised with a path under it, and the cases
 # that matter by name — a documentation change runs nothing, a hub, watch, TV, Womble, TopoLink
-# change runs `others` alone, a change to the harness alone (the janitor, the push script, the
-# host switch, the selectors, the reviewer's scripts, and their tests) runs `scripts` alone, a
-# change to the app, a package the app links, the tests, the project, a guest patch, the workflow
-# or a script the product suites prove runs the three that cover the product, a path no rule names
-# runs those three, `scripts` is never chosen beside `others` — and every way the inputs can be
+# change or a product check runs `others` alone, a change to the harness alone (the janitor, the
+# push script, the host switch, the selectors, the reviewer's scripts, a script no product suite
+# runs, and their tests) runs `scripts` alone, a change to the app, a package the app links, the
+# tests, the project, a guest patch, the workflow or a script a build or a product suite runs runs
+# the three that cover the product, a path no rule names runs those three, `scripts` is never
+# chosen beside `others`, every file in scripts/tests alone runs `scripts` alone, every other file
+# in scripts/ has a rule or is one the test names as kept at the three — and every way the inputs can be
 # missing runs those three or fails, never fewer. Then it
 # runs the select step itself out of the workflow on a pull_request event in scratch repositories,
 # a diff producer that fails among them.
@@ -57,9 +59,11 @@ expected=(
   '*.md none'
   '.claude/hooks/review-dispatch.py scripts'
   'scripts/tests/review-dispatch-test.sh scripts'
+  '.claude/hooks/ledger-recall.py scripts'
+  'scripts/tests/ledger-recall-test.sh scripts'
   '.claude/* none'
   'Distribution/* none'
-  'scripts/archive-upload.sh none'
+  'scripts/archive-upload.sh scripts'
   'scripts/plan-review.sh none'
   '.gitignore none'
   'scripts/janitor.py scripts'
@@ -78,9 +82,34 @@ expected=(
   'scripts/tests/review-prompt-test.sh scripts'
   'scripts/review-verdicts.sh scripts'
   'scripts/tests/review-verdict-test.sh scripts'
+  'scripts/simulator-run.sh scripts'
   'scripts/tests/simulator-run-test.sh scripts'
   'scripts/tests/ci-audio-lane-test.sh scripts'
   'scripts/tests/ci-require-tests-test.sh scripts'
+  'scripts/agent-simulator.sh scripts'
+  'scripts/tests/agent-simulator-test.sh scripts'
+  'scripts/tests/archive-upload-test.sh scripts'
+  'scripts/asc-pem.sh scripts'
+  'scripts/tests/asc-pem-test.sh scripts'
+  'scripts/tests/build-ish-test.sh scripts'
+  'scripts/check-built-assets.sh others'
+  'scripts/tests/check-built-assets-test.sh scripts'
+  'scripts/check-built-plist.sh others'
+  'scripts/tests/check-built-plist-test.sh scripts'
+  'scripts/tests/fetch-phonon-test.sh scripts'
+  'scripts/tests/mac-suite-test.sh scripts'
+  'scripts/tests/maps-opens-nothing-test.sh scripts'
+  'scripts/model-manifest.sh others'
+  'scripts/tests/model-manifest-test.sh scripts'
+  'scripts/perf-run.sh scripts'
+  'scripts/tests/perf-run-test.sh scripts'
+  'scripts/phonon-bundles.sh scripts'
+  'scripts/tests/phonon-bundles-test.sh scripts'
+  'scripts/smartturn-mel.py scripts'
+  'scripts/vendor/whisper_features.py scripts'
+  'scripts/tests/smartturn-mel-test.sh scripts'
+  'scripts/tests/suite-gate-test.sh scripts'
+  'scripts/tests/lib.sh scripts'
 )
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -133,7 +162,7 @@ done
 # Nothing: documentation, the other workflows, tooling no suite covers.
 selects false false false "documentation and root markdown" $'docs/design.md\nREADME.md\nCLAUDE.md\nDesign/README.md\n'
 selects false false false "the automerge workflow" $'.github/workflows/automerge.yaml\n'
-selects false false false "agent hooks and TestFlight tooling" $'.claude/hooks/pm-guard.py\nscripts/plan-review.sh\nscripts/archive-upload.sh\nDistribution/ExportOptions.plist\n'
+selects false false false "agent hooks and the plan review and TestFlight configuration" $'.claude/settings.json\nscripts/plan-review.sh\nDistribution/ExportOptions.plist\n'
 
 # `others` alone: what only the hub, watch, TV, Womble and TopoLink compile.
 selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.swift\ndocs/pairing.md\n'
@@ -148,12 +177,48 @@ selects false false false "the host switch and its test" $'scripts/validate-host
 selects false false false "the selectors and their tests" $'scripts/ci-select-suites.sh\nscripts/ci-select-lane.sh\nscripts/tests/ci-select-suites-test.sh\nscripts/tests/ci-select-lane-test.sh\n' true
 selects false false false "the reviewer's scripts and their tests" $'scripts/review-cap.sh\nscripts/review-prompt.sh\nscripts/review-verdicts.sh\nscripts/tests/review-cap-test.sh\nscripts/tests/review-prompt-test.sh\nscripts/tests/review-verdict-test.sh\n' true
 # The simulator run's and the audio lane's tests fake their whole world, so a change to a test
-# alone is the harness's; the scripts they test are what the product suites prove.
+# alone is the harness's. The audio lane is what topo_ui runs on; the simulator run is run by
+# hand and by the talk lane, which no PR suite is, so its test is all that proves it.
 selects false false false "the simulator run's and the audio lane's tests alone" $'scripts/tests/simulator-run-test.sh\nscripts/tests/ci-audio-lane-test.sh\n' true
-selects true true true "the simulator run's script beside its test" $'scripts/simulator-run.sh\nscripts/tests/simulator-run-test.sh\n'
+selects false false false "the simulator run's script beside its test" $'scripts/simulator-run.sh\nscripts/tests/simulator-run-test.sh\n' true
+selects false false false "the agent's simulator reservation, which only its test runs" $'scripts/agent-simulator.sh\n' true
+selects false false false "the TestFlight upload, which only its test runs" $'scripts/archive-upload.sh\n' true
+# The product checks run in `others` alone, on the builds it makes, beside their own tests.
+selects false false true "a product check alone" $'scripts/check-built-plist.sh\n'
+selects false false true "a product check beside its test" $'scripts/check-built-assets.sh\nscripts/tests/check-built-assets-test.sh\n'
+selects true true true "the manifest's script beside the manifest the app bundles" $'scripts/model-manifest.sh\nApps/Topo/Resources/models.json\n'
 selects false false false "the suite gate's test alone" $'scripts/tests/ci-require-tests-test.sh\n' true
 selects true true true "the suite gate beside its test" $'scripts/ci-require-tests.sh\nscripts/tests/ci-require-tests-test.sh\n'
+selects false false false "a build script's test alone" $'scripts/tests/build-ish-test.sh\n' true
+selects true true true "the build script beside its test" $'scripts/build-ish.sh\nscripts/tests/build-ish-test.sh\n'
 selects true true true "the audio lane's script beside its test" $'scripts/ci-audio-lane.sh\nscripts/tests/ci-audio-lane-test.sh\n'
+# Every file in scripts/tests, alone, is the harness's: each is a script test the scripts suite
+# runs, or a helper only they read, so a test added with no rule falls to no rule and fails here.
+tests_in_dir=0
+for file in "$here"/*; do
+  [ -f "$file" ] || continue
+  tests_in_dir=$((tests_in_dir + 1))
+  selects false false false "scripts/tests/${file##*/} alone, a file in scripts/tests" "scripts/tests/${file##*/}"$'\n' true
+done
+[ "$tests_in_dir" -gt 0 ] || fail "no file found in $here to hold to a rule"
+# Every other file git has in scripts/ is named by a rule, or is one the product suites run and so is
+# left to the three on purpose: these, which a build, a product suite or its lane runs. A script
+# added with neither falls to no rule and fails here.
+kept_at_three=(
+  build-ish.sh ci-audio-feeder.swift ci-audio-lane.sh ci-audio-meter.swift ci-require-tests.sh
+  embed-voice.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh
+)
+scripts_in_dir=0
+while IFS= read -r relative; do
+  scripts_in_dir=$((scripts_in_dir + 1))
+  out="$(printf '%s\n' "$relative" | SUITE_RULES="$rules" "$script" 2>&1)"
+  if [[ " ${kept_at_three[*]} " == *" ${relative#scripts/} "* ]]; then
+    selects true true true "$relative alone, a script the product suites run" "$relative"$'\n'
+  elif grep -q '(no rule)' <<<"$out"; then
+    fail "$relative falls to no rule: give it the suite that tests it, or add it to kept_at_three"
+  fi
+done < <(git -C "$here/../.." ls-files -- scripts ':!scripts/tests')
+[ "$scripts_in_dir" -gt 0 ] || fail "no file found in scripts/ to hold to a rule"
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
 selects true true true "the app's client code" $'Apps/Client/SettingsView.swift\n'
@@ -175,7 +240,8 @@ selects true true true "this workflow" $'.github/workflows/pr-validate.yaml\n'
 selects true true true "the Mac suites' script" $'scripts/mac-suite.sh\n'
 selects true true true "the audio lane's script" $'scripts/ci-audio-lane.sh\n'
 selects true true true "the script that reads the suites' results" $'scripts/ci-require-tests.sh\n'
-selects true true true "a script's test" $'scripts/tests/suite-gate-test.sh\n'
+selects false false false "a script's test, which the scripts suite runs" $'scripts/tests/suite-gate-test.sh\n' true
+selects false false false "the script tests' shared helpers" $'scripts/tests/lib.sh\n' true
 selects true true true "a build script" $'scripts/build-ish.sh\n'
 selects true true true "a path no rule names" $'Somewhere/New.swift\n'
 

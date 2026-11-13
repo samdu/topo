@@ -478,10 +478,8 @@ final class MapKitMapsTests: XCTestCase {
         XCTAssertEqual(near.region.span.latitudeDelta, 0.09, accuracy: 0.005)
         // And 10 km of longitude at this latitude.
         XCTAssertEqual(near.region.span.longitudeDelta, 0.1136, accuracy: 0.005)
-        if #available(iOS 18.0, *) {
-            XCTAssertEqual(near.regionPriority, .required)
-            XCTAssertEqual(requests.searches.last?.regionPriority, .default)
-        }
+        XCTAssertEqual(near.regionPriority, .required)
+        XCTAssertEqual(requests.searches.last?.regionPriority, .default)
     }
 
     func testDirectionsCarryBothEndsTheModeAndTheDeparture() async throws {

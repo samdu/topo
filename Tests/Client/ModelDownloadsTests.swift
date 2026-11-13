@@ -362,8 +362,7 @@ final class ModelWaitersTests: XCTestCase {
         XCTAssertTrue(ModelDownloads.measured([.present, .absent]), "one model on the phone and one to come is partway")
         XCTAssertTrue(ModelDownloads.measured([.present, .downloading(done: 1, total: 4)]))
         for unmeasured in [[Status.present, .present], [.absent, .absent], [.downloading(done: 1, total: 4), .failed("503")],
-                           [.downloading(done: 1, total: 4), .waiting], [.present, .verifying], [.queued],
-                           [.present, .queued], []] {
+                           [.downloading(done: 1, total: 4), .waiting], [.present, .verifying], []] {
             XCTAssertFalse(ModelDownloads.measured(unmeasured), "\(unmeasured)")
         }
         XCTAssertEqual(ModelDownloads.fraction(done: 57, of: 228), 0.25)
@@ -372,47 +371,18 @@ final class ModelWaitersTests: XCTestCase {
         XCTAssertNil(ModelDownloads.fraction(done: 0, of: 0))
     }
 
-    /// The ear before the voice: a model asked for after others is held while any of them is
-    /// wanted, not on the phone and not failed, and only then. One never asked for (a debug
-    /// build's stand-in ear) holds nothing, and a failed one lets it go, so a broken ear never
-    /// costs the voice.
-    func testAModelAskedForAfterOthersIsHeldUntilTheyAreHereOrFailed() {
-        let after = ["voice": ["ear", "spotter"]]
-        let both: Set<String> = ["ear", "spotter", "voice"]
-        XCTAssertTrue(ModelDownloads.held("voice", after: after, wanted: both, present: [], failed: []))
-        XCTAssertTrue(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear"], failed: []),
-                      "one of the two still to come holds it")
-        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear", "spotter"], failed: []))
-        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: ["ear"], failed: ["spotter"]),
-                       "a failed one lets it go")
-        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: both, present: [], failed: ["spotter"]),
-                       "one failed lets it go while the other is still to come")
-        XCTAssertFalse(ModelDownloads.held("voice", after: after, wanted: ["voice"], present: [], failed: []),
-                       "an ear nobody asked for holds nothing")
-        XCTAssertFalse(ModelDownloads.held("ear", after: after, wanted: both, present: [], failed: []),
-                       "a model asked for after nothing is never held")
-        XCTAssertFalse(ModelDownloads.held("voice", after: [:], wanted: both, present: [], failed: []))
-    }
-
-    /// A pass enqueues the ear's models first and holds the voice back; the arrival of both, or
-    /// the failure of either, lets the voice go. A failed model is enqueued again only by a pass
-    /// that retries (a foreground's `start`), never by the pass a release makes.
-    func testAPassEnqueuesTheEarAndHoldsTheVoiceUntilTheEarIsHereOrFailed() {
-        let models = ["ear", "spotter", "voice", "rootfs"]
-        let after = ["voice": ["ear", "spotter"]]
+    /// A pass enqueues the wanted models not on the phone, in the manifest's order. A failed model
+    /// is enqueued again only by a pass that retries (a foreground's `start`).
+    func testAPassEnqueuesWhatIsWantedAndRetriesAFailureOnlyWhenAsked() {
+        let models = ["ear", "spotter", "rootfs"]
         let all = Set(models)
-        let fresh = ModelDownloads.plan(models, after: after, wanted: all, present: [], failed: [], retry: true)
-        XCTAssertEqual(fresh.enqueue, ["ear", "spotter", "rootfs"])
-        XCTAssertEqual(fresh.holding, ["voice"])
-        let earHere = ModelDownloads.plan(models, after: after, wanted: all, present: ["ear", "spotter"], failed: [], retry: false)
-        XCTAssertEqual(earHere.enqueue, ["voice", "rootfs"])
-        XCTAssertEqual(earHere.holding, [])
-        let spotterFailed = ModelDownloads.plan(models, after: after, wanted: all, present: [], failed: ["spotter"], retry: false)
-        XCTAssertEqual(spotterFailed.enqueue, ["ear", "voice", "rootfs"], "a release retries nothing and lets the voice go")
-        let retried = ModelDownloads.plan(models, after: after, wanted: all, present: [], failed: ["spotter"], retry: true)
-        XCTAssertEqual(retried.enqueue, ["ear", "spotter", "voice", "rootfs"], "a foreground retries the failure beside the voice")
-        let notAsked = ModelDownloads.plan(models, after: after, wanted: ["voice"], present: [], failed: [], retry: true)
-        XCTAssertEqual(notAsked.enqueue, ["voice"], "an ear nobody asked for holds nothing")
+        XCTAssertEqual(ModelDownloads.plan(models, wanted: all, present: [], failed: [], retry: true), models)
+        XCTAssertEqual(ModelDownloads.plan(models, wanted: all, present: ["ear"], failed: [], retry: false), ["spotter", "rootfs"])
+        XCTAssertEqual(ModelDownloads.plan(models, wanted: ["rootfs"], present: [], failed: [], retry: true), ["rootfs"],
+                       "a model nobody asked for is left alone")
+        XCTAssertEqual(ModelDownloads.plan(models, wanted: all, present: [], failed: ["spotter"], retry: false), ["ear", "rootfs"],
+                       "a pass that retries nothing asked for a failure again")
+        XCTAssertEqual(ModelDownloads.plan(models, wanted: all, present: [], failed: ["spotter"], retry: true), models)
     }
 
     /// The bar and the words beside it are one count: a model on the phone counts whole, one
@@ -653,11 +623,9 @@ final class ModelDownloadsGlueTests: XCTestCase {
         let downloads = downloads(manifest)
         let key = "ear|encoder.bin"
         downloads.start(["ear"])
-        downloads.start(["voice"], after: ["ear"])
         downloads.enqueue(manifest, excluding: [], retry: true)
         downloads.handle(.progress(key, 1))
         XCTAssertEqual(downloads.status(for: "ear"), .downloading(done: 1, total: 3))
-        XCTAssertEqual(downloads.status(for: "voice"), .queued, "held behind the ear")
         var settled: [Result<Void, ModelDownloadFailure>] = []
         downloads.whenSettled(["ear"]) { settled.append($0) }
         crawl(downloads, key)
@@ -667,7 +635,6 @@ final class ModelDownloadsGlueTests: XCTestCase {
         XCTAssertFalse(downloads.failed(["ear"]), "a restart sets no failure")
         XCTAssertEqual(downloads.status(for: "ear"), .downloading(done: 1, total: 3), "the key stays in flight at the bytes last reported")
         XCTAssertTrue(settled.isEmpty, "a waiter on the model is not told anything")
-        XCTAssertEqual(downloads.status(for: "voice"), .queued, "the model held behind it is still held")
         XCTAssertTrue(downloads.watchdog.restarting(key), "the replacement is owed")
         // A restart for a key no longer in flight (verified or failed meanwhile) owes nothing.
         downloads.handle(.verifying(key))
