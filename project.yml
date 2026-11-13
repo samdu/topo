@@ -526,6 +526,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tests
+        # Compiled against the host's module, which is arm64 only on a simulator (the Topo
+        # target's exclusion), so a generic simulator build of the bundle is arm64 only too.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   # The guest's suite: the rootfs pipeline, the kernel booted on Alpine's minirootfs
   # (TEST_RUNNER_TOPO_USERLAND_ROOTFS) with bash and its packages laid in
   # (TEST_RUNNER_TOPO_USERLAND_SHELL) and Claude Code mounted into it
