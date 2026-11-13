@@ -313,8 +313,9 @@ actor GuestBridge: Brain {
     /// task of the bridge's own, so the caller that gave the words can fail or go without the
     /// turn being lost, and holds the requests' one slot until it ends.
     private var flights: [String: Task<Void, Never>] = [:]
-    /// What such a turn reported of its model and usage, for the reply made of it.
-    private var flown: [String: (model: String?, usage: StreamEvent.Usage?)] = [:]
+    /// What such a turn reported of its model and usage, and the resident process it was sent
+    /// to, for the reply made of it.
+    private var flown: [String: (model: String?, usage: StreamEvent.Usage?, pid: Int32?)] = [:]
     /// The nonces `hear` is at work on, each with the calls for the same nonce waiting on it.
     private var hearing: [String: [CheckedContinuation<Bool, Never>]] = [:]
     private let heardObserver: @Sendable (GuestHeard) async -> Void
@@ -393,7 +394,7 @@ actor GuestBridge: Brain {
                 }
                 if let now = ledger.pending, now.input == heard.input, now.nonce == request.nonce,
                    now.state == .answered, let text = now.text {
-                    provenance[request.nonce] = provenance[request.nonce] ?? (now.session, nil)
+                    provenance[request.nonce] = provenance[request.nonce] ?? (now.session, flown[now.input]?.pid)
                     return reply(text, to: request, usage: flown[now.input]?.usage, model: flown[now.input]?.model)
                 }
                 // Anything else — cut off, never received, not known yet — is the record's to
@@ -908,7 +909,7 @@ actor GuestBridge: Brain {
         var reply: String?
         // A sign-out meanwhile makes whatever the turn came to a login's that has gone.
         if self.login == login {
-            flown[id] = (model, usage)
+            flown[id] = (model, usage, pid)
             switch end {
             case .answered(let result):
                 reply = words.text.isEmpty ? result.text ?? "" : words.text

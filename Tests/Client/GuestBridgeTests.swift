@@ -1751,6 +1751,21 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs.count, 2)
     }
 
+    /// A reply made of words given ahead of their turn names the session and the resident
+    /// process the words were sent to, as a reply asked after the save does.
+    func testAReplyToWordsGivenAheadNamesTheResidentProcessThatMadeIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("Paris."))
+        let heard = await bridge.hear("capital of France?", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertTrue(heard)
+        let result = try await runner.run("capital of France?", model: .sonnet, nonce: "n1", known: [])
+        XCTAssertEqual(guest.inputs, ["capital of France?"])
+        XCTAssertEqual(result.assistant.text, "Paris.")
+        let by = await bridge.provenance(of: result.assistant.nonce)
+        XCTAssertEqual(by?.session, "S1")
+        XCTAssertEqual(by?.pid, 7)
+    }
+
     /// iCloud is away and the guest is not: two messages are each answered, once, with nothing
     /// saved, and when iCloud is back each reply lands after its person's turn under that turn's
     /// nonce, with no second input.
