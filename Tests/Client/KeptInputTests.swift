@@ -173,8 +173,7 @@ final class KeptInputTests: XCTestCase {
         await rig.press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { _ in }?.value
         utterance(into: rig.voice.sink)
-        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+        await rig.press.gesture(false, held: true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { text in rig.sent.add(text) }?.value
         XCTAssertEqual(atTake?.kept, true, "the take was told before the input was kept, or not at all")
         XCTAssertEqual(atTake?.passes, false, "the kept input's gate was open at the take")
