@@ -214,8 +214,8 @@ final class PressGestureTests: XCTestCase {
     // MARK: - The open, off the main actor
 
     /// The main actor goes on running while a half-second open is in flight: the gesture's events
-    /// and the long press's verdict arrive on it. A ticker on the main actor never waits as long as
-    /// the open takes.
+    /// and the long press's verdict arrive on it. A ticker on the main actor ticks all through the
+    /// open, from the press to its answer, and never waits as long as the open takes.
     func testTheMainActorRunsWhileTheMicrophoneOpens() async {
         let rig = await rig(openTakes: 0.5)
         defer { rig.voice.cancel() }
@@ -227,10 +227,18 @@ final class PressGestureTests: XCTestCase {
                 try? await Task.sleep(for: .milliseconds(10))
             }
         }
+        let pressed = ContinuousClock.now
         await press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice) { _ in }?.value
+        let answered = ContinuousClock.now
         ticker.cancel()
         XCTAssertTrue(rig.voice.listening)
-        let gaps = zip(ticks, ticks.dropFirst()).map { $1 - $0 }
+        XCTAssertGreaterThanOrEqual(answered - pressed, .milliseconds(500), "the open did not take the half second it was given")
+        // The interval from the press to the answer, ends included, so an open that held the main
+        // actor throughout is one gap as long as the open, not an empty list.
+        let during = ticks.filter { $0 > pressed && $0 < answered }
+        XCTAssertGreaterThan(during.count, 5, "the main actor barely ticked while the microphone opened: \(during.count) ticks")
+        let marks = [pressed] + during + [answered]
+        let gaps = zip(marks, marks.dropFirst()).map { $1 - $0 }
         XCTAssertLessThan(gaps.max() ?? .zero, .milliseconds(250), "the main actor stopped for the open")
     }
 

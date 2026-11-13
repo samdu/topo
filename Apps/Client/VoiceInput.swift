@@ -552,7 +552,7 @@ final class VoiceInput {
             throw InputEngine.Refusal.reset
         }
         opened(result, suppress: suppress, resuming: false, mine: mine,
-               main: "session \(Self.ms(session)), queue \(Self.ms(answered))")
+               main: "session \(SmartTurn.ms(session)), queue \(SmartTurn.ms(answered))")
         if suspendWhenOpened == at {
             suspendWhenOpened = nil
             suspendNow("the interruption's start, while it opened")
@@ -567,7 +567,7 @@ final class VoiceInput {
         let opened = try input.openNow(suppress: suppress, resetsAt: resetsAt, tap: tap)
         audio.microphone(open: true)
         self.opened(opened, suppress: suppress, resuming: true, mine: generation,
-                    main: "session \(Self.ms(session))")
+                    main: "session \(SmartTurn.ms(session))")
     }
 
     /// What every open does on the main actor before the first handle: a kept input stopped (its
@@ -594,11 +594,6 @@ final class VoiceInput {
         #else
         InputEngine.Tap(gate: gate, sink: sink)
         #endif
-    }
-
-    /// The microphone's open in whole milliseconds, for its log line.
-    private static func ms(_ d: Duration) -> String {
-        "\(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000) ms"
     }
 
     /// The engine is running with the tap on it: the microphone is open. `main` is what the
