@@ -813,6 +813,9 @@ final class Speaker {
     /// still writing — the guest at its tools — to the next frame scheduled. A drain with a
     /// sentence still being made is the pause between two sentences, not a gap.
     private(set) var voiceGap = false
+    /// Whether the reading has scheduled a frame: a gap before any is the voice making nothing,
+    /// not the voice heard out, and the ceiling stops it as a dead engine.
+    private var voiceHeard = false
     /// The releases whose utterance `VoiceInput` has taken (`utteranceTaken`): only those want
     /// the bed, so its onset is never in input still being collected.
     private var taken: Set<Int> = []
@@ -1046,6 +1049,7 @@ final class Speaker {
                 samples += frame.samples.count
                 guard !frame.samples.isEmpty else { continue }
                 try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
+                voiceHeard = true
                 progressed()
                 if voiceGap {
                     // The voice is heard again: the bed gives way to it.
@@ -1168,7 +1172,7 @@ final class Speaker {
             // card's hang-up is the bound, as for a wait (`capped`), so the reading stands for
             // another pass. Otherwise its hold goes and the reading is parked, not stopped: it goes
             // on from where it was with the guest's next sentence or the reply's landing.
-            if let kept = self.written, kept.live, self.voiceGap, self.making == 0, self.queue.isIdle {
+            if let kept = self.written, kept.live, self.voiceHeard, self.voiceGap, self.making == 0, self.queue.isIdle {
                 if self.call?.up == true {
                     AudioLog.say("the voice was heard out \(ceiling) ago under the call with the guest still writing; the reading stands")
                     return self.progressed()
@@ -1227,6 +1231,7 @@ final class Speaker {
     private func done() {
         speaking = false
         voiceGap = false
+        voiceHeard = false
         answering = false
         // Before `.speaking` drops: a wait or a release still standing has the bed back now the
         // voice is done, and one that wants none is faded out under the reading's hold.

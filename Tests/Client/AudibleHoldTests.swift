@@ -466,6 +466,29 @@ final class AudibleHoldTests: XCTestCase {
         rig.speaker.stop()
     }
 
+    /// A parked reading's reply landing on a session that will not activate is refused, and the
+    /// turn's end straight after takes nothing: offered again, it goes on from where it was.
+    func testAParkedReadingsRefusedReplyGoesOnFromWhereItWasWhenOfferedAgain() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
+        rig.audio.invalidate()
+        rig.seams.activationError = CancellationError()
+        let reply = "One moment.\n\nIt is on the shelf."
+        XCTAssertFalse(rig.speaker.speak(reply, answering: "turn"), "taken on a session that would not activate")
+        rig.speaker.writingEnded("turn")
+        rig.seams.activationError = nil
+        XCTAssertTrue(rig.speaker.speak(reply, answering: "turn"), "refused again with the session back")
+        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
+        rig.speaker.stop()
+    }
+
     /// Under a call the card's hang-up is the bound: a first part heard out with the guest at its
     /// tools past the reading's ceiling keeps the reading, its hold and so the call.
     func testUnderACallTheCeilingLeavesAHeardOutReadingStanding() async throws {
