@@ -1,6 +1,6 @@
 # What the tests under scripts/tests share, sourced by a path relative to the test itself:
 #   . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-# It is not a test: the suite runs tests by name, and lists them by `*-test.sh`, which this is not.
+# It is not a test: the suite runs each test it names as `scripts/tests/<name>-test.sh`, which this is not.
 # `fail` counts into `failures`, which the test reads at its end, and prints to stdout as `ok`
 # does; a test whose failures go to stderr keeps its own.
 
