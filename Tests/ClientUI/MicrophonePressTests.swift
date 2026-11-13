@@ -171,12 +171,19 @@ final class MicrophonePressTests: XCTestCase {
         }
         XCTAssertEqual(app.state, .runningForeground, "the app survived the stalled tap")
         if after.holds > before.holds {
-            // A hold released while the microphone opened: the press is cancelled.
+            // A hold: released while the microphone opened, the press is cancelled and no session
+            // is counted; released once the queue's open has answered (the release waits behind
+            // the stall, the open does not), it ends the session it opened as a hold's release.
             XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15),
                           "the gesture called the tap a hold, and the microphone did not close: \(after.raw)")
             let settled = try report(app)
-            XCTAssertEqual(settled.sessions, before.sessions, "a hold released while the microphone opened left a session: \(settled.raw)")
-            record("the stalled tap was a hold to the gesture, and the press was cancelled", settled)
+            if settled.sessions == before.sessions {
+                record("the stalled tap was a hold to the gesture, released mid-open, and the press was cancelled", settled)
+            } else {
+                XCTAssertEqual(settled.sessions, before.sessions + 1, "one hold opened more than one session: \(settled.raw)")
+                XCTAssertEqual(settled.capture.ended, "release", "the hold's session was not ended by its release: \(settled.raw)")
+                record("the stalled tap was a hold to the gesture, released over the open microphone, and its release ended the session", settled)
+            }
             return
         }
         if let refusal = after.refusal {
