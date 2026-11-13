@@ -15,8 +15,7 @@ check="$here/check-built-assets.sh"
 embed="$here/embed-voice.sh"
 work="$(mktemp -d -t check-built-assets-test)"
 trap 'rm -rf "$work"' EXIT
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 passes() { "$check" "$@" >/dev/null 2>&1 || fail "refused: $*"; }
 refuses() {  # refuses <words the refusal says> <args…>
   local want="$1" errors; shift

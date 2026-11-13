@@ -12,9 +12,10 @@ import TopoCoreTesting
 /// nothing then waits on iCloud or the network, so a UI suite's first screen on a freshly booted
 /// simulator is not as slow as CloudKit is (#434). Every part takes the same instance, so the role
 /// a launch decides is the one the harness and the sweep read. The hub's unsigned build does the
-/// same with `TOPO_STORE=memory`. `TOPO_DEBUG_STORE=stalled` gets a store that never answers and
-/// a zone that is never made: CloudKit at its slowest, for seeing what the first screen does while
-/// iCloud keeps it waiting (#436).
+/// same with `TOPO_STORE=memory`. `TOPO_DEBUG_STORE=stalled` gets a store that never answers
+/// (but runs out at a bound asked of it, as CloudKit does) and a zone that is never made:
+/// CloudKit at its slowest, for seeing what the first screen does while iCloud keeps it waiting
+/// (#436).
 enum AppRecords {
     #if DEBUG
     static let storeVariable = "TOPO_DEBUG_STORE"
@@ -82,8 +83,10 @@ enum AppRecords {
 }
 
 #if DEBUG
-/// A record store whose every call waits until it is cancelled, and is never answered.
-private struct StalledRecordDatabase: ZoneDatabase {
+/// A record store whose every call waits until it is cancelled, and is never answered. Asked
+/// bounded (`answering(within:)`), its saves and fetches by ID run out at the bound and throw
+/// `unavailable`, as CloudKit's do with the bound as their request's timeout; the rest wait on.
+struct StalledRecordDatabase: ZoneDatabase {
     static func never() async throws -> Never {
         while true { try await Task.sleep(for: .seconds(3600)) }
     }
@@ -93,5 +96,21 @@ private struct StalledRecordDatabase: ZoneDatabase {
     func records(ofType type: String) async throws -> [Record] { try await Self.never() }
     func delete(_ ids: [RecordID]) async throws { try await Self.never() }
     func changes(ofType type: String, since token: Data?) async throws -> RecordChanges { try await Self.never() }
+    func answering(within seconds: TimeInterval) -> any RecordDatabase { Bounded(seconds: seconds) }
+
+    struct RanOut: Error {}
+
+    private struct Bounded: RecordDatabase {
+        let seconds: TimeInterval
+        func ranOut() async throws -> Never {
+            try await Task.sleep(for: .seconds(seconds))
+            throw RecordDatabaseError.unavailable(underlying: RanOut())
+        }
+        func save(_ records: [Record]) async throws -> [Record] { try await ranOut() }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await ranOut() }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await StalledRecordDatabase.never() }
+        func records(ofType type: String) async throws -> [Record] { try await StalledRecordDatabase.never() }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase { Bounded(seconds: seconds) }
+    }
 }
 #endif

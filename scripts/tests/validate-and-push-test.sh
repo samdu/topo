@@ -68,9 +68,7 @@ export LOCK_WAIT=60 LOCK_POLL=1
 # A Mac with a way into its login session is not asked for it by a fake suite.
 export TOPO_VALIDATE_SESSION_RUN=
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-ok() { echo "ok   $*"; }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 
 mkdir -p "$work/bin"
@@ -130,8 +128,8 @@ if [ "$check" = yes ]; then
   [ -z "${FAKE_CHECK_TIMES-}" ] || perl -MTime::HiRes=time -e "printf q(%.2f), time; print qq(\\n)" >> "$FAKE_CHECK_TIMES"
   [ -z "${FAKE_CHECK_SLOW-}" ] || perl -e "select(undef,undef,undef,3)"
   [ -z "${FAKE_CHECK-}" ] || { echo "error: $FAKE_CHECK" >&2; exit 1; }
-  # As the real check refuses a bash that crashes: here, one in a directory named crashbin.
-  case "$(command -v bash)" in *crashbin*) echo "error: the bash env finds, $(command -v bash), crashes" >&2; exit 1 ;; esac
+  # As the real check refuses a python3 that does not run: here, one in a directory named badbin.
+  case "$(command -v python3)" in *badbin*) echo "error: python3 ($(command -v python3)) does not run." >&2; exit 1 ;; esac
   # Refused at the first ask alone, as a lid shut for a minute is.
   [ -z "${FAKE_CHECK_ONCE-}" ] || [ -e "$FAKE_CHECK_ONCE" ] || { : > "$FAKE_CHECK_ONCE"; echo "error: the lid is closed." >&2; exit 1; }
   exit 0
@@ -223,7 +221,7 @@ origin_head() { git -C "$repo" ls-remote origin refs/heads/topic | cut -f1; }
 posted() { sed -n "s|^api --silent -X POST repos/samdu/topo/statuses/$sha -f context=\([^ ]*\) -f state=\([^ ]*\) .*|\1=\2|p" "$GH_CALLS" | tr '\n' ' '; }
 posts_elsewhere() { grep 'statuses/' "$GH_CALLS" | grep -vc "statuses/$sha "; }
 recorded() { sed -n "s/^$1=//p" "$FAKE_RECORD" 2>/dev/null; }
-is() {  # is <case> <got> <want>
+is() {  # is <case> <got> <want>; appends $out, which lib.sh's does not
   if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: got '$2', wanted '$3': $out"; fi
 }
 
@@ -938,32 +936,32 @@ for case in "not reached|FAKE_UNREACHABLE=laptop" "cannot run it|FAKE_CHECK=no i
   is "a host ${case%%|*}: asked to run a suite at most once" "$(grep -c '^laptop bash -s' "$SSH_CALLS")" "$([ "${case%%|*}" = "not reached" ] && echo 0 || echo 1)"
   rm -rf "$work/host-unusable"
 done
-# The check runs in a login shell, as the suite does: a bash only the host's profile puts first is
-# the one judged, though the caller's PATH finds a good one.
+# The check runs in a login shell, as the suite does: a python3 only the host's profile puts first
+# is the one judged, though the caller's PATH finds a good one.
 scratch host-profile Packages/TopoLink/Package.swift
-mkdir -p "$FAKE_HOSTS/laptop/crashbin"
-printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$FAKE_HOSTS/laptop/crashbin/bash"; chmod +x "$FAKE_HOSTS/laptop/crashbin/bash"
-echo 'PATH="$HOME/crashbin:$PATH"' > "$FAKE_HOSTS/laptop/.bash_profile"
+mkdir -p "$FAKE_HOSTS/laptop/badbin"
+printf '#!/bin/sh\nexec %s "$@"\n' "$(command -v python3)" > "$FAKE_HOSTS/laptop/badbin/python3"; chmod +x "$FAKE_HOSTS/laptop/badbin/python3"
+echo 'PATH="$HOME/badbin:$PATH"' > "$FAKE_HOSTS/laptop/.bash_profile"
 HOST_RETRY=0 TOPO_VALIDATE_HOSTS=laptop validate
-is "a host whose profile finds a crashing bash: exits 0" "$status" 0
-is "a host whose profile finds a crashing bash: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
-case "$out" in *"laptop"*"cannot run it"*"crashbin/bash"*) ok "a host whose profile finds a crashing bash: it is said, with the bash" ;; *) fail "a host whose profile finds a crashing bash: $out" ;; esac
-rm -rf "$FAKE_HOSTS/laptop/crashbin" "$FAKE_HOSTS/laptop/.bash_profile"
+is "a host whose profile finds a python3 that does not run: exits 0" "$status" 0
+is "a host whose profile finds a python3 that does not run: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+case "$out" in *"laptop"*"cannot run it"*"badbin/python3"*) ok "a host whose profile finds a python3 that does not run: it is said, with the python3" ;; *) fail "a host whose profile finds a python3 that does not run: $out" ;; esac
+rm -rf "$FAKE_HOSTS/laptop/badbin" "$FAKE_HOSTS/laptop/.bash_profile"
 # Through a way into the login session, the check is the session's user's: here the wrapper
-# runs it in another home, whose profile finds a crashing bash, and the ssh user's finds none.
+# runs it in another home, whose profile finds a python3 that does not run, and the ssh user's finds none.
 scratch host-session Packages/TopoLink/Package.swift
-mkdir -p "$work/host-session/bin" "$work/host-session/gui/crashbin"
+mkdir -p "$work/host-session/bin" "$work/host-session/gui/badbin"
 printf '#!/bin/sh\n[ "$1" != -n ] || shift\nexec "$@"\n' > "$work/host-session/bin/sudo"
 printf '#!/bin/sh\necho "session $*" >> "%s"\nHOME="%s" exec "$@"\n' "$work/host-session/calls" "$work/host-session/gui" > "$work/host-session/session-run"
-printf '#!/bin/sh\nexec /bin/bash "$@"\n' > "$work/host-session/gui/crashbin/bash"
-echo "PATH=\"$work/host-session/gui/crashbin:\$PATH\"" > "$work/host-session/gui/.bash_profile"
-chmod +x "$work/host-session/bin/sudo" "$work/host-session/session-run" "$work/host-session/gui/crashbin/bash"
+printf '#!/bin/sh\nexec %s "$@"\n' "$(command -v python3)" > "$work/host-session/gui/badbin/python3"
+echo "PATH=\"$work/host-session/gui/badbin:\$PATH\"" > "$work/host-session/gui/.bash_profile"
+chmod +x "$work/host-session/bin/sudo" "$work/host-session/session-run" "$work/host-session/gui/badbin/python3"
 PATH="$work/host-session/bin:$PATH" TOPO_VALIDATE_SESSION_RUN="$work/host-session/session-run" HOST_RETRY=0 TOPO_VALIDATE_HOSTS=laptop validate
-is "a host whose session's user finds a crashing bash: exits 0" "$status" 0
+is "a host whose session's user finds a python3 that does not run: exits 0" "$status" 0
 grep -q '^session /bin/bash -lc .*mac-suite.sh --check' "$work/host-session/calls" 2>/dev/null \
-  && ok "a host whose session's user finds a crashing bash: the check ran through the way in" || fail "the check did not run through the way in: $(cat "$work/host-session/calls" 2>&1)"
-case "$out" in *"laptop"*"cannot run it"*"gui/crashbin/bash"*) ok "a host whose session's user finds a crashing bash: refused, naming that user's bash" ;; *) fail "a host whose session's user finds a crashing bash: $out" ;; esac
-is "a host whose session's user finds a crashing bash: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
+  && ok "a host whose session's user finds a python3 that does not run: the check ran through the way in" || fail "the check did not run through the way in: $(cat "$work/host-session/calls" 2>&1)"
+case "$out" in *"laptop"*"cannot run it"*"gui/badbin/python3"*) ok "a host whose session's user finds a python3 that does not run: refused, naming that user's python3" ;; *) fail "a host whose session's user finds a python3 that does not run: $out" ;; esac
+is "a host whose session's user finds a python3 that does not run: the suite ran here" "$(recorded checkout)" "$(cd "$TOPO_VALIDATE_CACHE/slots/1/checkout" && pwd -P)"
 # A Mac whose --check refuses once and then passes: asked again after HOST_RETRY, and the suite
 # it then takes runs there; the one asked of it the first time ran here.
 scratch host-once Packages/TopoLink/Package.swift Womble/x
@@ -1151,7 +1149,6 @@ is "detached: exits 2" "$status" 2
 export TOPO_VALIDATE_SLOTS=1
 tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{16}-[0-9]{7}$' | env LC_ALL=C sort | tr '\n' ' '; }
 ticket_of() { tickets | tr ' ' '\n' | grep -- "-0*$1\$" || true; }
-until_true() { local n; for n in $(seq 100); do "$@" && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
 has_ticket() { [ -n "$(ticket_of "$1")" ]; }
 no_ticket() { [ -z "$(ticket_of "$1")" ]; }
 reached() { [ -s "$1" ]; }

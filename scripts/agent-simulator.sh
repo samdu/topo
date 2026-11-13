@@ -41,7 +41,8 @@ session_pid() {
 # When a pid started, which with the pid names one process and not whichever has the number now.
 # In C and UTC, so sessions with different locales and zones read the same words.
 # Through env, never as an assignment of the shell's own: a Homebrew bash resets its locale
-# after one, which in a forked subshell can segfault it (scripts/validate-and-push.sh, began_of).
+# after one, which in a forked subshell can segfault it on an account with a region override
+# (scripts/validate-and-push.sh, began_of).
 started() { env LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//' || true; }
 
 # The holder file is three lines: pid, when that process started, and a line for people.

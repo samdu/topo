@@ -247,6 +247,44 @@ final class VaultMigrationTests: XCTestCase {
         XCTAssertNil(memory.moveError)
     }
 
+    /// The same retry refused after the sign-out says nothing either: its failure was the last
+    /// login's, and the sign-out cleared the line it would go on.
+    func testARetryRefusedAfterASignOutSaysNothing() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: VaultPath("notes/today.md")!, in: database, as: hub, at: t0)
+        let login = LoginLife()
+        let memory = memory(database, on: device, login: login)
+        await memory.sync()
+        let shut = device.local.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: shut.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        }
+        _ = await memory.keepInICloudDrive(device.obsidianVault)
+        XCTAssertNotNil(memory.stranded)
+
+        let parked = Parked()
+        memory.emptyAgain = { _, names, _ in
+            await parked.wait()
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        let retry = Task { await memory.removeStranded() }
+        let deadline = Date().addingTimeInterval(10)
+        while !(await parked.waiting) {
+            guard Date() < deadline else { return XCTFail("timed out waiting for the retry to be parked") }
+            await Task.yield()
+        }
+        // A sign-out's steps, as `SignOut` takes them.
+        login.moveEpoch()
+        memory.forget()
+        login.runTeardowns()
+        await parked.release()
+        await retry.value
+        XCTAssertNil(memory.stranded, "the last login's old copy came back after the sign-out")
+        XCTAssertNil(memory.moveError, "the last login's refused retry was said after the sign-out")
+    }
+
     /// A name the transfer skipped on purpose was never the memory's to move, so it does not
     /// strand the folder. Reported as left behind it would say the old copy is still there when
     /// the memory has entirely gone — and offer a control to delete the person's own files.

@@ -265,12 +265,12 @@ final class GuestResident {
     /// Where a listener started again is told: at `notice`, which the phone keeps.
     nonisolated static let listenerLog = TopoLog(.resident)
 
-    /// A turn just sent, carried behind another app by a continued-processing task (iOS 26 on):
+    /// A turn just sent, carried behind another app by a continued-processing task:
     /// the task is asked for now, while the app is in front, and the lifecycle hears the turn end
     /// from the updates, which are passed on as they come. Read to the end whoever listens, since
     /// the end is what lets the task go.
     func carried(_ updates: AsyncStream<GuestSession.TurnUpdate>, compaction: Bool) -> AsyncStream<GuestSession.TurnUpdate> {
-        guard #available(iOS 26, *), let lifecycle else { return updates }
+        guard let lifecycle else { return updates }
         // A compaction is the mind's housekeeping, not a reply the person is waiting on.
         guard !compaction else { return updates }
         let turn = lifecycle.turnBegan()

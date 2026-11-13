@@ -94,7 +94,7 @@ public struct ForkImporter: FakefsImporter {
 /// finished, and is discarded, and a fakefs with no marker — one made before the packages were
 /// laid in — is imported afresh from the tarball and the packages, never patched in place.
 public struct RootfsInstaller: Sendable {
-    public enum Failure: Error, Equatable, CustomStringConvertible {
+    public enum Failure: PinMismatch, Equatable, CustomStringConvertible {
         case wrongSize(expected: Int64, got: Int64)
         case wrongDigest
         case unreadable(String)
@@ -194,14 +194,7 @@ public struct RootfsInstaller: Sendable {
     }
 
     static func verify(_ tarball: URL, against pin: RootfsPin) throws {
-        let size: Int64
-        do {
-            size = (try FileManager.default.attributesOfItem(atPath: tarball.path)[.size] as? Int64) ?? -1
-        } catch {
-            throw Failure.unreadable(error.localizedDescription)
-        }
-        guard size == pin.size else { throw Failure.wrongSize(expected: pin.size, got: size) }
-        guard try sha256(of: tarball) == pin.sha256.lowercased() else { throw Failure.wrongDigest }
+        try PinnedFile.verify(tarball, size: pin.size, sha256: pin.sha256, as: Failure.self, digest: sha256(of:))
     }
 
     static func sha256(of url: URL) throws -> String {

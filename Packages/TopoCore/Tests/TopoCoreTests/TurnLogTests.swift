@@ -308,6 +308,26 @@ import TopoCoreTesting
         let t = Transcript(turns: [b, root, a])
         #expect(t.ordered.map(\.text) == ["root", "a", "b"])
     }
+
+    /// The cycle goes after the rest even when the rest is younger: the end is the cycle's place,
+    /// not a slot in one sort by time.
+    @Test func aParentCycleOlderThanTheRestStillGoesAfterIt() async throws {
+        let root = Turn(ref: .ref("phone", 1), parents: [], role: .person, text: "root", at: tA + 3)
+        let a = Turn(ref: .ref("phone", 2), parents: [.ref("phone", 3)], role: .assistant, text: "a", at: tA + 1)
+        let b = Turn(ref: .ref("phone", 3), parents: [.ref("phone", 2)], role: .person, text: "b", at: tA + 2)
+        let t = Transcript(turns: [b, root, a])
+        #expect(t.ordered.map(\.text) == ["root", "a", "b"])
+    }
+
+    /// Two turns of a cycle written at the same moment are ordered by their refs.
+    @Test func turnsOfACycleWrittenAtOneMomentAreOrderedByRef() async throws {
+        let root = Turn(ref: .ref("phone", 1), parents: [], role: .person, text: "root", at: tA)
+        let a = Turn(ref: .ref("phone", 2), parents: [.ref("phone", 3)], role: .assistant, text: "a", at: tA + 1)
+        let b = Turn(ref: .ref("phone", 3), parents: [.ref("phone", 2)], role: .person, text: "b", at: tA + 1)
+        for turns in [[b, root, a], [a, root, b], [root, b, a]] {
+            #expect(Transcript(turns: turns).ordered.map(\.ref) == [root.ref, a.ref, b.ref])
+        }
+    }
 }
 
 @Suite struct TurnWriterRecoveryTests {

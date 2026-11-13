@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Testing
 @testable import TopoProxy
+import TopoProxyTestSupport
 
 @Suite struct CredentialTests {
     /// Review focus 1: the guest's `Authorization` reaches the upstream byte for byte, and no line
