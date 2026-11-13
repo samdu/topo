@@ -530,6 +530,20 @@ final class AudibleHoldTests: XCTestCase {
         call.end()
     }
 
+    /// In a conversation the microphone closes at each utterance's end, mid-turn too: what the
+    /// guest wrote under it is not read then but with the reply as it lands. Guards this PR's
+    /// re-offer (`writingWaited`), which main does not make at all.
+    func testInAConversationWhatWaitedForTheMicrophoneIsNotReadAtItsClose() async throws {
+        let rig = await rig()
+        rig.speaker.conversing = true
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.microphoneOpening()
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        rig.speaker.microphoneOpened(counted: true)
+        XCTAssertFalse(rig.speaker.speaking, "read at a conversation's microphone close mid-turn")
+        rig.speaker.stop()
+    }
+
     /// A parked reading whose landing is refused is not cut off by another turn's reading that is
     /// refused too: offered again, the landing goes on from where the reading was.
     func testAParkedReadingOutlivesAnotherTurnsRefusedReading() async throws {

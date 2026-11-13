@@ -656,7 +656,7 @@ final class Speaker {
             let base = settled.hasPrefix(kept.settled) ? kept.queued : 0
             guard Self.spoken(settled).count > base else { return }
             if replyMustWait {
-                writingWaited = (text, nonce)
+                if !conversing { writingWaited = (text, nonce) }
                 return
             }
             parked = nil
@@ -669,6 +669,9 @@ final class Speaker {
         } else if written?.nonce != nonce {
             guard !settled.isEmpty else { return }
             if replyMustWait {
+                // A conversation's microphone closes at each utterance's end, mid-turn as well:
+                // what it held back is read when the reply lands, not then.
+                guard !conversing else { return }
                 if writingWaited?.nonce != nonce {
                     AudioLog.say("what the guest has written waits for \(microphoneBusy ? "the microphone to close" : "the call's session to be activated")")
                 }
