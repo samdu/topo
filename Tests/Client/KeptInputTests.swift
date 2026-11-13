@@ -160,6 +160,27 @@ final class KeptInputTests: XCTestCase {
 
     // MARK: Review Focus 1: nothing the kept input hears reaches anything
 
+    /// The take the working bed waits for (`VoiceInput.onTaken`) is told with the kept input's
+    /// gate already shut, so the bed's onset reaches no sink.
+    func testTheTakeIsToldWithTheKeptInputsGateShut() async {
+        let rig = await rig()
+        var atTake: (kept: Bool, passes: Bool)?
+        rig.voice.onTaken = {
+            var passes = false
+            rig.voice.gate.pass { passes = true }
+            atTake = (rig.voice.inputKept, passes)
+        }
+        await rig.press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+                                speaks: true, calls: { true }) { _ in }?.value
+        utterance(into: rig.voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+                                speaks: true, calls: { true }) { text in rig.sent.add(text) }?.value
+        XCTAssertEqual(atTake?.kept, true, "the take was told before the input was kept, or not at all")
+        XCTAssertEqual(atTake?.passes, false, "the kept input's gate was open at the take")
+        rig.voice.cancel()
+    }
+
     func testWhatTheKeptInputHearsReachesNoTurnCaptionOrRecogniser() async {
         let rig = await rig()
         await rig.press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
