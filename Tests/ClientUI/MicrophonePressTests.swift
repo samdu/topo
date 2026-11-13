@@ -114,7 +114,11 @@ final class MicrophonePressTests: XCTestCase {
         // A tap opens the microphone and leaves it open until the next press.
         let before = try report(app)
         mic.press(forDuration: 0.1)
-        let after = try waitForReport(app, timeout: 15, "the tap reached VoiceInput") { $0.presses == before.presses + 1 }
+        // The open answers from the input's queue after the press is counted: the report is read
+        // once the tap has opened its session or been refused.
+        let after = try waitForReport(app, timeout: 15, "the tap opened the microphone or was refused") {
+            $0.presses == before.presses + 1 && ($0.sessions > before.sessions || $0.refusal != nil)
+        }
         if let refusal = after.refusal {
             record("hands free; microphone refused: \(refusal)", after)
             guard refusal == "no audio input" else {
@@ -137,6 +141,66 @@ final class MicrophonePressTests: XCTestCase {
         let ended = try report(app)
         XCTAssertEqual(ended.sessions, after.sessions, "raising the keyboard opened a second session: \(ended.raw)")
         record("hands free, ended by the keyboard", ended)
+    }
+
+    /// The limit of the gesture's verdict: a quick tap while the main thread is held for 0.8 s
+    /// at the thumb-down (`TOPO_DEBUG_PRESS_STALL`), past the long press's 0.4 s, as a cold
+    /// launch's session work can hold it. The release and the long press's due time both queue
+    /// behind the stall, and SwiftUI fires the overdue long press first, so the tap is a hold
+    /// (on Xcode 27.2's iOS 26 simulator): a hold released while the microphone opens cancels
+    /// the press, one released once the queue's open has answered ends its session as a hold's
+    /// release, and either way the microphone is left closed. The test records which verdict the gesture
+    /// gave and holds that the press did what that verdict says, so it does not fail for the
+    /// limit and does fail for a verdict the press then ignored.
+    func testATapWhileTheMainThreadStallsIsJudgedByTheGesture() throws {
+        let app = launch(environment: ["TOPO_DEBUG_EAR": "stub", "TOPO_DEBUG_PRESS_STALL": "0.8"])
+        let mic = microphone(in: app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        try waitForReport(app, timeout: 30, "the stub ear is resident") { $0.ear == "ready" }
+        mic.press(forDuration: 0.5)
+        answerOnePrompt()
+        closeHandsFree(app, mic)
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the tap")
+
+        let before = try report(app)
+        mic.tap()
+        // The open answers from the input's queue after the press is counted: the report is read
+        // once the tap has opened its session, been refused, or been called a hold.
+        let after = try waitForReport(app, timeout: 15, "the tap was released and opened the microphone, was refused or was a hold") {
+            $0.presses == before.presses + 1 && $0.releases == before.releases + 1
+                && ($0.sessions > before.sessions || $0.refusal != nil || $0.holds > before.holds)
+        }
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the stalled tap")
+        if after.holds > before.holds {
+            // A hold: released while the microphone opened, the press is cancelled and no session
+            // is counted; released once the queue's open has answered (the release waits behind
+            // the stall, the open does not), it ends the session it opened as a hold's release.
+            XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15),
+                          "the gesture called the tap a hold, and the microphone did not close: \(after.raw)")
+            let settled = try report(app)
+            if settled.sessions == before.sessions {
+                record("the stalled tap was a hold to the gesture, released mid-open, and the press was cancelled", settled)
+            } else {
+                XCTAssertEqual(settled.sessions, before.sessions + 1, "one hold opened more than one session: \(settled.raw)")
+                XCTAssertEqual(settled.capture.ended, "release", "the hold's session was not ended by its release: \(settled.raw)")
+                record("the stalled tap was a hold to the gesture, released over the open microphone, and its release ended the session", settled)
+            }
+            return
+        }
+        if let refusal = after.refusal {
+            record("stalled tap; microphone refused: \(refusal)", after)
+            guard refusal == "no audio input" else {
+                return XCTFail("the tap was refused for a reason that is a fault: \(after.raw)")
+            }
+            if laneHasInput {
+                XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the tap was refused for want of one: \(after.raw)")
+            }
+            throw XCTSkip("missing coverage: this host has no audio input, so the stalled tap opened no session")
+        }
+        XCTAssertTrue(app.images["Listening; press to send"].waitForExistence(timeout: 15),
+                      "the gesture called the stalled tap a tap, and the microphone is not open hands-free: \(after.raw)")
+        record("the stalled tap was a tap to the gesture, and the microphone is open hands-free", try report(app))
+        closeHandsFree(app, mic)
     }
 
     /// Over the pane's row a press on the microphone is dictation into the draft: what was typed
@@ -349,12 +413,14 @@ final class MicrophonePressTests: XCTestCase {
     struct Report: Decodable {
         var presses: UInt
         var sessions: UInt
+        var releases: UInt
+        var holds: UInt
         var refusal: String?
         var ear: String
         var capture: Capture
         var raw = ""
 
-        enum CodingKeys: String, CodingKey { case presses, sessions, refusal, ear, capture }
+        enum CodingKeys: String, CodingKey { case presses, sessions, releases, holds, refusal, ear, capture }
     }
 
     struct Capture: Decodable, Equatable {

@@ -249,8 +249,7 @@ final class AudibleHoldTests: XCTestCase {
         buffer.frameLength = frames
         for i in 0..<Int(frames) { buffer.floatChannelData![0][i] = sinf(Float(i) * 0.05) * 0.3 }
         input.sink.append(buffer)
-        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        let heard = await input.pressUp(as: .chat)
+        let heard = await input.pressUp(as: .chat, held: true)
         XCTAssertEqual(heard, "purple elephants")
         XCTAssertEqual(takes.count, 1, "the take was told other than once")
         XCTAssertEqual(takes.first?.sunk, 0, "the sink still held audio when the take was told")
