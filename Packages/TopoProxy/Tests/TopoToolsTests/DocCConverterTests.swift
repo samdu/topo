@@ -118,6 +118,11 @@ final class DocCConverterTests: XCTestCase {
         XCTAssertTrue(rest.contains("\n[apple-doc: unrendered restResponses section]\n"), rest)
         let inline = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"a "},{"type":"sparkle"}]}]}]}"#)
         XCTAssertTrue(inline.contains("\na [apple-doc: unrendered sparkle inline]\n"), inline)
+        let holding = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"mysteryBox","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"inside"}]}]},{"type":"mysteryLine","inlineContent":[{"type":"text","text":"said"}]},{"type":"paragraph","inlineContent":[{"type":"glitter","inlineContent":[{"type":"text","text":"shone"}]}]},{"type":"emptyBox","content":[]}]}]}"#)
+        XCTAssertTrue(holding.contains("\n[apple-doc: unrendered mysteryBox block]\ninside\n"), "an unknown block's children stay, under its mark: " + holding)
+        XCTAssertTrue(holding.contains("\n[apple-doc: unrendered mysteryLine block]\nsaid\n"), holding)
+        XCTAssertTrue(holding.contains("\n[apple-doc: unrendered glitter inline] shone\n"), holding)
+        XCTAssertTrue(holding.contains("\n[apple-doc: unrendered emptyBox block]\n"), "an empty one is marked too: " + holding)
     }
 
     /// The pages that mention this one, linked with their abstracts, as the page lists them.
@@ -164,6 +169,9 @@ final class DocCConverterTests: XCTestCase {
         XCTAssertTrue(shapes.contains("- **p**: First para.\n\n  ```swift\n  let a = 1\n  let b = 2\n  ```\n"), shapes)
         XCTAssertTrue(shapes.contains("> **Warning**\n> Para one.\n>\n> Para two.\n"), shapes)
         XCTAssertTrue(shapes.contains("- **Key**: Def one.\n\n  Def two.\n"), shapes)
+        let led = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"parameters","parameters":[{"name":"p","content":[{"type":"heading","level":2,"text":"Heading"},{"type":"paragraph","inlineContent":[{"type":"text","text":"Body"}]}]}]},{"kind":"possibleValues","title":"Accepted Modes","values":[{"name":"audio","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"Plays."}]},{"type":"codeListing","syntax":"xml","code":["<string>audio</string>"]}]},{"name":"fetch","content":[]}]}]}"#)
+        XCTAssertTrue(led.contains("- **p**:\n  ## Heading\n\n  Body\n"), "a lead that is not a paragraph keeps its own line: " + led)
+        XCTAssertTrue(led.contains("## Accepted Modes\n\n- `audio`: Plays.\n\n  ```xml\n  <string>audio</string>\n  ```\n- `fetch`\n"), "the section's own title, and a value's blocks: " + led)
         let real = try convert(page("requestrecordpermission"))
         XCTAssertTrue(real.contains("indicating whether the user granted or denied permission to record.\n\n  When you call this method,"), real)
     }
@@ -174,6 +182,14 @@ final class DocCConverterTests: XCTestCase {
         XCTAssertTrue(shapes.contains("|  |  |\n|---|---|\n| r1c1 | r1c2 |\n| r2c1 | r2c2 |\n"), shapes)
         let headed = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"table","header":"row","rows":[[[{"type":"paragraph","inlineContent":[{"type":"text","text":"h"}]}]],[[{"type":"paragraph","inlineContent":[{"type":"text","text":"d"}]}]]]}]}]}"#)
         XCTAssertTrue(headed.contains("| h |\n|---|\n| d |"), headed)
+        let both = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"table","header":"both","rows":[[[{"type":"paragraph","inlineContent":[{"type":"text","text":"h"}]}]],[[{"type":"paragraph","inlineContent":[{"type":"text","text":"d"}]}]]]}]}]}"#)
+        XCTAssertTrue(both.contains("| h |\n|---|\n| d |"), "a header row and column: the row is the header: " + both)
+    }
+
+    /// A thematic break is a rule.
+    func testAThematicBreakIsARule() throws {
+        let markdown = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"above"}]},{"type":"thematicBreak"},{"type":"paragraph","inlineContent":[{"type":"text","text":"below"}]}]}]}"#)
+        XCTAssertTrue(markdown.contains("above\n\n---\n\nbelow"), markdown)
     }
 
     /// The command itself, through the link it is run by, over a `wget` that records what it was

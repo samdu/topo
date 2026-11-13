@@ -42,7 +42,7 @@ def inl:
                else "[" + $title + "](" + href($r) + ")" end
       elif $t == "link"        then "[" + ((.title // .destination) | if type=="array" then inl else . end) + "](" + .destination + ")"
       elif $t == "image"       then ref(.identifier) as $r | "![" + ($r.alt // "image") + "](" + (($r.variants[0].url // "") | if startswith("/") then base + . else . end) + ")"
-      elif has("inlineContent") then (.inlineContent | inl)
+      elif has("inlineContent") then unrendered("inline") + " " + (.inlineContent | inl)
       else unrendered("inline") end
   end;
 
@@ -50,12 +50,17 @@ def inl:
 # collapsed without touching a listing's own.
 def code_mark: "\u0001";
 
-# A list item: its marker and lead line, then the rest of its lines hung under it by $n. A lead
-# that opens a code listing goes on a line of its own, below the marker.
-def item($marker; $n):
-  if length == 0 then [ $marker ]
-  elif (.[0] | startswith("```")) then [ $marker ] + map(if . == "" then . else (" " * $n) + . end)
-  else [ $marker + " " + .[0] ] + (.[1:] | map(if . == "" then . else (" " * $n) + . end)) end;
+# A list item from its blocks: the marker, with a lead paragraph beside it, then the rest of the
+# lines hung under it by $n; render is the block renderer. A lead that is any other block — a
+# heading, a list, a listing, a table, an aside — starts on a line of its own below the marker,
+# so it stays that block.
+def item($marker; $n; render):
+  def hung: map(if . == "" then . else (" " * $n) + . end);
+  (((.[0].type // "") == "paragraph") and ((.[0] | render)[0] != "")) as $lead
+  | (render | trimmed) as $lines
+  | if ($lines | length) == 0 then [ $marker ]
+    elif $lead then [ $marker + " " + $lines[0] ] + ($lines[1:] | hung)
+    else [ $marker ] + ($lines | hung) end;
 
 # Block content → markdown lines (array of strings). $d is the list depth.
 def blk($d):
@@ -77,7 +82,7 @@ def blk($d):
                | [ (.items // []) | to_entries[] | .key as $i | (.value.content | blk($d + 1)) | (.[0] |= ($pad + (($start + $i) | tostring) + ". " + .)) | .[1:] |= map(if . == "" then . else "   " + . end) | .[] ]
         elif $t == "termList"    then
                [ (.items // [])[] | ("- **" + (.term.inlineContent | inl) + "**:") as $marker
-                 | (.definition.content // []) | blk(0) | trimmed | item($marker; 2) | .[] ]
+                 | (.definition.content // []) | item($marker; 2; blk(0)) | .[] ]
         elif $t == "table"       then
                (.rows // []) as $rows
                | if ($rows | length) == 0 then []
@@ -102,11 +107,12 @@ def blk($d):
         elif $t == "small"       then [ (.inlineContent | inl) ]
         elif $t == "thematicBreak" then [ "---" ]
         elif $t == "dictionaryExample" then [ (.summary // [] | blk($d) | .[]), "```json", (.example.code // [] | .[]), "```" ]
-        elif has("content")      then (.content | blk($d))
-        elif has("inlineContent") then [ (.inlineContent | inl) ]
+        elif has("content")      then [ unrendered("block") ] + (.content | blk($d))
+        elif has("inlineContent") then [ unrendered("block"), (.inlineContent | inl) ]
         else [ unrendered("block") ] end
       | . + [ "" ]
     end;
+
 
 # A list of identifiers → bullet lines with title, link and abstract.
 def idlist($ids):
@@ -134,14 +140,14 @@ def section:
     elif $k == "content" then (.content // []) | blk(0)
     elif $k == "parameters" then
       [ "## Parameters", "" ]
-      + [ (.parameters // [])[] | ("- **" + .name + "**:") as $marker | (.content // []) | blk(0) | trimmed | item($marker; 2) | .[] ]
+      + [ (.parameters // [])[] | ("- **" + .name + "**:") as $marker | (.content // []) | item($marker; 2; blk(0)) | .[] ]
       + [ "" ]
     elif $k == "returnValue" then [ "## Return Value", "" ] + ((.content // []) | blk(0))
     elif $k == "discussion" then [ "## Discussion", "" ] + ((.content // []) | blk(0))
     elif $k == "possibleValues" then
       [ "## " + (.title // "Possible Values"), "" ]
-      + [ (.values // [])[] | .name as $name | (.content // []) | blk(0) | trimmed
-          | item("- `" + $name + "`" + (if length > 0 then ":" else "" end); 2) | .[] ]
+      + [ (.values // [])[] | .name as $name | (.content // [])
+          | item("- `" + $name + "`" + (if (blk(0) | trimmed | length) > 0 then ":" else "" end); 2; blk(0)) | .[] ]
       + [ "" ]
     elif $k == "mentions" then [ "## Mentioned in", "" ] + idlist(.mentions) + [ "" ]
     elif $k == "restEndpoint" then
