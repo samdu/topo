@@ -399,10 +399,9 @@ final class AudibleHoldTests: XCTestCase {
         rig.speaker.stop()
     }
 
-    /// A first part heard out with the guest at its tools past the reading's ceiling: the
-    /// reading's hold goes, and the reading goes on from where it was at the guest's next
-    /// sentence, nothing read twice and nothing left unread.
-    func testAFirstPartHeardOutPastTheCeilingGoesOnFromWhereItWas() async throws {
+    /// A first part heard out with the guest at its tools past the reading's ceiling: its hold
+    /// goes, and the reply is read from the top as the guest writes on, rather than never.
+    func testAFirstPartHeardOutPastTheCeilingIsReadFromTheTopAsMoreComes() async throws {
         let rig = await rig(ceiling: .seconds(1))
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.speaker.speak(writing: "One moment.\n", answering: "turn")
@@ -410,82 +409,14 @@ final class AudibleHoldTests: XCTestCase {
         rig.voice.open(1)
         try await render(rig, "the first frame") { !rig.speaker.voiceGap }
         try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        await settle("the ceiling to let the reading's hold go") { !rig.speaker.speaking }
+        await settle("the ceiling to end the reading's hold") { !rig.speaker.speaking }
         XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the ceiling")
         rig.speaker.speak(writing: "One moment.\n\nIt is on the shelf. ", answering: "turn")
         XCTAssertTrue(rig.speaker.speaking, "what the guest wrote after the ceiling was not read")
-        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
+        await settle("the reply's first sentence to be asked for again") { rig.voice.sentencesAsked == 2 }
         rig.voice.open(2)
-        try await render(rig, "the next sentence heard") { !rig.speaker.voiceGap }
-        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
-        rig.speaker.stop()
-    }
-
-    /// A press while a reading is parked sounds over nothing and so loses nothing: what the guest
-    /// writes while the microphone is open is read once it closes, from where the reading was.
-    func testAPressWhileAReadingIsParkedKeepsTheRestOfTheReply() async throws {
-        let rig = await rig(ceiling: .seconds(1))
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
-        rig.voice.open(1)
-        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
-        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
-        rig.speaker.microphoneOpening()
-        rig.speaker.speak(writing: "One moment.\n\nIt is on the shelf. ", answering: "turn")
-        XCTAssertFalse(rig.speaker.speaking, "read into an open microphone")
-        rig.speaker.microphoneOpened(counted: true)
-        XCTAssertTrue(rig.speaker.speaking, "the rest of the reply was lost to the press")
-        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
-        rig.voice.open(2)
-        try await render(rig, "the next sentence heard") { !rig.speaker.voiceGap }
-        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
-        rig.speaker.stop()
-    }
-
-    /// A parked reading's reply landing while a microphone is open waits for it, through the
-    /// turn's end straight after, and then goes on from where the reading was.
-    func testAParkedReadingsReplyLandingUnderAnOpenMicrophoneGoesOnFromWhereItWas() async throws {
-        let rig = await rig(ceiling: .seconds(1))
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
-        rig.voice.open(1)
-        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
-        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
-        rig.speaker.microphoneOpening()
-        XCTAssertTrue(rig.speaker.speak("One moment.\n\nIt is on the shelf.", answering: "turn"), "the landing was refused")
-        rig.speaker.writingEnded("turn")
-        XCTAssertFalse(rig.speaker.speaking, "read into an open microphone")
-        rig.speaker.microphoneOpened(counted: true)
-        XCTAssertTrue(rig.speaker.speaking, "the rest of the reply was lost to the turn's end")
-        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
-        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
-        rig.speaker.stop()
-    }
-
-    /// A parked reading's reply landing on a session that will not activate is refused, and the
-    /// turn's end straight after takes nothing: offered again, it goes on from where it was.
-    func testAParkedReadingsRefusedReplyGoesOnFromWhereItWasWhenOfferedAgain() async throws {
-        let rig = await rig(ceiling: .seconds(1))
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
-        rig.voice.open(1)
-        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
-        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
-        rig.audio.invalidate()
-        rig.seams.activationError = CancellationError()
-        let reply = "One moment.\n\nIt is on the shelf."
-        XCTAssertFalse(rig.speaker.speak(reply, answering: "turn"), "taken on a session that would not activate")
-        rig.speaker.writingEnded("turn")
-        rig.seams.activationError = nil
-        XCTAssertTrue(rig.speaker.speak(reply, answering: "turn"), "refused again with the session back")
-        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
-        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "a part read twice")
+        await settle("the reply's second sentence to be asked for") { rig.voice.sentencesAsked == 3 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "One moment.", "It is on the shelf."])
         rig.speaker.stop()
     }
 
@@ -510,63 +441,6 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertTrue(rig.audio.heldForATurn, "the ceiling let the call's hold go")
         rig.speaker.stop()
         call.end()
-    }
-
-    /// Under a call a reading whose voice has made no frame at all is a dead engine, not a voice
-    /// heard out: the ceiling stops it.
-    func testUnderACallTheCeilingStopsAReadingThatMadeNoFrame() async throws {
-        let rig = await rig(ceiling: .seconds(1))
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        rig.speaker.attach(call)
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        call.start()
-        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
-        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
-        rig.voice.open(1, frames: 0)
-        await settle("the reading to stop at the ceiling") { !rig.speaker.speaking }
-        call.end()
-    }
-
-    /// In a conversation the microphone closes at each utterance's end, mid-turn too: what the
-    /// guest wrote under it is not read then but with the reply as it lands. Guards this PR's
-    /// re-offer (`writingWaited`), which main does not make at all.
-    func testInAConversationWhatWaitedForTheMicrophoneIsNotReadAtItsClose() async throws {
-        let rig = await rig()
-        rig.speaker.conversing = true
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.speaker.microphoneOpening()
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        rig.speaker.microphoneOpened(counted: true)
-        XCTAssertFalse(rig.speaker.speaking, "read at a conversation's microphone close mid-turn")
-        rig.speaker.stop()
-    }
-
-    /// A parked reading whose landing is refused is not cut off by another turn's reading that is
-    /// refused too: offered again, the landing goes on from where the reading was.
-    func testAParkedReadingOutlivesAnotherTurnsRefusedReading() async throws {
-        let rig = await rig(ceiling: .seconds(1))
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
-        rig.voice.open(1)
-        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
-        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
-        rig.audio.invalidate()
-        rig.seams.activationError = CancellationError()
-        let reply = "One moment.\n\nIt is on the shelf."
-        XCTAssertFalse(rig.speaker.speak(reply, answering: "turn"))
-        rig.speaker.writingEnded("turn")
-        rig.speaker.speak(writing: "Sure.\n", answering: "other")
-        XCTAssertFalse(rig.speaker.speaking)
-        rig.seams.activationError = nil
-        XCTAssertTrue(rig.speaker.speak(reply, answering: "turn"))
-        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
-        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "the rest was lost or a part read twice")
-        rig.speaker.stop()
     }
 
     /// The red line's order: the queue drains while the last sentence is still being made, and
