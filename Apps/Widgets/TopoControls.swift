@@ -6,7 +6,6 @@ import WidgetKit
 /// on the Action button — and pointed at one of its kind's six slots, whose document the mind
 /// writes (`ControlDocument`). The template takes one intent per kind: what a tap does is read by
 /// the app from the slot at the revision the value carried (`WidgetTaps.controlTapped`).
-@available(iOS 18, *)
 struct TopoButtonControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         AppIntentControlConfiguration(kind: ControlSlot.Kind.button.controlKind, provider: ControlSlotProvider<ButtonSlotConfiguration>()) { value in
@@ -26,7 +25,6 @@ struct TopoButtonControl: ControlWidget {
     }
 }
 
-@available(iOS 18, *)
 struct TopoToggleControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         AppIntentControlConfiguration(kind: ControlSlot.Kind.toggle.controlKind, provider: ControlSlotProvider<ToggleSlotConfiguration>()) { value in
@@ -42,13 +40,11 @@ struct TopoToggleControl: ControlWidget {
 }
 
 /// A placed control's one parameter, which of its kind's slots it is.
-@available(iOS 18, *)
 protocol ControlSlotConfiguring: ControlConfigurationIntent {
     /// The slot picked, or slot 1 of the kind when none was.
     var slotName: String { get }
 }
 
-@available(iOS 18, *)
 struct ButtonSlotConfiguration: ControlSlotConfiguring {
     static let title: LocalizedStringResource = "Topo Button"
     @Parameter(title: "Slot") var slot: ButtonSlot?
@@ -56,7 +52,6 @@ struct ButtonSlotConfiguration: ControlSlotConfiguring {
     var slotName: String { (slot ?? .button1).rawValue }
 }
 
-@available(iOS 18, *)
 struct ToggleSlotConfiguration: ControlSlotConfiguring {
     static let title: LocalizedStringResource = "Topo Toggle"
     @Parameter(title: "Slot") var slot: ToggleSlot?
@@ -89,7 +84,6 @@ enum ToggleSlot: String, AppEnum {
 
 /// The slot as the app group holds it at the moment the system asks; the preview is its default.
 /// Nothing here reaches the tool service, HomeKit or the network.
-@available(iOS 18, *)
 struct ControlSlotProvider<Configuration: ControlSlotConfiguring>: AppIntentControlValueProvider {
     func previewValue(configuration: Configuration) -> ControlValue {
         ControlValue(slot: configuration.slotName, document: ControlDocument.standard(slot: configuration.slotName))

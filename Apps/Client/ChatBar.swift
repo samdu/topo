@@ -95,13 +95,8 @@ enum ChatBar {
                    stop: { stop($0.inset(by: UIEdgeInsets(top: 0, left: 0, bottom: -slider.padding, right: 0))) })
                 .padding(slider.padding)
                 .background {
-                    // The bar's own glass from iOS 26 on, which is a shape the system draws and
-                    // not a `Look` field, and a material before it.
-                    if #available(iOS 26, *) {
-                        Color.clear.glassEffect(.regular, in: Capsule())
-                    } else {
-                        Capsule().fill(.ultraThinMaterial)
-                    }
+                    // The bar's own glass, which is a shape the system draws and not a `Look` field.
+                    Color.clear.glassEffect(.regular, in: Capsule())
                 }
                 .padding(.top, slider.drop)
                 .padding(.horizontal, Self.margin)

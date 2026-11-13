@@ -117,7 +117,8 @@ final class GuestLoginTests: XCTestCase {
             try FileManager.default.createSymbolicLink(atPath: claude.path, withDestinationPath: target)
             var asked: [String] = []
             XCTAssertThrowsError(try GuestResident.makeHome(home) { _, path in asked.append(path) }, target) { error in
-                XCTAssertTrue("\(error)".contains(".claude"), "the refusal names the link: \(error)")
+                XCTAssertEqual(error as? GuestBridgeError, .notReady(".claude in the guest's home is not a folder"),
+                               "the refusal is the home's own, naming the link: \(error)")
             }
             XCTAssertFalse(asked.contains(claude.path), "nothing is protected through the link to \(target)")
             XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("made").path), target)
@@ -126,6 +127,22 @@ final class GuestLoginTests: XCTestCase {
                 try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
             }
         }
+    }
+
+    /// A file the guest left at `~/.claude` is refused the same way, and is left as it was.
+    func testAFileAtClaudeIsRefusedAndLeftAsItWas() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("login-file-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let claude = home.appendingPathComponent(".claude")
+        try Data("the guest's own".utf8).write(to: claude)
+        var asked: [String] = []
+        XCTAssertThrowsError(try GuestResident.makeHome(home) { _, path in asked.append(path) }) { error in
+            XCTAssertEqual(error as? GuestBridgeError, .notReady(".claude in the guest's home is not a folder"),
+                           "the refusal is the home's own, naming the file: \(error)")
+        }
+        XCTAssertFalse(asked.contains(claude.path), "the file was given the folder's protection")
+        XCTAssertEqual(try Data(contentsOf: claude), Data("the guest's own".utf8))
     }
 
     /// The guest's files are out of `Documents`, which Finder's file sharing shows: the standard
@@ -217,6 +234,34 @@ final class GuestLoginTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "someone else's", "nothing is removed through the link")
         // No folder at all is no credential.
         XCTAssertTrue(GuestLogin.removeCredentials([root.appendingPathComponent("none/.claude/.credentials.json")]))
+    }
+
+    /// A file at `.claude` is no folder to remove the credential from: a sign-out does not say it
+    /// is gone, and leaves the file as it was.
+    func testSignOutDoesNotCountAFileAtClaudeAsTheCredentialGone() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("credentials-file-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let claude = root.appendingPathComponent("home/.claude")
+        try write("the guest's own", to: claude)
+        XCTAssertFalse(GuestLogin.removeCredentials([claude.appendingPathComponent(".credentials.json")]))
+        XCTAssertEqual(try String(contentsOf: claude, encoding: .utf8), "the guest's own")
+    }
+
+    /// A link at `.credentials.json` that a sign-out could not remove still stands, whatever it
+    /// points at: one pointing nowhere is not the credential gone.
+    func testSignOutCountsADanglingLinkItCouldNotRemoveAsStanding() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("credentials-dangling-\(UUID().uuidString)", isDirectory: true)
+        let claude = root.appendingPathComponent("home/.claude", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        let credential = claude.appendingPathComponent(".credentials.json")
+        try FileManager.default.createSymbolicLink(atPath: credential.path, withDestinationPath: "nowhere")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: claude.path)
+        XCTAssertFalse(GuestLogin.removeCredentials([credential]))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: credential.path), "nowhere")
     }
 
     /// One in the new place is the one; a copy left in `Documents` is stale and is taken away.

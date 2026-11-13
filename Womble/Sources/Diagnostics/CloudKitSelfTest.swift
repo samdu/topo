@@ -16,7 +16,7 @@ import Foundation
 /// refused. Those are the four things that fail quietly on a device and
 /// look identical from a simulator.
 enum CloudKitSelfTest {
-    static func steps(logContainer: String = "iCloud.zone.hexagon.topo",
+    static func steps(logContainer: String = CloudKitStore.containerIdentifier,
                       boardContainer: String = "iCloud.zone.hexagon.topo.board") -> [SelfTestStep] {
         let run = Run(logIdentifier: logContainer, boardIdentifier: boardContainer)
         return [
