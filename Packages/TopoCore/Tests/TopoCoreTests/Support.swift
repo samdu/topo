@@ -103,12 +103,12 @@ actor SlowProbe: LeaseProbe {
 
 /// A database whose next fetch of the lease can be held by the test, so something can happen
 /// while that read of the record is out. Fetches after it go straight through.
-actor ReadGate: RecordDatabase {
-    private let inner: InMemoryRecordDatabase
+actor ReadGate: ForwardingDatabase {
+    let base: any RecordDatabase
     private var holding = false
     private var held: [CheckedContinuation<Void, Never>] = []
 
-    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    init(_ inner: any RecordDatabase) { base = inner }
 
     func hold() { holding = true }
     var waiting: Bool { !held.isEmpty }
@@ -118,16 +118,13 @@ actor ReadGate: RecordDatabase {
         held = []
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         if holding, ids.contains(Lease.recordID) {
             holding = false
             await withCheckedContinuation { held.append($0) }
         }
-        return try await inner.fetch(ids)
+        return try await base.fetch(ids)
     }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
 /// A probe the test answers: the asker waits until it does.
@@ -163,13 +160,14 @@ actor Barrier {
 
 /// A database whose query index has not caught up with the newest turn of
 /// each device: every query drops the highest sequence it would return.
-struct StaleTailDatabase: RecordDatabase {
-    let inner: InMemoryRecordDatabase
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] {
-        let all = try await inner.query(query)
+struct StaleTailDatabase: ForwardingDatabase {
+    let base: any RecordDatabase
+    init(inner: any RecordDatabase) { base = inner }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await query(RecordQuery(type: type), through: base)
+    }
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
+        let all = try await base.query(query)
         var newest: [String: Int64] = [:]
         for r in all {
             if let d = r.string("device"), let s = r.int("sequence") { newest[d] = max(newest[d] ?? 0, s) }
@@ -182,12 +180,11 @@ struct StaleTailDatabase: RecordDatabase {
 }
 
 /// A database whose query index is permanently cold.
-struct BlindQueryDatabase: RecordDatabase {
-    let inner: InMemoryRecordDatabase
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] { [] }
+struct BlindQueryDatabase: ForwardingDatabase {
+    let base: any RecordDatabase
+    init(inner: any RecordDatabase) { base = inner }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] { [] }
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] { [] }
 }
 
 /// Counts the fetches by ID that reach the store.
@@ -203,26 +200,27 @@ final class CountingFetchDatabase: ForwardingDatabase, @unchecked Sendable {
 }
 
 /// A conforming adapter whose `save` echoes a record `Lease` cannot parse.
-struct LossySaveDatabase: RecordDatabase {
-    let inner: InMemoryRecordDatabase
-    func save(_ records: [Record]) async throws -> [Record] {
-        var out = try await inner.save(records)
+struct LossySaveDatabase: ForwardingDatabase {
+    let base: any RecordDatabase
+    init(inner: any RecordDatabase) { base = inner }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        var out = try await base.save(records)
         for i in out.indices { out[i].fields.removeValue(forKey: "expiresAt") }
         return out
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.query(RecordQuery(type: type))
+    }
 }
 
 /// Commits the first save, then reports it as a transport failure.
-final class FlakyOnceDatabase: RecordDatabase, @unchecked Sendable {
-    let inner: InMemoryRecordDatabase
+final class FlakyOnceDatabase: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
     private let lock = NSLock()
     private var fired = false
-    init(inner: InMemoryRecordDatabase) { self.inner = inner }
-    func save(_ records: [Record]) async throws -> [Record] {
-        let out = try await inner.save(records)
+    init(inner: any RecordDatabase) { base = inner }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        let out = try await base.save(records)
         let first = lock.withLock { () -> Bool in
             if fired { return false }
             fired = true
@@ -234,18 +232,18 @@ final class FlakyOnceDatabase: RecordDatabase, @unchecked Sendable {
         }
         return out
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.query(RecordQuery(type: type))
+    }
 }
 
 /// Reports the first save as a transport failure without committing it.
-final class DropOnceDatabase: RecordDatabase, @unchecked Sendable {
-    let inner: InMemoryRecordDatabase
+final class DropOnceDatabase: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
     private let lock = NSLock()
     private var fired = false
-    init(inner: InMemoryRecordDatabase) { self.inner = inner }
-    func save(_ records: [Record]) async throws -> [Record] {
+    init(inner: any RecordDatabase) { base = inner }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         let first = lock.withLock { () -> Bool in
             if fired { return false }
             fired = true
@@ -255,24 +253,24 @@ final class DropOnceDatabase: RecordDatabase, @unchecked Sendable {
             struct Dropped: Error {}
             throw RecordDatabaseError.unavailable(underlying: Dropped())
         }
-        return try await inner.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.query(RecordQuery(type: type))
+    }
 }
 
 /// A database whose link drops on request: the next save commits but
 /// reports a transport failure, or fails the same way without reaching the
 /// store or reaching it only ahead of the save after it, or the next fetch
 /// fails outright.
-final class LossyLinkDatabase: RecordDatabase, @unchecked Sendable {
-    let inner: InMemoryRecordDatabase
+final class LossyLinkDatabase: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
     private let lock = NSLock()
     private var dropSaveAck = false
     private var dropFetch = false
     private var dropSave = false
-    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    init(inner: any RecordDatabase) { base = inner }
     func commitButDropNextSaveAck() { lock.withLock { dropSaveAck = true } }
     func dropNextSaveUnsent() { lock.withLock { dropSave = true } }
     private var lateNext = false
@@ -280,7 +278,7 @@ final class LossyLinkDatabase: RecordDatabase, @unchecked Sendable {
     func landNextSaveLate() { lock.withLock { lateNext = true } }
     func dropNextFetch() { lock.withLock { dropFetch = true } }
     private struct Dropped: Error {}
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         let unsent = lock.withLock { () -> Bool in defer { dropSave = false }; return dropSave }
         if unsent { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
         let held = lock.withLock { () -> Bool in
@@ -290,20 +288,21 @@ final class LossyLinkDatabase: RecordDatabase, @unchecked Sendable {
         }
         if held { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
         if let landing = lock.withLock({ () -> [Record]? in defer { late = nil }; return late }) {
-            _ = try? await inner.save(landing)
+            _ = try? await base.save(landing)
         }
-        let out = try await inner.save(records)
+        let out = try await base.save(records)
         let drop = lock.withLock { () -> Bool in defer { dropSaveAck = false }; return dropSaveAck }
         if drop { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
         return out
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         let drop = lock.withLock { () -> Bool in defer { dropFetch = false }; return dropFetch }
         if drop { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
-        return try await inner.fetch(ids)
+        return try await base.fetch(ids)
     }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.query(RecordQuery(type: type))
+    }
 }
 
 /// Deterministic pseudo-random numbers for model checks.
@@ -344,38 +343,35 @@ let hub = DeviceID("hub")
 let watch = DeviceID("watch")
 
 /// Remembers what was asked of the query index.
-actor QueryWatcher: RecordDatabase {
-    let inner: InMemoryRecordDatabase
+actor QueryWatcher: ForwardingDatabase {
+    let base: any RecordDatabase
     /// What was asked of the query index, which needs an index per field.
     private(set) var queries: [RecordQuery] = []
     /// What was read from the zone's change feed, which needs none.
     private(set) var feedReads: [String] = []
 
-    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    init(inner: any RecordDatabase) { base = inner }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         feedReads.append(type)
-        return try await inner.records(ofType: type)
+        return try await base.records(ofType: type)
     }
 
-    func query(_ query: RecordQuery) async throws -> [Record] {
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         queries.append(query)
-        return try await inner.query(query)
+        return try await base.query(query)
     }
 }
 
 /// A database that holds the answer of the next save, its success or the conflict it threw, after
 /// the store has judged it, or of the next read of the lease after the store has read it: what a
 /// slow network does to an answer, with whatever the test does meanwhile done before it arrives.
-actor LateAnswers: RecordDatabase {
-    private let inner: InMemoryRecordDatabase
+actor LateAnswers: ForwardingDatabase {
+    let base: any RecordDatabase
     private var holdSave = false, holdFetch = false
     private var saves: [CheckedContinuation<Void, Never>] = [], fetches: [CheckedContinuation<Void, Never>] = []
 
-    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    init(_ inner: any RecordDatabase) { base = inner }
 
     func holdNextSaveAnswer() { holdSave = true }
     func holdNextFetchAnswer() { holdFetch = true }
@@ -386,10 +382,10 @@ actor LateAnswers: RecordDatabase {
     func releaseSaves() { saves.forEach { $0.resume() }; saves = [] }
     func releaseFetches() { fetches.forEach { $0.resume() }; fetches = [] }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         calls += 1
         let result: Result<[Record], any Error>
-        do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
+        do { result = .success(try await base.save(records)) } catch { result = .failure(error) }
         if holdSave {
             holdSave = false
             await withCheckedContinuation { saves.append($0) }
@@ -397,30 +393,27 @@ actor LateAnswers: RecordDatabase {
         return try result.get()
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         calls += 1
-        let out = try await inner.fetch(ids)
+        let out = try await base.fetch(ids)
         if holdFetch, ids.contains(Lease.recordID) {
             holdFetch = false
             await withCheckedContinuation { fetches.append($0) }
         }
         return out
     }
-
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
 /// A database whose answers arrive after a number of turns of the scheduler drawn from `seed`,
 /// before and after the store judges each call, so calls made together are answered in an order
 /// the seed picks. Each save moves `clock` on a little, so no two writes of the lease are equal.
-actor Jitter: RecordDatabase {
-    private let inner: InMemoryRecordDatabase
+actor Jitter: ForwardingDatabase {
+    let base: any RecordDatabase
     private let clock: ManualClock
     private var random: LCG
 
-    init(_ inner: InMemoryRecordDatabase, seed: UInt64, clock: ManualClock) {
-        self.inner = inner
+    init(_ inner: any RecordDatabase, seed: UInt64, clock: ManualClock) {
+        base = inner
         self.clock = clock
         random = LCG(seed &+ 977)
     }
@@ -429,24 +422,21 @@ actor Jitter: RecordDatabase {
         for _ in 0..<random.int(5) { await Task.yield() }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         await wander()
         clock.advance(0.001)
         let result: Result<[Record], any Error>
-        do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
+        do { result = .success(try await base.save(records)) } catch { result = .failure(error) }
         await wander()
         return try result.get()
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         await wander()
-        let out = try await inner.fetch(ids)
+        let out = try await base.fetch(ids)
         await wander()
         return out
     }
-
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
 /// A database that records what bound it was asked to answer within, and counts the saves and
@@ -476,13 +466,13 @@ final class AsksWithin: RecordDatabase, @unchecked Sendable {
 
 /// A database whose next save stalls until the test gives it up: it then fails as a request
 /// that ran out of time does. The store never hears of it, or, `landing`, applied it first.
-actor Stalls: RecordDatabase {
-    private let inner: InMemoryRecordDatabase
+actor Stalls: ForwardingDatabase {
+    let base: any RecordDatabase
     private var stallNext = false
     private var landing = false
     private var waiter: CheckedContinuation<Void, Never>?
     private struct RanOut: Error {}
-    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    init(_ inner: any RecordDatabase) { base = inner }
     func stallNextSave(landing: Bool = false) {
         stallNext = true
         self.landing = landing
@@ -492,31 +482,28 @@ actor Stalls: RecordDatabase {
         waiter?.resume()
         waiter = nil
     }
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if stallNext {
             stallNext = false
-            if landing { _ = try await inner.save(records) }
+            if landing { _ = try await base.save(records) }
             await withCheckedContinuation { waiter = $0 }
             throw RecordDatabaseError.unavailable(underlying: RanOut())
         }
-        return try await inner.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
 /// A database whose next save fails as a dropped connection does and reaches the store late:
 /// after the read that follows it, ahead of the next save.
-final class LandsLate: RecordDatabase, @unchecked Sendable {
-    let inner: InMemoryRecordDatabase
+final class LandsLate: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
     private let lock = NSLock()
     private var lateNext = false
     private var late: [Record]?
     private struct Dropped: Error {}
-    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    init(inner: any RecordDatabase) { base = inner }
     func landNextSaveLate() { lock.withLock { lateNext = true } }
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         let hold = lock.withLock { () -> Bool in
             defer { lateNext = false }
             if lateNext { late = records }
@@ -524,13 +511,13 @@ final class LandsLate: RecordDatabase, @unchecked Sendable {
         }
         if hold { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
         if let landing = lock.withLock({ () -> [Record]? in defer { late = nil }; return late }) {
-            _ = try await inner.save(landing)
+            _ = try await base.save(landing)
         }
-        return try await inner.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.query(RecordQuery(type: type))
+    }
 }
 
 /// A probe answered by the holder itself, as the hub answers one.

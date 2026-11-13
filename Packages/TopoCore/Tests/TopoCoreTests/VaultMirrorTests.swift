@@ -1144,28 +1144,26 @@ import TopoCoreTesting
 /// A database that lets a test act on the folder in the window the mirror is
 /// reading the store in: the hook runs inside the first read of the change
 /// feed, which is the first thing a sync does after its scan.
-actor InterruptedFeedDatabase: RecordDatabase {
+actor InterruptedFeedDatabase: ForwardingDatabase {
     let inner: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { inner }
     private var hook: (@Sendable () -> Void)?
 
     init(inner: InMemoryRecordDatabase) { self.inner = inner }
 
     func onFirstFeedRead(_ body: @escaping @Sendable () -> Void) { hook = body }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         if let hook { self.hook = nil; hook() }
-        return try await inner.records(ofType: type)
+        return try await base.records(ofType: type)
     }
 }
 
 /// A database that parks the first read of the change feed until it is let go,
 /// so a test can do something while a sync is suspended in it.
-actor HeldFeedDatabase: RecordDatabase {
+actor HeldFeedDatabase: ForwardingDatabase {
     let inner: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { inner }
     private var parked: CheckedContinuation<Void, Never>?
     private(set) var waiting = false
     private var released = false
@@ -1178,36 +1176,29 @@ actor HeldFeedDatabase: RecordDatabase {
         parked = nil
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         if !released {
             waiting = true
             await withCheckedContinuation { parked = $0 }
         }
-        return try await inner.records(ofType: type)
+        return try await base.records(ofType: type)
     }
 }
 
 /// A database that runs a hook inside the first query, which is what making a writer does:
 /// past the sync's first cancellation fence and before any revision is written.
-actor InterruptedQueryDatabase: RecordDatabase {
+actor InterruptedQueryDatabase: ForwardingDatabase {
     let inner: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { inner }
     private var hook: (@Sendable () -> Void)?
 
     init(inner: InMemoryRecordDatabase) { self.inner = inner }
 
     func onFirstQuery(_ body: @escaping @Sendable () -> Void) { hook = body }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
-
-    func query(_ query: RecordQuery) async throws -> [Record] {
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         if let hook { self.hook = nil; hook() }
-        return try await inner.query(query)
+        return try await base.query(query)
     }
 }
 
