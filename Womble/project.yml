@@ -57,9 +57,6 @@ targets:
         buildPhase: resources
       - path: ../Packages/TopoCore/Tests/Fixtures/turn.json
         buildPhase: resources
-      # Read by ContainerTests for the container and zone TopoCore declares.
-      - path: ../Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.womble.tests

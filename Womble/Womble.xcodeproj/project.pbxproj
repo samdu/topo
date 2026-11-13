@@ -54,7 +54,6 @@
 		995123BC99460EBF7979DDC5 /* SurfaceWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85B830A70869453DA00D5FE /* SurfaceWire.swift */; };
 		99CAD892489F918AF987E6D4 /* Turn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22A98385806B4D4CD4094F70 /* Turn.swift */; };
 		9B57CE332C5B8F6CBEC0A4C6 /* CardRecordStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DD0765C99B7ED1DC0C9587 /* CardRecordStore.swift */; };
-		9C690E554A69D3FBD5DF265C /* CloudKitRecordDatabase.swift in Resources */ = {isa = PBXBuildFile; fileRef = FE56567F52814F2B4D9FB463 /* CloudKitRecordDatabase.swift */; };
 		A1DD712C3EBAFFC8EBF78867 /* SurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 223DC632AF8144E3E6A9AAB1 /* SurfaceTests.swift */; };
 		A45DBF2C81E1CF5D0DE607FC /* CloudKitStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B12D642EEEAF71258E3BEED /* CloudKitStore.swift */; };
 		A492664235E85F487BE91A60 /* SurfaceRoster.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D45A57D3160FC642BB3767 /* SurfaceRoster.swift */; };
@@ -129,7 +128,6 @@
 		F252B1BF031C149003F3D594 /* TurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnTests.swift; sourceTree = "<group>"; };
 		F5E6F4009385466E9B7C778D /* TailProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailProbeTests.swift; sourceTree = "<group>"; };
 		F7870CCBCF060FE7C06CC9A6 /* CloudKitTranscriptSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitTranscriptSource.swift; sourceTree = "<group>"; };
-		FE56567F52814F2B4D9FB463 /* CloudKitRecordDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitRecordDatabase.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -155,7 +153,6 @@
 		158EF981DE1A5C7678C38F2E /* TopoCore */ = {
 			isa = PBXGroup;
 			children = (
-				F60BDFD98537E5D4718FAFE8 /* Sources */,
 				E06ED5A9CFC55055BE53856C /* Tests */,
 			);
 			path = TopoCore;
@@ -264,14 +261,6 @@
 			path = Design;
 			sourceTree = "<group>";
 		};
-		B806F3977D4992237574992D /* TopoCore */ = {
-			isa = PBXGroup;
-			children = (
-				FE56567F52814F2B4D9FB463 /* CloudKitRecordDatabase.swift */,
-			);
-			path = TopoCore;
-			sourceTree = "<group>";
-		};
 		C4D978A1C9EBAD17297E703D /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -313,14 +302,6 @@
 				5BAD143A809737C056F8A769 /* TurnCell.swift */,
 			);
 			path = UI;
-			sourceTree = "<group>";
-		};
-		F60BDFD98537E5D4718FAFE8 /* Sources */ = {
-			isa = PBXGroup;
-			children = (
-				B806F3977D4992237574992D /* TopoCore */,
-			);
-			path = Sources;
 			sourceTree = "<group>";
 		};
 		FBE076CCC5654326979BA3BE /* Products */ = {
@@ -415,7 +396,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9C690E554A69D3FBD5DF265C /* CloudKitRecordDatabase.swift in Resources */,
 				75A86DB8F023A0F9A8B431D4 /* THIRD-PARTY in Resources */,
 				797F2C503D97C62C9E00E8E2 /* topo-mark.svg in Resources */,
 				39EE7193980E54681C893319 /* turn.json in Resources */,

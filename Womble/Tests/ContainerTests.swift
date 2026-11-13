@@ -1,13 +1,15 @@
 import XCTest
 
-/// Womble cannot import TopoCore, so `CloudKitRecordDatabase.swift` is bundled with these tests as
-/// a resource (`project.yml`) and its two declarations read from it: the container and zone Womble
-/// compiles are compared with the ones TopoCore declares, whatever the source spelling them looks
-/// like.
+/// Womble cannot import TopoCore, so TopoCore's `CloudKitRecordDatabase.swift` is read from the
+/// repository (a simulator's tests can read the Mac's files) and its two declarations taken from
+/// it: the container and zone Womble compiles are compared with the ones TopoCore declares.
 final class ContainerTests: XCTestCase {
     func testTheStoreReadsTopoCoresContainerAndZone() throws {
-        let url = try XCTUnwrap(Bundle(for: Marker.self).url(forResource: "CloudKitRecordDatabase", withExtension: "swift"),
-                                "CloudKitRecordDatabase.swift is not in the bundle")
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // Womble
+            .deletingLastPathComponent()
+            .appendingPathComponent("Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift")
         let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(CloudKitStore.containerIdentifier, try Self.declared("containerIdentifier", in: text))
         XCTAssertEqual(CloudKitStore.zoneName, try Self.declared("zoneName", in: text))
@@ -23,6 +25,4 @@ final class ContainerTests: XCTestCase {
         let match = try XCTUnwrap(found.first)
         return (text as NSString).substring(with: match.range(at: 1))
     }
-
-    private final class Marker {}
 }

@@ -4,9 +4,12 @@ import Testing
 import TopoCore
 
 /// The log's container and zone are a contract between bundles (CLAUDE.md, *Invariants*), and
-/// `CloudKitRecordDatabase` holds the one copy the Swift that links TopoCore reads. What cannot
-/// read it — Womble, which does not link TopoCore, the entitlements and `project.yml` — keeps a
-/// copy of its own, and this suite holds each to the constant by reading the file it is in.
+/// `CloudKitRecordDatabase` holds the constant. A bundle with a test target checks its own compiled
+/// value against it: the app's `TopoCloudKitTests`, and Womble's `ContainerTests`, which reads
+/// the constant's declaration line from this package's source. A file another tool reads is read
+/// here by a parser, not by its text: the entitlements as property lists, and `project.yml`
+/// through the hub's entitlements, which XcodeGen writes from it. What else this suite reads as
+/// text is a guard against a second plain literal, and says what it sees.
 @Suite struct ContainerContractTests {
     static let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent() // TopoCoreTests
@@ -32,26 +35,6 @@ import TopoCore
         }
     }
 
-    /// The text of a Womble file, read as plain lines: one with a block comment, a conditional
-    /// or a multi-line string, any of which can hide a line from the compiler or show one it does
-    /// not have, fails rather than being read.
-    static func plain(_ path: String) throws -> String {
-        let text = try text(path)
-        for form in ["/*", "#if", "\"\"\""] {
-            #expect(!text.contains(form), "\(path) has \(form), which this suite does not read through")
-        }
-        return text
-    }
-
-    /// How many times `name` appears as a word in `text`, outside `//` lines. A second
-    /// declaration adds one whatever form it is written in, so each file's count is pinned: a use
-    /// added or taken away is a change to the count here, made with the file read.
-    static func uses(of name: String, in text: String) throws -> Int {
-        try matches(#"^(?!\s*//).*$"#, in: text).reduce(0) { sum, line in
-            sum + (try matches(#"\b"# + name + #"\b"#, in: line)).count
-        }
-    }
-
     /// Every file under `top` with the extension, past what a build or a checkout keeps of its own.
     static func files(under top: URL, ext: String) throws -> [URL] {
         let walk = try #require(FileManager.default.enumerator(at: top, includingPropertiesForKeys: [.isDirectoryKey]))
@@ -69,6 +52,11 @@ import TopoCore
         return found
     }
 
+    /// The hub's file is XcodeGen's, written from `project.yml`
+    /// (`targets.TopoHub.entitlements.properties`) at every generate, and every validation
+    /// generates before any suite runs (`scripts/mac-suite.sh`, `prepare`), so what this reads of
+    /// it there is XcodeGen's reading of the YAML as it stands. Run by hand, it reads the file of
+    /// the last generate.
     @Test(arguments: [
         "Apps/Topo.entitlements",
         "Apps/TopoiOS.entitlements",
@@ -76,10 +64,6 @@ import TopoCore
         "Apps/TopoHub/TopoHub.entitlements",
         "Womble/Sources/App/Womble.entitlements",
     ])
-    /// The hub's file is XcodeGen's, written from `project.yml` (`targets.TopoHub.entitlements`)
-    /// at every generate, and every validation generates before any suite runs
-    /// (`scripts/mac-suite.sh`, `prepare`), so what this reads of it there is what XcodeGen made
-    /// of the YAML as it now stands.
     func everyEntitlementNamesTheContainer(_ path: String) throws {
         let data = try Data(contentsOf: Self.root.appendingPathComponent(path))
         let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
@@ -104,21 +88,24 @@ import TopoCore
         #expect(named == known)
     }
 
-    /// Womble's `CloudKitStore` values are compared as compiled with this package's by Womble's own
-    /// `ContainerTests`; its self-test takes the store's container as its default rather than a copy.
-    @Test func wombleSelfTestReadsTheStore() throws {
-        let path = "Womble/Sources/Diagnostics/CloudKitSelfTest.swift"
-        let selfTest = try Self.plain(path)
-        #expect(try Self.matches(#"`?logContainer`?\s*:"#, in: selfTest).count == 1)
-        #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = CloudKitStore\.containerIdentifier,\s*$"#,
-                                 in: selfTest).count == 1)
-        #expect(try Self.uses(of: "logContainer", in: selfTest) == 10, "\(path): logContainer is used other than the 10 times it was")
+    /// Womble's `ContainerTests` takes the constant from the one whole line declaring each name in
+    /// `CloudKitRecordDatabase.swift`; this is the check that the line's literal is the value
+    /// TopoCore compiles, so the two together hold Womble's compiled value to it.
+    @Test func theDatabaseDeclaresEachOnOneWholeLine() throws {
+        let text = try Self.text("Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift")
+        #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"\\]*)"\s*$"#, in: text) == [Self.container])
+        #expect(try Self.matches(#"^\s*public static let zoneName = "([^"\\]*)"\s*$"#, in: text) == [Self.zone])
     }
 
-    /// Every container literal, and every zone given as a literal (`zoneName = "…"`,
-    /// `zoneName: "…"`, `zoneName: String = "…"`, the name in backticks or not, across lines or
-    /// not; a literal plain, raw (`#"…"#`) or multi-line), in the Swift outside the
-    /// tests, by the file it is in, once for each time it is spelled.
+    /// `TopoCloudKitTests` reads the app's values as the iOS test build has them. This is the
+    /// check that the file holds no `#if` of its own; a conditional reached through another
+    /// declaration, and the hub's, watch's and TV's builds, are not read.
+    @Test func theAppsFileHoldsNoConditional() throws {
+        #expect(!(try Self.text("Apps/Shared/TopoCloudKit.swift")).contains("#if"))
+    }
+
+    /// Every match of `pattern` in the Swift under `Apps/`, `Packages/` and `Womble/Sources`,
+    /// outside `Tests/` folders, by the file it is in, once for each time it is spelled.
     static func literals(_ pattern: String) throws -> [String] {
         let base = root.standardizedFileURL.path + "/"
         var found: [String] = []
@@ -132,17 +119,11 @@ import TopoCore
         return found.sorted()
     }
 
-    /// `TopoCloudKitTests` reads the app's names as the iOS test build has them, so the file
-    /// holds no conditional that could give another platform or configuration other values.
-    @Test func theAppsNamesAreTheSameInEveryBuild() throws {
-        #expect(!(try Self.text("Apps/Shared/TopoCloudKit.swift")).contains("#if"))
-    }
-
-    /// The log's container and zone are spelled once in the Swift that links TopoCore, in
-    /// `CloudKitRecordDatabase`, and once in Womble's, in `CloudKitStore`; the board's are spelled
-    /// once in each and again as the self-test's board default, and the self-test's own zone is
-    /// a `SelfTest-` name. Womble's store is held to the constant as compiled (`ContainerTests`).
-    @Test func theConstantIsTheOnlySpellingInTheSwiftThatLinksTopoCore() throws {
+    /// A guard against a second literal copy: every `"iCloud.…"` literal, and every zone given as a
+    /// literal after `zoneName` (in backticks or not; `=`, `:` or a type annotation, across lines or
+    /// not), plain, raw (`#"…"#`) or multi-line, is one of those listed, counted. A value built by
+    /// concatenation, interpolation or a call is not seen.
+    @Test func noContainerOrZoneLiteralButTheKnownOnes() throws {
         let database = "Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift"
         let app = "Apps/Shared/TopoCloudKit.swift"
         let store = "Womble/Sources/Log/CloudKitStore.swift"
@@ -155,9 +136,6 @@ import TopoCore
         #expect(try Self.literals(#"`?zoneName`?\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*#*"(?:""\s*)?([^"\n]*)"#)
                 == ["\(app): Board", "\(database): \(Self.zone)", "\(cards): Board", "\(selfTest): SelfTest-",
                     "\(store): \(Self.zone)"])
-        let text = try Self.text(database)
-        #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"]*)"\s*$"#, in: text) == [Self.container])
-        #expect(try Self.matches(#"^\s*public static let zoneName = "([^"]*)"\s*$"#, in: text) == [Self.zone])
     }
 }
 #endif
