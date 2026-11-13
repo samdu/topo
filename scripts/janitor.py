@@ -149,9 +149,10 @@ MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", f"http://192.168.1
 MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
 MESH_SELF = "buddy-janitor"   # this host's verified mesh name; the sender below is the janitor's
 FROM = "topo-janitor"
-# The receiving bridge ends every relayed message by asking for a reply. One
-# sent to a script is addressed to no session: buddybox's bridge refuses it,
-# and it holds the PM's queue to this host until it expires.
+# A report goes as a notice (notice_text), which the bridge shows under this
+# name with no reply asked for. A bridge that takes no notices shows `text`,
+# and ends it by asking for a reply; one sent to a script is addressed to no
+# session, so `text` says not to.
 NO_REPLY = "No reply is read: topo-janitor is a script with no session, so do not answer this."
 
 GRACE = timedelta(minutes=15)      # a box's, a lone run's, an issue's, before it is said
@@ -1478,6 +1479,13 @@ def peer_token(path=MESH_ENV):
     return None
 
 
+def notice_text(lines):
+    """The report as the bridge shows it under topo-janitor's own name, a
+    one-way notice: the lines alone, one bare, several as a list. `text`
+    rides beside it whole, for a bridge that takes no notices."""
+    return lines[0] if len(lines) == 1 else "\n".join(f"- {l}" for l in lines)
+
+
 def deliver(sh, state, now, dry=False, log=print, warn=None):
     """The reports to the PM, through its bridge's /deliver as the fleet's
     bridges forward to each other: this host's verified name as `from`, the
@@ -1529,7 +1537,8 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
             log(text)
             queue.pop(0)
             continue
-        body = {"id": m["id"], "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text}
+        body = {"id": m["id"], "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text,
+                "notice": {"source": FROM, "text": notice_text(m["lines"])}}
         try:
             status, answer = sh.post(MESH_DELIVER_URL, body, token)
         except RuntimeError as ex:
