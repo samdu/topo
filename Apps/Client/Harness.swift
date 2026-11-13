@@ -103,6 +103,9 @@ final class Harness {
     /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
+    /// What the reader was last handed of `writingSpoken`'s reply: everything it is handed after
+    /// extends this, so a message's last sentence settled at its end is never taken back.
+    @ObservationIgnored private var handed: String?
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
     private(set) var unfinished: Turn?
@@ -1094,6 +1097,7 @@ final class Harness {
             if replied, let reply = unsaved[nonce] { onWriting?(reply + "\n", nonce) }
             onWriting?(nil, nonce)
             writingSpoken = nil
+            handed = nil
             // Read as it was written, so its landing is not read again.
             if replied { spokenNonces.removeAll { $0 == nonce } }
         }
@@ -1130,12 +1134,21 @@ final class Harness {
     ///
     /// Whoever reads it aloud is handed that same text and nothing else, so a string that only
     /// ever grows: a new message adds nothing until it has words, and then the paragraph break
-    /// comes with them, which is what ends the sentence before it.
+    /// comes with them. A text block that is whole (`.text`, which comes before the message's
+    /// tool call does) is handed again with a line break after it, which settles its last
+    /// sentence (`Speaker.settled`), so what was written before a tool is read before the tool
+    /// runs rather than once the next message begins.
     private func follow(_ activity: GuestActivity) {
-        if case .update(.event(.writing)) = activity, let hearing, answeredElsewhere.contains(hearing) { return }
+        switch activity {
+        case .update(.event(.writing)), .update(.event(.text)):
+            if let hearing, answeredElsewhere.contains(hearing) { return }
+        default:
+            break
+        }
         switch activity {
         case .began(_, let answering):
             writing = nil
+            handed = nil
             words = ReplyWords()
             if !answering.isEmpty { hearing = nil }
             writingSpoken = hearing.flatMap { spokenNonces.contains($0) ? $0 : nil }
@@ -1147,7 +1160,12 @@ final class Harness {
             words.append(more)
             let written = words.text
             writing = written
-            if let writingSpoken { onWriting?(written, writingSpoken) }
+            hand(written)
+        case .update(.event(.text)):
+            // The block is whole, so its last sentence is too. Its words are the deltas already
+            // in `words`; a message written with none has nothing to hand.
+            let written = words.text
+            if !written.isEmpty { hand(written + "\n") }
         case .update(.ended(let end)):
             // A turn that ended with no reply leaves nothing to land; one that answered is
             // replaced by its turn when that is shown.
@@ -1167,12 +1185,22 @@ final class Harness {
         }
     }
 
+    /// Hands the reader `text` of the spoken turn being written, when it extends what it was last
+    /// handed and is not that: a whitespace message after a settled block leaves the words short
+    /// of the line break the reader already has, and is nothing new to read.
+    private func hand(_ text: String) {
+        guard let writingSpoken, text != handed, text.hasPrefix(handed ?? "") else { return }
+        handed = text
+        onWriting?(text, writingSpoken)
+    }
+
     /// What was drawn of a reply goes, and whoever was reading it aloud is told no more comes.
     private func dropWriting() {
         writing = nil
         words = ReplyWords()
         if let writingSpoken { onWriting?(nil, writingSpoken) }
         writingSpoken = nil
+        handed = nil
     }
 
     private func show(_ turn: Turn) {

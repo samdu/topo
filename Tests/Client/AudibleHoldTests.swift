@@ -140,7 +140,7 @@ final class AudibleHoldTests: XCTestCase {
 
     /// The store never asked, unless a test keeps a mode, and the earcons off, so the players
     /// made are the keeper's.
-    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true) async -> Rig {
+    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true, ceiling: Duration = .seconds(120)) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = defaults()
@@ -158,7 +158,7 @@ final class AudibleHoldTests: XCTestCase {
         voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
-                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
+                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, ceiling: ceiling,
                               heard: .dataRendered, sounds: sounds)
         return Rig(speaker: speaker, sounds: sounds, audio: audio, seams: seams, defaults: defaults,
                    clock: clock, players: players, voice: engine, center: center)
@@ -393,6 +393,24 @@ final class AudibleHoldTests: XCTestCase {
         rig.voice.open(3)
         try await render(rig, "the next frame") { bed.fades.last == 0 }
         XCTAssertFalse(rig.speaker.voiceGap)
+        rig.speaker.stop()
+    }
+
+    /// A first part heard out with the guest at its tools past the reading's ceiling: the
+    /// reading and its hold end, and what the guest writes next is read from the top, rather than
+    /// the rest of the reply never being read.
+    func testAFirstPartHeardOutPastTheCeilingLeavesTheRestToBeRead() async throws {
+        let rig = await rig(ceiling: .milliseconds(300))
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to end the reading") { !rig.speaker.speaking }
+        rig.speaker.speak(writing: "One moment.\n\nIt is on the shelf. ", answering: "turn")
+        XCTAssertTrue(rig.speaker.speaking, "what the guest wrote after the ceiling was not read")
+        await settle("the reply to be read from the top") { rig.voice.sentencesAsked == 3 }
         rig.speaker.stop()
     }
 

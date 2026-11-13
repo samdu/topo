@@ -1487,9 +1487,10 @@ final class GuestBridgeTests: XCTestCase {
     }
 
     /// A spoken turn the guest answers in messages round tool calls: whoever reads it aloud is
-    /// handed one string that only grows, each beginning with the last, the paragraph break
-    /// arriving with the first words of the message after it and none for a message that says
-    /// nothing. Then nil, once the reply has landed.
+    /// handed one string that only grows, each beginning with the last, a line break after each
+    /// text block once it is whole, the paragraph break arriving with the first words of the
+    /// message after it and none for a message that says nothing. Then nil, once the reply has
+    /// landed.
     func testTheReaderIsHandedOneGrowingReplyAcrossMessages() async throws {
         let db = InMemoryRecordDatabase()
         let guest = ScriptedGuest(home: home, script: [.said(Self.told, ending: .held)])
@@ -1502,8 +1503,9 @@ final class GuestBridgeTests: XCTestCase {
             heard.append(text)
         }
         let sending = Task { await harness.retry() }
-        for _ in 0..<500 where heard.last != .some(Self.toldReply) { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertEqual(heard, ["Let me", "Let me look. ", "Let me look. \n\nIt is on ", Self.toldReply])
+        for _ in 0..<500 where heard.last != .some(Self.toldReply + "\n") { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(heard, ["Let me", "Let me look. ", "Let me look. \n", "Let me look. \n\nIt is on ", Self.toldReply,
+                               Self.toldReply + "\n"])
         for (earlier, later) in zip(heard, heard.dropFirst()) {
             XCTAssertTrue(later?.hasPrefix(earlier ?? "") == true, "\(String(describing: later)) does not extend \(String(describing: earlier))")
         }
@@ -1511,6 +1513,25 @@ final class GuestBridgeTests: XCTestCase {
         await sending.value
         XCTAssertEqual(heard.last, .some(nil), "the reader was not told the reply had landed")
         XCTAssertEqual(harness.turns.last?.text, Self.toldReply)
+    }
+
+    /// A message of one sentence and a tool call: the reader is handed that sentence settled
+    /// (`Speaker.settled`) as its block ends, so it is read while the tool runs rather than once
+    /// the next message begins or the reply lands.
+    func testAMessagesLastSentenceIsSettledForTheReaderBeforeTheToolRuns() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.said([.words("One moment.", tool: true)], ending: .held)])
+        let harness = harness(db, guest)
+        var heard: [String] = []
+        let nonce = harness.willSend("where is it?")
+        harness.markSpoken(nonce)
+        harness.onWriting = { text, _ in if let text { heard.append(text) } }
+        let sending = Task { await harness.retry() }
+        for _ in 0..<500 where heard.last.map(Speaker.settled) != "One moment.\n" { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(heard.last.map(Speaker.settled), "One moment.\n", "the sentence before the tool was left unsettled: \(heard)")
+        XCTAssertNil(harness.turns.last { $0.role == .assistant }, "settled only once the reply landed")
+        guest.finishHanging(with: "One moment.")
+        await sending.value
     }
 
     /// A message that is only whitespace, or opens with it, takes nothing back from the reader:
@@ -1527,8 +1548,8 @@ final class GuestBridgeTests: XCTestCase {
         harness.onWriting = { text, _ in if let text { heard.append(text) } }
         let sending = Task { await harness.retry() }
         let whole = "Let me look. It is here. \n\n\n\nFound it."
-        for _ in 0..<500 where heard.last != whole { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertEqual(heard.last, whole)
+        for _ in 0..<500 where heard.last != whole + "\n" { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(heard.last, whole + "\n")
         for (earlier, later) in zip(heard, heard.dropFirst()) {
             XCTAssertTrue(later.hasPrefix(earlier), "\(later.debugDescription) does not extend \(earlier.debugDescription)")
         }

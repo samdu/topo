@@ -1179,6 +1179,23 @@ final class SpokenCallSpeakerTests: XCTestCase {
         speaker.stop()
     }
 
+    /// What the guest wrote while the call's session changed hands is read once the system has
+    /// activated it: a message's last sentence is handed to the speaker once, as its block ends,
+    /// and nothing else may come before the reply lands.
+    func testWhatTheGuestWroteWhileTheCallWasPlacedIsReadAtTheActivation() async {
+        let (speaker, call, audio) = await fixture()
+        speaker.awaitReply("n", readAloud: true)
+        lock(audio, call)
+        speaker.speak(writing: "One moment.\n", answering: "n")
+        XCTAssertFalse(speaker.speaking, "begun on a session the system is taking")
+        XCTAssertEqual(speaker.awaiting, ["n"], "the turn's wait went before anything was read")
+        activate(call)
+        await settle("the reading to begin") { speaker.report.started }
+        XCTAssertEqual(speaker.awaiting, [], "a reply being read has no wait left")
+        XCTAssertEqual(settled, [], "the turn's mark went with nothing heard but its first part")
+        speaker.stop()
+    }
+
     /// A reply landing as the call closes is read on the session after it, not on the one the
     /// system is about to deactivate.
     func testAReplyLandingWhileTheCallClosesWaitsForItsEnd() async {
