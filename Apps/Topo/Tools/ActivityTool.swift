@@ -119,7 +119,7 @@ struct ActivityTool: Tool {
         }
         // Between a login's end and the next sign-in no epoch is current, and nothing starts; nor
         // does a call of a login that has ended, whatever stands now. Judged before the host is
-        // read, so an ended login's call is told nothing of the next login's activities.
+        // read, so an ended login's start is not answered with the next login's activity in its slot.
         guard login.isCurrent else {
             return .failed("topo: the login has ended; nothing started\n")
         }
