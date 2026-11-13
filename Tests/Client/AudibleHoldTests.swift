@@ -512,6 +512,49 @@ final class AudibleHoldTests: XCTestCase {
         call.end()
     }
 
+    /// Under a call a reading whose voice has made no frame at all is a dead engine, not a voice
+    /// heard out: the ceiling stops it.
+    func testUnderACallTheCeilingStopsAReadingThatMadeNoFrame() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        call.start()
+        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1, frames: 0)
+        await settle("the reading to stop at the ceiling") { !rig.speaker.speaking }
+        call.end()
+    }
+
+    /// A parked reading whose landing is refused is not cut off by another turn's reading that is
+    /// refused too: offered again, the landing goes on from where the reading was.
+    func testAParkedReadingOutlivesAnotherTurnsRefusedReading() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to park the reading") { !rig.speaker.speaking }
+        rig.audio.invalidate()
+        rig.seams.activationError = CancellationError()
+        let reply = "One moment.\n\nIt is on the shelf."
+        XCTAssertFalse(rig.speaker.speak(reply, answering: "turn"))
+        rig.speaker.writingEnded("turn")
+        rig.speaker.speak(writing: "Sure.\n", answering: "other")
+        XCTAssertFalse(rig.speaker.speaking)
+        rig.seams.activationError = nil
+        XCTAssertTrue(rig.speaker.speak(reply, answering: "turn"))
+        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "It is on the shelf."], "the rest was lost or a part read twice")
+        rig.speaker.stop()
+    }
+
     /// The red line's order: the queue drains while the last sentence is still being made, and
     /// that sentence then ends with no frame after it, the queue idle and the guest still writing.
     /// No drain is coming, so the gap is opened where the sentence is made.

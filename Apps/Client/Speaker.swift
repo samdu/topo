@@ -113,9 +113,13 @@ final class Speaker {
     /// A reading heard out with the guest at its tools for the reading's ceiling, whose hold went
     /// (`progressed`): it goes on from where it was at the next sentence written, or with the rest
     /// of the reply as it lands, and is kept apart from `written` so the turn's end, which comes
-    /// straight after a landing that waits or is refused, does not take it. A stop ends it for
-    /// good, as it ends any reading: `cancel` makes it a stopped `written`.
+    /// straight after a landing that waits or is refused, does not take it. A stop (`stop`) or
+    /// another turn's reading begun ends it for good, as either ends any reading (`parkedEnded`);
+    /// its turn's failure forgets it.
     private var parked: (nonce: String, settled: String, queued: Int)?
+    /// The turn whose parked reading was ended for good: nothing more of it is read, as of a
+    /// stopped `written`, and its landing is taken unread. Forgotten as its turn lands or ends.
+    private var parkedEnded: String?
     /// A reply that landed while a microphone was open, to be read once it closes. Its wait stands
     /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
     /// each reply cuts off the one before it anyway.
@@ -532,6 +536,7 @@ final class Speaker {
     /// in place of `done`, since what was heard was cut short. A turn no wait stands for and
     /// nobody is reading — a typed one — sounds nothing.
     func turnFailed(_ nonce: String) {
+        if parked?.nonce == nonce { parked = nil }
         if written?.nonce == nonce {
             readingFailed = true
             return
@@ -590,6 +595,16 @@ final class Speaker {
         // The reply to a turn whose reading began while it was written: what is not yet queued
         // of it is queued behind what is, and nothing is read twice. One stopped meanwhile was
         // stopped, and is not read again.
+        if let nonce, parkedEnded == nonce {
+            parkedEnded = nil
+            return true
+        }
+        // A reply that does not go on from what was read (another device's, under this turn) is
+        // read whole, from the top.
+        if let kept = parked, let nonce, kept.nonce == nonce,
+           Self.spoken(text).prefix(kept.queued).map(\.text) != Self.spoken(kept.settled).prefix(kept.queued).map(\.text) {
+            parked = nil
+        }
         if let kept = parked, let nonce, kept.nonce == nonce {
             let rest = Array(Self.spoken(text).dropFirst(kept.queued))
             guard !rest.isEmpty else {
@@ -634,7 +649,7 @@ final class Speaker {
     /// ends (`writingWaited`), and the reply whole when it lands, as ever. Nor while the voice is
     /// not resident.
     func speak(writing text: String, answering nonce: String) {
-        guard !hungUp.contains(nonce) else { return }
+        guard !hungUp.contains(nonce), parkedEnded != nonce else { return }
         let settled = Self.settled(text)
         if let kept = parked, kept.nonce == nonce {
             // Nothing new settled: nothing to go on with yet.
@@ -679,6 +694,7 @@ final class Speaker {
     func writingEnded(_ nonce: String) {
         hungUp.remove(nonce)
         if writingWaited?.nonce == nonce { writingWaited = nil }
+        if parkedEnded == nonce { parkedEnded = nil }
         guard let reading = written, reading.nonce == nonce else { return }
         written = nil
         if reading.live, making == 0, queue.isIdle { finished() }
@@ -733,6 +749,9 @@ final class Speaker {
             return false
         }
         speaking = true
+        // Each reply read cuts off the one before it, a parked one included; one refused above
+        // cuts off nothing.
+        if parked?.nonce != nonce { endParked() }
         // A reply to a spoken turn is quiet until its first frame, and the bed fills that; a
         // replay, which answers no turn, has no bed under it at all.
         answering = nonce != nil
@@ -778,7 +797,16 @@ final class Speaker {
     /// sent, and goes at its turn's wait.
     func stop() {
         cancel()
+        endParked()
         endAllWaits("stopped")
+    }
+
+    /// A parked reading ended for good: what more is written of its turn is not read, and its
+    /// landing is taken unread.
+    private func endParked() {
+        guard let ended = parked else { return }
+        parked = nil
+        parkedEnded = ended.nonce
     }
 
     /// The keeper's sounds (`KeeperSounds`): the bed wherever a turn's hold stands and the voice
@@ -887,14 +915,11 @@ final class Speaker {
         // that hold goes, rather than ended under it.
         earcons?.microphoneOpening()
         let waiting = deferred
-        // A parked reading is sounding nothing for the microphone to hear, so it is no reason to
-        // lose the rest of the reply either: it goes on once this one closes.
-        let kept = parked
-        parked = nil
+        // A parked reading is sounding nothing for the microphone to hear, so `cancel` leaves it:
+        // what is written next, or the landing, waits for this microphone to close.
         deferred = nil
         cancel()
         deferred = waiting
-        parked = kept
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         openings += 1
         sounds?.duck()
@@ -947,8 +972,6 @@ final class Speaker {
         deferred = nil
         writingWaited = nil
         written?.live = false
-        if let stopped = parked { written = (stopped.nonce, stopped.settled, stopped.queued, false) }
-        parked = nil
         generation += 1
         reply = nil
         chain = nil
