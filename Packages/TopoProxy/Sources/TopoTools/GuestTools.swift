@@ -537,7 +537,7 @@ public enum GuestTools {
 
     # apple-docs
 
-    `apple-doc <path-or-url>` prints a developer.apple.com page as Markdown: title, availability by platform, then the page's sections in its own order (declaration, parameters, the body, the pages that mention it), then its Topics, Relationships and See Also, each entry linked with its one-line summary. A line `[apple-doc: unrendered …]` is a part of the page it has no rendering for; when that part matters, read it from the JSON itself (`wget -qO- https://developer.apple.com/tutorials/data/documentation/<path>.json`). It is Apple's own page, from the JSON behind it, rendered in the guest; no third party is involved. It needs `jq` (`apk add jq` once).
+    `apple-doc <path-or-url>` prints a developer.apple.com page as Markdown: title, availability by platform, then the page's sections as the page orders them (its declaration, parameters, body and the pages that mention it among them), then its Topics, Relationships and See Also, each entry linked with its one-line summary. A line `[apple-doc: unrendered …]` names a part of the page it has no rendering for. It is Apple's own page, from the JSON behind it, rendered in the guest; no third party is involved. It needs `jq` (`apk add jq` once).
 
     - Name the page as its path or its URL: `apple-doc backgroundtasks`, `apple-doc widgetkit/widgetfamily`, `apple-doc https://developer.apple.com/documentation/activitykit`. Symbol pages take the symbol's path: `backgroundtasks/bgtaskscheduler/submit(_:)` (quote it for the shell).
     - Release notes: `apple-doc ios-ipados-release-notes/ios-ipados-27_2-release-notes`; the same shape for `xcode-release-notes`, `watchos-release-notes`, `macos-release-notes`.
