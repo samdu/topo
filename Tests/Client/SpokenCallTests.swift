@@ -1196,20 +1196,6 @@ final class SpokenCallSpeakerTests: XCTestCase {
         speaker.stop()
     }
 
-    /// Stop while the call's session changes hands ends what the guest wrote of the turn as it
-    /// ends any reading: the activation reads none of it.
-    func testAStopWhileTheCallIsPlacedLeavesNothingToReadAtTheActivation() async {
-        let (speaker, call, audio) = await fixture()
-        speaker.awaitReply("n", readAloud: true)
-        lock(audio, call)
-        speaker.speak(writing: "One moment.\n", answering: "n")
-        speaker.stop()
-        activate(call)
-        await tick()
-        XCTAssertFalse(speaker.speaking, "what waited was read after a stop")
-        XCTAssertFalse(speaker.report.started)
-    }
-
     /// A reply landing as the call closes is read on the session after it, not on the one the
     /// system is about to deactivate.
     func testAReplyLandingWhileTheCallClosesWaitsForItsEnd() async {

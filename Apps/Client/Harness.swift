@@ -1134,15 +1134,16 @@ final class Harness {
     ///
     /// Whoever reads it aloud is handed that same text and nothing else, so a string that only
     /// ever grows: a new message adds nothing until it has words, and then the paragraph break
-    /// comes with them. A tool call ends its message's words, so they are handed again at it with
-    /// a line break after them, which settles their last sentence (`Speaker.settled`): what was
+    /// comes with them. A tool call ends its message's words, so they are handed again as it
+    /// begins (`.toolCallBegan`, the turn's own and before its input streams) with a line break
+    /// after them, which settles their last sentence (`Speaker.settled`): what was
     /// written before a tool is read as the tool is called rather than once the next message
     /// begins. Not at a text block's end: a message can carry more than one, run on with nothing
     /// between them (a server tool's search between two), and a break after the first would be
     /// a sentence the reply does not have.
     private func follow(_ activity: GuestActivity) {
         switch activity {
-        case .update(.event(.writing)), .update(.event(.toolUse)):
+        case .update(.event(.writing)), .update(.event(.toolCallBegan)):
             if let hearing, answeredElsewhere.contains(hearing) { return }
         default:
             break
@@ -1163,7 +1164,7 @@ final class Harness {
             let written = words.text
             writing = written
             hand(written)
-        case .update(.event(.toolUse)):
+        case .update(.event(.toolCallBegan)):
             // The message's words are whole, so their last sentence is too. A message that wrote
             // none, or calls a second tool, hands nothing new.
             let written = words.text

@@ -94,6 +94,8 @@ final class Speaker {
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
+    /// A reading heard out with the guest at its tools is no dead engine: under a call it stands
+    /// for another pass, and otherwise its hold goes and it is parked (`parked`), not stopped.
     private var reading: Task<Void, Never>?
     /// Counts replies. A forward pass in flight does not notice a cancellation, so a frame
     /// carrying an older number is made and dropped.
@@ -874,7 +876,7 @@ final class Speaker {
     /// A press is about to open the microphone. What is being read stops, so the microphone does
     /// not hear it, and every other wait goes, as at any press; a reply waiting for the microphone
     /// waits on with its wait, since opening it again is no reason to lose it — it is read when
-    /// this one closes.
+    /// this one closes — and so does a parked reading (`parked`).
     func microphoneOpening() {
         onMicrophone?(true)
         // A cue sounding as the microphone opens is not heard by it. After the microphone is
@@ -882,9 +884,16 @@ final class Speaker {
         // that hold goes, rather than ended under it.
         earcons?.microphoneOpening()
         let waiting = deferred
+        // A parked reading is sounding nothing for the microphone to hear, so it is no reason to
+        // lose the rest of the reply either: it goes on once this one closes.
+        let kept = parked ? written : nil
         deferred = nil
         cancel()
         deferred = waiting
+        if let kept {
+            written = kept
+            parked = true
+        }
         waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         openings += 1
         sounds?.duck()

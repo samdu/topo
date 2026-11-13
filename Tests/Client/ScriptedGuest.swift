@@ -251,6 +251,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
                     continuation.yield(.event(.text(words, message: messageID)))
                 }
                 if message.tool {
+                    continuation.yield(.event(.toolCallBegan))
                     continuation.yield(.event(.toolUse(name: "Bash")))
                     continuation.yield(.event(.toolResult(isError: false, text: "ok")))
                 }
