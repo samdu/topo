@@ -148,7 +148,8 @@ final class MicrophonePressTests: XCTestCase {
     /// launch's session work can hold it. The release and the long press's due time both queue
     /// behind the stall, and SwiftUI fires the overdue long press first, so the tap is a hold
     /// (on Xcode 27.2's iOS 26 simulator): a hold released while the microphone opens cancels
-    /// the press, and the microphone is left closed. The test records which verdict the gesture
+    /// the press, one released once the queue's open has answered ends its session as a hold's
+    /// release, and either way the microphone is left closed. The test records which verdict the gesture
     /// gave and holds that the press did what that verdict says, so it does not fail for the
     /// limit and does fail for a verdict the press then ignored.
     func testATapWhileTheMainThreadStallsIsJudgedByTheGesture() throws {
