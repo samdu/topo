@@ -691,6 +691,16 @@ jobs:
             original is not evidence that none exists, so search for the
             name before saying so.
 
+            Ask the same of the platform. For each mechanism the diff writes
+            of its own — a timer, a gate, a gesture's verdict, a lifecycle
+            or audio step — ask whether a first-party API already does it:
+            an Apple framework API, a SwiftUI gesture or modifier, a system
+            service. When one does and the description does not name it as
+            checked and say why it does not fit, that is a finding naming
+            the API and the new code's `path:line`. It does not block unless
+            the diff's own mechanism is itself a defect the blocking rule
+            below covers.
+
             Evidence rule: every finding cites `path:line` and names the
             concrete input or sequence that breaks the claim. A finding with
             neither is reported as low-confidence — say so in its text — and
