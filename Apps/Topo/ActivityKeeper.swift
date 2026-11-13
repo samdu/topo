@@ -219,9 +219,10 @@ final class ActivityKeeper {
     private var ends: [String: Task<Void, Never>] = [:]
     /// Slots a start holds while it fetches its tracker, so two starts of one slot make one activity.
     private var reserved: Set<String> = []
-    /// The login the activities are kept under: a call that read the activities before an await
-    /// takes its `epoch` and checks it after, since the login may have ended in between and
-    /// nothing from before that may start or keep anything.
+    /// The login the activities are kept under: the keeper's own poll and resume take its `epoch`
+    /// before an await and check it after, since the login may have ended in between and nothing
+    /// from before that may start or keep anything. The tool's listing, start, update and end judge
+    /// the login their call carries instead (`ToolCall.context`).
     let login: LoginLife
     /// Counts the tool's updates of each activity: a poll that read the count before its fetch
     /// and finds it moved when its turn at the gate comes leaves that round to the next.

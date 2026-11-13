@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Testing
 @testable import TopoProxy
+import TopoProxyTestSupport
 
 /// The ports the listener-loss tests take back: below the ephemeral range, each examined once per
 /// run, one already held passed over, and a port a test was given never handed to another.
@@ -36,6 +37,29 @@ import Testing
         defer { Task { await next.stop() } }
         #expect(port != held)
         #expect(port != fellBack, "a port given to one start was handed to the next once its listener went")
+    }
+
+    /// The same, read off the draws themselves through a start that binds nothing: the test above
+    /// stops its listener and starts again, and a port still held from that stop is skipped as in
+    /// use, which a fallback handed twice would hide behind.
+    @Test func aPortAStartWasGivenIsNeverDrawnAgain() async throws {
+        let held = try #require(TestPorts.shared.draw())
+        let ports = TestPorts(handing: [held], then: .shared)
+        let tried = Tried()
+        let fellBack = try await ports.first { (port: NWEndpoint.Port) -> UInt16 in
+            tried.add(port.rawValue)
+            if port.rawValue == held { throw NWError.posix(.EADDRINUSE) }
+            return port.rawValue
+        }
+        #expect(fellBack != held)
+        let next = try await ports.first { (port: NWEndpoint.Port) -> UInt16 in
+            tried.add(port.rawValue)
+            return port.rawValue
+        }
+        #expect(next != held)
+        #expect(next != fellBack, "a port given to one start was handed to the next")
+        #expect(tried.ports.count == 3)
+        #expect(Set(tried.ports).count == tried.ports.count, "a port was tried twice: \(tried.ports)")
     }
 
     /// A refusal comes only after every port of the range is tried, once each: a run of held ports

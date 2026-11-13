@@ -67,8 +67,7 @@ extract "Sanitise the verdict" > "$work/sanitise.sh" || exit 2
 extract "Enforce the review verdict" > "$work/gate.sh" || exit 2
 [ -s "$work/sanitise.sh" ] && [ -s "$work/gate.sh" ] || { echo "extracted an empty snippet" >&2; exit 2; }
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # sanitise <case> <scoped file> — runs the sanitise snippet with the fake secrets in the
 # environment, leaving the verdict at $work/<case>/verdict.json and has_verdict in $has_verdict.
@@ -259,7 +258,7 @@ no_verdict
 # The review cap: no verdict, and the gate holds the merge with the cap as its reason rather than
 # passing or reading as a missing verdict. A passing verdict beside it does not open the gate.
 CAPPED=true gate review-cap false "$work/absent/verdict.json" block \
-  "review cap reached: four Codex verdicts; merges on Sam's word or goes back to draft for a replan"
+  "review cap reached; the PM rules on it"
 CAPPED=true gate review-cap-beside-a-pass true "$work/passing-scoped.json" block
 CAPPED=false gate not-capped true "$work/passing-scoped.json" pass
 

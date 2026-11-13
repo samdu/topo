@@ -127,10 +127,9 @@ struct WidgetTool: Tool {
     // MARK: Writing
 
     private func set(_ slot: String, _ text: String, _ store: SurfaceStore) async -> ToolReply {
-        if let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
+        if let refusal = Self.refusal(slot: slot) { return .refused("topo: \(refusal)\n") }
         if !store.slots().contains(slot), store.slots().count >= WidgetDocument.slotLimit {
-            return ToolReply(status: ToolReply.refused,
-                             text: "topo: there are \(WidgetDocument.slotLimit) slots already; clear one first\n")
+            return .refused("topo: there are \(WidgetDocument.slotLimit) slots already; clear one first\n")
         }
         let reading = WidgetDocument.read(text, from: .mind)
         guard case .read = reading.state else {
@@ -168,13 +167,14 @@ struct WidgetTool: Tool {
         var lines = ["set: \(slot), revision \(revision)"]
         lines += notes.map { "refused: \($0)" }
         lines += unchecked
-        return ToolReply(status: notes.isEmpty ? ToolReply.ok : ToolReply.refused, text: lines.joined(separator: "\n") + "\n")
+        let said = lines.joined(separator: "\n") + "\n"
+        return notes.isEmpty ? .ok(said) : .refused(said)
     }
 
     private func clear(_ slot: String?, _ store: SurfaceStore) async -> ToolReply {
         let slots = slot.map { [$0] } ?? store.slots()
         if let slot {
-            if let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
+            if let refusal = Self.refusal(slot: slot) { return .refused("topo: \(refusal)\n") }
             guard store.slots().contains(slot) else { return .failed("topo: there is no slot \(slot)\n") }
         }
         await expect(slots)
@@ -221,7 +221,7 @@ struct WidgetTool: Tool {
     struct ImageRefusal: Error { let text: String; init(_ text: String) { self.text = text } }
 
     private func image(slot: String, name: String, path: String, _ store: SurfaceStore) async -> ToolReply {
-        func refused(_ why: String) -> ToolReply { ToolReply(status: ToolReply.refused, text: "topo: \(why); nothing was copied\n") }
+        func refused(_ why: String) -> ToolReply { .refused("topo: \(why); nothing was copied\n") }
         if let refusal = Self.refusal(slot: slot) { return refused(refusal) }
         guard WidgetDocument.isName(name) else { return refused("\(name) is not an image name: [a-z0-9-], at most 32 characters") }
         let existing = store.imageNames(slot: slot)

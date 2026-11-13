@@ -213,12 +213,12 @@ final class VoiceToolTests: XCTestCase {
 
     // MARK: - The keeper's sounds
 
-    func testAPhoneNeverAskedPlaysReceipts() async {
+    func testAPhoneNeverAskedPlaysSounds() async {
         let defaults = defaults()
-        XCTAssertEqual(WorkingSounds.mode(defaults), .receipts)
+        XCTAssertEqual(WorkingSounds.mode(defaults), .sounds)
         for arguments in [["working"], ["working", "status"]] {
             let reply = await VoiceTool(defaults: defaults).run(arguments)
-            XCTAssertEqual(reply, .ok("working sounds receipts\n"), "\(arguments)")
+            XCTAssertEqual(reply, .ok("working sounds sounds\n"), "\(arguments)")
         }
         XCTAssertNil(defaults.object(forKey: WorkingSounds.key), "asking sets nothing")
     }

@@ -57,18 +57,18 @@ public actor PermissionBroker {
     /// Restricted is lifted where it was set, not under Topo's own settings.
     static func restricted(_ name: String) -> ToolReply {
         if name == "HomeKit" {
-            return ToolReply(status: ToolReply.denied, text:
+            return .denied(
                 "topo: HomeKit is restricted on this phone, so Topo cannot use it. A restriction is lifted by whoever set it — a device profile's by whoever manages the phone (Settings › General › VPN & Device Management) — and then the person allows Topo in the Settings app, under Privacy & Security › HomeKit › Topo. Ask the person, rather than trying again.\n")
         }
         let item = name == "Location" ? "Location Services" : name
-        return ToolReply(status: ToolReply.denied, text:
+        return .denied(
             "topo: \(name) is restricted on this phone, so Topo cannot use it. A Screen Time restriction is lifted in the Settings app, under Screen Time › Content & Privacy Restrictions › \(item), by whoever holds the Screen Time passcode; a device profile's, by whoever manages the phone (Settings › General › VPN & Device Management). Ask the person, rather than trying again.\n")
     }
 
     /// HomeKit's switch is under Privacy & Security, not under the app's own settings.
     static func refusal(_ name: String) -> ToolReply {
         let place = name == "HomeKit" ? "Privacy & Security › HomeKit › Topo" : "Apps › Topo › \(name)"
-        return ToolReply(status: ToolReply.denied, text:
+        return .denied(
             "topo: Topo is not allowed to use \(name) on this phone. The person can allow it in the Settings app, under \(place); ask them, rather than trying again.\n")
     }
 }

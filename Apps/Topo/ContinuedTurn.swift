@@ -5,7 +5,6 @@ import TopoUserland
 /// A turn's `BGContinuedProcessingTask`, as `GuestLifecycle` holds it: its progress rises with
 /// time (`TurnProgress`), since iOS expires a task whose progress stands still, and is full only
 /// at a completion that succeeded.
-@available(iOS 26, *)
 @MainActor
 final class ContinuedTurnTask: ContinuedTask {
     private let task: BGContinuedProcessingTask
@@ -67,7 +66,6 @@ final class ContinuedTurnTask: ContinuedTask {
 /// grace. The pill's words are fixed, never the turn's: it is drawn on the lock screen. They say
 /// what a tap does, since iOS's time is short and opening Topo is what keeps the turn going, and
 /// once the task expires they say the turn is being stopped.
-@available(iOS 26, *)
 @MainActor
 enum ContinuedTurns {
     nonisolated static let prefix = "zone.hexagon.topo.turn"

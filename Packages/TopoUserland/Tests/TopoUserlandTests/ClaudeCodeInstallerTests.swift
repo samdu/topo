@@ -66,7 +66,11 @@ final class ClaudeCodeInstallerTests: XCTestCase {
         let (url, pin) = try binary(Data(repeating: 1, count: 16))
         try fm.removeItem(at: url)
         let guest = CountingMounts()
-        XCTAssertThrowsError(try ClaudeCodeInstaller(binary: url, pin: pin).install(into: guest))
+        XCTAssertThrowsError(try ClaudeCodeInstaller(binary: url, pin: pin).install(into: guest)) { error in
+            guard case .unreadable = error as? ClaudeCodeInstaller.Failure else {
+                return XCTFail("a missing binary threw \(error), not unreadable")
+            }
+        }
         XCTAssertEqual(guest.mounts.count, 0)
     }
 

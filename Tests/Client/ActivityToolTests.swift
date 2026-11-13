@@ -13,9 +13,13 @@ final class ActivityToolTests: XCTestCase {
     private var fetcher: TrackerFetcher!
     private var login: LoginLife!
 
-    private var tool: ActivityTool {
+    private var bare: ActivityTool {
         ActivityTool(host: { [host] in host! }, keeper: { [keeper] in keeper! }, fetcher: fetcher, now: { [clock] in clock!.date })
     }
+
+    /// The tool as a launch's tool service hands it a call: every call carries the login standing
+    /// when the tool was taken, as a call carries the one its launch was started under.
+    private var tool: Launched { Launched(tool: bare, login: login.epoch) }
 
     override func setUp() {
         host = FakeActivityHost()
@@ -134,15 +138,16 @@ final class ActivityToolTests: XCTestCase {
         let tool = self.tool
         let first = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
         await SigningOut.midFlight(login, reached: { gate.pending == 1 })
-        // Signed in again: the second start is the next login's.
+        // Signed in again: the second start is the next login's, by a launch of its own.
         login.began()
-        let second = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
+        let next = self.tool
+        let second = Task { await next.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
         await settle()
         XCTAssertEqual(gate.pending, 2)
         gate.release(TrackerFixtures.wiki)
         let firstReply = await first.value
         XCTAssertEqual(firstReply.status, ToolReply.failed, firstReply.text)
-        let third = await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
+        let third = await next.run(["start", "job", #"{"poll": "https://h/progress/x"}"#])
         XCTAssertEqual(third.status, ToolReply.failed, "the second start still holds the slot")
         XCTAssertTrue(third.text.contains("is starting"), third.text)
         gate.release(TrackerFixtures.wiki)
@@ -172,8 +177,9 @@ final class ActivityToolTests: XCTestCase {
     func testAStartReceivedDuringASignOutStartsNothing() async throws {
         let gate = GatedTrackerFetcher()
         fetcher = gate
-        let tool = self.tool
         login.moveEpoch()
+        // From a launch made after the sign-out's first step, so it carries the moved epoch.
+        let tool = self.tool
         let started = Task { await tool.run(["start", "job", #"{"poll": "https://h/progress/x"}"#]) }
         await settle()
         XCTAssertEqual(gate.pending, 1)
@@ -207,6 +213,37 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertEqual(timed.status, ToolReply.failed, timed.text)
         XCTAssertEqual(host.starts, 0, "an activity started after the login's end")
         XCTAssertFalse(keeper.isReserved("tea"))
+    }
+
+    /// A start carrying a login that has ended, received once the next login has an activity in
+    /// the slot, is refused as the ended login's and says nothing of the next login's activity.
+    func testAStartFromAnEndedLoginSaysNothingOfTheNextLoginsSlot() async throws {
+        let ended = self.tool
+        login.end()
+        await login.tornDown()
+        login.began()
+        let next = await tool.run(["start", "job", timer])
+        XCTAssertEqual(next.status, ToolReply.ok, next.text)
+        let reply = await ended.run(["start", "job", timer])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(reply.text, "topo: the login has ended; nothing started\n")
+        XCTAssertEqual(host.starts, 1)
+        keeper.forget("A1")
+    }
+
+    /// A listing carrying a login that has ended, asked once the next login has an activity
+    /// running, is refused as the ended login's and lists nothing of the next login's.
+    func testAListingFromAnEndedLoginListsNothingOfTheNextLogins() async throws {
+        let ended = self.tool
+        login.end()
+        await login.tornDown()
+        login.began()
+        let next = await tool.run(["start", "job", timer])
+        XCTAssertEqual(next.status, ToolReply.ok, next.text)
+        let reply = await ended.run([])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(reply.text, "topo: the login this call came from has ended (a sign-out since the resident started); nothing changed\n")
+        keeper.forget("A1")
     }
 
     func testTwoStartsOfOneSlotMakeOneActivity() async throws {
@@ -268,7 +305,9 @@ final class ActivityToolTests: XCTestCase {
         let ended = Task { await tool.run(["end", "A1", #"{"relevance": 7}"#]) }
         await settle()
         let keeper = self.keeper!
-        await SigningOut.midFlight(login, reached: { gate.held == 1 }, release: { gate.openUp() })
+        // The next login stands as the gate opens, so the queued calls are refused by the login they
+        // carry, not by finding none current.
+        await SigningOut.midFlight(login, reached: { gate.held == 1 }, release: { login.began(); gate.openUp() })
         _ = await first.value
         let update = await queued.value
         let end = await ended.value
@@ -482,6 +521,8 @@ final class ActivityToolTests: XCTestCase {
         }
         XCTAssertTrue(host.running().allSatisfy(\.ended))
         let started = ToolDates.write(clock.date), until = ToolDates.write(Date(timeIntervalSince1970: 1_793_599_200))
+        // Listed under the next login, since no listing is answered while none stands.
+        login.began()
         let reply13 = await tool.run([])
         XCTAssertEqual(reply13.text, "activity: A1 | slot job | ended | started \(started) | until \(until)\n  families: lockScreen\nactivity: A2 | slot two | ended | started \(started)\n  tracker: macOS update on buddybox, 1 of 3 done, running, at Download\n")
     }
@@ -499,10 +540,122 @@ final class ActivityToolTests: XCTestCase {
         }
     }
 
+    // MARK: The call's login
+
+    /// A start carries the login its launch was started under, not the one standing when it first
+    /// reaches the main actor: a call made under a login that ends, and whose first hop runs only
+    /// once the next login has begun, starts nothing under the next one.
+    func testAStartFromALoginThatEndedStartsNothingUnderTheNext() async throws {
+        let tool = self.tool
+        let call = Task { await tool.run(["start", "tea", timer]) }
+        // A sign-out's steps, then the next sign-in, all before the call has run at all: nothing
+        // here suspends, so the call's task cannot run between them.
+        login.moveEpoch()
+        login.runTeardowns()
+        login.began()
+        let reply = await call.value
+        await login.tornDown()
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(host.starts, 0, "an activity of the login that ended was started under the next")
+        XCTAssertEqual(keeper.tasks, 0)
+        XCTAssertFalse(keeper.isReserved("tea"))
+    }
+
+    /// A start already holding its call's login when that login ends starts nothing: it is parked
+    /// while the sign-out's steps run and the next login begins, and only then goes on.
+    func testAStartParkedAcrossASignOutAndTheNextSignInStartsNothing() async throws {
+        let gate = Gate()
+        var parking = bare
+        parking.parked = { await gate.park() }
+        let tool = Launched(tool: parking, login: login.epoch)
+        let call = Task { await tool.run(["start", "tea", timer]) }
+        await gate.reached()
+        login.moveEpoch()
+        login.runTeardowns()
+        await login.tornDown()
+        login.began()
+        await gate.release()
+        let reply = await call.value
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(host.starts, 0, "the start outlived the sign-out")
+        XCTAssertEqual(keeper.tasks, 0)
+        XCTAssertFalse(keeper.isReserved("tea"))
+    }
+
+    /// An update and an end from a login that ended change nothing of the next login's: an id
+    /// listed under the next one reached by a call of the last does not reach its activity.
+    func testAnUpdateAndAnEndFromALoginThatEndedChangeNothingOfTheNext() async throws {
+        let old = self.tool
+        await SigningOut.now(login)
+        login.began()
+        let started = await self.tool.run(["start", "tea", timer])
+        XCTAssertEqual(started.status, ToolReply.ok, started.text)
+        let update = await old.run(["update", "A1", #"{"relevance": 5}"#])
+        let end = await old.run(["end", "A1"])
+        XCTAssertEqual(update.status, ToolReply.failed, update.text)
+        XCTAssertEqual(end.status, ToolReply.failed, end.text)
+        XCTAssertEqual(host.updates, 0, "\(host.calls)")
+        XCTAssertTrue(host.ends.isEmpty, "\(host.ends)")
+        keeper.forget("A1")
+    }
+
+    /// A call that carries no login (one the service accepted on a listener no launch was told)
+    /// lists, starts, updates and ends nothing, and says why.
+    func testACallCarryingNoLoginChangesNothing() async throws {
+        _ = await tool.run(["start", "tea", timer])
+        let start = await bare.run(["start", "job", timer])
+        let update = await bare.run(["update", "A1", #"{"relevance": 5}"#])
+        let end = await bare.run(["end", "A1"])
+        let listed = await bare.run([])
+        for reply in [start, update, end, listed] {
+            XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+            XCTAssertTrue(reply.text.contains("no login"), reply.text)
+        }
+        XCTAssertEqual(host.starts, 1)
+        XCTAssertEqual(host.updates, 0)
+        XCTAssertTrue(host.ends.isEmpty)
+        keeper.forget("A1")
+    }
+
     func testHelpSaysWhatItCannotDo() {
         let usage = tool.usage
         for phrase in ["never while it is suspended", "locked phone", "No control and no image", "only while Topo is on the screen", "Settings"] {
             XCTAssertTrue(usage.contains(phrase), phrase)
         }
+    }
+}
+
+/// A call as a launch's listener hands it on: run under the login it carries (`ToolCall.context`).
+private struct Launched: Sendable {
+    let tool: ActivityTool
+    let login: LoginLife.Epoch
+    var usage: String { tool.usage }
+
+    func run(_ arguments: [String]) async -> ToolReply {
+        await ToolCall.$context.withValue(login) { await tool.run(arguments) }
+    }
+}
+
+/// Where a call waits: `park` holds it until `release`, and `reached` returns once it is held.
+private actor Gate {
+    private var parked: CheckedContinuation<Void, Never>?
+    private var arrived: CheckedContinuation<Void, Never>?
+    private var isParked = false
+
+    func park() async {
+        isParked = true
+        arrived?.resume()
+        arrived = nil
+        await withCheckedContinuation { parked = $0 }
+    }
+
+    func reached() async {
+        if isParked { return }
+        await withCheckedContinuation { arrived = $0 }
+    }
+
+    func release() {
+        parked?.resume()
+        parked = nil
     }
 }

@@ -11,6 +11,9 @@ struct ActivityTool: Tool {
     var keeper: @MainActor @Sendable () -> ActivityKeeper
     var fetcher: TrackerFetcher = URLTrackerFetcher()
     var now: @Sendable () -> Date = { Date() }
+    /// Awaited by a start, an update or an end before it goes to the main actor: a test parks the
+    /// call there.
+    var parked: @Sendable () async -> Void = {}
 
     let name = "activity"
     let summary = "a Live Activity on the lock screen and in the Dynamic Island: a progress tracker, or a countdown with no sound (a timer that sounds is topo timer)"
@@ -52,24 +55,44 @@ struct ActivityTool: Tool {
     func run(_ arguments: [String]) async -> ToolReply {
         switch (arguments.first, arguments.count) {
         case (nil, _):
-            return await list()
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            return await list(login: login)
         case ("example", 1):
             return .ok(Self.example(now: now()) + "\n")
         case ("start", 3):
-            return await start(slot: arguments[1], json: arguments[2])
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            await parked()
+            return await start(slot: arguments[1], json: arguments[2], login: login)
         case ("update", 3):
-            return await update(id: arguments[1], json: arguments[2])
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            await parked()
+            return await update(id: arguments[1], json: arguments[2], login: login)
         case ("end", let count) where (2...5).contains(count):
-            return await end(Array(arguments.dropFirst()))
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            await parked()
+            return await end(Array(arguments.dropFirst()), login: login)
         default:
             return .usage("topo: activity takes nothing, start, update, end or example\n\n\(usage)\n")
         }
     }
 
+    /// The login a listing, a start, an update or an end is answered under: the mark its launch was started under,
+    /// which the tool service's listener hands every call it accepts (`LaunchPorts`,
+    /// `ToolCall.context`). One taken at the call's first hop to the main actor could be taken
+    /// after a sign-out and the next sign-in both ran ahead of it, and would let the last login's
+    /// call act on the next one's activities, or list them.
+    private static func callLogin() -> LoginLife.Epoch? { ToolCall.context as? LoginLife.Epoch }
+
+    private static let loginEnded = ToolReply.failed("topo: the login this call came from has ended (a sign-out since the resident started); nothing changed\n")
+
+    private static let noLogin = ToolReply.failed("topo: this call carries no login; nothing changed\n")
+
     // MARK: Listing
 
     @MainActor
-    private func list() -> ToolReply {
+    private func list(login: LoginLife.Epoch) -> ToolReply {
+        // An ended login's call is told nothing of what the next login has running.
+        guard login.isCurrent else { return Self.loginEnded }
         let records = host().running()
         guard !records.isEmpty else { return .ok("no activity running\n") }
         var lines: [String] = []
@@ -93,28 +116,30 @@ struct ActivityTool: Tool {
     // MARK: Starting
 
     @MainActor
-    private func start(slot: String, json: String) async -> ToolReply {
+    private func start(slot: String, json: String, login: LoginLife.Epoch) async -> ToolReply {
         guard WidgetDocument.isSlot(slot) else {
             return .usage("topo: a slot is [a-z0-9-], at most 32 characters\n")
         }
+        // Between a login's end and the next sign-in no epoch is current, and nothing starts; nor
+        // does a call of a login that has ended, whatever stands now. Judged before the host is
+        // read, so an ended login's start is not answered with the next login's activity in its slot.
+        guard login.isCurrent else {
+            return .failed("topo: the login has ended; nothing started\n")
+        }
         guard host().enabled else {
-            return ToolReply(status: ToolReply.denied, text: Self.disabled)
+            return .denied(Self.disabled)
         }
         if let running = host().running().first(where: { $0.attributes.slot == slot && !$0.ended }) {
             return .failed("topo: slot \(slot) is running as \(running.id); update or end it\n")
         }
         let keeper = keeper()
-        // Between a login's end and the next sign-in no epoch is current, and nothing starts.
-        guard keeper.login.epoch.isCurrent else {
-            return .failed("topo: the login has ended; nothing started\n")
-        }
         // Held from here until the reply: a second start of the slot while this one fetches is refused.
         guard keeper.reserve(slot) else {
             return .failed("topo: slot \(slot) is starting; wait for it\n")
         }
         // Released only under the login that reserved it: after the login ends the slot is another
         // start's to hold, and this one lets go of nothing.
-        let reserved = keeper.login.epoch
+        let reserved = login
         defer { if reserved.isCurrent { keeper.release(slot) } }
         let reading = ActivityDocument.read(json, now: now())
         guard case .read = reading.state else {
@@ -127,7 +152,7 @@ struct ActivityTool: Tool {
         // is the tracker drawn: it is what every later round draws too.
         if let poll = document.poll {
             if tracker != nil { notes.append(Self.trackerSetAside) }
-            let epoch = keeper.login.epoch
+            let epoch = login
             let data = await fetcher.fetch(poll)
             guard epoch.isCurrent else {
                 return .failed("topo: the login ended while the tracker was fetched; nothing started\n")
@@ -155,7 +180,7 @@ struct ActivityTool: Tool {
         case .success(let id):
             keeper.keep(id)
             let text = "started \(id) for slot \(slot)\n" + Self.notes(notes)
-            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+            return notes.isEmpty ? .ok(text) : .refused(text)
         case .failure(let error):
             return Self.refused(error)
         }
@@ -164,7 +189,7 @@ struct ActivityTool: Tool {
     // MARK: Updating
 
     @MainActor
-    private func update(id: String, json: String) async -> ToolReply {
+    private func update(id: String, json: String, login: LoginLife.Epoch) async -> ToolReply {
         let reading = ActivityDocument.read(json, now: now(), update: true)
         guard case .read = reading.state else {
             return .usage("topo: the document " + Self.why(reading.state) + "\n" + Self.notes(reading.notes))
@@ -172,7 +197,8 @@ struct ActivityTool: Tool {
         var notes = reading.notes
         if reading.document.poll != nil { notes.append(Self.pollStands) }
         let keeper = keeper()
-        let epoch = keeper.login.epoch
+        guard login.isCurrent else { return Self.loginEnded }
+        let epoch = login
         // Merged over the state the host holds when the gate opens, not as it was before the
         // wait, so a poll's round that passed first keeps its card.
         let reply = await keeper.changing(id) { record -> ToolReply in
@@ -190,7 +216,7 @@ struct ActivityTool: Tool {
             // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
             if epoch.isCurrent { keeper.keep(id) }
             let text = "updated \(id)\n" + Self.notes(notes)
-            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+            return notes.isEmpty ? .ok(text) : .refused(text)
         }
         return reply ?? .failed("topo: no activity \(id) running\n")
     }
@@ -198,7 +224,7 @@ struct ActivityTool: Tool {
     // MARK: Ending
 
     @MainActor
-    private func end(_ arguments: [String]) async -> ToolReply {
+    private func end(_ arguments: [String], login: LoginLife.Epoch) async -> ToolReply {
         let id = arguments[0]
         var rest = Array(arguments.dropFirst())
         var dismissal = ActivityDismissal.standard
@@ -229,7 +255,8 @@ struct ActivityTool: Tool {
         // else: a last document or the default dismissal is for one still running.
         let takesDown = reading == nil && dismissal != .standard
         let keeper = keeper()
-        let epoch = keeper.login.epoch
+        guard login.isCurrent else { return Self.loginEnded }
+        let epoch = login
         // Judged at the gate as the host then holds it: another end that passed first leaves this
         // one ended, and no second end is sent.
         let reply = await keeper.changing(id, ended: takesDown) { record -> ToolReply in
@@ -256,7 +283,7 @@ struct ActivityTool: Tool {
             default: said = "ended \(id)\n"
             }
             let text = said + Self.notes(notes)
-            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+            return notes.isEmpty ? .ok(text) : .refused(text)
         }
         return reply ?? .failed("topo: no activity \(id) running\n")
     }
@@ -269,12 +296,12 @@ struct ActivityTool: Tool {
 
     /// Status 6: the whole document refused, since nothing of it fits beside the attributes.
     static func overBudget(_ note: String?, _ notes: [String], _ outcome: String) -> ToolReply {
-        ToolReply(status: ToolReply.refused, text: "topo: the document " + (note ?? "is over the payload budget") + "; \(outcome)\n" + Self.notes(notes))
+        .refused("topo: the document " + (note ?? "is over the payload budget") + "; \(outcome)\n" + Self.notes(notes))
     }
 
     static func refused(_ error: Error) -> ToolReply {
         switch error as? ActivityRefusal {
-        case .disabled: ToolReply(status: ToolReply.denied, text: disabled)
+        case .disabled: .denied(disabled)
         case .notOnScreen: .failed("topo: Topo is not on the screen, and a Live Activity starts only while it is; ask again with Topo in front\n")
         case .tooMany: .failed("topo: the system is showing as many Live Activities as it allows; end one first\n")
         case .tooLarge: .failed("topo: the system refused the activity as too large\n")

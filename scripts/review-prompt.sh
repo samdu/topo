@@ -24,7 +24,7 @@
 #
 # The round is one more than the codex verdicts already on the PR. From round 3 on the prompt ends
 # with the convergence rule (docs/process.md, *The fix loop*): only a bug a real user would hit
-# blocks, and everything else is reported non-blocking for the coordinator to file as an issue. That holds on
+# blocks, and everything else is reported non-blocking, for the engineer to hand the PM as work outside its PR. That holds on
 # every path below, a first review included. The count comes from scripts/review-verdicts.sh, which
 # retries `gh` (REVIEW_GH_ATTEMPTS, REVIEW_GH_BACKOFF); a `gh` that still fails exits 1 with an
 # `::error::`, because a guessed round is a review under the wrong rule.
@@ -93,7 +93,7 @@ than the code, a test or Proof entry that could be stronger, a defect in
 CI, the scripts or the test harness, a sequence reachable only through a
 debug path or one no user can produce. This holds for an earlier finding
 still open as much as for a new one, and it overrides any other bar in
-this prompt. The coordinator files the non-blocking findings as issues.
+this prompt. The PM files the non-blocking findings as issues.
 
 Two more rules hold from round 3 on, and neither lowers a finding the
 rule above still holds blocking: that one blocks until the code it cites
@@ -205,7 +205,7 @@ evidence rule. A new finding in the change since, and an earlier
 finding still open, block by the ordinary rule. A finding in code the
 change since does not touch does not block, whatever it is: it is
 reported, says in its text that it is not blocking, and does not by
-itself set \`blocking\`. The coordinator writes it to the ledger as
+itself set \`blocking\`. The PM writes it to the ledger as
 deferred, and it does not extend the loop.
 EOF
 round_rule
