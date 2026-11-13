@@ -97,6 +97,9 @@ final class GuestToolsInstallTests: XCTestCase {
             let mode = try FileManager.default.attributesOfItem(atPath: home.appendingPathComponent(path).path)[.posixPermissions] as? Int
             XCTAssertEqual(mode, 0o644, path)
         }
+        let converter = try String(contentsOf: home.appendingPathComponent(GuestTools.doccToMarkdownPath), encoding: .utf8)
+        XCTAssertTrue(converter.hasPrefix("# docc2md.jq"), "the converter is TopoTools' resource: " + converter)
+        XCTAssertEqual(converter, try GuestTools.doccToMarkdown)
         let left = try FileManager.default.subpathsOfDirectory(atPath: home.path).filter { ($0 as NSString).lastPathComponent.hasSuffix(".part") }
         XCTAssertEqual(left, [], "no hidden name is left behind")
     }
