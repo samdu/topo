@@ -1003,6 +1003,30 @@ import TopoCoreTesting
         guard case .primary = try await h.takeOver() else { Issue.record("the renewal after the one given up did not go through"); return }
     }
 
+    /// A wrapper between the lease and that store passes the bound on (`ForwardingDatabase`): the
+    /// held renewal is still given up at the patience, and the lease's reads went through the
+    /// wrapper's own hook rather than round it.
+    @Test func aRenewalHeldUnderAWrapperIsGivenUpAtThePatience() async throws {
+        let held = HoldingDatabase(db)
+        let counting = CountingFetchDatabase(inner: held)
+        let timing = LeaseTiming(duration: 3, heartbeat: 1)
+        let h = PrimaryLease(database: counting, device: hub, endpoint: nil, probe: StubProbe.allDead,
+                             timing: timing, now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        #expect(held.bounds == [timing.patience], "the wrapper did not pass the bound on")
+        _ = try await h.acquire()
+        #expect(counting.fetches > 0, "the lease's reads went round the wrapper")
+        held.holdNextSave()
+        let late = Task { try await Task.sleep(for: .seconds(timing.patience * 3)); held.release() }
+        defer { late.cancel() }
+        let began = ContinuousClock.now
+        await #expect(throws: RecordDatabaseError.self) { try await h.takeOver() }
+        let took = ContinuousClock.now - began
+        #expect(took >= .seconds(timing.patience), "given up before its bound: \(took)")
+        #expect(took < .seconds(timing.patience * 3), "not given up at its bound: \(took)")
+        #expect(held.holding, "the request is still out: only the lease gave it up")
+        held.release()
+    }
+
     @Test func aRequestThatStallsAndIsGivenUpDoesNotCostAHealthyHolderTheLease() async throws {
         let stalls = Stalls(db), ticker = Ticker()
         let h = lease(hub, on: stalls, ticker: ticker)
