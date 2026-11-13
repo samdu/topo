@@ -2382,8 +2382,9 @@ extension GuestBridgeTests {
 
 /// The in-memory log behind a link that can go: while away, every call fails `unavailable` and
 /// nothing reaches the store.
-private actor Outage: RecordDatabase {
+private actor Outage: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var gone = false
     private var stalled = false
     private var held: [CheckedContinuation<Void, Never>] = []
@@ -2407,16 +2408,16 @@ private actor Outage: RecordDatabase {
         if gone { throw RecordDatabaseError.unavailable(underlying: Refused()) }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         try await reach()
         if noReplies, records.contains(where: { $0.type == Turn.recordType && $0.fields["role"] == .string(TurnRole.assistant.rawValue) }) {
             throw RecordDatabaseError.unavailable(underlying: Refused())
         }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await reach(); return try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await reach(); return try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await reach(); return try await wrapped.records(ofType: type) }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] { try await reach(); return try await base.fetch(ids) }
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] { try await reach(); return try await base.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] { try await reach(); return try await base.records(ofType: type) }
 }
 
 @MainActor
@@ -2467,8 +2468,9 @@ final class StartOnceTests: XCTestCase {
 
 /// The in-memory log, able to refuse every reply's save (nothing written) and to commit the next
 /// reply and throw (a lost acknowledgement).
-private actor RefusingReplies: RecordDatabase {
+private actor RefusingReplies: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var refusing = false
     private var loseNext = false
 
@@ -2480,9 +2482,9 @@ private actor RefusingReplies: RecordDatabase {
         records.contains { Turn(record: $0)?.role == .assistant }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if refusing, isReply(records) { throw RecordDatabaseError.unavailable(underlying: Refused()) }
-        let saved = try await wrapped.save(records)
+        let saved = try await base.save(records)
         if loseNext, isReply(records) {
             loseNext = false
             throw RecordDatabaseError.unavailable(underlying: Refused())
@@ -2490,9 +2492,6 @@ private actor RefusingReplies: RecordDatabase {
         return saved
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 private struct Refused: Error {}
@@ -2561,17 +2560,15 @@ private final class Flag: @unchecked Sendable {
 }
 
 /// Reads get through and every save is refused: a lease call or a save that fails with the log readable.
-private actor SavesRefused: RecordDatabase {
+private actor SavesRefused: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var refusing = false
     func refuse(_ on: Bool) { refusing = on }
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if refusing { throw RecordDatabaseError.unavailable(underlying: Refused()) }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 extension GuestBridgeTests {
@@ -3038,21 +3035,19 @@ extension GuestBridgeTests {
 }
 
 /// Commits the next save that carries a person's turn and then fails it: a lost acknowledgement.
-private actor LostAck: RecordDatabase {
+private actor LostAck: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var loseNextPerson = false
     func loseNextPersonAcknowledgement() { loseNextPerson = true }
-    func save(_ records: [Record]) async throws -> [Record] {
-        let saved = try await wrapped.save(records)
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        let saved = try await base.save(records)
         if loseNextPerson, records.contains(where: { Turn(record: $0)?.role == .person }) {
             loseNextPerson = false
             throw RecordDatabaseError.unavailable(underlying: Refused())
         }
         return saved
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 extension GuestBridgeTests {
@@ -3319,8 +3314,9 @@ extension GuestBridgeTests {
 
 // MARK: - Words given ahead: a demotion under way, and inputs never received
 
-private actor SlowSaves: RecordDatabase {
+private actor SlowSaves: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var holding = false
     private var held: [CheckedContinuation<Void, Never>] = []
 
@@ -3331,13 +3327,10 @@ private actor SlowSaves: RecordDatabase {
         held = []
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if holding { await withCheckedContinuation { held.append($0) } }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 extension GuestBridgeTests {
@@ -3592,8 +3585,9 @@ extension GuestBridgeTests {
 
 // MARK: - Words given ahead: a retry racing its own earlier save, and a demotion racing a launch
 
-private actor TurnSavesHeld: RecordDatabase {
+private actor TurnSavesHeld: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var holding = false
     private var held: [CheckedContinuation<Void, Never>] = []
 
@@ -3606,15 +3600,12 @@ private actor TurnSavesHeld: RecordDatabase {
         held = []
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if holding, records.contains(where: { $0.type == Turn.recordType }) {
             await withCheckedContinuation { held.append($0) }
         }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 extension GuestBridgeTests {
@@ -3854,14 +3845,15 @@ extension GuestBridgeTests {
 
 /// The next save that carries a person's turn fails `unavailable` and is still on its way: it
 /// lands just ahead of the next save that carries a turn. A request that ran out, applied late.
-private actor PersonSaveLandsLate: RecordDatabase {
+private actor PersonSaveLandsLate: ForwardingDatabase {
     let wrapped = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { wrapped }
     private var armed = false
     private var late: [Record]?
 
     func loseNextPersonSaveUntilTheNextTurnSave() { armed = true }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if armed, records.contains(where: { Turn(record: $0)?.role == .person }) {
             armed = false
             late = records
@@ -3869,13 +3861,10 @@ private actor PersonSaveLandsLate: RecordDatabase {
         }
         if records.contains(where: { $0.type == Turn.recordType }), let landing = late {
             late = nil
-            _ = try await wrapped.save(landing)
+            _ = try await base.save(landing)
         }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 extension GuestBridgeTests {

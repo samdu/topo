@@ -476,24 +476,26 @@ private struct Failing: RecordDatabase {
 
 /// A database whose zone does not exist until `open()`: every call before that is CloudKit's
 /// `zoneNotFound`, which is what a fresh Apple ID answers.
-private actor ZoneGate: RecordDatabase {
+private actor ZoneGate: ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var isOpen = false
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
     func open() { isOpen = true }
     private func check() throws {
         if !isOpen { throw RecordDatabaseError.rejected(underlying: CKError(.zoneNotFound)) }
     }
-    func save(_ records: [Record]) async throws -> [Record] { try check(); return try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try check(); return try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try check(); return try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try check(); return try await wrapped.records(ofType: type) }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] { try check(); return try await base.save(records) }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] { try check(); return try await base.fetch(ids) }
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] { try check(); return try await base.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] { try check(); return try await base.records(ofType: type) }
 }
 
 /// A database that never answers until `answer()`: every call before that waits until it is
 /// cancelled, as a CloudKit that keeps a first launch waiting does.
-private actor Stalling: RecordDatabase {
+private actor Stalling: ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     /// The records whose fetch stalls; nil stalls every call.
     let only: Set<RecordID>?
     /// Whether a stalled call goes on waiting when it is cancelled, as a request that does not
@@ -526,10 +528,10 @@ private actor Stalling: RecordDatabase {
         }
         while !answers { try await Task.sleep(for: .milliseconds(10)) }
     }
-    func save(_ records: [Record]) async throws -> [Record] { saves += 1; try await stall(); return try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await stall(ids); return try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await stall(); return try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await stall(); return try await wrapped.records(ofType: type) }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] { saves += 1; try await stall(); return try await base.save(records) }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] { try await stall(ids); return try await base.fetch(ids) }
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] { try await stall(); return try await base.query(query) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] { try await stall(); return try await base.records(ofType: type) }
 }
 
 /// A zone made only once `open()` is called: until then `wait()` does not return, cancelled or not.
