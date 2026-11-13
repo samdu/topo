@@ -20,7 +20,43 @@ final class ScriptedDetector: VoiceDetector, @unchecked Sendable {
     /// The silence each stream was reset with.
     var silences: [TimeInterval] { lock.withLock { silenced } }
 
-    func reset(silence: TimeInterval) async { lock.withLock { resets += 1; fed = 0; silenced.append(silence) } }
+    func reset(silence: TimeInterval) async {
+        // Asked for by a cancelled task: a feeder already replaced.
+        if Task.isCancelled {
+            lock.withLock { staleCount += 1 }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                // Judged and kept under one lock, so a `landStaleResets` cannot fall between.
+                let now = lock.withLock { () -> Bool in
+                    if deferring { stale.append(continuation) }
+                    return !deferring
+                }
+                if now { continuation.resume() }
+            }
+            lock.withLock { resets += 1; fed = 0; silenced.append(silence); staleLanded += 1 }
+            return
+        }
+        lock.withLock { resets += 1; fed = 0; silenced.append(silence) }
+    }
+
+    /// The resets a cancelled task asked for, and those of them that have landed.
+    private var staleCount = 0
+    private var staleLanded = 0
+    var staleResets: Int { lock.withLock { staleCount } }
+    var staleResetsLanded: Int { lock.withLock { staleLanded } }
+    /// A stale reset waits for `landStaleResets` rather than landing as it is asked, as an actor
+    /// running it after the live feeder's feeds would land it.
+    private var deferring = false
+    private var stale: [CheckedContinuation<Void, Never>] = []
+    func deferStaleResets() { lock.withLock { deferring = true } }
+    /// Every stale reset waiting lands now, and those asked for after land as they are asked.
+    func landStaleResets() {
+        let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            deferring = false
+            defer { stale = [] }
+            return stale
+        }
+        waiting.forEach { $0.resume() }
+    }
 
     /// The chunk whose verdict waits for `release`, and the wait itself.
     private var holdAt: Int?
@@ -421,6 +457,35 @@ final class ConversationTests: XCTestCase {
         center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
         XCTAssertFalse(voice.listening, "a suspended session outlived the app's return with no conversation")
         XCTAssertFalse(conversation.on)
+    }
+
+    /// The feeder the lock's conversation began is replaced at the call's activation before it
+    /// has run: it asks the detector nothing, so no reset of its lands among the live feeder's
+    /// feeds to begin the stream again mid-utterance and lose the utterance's end.
+    func testAFeederReplacedBeforeItRanResetsNothing() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        detector.deferStaleResets()
+        detector.hold(at: 1)
+        let (conversation, voice, _) = await make(detector: detector)
+        defer { conversation.stop("test", sending: false); detector.landStaleResets(); detector.release() }
+        await tap(voice)
+        // The leave begins the conversation and its feeder; the placing and the activation, in
+        // the same turn, replace it before it has run.
+        leave()
+        conversation.call(.placing)
+        conversation.call(.active)
+        XCTAssertTrue(voice.listening && !voice.suspended, "the activation did not resume the microphone")
+        utterance(into: voice.sink)
+        await settle("the live feeder's second chunk with the detector") { detector.holding }
+        // A stale reset asked for lands now, after the live feeder's first chunk: as late as an
+        // actor that ran it after them would.
+        let asked = detector.staleResets
+        detector.landStaleResets()
+        await settle("the stale resets landed") { detector.staleResetsLanded == asked }
+        detector.release()
+        await settle("the turn sent") { self.sent.count == 1 }
+        XCTAssertEqual(sent, ["turn the lights off"])
+        XCTAssertEqual(detector.staleResets, 0, "a feeder replaced before it ran reset the detector")
     }
 
     // MARK: - The end, every way
