@@ -27,14 +27,12 @@ final class ControlCueTests: XCTestCase {
 
     private var store: SurfaceStore { SurfaceStore(folder: folder) }
 
-    private func taps(_ harness: Harness, tools: [any Tool] = [], holdsForTheDrain: Bool = false,
-                      drainBound: Duration = WidgetTaps.drainBound) -> WidgetTaps {
+    private func taps(_ harness: Harness, tools: [any Tool] = []) -> WidgetTaps {
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                        reloadEveryControl: {}, schedule: { _, _ in })
         return WidgetTaps(cues: WidgetCues(harness: harness, store: { store }, reloader: reloader),
-                          actions: WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: .seconds(5)),
-                          holdsForTheDrain: holdsForTheDrain, drainBound: drainBound)
+                          actions: WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: .seconds(5)))
     }
 
     @discardableResult
@@ -155,23 +153,28 @@ final class ControlCueTests: XCTestCase {
         XCTAssertEqual(ControlSlot.all.map { store.readControl(slot: $0)?.document.revision }, others, "a relaunch rewrote a slot")
     }
 
-    /// A turn tap held for its drain returns at the bound when the log will not take the turn in
-    /// time, leaving the drain running. The cue's words are in the harness's outbox under the cue's
-    /// nonce by then (`Harness.pending`, kept in the defaults), so a later launch's harness sends
-    /// them once, and the cue, gone from the app group, is not said a second time.
-    func testAHeldTapReturnsAtTheBoundAndTheTurnOutlivesIt() async throws {
+    /// A turn tap whose intent ends while the log will not take the turn: the cue's words are in
+    /// the harness's outbox under the cue's nonce (`Harness.pending`, kept in the defaults) and the
+    /// cue is gone from the app group, so a later launch's harness sends them once, and the cue is
+    /// not said a second time.
+    func testATurnTheLogDidNotTakeBeforeTheProcessEndedIsSentOnceByTheNextLaunch() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
         let stalled = harness(db, defaults: defaults, transport: ScriptedTransport(),
                               ensureZone: { try await Task.sleep(for: .seconds(3600)) })
         let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
-        let taps = taps(stalled, holdsForTheDrain: true, drainBound: .milliseconds(300))
-        let started = ContinuousClock.now
+        let taps = taps(stalled)
         let answer = await taps.controlTapped(slot: "button-1", revision: revision, turningOn: nil)
         XCTAssertEqual(answer, .foreground)
-        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3), "the tap waited on the drain past its bound")
+        // The drain is a main-actor task the tap started, so it has not run yet.
+        let cueNonce = try XCTUnwrap(store.cues().first?.nonce, "the tap recorded no cue")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while stalled.owed.isEmpty || !store.cues().isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertEqual(store.cues(), [], "the cue outlived its place on the line")
-        let nonce = try XCTUnwrap(stalled.owed.first?.nonce)
+        let nonce = try XCTUnwrap(stalled.owed.first?.nonce, "the drain put nothing on the line")
+        XCTAssertEqual(nonce, cueNonce, "the turn went on the line under a nonce that is not the cue's")
 
         // The process ends here; the next launch's harness reads the same defaults.
         let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport())
@@ -218,21 +221,65 @@ final class ControlCueTests: XCTestCase {
         XCTAssertEqual(store.taps(), [])
     }
 
-    /// iOS 18 to 25: a turn control pressed with Topo killed launches the app in the background,
-    /// where no screen has read the log. The intent's own drain reads it and sends the turn.
+    /// A turn control pressed with Topo killed launches the app for the intent before any screen
+    /// has read the log. The tap's own drain reads it and sends the turn.
     func testAColdBackgroundTurnIsSent() async throws {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         XCTAssertFalse(harness.hasRead)
         let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
-        // The intent is held open for the drain, as before iOS 26: the turn is in the log by the
-        // time the tap answers, with nothing polled for.
-        let answer = await taps(harness, holdsForTheDrain: true).controlTapped(slot: "button-1", revision: revision, turningOn: nil)
+        let taps = taps(harness)
+        let answer = await taps.controlTapped(slot: "button-1", revision: revision, turningOn: nil)
         XCTAssertEqual(answer, .foreground)
+        let draining = try XCTUnwrap(taps.draining, "the tap started no drain")
+        await draining.value
         XCTAssertTrue(harness.hasRead)
         let said = (try await TurnLog(database: db).read()).ordered.filter { $0.role == .person }
-        XCTAssertEqual(said.map(\.text), ["control button-1: lights please"], "the tap answered before its turn was sent")
+        XCTAssertEqual(said.map(\.text), ["control button-1: lights please"], "the drain did not send the turn")
         XCTAssertEqual(store.cues(), [])
+    }
+
+    /// A cue whose turn is already in the log — an earlier drain sent it and its record was not
+    /// removed — drained by a harness that has not read the log: the drain reads the log first,
+    /// finds the cue's nonce there, and neither sets the toggle again (it was turned back off
+    /// since) nor puts the turn on the line a second time.
+    func testACueAlreadyInTheLogIsReadFirstAndNotActedOnAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let revision = try set("toggle-1", #"{"title": "Fan", "on": false, "action": {"kind": "turn", "say": "fan"}}"#)
+        let nonce = UUID().uuidString
+        let log = TurnLog(database: db)
+        let writer = try await log.writer(for: phone)
+        _ = try await writer.append(.person, "control toggle-1: fan on", continuing: try await log.read(), nonce: nonce)
+        try store.appendCue(SurfaceStore.Cue(nonce: nonce, slot: ControlSlot.stored("toggle-1"), id: ControlSlot.control,
+                                             revision: revision, turningOn: true, time: Date(), resolved: true))
+        // The zone is not made, so nothing on the line is sent: what the drain put there stays.
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        XCTAssertFalse(harness.hasRead)
+        await taps(harness).cues.drain()
+        XCTAssertTrue(harness.hasRead, "the drain did not read the log first")
+        XCTAssertEqual(store.readControl(slot: "toggle-1")?.document.on, false, "a cue already sent set its toggle again")
+        XCTAssertFalse(harness.owed.contains { $0.nonce == nonce }, "a cue already sent went on the line again")
+        let said = (try await log.read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.nonce), [nonce])
+        XCTAssertEqual(store.cues(), [])
+    }
+
+    /// A cue drained by a harness that has not read the log, over a log whose read fails with
+    /// something other than "no log yet": a read that failed is not an answer, so the drain acts on
+    /// nothing — the cue stays in the app group and nothing goes on the line.
+    func testACueIsNotActedOnWhenTheLogCannotBeRead() async throws {
+        let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
+        let nonce = UUID().uuidString
+        try store.appendCue(SurfaceStore.Cue(nonce: nonce, slot: ControlSlot.stored("button-1"), id: ControlSlot.control,
+                                             revision: revision, turningOn: nil, time: Date()))
+        let harness = harness(UnreadableDatabase(), defaults: makeDefaults(), transport: ScriptedTransport(),
+                              ensureZone: { throw Unexpected() })
+        XCTAssertFalse(harness.hasRead)
+        await taps(harness).cues.drain()
+        XCTAssertFalse(harness.hasRead, "a read that failed was taken as a read")
+        XCTAssertEqual(store.cues().map(\.nonce), [nonce], "the drain dropped a cue it could not check against the log")
+        XCTAssertEqual(harness.owed.count, 0, "the drain put a turn on the line without reading the log")
+        XCTAssertEqual(store.taps(), [])
     }
 
     /// Signed out there are no documents: the value is "Sign in", and a tap on any revision comes
@@ -295,6 +342,15 @@ private final class ScriptedTransport: Transport, @unchecked Sendable {
 
 
 private struct Unexpected: Error {}
+
+/// A log that cannot be read, for a reason that is not "no log yet": every call is unavailable.
+private struct UnreadableDatabase: RecordDatabase {
+    private var refusal: RecordDatabaseError { .unavailable(underlying: Unexpected()) }
+    func save(_ records: [Record]) async throws -> [Record] { throw refusal }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { throw refusal }
+    func query(_ query: RecordQuery) async throws -> [Record] { throw refusal }
+    func records(ofType type: String) async throws -> [Record] { throw refusal }
+}
 
 /// A heartbeat loop that never beats inside a test: the lease is renewed by the turns themselves.
 private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }

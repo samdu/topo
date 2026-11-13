@@ -459,9 +459,6 @@ public actor GuestSession {
     /// The model processes are started with.
     public var currentModel: String? { model }
 
-    /// What processes are told of their memory.
-    public var currentMemory: Bool? { memory }
-
     // MARK: - What the process is started with
 
     /// Every process from here on asks `model`. A resident process started with another is
@@ -472,9 +469,6 @@ public actor GuestSession {
         log("the model is now \(model ?? "Claude Code's own"); the resident process is replaced once idle")
         renewIfStale()
     }
-
-    /// What processes are told to compact at.
-    public var currentCompactAt: Int? { compactAt }
 
     /// Every process from here on compacts at `compactAt` percent of its window, or at Claude
     /// Code's own threshold for nil. It is told once, in its environment at its launch, so a

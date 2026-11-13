@@ -8,7 +8,6 @@ import XCTest
 final class ContinuedTurnTests: XCTestCase {
     @MainActor
     func testATurnsRequestFailsRatherThanQueuesAndCarriesTheFixedWords() throws {
-        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTaskRequest is iOS 26 on") }
         let identifier = "\(ContinuedTurns.prefix).\(UUID().uuidString)"
         let request = ContinuedTurns.request(identifier: identifier)
         XCTAssertEqual(request.identifier, identifier)
@@ -20,7 +19,6 @@ final class ContinuedTurnTests: XCTestCase {
     /// At expiry, or the person's cancel, the pill says the turn is stopping before the way out runs.
     @MainActor
     func testAtExpiryThePillSaysTheTurnIsStoppingBeforeTheWayOutRuns() throws {
-        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTask is iOS 26 on") }
         let seen = OSAllocatedUnfairLock(initialState: [String]())
         let expire = ContinuedTurnTask.expiration(retitle: { title, subtitle in seen.withLock { $0.append("\(title) — \(subtitle)") } },
                                                   then: { seen.withLock { $0.append("the way out") } })
@@ -29,14 +27,12 @@ final class ContinuedTurnTests: XCTestCase {
     }
 
     func testTheIdentifierIsUnderTheWildcardThePlistPermits() throws {
-        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTaskRequest is iOS 26 on") }
         let permitted = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String])
         XCTAssertTrue(permitted.contains("\(ContinuedTurns.prefix).*"), "\(permitted)")
     }
 
     @MainActor
     func testEachTurnRegistersItsOwnIdentifierAndSubmitsThatOne() throws {
-        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTaskRequest is iOS 26 on") }
         let seen = Seen()
         let scheduler = ContinuedTurns.Scheduler(
             register: { identifier, _ in seen.registered.append(identifier); return true },
@@ -66,7 +62,6 @@ final class ContinuedTurnTests: XCTestCase {
 
     @MainActor
     func testARefusedRegistrationSubmitsNothing() throws {
-        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTaskRequest is iOS 26 on") }
         let seen = Seen()
         let scheduler = ContinuedTurns.Scheduler(
             register: { _, _ in false },
@@ -80,7 +75,6 @@ final class ContinuedTurnTests: XCTestCase {
 
     @MainActor
     func testARefusedSubmissionIsLoggedAsRefused() throws {
-        guard #available(iOS 26, *) else { throw XCTSkip("BGContinuedProcessingTaskRequest is iOS 26 on") }
         let seen = Seen()
         let scheduler = ContinuedTurns.Scheduler(
             register: { _, _ in true },

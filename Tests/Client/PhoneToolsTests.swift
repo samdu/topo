@@ -173,6 +173,21 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertTrue(cancelled.withLock { $0 })
     }
 
+    /// The other way round: work that answers at once lets the bound's sleep go too, rather than
+    /// leaving it to run out its time. Seen through what a task holds: the bound's task carries the
+    /// caller's task-locals, so an object bound there outlives the call only while that task runs.
+    func testTheBoundsSleepIsCancelledWhenTheWorkAnswersAtOnce() async throws {
+        let watched = Watched()
+        let reply: Int? = await Watched.$held.withValue(watched.object) {
+            await PhoneTool.within(.seconds(60)) { 1 }
+        }
+        XCTAssertEqual(reply, 1)
+        watched.object = nil
+        let deadline = ContinuousClock.now + .seconds(5)
+        while watched.alive, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(watched.alive, "the bound's task still runs after the work answered")
+    }
+
     // MARK: Permission first
 
     /// Review focus 12: a refusal says so, and never reaches the store as an empty answer.
@@ -790,4 +805,14 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(byName.status, ToolReply.ok, byName.text)
         XCTAssertTrue(byName.text.contains("\(id) | Topotest Person\(tag) | "), "Person\(tag), after five seconds: \(byName.text)")
     }
+}
+
+/// An object bound as a task-local, and whether anything still holds it.
+private final class Watched: @unchecked Sendable {
+    final class Object: Sendable {}
+    @TaskLocal static var held: Object?
+    var object: Object? = Object()
+    private weak var weakObject: Object?
+    init() { weakObject = object }
+    var alive: Bool { weakObject != nil }
 }

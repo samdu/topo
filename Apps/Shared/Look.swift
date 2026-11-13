@@ -552,7 +552,7 @@ struct Look: Equatable, Sendable {
         /// From the pane's leading edge to the axis of Topo's body where the look places him on
         /// the glass, as far as keeps his reach inside the transcript's width (`MascotPerch`).
         var perchInset: CGFloat = 44
-        /// What the pane is made of: the system's glass where there is any, a material below it.
+        /// What the pane is made of.
         var surface: Surface = .glass
         /// The colour the pane takes while the microphone is open, and the alpha it takes it at.
         /// Clear otherwise: the same value at nothing, so the change is an animation and not a

@@ -5,10 +5,10 @@ import TopoCore
 /// The one container and zone every bundle shares: client, hub, Womble. The
 /// identifiers are a contract between them, not a per-target setting.
 enum TopoCloudKit {
-    static let containerIdentifier = "iCloud.zone.hexagon.topo"
+    static let containerIdentifier = CloudKitRecordDatabase.containerIdentifier
     /// The log lives in a custom zone; the default zone has no atomic
     /// batches, which the writers need.
-    static let zoneName = "Topo"
+    static let zoneName = CloudKitRecordDatabase.zoneName
 
     static var zoneID: CKRecordZone.ID {
         CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)

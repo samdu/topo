@@ -445,6 +445,10 @@ final class Conversation {
         let silence = silence
         let feedSleep = feedSleep
         feeder = Task { [weak self] in
+            // A feeder replaced before it ran asks the detector nothing: its reset would land
+            // among its successor's feeds and begin the stream again mid-utterance. Nothing is
+            // awaited between this check and the call, and the cancel is the main actor's.
+            guard !Task.isCancelled else { return }
             if reset { await detector.reset(silence: silence) }
             var heardAt = now()
             var arrived = -1

@@ -97,7 +97,7 @@ public enum GuestTools {
     /// is replaced by the file rather than written through.
     public static func install(home: URL) throws {
         let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser), (appleDocPath, appleDoc)]
-        let plain = [(skillPath, skill), (appleDocsSkillPath, appleDocsSkill), (doccToMarkdownPath, doccToMarkdown)]
+        let plain = [(skillPath, skill), (appleDocsSkillPath, appleDocsSkill), (doccToMarkdownPath, try doccToMarkdown)]
         for (path, text) in scripts { try place(Data(text.utf8), at: path, mode: 0o755, under: home) }
         for (path, text) in plain { try place(Data(text.utf8), at: path, mode: 0o644, under: home) }
     }
@@ -507,172 +507,23 @@ public enum GuestTools {
     jq -r -f "$converter" "$tmp"
     """#
 
-    /// The converter `apple-doc` runs: DocC's render JSON — a tree of blocks (paragraph, heading,
-    /// lists, code listing, aside, table, term list, image) over inline runs (text, code voice,
-    /// emphasis, references into the page's own reference table) — written out as Markdown, with
-    /// the page's title, role, breadcrumb, availability and declaration first, then its content,
-    /// parameters and return value, then Topics, Relationships and See Also with each entry linked
-    /// to its absolute page and carrying its one-line abstract. Written beside the scripts and
-    /// not linked onto the path; `apple-doc` finds it by its own resolved location.
-    public static let doccToMarkdown = #"""
-    # docc2md.jq — Apple DocC render JSON → Markdown.
-    # usage: jq -r -f docc2md.jq page.json
-    # The input is what developer.apple.com/tutorials/data/documentation/<path>.json answers.
-
-    def base: "https://developer.apple.com";
-
-    # A reference id → its record from the page's reference table.
-    . as $page | .references as $refs |
-    def ref($id): ($refs[$id] // {});
-
-    def href($r):
-      ($r.url // "") as $u
-      | if ($u | startswith("/")) then base + $u else $u end;
-
-    # Inline content → one string.
-    def inl:
-      if type == "array" then map(inl) | join("")
-      elif type == "string" then .
-      elif type != "object" then ""
-      else
-        .type as $t
-        | if   $t == "text"        then .text
-          elif $t == "codeVoice"   then "`" + .code + "`"
-          elif $t == "emphasis"    then "*" + (.inlineContent | inl) + "*"
-          elif $t == "strong"      then "**" + (.inlineContent | inl) + "**"
-          elif $t == "newTerm"     then "*" + (.inlineContent | inl) + "*"
-          elif $t == "inlineHead"  then "**" + (.inlineContent | inl) + "**"
-          elif $t == "strikethrough" then "~~" + (.inlineContent | inl) + "~~"
-          elif $t == "subscript" or $t == "superscript" then (.inlineContent | inl)
-          elif $t == "reference"   then
-                 ref(.identifier) as $r
-                 | (.overridingTitle // $r.title // (.identifier | sub(".*/";""))) as $title
-                 | if ($r.url // "") == "" then "`" + $title + "`"
-                   elif ($r.role // "") == "symbol" or ($r.kind // "") == "symbol"
-                   then "[`" + $title + "`](" + href($r) + ")"
-                   else "[" + $title + "](" + href($r) + ")" end
-          elif $t == "link"        then "[" + ((.title // .destination) | if type=="array" then inl else . end) + "](" + .destination + ")"
-          elif $t == "image"       then ref(.identifier) as $r | "![" + ($r.alt // "image") + "](" + (($r.variants[0].url // "") | if startswith("/") then base + . else . end) + ")"
-          elif has("inlineContent") then (.inlineContent | inl)
-          else "" end
-      end;
-
-    # A code listing's lines carry this mark until the end, so the blank lines between blocks are
-    # collapsed without touching a listing's own.
-    def code_mark: "\u0001";
-
-    # Block content → markdown lines (array of strings). $d is the list depth.
-    def blk($d):
-      ("  " * $d) as $pad
-      | if type == "array" then map(blk($d)) | add // []
-        elif type != "object" then []
-        else
-          .type as $t
-          | if   $t == "paragraph"   then [ (.inlineContent | inl) ]
-            elif $t == "heading"     then [ ("#" * (.level // 2)) + " " + (.text // (.inlineContent | inl)) ]
-            elif $t == "codeListing" then [ "```" + (.syntax // "") ] + ((.code // []) | map(code_mark + .)) + [ "```" ]
-            elif $t == "aside"       then
-                   [ "> **" + (.name // (.style // "Note") | ascii_upcase[0:1] + .[1:]) + "**" ]
-                   + ((.content // []) | blk(0) | map(select(. != "")) | map("> " + .))
-            elif $t == "unorderedList" then
-                   [ (.items // [])[] | (.content | blk($d + 1)) | (.[0] |= ($pad + "- " + .)) | .[1:] |= map(if . == "" then . else "  " + . end) | .[] ]
-            elif $t == "orderedList" then
-                   (.start // 1) as $start
-                   | [ (.items // []) | to_entries[] | .key as $i | (.value.content | blk($d + 1)) | (.[0] |= ($pad + (($start + $i) | tostring) + ". " + .)) | .[1:] |= map(if . == "" then . else "   " + . end) | .[] ]
-            elif $t == "termList"    then
-                   [ (.items // [])[] | "- **" + (.term.inlineContent | inl) + "**: " + ((.definition.content // []) | blk(0) | join(" ")) ]
-            elif $t == "table"       then
-                   (.rows // []) as $rows
-                   | if ($rows | length) == 0 then []
-                     else
-                       ($rows | map(map(blk(0) | join(" ") | gsub("\\|"; "\\|")))) as $cells
-                       | [ "| " + ($cells[0] | join(" | ")) + " |",
-                           "|" + ($cells[0] | map("---") | join("|")) + "|" ]
-                         + ($cells[1:] | map("| " + join(" | ") + " |"))
-                     end
-            elif $t == "image"       then [ ({type:"image", identifier:.identifier} | inl) ]
-            elif $t == "video"       then [ "(video: " + (ref(.identifier).alt // .identifier) + ")" ]
-            elif $t == "links"       then [ (.items // [])[] | ref(.) as $r | "- [" + ($r.title // .) + "](" + href($r) + ")" + (if ($r.abstract // []) | length > 0 then ": " + ($r.abstract | inl) else "" end) ]
-            elif $t == "row"         then [ (.columns // [])[] | .content | blk($d) | .[] ]
-            elif $t == "tabNavigator" then [ (.tabs // [])[] | ("**" + .title + "**"), (.content | blk($d) | .[]) ]
-            elif $t == "small"       then [ (.inlineContent | inl) ]
-            elif $t == "dictionaryExample" then [ (.summary // [] | blk($d) | .[]), "```json", (.example.code // [] | .[]), "```" ]
-            elif has("content")      then (.content | blk($d))
-            elif has("inlineContent") then [ (.inlineContent | inl) ]
-            else [] end
-          | . + [ "" ]
-        end;
-
-    # A list of identifiers → bullet lines with title, link and abstract.
-    def idlist($ids):
-      [ ($ids // [])[] | ref(.) as $r
-        | select($r != {})
-        | "- " + (if ($r.role // $r.kind // "") == "symbol" then "[`" + $r.title + "`]" else "[" + $r.title + "]" end)
-              + "(" + href($r) + ")"
-              + (if ($r.deprecated // false) then " *(deprecated)*" else "" end)
-              + (if (($r.abstract // []) | length) > 0 then ": " + ($r.abstract | inl) else "" end) ];
-
-    def platforms:
-      [ (.metadata.platforms // [])[]
-        | .name + (if .introducedAt then " " + .introducedAt else "" end)
-               + (if .beta then " beta" else "" end)
-               + (if .deprecatedAt then ", deprecated " + .deprecatedAt elif .deprecated then ", deprecated" else "" end)
-               + (if .unavailable then ", unavailable" else "" end) ]
-      | if length > 0 then "Availability: " + join(" · ") else empty end;
-
-    def declarations:
-      [ .primaryContentSections[]? | select(.kind == "declarations") | .declarations[]?
-        | "```" + ((.languages // ["swift"])[0]) , (.tokens | map(.text) | join("")), "```", "" ] ;
-
-    def named_section($kind; $title):
-      [ .primaryContentSections[]? | select(.kind == $kind) ] as $s
-      | if ($s | length) == 0 then []
-        else [ "## " + $title, "" ]
-          + ( $s[0]
-              | if $kind == "parameters" then
-                  [ .parameters[] | "- **" + .name + "**: " + ((.content // []) | blk(0) | map(select(. != "")) | join(" ")) ] + [""]
-                elif $kind == "possibleValues" then
-                  [ .values[] | "- `" + .name + "`" + (if (.content // []) | length > 0 then ": " + (.content | blk(0) | map(select(. != "")) | join(" ")) else "" end) ] + [""]
-                else ((.content // []) | blk(0)) end )
-        end;
-
-    def content_section:
-      [ .primaryContentSections[]? | select(.kind == "content") | .content | blk(0) | .[] ];
-
-    def id_sections($secs; $heading):
-      [ ($secs // [])[] | select((.identifiers // []) | length > 0) ] as $kept
-      | if ($kept | length) == 0 then []
-        else [ "## " + $heading, "" ]
-          + [ $kept[] | ("### " + .title), "", (idlist(.identifiers) | .[]), "" ]
-        end;
-
-    def breadcrumb:
-      [ (.hierarchy.paths[0] // [])[] | ref(.) | select(. != {}) | .title ] | if length > 0 then join(" › ") else empty end;
-
-    .
-    | [
-        "# " + (.metadata.title // "Untitled"),
-        (if .metadata.roleHeading then "*" + .metadata.roleHeading + "*" else empty end),
-        (breadcrumb),
-        (platforms),
-        "Source: " + base + ($page.variants[0].paths[0] // ($page.identifier.url // "" | sub("^doc://[^/]*"; "") | ascii_downcase)),
-        "",
-        (if (.abstract // []) | length > 0 then (.abstract | inl), "" else empty end)
-      ]
-      + declarations
-      + content_section
-      + named_section("parameters"; "Parameters")
-      + named_section("returnValue"; "Return Value")
-      + named_section("possibleValues"; "Possible Values")
-      + named_section("discussion"; "Discussion")
-      + id_sections(.topicSections; "Topics")
-      + id_sections(.relationshipsSections // .relationshipSections; "Relationships")
-      + id_sections(.seeAlsoSections; "See Also")
-    | map(select(. != null))
-    | reduce .[] as $line ([]; if $line == "" and (length > 0) and (.[-1] == "") then . else . + [$line] end)
-    | map(gsub(code_mark; ""))
-    | join("\n")
-    """#
+    /// The converter `apple-doc` runs, `docc2md.jq`, a resource of this target: DocC's render JSON
+    /// — a tree of blocks (paragraph, heading, lists, code listing, aside, table, term list, image)
+    /// over inline runs (text, code voice, emphasis, references into the page's own reference
+    /// table) — written out as Markdown: the page's title, role, breadcrumb, availability, abstract
+    /// and deprecation summary, then its sections in the page's own order, then Topics,
+    /// Relationships and See Also with each entry linked to its absolute page and carrying its
+    /// one-line abstract. A block, section or inline run it has no rendering for is a line
+    /// `[apple-doc: unrendered <type> block|section|inline]`. Written beside the scripts and not
+    /// linked onto the path; `apple-doc` finds it by its own resolved location.
+    public static var doccToMarkdown: String {
+        get throws {
+            guard let url = Bundle.module.url(forResource: "docc2md", withExtension: "jq") else {
+                throw InstallFailure(doccToMarkdownPath, "has no source: docc2md.jq is not in TopoTools' resources", ENOENT)
+            }
+            return try String(contentsOf: url, encoding: .utf8)
+        }
+    }
 
     /// The skill for `apple-doc`: its description names the questions Apple's documentation
     /// answers, so a turn pays for the rest only when one is asked; its body says how to name a
@@ -686,7 +537,7 @@ public enum GuestTools {
 
     # apple-docs
 
-    `apple-doc <path-or-url>` prints a developer.apple.com page as Markdown: title, availability by platform, declaration, the body, parameters, then its Topics, Relationships and See Also, each entry linked with its one-line summary. It is Apple's own page, from the JSON behind it, rendered in the guest; no third party is involved. It needs `jq` (`apk add jq` once).
+    `apple-doc <path-or-url>` prints a developer.apple.com page as Markdown: title, availability by platform, then the page's sections as the page orders them (its declaration, parameters, body and the pages that mention it among them), then its Topics, Relationships and See Also, each entry linked with its one-line summary. A line `[apple-doc: unrendered …]` names a part of the page it has no rendering for. It is Apple's own page, from the JSON behind it, rendered in the guest; no third party is involved. It needs `jq` (`apk add jq` once).
 
     - Name the page as its path or its URL: `apple-doc backgroundtasks`, `apple-doc widgetkit/widgetfamily`, `apple-doc https://developer.apple.com/documentation/activitykit`. Symbol pages take the symbol's path: `backgroundtasks/bgtaskscheduler/submit(_:)` (quote it for the shell).
     - Release notes: `apple-doc ios-ipados-release-notes/ios-ipados-27_2-release-notes`; the same shape for `xcode-release-notes`, `watchos-release-notes`, `macos-release-notes`.
