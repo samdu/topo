@@ -49,10 +49,20 @@ import TopoCore
         try matches(#"^(?!\s*//).*(?<![.\w`])`?"# + name + #"`?\s*(?::[^=\n{]*)?(?:=(?!=)|\{).*$"#, in: text)
     }
 
+    /// How many times `name` appears as a word in `text`, outside `//` lines. A second
+    /// declaration adds one whatever form it is written in, so each file's count is pinned: a use
+    /// added or taken away is a change to the count here, made with the file read.
+    static func uses(of name: String, in text: String) throws -> Int {
+        try matches(#"^(?!\s*//).*$"#, in: text).reduce(0) { sum, line in
+            sum + (try matches(#"\b"# + name + #"\b"#, in: line)).count
+        }
+    }
+
     /// The one literal `name` is declared as: the one place it is bound is the whole line
-    /// `static let <name> = "…"`.
-    static func literal(declaring name: String, in path: String) throws -> String? {
+    /// `static let <name> = "…"`, and the name is used exactly `uses` times in the file.
+    static func literal(declaring name: String, uses count: Int, in path: String) throws -> String? {
         let text = try plain(path)
+        #expect(try uses(of: name, in: text) == count, "\(path): \(name) is used other than the \(count) times it was")
         let all = try bindings(of: name, in: text)
         let whole = try matches(#"^\s*static let "# + name + #" = "([^"\\]*)"\s*$"#, in: text)
         #expect(all.count == 1 && whole.count == 1, "\(path): \(all)")
@@ -129,11 +139,12 @@ import TopoCore
 
     @Test func wombleReadsTheSameContainerAndZone() throws {
         let store = "Womble/Sources/Log/CloudKitStore.swift"
-        #expect(try Self.literal(declaring: "containerIdentifier", in: store) == Self.container)
-        #expect(try Self.literal(declaring: "zoneName", in: store) == Self.zone)
+        #expect(try Self.literal(declaring: "containerIdentifier", uses: 2, in: store) == Self.container)
+        #expect(try Self.literal(declaring: "zoneName", uses: 3, in: store) == Self.zone)
         // The self-test's default is the first argument of the one `steps` there is.
         let selfTest = try Self.plain("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
-        #expect(try Self.matches(#"logContainer\s*:"#, in: selfTest).count == 1)
+        #expect(try Self.matches(#"`?logContainer`?\s*:"#, in: selfTest).count == 1)
+        #expect(try Self.uses(of: "logContainer", in: selfTest) == 10, "logContainer is used other than the 10 times it was")
         #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = "([^"\\]*)",\s*$"#, in: selfTest)
                 == [Self.container])
     }
@@ -152,6 +163,12 @@ import TopoCore
             }
         }
         return found.sorted()
+    }
+
+    /// `TopoCloudKitTests` reads the app's names as the iOS test build has them, so the file
+    /// holds no conditional that could give another platform or configuration other values.
+    @Test func theAppsNamesAreTheSameInEveryBuild() throws {
+        #expect(!(try Self.text("Apps/Shared/TopoCloudKit.swift")).contains("#if"))
     }
 
     /// The log's container and zone are spelled once, in `CloudKitRecordDatabase`; the one other
