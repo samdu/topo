@@ -76,11 +76,11 @@ struct ActivityTool: Tool {
         }
     }
 
-    /// The login a start, an update or an end acts under: the mark its launch was started under,
+    /// The login a listing, a start, an update or an end is answered under: the mark its launch was started under,
     /// which the tool service's listener hands every call it accepts (`LaunchPorts`,
     /// `ToolCall.context`). One taken at the call's first hop to the main actor could be taken
     /// after a sign-out and the next sign-in both ran ahead of it, and would let the last login's
-    /// call act on the next one's activities.
+    /// call act on the next one's activities, or list them.
     private static func callLogin() -> LoginLife.Epoch? { ToolCall.context as? LoginLife.Epoch }
 
     private static let loginEnded = ToolReply.failed("topo: the login this call came from has ended (a sign-out since the resident started); nothing changed\n")
