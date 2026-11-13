@@ -215,6 +215,22 @@ final class ActivityToolTests: XCTestCase {
         XCTAssertFalse(keeper.isReserved("tea"))
     }
 
+    /// A start carrying a login that has ended, received once the next login has an activity in
+    /// the slot, is refused as the ended login's and says nothing of the next login's activity.
+    func testAStartFromAnEndedLoginSaysNothingOfTheNextLoginsSlot() async throws {
+        let ended = self.tool
+        login.end()
+        await login.tornDown()
+        login.began()
+        let next = await tool.run(["start", "job", timer])
+        XCTAssertEqual(next.status, ToolReply.ok, next.text)
+        let reply = await ended.run(["start", "job", timer])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(reply.text, "topo: the login has ended; nothing started\n")
+        XCTAssertEqual(host.starts, 1)
+        keeper.forget("A1")
+    }
+
     func testTwoStartsOfOneSlotMakeOneActivity() async throws {
         let gate = GatedTrackerFetcher()
         fetcher = gate

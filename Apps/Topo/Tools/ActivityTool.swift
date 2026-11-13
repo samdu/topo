@@ -117,18 +117,19 @@ struct ActivityTool: Tool {
         guard WidgetDocument.isSlot(slot) else {
             return .usage("topo: a slot is [a-z0-9-], at most 32 characters\n")
         }
+        // Between a login's end and the next sign-in no epoch is current, and nothing starts; nor
+        // does a call of a login that has ended, whatever stands now. Judged before the host is
+        // read, so an ended login's call is told nothing of the next login's activities.
+        guard login.isCurrent else {
+            return .failed("topo: the login has ended; nothing started\n")
+        }
         guard host().enabled else {
-            return ToolReply(status: ToolReply.denied, text: Self.disabled)
+            return .denied(Self.disabled)
         }
         if let running = host().running().first(where: { $0.attributes.slot == slot && !$0.ended }) {
             return .failed("topo: slot \(slot) is running as \(running.id); update or end it\n")
         }
         let keeper = keeper()
-        // Between a login's end and the next sign-in no epoch is current, and nothing starts; nor
-        // does a call of a login that has ended, whatever stands now.
-        guard login.isCurrent else {
-            return .failed("topo: the login has ended; nothing started\n")
-        }
         // Held from here until the reply: a second start of the slot while this one fetches is refused.
         guard keeper.reserve(slot) else {
             return .failed("topo: slot \(slot) is starting; wait for it\n")
@@ -176,7 +177,7 @@ struct ActivityTool: Tool {
         case .success(let id):
             keeper.keep(id)
             let text = "started \(id) for slot \(slot)\n" + Self.notes(notes)
-            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+            return notes.isEmpty ? .ok(text) : .refused(text)
         case .failure(let error):
             return Self.refused(error)
         }
@@ -212,7 +213,7 @@ struct ActivityTool: Tool {
             // Kept only while the login that updated it stands: after an `endAll` nothing is restarted.
             if epoch.isCurrent { keeper.keep(id) }
             let text = "updated \(id)\n" + Self.notes(notes)
-            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+            return notes.isEmpty ? .ok(text) : .refused(text)
         }
         return reply ?? .failed("topo: no activity \(id) running\n")
     }
@@ -279,7 +280,7 @@ struct ActivityTool: Tool {
             default: said = "ended \(id)\n"
             }
             let text = said + Self.notes(notes)
-            return notes.isEmpty ? .ok(text) : ToolReply(status: ToolReply.refused, text: text)
+            return notes.isEmpty ? .ok(text) : .refused(text)
         }
         return reply ?? .failed("topo: no activity \(id) running\n")
     }
@@ -292,12 +293,12 @@ struct ActivityTool: Tool {
 
     /// Status 6: the whole document refused, since nothing of it fits beside the attributes.
     static func overBudget(_ note: String?, _ notes: [String], _ outcome: String) -> ToolReply {
-        ToolReply(status: ToolReply.refused, text: "topo: the document " + (note ?? "is over the payload budget") + "; \(outcome)\n" + Self.notes(notes))
+        .refused("topo: the document " + (note ?? "is over the payload budget") + "; \(outcome)\n" + Self.notes(notes))
     }
 
     static func refused(_ error: Error) -> ToolReply {
         switch error as? ActivityRefusal {
-        case .disabled: ToolReply(status: ToolReply.denied, text: disabled)
+        case .disabled: .denied(disabled)
         case .notOnScreen: .failed("topo: Topo is not on the screen, and a Live Activity starts only while it is; ask again with Topo in front\n")
         case .tooMany: .failed("topo: the system is showing as many Live Activities as it allows; end one first\n")
         case .tooLarge: .failed("topo: the system refused the activity as too large\n")

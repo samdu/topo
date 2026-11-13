@@ -56,10 +56,10 @@ struct OpenURLTool: Tool {
     func run(_ arguments: [String]) async -> ToolReply {
         guard arguments.count == 1, let url = URL(string: arguments[0]) else { return .usage(usage) }
         guard Self.accepts(url) else {
-            return ToolReply(status: ToolReply.refused, text: "topo open-url: only Claude's sign-in pages open here\n")
+            return .refused("topo open-url: only Claude's sign-in pages open here\n")
         }
         guard await browser(url) else {
-            return ToolReply(status: ToolReply.refused, text: "topo open-url: no sign-in is waiting for a browser\n")
+            return .refused("topo open-url: no sign-in is waiting for a browser\n")
         }
         return .ok("")
     }
