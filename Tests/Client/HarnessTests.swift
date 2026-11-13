@@ -2444,8 +2444,9 @@ final class RecordingDatabaseTests: XCTestCase {
 }
 
 /// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
-private actor ReadFailingDatabase: RecordDatabase {
+private actor ReadFailingDatabase: ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var failing = false
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
@@ -2456,29 +2457,28 @@ private actor ReadFailingDatabase: RecordDatabase {
         if failing { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
-
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         try check()
-        return try await wrapped.fetch(ids)
+        return try await base.fetch(ids)
     }
 
-    func query(_ query: RecordQuery) async throws -> [Record] {
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         try check()
-        return try await wrapped.query(query)
+        return try await base.query(query)
     }
 
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         try check()
-        return try await wrapped.records(ofType: type)
+        return try await base.records(ofType: type)
     }
 }
 
 /// A database whose next read waits until `release()`, which can answer it with an error. Held
 /// `afterReading`, a listing of records reads the store first and waits with what it read, so
 /// what it answers is the store as it stood when it was asked.
-private actor HeldReads: RecordDatabase {
+private actor HeldReads: ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var holdingNext = false
     private var afterReading = false
     private var failure: (any Error)?
@@ -2507,40 +2507,37 @@ private actor HeldReads: RecordDatabase {
         }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         try await gate()
-        return try await wrapped.fetch(ids)
+        return try await base.fetch(ids)
     }
-    func query(_ query: RecordQuery) async throws -> [Record] {
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         try await gate()
-        return try await wrapped.query(query)
+        return try await base.query(query)
     }
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         guard holdingNext, afterReading else {
             try await gate()
-            return try await wrapped.records(ofType: type)
+            return try await base.records(ofType: type)
         }
-        let read = try await wrapped.records(ofType: type)
+        let read = try await base.records(ofType: type)
         try await gate()
         return read
     }
 }
 
 /// A database whose saves are refused once `refuse()` is called, its reads still answered.
-private actor RefusingSaves: RecordDatabase {
+private actor RefusingSaves: ForwardingDatabase {
     struct Down: Error {}
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var refusing = false
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
     func refuse() { refusing = true }
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if refusing { throw RecordDatabaseError.unavailable(underlying: Down()) }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 /// What the reply handler was given, in order.
@@ -2588,8 +2585,9 @@ private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try a
 /// The in-memory log, able to commit the next person's turn and then throw, which is what a lost
 /// acknowledgement looks like from the writer's side; and able to refuse every read, which is
 /// what a device that cannot reach CloudKit sees when it asks whether a turn is there.
-private actor FailingDatabase: RecordDatabase {
+private actor FailingDatabase: ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var loseNextTurnAcknowledgement = false
     private var refusingReads = false
     private var refusingWrites = false
@@ -2612,9 +2610,9 @@ private actor FailingDatabase: RecordDatabase {
         darkAfterLostAcknowledgement = true
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if refusingWrites { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
-        let saved = try await wrapped.save(records)
+        let saved = try await base.save(records)
         if loseNextTurnAcknowledgement, records.contains(where: { $0.type == Turn.recordType }) {
             loseNextTurnAcknowledgement = false
             refusingReads = darkAfterLostAcknowledgement
@@ -2623,17 +2621,17 @@ private actor FailingDatabase: RecordDatabase {
         return saved
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         try refuse()
-        return try await wrapped.fetch(ids)
+        return try await base.fetch(ids)
     }
-    func query(_ query: RecordQuery) async throws -> [Record] {
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         try refuse()
-        return try await wrapped.query(query)
+        return try await base.query(query)
     }
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         try refuse()
-        return try await wrapped.records(ofType: type)
+        return try await base.records(ofType: type)
     }
 
     private func refuse() throws {

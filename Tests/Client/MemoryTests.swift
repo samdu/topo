@@ -522,8 +522,9 @@ final class NotePushTests: XCTestCase {
 /// hold a sync at the moment it is waiting on the store. `release` lets a read that is already
 /// parked go on; `permit` lets the next read to arrive pass without parking at all, which is
 /// how one sync is held while another is let run.
-private actor GatedDatabase: RecordDatabase {
+private actor GatedDatabase: ForwardingDatabase {
     private let inner: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { inner }
     private var parked: [CheckedContinuation<Void, Never>] = []
     private var permits = 0
     private(set) var waiting = 0
@@ -538,18 +539,14 @@ private actor GatedDatabase: RecordDatabase {
         parked.removeFirst().resume()
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-
-    func records(ofType type: String) async throws -> [Record] {
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         if permits > 0 {
             permits -= 1
         } else {
             waiting += 1
             await withCheckedContinuation { parked.append($0) }
         }
-        return try await inner.records(ofType: type)
+        return try await base.records(ofType: type)
     }
 }
 

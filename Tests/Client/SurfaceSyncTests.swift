@@ -6,8 +6,9 @@ import XCTest
 
 /// The in-memory store, refusing saves or clears while told to, as iCloud does with no network. A
 /// clear is a save of a tombstone, so `deletes` refuses those.
-private actor Outage: ZoneDatabase {
+private actor Outage: ZoneDatabase, ForwardingDatabase {
     let inner = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { inner }
     var saves = false
     var deletes = false
     /// Whether the zone is there, as it is not on an account nothing has written to yet.
@@ -27,13 +28,10 @@ private actor Outage: ZoneDatabase {
         if failing { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         try check(records.contains { $0.fields["cleared"] != nil } ? deletes : saves)
-        return try await inner.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
     func delete(_ ids: [RecordID]) async throws { try check(deletes); try await inner.delete(ids) }
     func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
         try await inner.changes(ofType: type, since: token)
@@ -982,8 +980,9 @@ private final class Flag: @unchecked Sendable {
 /// a feed's are not, and a tagged save over one not kept fetches it and checks its tag before
 /// the compare-and-set is sent. `preRead` runs at every trip to the server short of the save
 /// itself: a fetch, or the fetch a save makes first.
-private actor FetchBeforeSave: ZoneDatabase {
+private actor FetchBeforeSave: ZoneDatabase, ForwardingDatabase {
     let inner = InMemoryRecordDatabase()
+    nonisolated var base: any RecordDatabase { inner }
     private var kept: [RecordID: String] = [:]
     private var preRead: (@Sendable (RecordID) async -> Void)?
     private(set) var events: [String] = []
@@ -991,27 +990,25 @@ private actor FetchBeforeSave: ZoneDatabase {
     func setPreRead(_ hook: (@Sendable (RecordID) async -> Void)?) { preRead = hook }
     func log(_ event: String) { events.append(event) }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         for record in records {
             guard let tag = record.changeTag, kept[record.id] != tag else { continue }
             await preRead?(record.id)
-            guard let server = try await inner.fetch([record.id])[record.id] else { throw RecordDatabaseError.unknownItem(record.id) }
+            guard let server = try await base.fetch([record.id])[record.id] else { throw RecordDatabaseError.unknownItem(record.id) }
             guard server.changeTag == tag else { throw RecordDatabaseError.serverRecordChanged(record.id, server: server) }
             kept[record.id] = tag
         }
         events.append("save " + records.map(\.id.name).joined(separator: ","))
-        let saved = try await inner.save(records)
+        let saved = try await base.save(records)
         for record in saved { kept[record.id] = record.changeTag }
         return saved
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         for id in ids { await preRead?(id) }
-        let found = try await inner.fetch(ids)
+        let found = try await base.fetch(ids)
         for (id, record) in found { kept[id] = record.changeTag }
         return found
     }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
     func delete(_ ids: [RecordID]) async throws { try await inner.delete(ids) }
     func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
         try await inner.changes(ofType: type, since: token)

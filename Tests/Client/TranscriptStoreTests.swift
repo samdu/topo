@@ -319,8 +319,9 @@ final class TranscriptStoreTests: XCTestCase {
 
 /// An in-memory database that can be told to start failing, so a refresh
 /// after a good read has something to fail on.
-private actor FailingDatabase: RecordDatabase {
+private actor FailingDatabase: ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var failure: (any Error)?
     /// Commits the save and then throws, which is what a lost
     /// acknowledgement looks like from the writer's side.
@@ -332,22 +333,22 @@ private actor FailingDatabase: RecordDatabase {
 
     func setFailAfterSave(_ on: Bool) { failAfterSave = on }
 
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if let failure { throw failure }
-        let saved = try await wrapped.save(records)
+        let saved = try await base.save(records)
         if failAfterSave { throw RecordDatabaseError.unavailable(underlying: CancellationError()) }
         return saved
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         if let failure { throw failure }
-        return try await wrapped.fetch(ids)
+        return try await base.fetch(ids)
     }
 
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] { try await query(RecordQuery(type: type), through: base) }
 
-    func query(_ query: RecordQuery) async throws -> [Record] {
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         if let failure { throw failure }
-        return try await wrapped.query(query)
+        return try await base.query(query)
     }
 }
