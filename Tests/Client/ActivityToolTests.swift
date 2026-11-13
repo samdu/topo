@@ -231,6 +231,21 @@ final class ActivityToolTests: XCTestCase {
         keeper.forget("A1")
     }
 
+    /// A listing carrying a login that has ended, asked once the next login has an activity
+    /// running, is refused as the ended login's and lists nothing of the next login's.
+    func testAListingFromAnEndedLoginListsNothingOfTheNextLogins() async throws {
+        let ended = self.tool
+        login.end()
+        await login.tornDown()
+        login.began()
+        let next = await tool.run(["start", "job", timer])
+        XCTAssertEqual(next.status, ToolReply.ok, next.text)
+        let reply = await ended.run([])
+        XCTAssertEqual(reply.status, ToolReply.failed, reply.text)
+        XCTAssertEqual(reply.text, "topo: the login this call came from has ended (a sign-out since the resident started); nothing changed\n")
+        keeper.forget("A1")
+    }
+
     func testTwoStartsOfOneSlotMakeOneActivity() async throws {
         let gate = GatedTrackerFetcher()
         fetcher = gate

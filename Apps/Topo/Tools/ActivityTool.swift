@@ -55,7 +55,8 @@ struct ActivityTool: Tool {
     func run(_ arguments: [String]) async -> ToolReply {
         switch (arguments.first, arguments.count) {
         case (nil, _):
-            return await list()
+            guard let login = Self.callLogin() else { return Self.noLogin }
+            return await list(login: login)
         case ("example", 1):
             return .ok(Self.example(now: now()) + "\n")
         case ("start", 3):
@@ -89,7 +90,9 @@ struct ActivityTool: Tool {
     // MARK: Listing
 
     @MainActor
-    private func list() -> ToolReply {
+    private func list(login: LoginLife.Epoch) -> ToolReply {
+        // An ended login's call is told nothing of what the next login has running.
+        guard login.isCurrent else { return Self.loginEnded }
         let records = host().running()
         guard !records.isEmpty else { return .ok("no activity running\n") }
         var lines: [String] = []
