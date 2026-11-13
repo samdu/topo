@@ -6,8 +6,9 @@ import XCTest
 
 /// The zone as the watch sees it: the in-memory database, with the feed able to leave a slot out
 /// (as an index would) and every read able to fail (as a watch off the network does).
-actor Zone: ZoneDatabase {
+actor Zone: ZoneDatabase, ForwardingDatabase {
     let wrapped: InMemoryRecordDatabase
+    nonisolated var base: any RecordDatabase { wrapped }
     private var omitted: Set<String> = []
     private var feedFails = false
     private var garbled: Set<String> = []
@@ -23,13 +24,10 @@ actor Zone: ZoneDatabase {
 
     private static let offline = RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet))
 
-    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
         if fetchFails { throw Self.offline }
-        return try await wrapped.fetch(ids)
+        return try await base.fetch(ids)
     }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
     func delete(_ ids: [RecordID]) async throws { try await wrapped.delete(ids) }
     func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
         if feedFails { throw Self.offline }

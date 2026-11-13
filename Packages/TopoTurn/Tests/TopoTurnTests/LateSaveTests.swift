@@ -6,12 +6,12 @@ import TopoCoreTesting
 
 /// The next save that carries a person's turn fails `unavailable` and is still on its way: it
 /// lands just ahead of the next save that carries a turn. A request that ran out, applied late.
-actor LandsLate: RecordDatabase {
-    let wrapped = InMemoryRecordDatabase()
+actor LandsLate: ForwardingDatabase {
+    let base: any RecordDatabase = InMemoryRecordDatabase()
     private var armed = false
     private var late: [Record]?
     func arm() { armed = true }
-    func save(_ records: [Record]) async throws -> [Record] {
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
         if armed, records.contains(where: { Turn(record: $0)?.role == .person }) {
             armed = false
             late = records
@@ -19,13 +19,10 @@ actor LandsLate: RecordDatabase {
         }
         if records.contains(where: { $0.type == Turn.recordType }), let landing = late {
             late = nil
-            _ = try await wrapped.save(landing)
+            _ = try await base.save(landing)
         }
-        return try await wrapped.save(records)
+        return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 @Suite struct LateSaveTests {

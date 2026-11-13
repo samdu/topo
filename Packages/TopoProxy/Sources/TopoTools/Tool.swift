@@ -42,6 +42,8 @@ public struct ToolReply: Sendable, Equatable {
     public static func ok(_ text: String) -> ToolReply { ToolReply(status: ok, text: text) }
     public static func failed(_ text: String) -> ToolReply { ToolReply(status: failed, text: text) }
     public static func usage(_ text: String) -> ToolReply { ToolReply(status: usage, text: text) }
+    public static func denied(_ text: String) -> ToolReply { ToolReply(status: denied, text: text) }
+    public static func refused(_ text: String) -> ToolReply { ToolReply(status: refused, text: text) }
 }
 
 /// The tools by name, and `help`: what the service dispatches a call through, and what `topo help`
