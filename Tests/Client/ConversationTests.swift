@@ -23,14 +23,14 @@ final class ScriptedDetector: VoiceDetector, @unchecked Sendable {
     func reset(silence: TimeInterval) async {
         // Asked for by a cancelled task: a feeder already replaced.
         if Task.isCancelled {
-            let deferred = lock.withLock { () -> Bool in
-                staleCount += 1
-                return deferring
-            }
-            if deferred {
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    lock.withLock { stale.append(continuation) }
+            lock.withLock { staleCount += 1 }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                // Judged and kept under one lock, so a `landStaleResets` cannot fall between.
+                let now = lock.withLock { () -> Bool in
+                    if deferring { stale.append(continuation) }
+                    return !deferring
                 }
+                if now { continuation.resume() }
             }
             lock.withLock { resets += 1; fed = 0; silenced.append(silence); staleLanded += 1 }
             return
