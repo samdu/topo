@@ -719,6 +719,9 @@ final class VoiceInput {
         case .taken:
             // The session the open is starting an engine on is the other call's now.
             if opening { cancel() }
+        case .ending:
+            // The session the open is starting an engine on is about to be activated afresh.
+            if opening { cancel() }
         case .over: stopKeptInput("the call is over")
         default: break
         }

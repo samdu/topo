@@ -521,11 +521,13 @@ final class ConversationTests: XCTestCase {
         voice.cancel(.chat)
         // Counted from here: engines a test before this one left are not this test's.
         let base = EngineWatch.running
+        let started = EngineWatch.starts
         await settle("the reopen's open held on the queue") { self.openLatch.waiting && voice.opening }
         let latch = openLatch
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { latch.open() }
         audio.callDeactivated()
         speaker.onCall?(.taken)
+        XCTAssertEqual(EngineWatch.starts, started + 1, "the taking returned before the open it tore down had run")
         XCTAssertEqual(EngineWatch.running, base, "the taking returned with the open's engine running")
         await settle("the reopen answered") { !voice.opening }
         await drain()

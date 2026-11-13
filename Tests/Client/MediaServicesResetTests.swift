@@ -53,7 +53,12 @@ final class Seams {
         deactivations = []
     }
 
+    /// Called at each configure, before it answers: what a test reads of the moment the session
+    /// is activated.
+    var onConfigure: (() -> Void)?
+
     func configure(_ record: Bool, _ processed: Bool) throws {
+        onConfigure?()
         lock.lock(); defer { lock.unlock() }
         records.append(record)
         modes.append(processed)

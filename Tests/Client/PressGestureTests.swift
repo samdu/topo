@@ -420,6 +420,47 @@ final class PressGestureTests: XCTestCase {
         XCTAssertFalse(rig.voice.inputRunning)
     }
 
+    /// The call ending while a reopen is in flight, with a hold standing: the speaker activates
+    /// the session afresh for the hold, and the open is cancelled before it does, so nothing
+    /// reconfigures the session between the open's format read and its tap. Driven through the
+    /// call's own callbacks, as `Speaker.attach` orders them.
+    func testTheCallEndingWhileTheMicrophoneOpensCancelsTheOpenBeforeTheSessionIsActivated() async {
+        let rig = await rig()
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        let voice = rig.voice
+        rig.speaker.onCall = { voice.call($0) }
+        rig.speaker.awaitReply("n", readAloud: true)
+        call.start()
+        call.provider(system.provider, perform: system.starts.last!)
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        XCTAssertEqual(rig.audio.call, .active)
+        // A conversation's reopen after its turn was sent, the reply's wait standing.
+        rig.latch.arm()
+        let down = Task { await voice.reopen(as: .chat) }
+        await settle("the reopen's open held on the queue") { rig.latch.waiting && voice.opening }
+        XCTAssertTrue(rig.audio.holding, "the reply's wait went with the reopen, so the call's end resumes nothing")
+        var openingAtActivation: [Bool] = []
+        rig.seams.onConfigure = { openingAtActivation.append(voice.opening) }
+        let latch = rig.latch
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
+        call.end()
+        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
+        rig.seams.onConfigure = nil
+        XCTAssertEqual(rig.audio.call, .none)
+        XCTAssertFalse(openingAtActivation.isEmpty, "the hold's resume activated nothing, so the test saw no activation")
+        XCTAssertEqual(openingAtActivation.filter { $0 }.count, 0,
+                       "the session was activated with the open still in flight: \(openingAtActivation)")
+        XCTAssertFalse(voice.opening)
+        XCTAssertEqual(EngineWatch.running, 0, "the call's end returned with the open's engine running")
+        let reopened = await down.value
+        XCTAssertFalse(reopened, "the reopen answered open across the call's end")
+        XCTAssertFalse(voice.listening, "the microphone opened across the call's end")
+        XCTAssertEqual(voice.sessions, 0)
+        rig.speaker.stop()
+    }
+
     /// A media services reset while the open is in flight: no handle is made on the dead server
     /// once the open sees it, and whatever it made is dropped; nothing listens.
     func testAResetWhileTheMicrophoneOpensLeavesNothingRunning() async {
