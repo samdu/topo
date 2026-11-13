@@ -521,6 +521,8 @@ final class ActivityToolTests: XCTestCase {
         }
         XCTAssertTrue(host.running().allSatisfy(\.ended))
         let started = ToolDates.write(clock.date), until = ToolDates.write(Date(timeIntervalSince1970: 1_793_599_200))
+        // Listed under the next login, since no call is answered while none stands.
+        login.began()
         let reply13 = await tool.run([])
         XCTAssertEqual(reply13.text, "activity: A1 | slot job | ended | started \(started) | until \(until)\n  families: lockScreen\nactivity: A2 | slot two | ended | started \(started)\n  tracker: macOS update on buddybox, 1 of 3 done, running, at Download\n")
     }
