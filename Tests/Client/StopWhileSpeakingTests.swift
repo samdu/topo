@@ -69,7 +69,7 @@ final class StopWhileSpeakingTests: XCTestCase {
                                permission: permission,
                                permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.listening }
+        speaker.microphoneOpen = { input.busy }
         return (speaker, input, seams)
     }
 

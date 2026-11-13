@@ -81,8 +81,7 @@ final class PressGestureTests: XCTestCase {
                                formats: { seams.readFormats($0) },
                                permission: permission ?? { true }, permitted: { permitted },
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.busy }
-        MicrophoneWatch.start(input, speaker)
+        MicrophoneWatch.wire(input, speaker)
         return Rig(speaker: speaker, voice: input, seams: seams, audio: audio, center: center, latch: latch)
     }
 
@@ -343,6 +342,44 @@ final class PressGestureTests: XCTestCase {
         XCTAssertFalse(voice.opening)
         XCTAssertEqual(EngineWatch.running, 0)
         XCTAssertEqual(voice.sessions, 0)
+    }
+
+    /// The release's task straight after the press's, with nothing between: the order a release
+    /// queued behind a stall runs in. Whatever moment the release lands at, it returns with the
+    /// open's engine stopped and nothing left running.
+    func testAHoldReleasedStraightAfterThePressLeavesNothingRunning() async {
+        for _ in 0..<20 {
+            let rig = await rig()
+            let voice = rig.voice
+            let down = Task { await voice.pressDown(as: .chat) }
+            let up = Task { await voice.pressUp(as: .chat, held: true) }
+            _ = await up.value
+            XCTAssertEqual(EngineWatch.running, 0, "the release returned with an engine running")
+            _ = await down.value
+            XCTAssertFalse(voice.listening)
+            XCTAssertEqual(EngineWatch.running, 0)
+            voice.cancel()
+        }
+    }
+
+    /// A reopen refused on the queue with a reply waiting: the microphone never listened, so
+    /// `opening` going false is all that changes, and the watch hears that as the close the
+    /// reply waits for.
+    func testAReplyWaitingOnAReopenTheQueueRefusesIsRead() async {
+        let rig = await rig()
+        defer { rig.speaker.stop() }
+        rig.latch.arm()
+        rig.seams.processingError = NSError(domain: "test", code: 1)
+        let voice = rig.voice
+        let reopened = Task { await voice.reopen(as: .chat) }
+        await settle("the reopen's open held on the queue") { rig.latch.waiting && voice.opening }
+        XCTAssertTrue(rig.speaker.speak("Paris is the capital.", answering: "earlier"))
+        XCTAssertTrue(rig.speaker.waitingForMicrophone)
+        rig.latch.open()
+        let opened = await reopened.value
+        XCTAssertFalse(opened)
+        XCTAssertFalse(voice.listening)
+        await settle("the reply to be read once the open was refused") { rig.speaker.report.started }
     }
 
     /// A conversation's reopen tells the speaker nothing but what `busy` says: a reply landing

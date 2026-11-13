@@ -200,8 +200,7 @@ final class ConversationTests: XCTestCase {
                                formats: { [openLatch] in openLatch.pass(); return seams.readFormats($0) },
                                permission: { await permission.ask() }, permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.busy }
-        MicrophoneWatch.start(input, speaker)
+        MicrophoneWatch.wire(input, speaker)
         let conversation = Conversation(voice: input, speaker: speaker, endpoint: endpoint ?? Endpoint(detector: detector, judge: judge),
                                         enabled: { [unowned self] in enabled },
                                         appActive: { [unowned self] in active },
@@ -209,7 +208,8 @@ final class ConversationTests: XCTestCase {
                                         otherCall: { [unowned self] in other },
                                         deafAfter: deafAfter, wait: { 1.2 },
                                         center: center, sleep: idle.sleep)
-        speaker.onCall = { conversation.call($0) }
+        // As the app has it: the microphone hears the call's moment before the conversation.
+        speaker.onCall = { input.call($0); conversation.call($0) }
         conversation.conversingChanged = { [unowned self] in told.append($0) }
         conversation.ended = { [unowned self] in ends += 1 }
         conversation.send = { [unowned self] in
@@ -510,6 +510,33 @@ final class ConversationTests: XCTestCase {
     }
 
     // MARK: - The review's blockers
+
+    /// The call's session taken by another call while the conversation's reopen is on the
+    /// input's queue: no engine crosses the event. The open is cancelled, and the microphone
+    /// opens again at the call's next activation.
+    func testTheCallsSessionTakenWhileTheReopenOpensLeavesNoEngineOnIt() async {
+        let (conversation, voice, speaker) = await begun()
+        defer { conversation.stop("test", sending: false) }
+        openLatch.arm()
+        voice.cancel(.chat)
+        // Counted from here: engines a test before this one left are not this test's.
+        let base = EngineWatch.running
+        await settle("the reopen's open held on the queue") { self.openLatch.waiting && voice.opening }
+        let latch = openLatch
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { latch.open() }
+        audio.callDeactivated()
+        speaker.onCall?(.taken)
+        XCTAssertEqual(EngineWatch.running, base, "the taking returned with the open's engine running")
+        await settle("the reopen answered") { !voice.opening }
+        await drain()
+        XCTAssertFalse(voice.listening && !voice.suspended, "a microphone listened on the session another call took")
+        XCTAssertEqual(EngineWatch.running, base)
+        XCTAssertTrue(conversation.on, "the taking ended the conversation")
+        audio.callActivated()
+        speaker.onCall?(.active)
+        await settle("opened again at the activation") { voice.listening && !voice.suspended }
+        XCTAssertEqual(EngineWatch.running, base + 1)
+    }
 
     /// The lock's `.began` under the active call while the conversation's reopen is on the
     /// input's queue: what the open starts is dropped, the session is suspended as it answers,

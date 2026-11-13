@@ -911,13 +911,21 @@ enum ReadAloud {
 }
 
 /// Reads a reply that waited for the microphone once the microphone closes, however it closed —
-/// a release, the keyboard, the scene going, a reset — by watching `VoiceInput.listening`. Not a
-/// view, so it runs behind the lock and whether or not the chat is drawn; the app starts it once.
+/// a release, the keyboard, the scene going, a reset, a refused reopen — by watching
+/// `VoiceInput.busy`. Not a view, so it runs behind the lock and whether or not the chat is drawn;
+/// the app wires it once (`wire`), which is also what answers the speaker's question.
 /// A press closes the microphone too and says so itself (`MicPress`), so the reply does not wait
 /// on the watch's hop. It tells the speaker of an opening too, so the keeper's bed dips under a
 /// microphone whatever opened it.
 @MainActor
 enum MicrophoneWatch {
+    /// The speaker's question answered with `busy` — no reply is read into a microphone open or
+    /// opening, whoever opened it — and the watch started.
+    static func wire(_ voice: VoiceInput, _ speaker: Speaker) {
+        speaker.microphoneOpen = { [weak voice] in voice?.busy ?? false }
+        start(voice, speaker)
+    }
+
     static func start(_ voice: VoiceInput, _ speaker: Speaker) {
         withObservationTracking {
             _ = voice.busy

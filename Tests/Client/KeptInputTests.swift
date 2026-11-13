@@ -115,7 +115,7 @@ final class KeptInputTests: XCTestCase {
         // pass on the bound standing in for it.
         voice.keptSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
         speaker.attach(SpokenCall(system: FakeCallSystem(), sleep: ManualSleep().sleep))
-        speaker.microphoneOpen = { voice.listening }
+        speaker.microphoneOpen = { voice.busy }
         speaker.onCall = { voice.call($0) }
         return Rig(speaker: speaker, voice: voice, audio: audio, seams: seams, center: center, ear: engine,
                    watch: watch)
@@ -545,7 +545,7 @@ extension KeptInputTests {
         watch.speaker = speaker
         voice.keptSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
         speaker.attach(SpokenCall(system: FakeCallSystem(), sleep: ManualSleep().sleep))
-        speaker.microphoneOpen = { voice.listening }
+        speaker.microphoneOpen = { voice.busy }
         speaker.onCall = { voice.call($0) }
         let rig = Rig(speaker: speaker, voice: voice, audio: audio, seams: seams, center: center, ear: engine,
                       watch: watch)

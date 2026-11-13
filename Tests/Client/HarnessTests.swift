@@ -2171,7 +2171,7 @@ final class HarnessIntegrationTests: XCTestCase {
                                formats: { seams.readFormats($0) }, permission: { true },
                                voiceProcessing: { try seams.process($0, $1) })
         defer { speaker.stop(); voice.cancel() }
-        speaker.microphoneOpen = { voice.listening }
+        speaker.microphoneOpen = { voice.busy }
         harness.onReply = { SpokenReply.read($0, harness: harness, speaker: speaker) }
         speaker.settled = { harness.answeredAloud($0) }
         let press = MicPress()

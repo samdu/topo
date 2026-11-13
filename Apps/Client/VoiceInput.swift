@@ -506,7 +506,7 @@ final class VoiceInput {
     /// The press proper, once the permission is in: everything that is a handle into
     /// mediaserverd, in the one order that is safe. The session is claimed and activated here, on
     /// the main actor whose state it is, before an engine exists; then the open goes to the input's
-    /// queue (`InputEngine.open`): the engine before its input node is read, voice processing set
+    /// queue (`InputEngine.enqueueOpen`): the engine before its input node is read, voice processing set
     /// before the formats are read, and the formats before a tap is installed on them. The main
     /// actor is free while it runs, which is what lets the gesture's events and the long press's
     /// verdict arrive while the microphone opens. A throw anywhere leaves the press refused with
@@ -530,6 +530,7 @@ final class VoiceInput {
                 opening = false
                 openingFor = nil
             }
+            if suspendWhenOpened == at { suspendWhenOpened = nil }
         }
         let handed = ContinuousClock.now
         let input = self.input, tap = self.tap
@@ -714,6 +715,9 @@ final class VoiceInput {
         case .placing:
             stopKeptInput("the call is placed: the session is the system's")
             // An open in flight would start an engine on the session the call is taking.
+            if opening { cancel() }
+        case .taken:
+            // The session the open is starting an engine on is the other call's now.
             if opening { cancel() }
         case .over: stopKeptInput("the call is over")
         default: break
