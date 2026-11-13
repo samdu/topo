@@ -28,10 +28,8 @@ cleanup() {
 trap cleanup EXIT
 unset FAKE_LOCKED FAKE_AWAY FAKE_UNREACHABLE FAKE_DROP
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-ok() { echo "ok   $*"; }
-is() { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: got '$2', wanted '$3': $out"; fi; }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+is() { if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: got '$2', wanted '$3': $out"; fi; }  # appends $out, which lib.sh's does not
 
 mkdir -p "$work/bin"
 cat > "$work/bin/ssh" <<'SSH'

@@ -25,9 +25,7 @@ script="$here/../review-cap.sh"
 work="$(mktemp -d -t review-cap-test)"
 trap 'rm -rf "$work"' EXIT
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-pass() { echo "ok   $*"; }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 MARKER='<!-- agent-review: codex -->'
 CAP_MARKER='<!-- topo-review-cap -->'
@@ -100,7 +98,7 @@ expect() {
   elif [ "$got" != "$posts" ]; then
     fail "$name: posted $got cap comments, not $posts"
   else
-    pass "$name: capped=$capped, $posts cap comment(s) posted"
+    ok "$name: capped=$capped, $posts cap comment(s) posted"
   fi
 }
 
@@ -114,7 +112,7 @@ expect_error() {
   elif ! grep -q -- "::error::.*$pattern" "$work/$name.err"; then
     fail "$name: stderr does not say why: $(cat "$work/$name.err")"
   else
-    pass "$name: failed with no capped line, and said why"
+    ok "$name: failed with no capped line, and said why"
   fi
 }
 
@@ -140,7 +138,7 @@ posted="$(jq -r . "$work/three.posts" 2>/dev/null)"
 if [ "$(head -n 1 <<<"$posted")" = "$CAP_MARKER" ] && [ "$(sed -n 2p <<<"$posted")" = "<!-- topo-review-cap-at: 3 -->" ] \
   && ! grep -qF -- "$MARKER" <<<"$posted" && grep -q "3 Codex verdicts, and the cap is 3" <<<"$posted" \
   && grep -q "second-chance" <<<"$posted"; then
-  pass "three: the cap comment opens with its own marker and the cap it was posted at, never the codex one, and names the count and the PM's ruling"
+  ok "three: the cap comment opens with its own marker and the cap it was posted at, never the codex one, and names the count and the PM's ruling"
 else
   fail "three: the cap comment is not as it should be: $posted"
 fi
@@ -168,7 +166,7 @@ expect granted-five true 1
 posted="$(jq -r . "$work/granted-five.posts" 2>/dev/null)"
 if [ "$(sed -n 2p <<<"$posted")" = "<!-- topo-review-cap-at: 5 -->" ] && grep -q "the cap is 5" <<<"$posted" \
   && grep -q "second chance is spent" <<<"$posted"; then
-  pass "granted-five: the cap comment is posted again at five, and says the second chance is spent"
+  ok "granted-five: the cap comment is posted again at five, and says the second chance is spent"
 else
   fail "granted-five: the cap comment is not as it should be: $posted"
 fi

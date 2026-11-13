@@ -67,8 +67,7 @@ extract "Sanitise the verdict" > "$work/sanitise.sh" || exit 2
 extract "Enforce the review verdict" > "$work/gate.sh" || exit 2
 [ -s "$work/sanitise.sh" ] && [ -s "$work/gate.sh" ] || { echo "extracted an empty snippet" >&2; exit 2; }
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # sanitise <case> <scoped file> — runs the sanitise snippet with the fake secrets in the
 # environment, leaving the verdict at $work/<case>/verdict.json and has_verdict in $has_verdict.

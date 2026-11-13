@@ -11,8 +11,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d -t phonon-bundles-test)"
 trap 'rm -rf "$work"' EXIT
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 repo="$work/repo"
 mkdir -p "$repo/voices"

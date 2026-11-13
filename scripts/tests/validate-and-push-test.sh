@@ -68,9 +68,7 @@ export LOCK_WAIT=60 LOCK_POLL=1
 # A Mac with a way into its login session is not asked for it by a fake suite.
 export TOPO_VALIDATE_SESSION_RUN=
 
-failures=0
-fail() { echo "FAIL $*"; failures=$((failures + 1)); }
-ok() { echo "ok   $*"; }
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 
 mkdir -p "$work/bin"
@@ -223,7 +221,7 @@ origin_head() { git -C "$repo" ls-remote origin refs/heads/topic | cut -f1; }
 posted() { sed -n "s|^api --silent -X POST repos/samdu/topo/statuses/$sha -f context=\([^ ]*\) -f state=\([^ ]*\) .*|\1=\2|p" "$GH_CALLS" | tr '\n' ' '; }
 posts_elsewhere() { grep 'statuses/' "$GH_CALLS" | grep -vc "statuses/$sha "; }
 recorded() { sed -n "s/^$1=//p" "$FAKE_RECORD" 2>/dev/null; }
-is() {  # is <case> <got> <want>
+is() {  # is <case> <got> <want>; appends $out, which lib.sh's does not
   if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: got '$2', wanted '$3': $out"; fi
 }
 
@@ -1151,7 +1149,6 @@ is "detached: exits 2" "$status" 2
 export TOPO_VALIDATE_SLOTS=1
 tickets() { ls -1 "$TOPO_VALIDATE_CACHE/queue" 2>/dev/null | grep -E '^[0-9]{16}-[0-9]{7}$' | env LC_ALL=C sort | tr '\n' ' '; }
 ticket_of() { tickets | tr ' ' '\n' | grep -- "-0*$1\$" || true; }
-until_true() { local n; for n in $(seq 100); do "$@" && return 0; perl -e 'select(undef,undef,undef,0.1)'; done; return 1; }
 has_ticket() { [ -n "$(ticket_of "$1")" ]; }
 no_ticket() { [ -z "$(ticket_of "$1")" ]; }
 reached() { [ -s "$1" ]; }
