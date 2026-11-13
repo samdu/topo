@@ -43,12 +43,6 @@ import TopoCore
         return text
     }
 
-    /// Every place `name` is bound in `text`, outside `//` lines: the name on its own (in
-    /// backticks or not, not after a `.`), then a type or not, then `=` or `{`.
-    static func bindings(of name: String, in text: String) throws -> [String] {
-        try matches(#"^(?!\s*//).*(?<![.\w`])`?"# + name + #"`?\s*(?::[^=\n{]*)?(?:=(?!=)|\{).*$"#, in: text)
-    }
-
     /// How many times `name` appears as a word in `text`, outside `//` lines. A second
     /// declaration adds one whatever form it is written in, so each file's count is pinned: a use
     /// added or taken away is a change to the count here, made with the file read.
@@ -56,17 +50,6 @@ import TopoCore
         try matches(#"^(?!\s*//).*$"#, in: text).reduce(0) { sum, line in
             sum + (try matches(#"\b"# + name + #"\b"#, in: line)).count
         }
-    }
-
-    /// The one literal `name` is declared as: the one place it is bound is the whole line
-    /// `static let <name> = "…"`, and the name is used exactly `uses` times in the file.
-    static func literal(declaring name: String, uses count: Int, in path: String) throws -> String? {
-        let text = try plain(path)
-        #expect(try uses(of: name, in: text) == count, "\(path): \(name) is used other than the \(count) times it was")
-        let all = try bindings(of: name, in: text)
-        let whole = try matches(#"^\s*static let "# + name + #" = "([^"\\]*)"\s*$"#, in: text)
-        #expect(all.count == 1 && whole.count == 1, "\(path): \(all)")
-        return all.count == 1 ? whole.first : nil
     }
 
     /// Every file under `top` with the extension, past what a build or a checkout keeps of its own.
@@ -121,16 +104,15 @@ import TopoCore
         #expect(named == known)
     }
 
-    @Test func wombleReadsTheSameContainerAndZone() throws {
-        let store = "Womble/Sources/Log/CloudKitStore.swift"
-        #expect(try Self.literal(declaring: "containerIdentifier", uses: 2, in: store) == Self.container)
-        #expect(try Self.literal(declaring: "zoneName", uses: 3, in: store) == Self.zone)
-        // The self-test's default is the first argument of the one `steps` there is.
-        let selfTest = try Self.plain("Womble/Sources/Diagnostics/CloudKitSelfTest.swift")
+    /// Womble's `CloudKitStore` values are compared as compiled with this package's by Womble's own
+    /// `ContainerTests`; its self-test takes the store's container as its default rather than a copy.
+    @Test func wombleSelfTestReadsTheStore() throws {
+        let path = "Womble/Sources/Diagnostics/CloudKitSelfTest.swift"
+        let selfTest = try Self.plain(path)
         #expect(try Self.matches(#"`?logContainer`?\s*:"#, in: selfTest).count == 1)
-        #expect(try Self.uses(of: "logContainer", in: selfTest) == 10, "logContainer is used other than the 10 times it was")
-        #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = "([^"\\]*)",\s*$"#, in: selfTest)
-                == [Self.container])
+        #expect(try Self.matches(#"^\s*static func steps\(logContainer: String = CloudKitStore\.containerIdentifier,\s*$"#,
+                                 in: selfTest).count == 1)
+        #expect(try Self.uses(of: "logContainer", in: selfTest) == 10, "\(path): logContainer is used other than the 10 times it was")
     }
 
     /// Every container literal, and every zone given as a literal (`zoneName = "…"`,
@@ -140,7 +122,7 @@ import TopoCore
     static func literals(_ pattern: String) throws -> [String] {
         let base = root.standardizedFileURL.path + "/"
         var found: [String] = []
-        for top in ["Apps", "Packages"] {
+        for top in ["Apps", "Packages", "Womble/Sources"] {
             for url in try files(under: root.appendingPathComponent(top), ext: "swift") {
                 let path = String(url.standardizedFileURL.path.dropFirst(base.count))
                 if path.contains("/Tests/") { continue }
@@ -156,15 +138,23 @@ import TopoCore
         #expect(!(try Self.text("Apps/Shared/TopoCloudKit.swift")).contains("#if"))
     }
 
-    /// The log's container and zone are spelled once, in `CloudKitRecordDatabase`; the one other
-    /// container and zone are the board's, once each.
+    /// The log's container and zone are spelled once in the Swift that links TopoCore, in
+    /// `CloudKitRecordDatabase`, and once in Womble's, in `CloudKitStore`; the board's are spelled
+    /// once in each and again as the self-test's board default, and the self-test's own zone is
+    /// a `SelfTest-` name. Womble's store is held to the constant as compiled (`ContainerTests`).
     @Test func theConstantIsTheOnlySpellingInTheSwiftThatLinksTopoCore() throws {
         let database = "Packages/TopoCore/Sources/TopoCore/CloudKitRecordDatabase.swift"
         let app = "Apps/Shared/TopoCloudKit.swift"
+        let store = "Womble/Sources/Log/CloudKitStore.swift"
+        let cards = "Womble/Sources/Board/CardRecordStore.swift"
+        let selfTest = "Womble/Sources/Diagnostics/CloudKitSelfTest.swift"
         #expect(try Self.literals(#""(?:""\s*)?(iCloud\.[^"\n]*)"#)
-                == ["\(app): iCloud.zone.hexagon.topo.board", "\(database): \(Self.container)"])
+                == ["\(app): iCloud.zone.hexagon.topo.board", "\(database): \(Self.container)",
+                    "\(cards): iCloud.zone.hexagon.topo.board", "\(selfTest): iCloud.zone.hexagon.topo.board",
+                    "\(store): \(Self.container)"])
         #expect(try Self.literals(#"`?zoneName`?\s*(?::\s*[\w.?!<>]+\s*=|[:=])\s*#*"(?:""\s*)?([^"\n]*)"#)
-                == ["\(app): Board", "\(database): \(Self.zone)"])
+                == ["\(app): Board", "\(database): \(Self.zone)", "\(cards): Board", "\(selfTest): SelfTest-",
+                    "\(store): \(Self.zone)"])
         let text = try Self.text(database)
         #expect(try Self.matches(#"^\s*public static let containerIdentifier = "([^"]*)"\s*$"#, in: text) == [Self.container])
         #expect(try Self.matches(#"^\s*public static let zoneName = "([^"]*)"\s*$"#, in: text) == [Self.zone])
