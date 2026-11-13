@@ -106,7 +106,7 @@ final class KeptInputTests: XCTestCase {
         // pass on the bound standing in for it.
         voice.keptSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
         speaker.attach(SpokenCall(system: FakeCallSystem(), sleep: ManualSleep().sleep))
-        speaker.microphoneOpen = { voice.listening }
+        speaker.microphoneOpen = { voice.busy }
         speaker.onCall = { voice.call($0) }
         return Rig(speaker: speaker, voice: voice, audio: audio, seams: seams, center: center, ear: engine,
                    watch: watch)
@@ -123,7 +123,7 @@ final class KeptInputTests: XCTestCase {
         utterance(into: rig.voice.sink)
         // Held past a tap, which would leave the microphone open and send nothing.
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+        await rig.press.gesture(false, held: true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 dictating: dictating, speaks: speaks, calls: { calls }) { text in
             // As the chat's send: nothing heard is no turn (`sendSpoken`).
             guard !text.isEmpty else { return }
@@ -173,8 +173,7 @@ final class KeptInputTests: XCTestCase {
         await rig.press.gesture(true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { _ in }?.value
         utterance(into: rig.voice.sink)
-        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+        await rig.press.gesture(false, held: true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { text in rig.sent.add(text) }?.value
         XCTAssertEqual(atTake?.kept, true, "the take was told before the input was kept, or not at all")
         XCTAssertEqual(atTake?.passes, false, "the kept input's gate was open at the take")
@@ -191,7 +190,7 @@ final class KeptInputTests: XCTestCase {
         utterance(into: rig.voice.sink)
         // Held past a tap, which would leave the microphone open and send nothing.
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await rig.press.gesture(false, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+        await rig.press.gesture(false, held: true, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 speaks: true, calls: { true }) { text in
             rig.sent.add(text)
             _ = rig.speaker.awaitReply("a-turn", readAloud: true)
@@ -557,7 +556,7 @@ extension KeptInputTests {
         watch.speaker = speaker
         voice.keptSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
         speaker.attach(SpokenCall(system: FakeCallSystem(), sleep: ManualSleep().sleep))
-        speaker.microphoneOpen = { voice.listening }
+        speaker.microphoneOpen = { voice.busy }
         speaker.onCall = { voice.call($0) }
         let rig = Rig(speaker: speaker, voice: voice, audio: audio, seams: seams, center: center, ear: engine,
                       watch: watch)

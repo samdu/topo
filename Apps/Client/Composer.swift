@@ -36,6 +36,10 @@ struct Composer: View {
     /// `VoiceInput`'s, and a press on Stop is a stop (`MicPress`); this passes the press on and
     /// nothing else.
     var micPressed: (Bool, MicState) -> Void = { _, _ in }
+    /// Called when the microphone's long press of `VoiceInput.tapLimit` fires with the thumb still
+    /// down, within the press's 60 points: the release that follows is a hold, and without this
+    /// call a tap. SwiftUI's word for which the press was (`MicPress.hold`).
+    var micHeld: () -> Void = {}
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
@@ -412,6 +416,12 @@ struct Composer: View {
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                 micPressed(down, mic)
             }
+            // Beside the down and the up, the hold: a standard long press, whose firing before the
+            // release is the whole of what makes the release a hold.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: VoiceInput.tapLimit, maximumDistance: 60)
+                    .onEnded { _ in micHeld() }
+            )
             // The UI suites look this button up by its label, which is `VoiceInput`'s state in
             // words, or Stop while Topo is speaking.
             .accessibilityLabel(mic.label)

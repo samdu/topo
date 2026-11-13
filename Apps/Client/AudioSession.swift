@@ -291,8 +291,8 @@ final class AudioSession {
         applyOrRemember()
     }
 
-    /// Says that the chat's microphone has opened, its engine started, or has closed, its engine
-    /// stopped. Between the two the session is not reconfigured; the close applies what waited,
+    /// Says that the chat's microphone is opening (said before its first handle exists, so nothing
+    /// is reconfigured under an open in flight) or open, or has closed, its engine stopped. Between the two the session is not reconfigured; the close applies what waited,
     /// as the last hold going does.
     func microphone(open: Bool) {
         guard microphoneOpen != open else { return }
