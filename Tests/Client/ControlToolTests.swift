@@ -5,49 +5,11 @@ import XCTest
 
 @testable import Topo
 
-/// A loaded home for the judge, answering at once.
-@MainActor
-private final class LoadedHome: HomeStore {
-    var authorization: HMHomeManagerAuthorizationStatus = []
-    var changed: (@MainActor (HomeChange) -> Void)?
-    var records: [HomeRecord] = []
-    func homes() -> [HomeRecord] { records }
-    func read(_ characteristic: String) async throws -> HomeValue? { nil }
-    func write(_ value: HomeValue, to characteristic: String) async throws {}
-    func run(scene: String) async throws {}
-}
-
 /// `topo control`: its round trip, a run judged at `set` as a widget's is, a toggle's state set
 /// alone, the defaults written back, the secrets kept by name, the listing and the taps saying
 /// nothing a request carried, and one reload per kind.
 @MainActor
 final class ControlToolTests: XCTestCase {
-    private static let lampID = "6A1F0C2E-0000-4000-8000-000000000001"
-    private static let lockID = "9B7E3D10-0000-4000-8000-000000000003"
-
-    private static func characteristic(_ id: String, _ name: String, _ format: String, valid: [Decimal]? = nil) -> HomeCharacteristic {
-        HomeCharacteristic(id: id, name: name, format: format, readable: true, writable: true, minimum: nil, maximum: nil,
-                           step: nil, validValues: valid, maxLength: nil, units: nil, value: nil)
-    }
-
-    private static let house = HomeRecord(
-        id: "H1", name: "The flat", primary: true,
-        accessories: [
-            HomeAccessory(id: lampID, name: "Desk lamp", room: "Office", category: "Lightbulb", reachable: true, services: [
-                HomeService(name: "Desk lamp", kind: "Lightbulb", characteristics: [
-                    characteristic("L-power", "power", "bool"),
-                    characteristic("L-once", "wake", "bool", valid: [1]),
-                ]),
-            ]),
-            HomeAccessory(id: lockID, name: "Front door", room: "Hall", category: "Door Lock", reachable: true, services: [
-                HomeService(name: "Front door", kind: "Lock Mechanism", characteristics: [
-                    characteristic("D-target", "lock", "uint8", valid: [0, 1]),
-                ]),
-            ]),
-        ],
-        scenes: [HomeScene(id: "SC-1111", name: "Good night"),
-                 HomeScene(id: "SC-LEAVE", name: "Leave", writes: [HMCharacteristicTypeTargetLockMechanismState])])
-
     private var folder: URL!
     private var secrets: ControlSecrets!
     private var leftBehind = ConnectionsLeftBehind.isolated()
@@ -80,7 +42,7 @@ final class ControlToolTests: XCTestCase {
             Task { @MainActor in
                 fake.authorization = [.determined, .authorized]
                 fake.changed?(.authorization)
-                fake.records = [Self.house]
+                fake.records = [House.house]
                 fake.changed?(.homes)
             }
             return fake
@@ -191,11 +153,11 @@ final class ControlToolTests: XCTestCase {
     func testRunJudgedAsAWidgetsIs() async throws {
         let tool = try await tool(loaded: true)
         let cases: [(String, [String])] = [
-            ("button-1", ["home", "set", Self.lockID, "lock", "1"]),
+            ("button-1", ["home", "set", House.lockID, "lock", "1"]),
             ("button-2", ["home", "set", "Attic fan", "power", "on"]),
             ("button-3", ["home", "scene", "SC-LEAVE"]),
             ("button-4", ["calendar", "add", "Dinner"]),
-            ("toggle-1", ["home", "set", Self.lampID, "wake"]),
+            ("toggle-1", ["home", "set", House.lampID, "wake"]),
         ]
         for (slot, argv) in cases {
             let reply = await tool.run(["set", slot, Self.run(argv)])
@@ -205,15 +167,15 @@ final class ControlToolTests: XCTestCase {
         let night = await tool.run(["set", "button-5", Self.run(["home", "scene", "SC-1111"])])
         XCTAssertEqual(night.status, ToolReply.ok, night.text)
         XCTAssertFalse(night.text.contains("unchecked"), night.text)
-        let lamp = await tool.run(["set", "toggle-2", Self.run(["home", "set", Self.lampID, "power"])])
+        let lamp = await tool.run(["set", "toggle-2", Self.run(["home", "set", House.lampID, "power"])])
         XCTAssertEqual(lamp.status, ToolReply.ok, lamp.text)
-        XCTAssertEqual(action("toggle-2"), .run(["home", "set", Self.lampID, "power"]))
+        XCTAssertEqual(action("toggle-2"), .run(["home", "set", House.lampID, "power"]))
     }
 
     /// `state` changes `on` alone: no new revision, the confirmed state told, the toggle kind reloaded.
     func testStateSetsOnAlone() async throws {
         let tool = try await tool()
-        _ = await tool.run(["set", "toggle-3", Self.run(["home", "set", Self.lampID, "power"])])
+        _ = await tool.run(["set", "toggle-3", Self.run(["home", "set", House.lampID, "power"])])
         let before = try XCTUnwrap(store.readControl(slot: "toggle-3")?.document)
         let reply = await tool.run(["state", "toggle-3", "on"])
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
