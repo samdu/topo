@@ -1094,7 +1094,7 @@ final class Harness {
         heardEnded[nonce] = nil
         if writingSpoken == nonce {
             // A line break settles the last sentence (`Speaker.settled`), so it is read too.
-            if replied, let reply = unsaved[nonce] { onWriting?(reply + "\n", nonce) }
+            if replied, let reply = unsaved[nonce] { hand(reply + "\n") }
             onWriting?(nil, nonce)
             writingSpoken = nil
             handed = nil
@@ -1134,13 +1134,15 @@ final class Harness {
     ///
     /// Whoever reads it aloud is handed that same text and nothing else, so a string that only
     /// ever grows: a new message adds nothing until it has words, and then the paragraph break
-    /// comes with them. A text block that is whole (`.text`, which comes before the message's
-    /// tool call does) is handed again with a line break after it, which settles its last
-    /// sentence (`Speaker.settled`), so what was written before a tool is read before the tool
-    /// runs rather than once the next message begins.
+    /// comes with them. A tool call ends its message's words, so they are handed again at it with
+    /// a line break after them, which settles their last sentence (`Speaker.settled`): what was
+    /// written before a tool is read as the tool is called rather than once the next message
+    /// begins. Not at a text block's end: a message can carry more than one, run on with nothing
+    /// between them (a server tool's search between two), and a break after the first would be
+    /// a sentence the reply does not have.
     private func follow(_ activity: GuestActivity) {
         switch activity {
-        case .update(.event(.writing)), .update(.event(.text)):
+        case .update(.event(.writing)), .update(.event(.toolUse)):
             if let hearing, answeredElsewhere.contains(hearing) { return }
         default:
             break
@@ -1161,9 +1163,9 @@ final class Harness {
             let written = words.text
             writing = written
             hand(written)
-        case .update(.event(.text)):
-            // The block is whole, so its last sentence is too. Its words are the deltas already
-            // in `words`; a message written with none has nothing to hand.
+        case .update(.event(.toolUse)):
+            // The message's words are whole, so their last sentence is too. A message that wrote
+            // none, or calls a second tool, hands nothing new.
             let written = words.text
             if !written.isEmpty { hand(written + "\n") }
         case .update(.ended(let end)):

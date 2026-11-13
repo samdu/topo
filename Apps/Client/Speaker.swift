@@ -108,6 +108,11 @@ final class Speaker {
     /// call and how many of those are queued, and whether it is still being read. One that was
     /// stopped keeps its turn, so what is written after the stop is not read from the top.
     private var written: (nonce: String, settled: String, queued: Int, live: Bool)?
+    /// Whether `written`'s reading was heard out with the guest at its tools for the reading's
+    /// ceiling and let go of its hold (`progressed`): it is still live, and goes on at the next
+    /// sentence written, or with the rest of the reply as it lands, from where it was. A stop
+    /// meanwhile ends it for good, as it ends any reading.
+    private var parked = false
     /// A reply that landed while a microphone was open, to be read once it closes. Its wait stands
     /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
     /// each reply cuts off the one before it anyway.
@@ -584,6 +589,28 @@ final class Speaker {
         if let written, let nonce, written.nonce == nonce {
             self.written = nil
             guard written.live else { return true }
+            if parked {
+                let rest = Array(Self.spoken(text).dropFirst(written.queued))
+                guard !rest.isEmpty else {
+                    parked = false
+                    return true
+                }
+                if replyMustWait {
+                    // Read through here again once that ends (`readWhatWaited`), still parked.
+                    self.written = written
+                    deferred = (text, nonce, reply)
+                    AudioLog.say("the rest of the reply waits for \(microphoneBusy ? "the microphone to close" : "the call's session to be activated")")
+                    return true
+                }
+                guard begin(text, answering: nonce, reply: reply, reading: false) else {
+                    self.written = written
+                    parked = true
+                    return false
+                }
+                AudioLog.say("the reading goes on with the rest of the reply")
+                enqueue(rest)
+                return true
+            }
             self.reply = reply
             enqueue(Array(Self.spoken(text).dropFirst(written.queued)))
             if making == 0, queue.isIdle { finished() }
@@ -617,6 +644,21 @@ final class Speaker {
             }
             guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else { return }
             written = (nonce, "", 0, true)
+        } else if parked, let kept = written, kept.live {
+            // Nothing new settled: nothing to go on with yet.
+            let base = settled.hasPrefix(kept.settled) ? kept.queued : 0
+            guard Self.spoken(settled).count > base else { return }
+            if replyMustWait {
+                writingWaited = (text, nonce)
+                return
+            }
+            guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else {
+                written = kept
+                parked = true
+                return
+            }
+            AudioLog.say("the reading goes on with what the guest wrote next")
+            written = kept
         }
         guard var reading = written, reading.live else { return }
         if !settled.hasPrefix(reading.settled) { reading.queued = 0 }
@@ -636,6 +678,7 @@ final class Speaker {
         if writingWaited?.nonce == nonce { writingWaited = nil }
         guard let reading = written, reading.nonce == nonce else { return }
         written = nil
+        parked = false
         if reading.live, making == 0, queue.isIdle { finished() }
     }
 
@@ -866,7 +909,11 @@ final class Speaker {
         if deferred == nil, let writing = writingWaited {
             writingWaited = nil
             AudioLog.say("reading what the guest wrote while it waited")
-            return speak(writing: writing.text, answering: writing.nonce)
+            speak(writing: writing.text, answering: writing.nonce)
+            // Refused (the session would not activate): it waits on for the next end, or the
+            // guest's next words, or the reply as it lands.
+            if !speaking, writingWaited == nil, !hungUp.contains(writing.nonce) { writingWaited = writing }
+            return
         }
         guard let waiting = deferred else { return }
         deferred = nil
@@ -890,6 +937,7 @@ final class Speaker {
         deferred = nil
         writingWaited = nil
         written?.live = false
+        parked = false
         generation += 1
         reply = nil
         chain = nil
@@ -1108,14 +1156,22 @@ final class Speaker {
         reading = Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
-            // Heard out with the guest still at its tools: what it writes next, or the reply as it
-            // lands, is read from the top, since the reading this ends is not one stopped for good.
-            if self.written?.live == true, self.voiceGap, self.making == 0, self.queue.isIdle {
-                AudioLog.say("the reply's first part was heard out \(ceiling) ago with the guest still writing; its hold ends and the rest is read from the top")
-                self.written = nil
-            } else {
-                AudioLog.say("the reply made no progress for \(ceiling); it and its hold end")
+            // Heard out with the guest still at its tools, which is no dead engine. Under a call the
+            // card's hang-up is the bound, as for a wait (`capped`), so the reading stands for
+            // another pass. Otherwise its hold goes and the reading is parked, not stopped: it goes
+            // on from where it was with the guest's next sentence or the reply's landing.
+            if let kept = self.written, kept.live, self.voiceGap, self.making == 0, self.queue.isIdle {
+                if self.call?.up == true {
+                    AudioLog.say("the voice was heard out \(ceiling) ago under the call with the guest still writing; the reading stands")
+                    return self.progressed()
+                }
+                AudioLog.say("the voice was heard out \(ceiling) ago with the guest still writing; its hold ends and the reading goes on at the next sentence")
+                self.stop()
+                self.written = kept
+                self.parked = true
+                return
             }
+            AudioLog.say("the reply made no progress for \(ceiling); it and its hold end")
             self.stop()
         }
     }

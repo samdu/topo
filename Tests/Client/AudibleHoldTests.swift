@@ -397,9 +397,9 @@ final class AudibleHoldTests: XCTestCase {
     }
 
     /// A first part heard out with the guest at its tools past the reading's ceiling: the
-    /// reading and its hold end, and what the guest writes next is read from the top, rather than
-    /// the rest of the reply never being read.
-    func testAFirstPartHeardOutPastTheCeilingLeavesTheRestToBeRead() async throws {
+    /// reading's hold goes, and the reading goes on from where it was at the guest's next
+    /// sentence, nothing read twice and nothing left unread.
+    func testAFirstPartHeardOutPastTheCeilingGoesOnFromWhereItWas() async throws {
         let rig = await rig(ceiling: .milliseconds(300))
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.speaker.speak(writing: "One moment.\n", answering: "turn")
@@ -407,11 +407,38 @@ final class AudibleHoldTests: XCTestCase {
         rig.voice.open(1)
         try await render(rig, "the first frame") { !rig.speaker.voiceGap }
         try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        await settle("the ceiling to end the reading") { !rig.speaker.speaking }
+        await settle("the ceiling to let the reading's hold go") { !rig.speaker.speaking }
+        XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the ceiling")
         rig.speaker.speak(writing: "One moment.\n\nIt is on the shelf. ", answering: "turn")
         XCTAssertTrue(rig.speaker.speaking, "what the guest wrote after the ceiling was not read")
-        await settle("the reply to be read from the top") { rig.voice.sentencesAsked == 3 }
+        await settle("the next sentence to be asked for") { rig.voice.sentencesAsked == 2 }
+        rig.voice.open(2)
+        try await render(rig, "the next sentence heard") { !rig.speaker.voiceGap }
+        XCTAssertEqual(rig.voice.sentencesAsked, 2, "the part heard before the ceiling was read again")
         rig.speaker.stop()
+    }
+
+    /// Under a call the card's hang-up is the bound: a first part heard out with the guest at its
+    /// tools past the reading's ceiling keeps the reading, its hold and so the call.
+    func testUnderACallTheCeilingLeavesAHeardOutReadingStanding() async throws {
+        let rig = await rig(ceiling: .milliseconds(300))
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        call.start()
+        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        try await Task.sleep(for: .milliseconds(1000))
+        XCTAssertTrue(rig.speaker.speaking, "the ceiling ended the reading under the call")
+        XCTAssertTrue(rig.audio.heldForATurn, "the ceiling let the call's hold go")
+        rig.speaker.stop()
+        call.end()
     }
 
     /// The red line's order: the queue drains while the last sentence is still being made, and
