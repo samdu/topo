@@ -1,0 +1,10 @@
+{"schemaVersion":{"major":0},"identifier":{"url":"doc://x/documentation/X/Fx"},"metadata":{"title":"Fx"},
+"primaryContentSections":[
+{"kind":"parameters","parameters":[{"name":"p","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"First para."}]},{"type":"codeListing","syntax":"swift","code":["let a = 1","let b = 2"]}]}]},
+{"kind":"content","content":[
+{"type":"orderedList","items":[{"content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"Step one"}]},{"type":"unorderedList","items":[{"content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"sub a"}]}]},{"content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"sub b"}]}]}]},{"type":"codeListing","syntax":"sh","code":["echo hi"]}]},{"content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"Step two"}]}]}]},
+{"type":"aside","style":"warning","name":"Warning","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"Para one."}]},{"type":"paragraph","inlineContent":[{"type":"text","text":"Para two."}]}]},
+{"type":"table","header":"none","rows":[[[{"type":"paragraph","inlineContent":[{"type":"text","text":"r1c1"}]}],[{"type":"paragraph","inlineContent":[{"type":"text","text":"r1c2"}]}]],[[{"type":"paragraph","inlineContent":[{"type":"text","text":"r2c1"}]}],[{"type":"paragraph","inlineContent":[{"type":"text","text":"r2c2"}]}]]]},
+{"type":"termList","items":[{"term":{"inlineContent":[{"type":"text","text":"Key"}]},"definition":{"content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"Def one."}]},{"type":"paragraph","inlineContent":[{"type":"text","text":"Def two."}]}]}}]},
+{"type":"mysteryBlock"}
+]}],"references":{}}

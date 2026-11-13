@@ -108,6 +108,74 @@ final class DocCConverterTests: XCTestCase {
         XCTAssertFalse(markdown.contains("\u{1}"), "the listing's mark is taken off")
     }
 
+    /// What the converter has no rendering for is one line naming it, never nothing: a block
+    /// (the made-up page's), a section (the REST page's parameters and responses), an inline run.
+    func testWhatItCannotRenderIsMarked() throws {
+        let shapes = try convert(page("shapes"))
+        XCTAssertTrue(shapes.contains("\n[apple-doc: unrendered mysteryBlock block]"), shapes)
+        let rest = try convert(page("get-v1-apps"))
+        XCTAssertTrue(rest.contains("\n[apple-doc: unrendered restParameters section]\n"), rest)
+        XCTAssertTrue(rest.contains("\n[apple-doc: unrendered restResponses section]\n"), rest)
+        let inline = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"paragraph","inlineContent":[{"type":"text","text":"a "},{"type":"sparkle"}]}]}]}"#)
+        XCTAssertTrue(inline.contains("\na [apple-doc: unrendered sparkle inline]\n"), inline)
+    }
+
+    /// The pages that mention this one, linked with their abstracts, as the page lists them.
+    func testTheMentionsAreKept() throws {
+        let markdown = try convert(page("get-v1-apps"))
+        XCTAssertTrue(markdown.contains("""
+        ## Mentioned in
+
+        - [Creating alternative distribution packages](https://developer.apple.com/documentation/appstoreconnectapi/creating-alternative-distribution-packages): Create distribution packages for your apps that you distribute on alternative marketplaces or on the web.
+        - [App Store Connect API 3.6 release notes](https://developer.apple.com/documentation/appstoreconnectapi/app-store-connect-api-3-6-release-notes)
+        """), markdown)
+    }
+
+    /// A deprecated symbol's summary of what to use instead, under the abstract.
+    func testTheDeprecationSummaryIsKept() throws {
+        let markdown = try convert(page("requestrecordpermission"))
+        XCTAssertTrue(markdown.contains("""
+        Requests the user’s permission to record audio.
+
+        > **Deprecated**
+        > Use [`requestRecordPermission(completionHandler:)`](https://developer.apple.com/documentation/avfaudio/avaudioapplication/requestrecordpermission(completionhandler:)) on [`AVAudioApplication`](https://developer.apple.com/documentation/avfaudio/avaudioapplication) instead.
+
+        """), markdown)
+    }
+
+    /// A REST page's method and URL.
+    func testTheRESTEndpointIsKept() throws {
+        let markdown = try convert(page("get-v1-apps"))
+        XCTAssertTrue(markdown.contains("## URL\n\n```\nGET https://api.appstoreconnect.apple.com/v1/apps\n```\n"), markdown)
+    }
+
+    /// The sections come in the page's own order: this one's Parameters before its Discussion.
+    func testTheSectionsKeepThePagesOrder() throws {
+        let markdown = try convert(page("requestrecordpermission"))
+        let parameters = try XCTUnwrap(markdown.range(of: "\n## Parameters\n"), markdown)
+        let discussion = try XCTUnwrap(markdown.range(of: "\n## Discussion\n"), markdown)
+        XCTAssertLessThan(parameters.lowerBound, discussion.lowerBound, markdown)
+    }
+
+    /// A parameter, an aside or a term's definition of more than one block keeps them as blocks,
+    /// hung under the item: a second paragraph stays a paragraph and a code listing stays fenced.
+    func testBlocksInsideAnItemStayBlocks() throws {
+        let shapes = try convert(page("shapes"))
+        XCTAssertTrue(shapes.contains("- **p**: First para.\n\n  ```swift\n  let a = 1\n  let b = 2\n  ```\n"), shapes)
+        XCTAssertTrue(shapes.contains("> **Warning**\n> Para one.\n>\n> Para two.\n"), shapes)
+        XCTAssertTrue(shapes.contains("- **Key**: Def one.\n\n  Def two.\n"), shapes)
+        let real = try convert(page("requestrecordpermission"))
+        XCTAssertTrue(real.contains("indicating whether the user granted or denied permission to record.\n\n  When you call this method,"), real)
+    }
+
+    /// A table's first row is its header only when DocC says the table has a header row.
+    func testATableWithoutAHeaderRowKeepsItsFirstRowAsData() throws {
+        let shapes = try convert(page("shapes"))
+        XCTAssertTrue(shapes.contains("|  |  |\n|---|---|\n| r1c1 | r1c2 |\n| r2c1 | r2c2 |\n"), shapes)
+        let headed = try convert(#"{"metadata":{"title":"T"},"primaryContentSections":[{"kind":"content","content":[{"type":"table","header":"row","rows":[[[{"type":"paragraph","inlineContent":[{"type":"text","text":"h"}]}]],[[{"type":"paragraph","inlineContent":[{"type":"text","text":"d"}]}]]]}]}]}"#)
+        XCTAssertTrue(headed.contains("| h |\n|---|\n| d |"), headed)
+    }
+
     /// The command itself, through the link it is run by, over a `wget` that records what it was
     /// asked for: a URL with a fragment or a query asks for the page's JSON, a page that is not
     /// there is Apple's 404 and status 1, and what is printed is the converter's Markdown.
@@ -167,6 +235,12 @@ final class DocCConverterTests: XCTestCase {
         try FileManager.default.createDirectory(at: home.appendingPathComponent(".topo", isDirectory: true), withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: home) }
         return home
+    }
+
+    /// One of the pages under `Pages`, as its JSON.
+    private func page(_ name: String) throws -> String {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Pages"), name)
+        return try String(contentsOf: url, encoding: .utf8)
     }
 
     private func convert(_ page: String) throws -> String {
