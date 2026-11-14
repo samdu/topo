@@ -309,6 +309,9 @@ final class StreamJSONTests: XCTestCase {
         let untold = try await launcher.launchEnvironment()
         XCTAssertNil(untold[ClaudeLauncher.noteVariable], "a note the callback supplied was told")
         XCTAssertNil(untold[ClaudeLauncher.noteMarkVariable])
+        let ids = [told[ClaudeLauncher.launchVariable], untold[ClaudeLauncher.launchVariable]]
+        XCTAssertEqual(ids.compactMap { $0.flatMap(UUID.init(uuidString:)) }.count, 2, "\(ids)")
+        XCTAssertNotEqual(ids[0], ids[1], "two launches shared an id, so their tellings can be the same bytes")
         XCTAssertFalse(untold.values.contains { $0.contains("Obsidian vault") || $0.contains("You run inside Topo") },
                        "a prompt reached the environment, which what the resident starts inherits")
     }

@@ -32,19 +32,24 @@ final class GuestSessionStartHookTests: XCTestCase {
 
     private var now: Int { Int(Date().timeIntervalSince1970) }
 
+    /// The launch the recorded start's marks are given to.
+    private let earlier = "0a1b2c3d-0000-4000-8000-000000000001"
+
     /// The recorded start's record with its time mark dated `seconds` and its memory mark `memory`.
     private func told(at seconds: Int, memory: String = "mounted") throws -> String {
-        let line = told.replacingOccurrences(of: #"\[topo: time [0-9]+\]"#, with: ClaudeLauncher.timeMark(seconds),
+        let line = told.replacingOccurrences(of: #"\[topo: time [0-9]+\]"#, with: ClaudeLauncher.timeMark(seconds, launch: earlier),
                                              options: .regularExpression)
         XCTAssertNotEqual(line, told)
         return line.replacingOccurrences(of: "[topo: memory mounted]",
-                                         with: ClaudeLauncher.memoryMark(mounted: memory == "mounted", at: seconds))
+                                         with: ClaudeLauncher.memoryMark(mounted: memory == "mounted", at: seconds, launch: earlier))
     }
 
     /// What the hook prints over `lines` (nil: no transcript at all), handed `source` as Claude
-    /// Code hands it, with `note` in the launch's environment as `launchEnvironment` puts it.
+    /// Code hands it, with `note` and `launch` in the launch's environment as `launchEnvironment`
+    /// puts them, and with the guest's `date` answering `clock` when one is given.
     private func hook(over lines: [String]?, memory: Bool?, source: String = "resume", note: String? = nil,
-                      path: String? = nil) async throws -> String {
+                      path: String? = nil, launch: String = "0a1b2c3d-0000-4000-8000-000000000002",
+                      clock: Int? = nil) async throws -> String {
         let name = "\(UUID().uuidString).jsonl"
         if let lines { try (lines.joined(separator: "\n") + "\n").write(to: host.appendingPathComponent(name), atomically: true, encoding: .utf8) }
         let input = #"{"session_id":"s","transcript_path":"\#(path ?? "\(point)/\(name)")","hook_event_name":"SessionStart","source":"\#(source)"}"#
@@ -53,34 +58,43 @@ final class GuestSessionStartHookTests: XCTestCase {
         environment["HOOK_COMMAND"] = ClaudeLauncher.hookCommand(memory: memory)
         environment[ClaudeLauncher.noteVariable] = note
         environment[ClaudeLauncher.noteMarkVariable] = note.map(ClaudeLauncher.noteMark)
-        let ran = try await Guest.shared.run("/bin/sh", ["-c", #"printf '%s' "$HOOK_INPUT" | sh -c "$HOOK_COMMAND""#],
-                                             environment: environment)
+        environment[ClaudeLauncher.launchVariable] = launch
+        environment["HOOK_CLOCK"] = clock.map(String.init)
+        let ran = try await Guest.shared.run("/bin/sh", ["-c", #"""
+            if [ -n "$HOOK_CLOCK" ]; then d=$(mktemp -d) && printf '#!/bin/sh\necho %s\n' "$HOOK_CLOCK" > "$d/date" \
+              && chmod +x "$d/date" && PATH="$d:$PATH"; fi; printf '%s' "$HOOK_INPUT" | sh -c "$HOOK_COMMAND"
+            """#], environment: environment)
         XCTAssertEqual(ran.status, 0, ran.errors)
         XCTAssertEqual(ran.errors, "")
         return ran.output
     }
 
     private func toldTime(_ output: String) -> Bool {
-        output.contains(ClaudeLauncher.timePrompt) && output.range(of: #"\[topo: time [0-9]+\]"#, options: .regularExpression) != nil
+        output.contains(ClaudeLauncher.timePrompt) && output.range(of: #"\[topo: time [0-9]+ [0-9a-z-]+\]"#, options: .regularExpression) != nil
     }
 
     private func toldMemory(_ output: String, mounted: Bool) -> Bool {
         output.contains(ClaudeLauncher.memoryPrompt(mounted: mounted))
-            && output.range(of: #"\[topo: memory \#(mounted ? "mounted" : "unmounted") at [0-9]+\]"#, options: .regularExpression) != nil
+            && output.range(of: #"\[topo: memory \#(mounted ? "mounted" : "unmounted") at [0-9]+ [0-9a-z-]+\]"#, options: .regularExpression) != nil
     }
 
     /// A conversation with no transcript yet is told its time and its memory, each followed by
-    /// its mark, the time's dated by the hook's clock; one asked nothing of its memory is told
-    /// nothing of it.
+    /// its mark, dated by the hook's clock and ending with the launch's id, so two launches'
+    /// tellings are never the same bytes, which Claude Code drops; one asked nothing of its memory
+    /// is told nothing of it.
     func testAFreshConversationIsToldItsTimeAndItsMemory() async throws {
         let before = now
-        let output = try await hook(over: nil, memory: true, source: "startup")
+        let launch = "0a1b2c3d-0000-4000-8000-00000000000a"
+        let output = try await hook(over: nil, memory: true, source: "startup", launch: launch)
         XCTAssertTrue(toldTime(output), output)
         XCTAssertTrue(toldMemory(output, mounted: true), output)
-        let stamp = try XCTUnwrap(output.firstMatch(of: /\[topo: time ([0-9]+)\]/).map { Int($0.1)! })
+        let stamp = try XCTUnwrap(output.firstMatch(of: #/\[topo: time ([0-9]+) /#).map { Int($0.1)! })
         XCTAssertTrue((before...now).contains(stamp), "\(stamp) not in \(before)...\(now)")
-        XCTAssertTrue(output.contains(ClaudeLauncher.memoryMark(mounted: true, at: stamp)),
-                      "the memory's mark is not dated, so a second telling of a state is the first's bytes, which Claude Code drops")
+        XCTAssertTrue(output.contains(ClaudeLauncher.timeMark(stamp, launch: launch)), output)
+        XCTAssertTrue(output.contains(ClaudeLauncher.memoryMark(mounted: true, at: stamp, launch: launch)), output)
+        let twin = try await hook(over: nil, memory: true, source: "startup", launch: "0a1b2c3d-0000-4000-8000-00000000000b", clock: stamp)
+        XCTAssertTrue(toldTime(twin) && toldMemory(twin, mounted: true), twin)
+        XCTAssertNotEqual(twin, output, "two launches in one second told the same bytes")
         let unsaid = try await hook(over: nil, memory: nil, source: "startup")
         XCTAssertTrue(toldTime(unsaid), unsaid)
         XCTAssertFalse(unsaid.contains("Obsidian vault"), unsaid)
@@ -93,8 +107,12 @@ final class GuestSessionStartHookTests: XCTestCase {
     func testTheTimeIsToldAgainOnlyPastTheGap() async throws {
         let inside = try await hook(over: [homeHook, told(at: now - 60), prompt, reply], memory: true)
         XCTAssertEqual(inside, "")
-        let edge = try await hook(over: [told(at: now - ClaudeLauncher.timeGap + 20), prompt, reply], memory: true)
-        XCTAssertEqual(edge, "")
+        let clock = now
+        let short = try await hook(over: [told(at: clock - ClaudeLauncher.timeGap + 1), prompt, reply], memory: true, clock: clock)
+        XCTAssertEqual(short, "")
+        let edge = try await hook(over: [told(at: clock - ClaudeLauncher.timeGap), prompt, reply], memory: true, clock: clock)
+        XCTAssertTrue(toldTime(edge), edge)
+        XCTAssertTrue(edge.contains(ClaudeLauncher.timeMark(clock, launch: "0a1b2c3d-0000-4000-8000-000000000002")), edge)
         let newest = try await hook(over: [told(at: now - ClaudeLauncher.timeGap - 100), prompt, reply, told(at: now - 60)], memory: true)
         XCTAssertEqual(newest, "", "an older mark was read over the newest")
         let past = try await hook(over: [homeHook, told(at: now - ClaudeLauncher.timeGap - 5), prompt, reply], memory: true)
@@ -155,11 +173,12 @@ final class GuestSessionStartHookTests: XCTestCase {
         XCTAssertFalse(fresh.contains(note), fresh)
     }
 
-    /// Only the records of SessionStart hooks' output count: a mark a person writes, one a reply
-    /// quotes, and the hook's own command, which Claude Code keeps in the record beside what it
-    /// printed, never read as told.
+    /// Only the records of SessionStart hooks' output on the main chain count, and only what the
+    /// hook printed in them: a mark a person writes, one a reply quotes, a tool call whose input
+    /// is laid out as such a record, a sub-agent's record, and the hook's own command, which
+    /// Claude Code keeps in the record beside what it printed, are never read as told.
     func testAMarkTheHookDidNotPrintIsNotTold() async throws {
-        let marks = "\(ClaudeLauncher.timeMark(now - 10)) \(ClaudeLauncher.memoryMark(mounted: true, at: now - 10))"
+        let marks = "\(ClaudeLauncher.timeMark(now - 10, launch: earlier)) \(ClaudeLauncher.memoryMark(mounted: true, at: now - 10, launch: earlier))"
         let person = prompt.replacingOccurrences(of: #""content":"one""#, with: #""content":"\#(marks)""#)
         let quoted = reply.replacingOccurrences(of: #""text":"ok""#, with: #""text":"\#(marks)""#)
         XCTAssertNotEqual(person, prompt)
@@ -169,7 +188,12 @@ final class GuestSessionStartHookTests: XCTestCase {
             .dropFirst().dropLast()
         let silent = homeHook.replacingOccurrences(of: #""command":"echo HOME-HOOK""#, with: #""command":\#(command)"#)
         XCTAssertNotEqual(silent, homeHook)
-        let output = try await hook(over: [silent, person, quoted], memory: true)
+        let call = #"{"type":"tool_use","id":"t","name":"Bash","input":{"type":"hook_success","hookEvent":"SessionStart","command":"echo '\#(marks)'"}}"#
+        let tool = reply.replacingOccurrences(of: #"{"type":"text","text":"ok"}"#, with: call)
+        XCTAssertNotEqual(tool, reply)
+        let sidechain = try told(at: now - 10).replacingOccurrences(of: #""isSidechain":false"#, with: #""isSidechain":true"#)
+        XCTAssertNotEqual(sidechain, try told(at: now - 10))
+        let output = try await hook(over: [silent, person, quoted, tool, sidechain], memory: true)
         XCTAssertTrue(toldTime(output), output)
         XCTAssertTrue(toldMemory(output, mounted: true), output)
     }
@@ -183,7 +207,7 @@ final class GuestSessionStartHookTests: XCTestCase {
         let lines = [try told(at: then), prompt, reply]
         let output = try await hook(over: lines, memory: true, note: note)
         XCTAssertEqual(output, note + "\n" + ClaudeLauncher.noteMark(note))
-        let mark = ClaudeLauncher.memoryMark(mounted: true, at: then)
+        let mark = ClaudeLauncher.memoryMark(mounted: true, at: then, launch: earlier)
         let noted = try told(at: then).replacingOccurrences(of: mark, with: "\(mark)\\n\\n\(note)\\n\(ClaudeLauncher.noteMark(note))")
         XCTAssertNotEqual(noted, try told(at: then))
         let before = try await hook(over: [noted, prompt, reply, boundary, summary, told(at: now - 30)], memory: true, note: note)

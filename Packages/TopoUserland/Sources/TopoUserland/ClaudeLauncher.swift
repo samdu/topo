@@ -108,21 +108,29 @@ public struct ClaudeLauncher: ResidentLauncher {
     public static let timeGap = 600
 
     /// The mark printed after the time prompt, with the time it was told in seconds since 1970,
-    /// and the one printed after the memory prompt, with the state it told and the time. The hook
-    /// builds both from `%s`, so neither is in its own command, which Claude Code keeps in the
-    /// transcript beside the output. Every telling is dated because Claude Code drops a hook's
-    /// output that is the same, byte for byte, as one the conversation already holds, and records
-    /// nothing of it: the memory told unmounted, mounted, then unmounted again would otherwise
-    /// leave the conversation told it is mounted.
-    static func timeMark(_ seconds: Int) -> String { "[topo: time \(seconds)]" }
-    static func memoryMark(mounted: Bool, at seconds: Int) -> String {
-        "[topo: memory \(mounted ? "mounted" : "unmounted") at \(seconds)]"
+    /// and the one printed after the memory prompt, with the state it told and the time; each
+    /// ends with the launch's own id (`launchVariable`). The hook builds both from `%s`, so
+    /// neither is in its own command, which Claude Code keeps in the transcript beside the output.
+    /// Every telling carries the launch's id because Claude Code drops a hook's output that is the
+    /// same, byte for byte, as one the conversation already holds, and records nothing of it: the
+    /// memory told unmounted, mounted, then unmounted again would otherwise leave the conversation
+    /// told it is mounted, and a time alone repeats whenever the clock is set back.
+    static func timeMark(_ seconds: Int, launch: String) -> String { "[topo: time \(seconds) \(launch)]" }
+    static func memoryMark(mounted: Bool, at seconds: Int, launch: String) -> String {
+        "[topo: memory \(mounted ? "mounted" : "unmounted") at \(seconds) \(launch)]"
     }
 
+    /// The variable a launch's id is in, a fresh UUID at every launch (`launchEnvironment`), which
+    /// the hook ends its marks with.
+    public static let launchVariable = "TOPO_LAUNCH"
+
     /// The hook's command: one pass over the conversation's transcript (the `transcript_path` of
-    /// what the hook is handed on stdin), reading only Claude Code's records of SessionStart hooks'
-    /// output and its compaction boundaries, so a mark a person or a reply quotes is not one the
-    /// hook printed. Then it prints, each with its mark after it:
+    /// what the hook is handed on stdin), reading only Claude Code's compaction boundaries and its
+    /// records of a SessionStart hook's output on the main chain — a line that is such a record
+    /// from its first byte, as 2.1.316 writes one, with marks read from its `content` alone — so a
+    /// mark a person writes, a reply quotes or a tool call carries is not one the hook printed. A
+    /// record laid out otherwise by a later Claude Code reads as none, which tells everything
+    /// rather than less. Then it prints, each with its mark after it:
     ///
     /// - `timePrompt`, unless a time mark since the last compaction is less than `timeGap` old;
     /// - `memoryPrompt` when `memory` is said, unless the last memory mark since the last
@@ -142,24 +150,25 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// it. Nothing printed is nothing added to the conversation.
     public static func hookCommand(memory: Bool?) -> String {
         func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'" }
-        var command = #"i=$(cat); f=$(printf '%s' "$i" | sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p'); "#
+        var command = #"i=$(cat); f=$(printf '%s' "$i" | sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p'); id=${TOPO_LAUNCH:-$$}; "#
             + #"c=$(printf '%s' "$i" | sed -n 's/.*"source" *: *"\([a-z]*\)".*/\1/p'); now=$(date +%s); t=; m=; n=; o=; "#
             + #"say() { if [ -n "$o" ]; then o=$(printf '%s\n\n%s' "$o" "$1"); else o=$1; fi; }; "#
             + #"if [ -n "$f" ]; then "#
             + #"set -- $({ grep -F -e '"compact_boundary"' -e '"hook_success"' "$f" 2>/dev/null; echo "grep $?"; } | awk -v note="$TOPO_LAST_PROCESS_MARK" '"#
             + #"/^grep [0-9]+$/ { r = $2; next } "#
             + #"index($0, "\"type\":\"system\",\"subtype\":\"compact_boundary\"") { t = ""; m = ""; next } "#
-            + #"index($0, "\"type\":\"hook_success\"") && index($0, "\"hookEvent\":\"SessionStart\"") { "#
-            + #"if (note != "" && index($0, note)) n = 1; "#
-            + #"s = $0; while (match(s, /\[topo: time [0-9]+\]/)) { t = substr(s, RSTART + 12, RLENGTH - 13); s = substr(s, RSTART + RLENGTH) } "#
-            + #"s = $0; while (match(s, /\[topo: memory [a-z]+ at [0-9]+\]/)) { m = substr(s, RSTART + 14, RLENGTH - 15); sub(/ .*/, "", m); s = substr(s, RSTART + RLENGTH) } } "#
+            + #"match($0, /^\{"parentUuid":("[^"]*"|null),"isSidechain":false,"attachment":\{"type":"hook_success","hookName":"SessionStart:[a-z]+","toolUseID":"[^"]*","hookEvent":"SessionStart","content":"/) { "#
+            + #"s = substr($0, RLENGTH + 1); s = substr(s, 1, index(s, "\",\"") - 1); c = s; "#
+            + #"if (note != "" && index(c, note)) n = 1; "#
+            + #"while (match(s, /\[topo: time [0-9]+ [0-9a-z-]+\]/)) { t = substr(s, RSTART + 12, RLENGTH - 13); sub(/ .*/, "", t); s = substr(s, RSTART + RLENGTH) } "#
+            + #"s = c; while (match(s, /\[topo: memory [a-z]+ at [0-9]+ [0-9a-z-]+\]/)) { m = substr(s, RSTART + 14, RLENGTH - 15); sub(/ .*/, "", m); s = substr(s, RSTART + RLENGTH) } } "#
             + #"END { if (r > 1) t = m = n = ""; print (t == "" ? "-" : t), (m == "" ? "-" : m), (n ? "told" : "-") }'); "#
             + #"t=$1; m=$2; n=$3; fi; [ "$t" = - ] && t=; case "$c" in compact|clear) t=; m=;; esac; "#
             + #"if [ -z "$t" ] || [ "$t" -gt "$now" ] || [ $((now - t)) -ge \#(timeGap) ]; then "#
-            + #"say "$(printf '%s\n[topo: time %s]' \#(quoted(timePrompt)) "$now")"; fi; "#
+            + #"say "$(printf '%s\n[topo: time %s %s]' \#(quoted(timePrompt)) "$now" "$id")"; fi; "#
         if let memory {
             command += #"s=\#(memory ? "mounted" : "unmounted"); "#
-                + #"[ "$m" = "$s" ] || say "$(printf '%s\n[topo: memory %s at %s]' \#(quoted(memoryPrompt(mounted: memory))) "$s" "$now")"; "#
+                + #"[ "$m" = "$s" ] || say "$(printf '%s\n[topo: memory %s at %s %s]' \#(quoted(memoryPrompt(mounted: memory))) "$s" "$now" "$id")"; "#
         }
         command += #"[ -z "$TOPO_LAST_PROCESS" ] || [ "$n" = told ] || [ "$c" = compact ] || [ "$c" = clear ] || say "$(printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK")"; "#
             + #"[ -z "$o" ] || printf '%s' "$o""#
@@ -207,6 +216,8 @@ public struct ClaudeLauncher: ResidentLauncher {
         // The note is the launcher's as well, so one the callback supplied is never told.
         environment[Self.noteVariable] = note
         environment[Self.noteMarkVariable] = note.map(Self.noteMark)
+        // A launch's id, which the hook's marks end with, so no two tellings are the same bytes.
+        environment[Self.launchVariable] = UUID().uuidString.lowercased()
         // A timed run asks Claude Code how each turn's time to its first request was spent; an
         // ordinary launch never does, whatever the callback supplied.
         environment[Self.timingVariable] = Perf.recording ? "1" : nil
