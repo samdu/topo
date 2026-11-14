@@ -347,7 +347,13 @@ extension DebugRun {
                      environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let text = words(environment) else { return }
         let run = environment[runVariable] ?? ""
-        say("icloud: \(await iCloud())")
+        let icloud = await iCloud()
+        say("icloud: \(icloud)")
+        // An account that does not answer is the run's answer: no turn is sent over it.
+        guard icloud == "answered" else {
+            say("done")
+            return
+        }
         say("model: \(ClaudeModel.effective(harness.model).rawValue) (setting: \(harness.model.rawValue))")
         // Nothing reaches the guest or the harness before this device is primary: the harness's
         // first pass claims the lease with an instance of its own, which a takeover still waiting

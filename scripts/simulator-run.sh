@@ -144,8 +144,8 @@ udid="$(xcrun simctl list devices available -j | /usr/bin/python3 -c '
 import json, re, sys
 n = sys.argv[1]
 def version(runtime):
-    m = re.search(r"iOS-(\d+)-(\d+)", runtime)
-    return (int(m[1]), int(m[2])) if m else (0, 0)
+    m = re.search(r"iOS-(\d+(?:-\d+)*)$", runtime)
+    return tuple(int(x) for x in m[1].split("-")) if m else ()
 found = [(version(r), d["udid"]) for r, ds in json.load(sys.stdin)["devices"].items() for d in ds if n in (d["name"], d["udid"])]
 print(max(found)[1] if found else "")' "$device")"
 [ -n "$udid" ] || { echo "no available simulator named '$device'; xcrun simctl list devices available" >&2; exit 1; }

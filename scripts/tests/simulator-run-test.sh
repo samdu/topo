@@ -44,7 +44,8 @@ cat >"$work/bin/xcrun" <<'EOF'
 run="${SIMCTL_CHILD_TOPO_DEBUG_RUN:-}"
 say() { echo "[topo-debug] $*"; }
 case "$2" in
-  list) echo '{"devices":{"iOS":[{"name":"iPhone 17","udid":"FAKE-UDID"}]}}' ;;
+  list) if [ -n "${FAKE_SIM_LIST:-}" ]; then echo "$FAKE_SIM_LIST"
+        else echo '{"devices":{"iOS":[{"name":"iPhone 17","udid":"FAKE-UDID"}]}}'; fi ;;
   launch)
     # The launcher's pid, for the test to hold that no run leaves one behind.
     echo "$$" >"$FAKE_LAUNCHER_PID"
@@ -189,8 +190,18 @@ def ask(word):
         s.sendall(word.encode() + b"\n"); got = b""
         while chunk := s.recv(256): got += chunk
         return got
+import time
 wrong = ask("not-the-nonce")
-open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + ask(nonce))' \
+right = ask(nonce)
+# Once answered the listener is gone: a second request with the nonce finds nobody.
+again = b"answered"
+for _ in range(20):
+    try:
+        again = ask(nonce)
+    except OSError:
+        again = b"refused"; break
+    time.sleep(0.1)
+open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + again)' \
     "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
   ;;
 esac
@@ -466,9 +477,9 @@ PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/sign
 status=$?
 got="$(cat "$work/signin.got" 2>/dev/null)"
 leaks="$(grep -lF "$secret" "$FAKE_XCODEBUILD_CALLS" "$work/signin.env" "$work/signin.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
-if [ "$status" = 0 ] && [ "$got" = "$(printf 'wrong:\nright:%s' "$secret")" ] && [ -z "$leaks" ] \
+if [ "$status" = 0 ] && [ "$got" = "$(printf 'wrong:\nright:%s\nagain:refused' "$secret")" ] && [ -z "$leaks" ] \
    && grep -q "TEST_RUNNER_TOPO_SIGNIN_ACCOUNT=buddy.durose@icloud.com" "$work/signin.env"; then
-  echo "ok   sign-in-password-once: the nonce's request alone got the password, which no argument, environment or output carries"
+  echo "ok   sign-in-password-once: the nonce's first request alone got the password, which no argument, environment or output carries"
 else
   echo "FAIL sign-in-password-once: exit $status, the listener gave: $(printf %s "$got" | tr "\n" "|"), the password is in: ${leaks:-nothing}"
   sed 's/^/    | /' "$work/signin.out"
@@ -482,6 +493,18 @@ if [ "$status" != 0 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
   echo "ok   sign-in-no-password: exited $status, no test started"
 else
   echo "FAIL sign-in-no-password: exit $status, xcodebuild was called with: $(cat "$FAKE_XCODEBUILD_CALLS")"
+  failures=$((failures + 1))
+fi
+
+# A name resolves to its device on the newest runtime, compared by every part of the version.
+: >"$FAKE_XCODEBUILD_CALLS"
+list='{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-2-1":[{"name":"iPhone 17","udid":"AAA-NEWER"}],"com.apple.CoreSimulator.SimRuntime.iOS-27-2":[{"name":"iPhone 17","udid":"ZZZ-OLDER"}],"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{"name":"iPhone 17","udid":"ZZZ-OLDEST"}]}}'
+PATH="$work/bin:$PATH" FAKE_SIM_LIST="$list" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/runtime.env" \
+  FAKE_SIGNIN_GOT="$work/runtime.got" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/runtime.out" 2>&1 </dev/null
+if grep -q "id=AAA-NEWER" "$FAKE_XCODEBUILD_CALLS"; then
+  echo "ok   newest-runtime: iPhone 17 is the device on iOS 27.2.1, not 27.2's"
+else
+  echo "FAIL newest-runtime: xcodebuild was called with: $(cat "$FAKE_XCODEBUILD_CALLS")"
   failures=$((failures + 1))
 fi
 

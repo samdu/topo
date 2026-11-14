@@ -36,7 +36,8 @@ final class SimulatorSignInTests: XCTestCase {
         guard accountCell.waitForExistence(timeout: 20) else { return stopped("Settings showed no Apple Account cell") }
         snap("start")
 
-        if accountCell.label.hasPrefix("Apple Account, Sign in") {
+        let firstSignIn = accountCell.label.hasPrefix("Apple Account, Sign in")
+        if firstSignIn {
             accountCell.tap()
             let manual = settings.staticTexts["Sign in Manually"]
             guard manual.waitForExistence(timeout: 20) else { return stopped("no Sign in Manually") }
@@ -50,7 +51,10 @@ final class SimulatorSignInTests: XCTestCase {
             print("[sign-in] signed in as \(accountCell.label); the sign-in is asked for again: \(prompt.label)")
             prompt.tap()
         } else {
-            print("[sign-in] already signed in as \(accountCell.label), and nothing asks for the password")
+            guard shows(account, after: accountCell) else {
+                return stopped("signed in to an account that is not \(account); sign it out by hand first")
+            }
+            print("[sign-in] already signed in as \(account), and nothing asks for the password")
             return
         }
 
@@ -61,6 +65,10 @@ final class SimulatorSignInTests: XCTestCase {
             guard field.exists else { return stopped("no password field") }
         }
         snap("password")
+        // A lapse's prompt names the account it asks for: Buddy's password goes to no other.
+        guard firstSignIn || screenWords().contains(where: { $0.localizedCaseInsensitiveContains(account) }) else {
+            return stopped("the password prompt does not name \(account); nothing was typed")
+        }
         let secret = try password()
         field.tap()
         field.typeText(secret)
@@ -111,15 +119,31 @@ final class SimulatorSignInTests: XCTestCase {
             if let passcode = words.first(where: { $0.count < 60 && $0.localizedCaseInsensitiveContains("passcode") }) {
                 return stopped("the device asks for a passcode: \(passcode)")
             }
-            let sheetUp = settings.secureTextFields.firstMatch.exists || settings.buttons["continue-button"].exists
-            if !sheetUp, accountCell.exists, !accountCell.label.hasPrefix("Apple Account, Sign in"), lapsePrompt() == nil {
+            // Anything still standing over Settings, SpringBoard's alerts included, is a screen
+            // the sign-in has not got past.
+            let sheetUp = settings.secureTextFields.firstMatch.exists || springboard.secureTextFields.firstMatch.exists
+                || settings.buttons["continue-button"].exists || springboard.alerts.firstMatch.exists
+                || settings.alerts.firstMatch.exists
+            if !sheetUp, accountCell.exists, accountCell.isHittable, !accountCell.label.hasPrefix("Apple Account, Sign in"),
+               lapsePrompt() == nil {
+                guard shows(account, after: accountCell) else {
+                    return stopped("Settings shows an account, but its page does not name \(account)")
+                }
                 snap("signed-in")
-                print("[sign-in] signed in: \(accountCell.label)")
+                print("[sign-in] signed in: \(account) (\(accountCell.label))")
                 return
             }
             if step % 5 == 0 { snap("waiting-\(step)") }
         }
         stopped("Settings did not show the account signed in within 120 s")
+    }
+
+    /// Whether the account's own page, opened from its cell, names this account.
+    private func shows(_ account: String, after accountCell: XCUIElement) -> Bool {
+        accountCell.tap()
+        let named = settings.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@", account, account)).firstMatch
+        return named.waitForExistence(timeout: 15)
     }
 
     private func asksForCode(_ words: [String]) -> String? {
