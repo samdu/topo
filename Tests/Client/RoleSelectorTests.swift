@@ -360,6 +360,8 @@ final class RoleSelectorTests: XCTestCase {
         let taken = await DebugRun.takePrimary(s, adopt: { adopted.append($0) },
                                                environment: ["TOPO_DEBUG_SEND": "hello"])
         XCTAssertTrue(taken)
+        // A takeover that did not land never opens the gate; cancelled, it fails here rather than hangs.
+        if !taken { gate.cancel() }
         let opened = await gate.value
         XCTAssertTrue(opened)
         // Asked again in the same process, it takes nothing.
@@ -415,6 +417,7 @@ final class RoleSelectorTests: XCTestCase {
         let taken = await DebugRun.takePrimary(s, adopt: { _ in adopted += 1 }, environment: ["TOPO_DEBUG_SEND": "hello"])
         XCTAssertFalse(taken)
         XCTAssertTrue(DebugRun.takeRefused)
+        if !DebugRun.takeRefused { gate.cancel() }
         // The send's wait ends with nothing sent rather than waiting on a guest that will never sign in.
         let opened = await gate.value
         XCTAssertFalse(opened)
