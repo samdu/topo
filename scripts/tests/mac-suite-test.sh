@@ -169,6 +169,30 @@ suite() {
 calls() { grep -c "^$1" "$CALLS"; }
 results() { tr '\n' ' ' < "$RESULTS_DIR/suites.txt"; }
 
+# scripts/secret-env.sh, which the script sources: which exported variables it takes for secrets,
+# by name and in any case, which it leaves (one naming where a secret is kept, an unexported one,
+# an ordinary one), and that a command started behind `scrubbed` has none of them and is the pid
+# its caller recorded.
+secret_env() {  # secret_env <code>: a clean shell with these variables exported, sourcing the helper first
+  env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" CLAUDE_SETUP_TOKEN=a GH_TOKEN=b OP_SERVICE_ACCOUNT_TOKEN=c HONCHO_API_KEY=d \
+    GOG_KEYRING_PASSWORD=e AWS_SECRET_ACCESS_KEY=f ASC_PRIVATE_KEY=g npm_config__authToken=h SOME_CREDENTIALS=i \
+    API_PRIVATE_KEYS_DIR=/keys SSH_AUTH_SOCK=/sock TOKEN_FILE=/file DEVELOPER_DIR=/dev TEST_RUNNER_TOPO_X=1 \
+    bash -c 'unexported_token=z; source "$1"; '"$1" _ "$root/scripts/secret-env.sh" </dev/null
+}
+
+is "secret-env: names: every secret-named variable, in any case, and only those" \
+  "$(secret_env 'secret_variables' | sort | tr '\n' ' ')" \
+  "ASC_PRIVATE_KEY AWS_SECRET_ACCESS_KEY CLAUDE_SETUP_TOKEN GH_TOKEN GOG_KEYRING_PASSWORD HONCHO_API_KEY OP_SERVICE_ACCOUNT_TOKEN SOME_CREDENTIALS npm_config__authToken "
+is "secret-env: scrubbed: the command started behind it has none of them and keeps the rest" \
+  "$(secret_env '"${scrubbed[@]}" env' | cut -d= -f1 | grep -v -e '^PATH$' -e '^HOME$' -e '^PWD$' -e '^SHLVL$' -e '^_$' -e '^TMPDIR$' | sort | tr '\n' ' ')" \
+  "API_PRIVATE_KEYS_DIR DEVELOPER_DIR SSH_AUTH_SOCK TEST_RUNNER_TOPO_X TOKEN_FILE "
+# The pid a caller records for a command started behind `scrubbed` is the command's: env execs it.
+is "secret-env: scrubbed: the recorded pid is the command's own" \
+  "$(secret_env '"${scrubbed[@]}" bash -c "echo \$\$" > "$TMPDIR/secret-env-test.$$" & pid=$!; wait "$pid"; [ "$(cat "$TMPDIR/secret-env-test.$$")" = "$pid" ] && echo same; rm -f "$TMPDIR/secret-env-test.$$"')" same
+is "secret-env: drop_secrets: the shell keeps none of them and the rest, and its nocasematch setting" \
+  "$(secret_env 'drop_secrets; compgen -e | grep -v -e "^PATH$" -e "^HOME$" -e "^PWD$" -e "^SHLVL$" -e "^OLDPWD$" -e "^TMPDIR$" | sort | tr "\n" " "; shopt -q nocasematch && echo on || echo off')" \
+  "API_PRIVATE_KEYS_DIR DEVELOPER_DIR SSH_AUTH_SOCK TEST_RUNNER_TOPO_X TOKEN_FILE off"
+
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
 is "green: a run with no secret in its environment notes none" "$(calls 'secret in')" 0

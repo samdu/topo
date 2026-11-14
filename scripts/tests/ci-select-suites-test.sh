@@ -206,7 +206,7 @@ done
 # added with neither falls to no rule and fails here.
 kept_at_three=(
   build-ish.sh ci-audio-feeder.swift ci-audio-lane.sh ci-audio-meter.swift ci-require-tests.sh
-  embed-voice.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh
+  embed-voice.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh secret-env.sh
 )
 scripts_in_dir=0
 while IFS= read -r relative; do
