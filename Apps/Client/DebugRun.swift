@@ -320,6 +320,8 @@ enum DebugRun {
 }
 
 #if os(iOS)
+@preconcurrency import CloudKit
+import os
 import TopoCore
 import TopoTurn
 
@@ -348,6 +350,13 @@ extension DebugRun {
                      environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let text = words(environment) else { return }
         let run = environment[runVariable] ?? ""
+        let icloud = await iCloud()
+        say("icloud: \(icloud)")
+        // An account that does not answer is the run's answer: no turn is sent over it.
+        guard icloud == "answered" else {
+            say("done")
+            return
+        }
         say("model: \(ClaudeModel.effective(harness.model).rawValue) (setting: \(harness.model.rawValue))")
         // Nothing reaches the guest or the harness before this device is primary: the harness's
         // first pass claims the lease with an instance of its own, which a takeover still waiting
@@ -402,7 +411,59 @@ extension DebugRun {
         if case .answered(_, let reply) = answered { by = await harness.guest?.provenance(of: reply.nonce) }
         say(line(for: answered, nonce: nonce, run: run, by: by))
         say("turns in the log: \(harness.turns.count)")
+        say("records: \(await AppRecords.recordsWhere())")
         say("done")
+    }
+
+    /// How long `iCloud()` waits for CloudKit to answer.
+    static let iCloudBound: Duration = .seconds(30)
+
+    /// Whether this device's iCloud account answers CloudKit, asked before the turn and apart
+    /// from the harness's own reads, so a run on a simulator with no account, or one whose
+    /// sign-in has lapsed, says so in one line rather than waiting at "Reaching iCloud…".
+    /// `answered` is the account available and the private database answering a read of the
+    /// zone (a zone not made yet is an answer); `no account`; `account <status>` for any other
+    /// status; `refused (CKError <code>)`; or `no answer within <n> s`, which is a lapsed sign-in:
+    /// its CloudKit requests wait on a password prompt in Settings nobody answers (#83).
+    static func iCloud() async -> String {
+        let container = CKContainer(identifier: TopoCloudKit.containerIdentifier)
+        let seconds = iCloudBound.components.seconds
+        // A race the bound wins without waiting for the probe: a lapsed account's request may
+        // never return, and a task group would wait for it before giving its answer.
+        return await withCheckedContinuation { continuation in
+            let pending = OSAllocatedUnfairLock<CheckedContinuation<String, Never>?>(initialState: continuation)
+            let answer: @Sendable (String) -> Void = { line in
+                pending.withLock { waiting in
+                    waiting?.resume(returning: line)
+                    waiting = nil
+                }
+            }
+            Task {
+                try? await Task.sleep(for: iCloudBound)
+                answer("no answer within \(seconds) s")
+            }
+            Task {
+                do {
+                    switch try await container.accountStatus() {
+                    case .available: break
+                    case .noAccount: return answer("no account")
+                    case .restricted: return answer("account restricted")
+                    case .temporarilyUnavailable: return answer("account temporarily unavailable")
+                    case .couldNotDetermine: return answer("account could not be determined")
+                    @unknown default: return answer("account unknown")
+                    }
+                    _ = try await container.privateCloudDatabase.recordZone(for: TopoCloudKit.zoneID)
+                    answer("answered")
+                } catch let error as CKError where error.code == .zoneNotFound {
+                    answer("answered")
+                } catch let error as CKError {
+                    answer("refused (CKError \(error.code.rawValue))")
+                } catch {
+                    let ns = error as NSError
+                    answer("refused (\(ns.domain) \(ns.code))")
+                }
+            }
+        }
     }
 
     /// Set when a sending launch found itself a viewer and the takeover was refused (`takePrimary`).

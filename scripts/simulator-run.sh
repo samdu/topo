@@ -9,9 +9,13 @@
 # written by the resident process it names), and printed `mascot: turn began for <refs>` and
 # `mascot: turn gone for <refs>` with that turn among the refs, or, for words given ahead of their
 # save, `heard:<nonce>` with the nonce of `sending under <nonce> in run <id>:` (Topo on the glass
-# following this turn, with every pose between them). A launcher that
+# following this turn, with every pose between them), and `records: iCloud` (the turn's records are
+# CloudKit's, not a journal on the phone; --fresh starts an install that decided on the phone again). A launcher that
 # exits before `done`, or non-zero at all, a turn not finished within TIMEOUT seconds (180), a
-# missing or foreign reply, and a reply no resident session wrote each exit non-zero.
+# missing or foreign reply, and a reply no resident session wrote each exit non-zero. Before the
+# turn the app asks CloudKit for the account and the Topo zone (`icloud: `, DebugRun.iCloud); a
+# device with no account, or one whose sign-in has lapsed, which leaves CloudKit's requests
+# hanging rather than failing, exits non-zero there with the --sign-in command that fixes it.
 # scripts/tests/simulator-run-test.sh holds this against a fake xcrun.
 #
 #   scripts/simulator-run.sh                        # build, boot, install, launch signed in
@@ -26,6 +30,7 @@
 #   scripts/simulator-run.sh --guest-turn "run echo topo-\$((6*7)) in bash" --expect-bash topo-42
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
+#   scripts/simulator-run.sh --sign-in              # sign the simulator into buddy's iCloud account
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
 #
 # The token comes from the environment (CLAUDE_SETUP_TOKEN, which is what the vault item
@@ -33,6 +38,15 @@
 # vault with `op-item`. It is handed to the app as SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN and
 # reaches no file, no scheme, no build setting and no artifact; the app hands it to every
 # `claude` it starts in the guest for that launch and keeps nothing of it.
+#
+# --sign-in runs the TopoSimulatorSignIn scheme's one UI test (Tests/SimulatorSignIn), which signs
+# the device into SIGNIN_ACCOUNT (buddy.durose@icloud.com) through Settings, as a first sign-in or
+# again after a lapse, and passes only when scripts/ci-require-tests.sh finds it ran and passed.
+# The password is the vault item `Buddy Apple ID`, read with `op-item` and handed to the test
+# runner once over the host's loopback, never as an argument, a file or the runner's environment.
+# It is typed once: a refusal, a two-factor code or a screen the test does not know stops the run
+# with what the screen showed. A two-factor stop leaves the code screen up, and
+# SIGNIN_CODE=<code> scripts/simulator-run.sh --sign-in types the code into it and goes on.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
 # ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
@@ -100,6 +114,7 @@ expect_rootfs=""
 expect_claude=""
 expect_bash=""
 fresh=no
+signin=no
 timeout="${TIMEOUT:-180}"
 
 while [ $# -gt 0 ]; do
@@ -118,13 +133,22 @@ while [ $# -gt 0 ]; do
     --expect-claude) expect_claude="$2"; shift 2 ;;
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
-    -h|--help) sed -n '2,77p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --sign-in) signin=yes; shift ;;
+    -h|--help) sed -n '2,92p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-udid="$(xcrun simctl list devices available -j \
-  | /usr/bin/python3 -c 'import json,sys;n=sys.argv[1];print(next((d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if n in (d["name"],d["udid"])),""))' "$device")"
+# A name matches the device of that name on the newest iOS runtime that has one, so the default
+# is the iPhone 17 on the runtime the suites pin rather than whichever the list gives first.
+udid="$(xcrun simctl list devices available -j | /usr/bin/python3 -c '
+import json, re, sys
+n = sys.argv[1]
+def version(runtime):
+    m = re.search(r"iOS-(\d+(?:-\d+)*)$", runtime)
+    return tuple(int(x) for x in m[1].split("-")) if m else ()
+found = [(version(r), d["udid"]) for r, ds in json.load(sys.stdin)["devices"].items() for d in ds if n in (d["name"], d["udid"])]
+print(max(found)[1] if found else "")' "$device")"
 [ -n "$udid" ] || { echo "no available simulator named '$device'; xcrun simctl list devices available" >&2; exit 1; }
 
 if [ "$erase" = yes ]; then
@@ -222,6 +246,72 @@ tracked() {
 if [ "$build" = yes ]; then
   scripts/build-ish.sh
   scripts/fetch-phonon.sh
+fi
+
+if [ "$signin" = yes ]; then
+  # The password is read into a variable and leaves it once, on a pipe to a listener on the
+  # host's loopback that answers one request carrying this run's nonce and exits. It is never an
+  # argument, a file or a variable of the test runner's environment, which the result bundle's
+  # session log records whole; the runner types it into a secure field, which XCTest logs as
+  # <redacted>. Tests/SimulatorSignIn says what the test answers and what it refuses to.
+  account="${SIGNIN_ACCOUNT:-buddy.durose@icloud.com}"
+  password="$(op-item get 'Buddy Apple ID' password)" || password=""
+  [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
+  nonce="$(uuidgen)"
+  portfile="$derived/sign-in.$$.port"
+  rm -f "$portfile"
+  /usr/bin/python3 -c '
+import socket, sys, time
+nonce, portfile, secret = sys.argv[1].encode(), sys.argv[2], sys.stdin.buffer.read()
+server = socket.socket()
+server.bind(("127.0.0.1", 0))
+server.listen(4)
+open(portfile, "w").write(str(server.getsockname()[1]))
+deadline = time.monotonic() + 1800
+while time.monotonic() < deadline:
+    server.settimeout(max(1, deadline - time.monotonic()))
+    try:
+        peer, _ = server.accept()
+    except socket.timeout:
+        break
+    with peer:
+        peer.settimeout(10)
+        try:
+            asked = peer.makefile("rb").readline().strip()
+        except OSError:
+            continue
+        if asked == nonce:
+            peer.sendall(secret)
+            sys.exit(0)
+sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "$password") &
+  listener=$!
+  echo "$listener" >>"$pids"
+  started_pids="$started_pids $listener"
+  unset password
+  for _ in $(seq 50); do [ -s "$portfile" ] && break; sleep 0.2; done
+  port="$(cat "$portfile" 2>/dev/null)"
+  rm -f "$portfile"
+  [ -n "$port" ] || { echo "the password's listener did not start" >&2; exit 1; }
+  results="$derived/TopoSimulatorSignIn.xcresult"
+  rm -rf "$results"
+  xcrun simctl boot "$udid" 2>/dev/null || true
+  xcrun simctl bootstatus "$udid" -b >/dev/null
+  echo "==> signing $udid into $account through Settings (TopoSimulatorSignInTests)"
+  status=0
+  TEST_RUNNER_TOPO_SIGNIN_ACCOUNT="$account" TEST_RUNNER_TOPO_SIGNIN_PORT="$port" \
+  TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" TEST_RUNNER_TOPO_SIGNIN_CODE="${SIGNIN_CODE:-}" \
+    tracked xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
+      -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
+      -resultBundlePath "$results" || status=$?
+  scripts/ci-require-tests.sh xcresult "$results" TopoSimulatorSignInTests || status=1
+  if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
+    echo "==> $udid was signed in already and Settings asks for no password; if --send still reports a lapse, the test does not know the screen the lapse shows"
+  elif [ "$status" = 0 ]; then
+    echo "==> $udid is signed in; DEVICE=$udid scripts/simulator-run.sh --send hello proves CloudKit answers"
+  else
+    echo "==> the sign-in stopped; the '[sign-in] stopped:' line above and $results say where. Type no password by hand before reading why: a refused one tried again locks the account" >&2
+  fi
+  exit "$status"
 fi
 
 if [ "$talk" = yes ]; then
@@ -332,8 +422,11 @@ fail() {
 # Waits for the app to print `marker`: one prefixed line per step and a closing line when the
 # work has settled, rather than for the app to exit, which it never does. A launcher that exits
 # first is a launch or an app that died, and fails the run there rather than at the timeout.
+# TIMEOUT is one budget for every wait on the app's lines after the launch; the build, the boot
+# and the install before it are not under it.
+waited=0
 wait_for() {
-  local marker="$1" what="$2" waited=0
+  local marker="$1" what="$2"
   until grep -q "\[topo-debug\] $marker" "$log" 2>/dev/null; do
     if ! kill -0 "$launcher" 2>/dev/null; then
       wait "$launcher" && status=0 || status=$?; launcher=""
@@ -346,7 +439,20 @@ wait_for() {
   done
 }
 
-[ -z "$send" ] || wait_for done "the turn"
+if [ -n "$send" ]; then
+  # The app asks CloudKit before the turn (DebugRun.iCloud) and says what it found in one line;
+  # anything but an answer is a device whose iCloud sign-in is missing or has lapsed, which the
+  # turn would only wait on at "Reaching iCloud…".
+  wait_for "icloud: " "the iCloud check"
+  icloud="$(grep -o '\[topo-debug\] icloud: .*' "$log" | head -1 | tr -d '\r')"
+  icloud="${icloud#\[topo-debug\] icloud: }"
+  case "$icloud" in
+    answered) ;;
+    "no account") fail "the simulator $udid has no iCloud account; sign it in with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
+    *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
+  esac
+  wait_for done "the turn"
+fi
 [ -z "$userland" ] || wait_for "userland done" "the guest command"
 [ -z "$guestturn" ] || wait_for "guest turn done" "the guest's turns"
 if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
@@ -381,7 +487,11 @@ if [ -n "$send" ]; then
   grep -Eq "\[topo-debug\] mascot: turn began for ([^ ,]+\+)?$pattern(\+[^ ,]+)?, process " "$log" \
     && grep -Eq "\[topo-debug\] mascot: turn gone for ([^ ,]+\+)?$pattern(\+[^ ,]+)?, " "$log" \
     || fail "Topo on the glass did not follow the guest's turn for $turn"
-  echo "==> the message landed and was answered by the guest"
+  # A phone that had no iCloud account when Topo was first opened keeps its records on the phone
+  # for good (docs/cloudkit.md), so a turn there never reached CloudKit, account or not.
+  grep -Fq '[topo-debug] records: iCloud' "$log" \
+    || fail "the turn's records are not iCloud's ($(grep -o '\[topo-debug\] records: .*' "$log" | head -1)): this install decided on the phone; --fresh starts it again"
+  echo "==> the message landed in iCloud and was answered by the guest"
 fi
 
 if [ -n "$userland" ]; then

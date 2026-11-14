@@ -57,6 +57,7 @@
 		11DB03A3B196E498EE9229BF /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		1265B8E7A0882A6A70185A7C /* licence-kokoroane-v3-notice.txt in Resources */ = {isa = PBXBuildFile; fileRef = 982C233854D42AF9103300EB /* licence-kokoroane-v3-notice.txt */; };
 		126DE91ED57B15E561D63B1F /* MapKitMapsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA6104E3CC23FD8C69FEFDF7 /* MapKitMapsTests.swift */; };
+		144C15F97CE2AD264E3F349D /* SimulatorSignInTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 386F9E351D4A93FFBC3E2490 /* SimulatorSignInTests.swift */; };
 		152BE6C3FA2F39AB2311F718 /* accessoryRectangular-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 52E1D82FD07A2B981E7CF050 /* accessoryRectangular-dark.png */; };
 		15379415C6F4FC595ACDA7E2 /* womble.js in Resources */ = {isa = PBXBuildFile; fileRef = 5FA3798B7F6069020E5A4DA0 /* womble.js */; };
 		162741ABD9C3D296289EF1A0 /* SetupMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C253887A3CC531320A7911 /* SetupMeter.swift */; };
@@ -928,6 +929,7 @@
 		376BCEC5903C9EB286BCE9E1 /* licence-fastcluster.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "licence-fastcluster.txt"; sourceTree = "<group>"; };
 		37C72071D6B88AB32EF3BBFD /* TuningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TuningTests.swift; sourceTree = "<group>"; };
 		37FFE301CDB57C54D6E76A8E /* WidgetToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetToolTests.swift; sourceTree = "<group>"; };
+		386F9E351D4A93FFBC3E2490 /* SimulatorSignInTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorSignInTests.swift; sourceTree = "<group>"; };
 		38D69076CBD5D984124A297F /* SecretTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretTool.swift; sourceTree = "<group>"; };
 		3900902B180055DC8BBE866B /* SpokenReplyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenReplyTests.swift; sourceTree = "<group>"; };
 		3B0DC42A89357598D9F05F49 /* FirstRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunTests.swift; sourceTree = "<group>"; };
@@ -1257,6 +1259,7 @@
 		EFC4DEFA1DE3ED504C31746F /* LookStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookStage.swift; sourceTree = "<group>"; };
 		EFCFFA49A2916D4AB103E565 /* earcon_listening.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = earcon_listening.mp3; sourceTree = "<group>"; };
 		F0282172ECF3161683779EE2 /* GuestZoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestZoneTests.swift; sourceTree = "<group>"; };
+		F03396E06324B9215F4E6899 /* TopoSimulatorSignInTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoSimulatorSignInTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F04D099F38FADE29E35DE3E1 /* OnePasswordInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePasswordInstallerTests.swift; sourceTree = "<group>"; };
 		F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsTests.swift; sourceTree = "<group>"; };
 		F0F95364AE3F08AD67EF9E7C /* tracker-expanded-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "tracker-expanded-light.png"; sourceTree = "<group>"; };
@@ -1713,6 +1716,14 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
+		6F673BEE9A63D556C6B1EBB9 /* SimulatorSignIn */ = {
+			isa = PBXGroup;
+			children = (
+				386F9E351D4A93FFBC3E2490 /* SimulatorSignInTests.swift */,
+			);
+			path = SimulatorSignIn;
+			sourceTree = "<group>";
+		};
 		73516B840F018A2E1C1376ED /* Tests */ = {
 			isa = PBXGroup;
 			children = (
@@ -1720,6 +1731,7 @@
 				9A03715ED3BB2F0EAFD6DA13 /* ClientTalk */,
 				D2C54D123FEACACF63B3F118 /* ClientUI */,
 				15707FBBAEF305B1F8F83541 /* Fixtures */,
+				6F673BEE9A63D556C6B1EBB9 /* SimulatorSignIn */,
 				D14A7754F516A95C7004889A /* Watch */,
 			);
 			path = Tests;
@@ -2047,6 +2059,7 @@
 				594F7C6A041FCD7F623CEA79 /* TopoBroadcast.appex */,
 				BE9C965D7E36544A4F9526C9 /* TopoHub.app */,
 				763F7701774B073308C078FE /* TopoShare.appex */,
+				F03396E06324B9215F4E6899 /* TopoSimulatorSignInTests.xctest */,
 				017C0E3316F8178AF19904AE /* TopoTalkTests.xctest */,
 				8D1F9ED3E5644D6B2C499B31 /* TopoTests.xctest */,
 				FF1945CD92E7D90DE491BDDB /* TopoTV.app */,
@@ -2256,6 +2269,23 @@
 			productReference = 99296C045628A368812315E3 /* Topo.app */;
 			productType = "com.apple.product-type.application";
 		};
+		8576909A6B7002FAD2775362 /* TopoSimulatorSignInTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 15100500A107FB71F6C4CE1B /* Build configuration list for PBXNativeTarget "TopoSimulatorSignInTests" */;
+			buildPhases = (
+				3F59F0668507658218A97AB1 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TopoSimulatorSignInTests;
+			packageProductDependencies = (
+			);
+			productName = TopoSimulatorSignInTests;
+			productReference = F03396E06324B9215F4E6899 /* TopoSimulatorSignInTests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		AB11F4F52A86D37D276CD32B /* TopoWidgets */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 73463C8C8AB69A387FB92D71 /* Build configuration list for PBXNativeTarget "TopoWidgets" */;
@@ -2451,6 +2481,10 @@
 						DevelopmentTeam = 4A5NSJ6Y3G;
 						ProvisioningStyle = Automatic;
 					};
+					8576909A6B7002FAD2775362 = {
+						DevelopmentTeam = 4A5NSJ6Y3G;
+						ProvisioningStyle = Automatic;
+					};
 					AB11F4F52A86D37D276CD32B = {
 						DevelopmentTeam = 4A5NSJ6Y3G;
 						ProvisioningStyle = Automatic;
@@ -2526,6 +2560,7 @@
 				F278C894AE9873500FB0A57E /* TopoUserlandBrakeTests */,
 				D7D0623DE59431205F481D66 /* TopoUITests */,
 				BFD139146CFC69EF0FEA7EC3 /* TopoTalkTests */,
+				8576909A6B7002FAD2775362 /* TopoSimulatorSignInTests */,
 				2AEA4DF805AD8884B78A1164 /* TopoHub */,
 			);
 		};
@@ -2755,6 +2790,14 @@
 				6F02825CA98AAE1641E9E6DC /* ScreenSampler.swift in Sources */,
 				EF23C14B8F6255EC51290452 /* ScreenStore.swift in Sources */,
 				9D909CDBAEEC40672804C4FE /* ScreenWatch.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3F59F0668507658218A97AB1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				144C15F97CE2AD264E3F349D /* SimulatorSignInTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3612,6 +3655,21 @@
 			};
 			name = Debug;
 		};
+		4523284535A82842C95F5FCB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = zone.hexagon.topo.simulatorsignin;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		4F44308E67DFF4CA09CABB95 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3798,6 +3856,21 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		8C7DADFBDD67BEA6787E760A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = zone.hexagon.topo.simulatorsignin;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
 		};
 		8D07F529D648FC3446C01EC4 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -4151,6 +4224,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		15100500A107FB71F6C4CE1B /* Build configuration list for PBXNativeTarget "TopoSimulatorSignInTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8C7DADFBDD67BEA6787E760A /* Debug */,
+				4523284535A82842C95F5FCB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		1820A1BE7E1016390279EA8C /* Build configuration list for PBXNativeTarget "TopoShare" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
