@@ -164,7 +164,7 @@ final class SimulatorSignInTests: XCTestCase {
         print("[sign-in] signing \(account) out, to sign it in again")
         settings.cells["AAUIDeleteButtonSpecifierID"].firstMatch.tap()
         // The page's own Sign Out stays under whatever it opens, so a confirmation is any other
-        // button of that name, Settings' or SpringBoard's.
+        // button of that name, Settings' or SpringBoard's. Nothing that erases is ever tapped.
         let other = NSPredicate(format: "label == 'Sign Out' AND identifier != 'AAUIDeleteButtonSpecifierID'")
         let deadline = Date().addingTimeInterval(120)
         var step = 0
@@ -176,7 +176,9 @@ final class SimulatorSignInTests: XCTestCase {
             if settings.secureTextFields.firstMatch.exists || springboard.secureTextFields.firstMatch.exists {
                 return "signing out asks for a password; nothing was typed"
             }
-            if let answer = first(springboard.alerts.buttons.matching(other).firstMatch, settings.alerts.buttons.matching(other).firstMatch,
+            // iOS asks whether to erase the device after signing out; the answer is never to.
+            if let answer = first(settings.buttons["Sign Out But Don’t Erase"], settings.buttons["Sign Out But Don't Erase"],
+                                  springboard.alerts.buttons.matching(other).firstMatch, settings.alerts.buttons.matching(other).firstMatch,
                                   settings.sheets.buttons.matching(other).firstMatch, settings.buttons.matching(other).firstMatch) {
                 print("[sign-in] sign-out step \(step): tapped \(answer.label)")
                 answer.tap()
