@@ -410,12 +410,18 @@ extension DebugRun {
 
     /// Waits until the role is primary, whether it was or `takePrimary` took it: true then, and
     /// false once the takeover was refused or the wait is cancelled. A device still deciding, or a
-    /// viewer whose takeover is under way, is waited on.
+    /// viewer whose takeover is under way, is waited on; a device still deciding says so once, so
+    /// a run that times out there names where it stood.
     @MainActor
     static func primary(_ role: RoleSelector, poll: Duration = .milliseconds(200)) async -> Bool {
+        var said = false
         while true {
             if role.role == .primary { return true }
             if takeRefused || Task.isCancelled { return false }
+            if role.role == nil, !said {
+                said = true
+                say("role: waiting for the role to be decided\(role.trouble.map { ": \($0)" } ?? "")")
+            }
             try? await Task.sleep(for: poll)
         }
     }
