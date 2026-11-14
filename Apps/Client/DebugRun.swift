@@ -13,11 +13,10 @@ import UIKit
 ///
 /// The token arrives in the launch environment or served once over the host's loopback — not a
 /// scheme, not a file the app reads, not a build setting — and the app keeps it in memory alone.
-/// `scripts/simulator-run.sh` reads it from the vault and hands it to `simctl` as
-/// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`, which the simulator's own log records with the rest of
-/// the launch's environment. A UI test's launch environment is recorded in its result bundle too,
-/// so `--talk` serves the token once on the loopback and the test hands the app only the port
-/// and the nonce (`servedToken`).
+/// `scripts/simulator-run.sh` reads it from the vault and serves it once on the loopback, handing
+/// the app only the port and the nonce (`servedToken`), because the simulator's own log records
+/// a launch's environment, and a UI test's result bundle records the environment its test
+/// launches the app with.
 enum DebugRun {
     static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
     static let tokenPortVariable = "TOPO_DEBUG_TOKEN_PORT"
