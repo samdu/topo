@@ -17,19 +17,46 @@ public enum CloudEnvironment: String, Sendable, Equatable {
     case development, production
 
     /// This build's environment, or nil when the profile it carries cannot be read: a reader
-    /// that cannot say keeps nothing under any environment rather than guess.
+    /// that cannot say keeps nothing under any environment rather than guess. Read once a launch,
+    /// and said in the `cloud` category with what it was read from (`Reading.line`).
     public static let current: CloudEnvironment? = {
-        #if targetEnvironment(simulator)
-        // The simulator talks to Development alone.
-        return .development
-        #elseif os(macOS)
-        return CloudEnvironment(entitlements: signedEntitlements())
-        #else
-        let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
-        return CloudEnvironment(profile: url.flatMap { try? Data(contentsOf: $0) } ?? Data(),
-                                present: url != nil)
-        #endif
+        let reading = Reading.ofThisBuild()
+        TopoLog(.cloud).notice(reading.line)
+        return reading.environment
     }()
+
+    /// What the environment was read from, and what it came to.
+    struct Reading: Equatable {
+        enum Source: String { case profileFound = "profile found", profileMissing = "profile missing",
+                              profileUnparseable = "profile unparseable", simulator, signed = "signed entitlements" }
+        var environment: CloudEnvironment?
+        var source: Source
+
+        /// The line a launch writes: the environment's name, or `none`, and its source.
+        var line: String { "environment: \(environment?.rawValue ?? "none") (\(source.rawValue))" }
+
+        /// Read from a build that carries `profile`, nil when it carries none.
+        static func of(profile: Data?) -> Reading {
+            guard let profile else { return Reading(environment: .production, source: .profileMissing) }
+            guard let environment = CloudEnvironment(profile: profile, present: true) else {
+                return Reading(environment: nil, source: .profileUnparseable)
+            }
+            return Reading(environment: environment, source: .profileFound)
+        }
+
+        static func ofThisBuild() -> Reading {
+            #if targetEnvironment(simulator)
+            // The simulator talks to Development alone.
+            return Reading(environment: .development, source: .simulator)
+            #elseif os(macOS)
+            return Reading(environment: CloudEnvironment(entitlements: signedEntitlements()), source: .signed)
+            #else
+            // A profile that is there and cannot be read is read as empty, so unparseable.
+            let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
+            return of(profile: url.map { (try? Data(contentsOf: $0)) ?? Data() })
+            #endif
+        }
+    }
 
     /// The environment entitlements say: the environment entitlement when it is one value, and
     /// otherwise Development exactly when the build may be debugged.

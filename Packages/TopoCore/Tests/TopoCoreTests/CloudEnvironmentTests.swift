@@ -93,6 +93,14 @@ import Testing
         #expect(CloudEnvironment(profile: Data(), present: true) == nil)
     }
 
+    /// The launch's line says the environment and what it was read from, and nothing else.
+    @Test func theLineSaysTheEnvironmentAndItsSource() throws {
+        let development = try profile(["get-task-allow": true])
+        #expect(CloudEnvironment.Reading.of(profile: development).line == "environment: development (profile found)")
+        #expect(CloudEnvironment.Reading.of(profile: nil).line == "environment: production (profile missing)")
+        #expect(CloudEnvironment.Reading.of(profile: Data("not a profile".utf8)).line == "environment: none (profile unparseable)")
+    }
+
     @Test func aSignedEnvironmentIsTakenAsItIs() {
         #expect(CloudEnvironment(entitlements: ["com.apple.developer.icloud-container-environment": "Production",
                                                 "get-task-allow": true]) == .production)
