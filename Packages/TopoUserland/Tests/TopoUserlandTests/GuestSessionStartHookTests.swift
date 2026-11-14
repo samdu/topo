@@ -37,7 +37,8 @@ final class GuestSessionStartHookTests: XCTestCase {
         let line = told.replacingOccurrences(of: #"\[topo: time [0-9]+\]"#, with: ClaudeLauncher.timeMark(seconds),
                                              options: .regularExpression)
         XCTAssertNotEqual(line, told)
-        return line.replacingOccurrences(of: "[topo: memory mounted]", with: "[topo: memory \(memory)]")
+        return line.replacingOccurrences(of: "[topo: memory mounted]",
+                                         with: ClaudeLauncher.memoryMark(mounted: memory == "mounted", at: seconds))
     }
 
     /// What the hook prints over `lines` (nil: no transcript at all), handed `source` as Claude
@@ -64,7 +65,8 @@ final class GuestSessionStartHookTests: XCTestCase {
     }
 
     private func toldMemory(_ output: String, mounted: Bool) -> Bool {
-        output.contains(ClaudeLauncher.memoryPrompt(mounted: mounted)) && output.contains(ClaudeLauncher.memoryMark(mounted: mounted))
+        output.contains(ClaudeLauncher.memoryPrompt(mounted: mounted))
+            && output.range(of: #"\[topo: memory \#(mounted ? "mounted" : "unmounted") at [0-9]+\]"#, options: .regularExpression) != nil
     }
 
     /// A conversation with no transcript yet is told its time and its memory, each followed by
@@ -77,6 +79,8 @@ final class GuestSessionStartHookTests: XCTestCase {
         XCTAssertTrue(toldMemory(output, mounted: true), output)
         let stamp = try XCTUnwrap(output.firstMatch(of: /\[topo: time ([0-9]+)\]/).map { Int($0.1)! })
         XCTAssertTrue((before...now).contains(stamp), "\(stamp) not in \(before)...\(now)")
+        XCTAssertTrue(output.contains(ClaudeLauncher.memoryMark(mounted: true, at: stamp)),
+                      "the memory's mark is not dated, so a second telling of a state is the first's bytes, which Claude Code drops")
         let unsaid = try await hook(over: nil, memory: nil, source: "startup")
         XCTAssertTrue(toldTime(unsaid), unsaid)
         XCTAssertFalse(unsaid.contains("Obsidian vault"), unsaid)
@@ -137,11 +141,25 @@ final class GuestSessionStartHookTests: XCTestCase {
         XCTAssertFalse(first.contains(note), "a /compact as the first input told the cut a second time")
     }
 
+    /// A `/clear` typed in the chat begins a new session in the same process, whose hook is
+    /// handed the new transcript: it is told the time and the memory, and not the cut, which the
+    /// process told at its start.
+    func testAClearIsToldItsTimeAndMemoryAndNotTheCut() async throws {
+        let note = "Your last process was cut short."
+        let cleared = try await hook(over: [told(at: now - 60), prompt, reply], memory: false, source: "clear", note: note)
+        XCTAssertTrue(toldTime(cleared), cleared)
+        XCTAssertTrue(toldMemory(cleared, mounted: false), cleared)
+        XCTAssertFalse(cleared.contains(note), cleared)
+        let fresh = try await hook(over: nil, memory: true, source: "clear", note: note)
+        XCTAssertTrue(toldTime(fresh) && toldMemory(fresh, mounted: true), fresh)
+        XCTAssertFalse(fresh.contains(note), fresh)
+    }
+
     /// Only the records of SessionStart hooks' output count: a mark a person writes, one a reply
     /// quotes, and the hook's own command, which Claude Code keeps in the record beside what it
     /// printed, never read as told.
     func testAMarkTheHookDidNotPrintIsNotTold() async throws {
-        let marks = "\(ClaudeLauncher.timeMark(now - 10)) \(ClaudeLauncher.memoryMark(mounted: true))"
+        let marks = "\(ClaudeLauncher.timeMark(now - 10)) \(ClaudeLauncher.memoryMark(mounted: true, at: now - 10))"
         let person = prompt.replacingOccurrences(of: #""content":"one""#, with: #""content":"\#(marks)""#)
         let quoted = reply.replacingOccurrences(of: #""text":"ok""#, with: #""text":"\#(marks)""#)
         XCTAssertNotEqual(person, prompt)
@@ -161,11 +179,13 @@ final class GuestSessionStartHookTests: XCTestCase {
     /// be read, or no path at all, tells everything.
     func testANoteIsToldOnceAndAnUnreadableTranscriptTellsAll() async throws {
         let note = "Your last process was cut short."
-        let lines = [try told(at: now - 60), prompt, reply]
+        let then = now - 60
+        let lines = [try told(at: then), prompt, reply]
         let output = try await hook(over: lines, memory: true, note: note)
         XCTAssertEqual(output, note + "\n" + ClaudeLauncher.noteMark(note))
-        let noted = try told(at: now - 60).replacingOccurrences(of: "[topo: memory mounted]",
-                                                                with: "[topo: memory mounted]\\n\\n\(note)\\n\(ClaudeLauncher.noteMark(note))")
+        let mark = ClaudeLauncher.memoryMark(mounted: true, at: then)
+        let noted = try told(at: then).replacingOccurrences(of: mark, with: "\(mark)\\n\\n\(note)\\n\(ClaudeLauncher.noteMark(note))")
+        XCTAssertNotEqual(noted, try told(at: then))
         let before = try await hook(over: [noted, prompt, reply, boundary, summary, told(at: now - 30)], memory: true, note: note)
         XCTAssertEqual(before, "")
 

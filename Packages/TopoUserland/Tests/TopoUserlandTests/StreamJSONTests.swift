@@ -278,7 +278,7 @@ final class StreamJSONTests: XCTestCase {
 
     /// What a conversation is told of its time, its memory and a cut is told by a SessionStart
     /// hook given on every launch, not appended to the system prompt, which a resumed conversation
-    /// never sends again: on `startup`, `resume` and `compact`, its command saying the memory the
+    /// never sends again: on `startup`, `resume`, `compact` and `clear`, its command saying the memory the
     /// launch was asked to say. The prompts are in the command, an argument, so nothing the
     /// resident starts inherits them; the note and its mark are the launcher's in the environment.
     /// What the command prints is `GuestSessionStartHookTests`'.
@@ -293,7 +293,7 @@ final class StreamJSONTests: XCTestCase {
             let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ClaudeLauncher.settings(memory: memory).utf8)) as? [String: Any])
             let hooks = try XCTUnwrap((json["hooks"] as? [String: Any])?["SessionStart"] as? [[String: Any]])
             XCTAssertEqual(hooks.count, 1)
-            XCTAssertEqual(hooks[0]["matcher"] as? String, "startup|resume|compact")
+            XCTAssertEqual(hooks[0]["matcher"] as? String, "startup|resume|compact|clear")
             return try XCTUnwrap((hooks[0]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
         }
         XCTAssertEqual(try command(true), ClaudeLauncher.hookCommand(memory: true))

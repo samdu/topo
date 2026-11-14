@@ -108,11 +108,16 @@ public struct ClaudeLauncher: ResidentLauncher {
     public static let timeGap = 600
 
     /// The mark printed after the time prompt, with the time it was told in seconds since 1970,
-    /// and the one printed after the memory prompt, with the state it told. The hook builds both
-    /// from `%s`, so neither is in its own command, which Claude Code keeps in the transcript
-    /// beside the output.
+    /// and the one printed after the memory prompt, with the state it told and the time. The hook
+    /// builds both from `%s`, so neither is in its own command, which Claude Code keeps in the
+    /// transcript beside the output. Every telling is dated because Claude Code drops a hook's
+    /// output that is the same, byte for byte, as one the conversation already holds, and records
+    /// nothing of it: the memory told unmounted, mounted, then unmounted again would otherwise
+    /// leave the conversation told it is mounted.
     static func timeMark(_ seconds: Int) -> String { "[topo: time \(seconds)]" }
-    static func memoryMark(mounted: Bool) -> String { "[topo: memory \(mounted ? "mounted" : "unmounted")]" }
+    static func memoryMark(mounted: Bool, at seconds: Int) -> String {
+        "[topo: memory \(mounted ? "mounted" : "unmounted") at \(seconds)]"
+    }
 
     /// The hook's command: one pass over the conversation's transcript (the `transcript_path` of
     /// what the hook is handed on stdin), reading only Claude Code's records of SessionStart hooks'
@@ -124,13 +129,15 @@ public struct ClaudeLauncher: ResidentLauncher {
     ///   compaction is that state;
     /// - the note in `TOPO_LAST_PROCESS`, unless its mark is in any SessionStart output of the
     ///   transcript, since a process ended after its hook ran and before it began leaves the note
-    ///   for the next, and never on a compaction, whose process told it at its start (that
-    ///   record is written only with the first input, so a `/compact` as the first one finds no
-    ///   mark). A compaction does not unsay it: a cut is told once, not once per context.
+    ///   for the next, and never on a compaction or a clear, whose process told it at its start
+    ///   (that record is written only with the first input, so a `/compact` as the first one
+    ///   finds no mark, and a clear's transcript is a new one). Neither unsays it: a cut is told
+    ///   once, not once per context.
     ///
     /// A compaction ends what the conversation was told: what came before the boundary is not
     /// sent again. The hook a compaction runs (`source` `compact` on its stdin) is run before
-    /// Claude Code has written that boundary, so it takes nothing as told but the note. A transcript that cannot be read, or a path the hook was not handed, tells all
+    /// Claude Code has written that boundary, and a clear's (`clear`) is handed the new session's
+    /// transcript, so both take nothing as told and tell the time and the memory. A transcript that cannot be read, or a path the hook was not handed, tells all
     /// of it, because a line told twice costs a line and one never told is a conversation without
     /// it. Nothing printed is nothing added to the conversation.
     public static func hookCommand(memory: Bool?) -> String {
@@ -145,26 +152,26 @@ public struct ClaudeLauncher: ResidentLauncher {
             + #"index($0, "\"type\":\"hook_success\"") && index($0, "\"hookEvent\":\"SessionStart\"") { "#
             + #"if (note != "" && index($0, note)) n = 1; "#
             + #"s = $0; while (match(s, /\[topo: time [0-9]+\]/)) { t = substr(s, RSTART + 12, RLENGTH - 13); s = substr(s, RSTART + RLENGTH) } "#
-            + #"s = $0; while (match(s, /\[topo: memory [a-z]+\]/)) { m = substr(s, RSTART + 14, RLENGTH - 15); s = substr(s, RSTART + RLENGTH) } } "#
+            + #"s = $0; while (match(s, /\[topo: memory [a-z]+ at [0-9]+\]/)) { m = substr(s, RSTART + 14, RLENGTH - 15); sub(/ .*/, "", m); s = substr(s, RSTART + RLENGTH) } } "#
             + #"END { if (r > 1) t = m = n = ""; print (t == "" ? "-" : t), (m == "" ? "-" : m), (n ? "told" : "-") }'); "#
-            + #"t=$1; m=$2; n=$3; fi; [ "$t" = - ] && t=; if [ "$c" = compact ]; then t=; m=; fi; "#
+            + #"t=$1; m=$2; n=$3; fi; [ "$t" = - ] && t=; case "$c" in compact|clear) t=; m=;; esac; "#
             + #"if [ -z "$t" ] || [ "$t" -gt "$now" ] || [ $((now - t)) -ge \#(timeGap) ]; then "#
             + #"say "$(printf '%s\n[topo: time %s]' \#(quoted(timePrompt)) "$now")"; fi; "#
         if let memory {
             command += #"s=\#(memory ? "mounted" : "unmounted"); "#
-                + #"[ "$m" = "$s" ] || say "$(printf '%s\n[topo: memory %s]' \#(quoted(memoryPrompt(mounted: memory))) "$s")"; "#
+                + #"[ "$m" = "$s" ] || say "$(printf '%s\n[topo: memory %s at %s]' \#(quoted(memoryPrompt(mounted: memory))) "$s" "$now")"; "#
         }
-        command += #"[ -z "$TOPO_LAST_PROCESS" ] || [ "$n" = told ] || [ "$c" = compact ] || say "$(printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK")"; "#
+        command += #"[ -z "$TOPO_LAST_PROCESS" ] || [ "$n" = told ] || [ "$c" = compact ] || [ "$c" = clear ] || say "$(printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK")"; "#
             + #"[ -z "$o" ] || printf '%s' "$o""#
         return command
     }
 
     /// The settings every launch is given on top of the home's own, whose hooks still run: one
     /// SessionStart hook (`hookCommand`), whose output Claude Code adds to the conversation. On
-    /// `startup` and `resume`, and on `compact`, since a compaction inside the process takes what
-    /// the conversation was told away with what came before the boundary; not on `clear`.
+    /// `startup` and `resume`, and on `compact` and `clear`, since a compaction or a `/clear`
+    /// typed in the chat takes what the conversation was told away inside the process.
     public static func settings(memory: Bool?) -> String {
-        let hook: [String: Any] = ["matcher": "startup|resume|compact", "hooks": [["type": "command", "command": hookCommand(memory: memory)]]]
+        let hook: [String: Any] = ["matcher": "startup|resume|compact|clear", "hooks": [["type": "command", "command": hookCommand(memory: memory)]]]
         let settings = ["hooks": ["SessionStart": [hook]]]
         let data = try! JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes])
         return String(decoding: data, as: UTF8.self)
