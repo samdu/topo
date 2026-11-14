@@ -131,11 +131,16 @@ final class WatchSurfaceCache {
         return true
     }
 
-    /// The token kept for this build's environment, or nil: none kept, one another environment
-    /// issued, or no environment to ask under.
+    /// The token kept for this build's environment, or nil. One kept for another environment, or
+    /// kept while this build has none to name, is removed before the group is touched: this read
+    /// is from the start, and a token from before it would otherwise outlast it should this read
+    /// keep none, and be offered back over a group it no longer describes.
     private func keptToken() -> Data? {
-        guard let environment, let kept = defaults.dictionary(forKey: Self.feedKey),
-              kept["environment"] as? String == environment.rawValue else { return nil }
+        guard let kept = defaults.dictionary(forKey: Self.feedKey) else { return nil }
+        guard let environment, kept["environment"] as? String == environment.rawValue else {
+            defaults.removeObject(forKey: Self.feedKey)
+            return nil
+        }
         return kept["token"] as? Data
     }
 

@@ -116,6 +116,26 @@ final class WatchSurfaceCacheTests: XCTestCase {
         XCTAssertEqual(askedProduction, [nil], "production was offered development's token")
     }
 
+    /// The other environment's install whose read keeps no token (a fetch by name that failed)
+    /// still ends the first environment's token, since its read changed the group.
+    func testAnInstallWhoseReadKeepsNoTokenStillEndsTheOthers() async throws {
+        let productionDatabase = InMemoryRecordDatabase()
+        let production = Zone(productionDatabase)
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        let lamp = SurfaceRecord(slot: "lamp", document: Self.document("on"), revision: 1, updated: Date(), runner: "phone-1", images: [:])
+        let records = SurfaceRecords(database: productionDatabase)
+        try await records.save(lamp, over: records.read(slot: "lamp"))
+
+        await cache.fetch()
+        await production.fail(feed: false, fetch: true)
+        await cache(in: .production, over: production).fetch()
+        XCTAssertNil(defaults.object(forKey: WatchSurfaceCache.feedKey), "development's token outlived production's read")
+        await cache.fetch()
+        let asked = await zone.asked
+        XCTAssertEqual(asked, [nil, nil])
+        XCTAssertEqual(store.slots(), ["weather"], "production's slot stayed on development's face")
+    }
+
     /// A token kept with no environment beside it is offered to neither, and goes.
     func testATokenKeptUnderNoEnvironmentIsNotOffered() async throws {
         try await phoneSets("weather", Self.document("rain"), revision: 3)
