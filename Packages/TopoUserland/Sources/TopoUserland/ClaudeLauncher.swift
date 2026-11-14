@@ -22,12 +22,10 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// `memory/` from the working directory.
     public static let memory = "/home/topo/memory"
 
-    /// What the resident is told of its memory, appended to Claude Code's own system prompt:
-    /// where the vault is and how to write in it when it is mounted, and that nothing written
-    /// there is kept when it is not.
-    /// What every process is told of the time it has, since nothing in Claude Code knows it runs
-    /// in an app iOS suspends: behind another app the process has only the time iOS allows, and it
-    /// is ended, with everything it started, when that runs out or when its reply is done.
+    /// What the conversation is told of the time a process has, since nothing in Claude Code knows
+    /// it runs in an app iOS suspends: behind another app the process has only the time iOS
+    /// allows, and it is ended, with everything it started, when that runs out or when its reply
+    /// is done. Told by the launch's SessionStart hook (`hookCommand`), at most once a `timeGap`.
     public static let timePrompt = "You run inside Topo, an app on the person's iPhone. While Topo is on the screen "
         + "you run freely. Once it goes behind another app, iOS gives you only the time it allows: often a minute "
         + "or two, sometimes none, and it can take it back at any moment. When that runs out, or when your reply "
@@ -35,17 +33,24 @@ public struct ClaudeLauncher: ResidentLauncher {
         + "commands included, is ended with you. Don't start work that has to outlive your reply or run for "
         + "minutes behind another app; when a job needs longer, tell the person to keep Topo open while it runs."
 
+    /// What the conversation is told of its memory: where the vault is and how to write in it when
+    /// it is mounted, and that nothing written there is kept when it is not. Told by the launch's
+    /// SessionStart hook when it differs from what the conversation was last told, so it is worded
+    /// as the state now: a conversation begun before the hook keeps the line its first launch
+    /// appended to the system prompt for good, and this stands over it.
     public static func memoryPrompt(mounted: Bool) -> String {
         if mounted {
             return "Your memory is an Obsidian vault at \(memory) (memory/ from your working directory). "
                 + "It is yours to read and write: a note you keep there is what you remember between "
                 + "conversations, and it is synced to the person's other devices, where they read it in "
                 + "Obsidian. Link notes with relative paths inside the vault, never absolute ones. The "
-                + "hidden folder in it (.obsidian) is not yours to change."
+                + "hidden folder in it (.obsidian) is not yours to change. This is where your memory "
+                + "stands now, over anything said of it earlier in this conversation."
         }
         return "Your memory, an Obsidian vault, cannot be reached on this phone right now. Nothing "
             + "written under \(memory) is kept, so if you are asked to remember something, say that "
-            + "you cannot at the moment."
+            + "you cannot at the moment. This is where your memory stands now, over anything said of "
+            + "it earlier in this conversation."
     }
 
     public let guest: Guest
@@ -68,21 +73,18 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// when there is one. Bypassed because the guest is the sandbox: what the mind can reach is
     /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
     ///
-    /// The system prompt is appended to with what the process is told of its time (`timePrompt`)
-    /// and of its memory when `memory` is said. `note`, what became of the process before it when
-    /// that was cut short (`GuestSession.Cut`), is not: Claude Code keeps the system prompt a
-    /// conversation began with and sends that on every resume, so an appended note reaches only a
-    /// fresh one. It is told by a SessionStart hook instead (`noteSettings`), whose output Claude
-    /// Code adds to the conversation on a resume as on a start, and which reads the note from the
-    /// environment (`launchEnvironment(note:)`).
-    public static func arguments(model: String?, resume: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
+    /// What the conversation is told of its time (`timePrompt`), of its memory when `memory` is
+    /// said, and of what became of the process before it when that was cut short (the note,
+    /// `GuestSession.Cut`, which the launch puts in the environment), are told by a SessionStart hook (`settings(memory:)`) and not by
+    /// appending to the system prompt: Claude Code keeps the system prompt a conversation began
+    /// with and sends that on every resume, so anything appended at a later launch reaches only a
+    /// fresh one, while a hook's output is added to the conversation on a resume as on a start.
+    public static func arguments(model: String?, resume: String?, memory: Bool? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--include-partial-messages", "--replay-user-messages",
                          "--dangerously-skip-permissions"]
         if let model { arguments += ["--model", model] }
-        let prompt = [timePrompt, memory.map { memoryPrompt(mounted: $0) }].compactMap { $0 }
-        arguments += ["--append-system-prompt", prompt.joined(separator: "\n\n")]
-        if note != nil { arguments += ["--settings", noteSettings] }
+        arguments += ["--settings", settings(memory: memory)]
         if let resume { arguments += ["--resume", resume] }
         return arguments
     }
@@ -100,31 +102,106 @@ public struct ClaudeLauncher: ResidentLauncher {
         return "[topo: last process \(digest)]"
     }
 
-    /// The hook's command: the conversation's transcript is the `transcript_path` of what the hook
-    /// is handed on stdin, and a note whose mark is already in it is not told again, since a
-    /// process ended after its hook ran and before it began leaves the note for the next. A
-    /// transcript that cannot be read tells it, because a note told twice costs a line and one
-    /// never told is a cut nobody hears of.
-    public static let noteCommand = #"f=$(sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p'); "#
-        + #"[ -n "$f" ] && grep -qF "$TOPO_LAST_PROCESS_MARK" "$f" 2>/dev/null || printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK""#
+    /// The least time between two tellings of `timePrompt` to one conversation: a phone can launch
+    /// a process on its conversation many times in a few minutes, and a dozen launches in ten
+    /// minutes tell it once.
+    public static let timeGap = 600
 
-    /// The settings a launch with a note is given on top of the home's own, whose hooks still run:
-    /// one SessionStart hook telling the note (`noteCommand`), which Claude Code adds to the
-    /// conversation. Only on `startup` and `resume`, since a compaction or a clear inside the same
-    /// process starts a session too.
-    public static let noteSettings: String = {
-        let hook: [String: Any] = ["matcher": "startup|resume", "hooks": [["type": "command", "command": noteCommand]]]
+    /// The mark printed after the time prompt, with the time it was told in seconds since 1970,
+    /// and the one printed after the memory prompt, with the state it told and the time; each
+    /// ends with the launch's own id (`launchVariable`). The hook builds both from `%s`, so
+    /// neither is in its own command, which Claude Code keeps in the transcript beside the output.
+    /// Every telling carries the launch's id because Claude Code drops a hook's output that is the
+    /// same, byte for byte, as one the conversation already holds, and records nothing of it: the
+    /// memory told unmounted, mounted, then unmounted again would otherwise leave the conversation
+    /// told it is mounted, and a time alone repeats whenever the clock is set back.
+    static func timeMark(_ seconds: Int, launch: String) -> String { "[topo: time \(seconds) \(launch)]" }
+    static func memoryMark(mounted: Bool, at seconds: Int, launch: String) -> String {
+        "[topo: memory \(mounted ? "mounted" : "unmounted") at \(seconds) \(launch)]"
+    }
+
+    /// The variable a launch's id is in, a fresh UUID at every launch (`launchEnvironment`), which
+    /// the hook ends its marks with.
+    public static let launchVariable = "TOPO_LAUNCH"
+
+    /// The most of a transcript the hook reads: its last 4 MB. A transcript grows for the life of
+    /// a conversation and the hook runs at every launch, so it reads a window of fixed size and
+    /// its cost does not grow with the file. Claude Code compacts a 200 000-token window inside
+    /// some 3 MB of a transcript of text (at most 15 bytes a token of context), so there the
+    /// window holds everything since the last compaction; images (their base64 is in the
+    /// transcript) or a larger window's model can run past it, and then a mark before the window
+    /// is not seen and its line is told again, once a window's growth.
+    public static let transcriptWindow = 4 * 1024 * 1024
+
+    /// The hook's command: one pass over the conversation's transcript (the `transcript_path` of
+    /// what the hook is handed on stdin), or over its last `transcriptWindow` bytes less the line
+    /// the window begins inside when it is longer, reading only Claude Code's compaction
+    /// boundaries and its records of a SessionStart hook's output on the main chain — a line that is such a record
+    /// from its first byte, as 2.1.316 writes one, with marks read from its `content` alone — so a
+    /// mark a person writes, a reply quotes or a tool call carries is not one the hook printed. A
+    /// record laid out otherwise by a later Claude Code reads as none, which tells everything
+    /// rather than less. Then it prints, each with its mark after it:
+    ///
+    /// - `timePrompt`, unless a time mark since the last compaction is less than `timeGap` old;
+    /// - `memoryPrompt` when `memory` is said, unless the last memory mark since the last
+    ///   compaction is that state;
+    /// - the note in `TOPO_LAST_PROCESS`, unless its mark is in any SessionStart output read,
+    ///   before a compaction included, since a process ended after its hook ran and before it began leaves the note
+    ///   for the next, and never on a compaction or a clear, whose process told it at its start
+    ///   (that record is written only with the first input, so a `/compact` as the first one
+    ///   finds no mark, and a clear's transcript is a new one). Neither unsays it: a cut is told
+    ///   once, not once per context.
+    ///
+    /// A compaction ends what the conversation was told: what came before the boundary is not
+    /// sent again. The hook a compaction runs (`source` `compact` on its stdin) is run before
+    /// Claude Code has written that boundary, and a clear's (`clear`) is handed the new session's
+    /// transcript, so both take nothing as told and tell the time and the memory. A path that is not a readable file, or none, tells all
+    /// of it, because a line told twice costs a line and one never told is a conversation without
+    /// it. Nothing printed is nothing added to the conversation.
+    public static func hookCommand(memory: Bool?) -> String {
+        func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'" }
+        var command = #"i=$(cat); f=$(printf '%s' "$i" | sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p'); id=${TOPO_LAUNCH:-$$}; "#
+            + #"c=$(printf '%s' "$i" | sed -n 's/.*"source" *: *"\([a-z]*\)".*/\1/p'); now=$(date +%s); t=; m=; n=; o=; "#
+            + #"say() { if [ -n "$o" ]; then o=$(printf '%s\n\n%s' "$o" "$1"); else o=$1; fi; }; "#
+            + #"if [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ]; then z=$(ls -ln "$f" 2>/dev/null | awk '{ print $5 }'); "#
+            + #"set -- $({ if [ "$z" -le \#(transcriptWindow) ] 2>/dev/null; then cat "$f"; else tail -c \#(transcriptWindow + 1) "$f" | sed 1d; fi; } 2>/dev/null "#
+            + #"| grep -F -e '"compact_boundary"' -e '"hook_success"' | awk -v note="$TOPO_LAST_PROCESS_MARK" '"#
+            + #"index($0, "\"type\":\"system\",\"subtype\":\"compact_boundary\"") { t = ""; m = ""; next } "#
+            + #"match($0, /^\{"parentUuid":("[^"]*"|null),"isSidechain":false,"attachment":\{"type":"hook_success","hookName":"SessionStart:[a-z]+","toolUseID":"[^"]*","hookEvent":"SessionStart","content":"/) { "#
+            + #"s = substr($0, RLENGTH + 1); s = substr(s, 1, index(s, "\",\"") - 1); c = s; "#
+            + #"if (note != "" && index(c, note)) n = 1; "#
+            + #"while (match(s, /\[topo: time [0-9]+ [0-9a-z-]+\]/)) { t = substr(s, RSTART + 12, RLENGTH - 13); sub(/ .*/, "", t); s = substr(s, RSTART + RLENGTH) } "#
+            + #"s = c; while (match(s, /\[topo: memory [a-z]+ at [0-9]+ [0-9a-z-]+\]/)) { m = substr(s, RSTART + 14, RLENGTH - 15); sub(/ .*/, "", m); s = substr(s, RSTART + RLENGTH) } } "#
+            + #"END { print (t == "" ? "-" : t), (m == "" ? "-" : m), (n ? "told" : "-") }'); "#
+            + #"t=$1; m=$2; n=$3; fi; [ "$t" = - ] && t=; case "$c" in compact|clear) t=; m=;; esac; "#
+            + #"if [ -z "$t" ] || [ "$t" -gt "$now" ] || [ $((now - t)) -ge \#(timeGap) ]; then "#
+            + #"say "$(printf '%s\n[topo: time %s %s]' \#(quoted(timePrompt)) "$now" "$id")"; fi; "#
+        if let memory {
+            command += #"s=\#(memory ? "mounted" : "unmounted"); "#
+                + #"[ "$m" = "$s" ] || say "$(printf '%s\n[topo: memory %s at %s %s]' \#(quoted(memoryPrompt(mounted: memory))) "$s" "$now" "$id")"; "#
+        }
+        command += #"[ -z "$TOPO_LAST_PROCESS" ] || [ "$n" = told ] || [ "$c" = compact ] || [ "$c" = clear ] || say "$(printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK")"; "#
+            + #"[ -z "$o" ] || printf '%s' "$o""#
+        return command
+    }
+
+    /// The settings every launch is given on top of the home's own, whose hooks still run: one
+    /// SessionStart hook (`hookCommand`), whose output Claude Code adds to the conversation. On
+    /// `startup` and `resume`, and on `compact` and `clear`, since a compaction or a `/clear`
+    /// typed in the chat takes what the conversation was told away inside the process.
+    public static func settings(memory: Bool?) -> String {
+        let hook: [String: Any] = ["matcher": "startup|resume|compact|clear", "hooks": [["type": "command", "command": hookCommand(memory: memory)]]]
         let settings = ["hooks": ["SessionStart": [hook]]]
         let data = try! JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes])
         return String(decoding: data, as: UTF8.self)
-    }()
+    }
 
     /// The whole command line: the shell moves into the home and `exec`s Claude Code, so the pid
     /// the app holds is Claude Code's own. `model` is the model every turn is asked of (the
     /// session's, which a debug build pins to Haiku); nil leaves it to Claude Code.
-    public func commandLine(resume: String?, model: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
+    public func commandLine(resume: String?, model: String?, memory: Bool? = nil) -> [String] {
         ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", command]
-            + Self.arguments(model: model, resume: resume, memory: memory, note: note)
+            + Self.arguments(model: model, resume: resume, memory: memory)
     }
 
     /// The resident's environment: the guest's, what `environment` answers now, and last the
@@ -149,6 +226,8 @@ public struct ClaudeLauncher: ResidentLauncher {
         // The note is the launcher's as well, so one the callback supplied is never told.
         environment[Self.noteVariable] = note
         environment[Self.noteMarkVariable] = note.map(Self.noteMark)
+        // A launch's id, which the hook's marks end with, so no two tellings are the same bytes.
+        environment[Self.launchVariable] = UUID().uuidString.lowercased()
         // A timed run asks Claude Code how each turn's time to its first request was spent; an
         // ordinary launch never does, whatever the callback supplied.
         environment[Self.timingVariable] = Perf.recording ? "1" : nil
@@ -170,7 +249,7 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// resident (`memoryPrompt`), nil says nothing. A launch mounts nothing: what it says is what
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
     public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
-        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory, note: note),
+        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
                               environment: try await launchEnvironment(compactAt: compactAt, note: note))
     }
 }

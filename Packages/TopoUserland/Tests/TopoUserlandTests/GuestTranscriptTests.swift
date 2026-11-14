@@ -51,6 +51,20 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: input, in: [prompt, notice(queued: false), reply]), .unresolved)
     }
 
+    /// What the launch's SessionStart hook leaves in the transcript, as 2.1.316 wrote it — the
+    /// record of its output, before and after a compaction's boundary and summary — is no prompt: coming between an input and its reply it ends nothing, and the reply is
+    /// still the input's.
+    func testASessionStartHooksRecordBetweenAnInputAndItsReplyEndsNothing() throws {
+        let lines = try Transcripts.lines("answered-with-tool")
+        let hooks = try Transcripts.lines("session-start-hooks")
+        let (homeHook, told, boundary, summary) = (hooks[0], hooks[1], hooks[4], hooks[5])
+        XCTAssertTrue(told.contains(#""type":"hook_success""#), told)
+        let input = try XCTUnwrap(lines.firstIndex { $0.contains(answeredInput) })
+        let between = Array(lines[...input]) + [homeHook, told, boundary, summary, told] + Array(lines[(input + 1)...])
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: between), .answered("marmalade"))
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: Array(lines[...input]) + [told]), .unresolved)
+    }
+
     func testAnInputNoEntryCarriesWasNotReceived() throws {
         let lines = try Transcripts.lines("answered-with-tool")
         XCTAssertEqual(GuestTranscript.verdict(for: "never-sent", in: lines), .notReceived)
