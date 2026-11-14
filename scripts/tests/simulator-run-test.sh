@@ -69,8 +69,8 @@ case "$2" in
       answered-on-the-phone) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"
                              say "mascot: turn gone for phone/2, idle"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                              say "records: on this phone (no iCloud account when Topo was first opened), protection none"; say "done"; exec sleep 600 ;;
-      no-account) say "icloud: no account"; say "model: claude-haiku-5-5 (setting: haiku)"; exec sleep 600 ;;
-      lapsed) say "icloud: no answer within 30 s"; say "model: claude-haiku-5-5 (setting: haiku)"; exec sleep 600 ;;
+      no-account) say "icloud: no account"; say "done"; exec sleep 600 ;;
+      lapsed) say "icloud: no answer within 30 s"; say "done"; exec sleep 600 ;;
       refused) say "icloud: refused (CKError 9)"; exec sleep 600 ;;
       answered-by-nobody) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                           say "reply to phone/2 in run $run from session none, process none: hi"; say "done"; exec sleep 600 ;;

@@ -156,7 +156,7 @@ final class SimulatorSignInTests: XCTestCase {
     /// The account as a whole address among other words: no character an address can hold
     /// on either side of it (a sentence's full stop aside), case aside.
     private static func wholePattern(_ account: String) -> String {
-        let edge = "[^a-z0-9._%+@-]"
+        let edge = #"[^\p{L}\p{N}\.\_\%\+\@\!\#\$\&\'\*\/\=\?\^\`\{\|\}\~\-]"#
         return "(?is).*(^|\(edge))\(NSRegularExpression.escapedPattern(for: account))\\.?(\(edge)|$).*"
     }
 
