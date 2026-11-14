@@ -659,6 +659,7 @@ struct ChatView: View {
                                                  pressed: { conversation.pressed() },
                                                  send: { await heard($0, going) })
                             },
+                            micHeld: { micPress.hold() },
                             micReport: micReport,
                             focused: { focused = $0 },
                             room: room)
@@ -910,21 +911,31 @@ enum ReadAloud {
 }
 
 /// Reads a reply that waited for the microphone once the microphone closes, however it closed —
-/// a release, the keyboard, the scene going, a reset — by watching `VoiceInput.listening`. Not a
-/// view, so it runs behind the lock and whether or not the chat is drawn; the app starts it once.
+/// a release, the keyboard, the scene going, a reset, a refused reopen — by watching
+/// `VoiceInput.busy`. Not a view, so it runs behind the lock and whether or not the chat is drawn;
+/// the app wires it once (`wire`), which is also what answers the speaker's question.
 /// A press closes the microphone too and says so itself (`MicPress`), so the reply does not wait
 /// on the watch's hop. It tells the speaker of an opening too, so the keeper's bed dips under a
 /// microphone whatever opened it.
 @MainActor
 enum MicrophoneWatch {
+    /// The speaker's question answered with `busy` — no reply is read into a microphone open or
+    /// opening, whoever opened it — and the watch started.
+    static func wire(_ voice: VoiceInput, _ speaker: Speaker) {
+        speaker.microphoneOpen = { [weak voice] in voice?.busy ?? false }
+        start(voice, speaker)
+    }
+
     static func start(_ voice: VoiceInput, _ speaker: Speaker) {
         withObservationTracking {
-            _ = voice.listening
+            _ = voice.busy
         } onChange: { [weak voice, weak speaker] in
-            // Called as the value is about to change, so the answer is read on the next turn.
+            // Called as the value is about to change, so the answer is read on the next turn. An
+            // open still in flight is neither: the microphone has closed once neither stands, a
+            // reopen the speaker was never told of included.
             Task { @MainActor in
                 guard let voice, let speaker else { return }
-                if voice.listening { speaker.microphoneListening() } else { speaker.microphoneClosed() }
+                if voice.listening { speaker.microphoneListening() } else if !voice.busy { speaker.microphoneClosed() }
                 start(voice, speaker)
             }
         }
@@ -1041,6 +1052,15 @@ final class MicPress {
     /// The last press down was a stop, so the release that follows it is one too. Set afresh on
     /// every press, so a release the gesture never delivered strands nothing.
     private var stopping = false
+    /// The long press fired on the press now down (`hold`): its release is a hold, and without
+    /// it a tap. Cleared at every press down.
+    private var heldDown = false
+
+    /// The microphone's long press of `VoiceInput.tapLimit` fired with the thumb still down: the
+    /// release that follows is a hold. A stop's press has none to be.
+    func hold() {
+        if !stopping { heldDown = true }
+    }
 
     /// The gesture's own call, as the finger lands or lifts, with the state the composer drew
     /// the button in: the press is what the person saw, not what the speaker says by the time
@@ -1048,8 +1068,9 @@ final class MicPress {
     /// and its release, which reach nothing. What a release heard is handed to `send`; with
     /// `dictating`, `send` writes it into the row rather than sending it, so the release sounds
     /// no cue — nothing went — and only the microphone's own `listening` is heard.
+    /// `held` overrides the verdict `hold` recorded, for a caller that knows it.
     @discardableResult
-    func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
+    func gesture(_ down: Bool, held: Bool? = nil, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  dictating: Bool = false, speaks: Bool = false,
                  calls: @MainActor () -> Bool = { SpokenCallSetting.enabled() },
                  pressed: @MainActor () -> Void = {},
@@ -1071,9 +1092,13 @@ final class MicPress {
             // A held release keeps its input running for the call's placing: the call service
             // lets the call start behind the lock when the app is recording (`VoiceInput.inputKept`).
             let keeps = release != nil && calls() && speaker.callIdle
+            // The gesture's verdict, taken here in the callback: whatever the task waits on, the
+            // release is the hold or the tap the thumb made.
+            let held = held ?? heldDown
+            heldDown = false
             return Task {
                 defer { release.map { speaker.released($0, "its send took no wait") } }
-                let heard = await voice.pressUp(as: .chat, keepingInput: keeps)
+                let heard = await voice.pressUp(as: .chat, held: held, keepingInput: keeps)
                 speaker.microphoneClosed()
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
@@ -1084,6 +1109,7 @@ final class MicPress {
             }
         }
         stopping = drawn.appearance == .stop
+        heldDown = false
         if !stopping { pressed() }
         // A press on a closed microphone stops what is being read, so the mic does not hear it.
         // One on the open microphone leaves the speaker alone: nothing is read while it is open,
@@ -1102,6 +1128,9 @@ final class MicPress {
         let keeps = release != nil && calls() && speaker.callIdle
         return Task {
             defer { release.map { speaker.released($0, "its send took no wait") } }
+            #if DEBUG
+            DebugRun.stallPress()
+            #endif
             let heard = await voice.pressDown(as: .chat, keepingInput: keeps)
             speaker.microphoneOpened(counted: opens)
             guard let heard else {
