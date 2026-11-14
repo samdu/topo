@@ -22,6 +22,9 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+# Both xcodebuilds run with every exported variable whose name says it holds a secret taken out
+# of their environment, which xcodebuild writes into the archive's build description.
+source "$root/scripts/secret-env.sh"
 
 scheme=Topo
 project=Topo.xcodeproj
@@ -134,7 +137,7 @@ mkdir -p "$packages"
 cp "$pins" "$packages/Package.resolved" 2>/dev/null || true
 
 rm -rf "$archive"
-xcodebuild archive \
+"${scrubbed[@]}" xcodebuild archive \
   -project "$project" \
   -scheme "$scheme" \
   -clonedSourcePackagesDirPath "$packages" \
@@ -145,7 +148,7 @@ xcodebuild archive \
   TOPO_SOURCE_COMMIT="$commit" \
   TOPO_CHANNEL=testflight
 
-xcodebuild -exportArchive \
+"${scrubbed[@]}" xcodebuild -exportArchive \
   -archivePath "$archive" \
   -exportOptionsPlist "$export_options" \
   -exportPath "$out/export" \

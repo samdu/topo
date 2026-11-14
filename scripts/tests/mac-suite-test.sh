@@ -60,7 +60,7 @@ trap 'exit 143' TERM INT HUP
 
 tree="$work/tree"
 mkdir -p "$tree/scripts" "$tree/Womble" "$work/bin"
-cp "$root/scripts/mac-suite.sh" "$tree/scripts/"
+cp "$root/scripts/mac-suite.sh" "$root/scripts/secret-env.sh" "$tree/scripts/"
 
 # fake <path> <body> — a script that logs its name and arguments, then runs the body.
 fake() {
@@ -91,7 +91,9 @@ fake "$tree/scripts/model-manifest.sh" 'exit 0'
 # it is the version that Xcode's version.plist names, and nothing for one marked broken. Each build-for-testing notes the
 # DEVELOPER_DIR it ran under in $CALLS.developer.
 pin="$(sed -n 's/^XCODE_VERSION="\(.*\)"$/\1/p' "$root/scripts/mac-suite.sh")"
-fake "$work/bin/xcodebuild" '
+# Every build and test notes in $CALLS when its environment holds $MARKER under any other name.
+secret='if [ -n "${MARKER-}" ] && env | grep -v "^MARKER=" | grep -qF "$MARKER"; then echo "secret in $(basename "$0")" >> "$CALLS"; fi'
+fake "$work/bin/xcodebuild" "$secret"'
 case "$*" in *"-clonedSourcePackagesDirPath build/packages"*) echo "packages=$(cat build/packages/Package.resolved 2>/dev/null)" >> "$CALLS" ;; esac
 case "$*" in
   -version) [ ! -e "${DEVELOPER_DIR:-/nonexistent}/broken" ] || exit 1
@@ -109,7 +111,8 @@ case "$*" in
   *) exit 0 ;;
 esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
-fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
+fake "$work/bin/swift" "$secret"'
+[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
 # The display's hold: it lives while the pid `-w` names does, as the real one, and says whether
 # that pid is the script this run started (the script's pid is this one's parent's: the hold is
@@ -168,6 +171,15 @@ results() { tr '\n' ' ' < "$RESULTS_DIR/suites.txt"; }
 
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
+is "green: a run with no secret in its environment notes none" "$(calls 'secret in')" 0
+
+# No exported variable whose name says it holds a secret reaches a build or a test: xcodebuild
+# writes its environment into the build description.
+MARKER="fake-secret-$$" CLAUDE_SETUP_TOKEN="fake-secret-$$" GH_TOKEN="fake-secret-$$" SOME_API_KEY="fake-secret-$$" \
+  suite secrets topo_unit topo_ui others
+is "secrets: exits 0" "$status" 0
+is "secrets: no build or test is started with one" "$(calls 'secret in')" 0
+is "secrets: builds and tests did run" "$( [ "$(calls 'xcodebuild ')" -gt 0 ] && [ "$(calls 'swift test')" -gt 0 ] && echo yes)" yes
 is "green: no port 53 holder here, none handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53="
 is "green: the fast lane leaves the real Smart Turn test out by name" "$(grep '^unit turn' "$CALLS")" "unit turn: deselected"
 is "green: exits 0" "$status" 0

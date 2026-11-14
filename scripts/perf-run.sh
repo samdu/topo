@@ -19,6 +19,9 @@
 # experiments/topo-perf/parse.py reads.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The build runs with every exported variable whose name says it holds a secret taken out of its
+# environment, which xcodebuild writes into the build description.
+source scripts/secret-env.sh
 
 bundle=zone.hexagon.topo
 device="${TOPO_PERF_DEVICE:-}"
@@ -57,7 +60,7 @@ mkdir -p "$(dirname "$out")"
 if [ "$build" = yes ]; then
   echo "==> building Release"
   mkdir -p build
-  xcodebuild -project Topo.xcodeproj -scheme Topo -configuration Release \
+  "${scrubbed[@]}" xcodebuild -project Topo.xcodeproj -scheme Topo -configuration Release \
     -destination 'generic/platform=iOS' -derivedDataPath build/dd build \
     -allowProvisioningUpdates -skipPackagePluginValidation -skipMacroValidation \
     ${TOPO_DEVELOPMENT_TEAM:+DEVELOPMENT_TEAM=$TOPO_DEVELOPMENT_TEAM} \

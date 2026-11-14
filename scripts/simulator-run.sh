@@ -35,10 +35,16 @@
 #
 # The token comes from the environment (CLAUDE_SETUP_TOKEN, which is what the vault item
 # `long-lived-claude-auth-token` reaches this machine as) or, failing that, straight from the
-# vault with `op-item`. It is handed to the app as SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN, which the
-# simulator's own log records with the launch's environment, and reaches no scheme, build setting
-# or file the app reads; the app hands it to every `claude` it starts in the guest for that
-# launch and keeps nothing of it. --talk hands it on otherwise, as below.
+# vault with `op-item`. It is served once on the host's loopback, which a simulator shares, to
+# the request carrying the launch's nonce, and the app is launched with only the port and the
+# nonce (SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT and _NONCE), from which it reads the token itself at
+# launch (DebugRun.servedToken): the simulator's own log records each launch's environment, so
+# the token is not in it. A signed-in run fails unless the listener served the token. The app
+# hands it to every `claude` it starts in the guest for that launch and keeps nothing of it.
+# Every xcodebuild runs with the exported variables whose names say they hold a secret taken out
+# of its environment (scripts/secret-env.sh), since xcodebuild writes its own environment into
+# the build description under build/sim's XCBuildData; and every test it runs collects no
+# diagnostics, which are the simulator's log archive.
 #
 # --sign-in runs the TopoSimulatorSignIn scheme's one UI test (Tests/SimulatorSignIn), which signs
 # the device into SIGNIN_ACCOUNT (buddy.durose@icloud.com) through Settings, as a first sign-in or
@@ -100,6 +106,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+source "$root/scripts/secret-env.sh"
 
 bundle=zone.hexagon.topo
 device="${DEVICE:-iPhone 17}"
@@ -137,7 +144,7 @@ while [ $# -gt 0 ]; do
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
-    -h|--help) sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,101p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -189,6 +196,7 @@ mkdir -p "$derived"
 pids="$derived/simulator-run.pids"
 runlog="$derived/simulator-run.log"
 started_pids=""
+served_by=""
 lane=no
 log=""
 echo "$$" >"$pids"
@@ -295,6 +303,15 @@ sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "${!2}") &
   [ -n "$served_port" ] || { echo "the listener that serves the $2 did not start" >&2; exit 1; }
 }
 
+# Whether the listener served the token within <seconds>. Whether it is still running is asked
+# of the shell's own jobs, not of the pid, which the system may have given another process once
+# the shell reaped it; the shell keeps a reaped child's status for `wait`.
+token_served() {
+  local deadline=$((SECONDS + $1))
+  while running_child "$served_by" && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.2; done
+  ! running_child "$served_by" && wait "$served_by"
+}
+
 if [ "$build" = yes ]; then
   scripts/build-ish.sh
   scripts/fetch-phonon.sh
@@ -321,9 +338,9 @@ if [ "$signin" = yes ]; then
   status=0
   TEST_RUNNER_TOPO_SIGNIN_ACCOUNT="$account" TEST_RUNNER_TOPO_SIGNIN_PORT="$port" \
   TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" TEST_RUNNER_TOPO_SIGNIN_CODE="${SIGNIN_CODE:-}" \
-    tracked xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
+    tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
-      -resultBundlePath "$results" || status=$?
+      -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-require-tests.sh xcresult "$results" TopoSimulatorSignInTests || status=1
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
     echo "==> $udid was signed in already and Settings asks for no password; if --send still reports a lapse, the test does not know the screen the lapse shows"
@@ -361,13 +378,10 @@ if [ "$talk" = yes ]; then
   # The result bundle's session log records the test runner's environment whole, and the
   # environment the runner launches the app with, so the token is in neither: it is served once
   # on the loopback, and the runner hands the app only the port and the nonce, from which the
-  # app reads it itself at launch (DebugRun.servedToken). The script's own CLAUDE_SETUP_TOKEN
-  # is taken out of xcodebuild's environment, whose build description keeps it otherwise. The
-  # test is built before the listener starts, so a slow build does not use up its 30 minutes.
-  # The test collects no diagnostics: they are the simulator's log archive, and that log records
-  # the environment of every process the simulator launched, a token-carrying launch's included.
+  # app reads it itself at launch (DebugRun.servedToken). The test is built before the listener
+  # starts, so a slow build does not use up its 30 minutes.
   echo "==> building the talk test (TopoTalkTests)"
-  tracked env -u CLAUDE_SETUP_TOKEN xcodebuild build-for-testing -project Topo.xcodeproj -scheme TopoTalk \
+  tracked "${scrubbed[@]}" xcodebuild build-for-testing -project Topo.xcodeproj -scheme TopoTalk \
     -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived"
   nonce="$(uuidgen)"
   serve_once "$nonce" token
@@ -379,19 +393,13 @@ if [ "$talk" = yes ]; then
   TEST_RUNNER_TOPO_DEBUG_TOKEN_PORT="$served_port" TEST_RUNNER_TOPO_DEBUG_TOKEN_NONCE="$nonce" \
   TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
   TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models/phonon-40m-en" \
-    tracked env -u CLAUDE_SETUP_TOKEN xcodebuild test-without-building -project Topo.xcodeproj -scheme TopoTalk \
+    tracked "${scrubbed[@]}" xcodebuild test-without-building -project Topo.xcodeproj -scheme TopoTalk \
       -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-audio-lane.sh check after || status=1
   # A test that passed on some other login proves nothing of the token: the listener has to have
-  # served it.
-  # A listener that has just answered may still be on its way out. Whether it is still running
-  # is asked of the shell's own jobs, not of the pid, which the system may have given another
-  # process once the shell reaped it; the shell keeps a reaped child's status for `wait`.
-  served=1
-  for _ in $(seq 10); do running_child "$served_by" || break; sleep 0.2; done
-  if ! running_child "$served_by"; then wait "$served_by" && served=0 || true; fi
-  [ "$served" = 0 ] || { echo "==> the app never read the served token" >&2; status=1; }
+  # served it. One that has just answered may still be on its way out.
+  token_served 2 || { echo "==> the app never read the served token" >&2; status=1; }
   scripts/ci-require-tests.sh xcresult "$results" TopoTalkTests || status=1
   [ "$status" = 0 ] && echo "==> the spoken question was heard, answered and read aloud" \
     || echo "==> the spoken turn failed; $results says where" >&2
@@ -400,7 +408,7 @@ fi
 
 if [ "$build" = yes ]; then
   echo "==> building"
-  tracked xcodebuild -project Topo.xcodeproj -scheme Topo -configuration Debug \
+  tracked "${scrubbed[@]}" xcodebuild -project Topo.xcodeproj -scheme Topo -configuration Debug \
     -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
     build
 fi
@@ -410,7 +418,7 @@ app="$derived/Build/Products/Debug-iphonesimulator/Topo.app"
 
 if [ "$pressmic" = yes ]; then
   # The XCUITest that taps, holds and releases the microphone (Tests/ClientUI), on this device.
-  # It launches the app signed in with a placeholder token; the launch below carries the real
+  # It launches the app signed in with a placeholder token; the launch below is served the real
   # one. docs/simulator.md says what the press reaches and what it cannot.
   echo "==> pressing the microphone"
   # The test counts the permission prompts the run raises, so the app's grants go first, and the
@@ -418,9 +426,9 @@ if [ "$pressmic" = yes ]; then
   xcrun simctl bootstatus "$udid" -b >/dev/null
   xcrun simctl privacy "$udid" reset all "$bundle"
   TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1 \
-    tracked xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
+    tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
-      -only-testing:TopoUITests
+      -collect-test-diagnostics never -only-testing:TopoUITests
 fi
 
 # A guest command alone needs no sign-in; anything else launches signed in.
@@ -447,12 +455,19 @@ fi
 # This run's id: the app prints it on the reply to the turn it sent, so neither a line from an
 # earlier launch nor a reply to some other turn can stand in for this run's answer.
 run="$(uuidgen)"
+launch=(SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland"
+        SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" SIMCTL_CHILD_TOPO_DEBUG_RUN="$run")
+# The token is served, never put in the launch's environment, which the simulator's log records.
+# The port goes in only with a token behind it: a launch that names a port and gets no token is
+# signed out (DebugRun.signIn), which a guest command alone is not asked to be.
+if [ -n "$token" ]; then
+  nonce="$(uuidgen)"
+  serve_once "$nonce" token
+  unset token
+  launch+=(SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT="$served_port" SIMCTL_CHILD_TOPO_DEBUG_TOKEN_NONCE="$nonce")
+fi
 echo "==> launching (run $run)"
-SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN="$token" \
-SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" \
-SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland" \
-SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" \
-SIMCTL_CHILD_TOPO_DEBUG_RUN="$run" \
+"${scrubbed[@]}" "${launch[@]}" \
   xcrun simctl launch $attach --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
 launcher=$!
 echo "$launcher" >>"$pids"
@@ -506,6 +521,10 @@ if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
     wait "$launcher" && status=0 || status=$?; launcher=""
   fi
   [ "${status:-0}" = 0 ] || fail "the launcher exited ($status) after the work finished"
+fi
+# The app reads the token at launch, so by the end of the work it has been served or never will.
+if [ -n "$served_by" ] && [ -n "$send$userland$guestturn" ]; then
+  token_served 2 || fail "the app never read the served token"
 fi
 
 if [ -n "$screenshot" ]; then
@@ -611,5 +630,8 @@ if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
 else
   wait "$launcher" && status=0 || status=$?; launcher=""
   [ "$status" = 0 ] || fail "the launcher exited ($status)"
+  # A detached launcher returns once the app is up, which can be before the app has asked; the
+  # app's own read gives up 10 s after it begins.
+  token_served 60 || fail "the app never read the served token"
   echo "==> launched signed in"
 fi

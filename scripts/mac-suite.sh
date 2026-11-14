@@ -68,6 +68,13 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root" || exit 2
 
+# Nothing a suite runs needs a secret, and xcodebuild writes its own environment into the build
+# description under the derived data's XCBuildData, so every exported variable whose name says it
+# holds one is dropped here (scripts/secret-env.sh): validation starts this script in a login
+# shell, which exports whatever the Mac's profile does.
+source "$root/scripts/secret-env.sh" || exit 2
+drop_secrets
+
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
 # change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
 # otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
@@ -759,7 +766,8 @@ suite_scripts() {
     started=()
     for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload \
                 suite-gate ci-require-tests check-built-plist check-built-assets maps-opens-nothing build-ish fetch-phonon phonon-bundles \
-                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator smartturn-mel review-dispatch ledger-recall; do
+                model-manifest review-prompt review-cap validate-host mac-suite agent-simulator smartturn-mel review-dispatch ledger-recall \
+                secret-env; do
       if [ ! -x "scripts/tests/$test-test.sh" ]; then
         say "scripts/tests/$test-test.sh"
         err "scripts/tests/$test-test.sh is missing."
