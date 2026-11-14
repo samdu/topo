@@ -7,7 +7,8 @@ import XCTest
 /// The account arrives as `TOPO_SIGNIN_ACCOUNT`. The password never reaches the runner's
 /// environment, which the result bundle's session log records whole: the script serves it once
 /// on the host's loopback (`TOPO_SIGNIN_PORT`) to a request carrying `TOPO_SIGNIN_NONCE`, and
-/// it is typed only into a secure field, whose typing XCTest logs as `<redacted>`.
+/// it is typed only into a secure field, through `RedactedTyping` and never `typeText`, whose
+/// activity title carries what it types.
 ///
 /// It is typed once, and submitted only when the field holds as many characters as it has. A
 /// refusal, a passcode or a screen this test does not know fails with what the screen showed, and
@@ -87,9 +88,10 @@ final class SimulatorSignInTests: XCTestCase {
         guard firstSignIn || screenWords().contains(where: { names($0, account) }) else {
             return stopped("the password prompt does not name \(account); nothing was typed")
         }
-        let secret = try password()
+        let secret = try servedSecret()
         field.tap()
-        field.typeText(secret)
+        // Never `typeText`, which writes what it types into its activity's title (RedactedTyping).
+        try RedactedTyping.type(secret, record: "the password")
         // A secure field shows its last character for a moment, and every screenshot is kept.
         sleep(3)
         let typed = (field.value as? String)?.count ?? 0
@@ -273,38 +275,6 @@ final class SimulatorSignInTests: XCTestCase {
         return nil
     }
 
-    /// The password, read once from the script's loopback listener.
-    private func password() throws -> String {
-        let env = ProcessInfo.processInfo.environment
-        let port = try XCTUnwrap(env["TOPO_SIGNIN_PORT"].flatMap(UInt16.init), "no TOPO_SIGNIN_PORT")
-        let nonce = try XCTUnwrap(env["TOPO_SIGNIN_NONCE"], "no TOPO_SIGNIN_NONCE")
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw failure("socket: \(errno)") }
-        defer { close(fd) }
-        var bound = timeval(tv_sec: 10, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
-        var address = sockaddr_in()
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-        }
-        guard connected == 0 else { throw failure("the password's listener refused the connection: \(errno)") }
-        let ask = Array((nonce + "\n").utf8)
-        guard write(fd, ask, ask.count) == ask.count else { throw failure("could not ask for the password: \(errno)") }
-        var bytes: [UInt8] = []
-        var chunk = [UInt8](repeating: 0, count: 256)
-        while true {
-            let n = read(fd, &chunk, chunk.count)
-            if n < 0 { throw failure("could not read the password: \(errno)") }
-            if n == 0 { break }
-            bytes += chunk[0..<n]
-        }
-        let password = String(decoding: bytes, as: UTF8.self)
-        guard !password.isEmpty else { throw failure("the listener gave no password") }
-        return password
-    }
 
     private func first(_ candidates: XCUIElement...) -> XCUIElement? {
         // A sheet's buttons are in the hierarchy twice, and a query matching two cannot be asked
@@ -340,4 +310,42 @@ final class SimulatorSignInTests: XCTestCase {
     private func failure(_ why: String) -> Error {
         NSError(domain: "SimulatorSignIn", code: 1, userInfo: [NSLocalizedDescriptionKey: why])
     }
+}
+
+/// The secret the script serves once on the host's loopback (`TOPO_SIGNIN_PORT`), to a request
+/// carrying `TOPO_SIGNIN_NONCE`: the password for a sign-in, a dummy for a leak check.
+func servedSecret() throws -> String {
+    let env = ProcessInfo.processInfo.environment
+    let port = try XCTUnwrap(env["TOPO_SIGNIN_PORT"].flatMap(UInt16.init), "no TOPO_SIGNIN_PORT")
+    let nonce = try XCTUnwrap(env["TOPO_SIGNIN_NONCE"], "no TOPO_SIGNIN_NONCE")
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw served("socket: \(errno)") }
+    defer { close(fd) }
+    var bound = timeval(tv_sec: 10, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    guard connected == 0 else { throw served("the password's listener refused the connection: \(errno)") }
+    let ask = Array((nonce + "\n").utf8)
+    guard write(fd, ask, ask.count) == ask.count else { throw served("could not ask for the password: \(errno)") }
+    var bytes: [UInt8] = []
+    var chunk = [UInt8](repeating: 0, count: 256)
+    while true {
+        let n = read(fd, &chunk, chunk.count)
+        if n < 0 { throw served("could not read the password: \(errno)") }
+        if n == 0 { break }
+        bytes += chunk[0..<n]
+    }
+    let password = String(decoding: bytes, as: UTF8.self)
+    guard !password.isEmpty else { throw served("the listener gave no password") }
+    return password
+}
+
+private func served(_ why: String) -> Error {
+    NSError(domain: "SimulatorSignIn", code: 1, userInfo: [NSLocalizedDescriptionKey: why])
 }

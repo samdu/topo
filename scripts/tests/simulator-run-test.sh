@@ -187,11 +187,30 @@ EOF
 cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
+# The leak check's test: it reads the dummy as the real one does, and records it as XCTest's
+# typeText does (its first 18 characters in the output and the bundle) for the control, and for
+# the redacted route only when FAKE_LEAK_REDACTED says the route leaks.
+case " $* " in *" -only-testing:TopoSimulatorSignInTests/LeakCheckTests "*)
+  dummy="$(/usr/bin/python3 -c '
+import socket, sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5) as s:
+    s.sendall(sys.argv[2].encode() + b"\n"); got = b""
+    while chunk := s.recv(256): got += chunk
+sys.stdout.write(got.decode())' "$TEST_RUNNER_TOPO_SIGNIN_PORT" "$TEST_RUNNER_TOPO_SIGNIN_NONCE")" || exit 65
+  bundle="$(printf '%s\n' "$@" | grep -A1 -x -- -resultBundlePath | tail -1)"
+  mkdir -p "$bundle"
+  if [ "$TEST_RUNNER_TOPO_LEAKCHECK_ROUTE" = typeText ] || [ -n "${FAKE_LEAK_REDACTED:-}" ]; then
+    [ "${FAKE_LEAK_SINK:-both}" = bundle ] || echo "t = Type '${dummy:0:18}...' into SecureTextField"
+    [ "${FAKE_LEAK_SINK:-both}" = output ] || echo "Type '${dummy:0:18}...'" >"$bundle/database.sqlite3"
+  fi
+  echo "** TEST SUCCEEDED **"; exit 0 ;;
+esac
 # The sign-in's test: what it was started with, and what the listener hands a request with a
 # wrong nonce and then with the run's own.
 case " $* " in *" TopoSimulatorSignIn "*)
   env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
   [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
+  [ -n "${TEST_RUNNER_TOPO_SIGNIN_PORT:-}" ] || exit 0  # a resume serves nothing to ask
   /usr/bin/python3 -c '
 import socket, sys
 port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -628,6 +647,51 @@ if [ "$status" = 2 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
 else
   echo "FAIL renew-without-sign-in: exit $status"; failures=$((failures + 1))
 fi
+# A resume reads no vault item (the fake one fails) and serves nothing, and its test runs only
+# the sign-in's suite; --resume is refused with --renew, and --leak-check with --sign-in.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" FAKE_SIGNIN_ENV="$work/resume.env" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in --resume >"$work/resume.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 0 ] && grep -qx "TEST_RUNNER_TOPO_SIGNIN_RESUME=1" "$work/resume.env" \
+   && grep -qx "TEST_RUNNER_TOPO_SIGNIN_PORT=" "$work/resume.env" \
+   && grep -q -- "-only-testing:TopoSimulatorSignInTests/SimulatorSignInTests " "$FAKE_XCODEBUILD_CALLS"; then
+  echo "ok   sign-in-resume: no password read or served, the test told to resume"
+else
+  echo "FAIL sign-in-resume: exit $status; the test got: $(grep -E 'RESUME|PORT' "$work/resume.env" 2>/dev/null | tr '\n' ' '), xcodebuild: $(cat "$FAKE_XCODEBUILD_CALLS")"
+  sed 's/^/    | /' "$work/resume.out"
+  failures=$((failures + 1))
+fi
+for refused in "--sign-in --resume --renew" "--sign-in --leak-check"; do
+  : >"$FAKE_XCODEBUILD_CALLS"
+  # shellcheck disable=SC2086
+  PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build $refused >"$work/refused.out" 2>&1 </dev/null
+  status=$?
+  if [ "$status" = 2 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
+    echo "ok   refused: $refused exits 2"
+  else
+    echo "FAIL refused: $refused exited $status"; failures=$((failures + 1))
+  fi
+done
+# The leak check passes only when the control's dummy is found in the output and the bundle and
+# the redacted one nowhere; a control the count cannot see fails it as a leak does.
+printf '#!/bin/sh\nexit 0\n' >"$work/bin/log"; chmod +x "$work/bin/log"
+leak_case() {
+  local name="$1" want="$2"; shift 2
+  : >"$FAKE_XCODEBUILD_CALLS"
+  env PATH="$work/bin:$PATH" "$@" "$work/root/scripts/simulator-run.sh" --no-build --leak-check >"$work/$name.out" 2>&1 </dev/null
+  local status=$?
+  if [ "$status" = "$want" ] && [ "$(grep -c -- '-only-testing:TopoSimulatorSignInTests/LeakCheckTests' "$FAKE_XCODEBUILD_CALLS")" = 2 ] \
+     && ! grep -q "TopoLeakCheck" <(ls "$work/root/build/sim"); then
+    echo "ok   $name: exit $status, both routes run, neither bundle kept"
+  else
+    echo "FAIL $name: exit $status, wanted $want"; sed 's/^/    | /' "$work/$name.out"; failures=$((failures + 1))
+  fi
+}
+leak_case leak-check-clean 0 FAKE_LEAK=none
+leak_case leak-check-redacted-leaks 1 FAKE_LEAK_REDACTED=1
+leak_case leak-check-control-unseen-in-bundle 1 FAKE_LEAK_SINK=output
+leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
 # A vault that gives no password stops the run before any test starts.
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-none.out" 2>&1 </dev/null
