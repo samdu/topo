@@ -140,6 +140,16 @@ private actor Feed {
         #expect(await feed.pulls == [nil, nil])
     }
 
+    @Test func aCopyOfAnotherOwnerIsRemovedThoughTheWalkChangesNothing() async throws {
+        let file = file()
+        await feed.save("Turn", "a")
+        _ = try await mirror(at: file).records(ofType: "Turn")
+        let empty = Feed()
+        let other = ZoneMirror(store: .init(file: file, owner: Data("someone else".utf8))) { try await empty.page(since: $0) }
+        #expect(try await other.records(ofType: "Turn").isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
     @Test func aFileThatIsNotACopyIsAWalkFromTheBeginning() async throws {
         let file = file()
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)

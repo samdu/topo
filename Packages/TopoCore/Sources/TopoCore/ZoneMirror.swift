@@ -29,8 +29,9 @@ public struct ZoneFeedPage: Sendable {
 /// Given a file, the copy is kept there between launches, so a launch asks the feed from where
 /// the last one stopped instead of from the beginning. The file holds the records, the token
 /// they were read up to and whose zone they are (`owner`), written whole and atomically after a
-/// read that changed anything; a file that is missing, unreadable, of another version or of
-/// another owner is a walk from the beginning. `forget()` removes it.
+/// read that changed anything; a file that is missing or unreadable is a walk from the
+/// beginning, and one read that is not a copy, or is of another version or another owner, is
+/// that and is removed. `forget()` removes it.
 public actor ZoneMirror {
     public typealias Pull = @Sendable (_ since: Data?) async throws -> ZoneFeedPage
 
@@ -85,9 +86,14 @@ public actor ZoneMirror {
     private func load() {
         guard !loaded else { return }
         loaded = true
-        guard let store, let data = try? Data(contentsOf: store.file),
-              let kept = try? PropertyListDecoder().decode(Kept.self, from: data),
-              kept.version == Kept.version, kept.owner == store.owner else { return }
+        guard let store, let data = try? Data(contentsOf: store.file) else { return }
+        guard let kept = try? PropertyListDecoder().decode(Kept.self, from: data),
+              kept.version == Kept.version, kept.owner == store.owner else {
+            // Read and not this owner's: removed now, since a walk that changes nothing keeps
+            // nothing over it.
+            try? FileManager.default.removeItem(at: store.file)
+            return
+        }
         records = Dictionary(kept.records.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
         token = kept.token
         Perf.mark("zone.loaded records=\(records.count) bytes=\(data.count)")

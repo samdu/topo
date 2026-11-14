@@ -15,22 +15,31 @@ import WidgetKit
 /// last-known slot beats a blank face.
 @MainActor
 final class WatchSurfaceCache {
-    static let tokenKey = "topo.surfaces.token"
+    /// The feed's token is the server's, so it is kept under the environment that issued it: a
+    /// build signed for the other one shares the app's defaults. With no environment, none is kept.
+    static func tokenKey(_ environment: CloudEnvironment?) -> String? {
+        environment.map { "topo.surfaces.token.\($0.rawValue)" }
+    }
+    /// Where a token was kept under no environment, read by nothing and removed at a fetch.
+    static let unnamedTokenKey = "topo.surfaces.token"
     /// The slots whose record the feed listed and a read could not take whole.
     static let recheckKey = "topo.surfaces.recheck"
 
     let records: SurfaceRecords
     let store: SurfaceStore
     let defaults: UserDefaults
+    let environment: CloudEnvironment?
     /// What a change in the cache sets going: the timelines reloaded and, below watchOS 11, the
     /// relevance donated again.
     let changed: @MainActor () -> Void
 
     init(records: SurfaceRecords, store: SurfaceStore, defaults: UserDefaults = .standard,
+         environment: CloudEnvironment? = CloudEnvironment.current,
          changed: @escaping @MainActor () -> Void = WatchSurfaceCache.reloadWidgets) {
         self.records = records
         self.store = store
         self.defaults = defaults
+        self.environment = environment
         self.changed = changed
     }
 
@@ -38,7 +47,9 @@ final class WatchSurfaceCache {
     /// the cache as it was.
     @discardableResult
     func fetch() async -> Bool {
-        let token = defaults.data(forKey: Self.tokenKey)
+        defaults.removeObject(forKey: Self.unnamedTokenKey)
+        let tokenKey = Self.tokenKey(environment)
+        let token = tokenKey.flatMap { defaults.data(forKey: $0) }
         let changes: SurfaceRecords.Changes
         var whole = token == nil
         do {
@@ -117,7 +128,7 @@ final class WatchSurfaceCache {
                 }
             }
         }
-        if !unconfirmed { defaults.set(changes.token, forKey: Self.tokenKey) }
+        if !unconfirmed, let tokenKey { defaults.set(changes.token, forKey: tokenKey) }
         if moved { changed() }
         return true
     }
