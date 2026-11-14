@@ -176,11 +176,14 @@ final class SimulatorSignInTests: XCTestCase {
             if settings.secureTextFields.firstMatch.exists || springboard.secureTextFields.firstMatch.exists {
                 return "signing out asks for a password; nothing was typed"
             }
-            // iOS asks whether to erase the device after signing out; the answer is never to.
-            // Then that most data stays on the device, which Continue accepts.
-            if let answer = first(settings.buttons["Sign Out But Don’t Erase"], settings.buttons["Sign Out But Don't Erase"],
-                                  settings.buttons["Continue"],
+            // iOS asks whether to erase the device after signing out, and the answer is never to;
+            // then says most data stays on the device (Continue), and that what an app has not
+            // synced goes (Continue Anyway: the simulator keeps nothing of its own). An alert
+            // stands over the sheet under it, so alerts are answered first.
+            if let answer = first(settings.alerts.buttons["Continue Anyway"], springboard.alerts.buttons["Continue Anyway"],
                                   springboard.alerts.buttons.matching(other).firstMatch, settings.alerts.buttons.matching(other).firstMatch,
+                                  settings.buttons["Sign Out But Don’t Erase"], settings.buttons["Sign Out But Don't Erase"],
+                                  settings.buttons["Continue"],
                                   settings.sheets.buttons.matching(other).firstMatch, settings.buttons.matching(other).firstMatch) {
                 print("[sign-in] sign-out step \(step): tapped \(answer.label)")
                 answer.tap()
