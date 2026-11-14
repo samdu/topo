@@ -15,12 +15,11 @@ import WidgetKit
 /// last-known slot beats a blank face.
 @MainActor
 final class WatchSurfaceCache {
-    /// The feed's token is the server's, so it is kept under the environment that issued it: a
-    /// build signed for the other one shares the app's defaults. With no environment, none is kept.
-    static func tokenKey(_ environment: CloudEnvironment?) -> String? {
-        environment.map { "topo.surfaces.token.\($0.rawValue)" }
-    }
-    /// Where a token was kept under no environment, read by nothing and removed at a fetch.
+    /// The feed's token and the CloudKit environment that issued it, kept together as one value:
+    /// a build signed for the other environment shares the app's defaults, and is offered no
+    /// token but one its own environment gave. With no environment, none is kept.
+    static let feedKey = "topo.surfaces.feed"
+    /// Where a token was kept with no environment beside it, read by nothing and removed at a fetch.
     static let unnamedTokenKey = "topo.surfaces.token"
     /// The slots whose record the feed listed and a read could not take whole.
     static let recheckKey = "topo.surfaces.recheck"
@@ -48,8 +47,7 @@ final class WatchSurfaceCache {
     @discardableResult
     func fetch() async -> Bool {
         defaults.removeObject(forKey: Self.unnamedTokenKey)
-        let tokenKey = Self.tokenKey(environment)
-        let token = tokenKey.flatMap { defaults.data(forKey: $0) }
+        let token = keptToken()
         let changes: SurfaceRecords.Changes
         var whole = token == nil
         do {
@@ -128,9 +126,22 @@ final class WatchSurfaceCache {
                 }
             }
         }
-        if !unconfirmed, let tokenKey { defaults.set(changes.token, forKey: tokenKey) }
+        if !unconfirmed { keep(token: changes.token) }
         if moved { changed() }
         return true
+    }
+
+    /// The token kept for this build's environment, or nil: none kept, one another environment
+    /// issued, or no environment to ask under.
+    private func keptToken() -> Data? {
+        guard let environment, let kept = defaults.dictionary(forKey: Self.feedKey),
+              kept["environment"] as? String == environment.rawValue else { return nil }
+        return kept["token"] as? Data
+    }
+
+    private func keep(token: Data) {
+        guard let environment else { defaults.removeObject(forKey: Self.feedKey); return }
+        defaults.set(["environment": environment.rawValue, "token": token], forKey: Self.feedKey)
     }
 
     /// Whether any file of `slot` is in the group: its document, its notes or its images.

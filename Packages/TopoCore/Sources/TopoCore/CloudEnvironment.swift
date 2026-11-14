@@ -8,8 +8,8 @@ import Security
 ///
 /// No target sets `com.apple.developer.icloud-container-environment` itself, so CloudKit takes
 /// the environment from the signing: a development-signed build talks to Development, a
-/// distribution-signed one (TestFlight, the App Store) to Production. iOS and watchOS give an
-/// app no way to read its own signed entitlements, so there it is read from the provisioning
+/// distribution-signed one (TestFlight, the App Store) to Production. iOS and watchOS have no
+/// public API for an app's own signed entitlements, so there it is read from the provisioning
 /// profile the build carries, on one assumption: a development-signed build carries a profile
 /// whose `get-task-allow` is true. A distribution profile says false, and an app installed from
 /// TestFlight or the App Store carries none. macOS reads the signed entitlements themselves.

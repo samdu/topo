@@ -221,7 +221,7 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
 
     /// The copy of the zone `key` names for `account` as read from `environment`: one file per
     /// zone, whose owner is the account and the environment together, so a copy either one does
-    /// not match is never read.
+    /// not match is refused and removed, never taken.
     static func store(named key: String, account: Data, environment: CloudEnvironment, caches: URL) -> ZoneMirror.Store {
         ZoneMirror.Store(file: mirrorDirectory(in: caches).appendingPathComponent(key.replacingOccurrences(of: "/", with: "-") + ".plist"),
                          owner: Data("\(environment.rawValue)/".utf8) + account)

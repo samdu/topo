@@ -41,6 +41,17 @@ import Testing
         #expect(await development.asked == [nil, nil])
     }
 
+    @Test func aCopyIsKeptPerAccountAndPerZone() async throws {
+        let caches = caches()
+        let key = "2/_defaultOwner/Topo"
+        _ = try await read(Server("sam"), CloudKitRecordDatabase.store(named: key, account: account, environment: .development, caches: caches))
+        let other = Server("other")
+        _ = try await read(other, CloudKitRecordDatabase.store(named: key, account: Data("another".utf8), environment: .development, caches: caches))
+        #expect(await other.asked == [nil])
+        let board = CloudKitRecordDatabase.store(named: "2/_defaultOwner/Board", account: account, environment: .development, caches: caches)
+        #expect(board.file != CloudKitRecordDatabase.store(named: key, account: account, environment: .development, caches: caches).file)
+    }
+
     @Test func aCopyKeptUnderTheAccountAloneIsAWalkFromTheBeginning() async throws {
         let caches = caches()
         let key = "2/_defaultOwner/Topo"

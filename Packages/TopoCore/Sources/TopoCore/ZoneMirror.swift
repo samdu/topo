@@ -36,7 +36,7 @@ public actor ZoneMirror {
     public typealias Pull = @Sendable (_ since: Data?) async throws -> ZoneFeedPage
 
     /// What is kept on disk, and where: the file, and whose zone it is. A copy kept under one
-    /// owner is never read under another.
+    /// owner is refused and removed under another, never taken.
     public struct Store: Sendable {
         public var file: URL
         public var owner: Data
