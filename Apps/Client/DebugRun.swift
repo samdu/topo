@@ -334,7 +334,10 @@ extension DebugRun {
     /// process up), printing the userland's line while it waits, so the turn is the guest's
     /// answer rather than a refusal. Topo on the glass follows the turn as the chat's does, and
     /// every change of his pose is printed as `mascot:`, between `mascot: turn began for <refs>`
-    /// and `mascot: turn gone for <refs>`, the refs being the turns that guest turn answers.
+    /// and `mascot: turn gone for <refs>`, the refs being the turns that guest turn answers, or
+    /// `heard:<nonce>` for words given ahead of their save, whose turn no ref names yet. The
+    /// words are sent under the nonce `sending under <nonce> in run <run>:` names, so a script
+    /// ties a heard turn's lines to this run.
     ///
     /// The reply printed is the one to the turn this run sent, found by that turn's nonce and the
     /// reply's parents, never merely the newest reply in the log; it carries `TOPO_DEBUG_RUN`,
@@ -373,22 +376,22 @@ extension DebugRun {
         harness.onGuest = { activity in
             chat?(activity)
             switch activity {
-            case .began(let pid, let answering):
+            case .began(let pid, let answering, let heard):
                 pose = mascot.state.activity
-                say("mascot: turn began for \(refs(answering)), process \(pid.map(String.init) ?? "none"), \(pose.rawValue)")
+                say("mascot: turn began for \(refs(answering, heard: heard)), process \(pid.map(String.init) ?? "none"), \(pose.rawValue)")
             case .update:
                 if mascot.state.activity != pose {
                     pose = mascot.state.activity
                     say("mascot: \(pose.rawValue)")
                 }
-            case .gone(let answering):
+            case .gone(let answering, let heard):
                 pose = mascot.state.activity
-                say("mascot: turn gone for \(refs(answering)), \(pose.rawValue)")
+                say("mascot: turn gone for \(refs(answering, heard: heard)), \(pose.rawValue)")
             }
         }
         defer { harness.onGuest = chat }
-        say("sending: \(text)")
         let nonce = harness.willSend(text)
+        say("sending under \(nonce) in run \(run): \(text)")
         await harness.retry()
         await harness.refresh()
         if let error = harness.error {
@@ -451,9 +454,11 @@ extension DebugRun {
     }
 
     /// The turns a guest turn answers as the mascot's lines name them, joined by `+`: the refs
-    /// the reply line names its turn by, so the script ties the two.
-    static func refs(_ answering: [TurnRef]) -> String {
-        answering.isEmpty ? "none" : answering.map(\.description).joined(separator: "+")
+    /// the reply line names its turn by, so the script ties the two. Words given ahead of their
+    /// save answer no ref yet and are named `heard:<nonce>`, the nonce the sending line names.
+    static func refs(_ answering: [TurnRef], heard: String? = nil) -> String {
+        if !answering.isEmpty { return answering.map(\.description).joined(separator: "+") }
+        return heard.map { "heard:\($0)" } ?? "none"
     }
 
     static let runVariable = "TOPO_DEBUG_RUN"

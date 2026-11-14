@@ -60,9 +60,11 @@ enum GuestBridgeError: Error, Equatable, CustomStringConvertible {
 /// updates, and the turn gone.
 enum GuestActivity: Sendable {
     /// `answering` is the person's turns the input answers, so each line of a turn names it.
-    case began(pid: Int32?, answering: [TurnRef])
+    /// Words given ahead of their save (`GuestBridge.hear`) answer a turn no ref names yet:
+    /// `answering` is empty and `heard` is the person's nonce, which their turn is saved under.
+    case began(pid: Int32?, answering: [TurnRef], heard: String? = nil)
     case update(GuestSession.TurnUpdate)
-    case gone(answering: [TurnRef])
+    case gone(answering: [TurnRef], heard: String? = nil)
 }
 
 /// What became of words the guest was given ahead of their turn (`GuestBridge.hear`), by the
@@ -878,7 +880,7 @@ actor GuestBridge: Brain {
     private func fly(_ id: String, person nonce: String, updates: AsyncStream<GuestSession.TurnUpdate>,
                      pid: Int32?, login: Int) async {
         await heardObserver(.began(nonce))
-        await observe(.began(pid: pid, answering: []))
+        await observe(.began(pid: pid, answering: [], heard: nonce))
         var model: String?, usage: StreamEvent.Usage?, end: GuestSession.TurnEnd?
         // Every message's words, as `answer` gathers them.
         var words = ReplyWords()
@@ -907,7 +909,7 @@ actor GuestBridge: Brain {
                 break
             }
         }
-        await observe(.gone(answering: []))
+        await observe(.gone(answering: [], heard: nonce))
         var reply: String?
         // A sign-out meanwhile makes whatever the turn came to a login's that has gone.
         if self.login == login {
