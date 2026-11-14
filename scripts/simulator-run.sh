@@ -303,7 +303,9 @@ sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "$password") &
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -resultBundlePath "$results" || status=$?
   scripts/ci-require-tests.sh xcresult "$results" TopoSimulatorSignInTests || status=1
-  if [ "$status" = 0 ]; then
+  if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
+    echo "==> $udid was signed in already and Settings asks for no password; if --send still reports a lapse, the test does not know the screen the lapse shows"
+  elif [ "$status" = 0 ]; then
     echo "==> $udid is signed in; DEVICE=$udid scripts/simulator-run.sh --send hello proves CloudKit answers"
   else
     echo "==> the sign-in stopped; the '[sign-in] stopped:' line above and $results say where. Type no password by hand before reading why: a refused one tried again locks the account" >&2
@@ -445,7 +447,7 @@ if [ -n "$send" ]; then
   case "$icloud" in
     answered) ;;
     "no account") fail "the simulator $udid has no iCloud account; sign it in with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
-    *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud): its sign-in has lapsed; sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
+    *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
   esac
   wait_for done "the turn"
 fi

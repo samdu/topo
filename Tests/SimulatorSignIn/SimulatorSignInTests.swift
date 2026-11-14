@@ -46,7 +46,7 @@ final class SimulatorSignInTests: XCTestCase {
             user.tap()
             user.typeText(account)
             settings.buttons["continue-button"].firstMatch.tap()
-        } else if let prompt = lapsePrompt() {
+        } else if let prompt = awaitLapsePrompt() {
             print("[sign-in] signed in as \(accountCell.label); the sign-in is asked for again: \(prompt.label)")
             prompt.tap()
         } else {
@@ -125,6 +125,16 @@ final class SimulatorSignInTests: XCTestCase {
         words.first { word in
             ["verification code", "Two-Factor", "Enter the code", "6-digit"].contains { word.localizedCaseInsensitiveContains($0) }
         }
+    }
+
+    /// A lapse's prompt, given the few seconds it takes to appear after Settings opens.
+    private func awaitLapsePrompt() -> XCUIElement? {
+        let deadline = Date().addingTimeInterval(10)
+        repeat {
+            if let prompt = lapsePrompt() { return prompt }
+            sleep(1)
+        } while Date() < deadline
+        return nil
     }
 
     /// What a lapsed sign-in shows: the Apple Account Verification alert, SpringBoard's or
