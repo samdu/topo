@@ -73,8 +73,8 @@ public struct SessionFile: Sendable {
 }
 
 /// What the way out cut short, kept on disk beside the session id until a process told of it has
-/// begun: the next one is told, in its system prompt, since nothing of a process ended outside a
-/// turn reaches the conversation any other way.
+/// begun: the next one is told, by its SessionStart hook (`ClaudeLauncher.hookCommand`), since
+/// nothing of a process ended outside a turn reaches the conversation any other way.
 public struct CutFile: Sendable {
     public let url: URL
 
@@ -482,7 +482,8 @@ public actor GuestSession {
     }
 
     /// Every process from here on is told `memory` of its memory: whether the vault is mounted,
-    /// which it is told once, at its launch. A resident process told otherwise is replaced as a
+    /// which its launch's SessionStart hook tells the conversation when it differs from what the
+    /// conversation was last told. A resident process launched to say otherwise is replaced as a
     /// change of model replaces it, so a turn never goes to a process told the memory is where it
     /// is not, or cannot be reached when it can.
     public func use(memory: Bool?) {
