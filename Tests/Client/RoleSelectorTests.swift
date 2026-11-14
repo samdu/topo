@@ -343,6 +343,7 @@ final class RoleSelectorTests: XCTestCase {
     /// and hands the harness the lease that claimed, so the arrival never drops its login.
     func testADebugSendOnAViewerTakesPrimaryAndHandsOnTheLease() async throws {
         DebugRun.takeRefused = false
+        DebugRun.takeTried = false
         let db = InMemoryRecordDatabase()
         try await lease(db, holder: DeviceID("erased-simulator"))
         let current = await db.current(Lease.recordID)
@@ -352,10 +353,19 @@ final class RoleSelectorTests: XCTestCase {
         let s = selector(db, signedIn: true)
         await s.decide()
         XCTAssertEqual(s.role, .viewer)
+        // The send waits on the role: nothing goes to the harness while this is still a viewer.
+        let gate = Task { await DebugRun.primary(s, poll: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(100))
         var adopted: [PrimaryLease] = []
         let taken = await DebugRun.takePrimary(s, adopt: { adopted.append($0) },
                                                environment: ["TOPO_DEBUG_SEND": "hello"])
         XCTAssertTrue(taken)
+        let opened = await gate.value
+        XCTAssertTrue(opened)
+        // Asked again in the same process, it takes nothing.
+        let again = await DebugRun.takePrimary(s, adopt: { adopted.append($0) },
+                                               environment: ["TOPO_DEBUG_SEND": "hello"])
+        XCTAssertFalse(again)
         XCTAssertEqual(s.role, .primary)
         XCTAssertFalse(DebugRun.takeRefused)
         XCTAssertEqual(adopted.count, 1)
@@ -368,6 +378,7 @@ final class RoleSelectorTests: XCTestCase {
     /// Only a launch that sends takes over: any other viewer stays one, and nothing is written.
     func testALaunchThatDoesNotSendLeavesAViewerAViewer() async throws {
         DebugRun.takeRefused = false
+        DebugRun.takeTried = false
         let db = InMemoryRecordDatabase()
         try await lease(db, holder: DeviceID("phone"))
         let s = selector(db, signedIn: true)
@@ -390,7 +401,8 @@ final class RoleSelectorTests: XCTestCase {
     /// waiting on a guest that will never sign in.
     func testADebugSendRefusedByALiveHolderEndsTheSend() async throws {
         DebugRun.takeRefused = false
-        defer { DebugRun.takeRefused = false }
+        DebugRun.takeTried = false
+        defer { DebugRun.takeRefused = false; DebugRun.takeTried = false }
         let db = InMemoryRecordDatabase()
         let holder = PrimaryLease(database: db, device: DeviceID("phone"), endpoint: nil, probe: NoProbe(),
                                   sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
@@ -399,9 +411,13 @@ final class RoleSelectorTests: XCTestCase {
                              sleep: { _ in _ = try await holder.heartbeat() })
         await s.decide()
         var adopted = 0
+        let gate = Task { await DebugRun.primary(s, poll: .milliseconds(5)) }
         let taken = await DebugRun.takePrimary(s, adopt: { _ in adopted += 1 }, environment: ["TOPO_DEBUG_SEND": "hello"])
         XCTAssertFalse(taken)
         XCTAssertTrue(DebugRun.takeRefused)
+        // The send's wait ends with nothing sent rather than waiting on a guest that will never sign in.
+        let opened = await gate.value
+        XCTAssertFalse(opened)
         XCTAssertEqual(s.role, .viewer)
         XCTAssertEqual(adopted, 0)
         let stillHeld = await holder.isPrimary()

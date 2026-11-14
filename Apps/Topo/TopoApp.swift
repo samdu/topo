@@ -251,7 +251,7 @@ struct TopoApp: App {
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.
     private func debugTurn() async {
         #if DEBUG
-        await DebugRun.send(with: harness, mascot: mascot)
+        await DebugRun.send(with: harness, mascot: mascot, role: roleSelector)
         #endif
     }
 
