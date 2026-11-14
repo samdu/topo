@@ -124,7 +124,8 @@ final class WatchSurfaceCacheTests: XCTestCase {
         defaults.removeObject(forKey: WatchSurfaceCache.feedKey)
         defaults.set(token, forKey: WatchSurfaceCache.unnamedTokenKey)
         await cache.fetch()
-        XCTAssertEqual(await zone.asked, [nil, nil])
+        let asked = await zone.asked
+        XCTAssertEqual(asked, [nil, nil])
         XCTAssertNil(defaults.data(forKey: WatchSurfaceCache.unnamedTokenKey))
     }
 
@@ -134,7 +135,8 @@ final class WatchSurfaceCacheTests: XCTestCase {
         let cache = cache(in: nil, over: zone)
         await cache.fetch()
         await cache.fetch()
-        XCTAssertEqual(await zone.asked, [nil, nil])
+        let asked = await zone.asked
+        XCTAssertEqual(asked, [nil, nil])
         XCTAssertEqual(store.slots(), ["weather"])
         XCTAssertNil(defaults.object(forKey: WatchSurfaceCache.feedKey))
     }
