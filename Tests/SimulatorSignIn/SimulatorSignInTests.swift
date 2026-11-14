@@ -29,7 +29,7 @@ final class SimulatorSignInTests: XCTestCase {
             guard asksForCode(screenWords()) != nil else { return stopped("given a code, but no screen asks for one") }
             snap("code")
             settings.typeText(code)
-            return try finish(accountCell)
+            return try finish(accountCell, account: account)
         }
         settings.terminate()
         settings.activate()
@@ -84,11 +84,11 @@ final class SimulatorSignInTests: XCTestCase {
             return stopped("no button submits the password; nothing was submitted")
         }
         submit.tap()
-        try finish(accountCell)
+        try finish(accountCell, account: account)
     }
 
     /// The screens after the password, until Settings shows the account signed in.
-    private func finish(_ accountCell: XCUIElement) throws {
+    private func finish(_ accountCell: XCUIElement, account: String) throws {
         let deadline = Date().addingTimeInterval(120)
         var step = 0
         while Date() < deadline {
