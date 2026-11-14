@@ -343,12 +343,19 @@ extension DebugRun {
     /// the id the script launched this run under, so a line from any other launch matches nothing;
     /// and it names the guest session and the resident process that wrote it.
     @MainActor
-    static func send(with harness: Harness, mascot: Mascot,
+    static func send(with harness: Harness, mascot: Mascot, role: RoleSelector,
                      environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let text = words(environment) else { return }
         let run = environment[runVariable] ?? ""
         say("icloud: \(await iCloud())")
         say("model: \(ClaudeModel.effective(harness.model).rawValue) (setting: \(harness.model.rawValue))")
+        // Nothing reaches the guest or the harness before this device is primary: the harness's
+        // first pass claims the lease with an instance of its own, which a takeover still waiting
+        // on the holder would then take for this device's and claim over again.
+        guard await primary(role) else {
+            say("done")
+            return
+        }
         if let guest = harness.guest {
             var said = ""
             while true {
@@ -448,6 +455,54 @@ extension DebugRun {
                 }
             }
         }
+    }
+
+    /// Set when a sending launch found itself a viewer and the takeover was refused (`takePrimary`).
+    @MainActor static var takeRefused = false
+    /// Set once a sending launch has asked for primary, so a viewer's screen shown again later in
+    /// the process (a demotion) does not take it a second time.
+    @MainActor static var takeTried = false
+
+    /// Waits until the role is primary, whether it was or `takePrimary` took it: true then, and
+    /// false once the takeover was refused or the wait is cancelled. A device still deciding, or a
+    /// viewer whose takeover is under way, is waited on; a device still deciding says so once, so
+    /// a run that times out there names where it stood.
+    @MainActor
+    static func primary(_ role: RoleSelector, poll: Duration = .milliseconds(200)) async -> Bool {
+        var said = false
+        while true {
+            if role.role == .primary { return true }
+            if takeRefused || Task.isCancelled { return false }
+            if role.role == nil, !said {
+                said = true
+                say("role: waiting for the role to be decided\(role.trouble.map { ": \($0)" } ?? "")")
+            }
+            try? await Task.sleep(for: poll)
+        }
+    }
+
+    /// A launch that sends (`TOPO_DEBUG_SEND`) on a device that is a viewer takes primary first,
+    /// through the viewer's own control (`RoleSelector.takePrimary`), and the harness keeps the
+    /// lease that made the claim, as the control's does. A simulator signed into a shared Apple ID
+    /// finds the lease of whichever device ran last, so without it every send would be a viewer's,
+    /// whose arrival signs it out. True when primary was taken, and then the viewer's arrival does
+    /// not run; false, with nothing written, for any launch that does not send or a device that
+    /// is not a viewer. A takeover refused, a live holder kept primary, is an `error:` line and
+    /// ends the send (`takeRefused`).
+    @MainActor
+    static func takePrimary(_ selector: RoleSelector, adopt: (PrimaryLease) -> Void,
+                            environment: [String: String] = ProcessInfo.processInfo.environment) async -> Bool {
+        guard words(environment) != nil, selector.role == .viewer, !takeTried else { return false }
+        takeTried = true
+        say("role: viewer; taking primary as the viewer's control does")
+        guard let lease = await selector.takePrimary() else {
+            takeRefused = true
+            say("error: role: still a viewer: \(selector.trouble ?? "the takeover did not land")")
+            return false
+        }
+        adopt(lease)
+        say("role: primary, taken over")
+        return true
     }
 
     /// The turns a guest turn answers as the mascot's lines name them, joined by `+`: the refs

@@ -338,6 +338,95 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertFalse(primary)
     }
 
+    /// A viewer whose lease's holder is gone, as a simulator on a shared Apple ID finds the device
+    /// that ran before it: a debug launch that sends takes primary through the viewer's control
+    /// and hands the harness the lease that claimed, so the arrival never drops its login.
+    func testADebugSendOnAViewerTakesPrimaryAndHandsOnTheLease() async throws {
+        DebugRun.takeRefused = false
+        DebugRun.takeTried = false
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("erased-simulator"))
+        let current = await db.current(Lease.recordID)
+        var record = try XCTUnwrap(current)
+        record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -3600))
+        _ = try await db.save(record)
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .viewer)
+        // The send waits on the role: nothing goes to the harness while this is still a viewer.
+        let gate = Task { await DebugRun.primary(s, poll: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(100))
+        var adopted: [PrimaryLease] = []
+        let taken = await DebugRun.takePrimary(s, adopt: { adopted.append($0) },
+                                               environment: ["TOPO_DEBUG_SEND": "hello"])
+        XCTAssertTrue(taken)
+        // A takeover that did not land never opens the gate; cancelled, it fails here rather than hangs.
+        if !taken { gate.cancel() }
+        let opened = await gate.value
+        XCTAssertTrue(opened)
+        // Asked again in the same process, it takes nothing.
+        let again = await DebugRun.takePrimary(s, adopt: { adopted.append($0) },
+                                               environment: ["TOPO_DEBUG_SEND": "hello"])
+        XCTAssertFalse(again)
+        XCTAssertEqual(s.role, .primary)
+        XCTAssertFalse(DebugRun.takeRefused)
+        XCTAssertEqual(adopted.count, 1)
+        let holds = await adopted.first?.isPrimary()
+        XCTAssertEqual(holds, true)
+        let after = await db.current(Lease.recordID)
+        XCTAssertEqual(Lease(record: try XCTUnwrap(after))?.holder, me)
+    }
+
+    /// Only a launch that sends takes over: any other viewer stays one, and nothing is written.
+    func testALaunchThatDoesNotSendLeavesAViewerAViewer() async throws {
+        DebugRun.takeRefused = false
+        DebugRun.takeTried = false
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("phone"))
+        let s = selector(db, signedIn: true)
+        await s.decide()
+        XCTAssertEqual(s.role, .viewer)
+        let before = await db.current(Lease.recordID)
+        var adopted = 0
+        for environment in [[:], ["TOPO_DEBUG_SEND": "  "], ["TOPO_DEBUG_GUEST_TURN": "hi", "TOPO_CLAUDE_SETUP_TOKEN": "t"]] {
+            let taken = await DebugRun.takePrimary(s, adopt: { _ in adopted += 1 }, environment: environment)
+            XCTAssertFalse(taken)
+        }
+        XCTAssertEqual(s.role, .viewer)
+        XCTAssertEqual(adopted, 0)
+        XCTAssertFalse(DebugRun.takeRefused)
+        let after = await db.current(Lease.recordID)
+        XCTAssertEqual(after, before)
+    }
+
+    /// A holder that answers through the wait keeps primary: the send ends on an error rather than
+    /// waiting on a guest that will never sign in.
+    func testADebugSendRefusedByALiveHolderEndsTheSend() async throws {
+        DebugRun.takeRefused = false
+        DebugRun.takeTried = false
+        defer { DebugRun.takeRefused = false; DebugRun.takeTried = false }
+        let db = InMemoryRecordDatabase()
+        let holder = PrimaryLease(database: db, device: DeviceID("phone"), endpoint: nil, probe: NoProbe(),
+                                  sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await holder.acquire() else { return XCTFail("claim") }
+        let s = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { true }, ensureZone: {},
+                             sleep: { _ in _ = try await holder.heartbeat() })
+        await s.decide()
+        var adopted = 0
+        let gate = Task { await DebugRun.primary(s, poll: .milliseconds(5)) }
+        let taken = await DebugRun.takePrimary(s, adopt: { _ in adopted += 1 }, environment: ["TOPO_DEBUG_SEND": "hello"])
+        XCTAssertFalse(taken)
+        XCTAssertTrue(DebugRun.takeRefused)
+        if !DebugRun.takeRefused { gate.cancel() }
+        // The send's wait ends with nothing sent rather than waiting on a guest that will never sign in.
+        let opened = await gate.value
+        XCTAssertFalse(opened)
+        XCTAssertEqual(s.role, .viewer)
+        XCTAssertEqual(adopted, 0)
+        let stillHeld = await holder.isPrimary()
+        XCTAssertTrue(stillHeld)
+    }
+
     func testAHolderThatHeartbeatsThroughTheWaitKeepsPrimary() async throws {
         let db = InMemoryRecordDatabase()
         let holder = PrimaryLease(database: db, device: DeviceID("phone"), endpoint: nil, probe: NoProbe(),
