@@ -43,7 +43,7 @@ final class SimulatorSignInTests: XCTestCase {
             guard shows(account, after: accountCell) else {
                 return stopped("signed in to an account that is not \(account); sign it out by hand first")
             }
-            if let why = signOut(accountCell) { return stopped(why) }
+            if let why = signOut(accountCell, account: account) { return stopped(why) }
         }
 
         let firstSignIn = accountCell.label.hasPrefix("Apple Account, Sign in")
@@ -152,8 +152,8 @@ final class SimulatorSignInTests: XCTestCase {
     /// Signs the account out from its own page, which `shows` left open, answering the sheets on
     /// the way, until Settings offers a sign-in: nil then, or why it stopped. Nothing is typed: a
     /// sign-out that asks for the password (Find My, on a phone) stops here.
-    private func signOut(_ accountCell: XCUIElement) -> String? {
-        let button = settings.buttons["Sign Out"].firstMatch
+    private func signOut(_ accountCell: XCUIElement, account: String) -> String? {
+        let button = settings.buttons["AAUIDeleteButtonSpecifierID"].firstMatch
         var swipes = 0
         while !(button.exists && button.isHittable), swipes < 8 {
             settings.swipeUp()
@@ -161,7 +161,7 @@ final class SimulatorSignInTests: XCTestCase {
         }
         guard button.exists, button.isHittable else { return "the account's page has no Sign Out" }
         snap("sign-out")
-        print("[sign-in] signing \(accountCell.label) out, to sign it in again")
+        print("[sign-in] signing \(account) out, to sign it in again")
         button.tap()
         let deadline = Date().addingTimeInterval(120)
         var step = 0
