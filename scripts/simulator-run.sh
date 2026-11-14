@@ -56,8 +56,10 @@
 # and verifies the ear's models into EAR_MODELS (build/ear-models) and the voice's bundle into
 # VOICE_MODELS (build/phonon; scripts/phonon-bundles.sh, with Sam's Hugging Face token), starts the loopback lane with
 # Tests/Fixtures/capital-of-france.wav (scripts/ci-audio-lane.sh; BlackHole as the Mac's default
-# input and output), hands the token to the test runner as TEST_RUNNER_TOPO_TALK_SETUP_TOKEN, and
-# passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
+# input and output), serves the token once on the host's loopback (as --sign-in serves the
+# password) to the app the test launches, which reads it itself from the port and nonce the test
+# hands it, so neither the runner's environment nor the app's launch environment, both of which
+# the result bundle records, carries it, and passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
 # lane is stopped and the Mac's defaults restored on every exit. Its turn is a real one.
 #
 # A --userland run needs no token. The app fetches or reuses the guest's rootfs and Claude Code,
@@ -134,7 +136,7 @@ while [ $# -gt 0 ]; do
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
-    -h|--help) sed -n '2,92p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -243,22 +245,14 @@ tracked() {
   return "$status"
 }
 
-if [ "$build" = yes ]; then
-  scripts/build-ish.sh
-  scripts/fetch-phonon.sh
-fi
-
-if [ "$signin" = yes ]; then
-  # The password is read into a variable and leaves it once, on a pipe to a listener on the
-  # host's loopback that answers one request carrying this run's nonce and exits. It is never an
-  # argument, a file or a variable of the test runner's environment, which the result bundle's
-  # session log records whole; the runner types it into a secure field, which XCTest logs as
-  # <redacted>. Tests/SimulatorSignIn says what the test answers and what it refuses to.
-  account="${SIGNIN_ACCOUNT:-buddy.durose@icloud.com}"
-  password="$(op-item get 'Buddy Apple ID' password)" || password=""
-  [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
-  nonce="$(uuidgen)"
-  portfile="$derived/sign-in.$$.port"
+# Serves one secret once on the host's loopback, which a simulator shares: a listener that answers
+# the first request carrying the nonce with the secret and exits, hands nothing to a request
+# without it, and gives up after 30 minutes unasked. The secret leaves its variable once, on a
+# pipe to the listener, never as an argument or a file. The listener is a recorded child, so
+# `cleanup` ends one nobody asked. Sets served_port.
+# serve_once <nonce> <name of the variable holding the secret>
+serve_once() {
+  local nonce="$1" portfile="$derived/served.$$.port" listener
   rm -f "$portfile"
   /usr/bin/python3 -c '
 import socket, sys, time
@@ -283,15 +277,34 @@ while time.monotonic() < deadline:
         if asked == nonce:
             peer.sendall(secret)
             sys.exit(0)
-sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "$password") &
+sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "${!2}") &
   listener=$!
   echo "$listener" >>"$pids"
   started_pids="$started_pids $listener"
-  unset password
   for _ in $(seq 50); do [ -s "$portfile" ] && break; sleep 0.2; done
-  port="$(cat "$portfile" 2>/dev/null)"
+  served_port="$(cat "$portfile" 2>/dev/null)"
   rm -f "$portfile"
-  [ -n "$port" ] || { echo "the password's listener did not start" >&2; exit 1; }
+  [ -n "$served_port" ] || { echo "the listener that serves the $2 did not start" >&2; exit 1; }
+}
+
+if [ "$build" = yes ]; then
+  scripts/build-ish.sh
+  scripts/fetch-phonon.sh
+fi
+
+if [ "$signin" = yes ]; then
+  # The password is read into a variable and leaves it once, on a pipe to a listener on the
+  # host's loopback that answers one request carrying this run's nonce and exits. It is never an
+  # argument, a file or a variable of the test runner's environment, which the result bundle's
+  # session log records whole; the runner types it into a secure field, which XCTest logs as
+  # <redacted>. Tests/SimulatorSignIn says what the test answers and what it refuses to.
+  account="${SIGNIN_ACCOUNT:-buddy.durose@icloud.com}"
+  password="$(op-item get 'Buddy Apple ID' password)" || password=""
+  [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
+  nonce="$(uuidgen)"
+  serve_once "$nonce" password
+  unset password
+  port="$served_port"
   results="$derived/TopoSimulatorSignIn.xcresult"
   rm -rf "$results"
   xcrun simctl boot "$udid" 2>/dev/null || true
@@ -337,13 +350,22 @@ if [ "$talk" = yes ]; then
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   xcrun simctl boot "$udid"
   xcrun simctl bootstatus "$udid" -b >/dev/null
+  # The result bundle's session log records the test runner's environment whole, and the
+  # environment the runner launches the app with, so the token is in neither: it is served once
+  # on the loopback, and the runner hands the app only the port and the nonce, from which the
+  # app reads it itself at launch (DebugRun.servedToken). The script's own CLAUDE_SETUP_TOKEN
+  # is taken out of xcodebuild's environment too, so nothing the test step starts has it.
+  nonce="$(uuidgen)"
+  serve_once "$nonce" token
+  unset token
   results="$derived/TopoTalk.xcresult"
   rm -rf "$results"
   echo "==> speaking a question into the microphone (TopoTalkTests)"
   status=0
-  TEST_RUNNER_TOPO_TALK_SETUP_TOKEN="$token" TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
+  TEST_RUNNER_TOPO_DEBUG_TOKEN_PORT="$served_port" TEST_RUNNER_TOPO_DEBUG_TOKEN_NONCE="$nonce" \
+  TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
   TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models/phonon-40m-en" \
-    tracked xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
+    tracked env -u CLAUDE_SETUP_TOKEN xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -resultBundlePath "$results" || status=$?
   scripts/ci-audio-lane.sh check after || status=1

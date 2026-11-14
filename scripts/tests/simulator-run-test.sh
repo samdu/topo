@@ -215,6 +215,19 @@ open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + ag
     "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
   ;;
 esac
+# The talk's test: what it was started with, and what the app it launches would read from the
+# port and nonce the runner hands it.
+case " $* " in *" TopoTalk "*)
+  env | grep -v "^FAKE_TALK_TOKEN=" >"$FAKE_TALK_ENV"  # the test's own copy is not the script's
+  /usr/bin/python3 -c '
+import socket, sys
+port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+    s.sendall(nonce.encode() + b"\n"); got = b""
+    while chunk := s.recv(256): got += chunk
+open(out, "wb").write(got)' "${TEST_RUNNER_TOPO_DEBUG_TOKEN_PORT:-0}" "${TEST_RUNNER_TOPO_DEBUG_TOKEN_NONCE:-}" "$FAKE_TALK_GOT" || exit 65
+  ;;
+esac
 if [ "${FAKE_XCODEBUILD:-}" = hangs ]; then
   /bin/sleep 30 &
   exec -a sleep /bin/sleep 31
@@ -440,7 +453,7 @@ ended ended-during-the-suite-slowly "sleep 31"  no  yes --press-mic
 # writes what it was called with to a file. A start that refuses (exit 3) found another run's
 # lane: the script exits 3 and never calls stop. A start that fails any other way is this run's
 # to stop.
-for fake in fetch-ear-models.sh phonon-bundles.sh; do printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/$fake"; done
+for fake in fetch-ear-models.sh phonon-bundles.sh ci-require-tests.sh; do printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/$fake"; done
 cat >"$work/root/scripts/ci-audio-lane.sh" <<EOF
 #!/bin/sh
 echo "\$1" >> "$work/lane-calls"
@@ -477,11 +490,28 @@ else
   failures=$((failures + 1))
 fi
 
+# A --talk that reaches its test: the token is served once to the request with the run's nonce,
+# and is in none of the test runner's arguments, its environment or the run's output, since the
+# result bundle records the runner's environment and the app's launch environment whole.
+token="fake-claude-token-$$"
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
+  FAKE_TALK_ENV="$work/talk.env" FAKE_TALK_GOT="$work/talk.got" \
+  "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk.out" 2>&1 </dev/null
+status=$?
+got="$(cat "$work/talk.got" 2>/dev/null)"
+leaks="$(grep -lF "$token" "$FAKE_XCODEBUILD_CALLS" "$work/talk.env" "$work/talk.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
+if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && grep -q " TopoTalk " "$FAKE_XCODEBUILD_CALLS"; then
+  echo "ok   talk-token-served: the test's app got the token from the run's nonce, and no argument, environment or output carries it"
+else
+  echo "FAIL talk-token-served: exit $status, the app read: ${got:+a value}${got:-nothing}, the token is in: ${leaks:-nothing}"
+  sed 's/^/    | /' "$work/talk.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
 # --sign-in, against a fake vault and a fake test that asks the listener for the password: the
 # listener hands nothing to a request without the run's nonce and the password to one with it,
 # and the password is in none of the test runner's arguments, its environment or the run's output.
-printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/ci-require-tests.sh"
-chmod +x "$work/root/scripts/ci-require-tests.sh"
 secret="fake-apple-password-$$"
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/signin.env" FAKE_SIGNIN_GOT="$work/signin.got" \

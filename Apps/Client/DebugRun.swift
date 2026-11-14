@@ -11,12 +11,17 @@ import UIKit
 /// whole file is behind `#if DEBUG`, and the model every turn goes to is pinned to Haiku by
 /// `ClaudeModel.pinned`, which is behind the same flag.
 ///
-/// The token arrives as an environment variable and nowhere else — not a scheme, not a file, not a
-/// build setting — because a variable lives only in the launching shell and the launched process.
-/// `scripts/simulator-run.sh` reads it from the vault and hands it to `simctl` as
-/// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`; nothing writes it down.
+/// The token arrives as an environment variable, or served once over the host's loopback, and
+/// nowhere else — not a scheme, not a file, not a build setting. `scripts/simulator-run.sh` reads
+/// it from the vault and hands it to `simctl` as `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`, which
+/// lives only in the launching shell and the launched process. A UI test cannot do that: a result
+/// bundle's session log records the environment the runner launches the app with, so `--talk`
+/// serves the token once on the loopback and the test hands the app only the port and the nonce
+/// (`servedToken`). Nothing writes it down.
 enum DebugRun {
     static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
+    static let tokenPortVariable = "TOPO_DEBUG_TOKEN_PORT"
+    static let tokenNonceVariable = "TOPO_DEBUG_TOKEN_NONCE"
     static let sendVariable = "TOPO_DEBUG_SEND"
     static let earVariable = "TOPO_DEBUG_EAR"
     static let voiceVariable = "TOPO_DEBUG_VOICE"
@@ -281,9 +286,53 @@ enum DebugRun {
     /// starts in the guest gets it as `CLAUDE_CODE_OAUTH_TOKEN` in place of a login
     /// (`GuestResident.developerEnvironment`), so a simulator and CI run with no browser and no
     /// paste. It reaches no connector: those need Claude Code's own login.
-    static func developerToken(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+    /// `TOPO_CLAUDE_SETUP_TOKEN` when the launch carries it, and otherwise the token `served`.
+    static func developerToken(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                               served: String? = DebugRun.servedToken) -> String? {
         let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return token.isEmpty ? nil : token
+        return token.isEmpty ? served : token
+    }
+
+    /// The token served to this launch over the host's loopback, read once, at the first ask for
+    /// the developer's token (`signIn`, at launch), and kept in memory for the life of the process:
+    /// the listener answers one request and exits.
+    static let servedToken: String? = served(ProcessInfo.processInfo.environment)
+
+    /// The token a listener on the host's loopback (which a simulator shares) serves to the
+    /// request carrying `TOPO_DEBUG_TOKEN_NONCE` on `TOPO_DEBUG_TOKEN_PORT`, as
+    /// `scripts/simulator-run.sh` stands one up, or nil when the launch names no port. A read that
+    /// fails is said and is nil, which is a launch signed out. Bounded: the connection gives up
+    /// after `seconds` without a byte.
+    static func served(_ environment: [String: String], seconds: Int = 10) -> String? {
+        guard let port = environment[tokenPortVariable].flatMap(UInt16.init) else { return nil }
+        let nonce = environment[tokenNonceVariable] ?? ""
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { say("no token served: socket: \(errno)"); return nil }
+        defer { close(fd) }
+        var bound = timeval(tv_sec: seconds, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else { say("no token served: the listener refused the connection: \(errno)"); return nil }
+        let ask = Array((nonce + "\n").utf8)
+        guard write(fd, ask, ask.count) == ask.count else { say("no token served: could not ask: \(errno)"); return nil }
+        var bytes: [UInt8] = []
+        var chunk = [UInt8](repeating: 0, count: 256)
+        while true {
+            let n = read(fd, &chunk, chunk.count)
+            if n < 0 { say("no token served: could not read: \(errno)"); return nil }
+            if n == 0 { break }
+            bytes += chunk[0..<n]
+        }
+        let token = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { say("no token served: the listener gave nothing"); return nil }
+        return token
     }
 
     /// Marks the launch signed in when it carries a developer's token, so the app comes up past
@@ -295,7 +344,7 @@ enum DebugRun {
                        environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
         guard developerToken(environment) != nil else { return false }
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
-        say("signed in from \(tokenVariable)")
+        say("signed in from a developer's token")
         return true
     }
 
