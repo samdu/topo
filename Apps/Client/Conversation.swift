@@ -306,6 +306,9 @@ final class Conversation {
             callUp = false
             dropWhatIsDecoding()
             stop("hung up from the call", sending: false)
+        case .ending:
+            // The microphone's own moment; the conversation ends at `.over`, just after.
+            break
         case .over:
             callUp = false
             stop("the call is over", sending: true)

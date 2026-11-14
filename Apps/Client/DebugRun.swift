@@ -22,6 +22,7 @@ enum DebugRun {
     static let voiceVariable = "TOPO_DEBUG_VOICE"
     static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
     static let replyDelayVariable = "TOPO_DEBUG_REPLY_DELAY"
+    static let pressStallVariable = "TOPO_DEBUG_PRESS_STALL"
     static let loopVariable = "TOPO_DEBUG_LOOP_SECONDS"
     static let outboxVariable = "TOPO_DEBUG_OUTBOX"
     static let lookVariable = "TOPO_DEBUG_LOOK"
@@ -244,6 +245,22 @@ enum DebugRun {
     /// Where the harness keeps its line. Named here as well because the seeding above runs before
     /// the harness exists.
     private static let outboxKey = "topo.harness.outbox"
+
+    /// `TOPO_DEBUG_PRESS_STALL=<seconds>`: how long the chat's press blocks the main thread at
+    /// its thumb-down, in its task after the gesture's callback has returned, as a cold launch's
+    /// session work can: the release and the long press's verdict queue behind it. Nil when the
+    /// variable is absent, which is every ordinary run.
+    static func pressStall(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Double? {
+        guard let seconds = environment[pressStallVariable].flatMap(Double.init), seconds > 0 else { return nil }
+        return seconds
+    }
+
+    /// Blocks the calling thread for `TOPO_DEBUG_PRESS_STALL`'s seconds; nothing when it is absent.
+    static func stallPress(_ environment: [String: String] = ProcessInfo.processInfo.environment) {
+        guard let seconds = pressStall(environment) else { return }
+        say("stalling the press's thread \(seconds)s")
+        Thread.sleep(forTimeInterval: seconds)
+    }
 
     /// `TOPO_DEBUG_REPLY_DELAY=<seconds>`: how long the harness waits before it asks the model,
     /// so the reply lands well past iOS's ordinary background grace and only a working hold

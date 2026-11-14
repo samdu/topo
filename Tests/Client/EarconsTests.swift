@@ -113,6 +113,7 @@ final class EarconsTests: XCTestCase {
     /// `hears`, sharing one audio session, with the speaker's earcons over the recorder's players.
     private func rig(hears: String = "", engine: any VoiceEngine = ScriptedVoice(),
                      permission: @escaping @MainActor () async -> Bool = { true },
+                     permitted: @escaping @MainActor () -> Bool = { true },
                      isActive: Bool = true,
                      heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack,
                      sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
@@ -138,16 +139,16 @@ final class EarconsTests: XCTestCase {
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
-                               permission: permission,
+                               permission: permission, permitted: permitted,
                                voiceProcessing: { try seams.process($0, $1) })
-        speaker.microphoneOpen = { input.listening }
+        speaker.microphoneOpen = { input.busy }
         return Rig(speaker: speaker, voice: input, earcons: earcons, cues: cues, seams: seams,
                    audio: audio, center: center, defaults: defaults)
     }
 
     /// The thumb on the microphone, through the chat's own routing.
-    private func press(_ rig: Rig, _ down: Bool, _ sent: Sent, dictating: Bool = false) async {
-        await rig.press.gesture(down, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
+    private func press(_ rig: Rig, _ down: Bool, _ sent: Sent, held: Bool = false, dictating: Bool = false) async {
+        await rig.press.gesture(down, held: held, drawn: rig.showing(), speaker: rig.speaker, voice: rig.voice,
                                 dictating: dictating) { sent.add($0) }?.value
     }
 
@@ -196,7 +197,7 @@ final class EarconsTests: XCTestCase {
 
         utterance(into: rig.voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press(rig, false, sent)
+        await press(rig, false, sent, held: true)
         XCTAssertEqual(sent.texts, ["purple elephants"])
         XCTAssertEqual(rig.earcons.played, [.listening, .sent])
         XCTAssertEqual(rig.cues.files, ["earcon_listening", "earcon_sent"])
@@ -210,7 +211,7 @@ final class EarconsTests: XCTestCase {
 
         await press(rig, true, sent)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press(rig, false, sent)
+        await press(rig, false, sent, held: true)
         XCTAssertFalse(rig.voice.listening)
         XCTAssertEqual(rig.earcons.played, [.listening, .failed])
         XCTAssertEqual(rig.cues.files, ["earcon_listening", "earcon_failed"])
@@ -226,7 +227,7 @@ final class EarconsTests: XCTestCase {
         XCTAssertEqual(rig.earcons.played, [.listening])
         utterance(into: rig.voice.sink)
         try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
-        await press(rig, false, sent, dictating: true)
+        await press(rig, false, sent, held: true, dictating: true)
         XCTAssertEqual(sent.texts, ["purple elephants"], "the words were not handed to the row")
         XCTAssertEqual(rig.earcons.played, [.listening], "a release into the row sounded")
     }
@@ -313,7 +314,8 @@ final class EarconsTests: XCTestCase {
     /// and nothing sounds — not at the release, and not when the prompt is answered after it.
     func testAReleaseDuringThePermissionPromptSoundsNothing() async {
         let prompt = Prompt()
-        let rig = await rig(permission: { await prompt.answer() })
+        // Not yet granted, so the press asks: the system's prompt is up while the release lands.
+        let rig = await rig(permission: { await prompt.answer() }, permitted: { false })
         let sent = Sent()
         defer { rig.voice.cancel() }
 

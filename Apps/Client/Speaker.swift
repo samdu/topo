@@ -86,11 +86,12 @@ final class Speaker {
     /// that it has closed: a call kept up in front is kept while it is open (`SpokenCallDriver`),
     /// so the session the press opened on is not ended under it.
     var onMicrophone: ((Bool) -> Void)?
-    /// The call's moments, told after the speaker has dealt with each — but for the placing,
-    /// told first, so an open microphone is off the session before the session changes hands
-    /// (`Conversation`).
+    /// The call's moments, told after the speaker has dealt with each — but for the placing and
+    /// `ending` (the call over or failed, told before `over`), told first, so an open microphone
+    /// or one opening is off the session before the session changes hands or is activated afresh
+    /// (`Conversation`, `VoiceInput.call`).
     var onCall: ((CallMoment) -> Void)?
-    enum CallMoment: Equatable { case placing, active, taken, hungUp, over, muted(Bool) }
+    enum CallMoment: Equatable { case placing, active, taken, hungUp, ending, over, muted(Bool) }
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
@@ -246,6 +247,9 @@ final class Speaker {
             // A call refused before the system performed its start never took the session: the
             // keeper is where it was, on a session that was never the system's.
             guard audio.call != .none else { return }
+            // The microphone hears of it first, as at the placing: the resume below activates the
+            // session afresh, which an open in flight would have reconfigured under it.
+            onCall?(.ending)
             // Before the call's end can hand the session back, which a player still running
             // on it would make a hand-back under live I/O.
             sounds?.pause("the call is over")
@@ -763,7 +767,7 @@ final class Speaker {
 
     /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
     /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
-    /// with `VoiceInput.listening`.
+    /// with `VoiceInput.busy`: open, or opening on the input's queue.
     var microphoneOpen: @MainActor () -> Bool = { false }
 
     /// The presses opening a microphone: counted at the press, before `VoiceInput` has awaited

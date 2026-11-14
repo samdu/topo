@@ -758,6 +758,11 @@ class TickedFirst(unittest.TestCase):
         self.assertEqual(kinds(janitor.decide_pr(dirty, None, [], {}, NOW, sessions={"topo-x"})), ["report:draft", "report:dirty"])
         self.assertEqual(janitor.decide_pr(pr(isDraft=True, mergeStateStatus="DIRTY"), None, [], {}, NOW, sessions=set()), [])
 
+    def test_a_report_of_one_line_is_that_line_bare(self):
+        line = "#735 (buddy/press-gesture): validate green for 3 h, 1 Proof box unticked; the merge waits on them."
+        self.assertEqual(janitor.notice_text([line]), line)
+        self.assertEqual(janitor.notice_text(["a", "b"]), "- a\n- b")
+
     def test_leading_lines_survive_the_delivery_cap(self):
         lead = [janitor.LEAD + "#7 is a draft"]
         state = {"pending": lead + [f"line {i}" for i in range(janitor.PENDING_MAX + 50)]}
@@ -1402,6 +1407,11 @@ class WholePass(unittest.TestCase):
         self.assertEqual((got["body"]["from"], got["body"]["sender"], got["body"]["to"]), ("buddy-janitor", "topo-janitor", "topo-pm"))
         self.assertTrue(got["body"]["id"])
         self.assertIn("merged #7", got["body"]["text"])
+        notice = got["body"]["notice"]
+        self.assertEqual(notice["source"], "topo-janitor")
+        self.assertNotIn(janitor.NO_REPLY, notice["text"])
+        self.assertNotIn("pass at", notice["text"])
+        self.assertEqual(notice["text"].splitlines(), got["body"]["text"].splitlines()[1:], "the lines alone, as a list")
         self.assertIn("swept worktree topo-old", got["body"]["text"])
         self.assertIn("killed tmux topo-old", got["body"]["text"])
         self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))

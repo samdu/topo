@@ -189,12 +189,11 @@ struct TopoApp: App {
             spoken.ear = ear
             ear.settled = { [weak spoken] in spoken?.earSettled() }
         }
-        // A reply is not read into an open microphone: one that lands while it is open waits for
-        // it to close (`Speaker.speak`).
-        speaker.microphoneOpen = { voice.listening }
+        // A reply is not read into an open or opening microphone: one that lands then waits for
+        // it to close (`Speaker.speak`), which the watch hears.
+        MicrophoneWatch.wire(voice, speaker)
         // A press heard behind a turn on its way bleeps, whatever the press itself has ended.
         speaker.turnOnItsWay = { harness.turnOnItsWay }
-        MicrophoneWatch.start(voice, speaker)
         // The working bed waits for a release's utterance to be taken before it begins.
         voice.onTaken = { [weak speaker] in speaker?.utteranceTaken() }
         // An open hands-free spoken turn as the app goes behind the lock goes on as a
