@@ -283,13 +283,11 @@ final class StreamJSONTests: XCTestCase {
     /// resident starts inherits them; the note and its mark are the launcher's in the environment.
     /// What the command prints is `GuestSessionStartHookTests`'.
     func testEveryLaunchIsToldByASessionStartHook() async throws {
-        let noted = ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true, note: "NOTE-1729")
+        let noted = ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true)
         XCTAssertFalse(noted.contains("--append-system-prompt"), "\(noted)")
-        XCTAssertFalse(noted.contains { $0.contains("NOTE-1729") }, "the note reached the command line")
         let settings = try XCTUnwrap(noted.firstIndex(of: "--settings").map { noted[$0 + 1] })
         XCTAssertEqual(settings, ClaudeLauncher.settings(memory: true))
         XCTAssertEqual(noted.suffix(2), ["--resume", "S1"])
-        XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true), noted)
 
         func command(_ memory: Bool?) throws -> String {
             let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ClaudeLauncher.settings(memory: memory).utf8)) as? [String: Any])

@@ -74,12 +74,12 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
     ///
     /// What the conversation is told of its time (`timePrompt`), of its memory when `memory` is
-    /// said, and `note`, what became of the process before it when that was cut short
-    /// (`GuestSession.Cut`), are told by a SessionStart hook (`settings(memory:)`) and not by
+    /// said, and of what became of the process before it when that was cut short (the note,
+    /// `GuestSession.Cut`, which the launch puts in the environment), are told by a SessionStart hook (`settings(memory:)`) and not by
     /// appending to the system prompt: Claude Code keeps the system prompt a conversation began
     /// with and sends that on every resume, so anything appended at a later launch reaches only a
     /// fresh one, while a hook's output is added to the conversation on a resume as on a start.
-    public static func arguments(model: String?, resume: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
+    public static func arguments(model: String?, resume: String?, memory: Bool? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--include-partial-messages", "--replay-user-messages",
                          "--dangerously-skip-permissions"]
@@ -102,9 +102,9 @@ public struct ClaudeLauncher: ResidentLauncher {
         return "[topo: last process \(digest)]"
     }
 
-    /// The least time between two tellings of `timePrompt` to one conversation: a phone resumes
-    /// its conversation at every return to the front, and a dozen of them in ten minutes is told
-    /// it once.
+    /// The least time between two tellings of `timePrompt` to one conversation: a phone can launch
+    /// a process on its conversation many times in a few minutes, and a dozen launches in ten
+    /// minutes tell it once.
     public static let timeGap = 600
 
     /// The mark printed after the time prompt, with the time it was told in seconds since 1970,
@@ -124,7 +124,9 @@ public struct ClaudeLauncher: ResidentLauncher {
     ///   compaction is that state;
     /// - the note in `TOPO_LAST_PROCESS`, unless its mark is in any SessionStart output of the
     ///   transcript, since a process ended after its hook ran and before it began leaves the note
-    ///   for the next. A compaction does not unsay it: a cut is told once, not once per context.
+    ///   for the next, and never on a compaction, whose process told it at its start (that
+    ///   record is written only with the first input, so a `/compact` as the first one finds no
+    ///   mark). A compaction does not unsay it: a cut is told once, not once per context.
     ///
     /// A compaction ends what the conversation was told: what came before the boundary is not
     /// sent again. The hook a compaction runs (`source` `compact` on its stdin) is run before
@@ -152,7 +154,7 @@ public struct ClaudeLauncher: ResidentLauncher {
             command += #"s=\#(memory ? "mounted" : "unmounted"); "#
                 + #"[ "$m" = "$s" ] || say "$(printf '%s\n[topo: memory %s]' \#(quoted(memoryPrompt(mounted: memory))) "$s")"; "#
         }
-        command += #"[ -z "$TOPO_LAST_PROCESS" ] || [ "$n" = told ] || say "$(printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK")"; "#
+        command += #"[ -z "$TOPO_LAST_PROCESS" ] || [ "$n" = told ] || [ "$c" = compact ] || say "$(printf '%s\n%s' "$TOPO_LAST_PROCESS" "$TOPO_LAST_PROCESS_MARK")"; "#
             + #"[ -z "$o" ] || printf '%s' "$o""#
         return command
     }
@@ -171,9 +173,9 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// The whole command line: the shell moves into the home and `exec`s Claude Code, so the pid
     /// the app holds is Claude Code's own. `model` is the model every turn is asked of (the
     /// session's, which a debug build pins to Haiku); nil leaves it to Claude Code.
-    public func commandLine(resume: String?, model: String?, memory: Bool? = nil, note: String? = nil) -> [String] {
+    public func commandLine(resume: String?, model: String?, memory: Bool? = nil) -> [String] {
         ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", command]
-            + Self.arguments(model: model, resume: resume, memory: memory, note: note)
+            + Self.arguments(model: model, resume: resume, memory: memory)
     }
 
     /// The resident's environment: the guest's, what `environment` answers now, and last the
@@ -219,7 +221,7 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// resident (`memoryPrompt`), nil says nothing. A launch mounts nothing: what it says is what
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
     public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
-        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory, note: note),
+        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
                               environment: try await launchEnvironment(compactAt: compactAt, note: note))
     }
 }

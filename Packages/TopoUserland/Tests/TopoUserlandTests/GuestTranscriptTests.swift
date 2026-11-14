@@ -51,9 +51,8 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: input, in: [prompt, notice(queued: false), reply]), .unresolved)
     }
 
-    /// What the launch's SessionStart hook leaves in the transcript, as 2.1.316 wrote it — its
-    /// output on a start, a resume or a compaction, after the compaction's boundary and summary —
-    /// is no prompt: coming between an input and its reply it ends nothing, and the reply is
+    /// What the launch's SessionStart hook leaves in the transcript, as 2.1.316 wrote it — the
+    /// record of its output, before and after a compaction's boundary and summary — is no prompt: coming between an input and its reply it ends nothing, and the reply is
     /// still the input's.
     func testASessionStartHooksRecordBetweenAnInputAndItsReplyEndsNothing() throws {
         let lines = try Transcripts.lines("answered-with-tool")

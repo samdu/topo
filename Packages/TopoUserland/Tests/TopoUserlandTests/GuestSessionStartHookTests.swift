@@ -27,7 +27,7 @@ final class GuestSessionStartHookTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        try? fm.removeItem(at: host)
+        if let host { try? fm.removeItem(at: host) }
     }
 
     private var now: Int { Int(Date().timeIntervalSince1970) }
@@ -89,6 +89,10 @@ final class GuestSessionStartHookTests: XCTestCase {
     func testTheTimeIsToldAgainOnlyPastTheGap() async throws {
         let inside = try await hook(over: [homeHook, told(at: now - 60), prompt, reply], memory: true)
         XCTAssertEqual(inside, "")
+        let edge = try await hook(over: [told(at: now - ClaudeLauncher.timeGap + 20), prompt, reply], memory: true)
+        XCTAssertEqual(edge, "")
+        let newest = try await hook(over: [told(at: now - ClaudeLauncher.timeGap - 100), prompt, reply, told(at: now - 60)], memory: true)
+        XCTAssertEqual(newest, "", "an older mark was read over the newest")
         let past = try await hook(over: [homeHook, told(at: now - ClaudeLauncher.timeGap - 5), prompt, reply], memory: true)
         XCTAssertTrue(toldTime(past), past)
         XCTAssertFalse(past.contains("Obsidian vault"), past)
@@ -111,7 +115,9 @@ final class GuestSessionStartHookTests: XCTestCase {
 
     /// A compaction takes away what the conversation was told before it: a resume after the
     /// boundary is told both again. The compaction's own hook runs before Claude Code writes the
-    /// boundary, so it tells both over marks that stand, and the cut note it does not repeat.
+    /// boundary, so it tells both over marks that stand. The cut note it never tells: the
+    /// process told it at its start, in a record written only with its first input, so a
+    /// `/compact` that is that input finds no mark.
     func testACompactionIsToldAgainWhatItTookAway() async throws {
         let compacted = try await hook(over: [told(at: now - 60), prompt, reply, boundary, summary], memory: true)
         XCTAssertTrue(toldTime(compacted), compacted)
@@ -126,6 +132,9 @@ final class GuestSessionStartHookTests: XCTestCase {
         XCTAssertTrue(toldTime(compacting), compacting)
         XCTAssertTrue(toldMemory(compacting, mounted: true), compacting)
         XCTAssertFalse(compacting.contains(note), "a compaction told a cut already told")
+        let first = try await hook(over: [try told(at: now - 60), prompt, reply], memory: true, source: "compact", note: note)
+        XCTAssertTrue(toldTime(first), first)
+        XCTAssertFalse(first.contains(note), "a /compact as the first input told the cut a second time")
     }
 
     /// Only the records of SessionStart hooks' output count: a mark a person writes, one a reply
