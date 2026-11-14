@@ -62,7 +62,8 @@ final class DebugRunTests: XCTestCase {
     }
 
     /// A token served on the loopback is read from the request carrying the launch's nonce, and
-    /// what a listener gives a request with another nonce, nothing, is no token.
+    /// what a listener gives a request with another nonce, nothing, is no token, nor is an answer
+    /// longer than a token could be.
     func testATokenServedOnTheLoopbackIsReadWithTheNonce() throws {
         let listener = try OneAnswer(nonce: "the-nonce", secret: "sk-ant-oat01-served")
         let read = DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(listener.port)", "TOPO_DEBUG_TOKEN_NONCE": "the-nonce"])
@@ -73,6 +74,10 @@ final class DebugRunTests: XCTestCase {
         let other = try OneAnswer(nonce: "the-nonce", secret: "sk-ant-oat01-served")
         XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(other.port)", "TOPO_DEBUG_TOKEN_NONCE": "not-the-nonce"]))
         XCTAssertNil(DebugRun.served([:]))
+
+        let long = try OneAnswer(nonce: "the-nonce", secret: String(repeating: "x", count: 5000))
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(long.port)", "TOPO_DEBUG_TOKEN_NONCE": "the-nonce"]),
+                     "an answer past the limit is no token")
     }
 
     /// A listener on the loopback that answers one connection: the secret when the first line

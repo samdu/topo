@@ -11,13 +11,13 @@ import UIKit
 /// whole file is behind `#if DEBUG`, and the model every turn goes to is pinned to Haiku by
 /// `ClaudeModel.pinned`, which is behind the same flag.
 ///
-/// The token arrives as an environment variable, or served once over the host's loopback, and
-/// nowhere else — not a scheme, not a file, not a build setting. `scripts/simulator-run.sh` reads
-/// it from the vault and hands it to `simctl` as `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`, which
-/// lives only in the launching shell and the launched process. A UI test cannot do that: a result
-/// bundle's session log records the environment the runner launches the app with, so `--talk`
-/// serves the token once on the loopback and the test hands the app only the port and the nonce
-/// (`servedToken`). Nothing writes it down.
+/// The token arrives in the launch environment or served once over the host's loopback — not a
+/// scheme, not a file the app reads, not a build setting — and the app keeps it in memory alone.
+/// `scripts/simulator-run.sh` reads it from the vault and hands it to `simctl` as
+/// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`, which the simulator's own log records with the rest of
+/// the launch's environment. A UI test's launch environment is recorded in its result bundle too,
+/// so `--talk` serves the token once on the loopback and the test hands the app only the port
+/// and the nonce (`servedToken`).
 enum DebugRun {
     static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
     static let tokenPortVariable = "TOPO_DEBUG_TOKEN_PORT"
@@ -282,11 +282,11 @@ enum DebugRun {
         try? await Task.sleep(for: .seconds(seconds))
     }
 
-    /// A developer's Claude Code token from the launch environment, or nil. Every `claude` the app
-    /// starts in the guest gets it as `CLAUDE_CODE_OAUTH_TOKEN` in place of a login
-    /// (`GuestResident.developerEnvironment`), so a simulator and CI run with no browser and no
-    /// paste. It reaches no connector: those need Claude Code's own login.
-    /// `TOPO_CLAUDE_SETUP_TOKEN` when the launch carries it, and otherwise the token `served`.
+    /// A developer's Claude Code token, or nil: `TOPO_CLAUDE_SETUP_TOKEN` when the launch carries
+    /// it, and otherwise the token `served`. Every `claude` the app starts in the guest gets it as
+    /// `CLAUDE_CODE_OAUTH_TOKEN` in place of a login (`GuestResident.developerEnvironment`), so a
+    /// simulator and CI run with no browser and no paste. It reaches no connector: those need
+    /// Claude Code's own login.
     static func developerToken(_ environment: [String: String] = ProcessInfo.processInfo.environment,
                                served: String? = DebugRun.servedToken) -> String? {
         let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -301,14 +301,18 @@ enum DebugRun {
     /// The token a listener on the host's loopback (which a simulator shares) serves to the
     /// request carrying `TOPO_DEBUG_TOKEN_NONCE` on `TOPO_DEBUG_TOKEN_PORT`, as
     /// `scripts/simulator-run.sh` stands one up, or nil when the launch names no port. A read that
-    /// fails is said and is nil, which is a launch signed out. Bounded: the connection gives up
-    /// after `seconds` without a byte.
-    static func served(_ environment: [String: String], seconds: Int = 10) -> String? {
-        guard let port = environment[tokenPortVariable].flatMap(UInt16.init) else { return nil }
+    /// fails is said and is nil, which is a launch signed out. Bounded: the whole read gives up
+    /// after `seconds`, and an answer longer than `limit` bytes is refused.
+    static func served(_ environment: [String: String], seconds: Int = 10, limit: Int = 4096) -> String? {
+        guard let text = environment[tokenPortVariable] else { return nil }
+        guard let port = UInt16(text) else { say("no token served: \(tokenPortVariable) is not a port"); return nil }
         let nonce = environment[tokenNonceVariable] ?? ""
+        let deadline = ContinuousClock.now + .seconds(seconds)
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { say("no token served: socket: \(errno)"); return nil }
         defer { close(fd) }
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         var bound = timeval(tv_sec: seconds, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
@@ -325,10 +329,15 @@ enum DebugRun {
         var bytes: [UInt8] = []
         var chunk = [UInt8](repeating: 0, count: 256)
         while true {
+            let left = deadline - ContinuousClock.now
+            guard left > .zero else { say("no token served: no answer within \(seconds) s"); return nil }
+            var wait = timeval(tv_sec: Int(left.components.seconds), tv_usec: min(Int32(left.components.attoseconds / 1_000_000_000_000) + 1, 999_999))
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
             let n = read(fd, &chunk, chunk.count)
             if n < 0 { say("no token served: could not read: \(errno)"); return nil }
             if n == 0 { break }
             bytes += chunk[0..<n]
+            guard bytes.count <= limit else { say("no token served: the answer is longer than \(limit) bytes"); return nil }
         }
         let token = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { say("no token served: the listener gave nothing"); return nil }
@@ -337,8 +346,8 @@ enum DebugRun {
 
     /// Marks the launch signed in when it carries a developer's token, so the app comes up past
     /// the sign-in screen; a status read later counts that token as signed in (`accepts`). Does
-    /// nothing when the variable is absent, which is every ordinary debug build: an engineer's own
-    /// sign-in is left exactly as it was.
+    /// nothing when the launch carries neither the variable nor a served token's port, which is
+    /// every ordinary debug build: an engineer's own sign-in is left exactly as it was.
     @discardableResult
     static func signIn(cache: LoginCache = .standard,
                        environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {

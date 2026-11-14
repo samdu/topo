@@ -35,9 +35,10 @@
 #
 # The token comes from the environment (CLAUDE_SETUP_TOKEN, which is what the vault item
 # `long-lived-claude-auth-token` reaches this machine as) or, failing that, straight from the
-# vault with `op-item`. It is handed to the app as SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN and
-# reaches no file, no scheme, no build setting and no artifact; the app hands it to every
-# `claude` it starts in the guest for that launch and keeps nothing of it.
+# vault with `op-item`. It is handed to the app as SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN, which the
+# simulator's own log records with the launch's environment, and reaches no scheme, build setting
+# or file the app reads; the app hands it to every `claude` it starts in the guest for that
+# launch and keeps nothing of it. --talk hands it on otherwise, as below.
 #
 # --sign-in runs the TopoSimulatorSignIn scheme's one UI test (Tests/SimulatorSignIn), which signs
 # the device into SIGNIN_ACCOUNT (buddy.durose@icloud.com) through Settings, as a first sign-in or
@@ -136,7 +137,7 @@ while [ $# -gt 0 ]; do
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
-    -h|--help) sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -354,7 +355,11 @@ if [ "$talk" = yes ]; then
   # environment the runner launches the app with, so the token is in neither: it is served once
   # on the loopback, and the runner hands the app only the port and the nonce, from which the
   # app reads it itself at launch (DebugRun.servedToken). The script's own CLAUDE_SETUP_TOKEN
-  # is taken out of xcodebuild's environment too, so nothing the test step starts has it.
+  # is taken out of xcodebuild's environment, whose build description keeps it otherwise. The
+  # test is built before the listener starts, so a slow build does not use up its 30 minutes.
+  echo "==> building the talk test (TopoTalkTests)"
+  tracked env -u CLAUDE_SETUP_TOKEN xcodebuild build-for-testing -project Topo.xcodeproj -scheme TopoTalk \
+    -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived"
   nonce="$(uuidgen)"
   serve_once "$nonce" token
   unset token
@@ -365,8 +370,8 @@ if [ "$talk" = yes ]; then
   TEST_RUNNER_TOPO_DEBUG_TOKEN_PORT="$served_port" TEST_RUNNER_TOPO_DEBUG_TOKEN_NONCE="$nonce" \
   TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
   TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models/phonon-40m-en" \
-    tracked env -u CLAUDE_SETUP_TOKEN xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
-      -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
+    tracked env -u CLAUDE_SETUP_TOKEN xcodebuild test-without-building -project Topo.xcodeproj -scheme TopoTalk \
+      -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -resultBundlePath "$results" || status=$?
   scripts/ci-audio-lane.sh check after || status=1
   scripts/ci-require-tests.sh xcresult "$results" TopoTalkTests || status=1

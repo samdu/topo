@@ -217,7 +217,7 @@ open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + ag
 esac
 # The talk's test: what it was started with, and what the app it launches would read from the
 # port and nonce the runner hands it.
-case " $* " in *" TopoTalk "*)
+case " $* " in *" test-without-building "*" TopoTalk "*)
   env | grep -v "^FAKE_TALK_TOKEN=" >"$FAKE_TALK_ENV"  # the test's own copy is not the script's
   /usr/bin/python3 -c '
 import socket, sys
@@ -449,7 +449,8 @@ ended ended-waiting-on-the-launcher "sleep 600" yes no --send hello
 ended ended-during-the-suite        "sleep 31"  no  no  --press-mic
 ended ended-during-the-suite-slowly "sleep 31"  no  yes --press-mic
 
-# --talk and the audio lane, against fakes of the lane and the two model fetches; the lane's fake
+# --talk and the audio lane, against fakes of the lane, the two model fetches and the results'
+# check. The lane's fake
 # writes what it was called with to a file. A start that refuses (exit 3) found another run's
 # lane: the script exits 3 and never calls stop. A start that fails any other way is this run's
 # to stop.
@@ -501,10 +502,10 @@ PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE
 status=$?
 got="$(cat "$work/talk.got" 2>/dev/null)"
 leaks="$(grep -lF "$token" "$FAKE_XCODEBUILD_CALLS" "$work/talk.env" "$work/talk.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
-if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && grep -q " TopoTalk " "$FAKE_XCODEBUILD_CALLS"; then
+if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && [ "$(cut -d" " -f1 "$FAKE_XCODEBUILD_CALLS" | tr "\n" " ")" = "build-for-testing test-without-building " ]; then
   echo "ok   talk-token-served: the test's app got the token from the run's nonce, and no argument, environment or output carries it"
 else
-  echo "FAIL talk-token-served: exit $status, the app read: ${got:+a value}${got:-nothing}, the token is in: ${leaks:-nothing}"
+  echo "FAIL talk-token-served: exit $status, the app read $([ "$got" = "$token" ] && echo the token || echo "something else"), the token is in: ${leaks:-nothing}, xcodebuild was called with: $(tr "\n" "|" < "$FAKE_XCODEBUILD_CALLS")"
   sed 's/^/    | /' "$work/talk.out" | grep -vF "$token"
   failures=$((failures + 1))
 fi
