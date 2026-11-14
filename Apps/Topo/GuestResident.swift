@@ -57,8 +57,8 @@ final class GuestResident {
     var conversing: @MainActor (_ beginning: Bool) -> Bool = { _ in false }
     private var observers: [NSObjectProtocol] = []
 
-    /// What a debug build launched with a developer's token (`TOPO_CLAUDE_SETUP_TOKEN`, which CI
-    /// and the simulator runs use) gives every `claude` it starts in place of a login: the token as
+    /// What a debug build launched with a developer's token (`DebugRun.developerToken`: in its
+    /// launch environment, or served on the loopback, which CI and the simulator runs use) gives every `claude` it starts in place of a login: the token as
     /// `CLAUDE_CODE_OAUTH_TOKEN`. Empty in a release build, and in a debug build launched without one.
     nonisolated static var developerEnvironment: [String: String] {
         #if DEBUG

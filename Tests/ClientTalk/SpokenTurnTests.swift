@@ -11,8 +11,11 @@ import XCTest
 /// They come from the test runner's environment (`TEST_RUNNER_`-prefixed on the `xcodebuild`
 /// command line, which is what `scripts/simulator-run.sh --talk` does):
 ///
-/// - `TOPO_TALK_SETUP_TOKEN`: a Claude Code setup token, handed to the app's launch environment
-///   and nowhere else.
+/// - `TOPO_DEBUG_TOKEN_PORT` and `TOPO_DEBUG_TOKEN_NONCE`: where the script serves a Claude Code
+///   setup token once on the host's loopback, handed to the app's launch environment, from which
+///   the app reads the token itself (`DebugRun.servedToken`). The token is never in this
+///   runner's environment or the app's launch environment, which the result bundle's session
+///   log records whole.
 /// - `TOPO_UITEST_EAR_MODELS`: a directory `scripts/fetch-ear-models.sh` filled.
 /// - `TOPO_UITEST_VOICE_MODELS`: the voice's bundle, as `scripts/phonon-bundles.sh` fetches it.
 /// - a loopback lane playing the fixture into the host's default input, and an iCloud account on
@@ -33,15 +36,18 @@ final class SpokenTurnTests: XCTestCase {
 
     func testASpokenQuestionIsAnsweredAloud() throws {
         let environment = ProcessInfo.processInfo.environment
-        let token = try XCTUnwrap(environment["TOPO_TALK_SETUP_TOKEN"].flatMap { $0.isEmpty ? nil : $0 },
-                                  "a Claude setup token in TEST_RUNNER_TOPO_TALK_SETUP_TOKEN")
+        let tokenPort = try XCTUnwrap(environment["TOPO_DEBUG_TOKEN_PORT"].flatMap { $0.isEmpty ? nil : $0 },
+                                      "the served token's port in TEST_RUNNER_TOPO_DEBUG_TOKEN_PORT")
+        let tokenNonce = try XCTUnwrap(environment["TOPO_DEBUG_TOKEN_NONCE"].flatMap { $0.isEmpty ? nil : $0 },
+                                       "the served token's nonce in TEST_RUNNER_TOPO_DEBUG_TOKEN_NONCE")
         let models = try XCTUnwrap(environment["TOPO_UITEST_EAR_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
                                    "Parakeet's models in TEST_RUNNER_TOPO_UITEST_EAR_MODELS")
         let voiceModels = try XCTUnwrap(environment["TOPO_UITEST_VOICE_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
                                         "the voice's bundle in TEST_RUNNER_TOPO_UITEST_VOICE_MODELS")
 
         let app = XCUIApplication()
-        app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = token
+        app.launchEnvironment["TOPO_DEBUG_TOKEN_PORT"] = tokenPort
+        app.launchEnvironment["TOPO_DEBUG_TOKEN_NONCE"] = tokenNonce
         app.launchEnvironment["TOPO_DEBUG_EAR"] = models
         app.launchEnvironment["TOPO_DEBUG_VOICE"] = voiceModels
         // Past the first-run question, replies read aloud whatever this simulator was left set
@@ -50,7 +56,7 @@ final class SpokenTurnTests: XCTestCase {
         app.launch()
 
         let mic = app.images.matching(NSPredicate(format: "label == 'Hold to talk' OR label BEGINSWITH 'Listening'")).firstMatch
-        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone (signed in from the served token)")
         // The report is on the badge, which is a button. A toolbar item's container carries its
         // one child's identifier too, so an any-descendant query matches two elements and
         // resolves to neither; the type is what names the one that is the badge.

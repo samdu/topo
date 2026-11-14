@@ -11,12 +11,17 @@ import UIKit
 /// whole file is behind `#if DEBUG`, and the model every turn goes to is pinned to Haiku by
 /// `ClaudeModel.pinned`, which is behind the same flag.
 ///
-/// The token arrives as an environment variable and nowhere else — not a scheme, not a file, not a
-/// build setting — because a variable lives only in the launching shell and the launched process.
+/// The token arrives in the launch environment or served once over the host's loopback — not a
+/// scheme, not a file the app reads, not a build setting — and the app keeps it in memory alone.
 /// `scripts/simulator-run.sh` reads it from the vault and hands it to `simctl` as
-/// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`; nothing writes it down.
+/// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`, which the simulator's own log records with the rest of
+/// the launch's environment. A UI test's launch environment is recorded in its result bundle too,
+/// so `--talk` serves the token once on the loopback and the test hands the app only the port
+/// and the nonce (`servedToken`).
 enum DebugRun {
     static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
+    static let tokenPortVariable = "TOPO_DEBUG_TOKEN_PORT"
+    static let tokenNonceVariable = "TOPO_DEBUG_TOKEN_NONCE"
     static let sendVariable = "TOPO_DEBUG_SEND"
     static let earVariable = "TOPO_DEBUG_EAR"
     static let voiceVariable = "TOPO_DEBUG_VOICE"
@@ -277,32 +282,120 @@ enum DebugRun {
         try? await Task.sleep(for: .seconds(seconds))
     }
 
-    /// A developer's Claude Code token from the launch environment, or nil. Every `claude` the app
-    /// starts in the guest gets it as `CLAUDE_CODE_OAUTH_TOKEN` in place of a login
-    /// (`GuestResident.developerEnvironment`), so a simulator and CI run with no browser and no
-    /// paste. It reaches no connector: those need Claude Code's own login.
-    static func developerToken(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+    /// A developer's Claude Code token, or nil: `TOPO_CLAUDE_SETUP_TOKEN` when the launch carries
+    /// it, and otherwise the token `served`. Every `claude` the app starts in the guest gets it as
+    /// `CLAUDE_CODE_OAUTH_TOKEN` in place of a login (`GuestResident.developerEnvironment`), so a
+    /// simulator and CI run with no browser and no paste. It reaches no connector: those need
+    /// Claude Code's own login.
+    static func developerToken(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                               served: String? = DebugRun.servedToken) -> String? {
         let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return token.isEmpty ? nil : token
+        return token.isEmpty ? served : token
+    }
+
+    /// The token served to this launch over the host's loopback, read once, at the first ask for
+    /// the developer's token (`signIn`, at launch), and kept in memory for the life of the process:
+    /// the listener answers one request and exits.
+    static let servedToken: String? = served(ProcessInfo.processInfo.environment)
+
+    /// The token a listener on the host's loopback (which a simulator shares) serves to the
+    /// request carrying `TOPO_DEBUG_TOKEN_NONCE` on `TOPO_DEBUG_TOKEN_PORT`, as
+    /// `scripts/simulator-run.sh` stands one up, or nil when the launch names no port. A read that
+    /// fails is said and is nil. Bounded: one deadline of `seconds` covers the connection, the ask
+    /// and the answer, each waited for with `poll` on a non-blocking socket, and an answer longer
+    /// than `limit` bytes is refused. It is synchronous because `signIn` is, before the first frame;
+    /// an `NWConnection` would want a wait on the main thread for its queue to say the same thing.
+    static func served(_ environment: [String: String], seconds: Int = 10, limit: Int = 4096) -> String? {
+        guard let text = environment[tokenPortVariable] else { return nil }
+        guard let port = UInt16(text) else { say("no token served: \(tokenPortVariable) is not a port"); return nil }
+        let nonce = environment[tokenNonceVariable] ?? ""
+        let deadline = ContinuousClock.now + .seconds(seconds)
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { say("no token served: socket: \(errno)"); return nil }
+        defer { close(fd) }
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else { say("no token served: fcntl: \(errno)"); return nil }
+        /// Waits for `events` on the socket until the deadline; false once it has passed.
+        func ready(_ events: Int16) -> Bool {
+            while true {
+                let left = deadline - ContinuousClock.now
+                guard left > .zero else { return false }
+                let ms = Int32(min(left.components.seconds * 1000 + left.components.attoseconds / 1_000_000_000_000_000 + 1, 60_000))
+                var entry = pollfd(fd: fd, events: events, revents: 0)
+                let n = poll(&entry, 1, ms)
+                if n > 0 { return true }
+                if n < 0, errno != EINTR { return true }  // the call after it says what went wrong
+            }
+        }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        if connected != 0 {
+            guard errno == EINPROGRESS else { say("no token served: the listener refused the connection: \(errno)"); return nil }
+            guard ready(Int16(POLLOUT)) else { say("no token served: no connection within \(seconds) s"); return nil }
+            var failure: Int32 = 0
+            var size = socklen_t(MemoryLayout<Int32>.size)
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &size)
+            guard failure == 0 else { say("no token served: the listener refused the connection: \(failure)"); return nil }
+        }
+        var ask = Array((nonce + "\n").utf8)[...]
+        while !ask.isEmpty {
+            guard ready(Int16(POLLOUT)) else { say("no token served: could not ask within \(seconds) s"); return nil }
+            let n = ask.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            if n < 0, errno == EAGAIN || errno == EINTR { continue }
+            guard n > 0 else { say("no token served: could not ask: \(errno)"); return nil }
+            ask = ask.dropFirst(n)
+        }
+        var bytes: [UInt8] = []
+        var chunk = [UInt8](repeating: 0, count: 256)
+        while true {
+            guard ready(Int16(POLLIN)) else { say("no token served: no answer within \(seconds) s"); return nil }
+            let n = read(fd, &chunk, chunk.count)
+            if n < 0, errno == EAGAIN || errno == EINTR { continue }
+            if n < 0 { say("no token served: could not read: \(errno)"); return nil }
+            if n == 0 { break }
+            bytes += chunk[0..<n]
+            guard bytes.count <= limit else { say("no token served: the answer is longer than \(limit) bytes"); return nil }
+        }
+        let token = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { say("no token served: the listener gave nothing"); return nil }
+        return token
     }
 
     /// Marks the launch signed in when it carries a developer's token, so the app comes up past
     /// the sign-in screen; a status read later counts that token as signed in (`accepts`). Does
-    /// nothing when the variable is absent, which is every ordinary debug build: an engineer's own
-    /// sign-in is left exactly as it was.
+    /// nothing when the launch carries neither the variable nor a served token's port, which is
+    /// every ordinary debug build: an engineer's own sign-in is left exactly as it was.
     @discardableResult
+    /// A launch that names a served token's port and got none is signed out, whatever an earlier
+    /// launch left in the cache, so it runs on no other login's word.
     static func signIn(cache: LoginCache = .standard,
-                       environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
-        guard developerToken(environment) != nil else { return false }
+                       environment: [String: String] = ProcessInfo.processInfo.environment,
+                       served: String? = DebugRun.servedToken) -> Bool {
+        guard developerToken(environment, served: served) != nil else {
+            if environment[tokenPortVariable] != nil { cache.clear() }
+            return false
+        }
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
-        say("signed in from \(tokenVariable)")
+        say("signed in from a developer's token")
         return true
     }
 
     /// What counts as signed in: Claude Code's own login, or, in a launch carrying a developer's
-    /// token, that token.
-    static func accepts(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> @Sendable (ClaudeLoginStatus) -> Bool {
-        if developerToken(environment) == nil {
+    /// token, that token. A launch that names a served token's port and got none counts nothing,
+    /// so a guest's own login does not sign it in again at boot (`SignIn.refresh`, which then only
+    /// clears the cache).
+    static func accepts(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                        served: String? = DebugRun.servedToken) -> @Sendable (ClaudeLoginStatus) -> Bool {
+        if developerToken(environment, served: served) == nil, environment[tokenPortVariable] != nil {
+            return { _ in false }
+        }
+        if developerToken(environment, served: served) == nil {
             return { status in status.isClaudeAI }
         }
         return { status in status.loggedIn }

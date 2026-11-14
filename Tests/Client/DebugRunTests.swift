@@ -61,6 +61,115 @@ final class DebugRunTests: XCTestCase {
         XCTAssertTrue(line.contains("gho_[redacted]"), line)
     }
 
+    /// A token served on the loopback is read from the request carrying the launch's nonce, and
+    /// what a listener gives a request with another nonce, nothing, is no token, nor is an answer
+    /// longer than a token could be.
+    func testATokenServedOnTheLoopbackIsReadWithTheNonce() throws {
+        let listener = try OneAnswer(nonce: "the-nonce", secret: "sk-ant-oat01-served")
+        let read = DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(listener.port)", "TOPO_DEBUG_TOKEN_NONCE": "the-nonce"])
+        XCTAssertEqual(read, "sk-ant-oat01-served")
+        XCTAssertEqual(DebugRun.developerToken([:], served: read), "sk-ant-oat01-served")
+        XCTAssertEqual(DebugRun.developerToken(["TOPO_CLAUDE_SETUP_TOKEN": "sk-ant-oat01-env"], served: read), "sk-ant-oat01-env")
+
+        let other = try OneAnswer(nonce: "the-nonce", secret: "sk-ant-oat01-served")
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(other.port)", "TOPO_DEBUG_TOKEN_NONCE": "not-the-nonce"]))
+        XCTAssertNil(DebugRun.served([:]))
+
+        let long = try OneAnswer(nonce: "the-nonce", secret: String(repeating: "x", count: 5000))
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(long.port)", "TOPO_DEBUG_TOKEN_NONCE": "the-nonce"]),
+                     "an answer past the limit is no token")
+    }
+
+    /// A launch that names a served token's port and gets none is signed out, even over a cache an
+    /// earlier launch left signed in or a guest's own login, so it cannot run on another login's word.
+    func testAServedTokenThatNeverCameSignsTheLaunchOut() {
+        let cache = LoginCache(defaults: UserDefaults(suiteName: "debug-run-\(UUID().uuidString)")!)
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
+        XCTAssertFalse(DebugRun.signIn(cache: cache, environment: ["TOPO_DEBUG_TOKEN_PORT": "1"], served: nil))
+        XCTAssertNil(cache.status)
+        XCTAssertFalse(DebugRun.accepts(["TOPO_DEBUG_TOKEN_PORT": "1"], served: nil)(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai")),
+                       "nor does the guest's own login sign it in again at boot")
+
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
+        XCTAssertFalse(DebugRun.signIn(cache: cache, environment: [:], served: nil))
+        XCTAssertNotNil(cache.status, "an ordinary debug launch leaves an engineer's own sign-in alone")
+
+        XCTAssertTrue(DebugRun.signIn(cache: cache, environment: ["TOPO_DEBUG_TOKEN_PORT": "1"], served: "sk-ant-oat01-served"))
+        XCTAssertEqual(cache.status, ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+    }
+
+    /// One deadline covers the whole read: a listener that takes the connection and never answers
+    /// gives no token once it has passed.
+    func testAServedTokenThatNeverAnswersGivesUpAtTheDeadline() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, size) == 0 && listen(fd, 1) == 0 && getsockname(fd, $0, &size) == 0
+            }
+        }
+        XCTAssertTrue(bound)
+        let began = ContinuousClock.now
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(UInt16(bigEndian: address.sin_port))", "TOPO_DEBUG_TOKEN_NONCE": "n"], seconds: 1))
+        let took = ContinuousClock.now - began
+        XCTAssertGreaterThanOrEqual(took, .milliseconds(900))
+        XCTAssertLessThan(took, .seconds(3))
+    }
+
+    /// The deadline is the whole read's, not each byte's: a peer that sends a byte every tenth of
+    /// a second and never ends still gives no token once it has passed.
+    func testAServedTokenThatDripsGivesUpAtTheDeadline() throws {
+        let listener = try OneAnswer(nonce: "n", secret: "", drip: true)
+        let began = ContinuousClock.now
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(listener.port)", "TOPO_DEBUG_TOKEN_NONCE": "n"], seconds: 1))
+        XCTAssertLessThan(ContinuousClock.now - began, .seconds(3))
+    }
+
+    /// A listener on the loopback that answers one connection: the secret when the first line
+    /// it reads is the nonce, nothing otherwise.
+    private final class OneAnswer {
+        let port: UInt16
+
+        /// `drip`: past the nonce, a byte every tenth of a second for 30 s, in place of the secret.
+        init(nonce: String, secret: String, drip: Bool = false) throws {
+            let fd = socket(AF_INET, SOCK_STREAM, 0)
+            var address = sockaddr_in()
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let bound = withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    bind(fd, $0, size) == 0 && listen(fd, 1) == 0 && getsockname(fd, $0, &size) == 0
+                }
+            }
+            guard fd >= 0, bound else { throw POSIXError(.EADDRNOTAVAIL) }
+            port = UInt16(bigEndian: address.sin_port)
+            Thread.detachNewThread {
+                defer { close(fd) }
+                let peer = accept(fd, nil, nil)
+                guard peer >= 0 else { return }
+                defer { close(peer) }
+                var asked: [UInt8] = []
+                var byte: UInt8 = 0
+                while read(peer, &byte, 1) == 1, byte != 10 { asked.append(byte) }
+                guard String(decoding: asked, as: UTF8.self) == nonce else { return }
+                if drip {
+                    var on: Int32 = 1
+                    setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+                    var x: UInt8 = 120
+                    for _ in 0..<300 where write(peer, &x, 1) == 1 { usleep(100_000) }
+                    return
+                }
+                let answer = Array(secret.utf8)
+                _ = write(peer, answer, answer.count)
+            }
+        }
+    }
+
     func testWithoutOneNothingIsTouched() {
         let cache = LoginCache(defaults: UserDefaults(suiteName: "debug-run-\(UUID().uuidString)")!)
         XCTAssertFalse(DebugRun.signIn(cache: cache, environment: [:]))
