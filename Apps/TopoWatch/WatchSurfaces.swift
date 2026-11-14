@@ -15,22 +15,30 @@ import WidgetKit
 /// last-known slot beats a blank face.
 @MainActor
 final class WatchSurfaceCache {
-    static let tokenKey = "topo.surfaces.token"
+    /// The feed's token and the CloudKit environment that issued it, kept together as one value:
+    /// a build signed for the other environment shares the app's defaults, and is offered no
+    /// token but one its own environment gave. With no environment, none is kept.
+    static let feedKey = "topo.surfaces.feed"
+    /// Where a token was kept with no environment beside it, read by nothing and removed at a fetch.
+    static let unnamedTokenKey = "topo.surfaces.token"
     /// The slots whose record the feed listed and a read could not take whole.
     static let recheckKey = "topo.surfaces.recheck"
 
     let records: SurfaceRecords
     let store: SurfaceStore
     let defaults: UserDefaults
+    let environment: CloudEnvironment?
     /// What a change in the cache sets going: the timelines reloaded and, below watchOS 11, the
     /// relevance donated again.
     let changed: @MainActor () -> Void
 
     init(records: SurfaceRecords, store: SurfaceStore, defaults: UserDefaults = .standard,
+         environment: CloudEnvironment? = CloudEnvironment.current,
          changed: @escaping @MainActor () -> Void = WatchSurfaceCache.reloadWidgets) {
         self.records = records
         self.store = store
         self.defaults = defaults
+        self.environment = environment
         self.changed = changed
     }
 
@@ -38,7 +46,8 @@ final class WatchSurfaceCache {
     /// the cache as it was.
     @discardableResult
     func fetch() async -> Bool {
-        let token = defaults.data(forKey: Self.tokenKey)
+        defaults.removeObject(forKey: Self.unnamedTokenKey)
+        let token = keptToken()
         let changes: SurfaceRecords.Changes
         var whole = token == nil
         do {
@@ -117,9 +126,27 @@ final class WatchSurfaceCache {
                 }
             }
         }
-        if !unconfirmed { defaults.set(changes.token, forKey: Self.tokenKey) }
+        if !unconfirmed { keep(token: changes.token) }
         if moved { changed() }
         return true
+    }
+
+    /// The token kept for this build's environment, or nil. One kept for another environment, or
+    /// kept while this build has none to name, is removed before the group is touched: this read
+    /// is from the start, and a token from before it would otherwise outlast it should this read
+    /// keep none, and be offered back over a group it no longer describes.
+    private func keptToken() -> Data? {
+        guard let kept = defaults.dictionary(forKey: Self.feedKey) else { return nil }
+        guard let environment, kept["environment"] as? String == environment.rawValue else {
+            defaults.removeObject(forKey: Self.feedKey)
+            return nil
+        }
+        return kept["token"] as? Data
+    }
+
+    private func keep(token: Data) {
+        guard let environment else { defaults.removeObject(forKey: Self.feedKey); return }
+        defaults.set(["environment": environment.rawValue, "token": token], forKey: Self.feedKey)
     }
 
     /// Whether any file of `slot` is in the group: its document, its notes or its images.
