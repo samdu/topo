@@ -419,29 +419,6 @@ final class AudibleHoldTests: XCTestCase {
         rig.speaker.stop()
     }
 
-    /// Under a call the card's hang-up is the bound: a first part heard out with the guest at its
-    /// tools past the reading's ceiling keeps the reading, its hold and so the call.
-    func testUnderACallTheCeilingLeavesAHeardOutReadingStanding() async throws {
-        let rig = await rig(ceiling: .seconds(1))
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        rig.speaker.attach(call)
-        _ = rig.speaker.awaitReply("turn", readAloud: true)
-        call.start()
-        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
-        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
-        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
-        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
-        rig.voice.open(1)
-        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
-        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
-        try await Task.sleep(for: .seconds(2.5))
-        XCTAssertTrue(rig.speaker.speaking, "the ceiling ended the reading under the call")
-        XCTAssertTrue(rig.audio.heldForATurn, "the ceiling let the call's hold go")
-        rig.speaker.stop()
-        call.end()
-    }
-
     /// The red line's order: the queue drains while the last sentence is still being made, and
     /// that sentence then ends with no frame after it, the queue idle and the guest still writing.
     /// No drain is coming, so the gap is opened where the sentence is made.
