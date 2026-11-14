@@ -162,32 +162,32 @@ final class SimulatorSignInTests: XCTestCase {
         guard button.exists, button.isHittable else { return "the account's page has no Sign Out" }
         snap("sign-out")
         print("[sign-in] signing \(account) out, to sign it in again")
-        button.tap()
+        settings.cells["AAUIDeleteButtonSpecifierID"].firstMatch.tap()
+        // The page's own Sign Out stays under whatever it opens, so a confirmation is any other
+        // button of that name, Settings' or SpringBoard's.
+        let other = NSPredicate(format: "label == 'Sign Out' AND identifier != 'AAUIDeleteButtonSpecifierID'")
         let deadline = Date().addingTimeInterval(120)
         var step = 0
         while Date() < deadline {
             sleep(2)
             step += 1
+            snap("signing-out-\(step)")
+            print("[sign-in] sign-out step \(step) shows: \(screenWords().prefix(12).joined(separator: " | "))")
             if settings.secureTextFields.firstMatch.exists || springboard.secureTextFields.firstMatch.exists {
                 return "signing out asks for a password; nothing was typed"
             }
-            // The sheets after Sign Out: what to keep on the device, then the confirmation.
-            if let answer = first(settings.alerts.buttons["Sign Out"], springboard.alerts.buttons["Sign Out"],
-                                  settings.sheets.buttons["Sign Out"], settings.buttons["Sign Out"]) {
-                print("[sign-in] sign-out step \(step): \(answer.label)")
+            if let answer = first(springboard.alerts.buttons.matching(other).firstMatch, settings.alerts.buttons.matching(other).firstMatch,
+                                  settings.sheets.buttons.matching(other).firstMatch, settings.buttons.matching(other).firstMatch) {
+                print("[sign-in] sign-out step \(step): tapped \(answer.label)")
                 answer.tap()
                 continue
             }
-            if settings.navigationBars.buttons.firstMatch.exists, !accountCell.exists {
-                settings.navigationBars.buttons.firstMatch.tap()
-                continue
-            }
+            // Signed out, Settings goes back to its list, where the cell offers a sign-in.
             if accountCell.exists, accountCell.label.hasPrefix("Apple Account, Sign in") {
                 snap("signed-out")
                 print("[sign-in] signed out")
                 return nil
             }
-            if step % 5 == 0 { snap("signing-out-\(step)") }
         }
         return "Settings did not offer a sign-in within 120 s of Sign Out"
     }
