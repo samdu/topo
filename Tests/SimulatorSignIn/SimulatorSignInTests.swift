@@ -154,6 +154,15 @@ final class SimulatorSignInTests: XCTestCase {
                 print("[sign-in] signed in: \(account) (\(label))")
                 return
             }
+            // A sign-in that went through the account's own page ends there: its Sign Out and
+            // the account named on it are the account signed in.
+            let whole = Self.wholePattern(account)
+            if !sheetUp, lapsePrompt() == nil, settings.buttons["AAUIDeleteButtonSpecifierID"].exists,
+               settings.staticTexts.matching(NSPredicate(format: "label MATCHES %@", whole)).firstMatch.exists {
+                snap("signed-in")
+                print("[sign-in] signed in: \(account) (its account page)")
+                return
+            }
             if step % 5 == 0 { snap("waiting-\(step)") }
         }
         stopped("Settings did not show the account signed in within 120 s")
