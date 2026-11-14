@@ -96,7 +96,7 @@
 # Every run writes two files under build/sim and prints their paths first. simulator-run.log is
 # everything the run prints, kept after it, so a run started in the background can be read once
 # it is over. simulator-run.pids is the pids the run started, the script's own first and then
-# each xcodebuild and the launcher; it is removed when the run ends. Ending a run is
+# each xcodebuild, token listener and launcher; it is removed when the run ends. Ending a run is
 # `kill $(head -1 build/sim/simulator-run.pids)`: the script ends what that file names and
 # nothing else, so a sibling worktree's xcodebuild is never touched.
 #
@@ -261,22 +261,22 @@ tracked() {
 
 # Serves one secret once on the host's loopback, which a simulator shares: a listener that answers
 # the first request carrying the nonce with the secret and exits, hands nothing to a request
-# without it, and gives up after 30 minutes unasked. The secret leaves its variable once, on a
+# without it, and gives up unasked after <seconds> (30 minutes by default). The secret leaves its variable once, on a
 # pipe to the listener, never as an argument or a file. The listener is a recorded child, so
 # `cleanup` ends one nobody asked. Sets served_port, and served_by to the listener's pid, whose
 # exit status is 0 once it has served the secret.
-# serve_once <nonce> <name of the variable holding the secret>
+# serve_once <nonce> <name of the variable holding the secret> [<seconds>]
 serve_once() {
-  local nonce="$1" portfile="$derived/served.$$.port" listener
+  local nonce="$1" portfile="$derived/served.$$.port" seconds="${3:-1800}" listener
   rm -f "$portfile"
   /usr/bin/python3 -c '
 import socket, sys, time
-nonce, portfile, secret = sys.argv[1].encode(), sys.argv[2], sys.stdin.buffer.read()
+nonce, portfile, seconds, secret = sys.argv[1].encode(), sys.argv[2], int(sys.argv[3]), sys.stdin.buffer.read()
 server = socket.socket()
 server.bind(("127.0.0.1", 0))
 server.listen(4)
 open(portfile, "w").write(str(server.getsockname()[1]))
-deadline = time.monotonic() + 1800
+deadline = time.monotonic() + seconds
 while time.monotonic() < deadline:
     server.settimeout(max(1, deadline - time.monotonic()))
     try:
@@ -292,7 +292,7 @@ while time.monotonic() < deadline:
         if asked == nonce:
             peer.sendall(secret)
             sys.exit(0)
-sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "${!2}") &
+sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") &
   listener=$!
   served_by=$listener
   echo "$listener" >>"$pids"
@@ -459,10 +459,12 @@ launch=(SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$
         SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" SIMCTL_CHILD_TOPO_DEBUG_RUN="$run")
 # The token is served, never put in the launch's environment, which the simulator's log records.
 # The port goes in only with a token behind it: a launch that names a port and gets no token is
-# signed out (DebugRun.signIn), which a guest command alone is not asked to be.
+# signed out (DebugRun.signIn), which a guest command alone is not asked to be. The app asks at
+# launch, so the listener waits two minutes and no longer, which bounds what a run killed by
+# SIGKILL, whose `cleanup` never runs, leaves listening.
 if [ -n "$token" ]; then
   nonce="$(uuidgen)"
-  serve_once "$nonce" token
+  serve_once "$nonce" token 120
   unset token
   launch+=(SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT="$served_port" SIMCTL_CHILD_TOPO_DEBUG_TOKEN_NONCE="$nonce")
 fi
@@ -631,7 +633,7 @@ else
   wait "$launcher" && status=0 || status=$?; launcher=""
   [ "$status" = 0 ] || fail "the launcher exited ($status)"
   # A detached launcher returns once the app is up, which can be before the app has asked; the
-  # app's own read gives up 10 s after it begins.
-  token_served 60 || fail "the app never read the served token"
+  # wait for it is under TIMEOUT, as every wait on the app after the launch is.
+  token_served "$timeout" || fail "the app never read the served token"
   echo "==> launched signed in"
 fi

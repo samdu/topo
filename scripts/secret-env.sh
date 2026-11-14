@@ -15,8 +15,10 @@
 # Written with bash builtins alone (compgen, [[ ]]), so it works on a PATH with nothing on it.
 
 secret_variables() {
-  local name restore
-  restore="$(shopt -p nocasematch)"
+  local name restore=-u
+  # `shopt -p` of an option that is off exits 1, which under an inherited errexit would end the
+  # function before it named anything.
+  ! shopt -q nocasematch || restore=-s
   shopt -s nocasematch
   for name in $(compgen -e); do
     if [[ "$name" =~ (TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|CREDENTIAL) ]] \
@@ -24,7 +26,7 @@ secret_variables() {
       printf '%s\n' "$name"
     fi
   done
-  eval "$restore"
+  shopt "$restore" nocasematch
 }
 
 # `env` with an -u for each, as words to put in front of a command. env execs the command, so

@@ -189,21 +189,15 @@ is "secret-env: scrubbed: the command started behind it has none of them and kee
 # The pid a caller records for a command started behind `scrubbed` is the command's: env execs it.
 is "secret-env: scrubbed: the recorded pid is the command's own" \
   "$(secret_env '"${scrubbed[@]}" bash -c "echo \$\$" > "$TMPDIR/secret-env-test.$$" & pid=$!; wait "$pid"; [ "$(cat "$TMPDIR/secret-env-test.$$")" = "$pid" ] && echo same; rm -f "$TMPDIR/secret-env-test.$$"')" same
+is "secret-env: names under errexit inherited into the subshell (POSIX mode)" \
+  "$(env -i PATH="$PATH" POSIXLY_CORRECT=1 GH_TOKEN=b bash -c 'set -euo pipefail; source "$1"; echo "${scrubbed[@]}"' _ "$root/scripts/secret-env.sh" </dev/null)" \
+  "env -u GH_TOKEN"
 is "secret-env: drop_secrets: the shell keeps none of them and the rest, and its nocasematch setting" \
   "$(secret_env 'drop_secrets; compgen -e | grep -v -e "^PATH$" -e "^HOME$" -e "^PWD$" -e "^SHLVL$" -e "^OLDPWD$" -e "^TMPDIR$" | sort | tr "\n" " "; shopt -q nocasematch && echo on || echo off')" \
   "API_PRIVATE_KEYS_DIR DEVELOPER_DIR SSH_AUTH_SOCK TEST_RUNNER_TOPO_X TOKEN_FILE off"
 
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
-is "green: a run with no secret in its environment notes none" "$(calls 'secret in')" 0
-
-# No exported variable whose name says it holds a secret reaches a build or a test: xcodebuild
-# writes its environment into the build description.
-MARKER="fake-secret-$$" CLAUDE_SETUP_TOKEN="fake-secret-$$" GH_TOKEN="fake-secret-$$" SOME_API_KEY="fake-secret-$$" \
-  suite secrets topo_unit topo_ui others
-is "secrets: exits 0" "$status" 0
-is "secrets: no build or test is started with one" "$(calls 'secret in')" 0
-is "secrets: builds and tests did run" "$( [ "$(calls 'xcodebuild ')" -gt 0 ] && [ "$(calls 'swift test')" -gt 0 ] && echo yes)" yes
 is "green: no port 53 holder here, none handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53="
 is "green: the fast lane leaves the real Smart Turn test out by name" "$(grep '^unit turn' "$CALLS")" "unit turn: deselected"
 is "green: exits 0" "$status" 0
@@ -242,6 +236,14 @@ is "left behind: the dead run's device is shut down and deleted before the first
   "$(grep -E "^xcrun simctl (shutdown LEFT-$dead|delete LEFT-$dead|create)" "$CALLS" | head -n 3 | cut -d' ' -f1-3 | tr '\n' '|')" \
   "xcrun simctl shutdown|xcrun simctl delete|xcrun simctl create|"
 is "left behind: a running pid's device is left alone" "$(calls "xcrun simctl delete LEFT-$$")" 0
+
+# No exported variable whose name says it holds a secret reaches a build or a test: xcodebuild
+# writes its environment into the build description.
+MARKER="fake-secret-$$" CLAUDE_SETUP_TOKEN="fake-secret-$$" GH_TOKEN="fake-secret-$$" SOME_API_KEY="fake-secret-$$" \
+  suite secrets topo_unit topo_ui others
+is "secrets: exits 0" "$status" 0
+is "secrets: no build or test is started with one" "$(calls 'secret in')" 0
+is "secrets: builds and tests did run" "$( [ "$(calls 'xcodebuild ')" -gt 0 ] && [ "$(calls 'swift test')" -gt 0 ] && echo yes)" yes
 
 # The device build's directory and the package state are kept for the pins they were built
 # from, and no others. The pins are written as Package.resolved is, JSON, here on one line, so a

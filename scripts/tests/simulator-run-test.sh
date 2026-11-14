@@ -59,6 +59,7 @@ case "$2" in
     # What the launch carries, which is what the simulator's log records, and the token the app
     # reads at launch from the port and nonce it was handed, unless FAKE_APP_UNREAD says it never asks.
     [ -z "${FAKE_LAUNCH_ENV:-}" ] || { echo "$*"; env; } >"$FAKE_LAUNCH_ENV"
+    [ -z "${FAKE_LAUNCH_PORT:-}" ] || echo "${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT:-}" >"$FAKE_LAUNCH_PORT"
     if [ -n "${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT:-}" ] && [ -z "${FAKE_APP_UNREAD:-}" ]; then
       /usr/bin/python3 -c '
 import socket, sys
@@ -563,10 +564,10 @@ fi
 secret="fake-apple-password-$$"
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/signin.env" FAKE_SIGNIN_GOT="$work/signin.got" \
-  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
+  GH_TOKEN="fake-gh-signin-$$" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
 status=$?
 got="$(cat "$work/signin.got" 2>/dev/null)"
-leaks="$(grep -lF "$secret" "$FAKE_XCODEBUILD_CALLS" "$work/signin.env" "$work/signin.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
+leaks="$(grep -lF -e "$secret" -e "fake-gh-signin-$$" "$FAKE_XCODEBUILD_CALLS" "$work/signin.env" "$work/signin.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
 if [ "$status" = 0 ] && [ "$got" = "$(printf 'wrong:\nright:%s\nagain:refused' "$secret")" ] && [ -z "$leaks" ] \
    && grep -q "TEST_RUNNER_TOPO_SIGNIN_ACCOUNT=buddy.durose@icloud.com" "$work/signin.env" \
    && grep -q -- '-collect-test-diagnostics never' "$FAKE_XCODEBUILD_CALLS"; then
@@ -609,7 +610,7 @@ others="fake-gh-$$ fake-op-$$ fake-key-$$"
 : >"$FAKE_XCODEBUILD_CALLS"; : >"$work/launch.build-env"; rm -f "$work/launch.got"
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" GH_TOKEN="fake-gh-$$" OP_SERVICE_ACCOUNT_TOKEN="fake-op-$$" \
   SOME_API_KEY="fake-key-$$" FAKE_LAUNCH=launched FAKE_LAUNCH_ENV="$work/launch.env" FAKE_LAUNCH_GOT="$work/launch.got" \
-  FAKE_BUILD_ENV="$work/launch.build-env" "$work/root/scripts/simulator-run.sh" >"$work/launch.out" 2>&1 </dev/null
+  FAKE_BUILD_ENV="$work/launch.build-env" "$work/root/scripts/simulator-run.sh" --press-mic >"$work/launch.out" 2>&1 </dev/null
 status=$?
 got="$(cat "$work/launch.got" 2>/dev/null)"
 leaks="$(grep -lF "$token" "$FAKE_XCODEBUILD_CALLS" "$work/launch.build-env" "$work/launch.env" "$work/launch.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
@@ -617,7 +618,8 @@ for other in $others; do
   leaks="$leaks$(grep -lF "$other" "$FAKE_XCODEBUILD_CALLS" "$work/launch.build-env" 2>/dev/null)"
 done
 if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && [ -s "$work/launch.build-env" ] \
-   && grep -q '^SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT=[0-9]' "$work/launch.env"; then
+   && grep -q '^SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT=[0-9]' "$work/launch.env" \
+   && [ "$(grep -c -e ' build$' -e '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS")" = 2 ]; then
   echo "ok   launch-token-served: the app got the token from the launch's nonce, and no secret is in the build's or the launch's environment"
 else
   echo "FAIL launch-token-served: exit $status, the app read $([ "$got" = "$token" ] && echo the token || echo "something else"), a secret is in: ${leaks:-nothing}"
@@ -650,6 +652,22 @@ if [ "$status" != 0 ] && grep -q "the app never read the served token" "$work/se
 else
   echo "FAIL send-token-unread: exit $status"
   sed 's/^/    | /' "$work/send-unread.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
+# A detached launch whose app never asks fails within TIMEOUT, saying so, and leaves nothing
+# listening on the port it was handed.
+rm -f "$work/unread.port"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LAUNCH=launched FAKE_APP_UNREAD=1 FAKE_LAUNCH_PORT="$work/unread.port" TIMEOUT=3 \
+  "$work/root/scripts/simulator-run.sh" --no-build >"$work/launch-unread.out" 2>&1 </dev/null
+status=$?
+port="$(cat "$work/unread.port" 2>/dev/null)"
+if [ "$status" != 0 ] && grep -q "the app never read the served token" "$work/launch-unread.out" && [ -n "$port" ] \
+   && ! /usr/bin/python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2)' "$port" 2>/dev/null; then
+  echo "ok   launch-token-unread: a detached launch never read exits $status, says so, and its listener is gone"
+else
+  echo "FAIL launch-token-unread: exit $status, port '${port}'"
+  sed 's/^/    | /' "$work/launch-unread.out" | grep -vF "$token"
   failures=$((failures + 1))
 fi
 
