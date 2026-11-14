@@ -419,6 +419,34 @@ final class AudibleHoldTests: XCTestCase {
         rig.speaker.stop()
     }
 
+    /// Under a call, a first part heard out past the ceiling with the guest at its tools is
+    /// forgotten as it is with no call: the hold goes, so the call does, and the reply that lands
+    /// is read from the top rather than taken as a reading stopped for good.
+    func testUnderACallAFirstPartHeardOutPastTheCeilingLetsTheReplyBeReadWhenItLands() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        call.start()
+        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to end the reading's hold") { !rig.speaker.speaking }
+        XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the ceiling under the call")
+        XCTAssertTrue(rig.speaker.speak("One moment.\n\nIt is on the shelf.", answering: "turn"))
+        await settle("the landed reply to be read from the top") { rig.voice.sentencesAsked == 2 }
+        rig.voice.open(2)
+        await settle("the reply's second sentence to be asked for") { rig.voice.sentencesAsked == 3 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "One moment.", "It is on the shelf."])
+        rig.speaker.stop()
+        call.end()
+    }
+
     /// The red line's order: the queue drains while the last sentence is still being made, and
     /// that sentence then ends with no frame after it, the queue idle and the guest still writing.
     /// No drain is coming, so the gap is opened where the sentence is made.

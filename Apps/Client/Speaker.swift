@@ -95,8 +95,8 @@ final class Speaker {
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
-    /// A reading heard out with the guest at its tools is no dead engine: with no call up its hold
-    /// goes and it is read from the top as more comes; under a call the ceiling stops it.
+    /// A reading heard out with the guest at its tools is no dead engine: its hold goes, a call's
+    /// with it, and it is read from the top as more comes or as the reply lands.
     private var reading: Task<Void, Never>?
     /// Counts replies. A forward pass in flight does not notice a cancellation, so a frame
     /// carrying an older number is made and dropped.
@@ -1118,11 +1118,11 @@ final class Speaker {
         reading = Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
-            // Heard out with the guest still at its tools, which is no dead engine, and no call
-            // up: its hold goes and the reading is forgotten rather than stopped for good, so what
-            // the guest writes next, or the reply as it lands, is read from the top. Under a call
-            // the reading stops, as one making no progress does.
-            if self.written?.live == true, self.call?.up != true, self.voiceHeard, self.voiceGap, self.making == 0, self.queue.isIdle {
+            // Heard out with the guest still at its tools, which is no dead engine: its hold goes,
+            // and a call's with it, and the reading is forgotten rather than stopped for good, so
+            // what the guest writes next, or the reply as it lands, is read from the top — behind
+            // the lock with no call, at the unlock, the turn still marked spoken until then.
+            if self.written?.live == true, self.voiceHeard, self.voiceGap, self.making == 0, self.queue.isIdle {
                 AudioLog.say("the voice was heard out \(ceiling) ago with the guest still writing; its hold ends and the reply is read from the top as more comes")
                 self.written = nil
             } else {
