@@ -236,6 +236,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Whether the pid is one of this shell's children and still running.
+running_child() {
+  case " $(jobs -pr | tr '\n' ' ') " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
 # Runs a command as a recorded child and waits for it, returning its status.
 tracked() {
   "$@" &
@@ -380,10 +385,12 @@ if [ "$talk" = yes ]; then
   scripts/ci-audio-lane.sh check after || status=1
   # A test that passed on some other login proves nothing of the token: the listener has to have
   # served it.
-  # A listener that has just answered may still be on its way out.
+  # A listener that has just answered may still be on its way out. Whether it is still running
+  # is asked of the shell's own jobs, not of the pid, which the system may have given another
+  # process once the shell reaped it; the shell keeps a reaped child's status for `wait`.
   served=1
-  for _ in $(seq 10); do kill -0 "$served_by" 2>/dev/null || break; sleep 0.2; done
-  if ! kill -0 "$served_by" 2>/dev/null; then wait "$served_by" && served=0 || true; fi
+  for _ in $(seq 10); do running_child "$served_by" || break; sleep 0.2; done
+  if ! running_child "$served_by"; then wait "$served_by" && served=0 || true; fi
   [ "$served" = 0 ] || { echo "==> the app never read the served token" >&2; status=1; }
   scripts/ci-require-tests.sh xcresult "$results" TopoTalkTests || status=1
   [ "$status" = 0 ] && echo "==> the spoken question was heard, answered and read aloud" \

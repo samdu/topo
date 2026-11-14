@@ -120,12 +120,22 @@ final class DebugRunTests: XCTestCase {
         XCTAssertLessThan(took, .seconds(3))
     }
 
+    /// The deadline is the whole read's, not each byte's: a peer that sends a byte every tenth of
+    /// a second and never ends still gives no token once it has passed.
+    func testAServedTokenThatDripsGivesUpAtTheDeadline() throws {
+        let listener = try OneAnswer(nonce: "n", secret: "", drip: true)
+        let began = ContinuousClock.now
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(listener.port)", "TOPO_DEBUG_TOKEN_NONCE": "n"], seconds: 1))
+        XCTAssertLessThan(ContinuousClock.now - began, .seconds(3))
+    }
+
     /// A listener on the loopback that answers one connection: the secret when the first line
     /// it reads is the nonce, nothing otherwise.
     private final class OneAnswer {
         let port: UInt16
 
-        init(nonce: String, secret: String) throws {
+        /// `drip`: past the nonce, a byte every tenth of a second for 30 s, in place of the secret.
+        init(nonce: String, secret: String, drip: Bool = false) throws {
             let fd = socket(AF_INET, SOCK_STREAM, 0)
             var address = sockaddr_in()
             address.sin_family = sa_family_t(AF_INET)
@@ -147,6 +157,13 @@ final class DebugRunTests: XCTestCase {
                 var byte: UInt8 = 0
                 while read(peer, &byte, 1) == 1, byte != 10 { asked.append(byte) }
                 guard String(decoding: asked, as: UTF8.self) == nonce else { return }
+                if drip {
+                    var on: Int32 = 1
+                    setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+                    var x: UInt8 = 120
+                    for _ in 0..<300 where write(peer, &x, 1) == 1 { usleep(100_000) }
+                    return
+                }
                 let answer = Array(secret.utf8)
                 _ = write(peer, answer, answer.count)
             }
