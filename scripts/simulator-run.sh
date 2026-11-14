@@ -118,6 +118,7 @@ expect_claude=""
 expect_bash=""
 fresh=no
 signin=no
+renew=no
 timeout="${TIMEOUT:-180}"
 
 while [ $# -gt 0 ]; do
@@ -137,6 +138,7 @@ while [ $# -gt 0 ]; do
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
+    --renew) renew=yes; shift ;;
     -h|--help) sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -153,6 +155,8 @@ def version(runtime):
 found = [(version(r), d["udid"]) for r, ds in json.load(sys.stdin)["devices"].items() for d in ds if n in (d["name"], d["udid"])]
 print(max(found)[1] if found else "")' "$device")"
 [ -n "$udid" ] || { echo "no available simulator named '$device'; xcrun simctl list devices available" >&2; exit 1; }
+
+[ "$renew" = no ] || [ "$signin" = yes ] || { echo "--renew is a way of --sign-in: --sign-in --renew" >&2; exit 2; }
 
 if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
@@ -295,6 +299,15 @@ sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "${!2}") &
   [ -n "$served_port" ] || { echo "the listener that serves the $2 did not start" >&2; exit 1; }
 }
 
+# When the process with this pid started, in seconds since the epoch, or nothing for no pid.
+process_start() {
+  [ -n "$1" ] || return 0
+  local started
+  started="$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//')" || return 0
+  [ -n "$started" ] || return 0
+  LC_ALL=C date -j -f '%a %b %d %T %Y' "$started" +%s 2>/dev/null || true
+}
+
 if [ "$build" = yes ]; then
   scripts/build-ish.sh
   scripts/fetch-phonon.sh
@@ -321,12 +334,13 @@ if [ "$signin" = yes ]; then
   status=0
   TEST_RUNNER_TOPO_SIGNIN_ACCOUNT="$account" TEST_RUNNER_TOPO_SIGNIN_PORT="$port" \
   TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" TEST_RUNNER_TOPO_SIGNIN_CODE="${SIGNIN_CODE:-}" \
+  TEST_RUNNER_TOPO_SIGNIN_RENEW="$([ "$renew" = yes ] && echo 1 || echo 0)" \
     tracked xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
-      -resultBundlePath "$results" || status=$?
+      -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-require-tests.sh xcresult "$results" TopoSimulatorSignInTests || status=1
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
-    echo "==> $udid was signed in already and Settings asks for no password; if --send still reports a lapse, the test does not know the screen the lapse shows"
+    echo "==> $udid was signed in already and Settings asks for no password. If --send reports 'account temporarily unavailable', the sign-in ended when the simulator last restarted, and no prompt will come for it: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew signs the account out and in again, typing the password once. If --send reports another lapse, the test does not know the screen it shows"
   elif [ "$status" = 0 ]; then
     echo "==> $udid is signed in; DEVICE=$udid scripts/simulator-run.sh --send hello proves CloudKit answers"
   else
@@ -351,13 +365,24 @@ if [ "$talk" = yes ]; then
     exit "$status"
   }
   # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
-  # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input.
-  # Booting it again after the lane is up binds it to the loopback; its iCloud account and
-  # keychain survive a reboot.
-  echo "==> rebooting the simulator onto the lane's audio devices"
-  xcrun simctl shutdown "$udid" 2>/dev/null || true
-  xcrun simctl boot "$udid"
-  xcrun simctl bootstatus "$udid" -b >/dev/null
+  # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input,
+  # and booting it again binds it to the loopback. A reboot also ends the device's iCloud
+  # sign-in (docs/simulator.md, *A lapse*), so a device booted since coreaudiod started, which
+  # already hears the lane, is not rebooted.
+  booted="$(process_start "$(pgrep -f "/Devices/$udid/data/var/run/launchd_bootstrap.plist" | head -1)")"
+  audio="$(process_start "$(pgrep -x coreaudiod | head -1)")"
+  if [ -n "$booted" ] && [ -n "$audio" ] && [ "$booted" -gt "$audio" ]; then
+    echo "==> the simulator booted after coreaudiod started, so it hears the lane without a reboot"
+  elif [ -z "$booted" ]; then
+    echo "==> booting the simulator onto the lane's audio devices"
+    xcrun simctl boot "$udid" 2>/dev/null || true
+    xcrun simctl bootstatus "$udid" -b >/dev/null
+  else
+    echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started; the reboot ends its iCloud sign-in, so the turn's iCloud half will be refused until: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew"
+    xcrun simctl shutdown "$udid" 2>/dev/null || true
+    xcrun simctl boot "$udid"
+    xcrun simctl bootstatus "$udid" -b >/dev/null
+  fi
   # The result bundle's session log records the test runner's environment whole, and the
   # environment the runner launches the app with, so the token is in neither: it is served once
   # on the loopback, and the runner hands the app only the port and the nonce, from which the
@@ -494,6 +519,9 @@ if [ -n "$send" ]; then
   case "$icloud" in
     answered) ;;
     "no account") fail "the simulator $udid has no iCloud account; sign it in with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
+    # Signed in to Settings with CloudKit refusing and nothing asking: a sign-in the device's last
+    # restart ended, which only signing out and in again mends (docs/simulator.md, *A lapse*).
+    "account temporarily unavailable") fail "the simulator $udid is signed in to Settings but CloudKit refuses its account (account temporarily unavailable): the sign-in ended when the simulator last restarted, and no prompt will come for it. Sign it out and in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew" ;;
     *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
   esac
   wait_for done "the turn"

@@ -36,6 +36,16 @@ final class SimulatorSignInTests: XCTestCase {
         guard accountCell.waitForExistence(timeout: 20) else { return stopped("Settings showed no Apple Account cell") }
         snap("start")
 
+        // A sign-in that ended at a restart of the simulator shows nothing in Settings, and no
+        // prompt can mend it (docs/simulator.md, *A lapse*): asked to renew, the account is signed
+        // out first and signed in as on a device that never had one.
+        if env["TOPO_SIGNIN_RENEW"] == "1", !accountCell.label.hasPrefix("Apple Account, Sign in"), lapsePrompt() == nil {
+            guard shows(account, after: accountCell) else {
+                return stopped("signed in to an account that is not \(account); sign it out by hand first")
+            }
+            if let why = signOut(accountCell) { return stopped(why) }
+        }
+
         let firstSignIn = accountCell.label.hasPrefix("Apple Account, Sign in")
         if firstSignIn {
             accountCell.tap()
@@ -137,6 +147,49 @@ final class SimulatorSignInTests: XCTestCase {
             if step % 5 == 0 { snap("waiting-\(step)") }
         }
         stopped("Settings did not show the account signed in within 120 s")
+    }
+
+    /// Signs the account out from its own page, which `shows` left open, answering the sheets on
+    /// the way, until Settings offers a sign-in: nil then, or why it stopped. Nothing is typed: a
+    /// sign-out that asks for the password (Find My, on a phone) stops here.
+    private func signOut(_ accountCell: XCUIElement) -> String? {
+        let button = settings.buttons["Sign Out"].firstMatch
+        var swipes = 0
+        while !(button.exists && button.isHittable), swipes < 8 {
+            settings.swipeUp()
+            swipes += 1
+        }
+        guard button.exists, button.isHittable else { return "the account's page has no Sign Out" }
+        snap("sign-out")
+        print("[sign-in] signing \(accountCell.label) out, to sign it in again")
+        button.tap()
+        let deadline = Date().addingTimeInterval(120)
+        var step = 0
+        while Date() < deadline {
+            sleep(2)
+            step += 1
+            if settings.secureTextFields.firstMatch.exists || springboard.secureTextFields.firstMatch.exists {
+                return "signing out asks for a password; nothing was typed"
+            }
+            // The sheets after Sign Out: what to keep on the device, then the confirmation.
+            if let answer = first(settings.alerts.buttons["Sign Out"], springboard.alerts.buttons["Sign Out"],
+                                  settings.sheets.buttons["Sign Out"], settings.buttons["Sign Out"]) {
+                print("[sign-in] sign-out step \(step): \(answer.label)")
+                answer.tap()
+                continue
+            }
+            if settings.navigationBars.buttons.firstMatch.exists, !accountCell.exists {
+                settings.navigationBars.buttons.firstMatch.tap()
+                continue
+            }
+            if accountCell.exists, accountCell.label.hasPrefix("Apple Account, Sign in") {
+                snap("signed-out")
+                print("[sign-in] signed out")
+                return nil
+            }
+            if step % 5 == 0 { snap("signing-out-\(step)") }
+        }
+        return "Settings did not offer a sign-in within 120 s of Sign Out"
     }
 
     /// Whether the account's own page, opened from its cell, names this account.
