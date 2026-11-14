@@ -81,12 +81,14 @@ final class DebugRunTests: XCTestCase {
     }
 
     /// A launch that names a served token's port and gets none is signed out, even over a cache an
-    /// earlier launch left signed in, so it cannot run on another login's word.
+    /// earlier launch left signed in or a guest's own login, so it cannot run on another login's word.
     func testAServedTokenThatNeverCameSignsTheLaunchOut() {
         let cache = LoginCache(defaults: UserDefaults(suiteName: "debug-run-\(UUID().uuidString)")!)
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
         XCTAssertFalse(DebugRun.signIn(cache: cache, environment: ["TOPO_DEBUG_TOKEN_PORT": "1"], served: nil))
         XCTAssertNil(cache.status)
+        XCTAssertFalse(DebugRun.accepts(["TOPO_DEBUG_TOKEN_PORT": "1"], served: nil)(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai")),
+                       "nor does the guest's own login sign it in again at boot")
 
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
         XCTAssertFalse(DebugRun.signIn(cache: cache, environment: [:], served: nil))

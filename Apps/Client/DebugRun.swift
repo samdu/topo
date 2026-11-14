@@ -387,9 +387,15 @@ enum DebugRun {
     }
 
     /// What counts as signed in: Claude Code's own login, or, in a launch carrying a developer's
-    /// token, that token.
-    static func accepts(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> @Sendable (ClaudeLoginStatus) -> Bool {
-        if developerToken(environment) == nil {
+    /// token, that token. A launch that names a served token's port and got none counts nothing,
+    /// so a guest's own login does not sign it in again at boot (`SignIn.refresh`, which then only
+    /// clears the cache).
+    static func accepts(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                        served: String? = DebugRun.servedToken) -> @Sendable (ClaudeLoginStatus) -> Bool {
+        if developerToken(environment, served: served) == nil, environment[tokenPortVariable] != nil {
+            return { _ in false }
+        }
+        if developerToken(environment, served: served) == nil {
             return { status in status.isClaudeAI }
         }
         return { status in status.loggedIn }
