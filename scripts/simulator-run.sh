@@ -31,6 +31,7 @@
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   scripts/simulator-run.sh --sign-in              # sign the simulator into buddy's iCloud account
+#   scripts/simulator-run.sh --sign-in --renew      # sign it out and in again after a restart ended it
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
 #
 # The token comes from the environment (CLAUDE_SETUP_TOKEN, which is what the vault item
@@ -48,6 +49,10 @@
 # It is typed once: a refusal, a two-factor code or a screen the test does not know stops the run
 # with what the screen showed. A two-factor stop leaves the code screen up, and
 # SIGNIN_CODE=<code> scripts/simulator-run.sh --sign-in types the code into it and goes on.
+# The sign-in does not survive a restart of the simulator: it keeps no continuation key and no
+# CloudKit token on disk, so after a reboot Settings still shows the account, nothing asks for the
+# password, and CloudKit answers "temporarily unavailable". --renew signs the account out in
+# Settings and in again, typing the password once; it is asked for by name, never taken.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
 # ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
@@ -139,7 +144,7 @@ while [ $# -gt 0 ]; do
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
     --renew) renew=yes; shift ;;
-    -h|--help) sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,100p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
