@@ -1769,13 +1769,13 @@ extension GuestBridgeTests {
     }
 
     /// Words given ahead whose flight ended with its end not confirmed: the reply is read off the
-    /// transcript once one is, and still names the process the words were sent to, whether the
-    /// pending pass writes it or the next run of the turn does.
+    /// transcript as owed once one is, and still names the process the words were sent to,
+    /// whether the pending pass writes it or the next run of the turn does.
     func testAReplyToWordsGivenAheadOwedAfterTheirFlightNamesTheirProcess() async throws {
         try await settleAfterTheFlight { runner in try await runner.answerPending(model: .sonnet) }
     }
 
-    func testAReplyToWordsGivenAheadReconciledAfterTheirFlightNamesTheirProcess() async throws {
+    func testAReplyToWordsGivenAheadOwedAtTheirTurnsNextRunNamesTheirProcess() async throws {
         try await settleAfterTheFlight { runner in
             try await runner.run("capital of France?", model: .sonnet, nonce: "n1", known: []).assistant
         }
