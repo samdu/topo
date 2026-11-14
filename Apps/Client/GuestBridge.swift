@@ -313,8 +313,9 @@ actor GuestBridge: Brain {
     /// task of the bridge's own, so the caller that gave the words can fail or go without the
     /// turn being lost, and holds the requests' one slot until it ends.
     private var flights: [String: Task<Void, Never>] = [:]
-    /// What such a turn reported of its model and usage, for the reply made of it.
-    private var flown: [String: (model: String?, usage: StreamEvent.Usage?)] = [:]
+    /// What such a turn reported of its model and usage, and the resident process read as its
+    /// input was sent, for the reply made of it.
+    private var flown: [String: (model: String?, usage: StreamEvent.Usage?, pid: Int32?)] = [:]
     /// The nonces `hear` is at work on, each with the calls for the same nonce waiting on it.
     private var hearing: [String: [CheckedContinuation<Bool, Never>]] = [:]
     private let heardObserver: @Sendable (GuestHeard) async -> Void
@@ -393,7 +394,7 @@ actor GuestBridge: Brain {
                 }
                 if let now = ledger.pending, now.input == heard.input, now.nonce == request.nonce,
                    now.state == .answered, let text = now.text {
-                    provenance[request.nonce] = provenance[request.nonce] ?? (now.session, nil)
+                    noteProvenance(of: now)
                     return reply(text, to: request, usage: flown[now.input]?.usage, model: flown[now.input]?.model)
                 }
                 // Anything else — cut off, never received, not known yet — is the record's to
@@ -439,7 +440,7 @@ actor GuestBridge: Brain {
                     try record(nil)
                 case .answered(let text):
                     // The ledger keeps the input until the reply is in the log (`landed`).
-                    provenance[request.nonce] = (pending.session, nil)
+                    noteProvenance(of: pending)
                     ledger.pending?.state = .answered
                     ledger.pending?.text = text
                     // What a record moved past earlier in this request carried goes with it.
@@ -674,6 +675,7 @@ actor GuestBridge: Brain {
         // and so no wait for the slot: a later input given ahead may be holding it, and the
         // reply owed is written before that one's turn all the same.
         if pending.state == .answered, let text = pending.text {
+            noteProvenance(of: pending)
             return OwedReply(parents: pending.parents, nonce: pending.nonce, text: text)
         }
         guard !asking else { return nil }
@@ -693,6 +695,7 @@ actor GuestBridge: Brain {
             ledger.pending?.state = .answered
             ledger.pending?.text = owed.text
             try? save()
+            noteProvenance(of: pending)
             return owed
         case .hold where pending.state != .unresolved:
             ledger.pending?.state = .unresolved
@@ -908,7 +911,7 @@ actor GuestBridge: Brain {
         var reply: String?
         // A sign-out meanwhile makes whatever the turn came to a login's that has gone.
         if self.login == login {
-            flown[id] = (model, usage)
+            flown[id] = (model, usage, pid)
             switch end {
             case .answered(let result):
                 reply = words.text.isEmpty ? result.text ?? "" : words.text
@@ -1157,6 +1160,14 @@ actor GuestBridge: Brain {
 
     /// The session and the resident process that wrote the reply under `nonce`, if this bridge
     /// asked for it in this launch.
+    /// Records who made the reply a record hands out, unless its nonce already names them: the
+    /// record's session, and the resident process read as its input was sent when this launch
+    /// gave the guest those words ahead of their turn. A record an earlier launch left names no
+    /// process; a request's own input named its process as its turn started.
+    private func noteProvenance(of pending: GuestLedger.Pending) {
+        provenance[pending.nonce] = provenance[pending.nonce] ?? (pending.session, flown[pending.input]?.pid)
+    }
+
     func provenance(of nonce: String) -> (session: String?, pid: Int32?)? {
         provenance[nonce]
     }
