@@ -51,7 +51,8 @@
 # SIGNIN_CODE=<code> scripts/simulator-run.sh --sign-in types the code into it and goes on.
 # The sign-in does not survive a restart of the simulator: it keeps no continuation key and no
 # CloudKit token on disk, so after a reboot Settings still shows the account, nothing asks for the
-# password, and CloudKit answers "temporarily unavailable". --renew signs the account out in
+# password, and CloudKit answers "temporarily unavailable"; a change of the account's password
+# ends it the same way without a restart. --renew signs the account out in
 # Settings and in again, typing the password once; it is asked for by name, never taken.
 # The password is typed through RedactedTyping, never XCTest's typeText, which writes what it
 # types into its activity's title and so into the run's output and the result bundle.
@@ -159,7 +160,7 @@ while [ $# -gt 0 ]; do
     --renew) renew=yes; shift ;;
     --resume) resume=yes; shift ;;
     --leak-check) leakcheck=yes; shift ;;
-    -h|--help) sed -n '2,110p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,114p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -503,7 +504,7 @@ if [ "$signin" = yes ]; then
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/SimulatorSignInTests || status=1
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
-    echo "==> $udid was signed in already and Settings asks for no password. If --send reports 'account temporarily unavailable', the sign-in ended when the simulator last restarted, and no prompt will come for it: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew signs the account out and in again, typing the password once. If --send reports another lapse, the test does not know the screen it shows"
+    echo "==> $udid was signed in already and Settings asks for no password. If --send reports 'account temporarily unavailable', its sign-in has ended (a restart of the simulator ends it, and so does a change of the account's password), and no prompt will come for it: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew signs the account out and in again, typing the password once. If --send reports another lapse, the test does not know the screen it shows"
   elif [ "$status" = 0 ]; then
     echo "==> $udid is signed in; DEVICE=$udid scripts/simulator-run.sh --send hello proves CloudKit answers"
   else
@@ -684,7 +685,7 @@ if [ -n "$send" ]; then
     "no account") fail "the simulator $udid has no iCloud account; sign it in with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
     # Signed in to Settings with CloudKit refusing and nothing asking: a sign-in the device's last
     # restart ended, which only signing out and in again mends (docs/simulator.md, *A lapse*).
-    "account temporarily unavailable") fail "the simulator $udid is signed in to Settings but CloudKit refuses its account (account temporarily unavailable): the sign-in ended when the simulator last restarted, and no prompt will come for it. Sign it out and in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew" ;;
+    "account temporarily unavailable") fail "the simulator $udid is signed in to Settings but CloudKit refuses its account (account temporarily unavailable): its sign-in has ended (a restart of the simulator ends it, and so does a change of the account's password), and no prompt will come for it. Sign it out and in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew" ;;
     *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
   esac
   wait_for done "the turn"

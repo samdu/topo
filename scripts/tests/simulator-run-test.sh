@@ -380,7 +380,7 @@ case_ send-icloud-unavailable              fail unavailable          quick  --se
 # Signed in with CloudKit refusing the account is a sign-in a restart ended, which only a
 # sign-out and sign-in mend: the failure says so and names --renew.
 grep -Fq "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in --renew" "$work/send-icloud-unavailable.out" \
-  && grep -Fq "ended when the simulator last restarted" "$work/send-icloud-unavailable.out" \
+  && grep -Fq "a restart of the simulator ends it, and so does a change of the account's password" "$work/send-icloud-unavailable.out" \
   || { echo "FAIL send-icloud-unavailable: the failure does not name the restart and --renew"; sed 's/^/    | /' "$work/send-icloud-unavailable.out"; failures=$((failures + 1)); }
 # A device with no account or a lapsed one is named, with the sign-in that mends it.
 for c in send-no-icloud-account send-icloud-lapsed send-icloud-refused; do
