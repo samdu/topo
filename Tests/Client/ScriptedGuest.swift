@@ -92,6 +92,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private var hanging: [(continuation: AsyncStream<GuestSession.TurnUpdate>.Continuation, id: String, text: String,
                            session: String, written: Bool, said: String?)] = []
     private var confirmed = true
+    private var pid: Int32 = 7
     private var messages = 0
     private var holdingReady = false
     private var readyGate: CheckedContinuation<Void, Never>?
@@ -178,7 +179,10 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
 
     func sessionID() async -> String? { lock.withLock { session } }
 
-    func residentPID() async -> Int32? { 7 }
+    func residentPID() async -> Int32? { lock.withLock { pid } }
+
+    /// The process the guest says is resident from now on.
+    func resident(_ pid: Int32) { lock.withLock { self.pid = pid } }
 
     func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
         if let why = lock.withLock({ refusal }) { throw GuestBridgeError.notReady(why) }

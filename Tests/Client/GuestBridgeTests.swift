@@ -1776,6 +1776,72 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs.count, 2)
     }
 
+    /// A reply made of words given ahead of their turn names their session and the resident
+    /// process read as they were sent, as a reply asked after the save does: not whichever is
+    /// resident when the reply is handed out.
+    func testAReplyToWordsGivenAheadNamesTheProcessResidentWhenTheyWereSent() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("Paris."))
+        let heard = await bridge.hear("capital of France?", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertTrue(heard)
+        guest.resident(8)
+        let result = try await runner.run("capital of France?", model: .sonnet, nonce: "n1", known: [])
+        XCTAssertEqual(guest.inputs, ["capital of France?"])
+        XCTAssertEqual(result.assistant.text, "Paris.")
+        let by = await bridge.provenance(of: result.assistant.nonce)
+        XCTAssertEqual(by?.session, "S1")
+        XCTAssertEqual(by?.pid, 7)
+    }
+
+    /// Words given ahead whose flight ended with its end not confirmed: the reply is read off the
+    /// transcript once one is, and still names the process read as the words were sent, whether
+    /// it is owed and the pending pass writes it, owed at the turn's next run, or asked for again
+    /// by a request.
+    func testAReplyToWordsGivenAheadOwedAfterTheirFlightNamesTheirProcess() async throws {
+        try await settleAfterTheFlight { runner, _, _ in
+            try await runner.answerPending(model: .sonnet).map { ($0.text, $0.nonce) }
+        }
+    }
+
+    func testAReplyToWordsGivenAheadOwedAtTheirTurnsNextRunNamesTheirProcess() async throws {
+        try await settleAfterTheFlight { runner, _, _ in
+            let turn = try await runner.run("capital of France?", model: .sonnet, nonce: "n1", known: []).assistant
+            return (turn.text, turn.nonce)
+        }
+    }
+
+    func testAReplyToWordsGivenAheadReconciledAtARequestNamesTheirProcess() async throws {
+        try await settleAfterTheFlight { _, bridge, db in
+            let turns = try await self.log(db)
+            let person = try XCTUnwrap(turns.first { $0.nonce == "n1" })
+            let nonce = TurnRunner.replyNonce(for: [person.ref])
+            let reply = try await bridge.answer(BrainRequest(context: [], answering: [person], parents: [person.ref],
+                                                             nonce: nonce, model: .sonnet))
+            return (reply.text, nonce)
+        }
+    }
+
+    private func settleAfterTheFlight(
+        _ settle: (TurnRunner, GuestBridge, InMemoryRecordDatabase) async throws -> (text: String, nonce: String)?
+    ) async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .answeredThenExited("Paris."))
+        guest.confirmEnds(false)
+        let heard = await bridge.hear("capital of France?", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertTrue(heard)
+        _ = try? await runner.run("capital of France?", model: .sonnet, nonce: "n1", known: [])
+        let kept = await bridge.current.pending
+        XCTAssertEqual(kept?.state, .sent, "the flight concluded a record its end was not confirmed for")
+        guest.confirmEnds(true)
+        let settled = try await settle(runner, bridge, db)
+        let reply = try XCTUnwrap(settled)
+        XCTAssertEqual(reply.text, "Paris.")
+        XCTAssertEqual(guest.inputs, ["capital of France?"])
+        let by = await bridge.provenance(of: reply.nonce)
+        XCTAssertEqual(by?.session, "S1")
+        XCTAssertEqual(by?.pid, 7)
+    }
+
     /// iCloud is away and the guest is not: two messages are each answered, once, with nothing
     /// saved, and when iCloud is back each reply lands after its person's turn under that turn's
     /// nonce, with no second input.
