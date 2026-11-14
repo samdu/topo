@@ -2,7 +2,8 @@
 # Runs scripts/simulator-run.sh against a fake `xcrun` whose `simctl launch` plays one scripted
 # console per case, and holds that the script exits non-zero on every way a run can fail and zero
 # only on a turn that finished and was answered under this run's id. No simulator, no build, no
-# token, no network: CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails.
+# token, no network: CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails, or
+# with --sign-in gives a placeholder password the case then looks for everywhere it must not be.
 # With --talk and a fake audio lane, it holds that a `start` that refuses is never followed by `stop`,
 # and that `start` is given the script's own pid as the lane's owner.
 #
@@ -24,6 +25,9 @@ chmod +x "$work/root/scripts/simulator-run.sh"
 
 cat >"$work/bin/op-item" <<'EOF'
 #!/bin/bash
+if [ "$*" = "get Buddy Apple ID password" ] && [ -n "${FAKE_APPLE_PASSWORD:-}" ]; then
+  printf '%s\n' "$FAKE_APPLE_PASSWORD"; exit 0
+fi
 echo "fake op-item: the test gives the token in the environment" >&2
 exit 1
 EOF
@@ -47,29 +51,35 @@ case "$2" in
     case "$FAKE_LAUNCH" in
       exits-42) echo "launch failed"; exit 42 ;;
       stale-reply-exits-42) say "reply: stale unrelated reply"; exit 42 ;;
-      dies-before-done) say "sending: hello"; exit 42 ;;
-      reply-no-done) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"; exec sleep 600 ;;
+      dies-before-done) say "icloud: answered"; say "sending: hello"; exit 42 ;;
+      reply-no-done) say "icloud: answered"; say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"; exec sleep 600 ;;
       silent) exec sleep 600 ;;
-      error-then-done) say "sending: hello"; say "error: Claude answered 500."; say "reply: hi"
+      error-then-done) say "icloud: answered"; say "sending: hello"; say "error: Claude answered 500."; say "reply: hi"
                        say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
-      other-run) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run someone-else from session S1, process 7: hi"
+      other-run) say "icloud: answered"; say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run someone-else from session S1, process 7: hi"
                  say "done"; exec sleep 600 ;;
-      no-reply) say "sending: hello"; say "reply: an older answer"; say "no reply to phone/2 in run $run"
+      no-reply) say "icloud: answered"; say "sending: hello"; say "reply: an older answer"; say "no reply to phone/2 in run $run"
                 say "done"; exec sleep 600 ;;
-      done-then-exits-1) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+      done-then-exits-1) say "icloud: answered"; say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                          say "done"; exit 1 ;;
-      answered) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: thinking"
+      answered) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: thinking"
                 say "mascot: turn gone for phone/2, idle"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
-                say "done"; exec sleep 600 ;;
-      answered-by-nobody) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
+                say "records: iCloud"; say "done"; exec sleep 600 ;;
+      answered-on-the-phone) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"
+                             say "mascot: turn gone for phone/2, idle"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+                             say "records: on this phone (no iCloud account when Topo was first opened), protection none"; say "done"; exec sleep 600 ;;
+      no-account) say "icloud: no account"; say "model: claude-haiku-5-5 (setting: haiku)"; exec sleep 600 ;;
+      lapsed) say "icloud: no answer within 30 s"; say "model: claude-haiku-5-5 (setting: haiku)"; exec sleep 600 ;;
+      refused) say "icloud: refused (CKError 9)"; exec sleep 600 ;;
+      answered-by-nobody) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                           say "reply to phone/2 in run $run from session none, process none: hi"; say "done"; exec sleep 600 ;;
-      answered-other-mascot) say "sending: hello"; say "mascot: turn began for phone/1, process 7, idle"
+      answered-other-mascot) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/1, process 7, idle"
                              say "mascot: turn gone for phone/1, idle"; say "mascot: turn began for phone/12, process 7, idle"
                              say "mascot: turn gone for phone/12, idle"
                              say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
-      answered-no-mascot) say "sending: hello"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+      answered-no-mascot) say "icloud: answered"; say "sending: hello"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                           say "done"; exec sleep 600 ;;
-      answered-old-format) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
+      answered-old-format) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                            say "reply to phone/2 in run $run: hi"; say "done"; exec sleep 600 ;;
       launched) case " $* " in *" --console-pty "*) echo "attached with nothing to wait for" >&2; exit 3 ;; esac; exit 0 ;;
       userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"
@@ -167,6 +177,23 @@ EOF
 cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
+# The sign-in's test: what it was started with, and what the listener hands a request with a
+# wrong nonce and then with the run's own.
+case " $* " in *" TopoSimulatorSignIn "*)
+  env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
+  /usr/bin/python3 -c '
+import socket, sys
+port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+def ask(word):
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(word.encode() + b"\n"); got = b""
+        while chunk := s.recv(256): got += chunk
+        return got
+wrong = ask("not-the-nonce")
+open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + ask(nonce))' \
+    "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
+  ;;
+esac
 if [ "${FAKE_XCODEBUILD:-}" = hangs ]; then
   /bin/sleep 30 &
   exec -a sleep /bin/sleep 31
@@ -263,6 +290,15 @@ case_ send-reply-to-another-run            fail other-run            quick  --se
 case_ send-no-reply-to-this-turn           fail no-reply             quick  --send hello
 case_ send-done-then-launcher-exits-1      fail done-then-exits-1    quick  --send hello
 case_ send-answered                        pass answered             quick  --send hello
+case_ send-answered-on-the-phone           fail answered-on-the-phone quick --send hello
+case_ send-no-icloud-account               fail no-account           quick  --send hello
+case_ send-icloud-lapsed                   fail lapsed               quick  --send hello
+case_ send-icloud-refused                  fail refused              quick  --send hello
+# A device with no account or a lapsed one is named, with the sign-in that mends it.
+for c in send-no-icloud-account send-icloud-lapsed send-icloud-refused; do
+  grep -Fq "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in" "$work/$c.out" \
+    || { echo "FAIL $c: the failure does not name the sign-in"; sed 's/^/    | /' "$work/$c.out"; failures=$((failures + 1)); }
+done
 case_ send-answered-by-no-resident         fail answered-by-nobody   quick  --send hello
 case_ send-answered-mascot-silent          fail answered-no-mascot   quick  --send hello
 case_ send-answered-mascot-other-turn      fail answered-other-mascot quick --send hello
@@ -415,6 +451,37 @@ if [ -n "$owner" ] && [ "$owner" = "$parent" ]; then
   echo "ok   talk-lane-has-an-owner: start was given AUDIO_LANE_OWNER=$owner, the script's own pid"
 else
   echo "FAIL talk-lane-has-an-owner: start was given AUDIO_LANE_OWNER='$owner'; the script's pid was $parent"
+  failures=$((failures + 1))
+fi
+
+# --sign-in, against a fake vault and a fake test that asks the listener for the password: the
+# listener hands nothing to a request without the run's nonce and the password to one with it,
+# and the password is in none of the test runner's arguments, its environment or the run's output.
+printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/ci-require-tests.sh"
+chmod +x "$work/root/scripts/ci-require-tests.sh"
+secret="fake-apple-password-$$"
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/signin.env" FAKE_SIGNIN_GOT="$work/signin.got" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
+status=$?
+got="$(cat "$work/signin.got" 2>/dev/null)"
+leaks="$(grep -lF "$secret" "$FAKE_XCODEBUILD_CALLS" "$work/signin.env" "$work/signin.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
+if [ "$status" = 0 ] && [ "$got" = "$(printf 'wrong:\nright:%s' "$secret")" ] && [ -z "$leaks" ] \
+   && grep -q "TEST_RUNNER_TOPO_SIGNIN_ACCOUNT=buddy.durose@icloud.com" "$work/signin.env"; then
+  echo "ok   sign-in-password-once: the nonce's request alone got the password, which no argument, environment or output carries"
+else
+  echo "FAIL sign-in-password-once: exit $status, the listener gave: $(printf %s "$got" | tr "\n" "|"), the password is in: ${leaks:-nothing}"
+  sed 's/^/    | /' "$work/signin.out"
+  failures=$((failures + 1))
+fi
+# A vault that gives no password stops the run before any test starts.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-none.out" 2>&1 </dev/null
+status=$?
+if [ "$status" != 0 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
+  echo "ok   sign-in-no-password: exited $status, no test started"
+else
+  echo "FAIL sign-in-no-password: exit $status, xcodebuild was called with: $(cat "$FAKE_XCODEBUILD_CALLS")"
   failures=$((failures + 1))
 fi
 
