@@ -70,7 +70,7 @@ case "$2" in
       answered-heard) say "sending under N1 in run $run: hello"; say "mascot: turn began for heard:N1, process 7, thinking"
                       say "mascot: turn gone for heard:N1, idle"
                       say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
-      answered-heard-other) say "sending under N1 in run $run: hello"; say "sending under N12 in run someone-else: hello"
+      answered-heard-other) say "sending under N12 in run someone-else: hello"; say "sending under N1 in run $run: hello"
                             say "mascot: turn began for heard:N12, process 7, thinking"; say "mascot: turn gone for heard:N12, idle"
                             say "mascot: turn began for none, process 7, thinking"; say "mascot: turn gone for none, idle"
                             say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
