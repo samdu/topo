@@ -104,7 +104,7 @@ final class Harness {
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
     /// What the reader was last handed of `writingSpoken`'s reply: everything it is handed after
-    /// extends this, so a message's last sentence settled at its end is never taken back.
+    /// extends this, so a message's last sentence settled at its tool call is never taken back.
     @ObservationIgnored private var handed: String?
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
@@ -1137,10 +1137,9 @@ final class Harness {
     /// comes with them. A tool call ends its message's words, so they are handed again as it
     /// begins (`.toolCallBegan`, the turn's own and before its input streams) with a line break
     /// after them, which settles their last sentence (`Speaker.settled`): what was
-    /// written before a tool is read as the tool is called rather than once the next message
-    /// begins. Not at a text block's end: a message can carry more than one, run on with nothing
-    /// between them (a server tool's search between two), and a break after the first would be
-    /// a sentence the reply does not have.
+    /// written before a tool is read as the tool is called. Not at a text block's end: a message
+    /// can carry more than one, run on with nothing between them (a server tool's search between
+    /// two), and a break after the first would be a sentence the reply does not have.
     private func follow(_ activity: GuestActivity) {
         switch activity {
         case .update(.event(.writing)), .update(.event(.toolCallBegan)):
@@ -1189,8 +1188,8 @@ final class Harness {
     }
 
     /// Hands the reader `text` of the spoken turn being written, when it extends what it was last
-    /// handed and is not that: a whitespace message after a settled block leaves the words short
-    /// of the line break the reader already has, and is nothing new to read.
+    /// handed and is not that: a whitespace message after a settle at a tool call leaves the
+    /// words short of the line break the reader already has, and is nothing new to read.
     private func hand(_ text: String) {
         guard let writingSpoken, text != handed, text.hasPrefix(handed ?? "") else { return }
         handed = text
