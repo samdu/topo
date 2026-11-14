@@ -58,10 +58,12 @@
 #
 # --leak-check proves that on a dummy, on a simulator signed into nothing that matters: it types a
 # random dummy, served as the password is, into a web page's password field in Safari, once with
-# typeText (the control) and once through RedactedTyping, and counts every 8-character run of each
-# dummy in the run's output, the result bundle, build/sim/Logs/Test and the device's and the Mac's
+# typeText (the control) and through RedactedTyping in a run that passes and one that fails after
+# typing, and counts every 8-character run of each dummy in the run's output, the result bundle
+# (its compressed blobs unpacked with zstd), build/sim/Logs/Test and the device's and the Mac's
 # logs for the run. It passes only when the control's dummy is found in the output and the bundle,
-# and the redacted dummy nowhere. It prints counts, never a dummy.
+# the redacted one nowhere, and neither redacted bundle holds a screen recording. It prints
+# counts, never a dummy.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
 # ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
@@ -329,17 +331,21 @@ process_start() {
 }
 
 # How many times any 8-character run of the secret on fd 3 is in each path (a file, or a folder
-# read whole, gzip members unpacked) or, for "-", in stdin. Prints "<label> <path>: <count>" and
-# nothing of the secret, which arrives on a pipe and never as an argument.
+# read whole, its gzip and zstd blobs unpacked, which a result bundle's are) or, for "-", in
+# stdin. Prints "<label> <path>: <count>", "unreadable" for a blob it could not unpack, and the
+# screen recordings among the files, which show what a secure field is given and which no count
+# of bytes can read; nothing of the secret, which arrives on a pipe and never as an argument.
 # count_runs <label> <path>...
 count_runs() {
   /usr/bin/python3 -c '
-import gzip, os, sys
+import gzip, os, subprocess, sys
 label, paths = sys.argv[1], sys.argv[2:]
+unread, videos = set(), {}
 secret = os.fdopen(3, "rb").read()
 runs = {secret[i:i + 8] for i in range(len(secret) - 7)}
 runs |= {r.decode().encode("utf-16-le") for r in list(runs)}
 def blobs(path):
+    videos[path] = 0
     if path == "-":
         yield sys.stdin.buffer.read(); return
     files = [path] if os.path.isfile(path) else [os.path.join(d, f) for d, _, fs in os.walk(path) for f in fs]
@@ -349,6 +355,13 @@ def blobs(path):
         except OSError:
             continue
         yield data
+        if data[4:8] == b"ftyp":
+            videos[path] += 1
+        if data[:4] == b"\x28\xb5\x2f\xfd":
+            try:
+                yield subprocess.run(["zstd", "-dcq", f], capture_output=True, check=True, timeout=120).stdout
+            except Exception:
+                unread.add(path)
         if data[:2] == b"\x1f\x8b":
             try:
                 yield gzip.decompress(data)
@@ -357,6 +370,10 @@ def blobs(path):
 for path in paths:
     found = path == "-" or os.path.exists(path)
     n = sum(blob.count(r) for blob in blobs(path) for r in runs) if found else "absent"
+    if path in unread:
+        n = "unreadable"
+    elif videos.get(path):
+        n = f"{n} and {videos[path]} screen recording(s)"
     print(f"{label} {path}: {n}")' "$@"
 }
 
@@ -366,7 +383,15 @@ if [ "$leakcheck" = yes ]; then
   rm -f "$pagefile"
   /usr/bin/python3 -c '
 import http.server, sys
-page = b"<!doctype html><meta name=viewport content=\"width=device-width\"><form><input type=password aria-label=\"leak-check\" autocomplete=off></form>"
+page = b"""<!doctype html><meta name=viewport content="width=device-width">
+<form><input type=password aria-label="leak-check" autocomplete=off oninput="shown(this.value)"></form><p id=h>sha none</p>
+<script>
+function shown(value) {
+  crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)).then(function (b) {
+    document.getElementById("h").textContent = "sha " + Array.from(new Uint8Array(b), function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+  });
+}
+</script>"""
 class Page(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers(); self.wfile.write(page)
@@ -387,8 +412,11 @@ server.serve_forever()' "$pagefile" &
   status=0
   counts="$derived/leak-check.$$.counts"
   : >"$counts"
-  for route in typeText redacted; do
-    dummy="$(openssl rand -base64 48 | tr -dc A-Za-z0-9 | cut -c1-32)"
+  # A failing run is the one a stopped sign-in leaves, which keeps what a passing one may not.
+  for route in typeText redacted failing; do
+    # Letters and digits with symbols among them, as a password has, in runs longer than eight.
+    dummy="$(openssl rand -base64 48 | tr -dc A-Za-z0-9 | cut -c1-30)"
+    dummy="${dummy:0:10}#${dummy:10:10}%!${dummy:20}"
     nonce="$(uuidgen)"
     serve_once "$nonce" dummy
     results="$derived/TopoLeakCheck-$route.xcresult"
@@ -397,12 +425,19 @@ server.serve_forever()' "$pagefile" &
     xcrun simctl openurl "$udid" "http://127.0.0.1:$page_port/"
     echo "==> typing a dummy into Safari's password field by $route"
     TEST_RUNNER_TOPO_SIGNIN_PORT="$served_port" TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" \
-    TEST_RUNNER_TOPO_LEAKCHECK_ROUTE="$route" \
+    TEST_RUNNER_TOPO_LEAKCHECK_ROUTE="$([ "$route" = failing ] && echo redacted || echo "$route")" \
+    TEST_RUNNER_TOPO_LEAKCHECK_FAIL="$([ "$route" = failing ] && echo 1 || echo 0)" \
       tracked xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
         -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
         -only-testing:TopoSimulatorSignInTests/LeakCheckTests \
-        -collect-test-diagnostics never -resultBundlePath "$results" || status=1
-    scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/LeakCheckTests || status=1
+        -collect-test-diagnostics never -resultBundlePath "$results" && ran=0 || ran=$?
+    if [ "$route" = failing ]; then
+      [ "$ran" != 0 ] && grep -q 'failing after the dummy' "$runlog" \
+        || { echo "==> the failing run did not fail after typing the dummy" >&2; status=1; }
+    else
+      [ "$ran" = 0 ] || status=1
+      scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/LeakCheckTests || status=1
+    fi
     # The logs are read on a pipe and counted, never kept: a device's log can hold what other
     # runs launched with.
     {
@@ -416,16 +451,16 @@ server.serve_forever()' "$pagefile" &
     unset dummy
   done
   # The control's bundle holds its dummy, which is worth nothing, but is not kept either.
-  rm -rf "$derived/TopoLeakCheck-typeText.xcresult" "$derived/TopoLeakCheck-redacted.xcresult"
+  rm -rf "$derived"/TopoLeakCheck-*.xcresult
   for sink in "$runlog" "TopoLeakCheck-typeText.xcresult"; do
     grep -E "^typeText [^ ]*$(basename "$sink" | sed 's/[.]/[.]/g'): [1-9]" "$counts" >/dev/null \
       || { echo "==> the control's dummy is not in $(basename "$sink"): this check cannot see what typeText records there" >&2; status=1; }
   done
-  if grep -E '^redacted .*: ([1-9]|absent)' "$counts" | grep -v 'Logs/Test: absent' >&2; then
-    echo "==> the redacted dummy is in what the run left, or a sink was not read" >&2; status=1
+  if grep -E '^(redacted|failing) .*: ([1-9]|absent|unreadable|0 and)' "$counts" | grep -v 'Logs/Test: absent' >&2; then
+    echo "==> the redacted dummy is in what the run left, a sink was not read, or the screen was recorded" >&2; status=1
   fi
   rm -f "$counts"
-  [ "$status" = 0 ] && echo "==> leak check passed: typeText's dummy is in the run's output and bundle, RedactedTyping's in nothing the run left"
+  [ "$status" = 0 ] && echo "==> leak check passed: typeText's dummy is in the run's output and bundle, RedactedTyping's in nothing a passing or a failing run left"
   exit "$status"
 fi
 

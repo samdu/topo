@@ -79,8 +79,10 @@ final class SimulatorSignInTests: XCTestCase {
 
         // A first sign-in asks in Settings' sheet; a lapse's may ask in a SpringBoard alert.
         var field = settings.secureTextFields.firstMatch
+        var host = settings
         if !field.waitForExistence(timeout: 30) {
             field = springboard.secureTextFields.firstMatch
+            host = springboard
             guard field.exists else { return stopped("no password field") }
         }
         snap("password")
@@ -90,6 +92,8 @@ final class SimulatorSignInTests: XCTestCase {
         }
         let secret = try servedSecret()
         field.tap()
+        // The synthesized keystrokes go to whatever has focus, and do not wait for it as typeText does.
+        _ = host.keyboards.firstMatch.waitForExistence(timeout: 5)
         // Never `typeText`, which writes what it types into its activity's title (RedactedTyping).
         try RedactedTyping.type(secret, record: "the password")
         // A secure field shows its last character for a moment, and every screenshot is kept.

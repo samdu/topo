@@ -1,11 +1,14 @@
+import CryptoKit
 import XCTest
 
 /// Types a dummy secret into a web page's password field in Safari, the way the sign-in types the
 /// password (`scripts/simulator-run.sh --leak-check`, docs/simulator.md). The dummy is served as
 /// the password is, and `TOPO_LEAKCHECK_ROUTE` says how it is typed: `redacted` through
 /// `RedactedTyping`, as the sign-in does, or `typeText`, the control that shows the script's count
-/// finds what XCTest records. The script counts the dummy in what the run left; this test only
-/// types it and says the field took it whole.
+/// finds what XCTest records; with `TOPO_LEAKCHECK_FAIL` it fails once the dummy is typed, so the
+/// script sees what a failing sign-in leaves. The script counts the dummy in what the run left;
+/// this test only types it and says the field took it whole, by the hash of its value the page
+/// shows, since a symbol typed as another keeps the length.
 @MainActor
 final class LeakCheckTests: XCTestCase {
     func testLeakCheck() throws {
@@ -25,14 +28,17 @@ final class LeakCheckTests: XCTestCase {
         guard field.exists else { return XCTFail("the leak check's page shows no password field") }
         let secret = try servedSecret()
         field.tap()
+        _ = safari.keyboards.firstMatch.waitForExistence(timeout: 5)
         switch route {
         case "redacted": try RedactedTyping.type(secret, record: "the dummy")
         case "typeText": field.typeText(secret)
         default: return XCTFail("TOPO_LEAKCHECK_ROUTE is \(route), not redacted or typeText")
         }
         sleep(2)
-        let typed = (field.value as? String)?.count ?? 0
-        print("[leak-check] \(route) typed \(typed) of \(secret.count) characters")
-        XCTAssertEqual(typed, secret.count, "the field holds \(typed) characters, not \(secret.count)")
+        let want = "sha " + SHA256.hash(data: Data(secret.utf8)).map { String(format: "%02x", $0) }.joined()
+        let shown = safari.webViews.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'sha '")).firstMatch.label
+        print("[leak-check] \(route) typed the dummy \(shown == want ? "whole" : "wrong")")
+        XCTAssertEqual(shown, want, "the field holds something other than the dummy")
+        if env["TOPO_LEAKCHECK_FAIL"] == "1" { XCTFail("failing after the dummy, as a stopped sign-in does") }
     }
 }

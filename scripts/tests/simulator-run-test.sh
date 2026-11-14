@@ -203,6 +203,11 @@ sys.stdout.write(got.decode())' "$TEST_RUNNER_TOPO_SIGNIN_PORT" "$TEST_RUNNER_TO
     [ "${FAKE_LEAK_SINK:-both}" = bundle ] || echo "t = Type '${dummy:0:18}...' into SecureTextField"
     [ "${FAKE_LEAK_SINK:-both}" = output ] || echo "Type '${dummy:0:18}...'" >"$bundle/database.sqlite3"
   fi
+  if [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" = 1 ]; then
+    echo "error: failing after the dummy, as a stopped sign-in does"
+    [ -z "${FAKE_LEAK_RECORDS:-}" ] || printf '\0\0\0\x20ftypmp42' >"$bundle/recording"
+    echo "** TEST FAILED **"; exit 65
+  fi
   echo "** TEST SUCCEEDED **"; exit 0 ;;
 esac
 # The sign-in's test: what it was started with, and what the listener hands a request with a
@@ -673,17 +678,18 @@ for refused in "--sign-in --resume --renew" "--sign-in --leak-check"; do
     echo "FAIL refused: $refused exited $status"; failures=$((failures + 1))
   fi
 done
-# The leak check passes only when the control's dummy is found in the output and the bundle and
-# the redacted one nowhere; a control the count cannot see fails it as a leak does.
+# The leak check passes only when the control's dummy is found in the output and the bundle, the
+# redacted one nowhere, and a failing run's bundle holds no screen recording; a control the count
+# cannot see fails it as a leak does.
 printf '#!/bin/sh\nexit 0\n' >"$work/bin/log"; chmod +x "$work/bin/log"
 leak_case() {
   local name="$1" want="$2"; shift 2
   : >"$FAKE_XCODEBUILD_CALLS"
   env PATH="$work/bin:$PATH" "$@" "$work/root/scripts/simulator-run.sh" --no-build --leak-check >"$work/$name.out" 2>&1 </dev/null
   local status=$?
-  if [ "$status" = "$want" ] && [ "$(grep -c -- '-only-testing:TopoSimulatorSignInTests/LeakCheckTests' "$FAKE_XCODEBUILD_CALLS")" = 2 ] \
+  if [ "$status" = "$want" ] && [ "$(grep -c -- '-only-testing:TopoSimulatorSignInTests/LeakCheckTests' "$FAKE_XCODEBUILD_CALLS")" = 3 ] \
      && ! grep -q "TopoLeakCheck" <(ls "$work/root/build/sim"); then
-    echo "ok   $name: exit $status, both routes run, neither bundle kept"
+    echo "ok   $name: exit $status, every route run, no bundle kept"
   else
     echo "FAIL $name: exit $status, wanted $want"; sed 's/^/    | /' "$work/$name.out"; failures=$((failures + 1))
   fi
@@ -692,6 +698,7 @@ leak_case leak-check-clean 0 FAKE_LEAK=none
 leak_case leak-check-redacted-leaks 1 FAKE_LEAK_REDACTED=1
 leak_case leak-check-control-unseen-in-bundle 1 FAKE_LEAK_SINK=output
 leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
+leak_case leak-check-failing-run-recorded 1 FAKE_LEAK_RECORDS=1
 # A vault that gives no password stops the run before any test starts.
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-none.out" 2>&1 </dev/null
