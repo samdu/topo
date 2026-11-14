@@ -357,6 +357,8 @@ if [ "$talk" = yes ]; then
   # app reads it itself at launch (DebugRun.servedToken). The script's own CLAUDE_SETUP_TOKEN
   # is taken out of xcodebuild's environment, whose build description keeps it otherwise. The
   # test is built before the listener starts, so a slow build does not use up its 30 minutes.
+  # The test collects no diagnostics: they are the simulator's log archive, and that log records
+  # the environment of every process the simulator launched, a token-carrying launch's included.
   echo "==> building the talk test (TopoTalkTests)"
   tracked env -u CLAUDE_SETUP_TOKEN xcodebuild build-for-testing -project Topo.xcodeproj -scheme TopoTalk \
     -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived"
@@ -372,7 +374,7 @@ if [ "$talk" = yes ]; then
   TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models/phonon-40m-en" \
     tracked env -u CLAUDE_SETUP_TOKEN xcodebuild test-without-building -project Topo.xcodeproj -scheme TopoTalk \
       -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
-      -resultBundlePath "$results" || status=$?
+      -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-audio-lane.sh check after || status=1
   scripts/ci-require-tests.sh xcresult "$results" TopoTalkTests || status=1
   [ "$status" = 0 ] && echo "==> the spoken question was heard, answered and read aloud" \

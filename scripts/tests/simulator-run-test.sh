@@ -215,10 +215,13 @@ open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + ag
     "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
   ;;
 esac
-# The talk's test: what it was started with, and what the app it launches would read from the
-# port and nonce the runner hands it.
+# The talk's build and test: what each was started with, and what the app the test launches
+# would read from the port and nonce the runner hands it.
+case " $* " in *" TopoTalk "*)
+  env | grep -v "^FAKE_TALK_TOKEN=" >>"$FAKE_TALK_ENV"  # the test's own copy is not the script's
+  ;;
+esac
 case " $* " in *" test-without-building "*" TopoTalk "*)
-  env | grep -v "^FAKE_TALK_TOKEN=" >"$FAKE_TALK_ENV"  # the test's own copy is not the script's
   /usr/bin/python3 -c '
 import socket, sys
 port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -492,17 +495,19 @@ else
 fi
 
 # A --talk that reaches its test: the token is served once to the request with the run's nonce,
-# and is in none of the test runner's arguments, its environment or the run's output, since the
-# result bundle records the runner's environment and the app's launch environment whole.
+# and is in none of xcodebuild's arguments, its environment or the run's output, since the result
+# bundle records the runner's environment and the app's launch environment whole, and the build
+# description xcodebuild's own; and the test collects no diagnostics, which are the simulator's log.
 token="fake-claude-token-$$"
-: >"$FAKE_XCODEBUILD_CALLS"
+: >"$FAKE_XCODEBUILD_CALLS"; : >"$work/talk.env"
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
   FAKE_TALK_ENV="$work/talk.env" FAKE_TALK_GOT="$work/talk.got" \
   "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk.out" 2>&1 </dev/null
 status=$?
 got="$(cat "$work/talk.got" 2>/dev/null)"
 leaks="$(grep -lF "$token" "$FAKE_XCODEBUILD_CALLS" "$work/talk.env" "$work/talk.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
-if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && [ "$(cut -d" " -f1 "$FAKE_XCODEBUILD_CALLS" | tr "\n" " ")" = "build-for-testing test-without-building " ]; then
+if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && [ "$(cut -d" " -f1 "$FAKE_XCODEBUILD_CALLS" | tr "\n" " ")" = "build-for-testing test-without-building " ] \
+   && grep -q "^test-without-building .*-collect-test-diagnostics never" "$FAKE_XCODEBUILD_CALLS"; then
   echo "ok   talk-token-served: the test's app got the token from the run's nonce, and no argument, environment or output carries it"
 else
   echo "FAIL talk-token-served: exit $status, the app read $([ "$got" = "$token" ] && echo the token || echo "something else"), the token is in: ${leaks:-nothing}, xcodebuild was called with: $(tr "\n" "|" < "$FAKE_XCODEBUILD_CALLS")"
