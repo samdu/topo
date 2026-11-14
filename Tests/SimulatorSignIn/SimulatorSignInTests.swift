@@ -64,7 +64,8 @@ final class SimulatorSignInTests: XCTestCase {
         let secret = try password()
         field.tap()
         field.typeText(secret)
-        snap("typed")
+        // A secure field shows its last character for a moment, and every screenshot is kept.
+        sleep(3)
         let typed = (field.value as? String)?.count ?? 0
         guard typed == secret.count else {
             return stopped("the password field holds \(typed) characters, not \(secret.count); nothing was submitted")
