@@ -127,9 +127,10 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// The most of a transcript the hook reads: its last 4 MB. A transcript grows for the life of
     /// a conversation and the hook runs at every launch, so it reads a window of fixed size and
     /// its cost does not grow with the file. Claude Code compacts a 200 000-token window inside
-    /// some 3 MB of transcript (at most 15 bytes a token of context), so there the window holds
-    /// everything since the last compaction; a larger window's model can run past it, and then a
-    /// mark before the window is not seen and its line is told again, once a window's growth.
+    /// some 3 MB of a transcript of text (at most 15 bytes a token of context), so there the
+    /// window holds everything since the last compaction; images (their base64 is in the
+    /// transcript) or a larger window's model can run past it, and then a mark before the window
+    /// is not seen and its line is told again, once a window's growth.
     public static let transcriptWindow = 4 * 1024 * 1024
 
     /// The hook's command: one pass over the conversation's transcript (the `transcript_path` of
