@@ -1134,7 +1134,7 @@ final class Harness {
     private func follow(_ activity: GuestActivity) {
         if case .update(.event(.writing)) = activity, let hearing, answeredElsewhere.contains(hearing) { return }
         switch activity {
-        case .began(_, let answering):
+        case .began(_, let answering, _):
             writing = nil
             words = ReplyWords()
             if !answering.isEmpty { hearing = nil }

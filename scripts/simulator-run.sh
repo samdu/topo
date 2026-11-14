@@ -7,9 +7,10 @@
 # `reply to <turn> in run <id> from session <session>, process <pid>:` under the id this script
 # launched it with (the reply DebugRun found by the sent turn's nonce and the reply's parents,
 # written by the resident process it names), and printed `mascot: turn began for <refs>` and
-# `mascot: turn gone for <refs>` with that turn among the refs (Topo on the glass following this
-# turn, with every pose between them), and `records: iCloud` (the turn's records are CloudKit's,
-# not a journal on the phone; --fresh starts an install that decided on the phone again). A launcher that
+# `mascot: turn gone for <refs>` with that turn among the refs, or, for words given ahead of their
+# save, `heard:<nonce>` with the nonce of `sending under <nonce> in run <id>:` (Topo on the glass
+# following this turn, with every pose between them), and `records: iCloud` (the turn's records are
+# CloudKit's, not a journal on the phone; --fresh starts an install that decided on the phone again). A launcher that
 # exits before `done`, or non-zero at all, a turn not finished within TIMEOUT seconds (180), a
 # missing or foreign reply, and a reply no resident session wrote each exit non-zero. Before the
 # turn the app asks CloudKit for the account and the Topo zone (`icloud: `, DebugRun.iCloud); a
@@ -475,9 +476,14 @@ if [ -n "$send" ]; then
     && ! grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run from session none," "$log" \
     || fail "the reply to this run's turn was not written by a resident guest session"
   # The mascot's lines name the turns the guest turn answered: this run's turn has to be among
-  # them, on the line it began with and the line it went with.
+  # them, on the line it began with and the line it went with. Words given ahead of their save
+  # answer a turn no ref names yet, so those lines name it `heard:` the nonce this run sent under.
   turn="$(grep -Eo "\[topo-debug\] reply to [^ ]+ in run $run from " "$log" | head -1 | awk '{print $4}')"
+  nonce="$(grep -Eo "\[topo-debug\] sending under [^ ]+ in run $run: " "$log" | head -1 | awk '{print $4}' || true)"
   pattern="$(printf '%s' "$turn" | sed 's/[][\.*^$+?(){}|/]/\\&/g')"
+  if [ -n "$nonce" ]; then
+    pattern="($pattern|heard:$(printf '%s' "$nonce" | sed 's/[][\.*^$+?(){}|/]/\\&/g'))"
+  fi
   grep -Eq "\[topo-debug\] mascot: turn began for ([^ ,]+\+)?$pattern(\+[^ ,]+)?, process " "$log" \
     && grep -Eq "\[topo-debug\] mascot: turn gone for ([^ ,]+\+)?$pattern(\+[^ ,]+)?, " "$log" \
     || fail "Topo on the glass did not follow the guest's turn for $turn"
