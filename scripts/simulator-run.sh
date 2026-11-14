@@ -124,6 +124,7 @@ expect_bash=""
 fresh=no
 signin=no
 renew=no
+resume=no
 timeout="${TIMEOUT:-180}"
 
 while [ $# -gt 0 ]; do
@@ -144,6 +145,7 @@ while [ $# -gt 0 ]; do
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
     --renew) renew=yes; shift ;;
+    --resume) resume=yes; shift ;;
     -h|--help) sed -n '2,100p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -162,6 +164,7 @@ print(max(found)[1] if found else "")' "$device")"
 [ -n "$udid" ] || { echo "no available simulator named '$device'; xcrun simctl list devices available" >&2; exit 1; }
 
 [ "$renew" = no ] || [ "$signin" = yes ] || { echo "--renew is a way of --sign-in: --sign-in --renew" >&2; exit 2; }
+[ "$resume" = no ] || { [ "$signin" = yes ] && [ "$renew" = no ]; } || { echo "--resume is a way of --sign-in, without --renew: --sign-in --resume" >&2; exit 2; }
 
 if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
@@ -325,12 +328,16 @@ if [ "$signin" = yes ]; then
   # session log records whole; the runner types it into a secure field, which XCTest logs as
   # <redacted>. Tests/SimulatorSignIn says what the test answers and what it refuses to.
   account="${SIGNIN_ACCOUNT:-buddy.durose@icloud.com}"
-  password="$(op-item get 'Buddy Apple ID' password)" || password=""
-  [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
-  nonce="$(uuidgen)"
-  serve_once "$nonce" password
-  unset password
-  port="$served_port"
+  nonce="" port=""
+  # --resume reads no password and serves none: it only answers the screens after one.
+  if [ "$resume" = no ]; then
+    password="$(op-item get 'Buddy Apple ID' password)" || password=""
+    [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
+    nonce="$(uuidgen)"
+    serve_once "$nonce" password
+    unset password
+    port="$served_port"
+  fi
   results="$derived/TopoSimulatorSignIn.xcresult"
   rm -rf "$results"
   xcrun simctl boot "$udid" 2>/dev/null || true
@@ -340,6 +347,7 @@ if [ "$signin" = yes ]; then
   TEST_RUNNER_TOPO_SIGNIN_ACCOUNT="$account" TEST_RUNNER_TOPO_SIGNIN_PORT="$port" \
   TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" TEST_RUNNER_TOPO_SIGNIN_CODE="${SIGNIN_CODE:-}" \
   TEST_RUNNER_TOPO_SIGNIN_RENEW="$([ "$renew" = yes ] && echo 1 || echo 0)" \
+  TEST_RUNNER_TOPO_SIGNIN_RESUME="$([ "$resume" = yes ] && echo 1 || echo 0)" \
     tracked xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?

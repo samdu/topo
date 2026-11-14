@@ -31,6 +31,14 @@ final class SimulatorSignInTests: XCTestCase {
             settings.typeText(code)
             return try finish(accountCell, account: account)
         }
+        // A run that resumes types nothing and asks for no password: it takes up the screens
+        // after the password where a sign-in stopped on one it did not know.
+        if env["TOPO_SIGNIN_RESUME"] == "1" {
+            settings.activate()
+            snap("resume")
+            print("[sign-in] resuming the screens after the password")
+            return try finish(accountCell, account: account)
+        }
         settings.terminate()
         settings.activate()
         guard accountCell.waitForExistence(timeout: 20) else { return stopped("Settings showed no Apple Account cell") }
@@ -115,11 +123,13 @@ final class SimulatorSignInTests: XCTestCase {
                 return stopped("Apple asks for a two-factor code (\(code)); the screen is left up for SIGNIN_CODE=<code> scripts/simulator-run.sh --sign-in")
             }
             // What a first sign-in asks after the password: keep the simulator's own data out of
-            // the account, agree to the terms, and decline the rest.
+            // the account, agree to the terms, decline the rest, and go past what only informs
+            // (Safety Settings' Continue).
             if let answer = first(
                 settings.buttons["Don’t Merge"], settings.buttons["Don't Merge"],
                 settings.buttons["Agree"], springboard.buttons["Agree"], settings.alerts.buttons["Agree"],
-                settings.buttons["Not Now"], springboard.buttons["Not Now"], settings.buttons["Skip"], settings.buttons["Later"]
+                settings.buttons["Not Now"], springboard.buttons["Not Now"], settings.buttons["Skip"], settings.buttons["Later"],
+                settings.buttons["Continue"]
             ) {
                 print("[sign-in] step \(step): \(answer.label)")
                 answer.tap()
