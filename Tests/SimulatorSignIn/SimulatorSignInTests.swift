@@ -66,7 +66,7 @@ final class SimulatorSignInTests: XCTestCase {
         }
         snap("password")
         // A lapse's prompt names the account it asks for: Buddy's password goes to no other.
-        guard firstSignIn || screenWords().contains(where: { $0.localizedCaseInsensitiveContains(account) }) else {
+        guard firstSignIn || screenWords().contains(where: { names($0, account) }) else {
             return stopped("the password prompt does not name \(account); nothing was typed")
         }
         let secret = try password()
@@ -126,11 +126,12 @@ final class SimulatorSignInTests: XCTestCase {
                 || settings.alerts.firstMatch.exists
             if !sheetUp, accountCell.exists, accountCell.isHittable, !accountCell.label.hasPrefix("Apple Account, Sign in"),
                lapsePrompt() == nil {
+                let label = accountCell.label
                 guard shows(account, after: accountCell) else {
                     return stopped("Settings shows an account, but its page does not name \(account)")
                 }
                 snap("signed-in")
-                print("[sign-in] signed in: \(account) (\(accountCell.label))")
+                print("[sign-in] signed in: \(account) (\(label))")
                 return
             }
             if step % 5 == 0 { snap("waiting-\(step)") }
@@ -141,9 +142,22 @@ final class SimulatorSignInTests: XCTestCase {
     /// Whether the account's own page, opened from its cell, names this account.
     private func shows(_ account: String, after accountCell: XCUIElement) -> Bool {
         accountCell.tap()
+        let whole = Self.wholePattern(account)
         let named = settings.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@", account, account)).firstMatch
+            .matching(NSPredicate(format: "label MATCHES %@ OR value MATCHES %@", whole, whole)).firstMatch
         return named.waitForExistence(timeout: 15)
+    }
+
+    /// Whether a screen's words name this account whole: `notbuddy@…` is not `buddy@…`.
+    private func names(_ words: String, _ account: String) -> Bool {
+        words.range(of: Self.wholePattern(account), options: .regularExpression) != nil
+    }
+
+    /// The account as a whole address among other words: no character an address can hold
+    /// on either side of it (a sentence's full stop aside), case aside.
+    private static func wholePattern(_ account: String) -> String {
+        let edge = "[^a-z0-9._%+@-]"
+        return "(?is).*(^|\(edge))\(NSRegularExpression.escapedPattern(for: account))\\.?(\(edge)|$).*"
     }
 
     private func asksForCode(_ words: [String]) -> String? {

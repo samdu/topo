@@ -200,13 +200,16 @@ def ask(word):
 import time
 wrong = ask("not-the-nonce")
 right = ask(nonce)
-# Once answered the listener is gone: a second request with the nonce finds nobody.
+# Once answered the listener is gone: no later request with the nonce is given a byte, and one
+# soon finds nobody there at all.
 again = b"answered"
 for _ in range(20):
     try:
-        again = ask(nonce)
+        got = ask(nonce)
     except OSError:
         again = b"refused"; break
+    if got:
+        again = b"given again:" + got; break
     time.sleep(0.1)
 open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + again)' \
     "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
