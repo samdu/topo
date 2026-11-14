@@ -207,14 +207,24 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
     }
 
     /// Where a zone's copy is kept between launches: the caches directory, which the system may
-    /// empty (a launch after that walks the feed), under the iCloud account it was read as. With
-    /// no account to name, nothing is kept.
+    /// empty (a launch after that walks the feed), under the iCloud account it was read as and the
+    /// environment that answered it (`CloudEnvironment`), since a change token is the server's and
+    /// a build signed for the other environment shares the app's container. With no account to
+    /// name, or no environment, nothing is kept.
     private static func store(named key: String) -> ZoneMirror.Store? {
         guard let identity = FileManager.default.ubiquityIdentityToken,
-              let owner = try? NSKeyedArchiver.archivedData(withRootObject: identity, requiringSecureCoding: true),
+              let account = try? NSKeyedArchiver.archivedData(withRootObject: identity, requiringSecureCoding: true),
+              let environment = CloudEnvironment.current,
               let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        return ZoneMirror.Store(file: mirrorDirectory(in: caches).appendingPathComponent(key.replacingOccurrences(of: "/", with: "-") + ".plist"),
-                                owner: owner)
+        return store(named: key, account: account, environment: environment, caches: caches)
+    }
+
+    /// The copy of the zone `key` names for `account` as read from `environment`: one file per
+    /// zone, whose owner is the account and the environment together, so a copy either one does
+    /// not match is refused and removed, never taken.
+    static func store(named key: String, account: Data, environment: CloudEnvironment, caches: URL) -> ZoneMirror.Store {
+        ZoneMirror.Store(file: mirrorDirectory(in: caches).appendingPathComponent(key.replacingOccurrences(of: "/", with: "-") + ".plist"),
+                         owner: Data("\(environment.rawValue)/".utf8) + account)
     }
 
     private static func mirrorDirectory(in caches: URL) -> URL { caches.appendingPathComponent("zone-mirror", isDirectory: true) }

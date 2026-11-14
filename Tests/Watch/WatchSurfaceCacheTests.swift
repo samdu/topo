@@ -13,6 +13,8 @@ actor Zone: ZoneDatabase, ForwardingDatabase {
     private var feedFails = false
     private var garbled: Set<String> = []
     private var fetchFails = false
+    /// The tokens the feed was asked from, in order.
+    private(set) var asked: [Data?] = []
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
@@ -30,6 +32,7 @@ actor Zone: ZoneDatabase, ForwardingDatabase {
     }
     func delete(_ ids: [RecordID]) async throws { try await wrapped.delete(ids) }
     func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
+        asked.append(token)
         if feedFails { throw Self.offline }
         var changes = try await wrapped.changes(ofType: type, since: token)
         changes.changed.removeAll { SurfaceRecord.slot(of: $0.id).map(omitted.contains) ?? false }
@@ -50,6 +53,7 @@ final class WatchSurfaceCacheTests: XCTestCase {
     private var database: InMemoryRecordDatabase!
     private var zone: Zone!
     private var cache: WatchSurfaceCache!
+    private var defaults: UserDefaults!
     private var reloads = 0
 
     static func document(_ words: String) -> String {
@@ -61,10 +65,9 @@ final class WatchSurfaceCacheTests: XCTestCase {
         store = SurfaceStore(folder: folder)
         database = InMemoryRecordDatabase()
         zone = Zone(database)
-        let defaults = UserDefaults(suiteName: "topo.watch.tests.\(UUID().uuidString)")!
+        defaults = UserDefaults(suiteName: "topo.watch.tests.\(UUID().uuidString)")!
         reloads = 0
-        cache = WatchSurfaceCache(records: SurfaceRecords(database: zone), store: store, defaults: defaults,
-                                  changed: { [unowned self] in reloads += 1 })
+        cache = cache(in: .development, over: zone)
     }
 
     override func tearDown() async throws {
@@ -81,6 +84,81 @@ final class WatchSurfaceCacheTests: XCTestCase {
     private func phoneClears(_ slot: String) async throws {
         let records = SurfaceRecords(database: database)
         try await records.clear(slot: slot, runner: "phone-1", at: Date(), over: records.read(slot: slot))
+    }
+
+    /// The cache over another zone, as a build signed for the other environment sees it: the same
+    /// group and defaults, another server.
+    private func cache(in environment: CloudEnvironment?, over zone: Zone) -> WatchSurfaceCache {
+        WatchSurfaceCache(records: SurfaceRecords(database: zone), store: store, defaults: defaults,
+                          environment: environment, changed: { [unowned self] in reloads += 1 })
+    }
+
+    /// A token is the server's: a TestFlight build installed over a debug one shares the defaults
+    /// and the group, and a debug build installed back over it again. Each install reads the feed
+    /// from the start, since the token kept is the other environment's, and the face ends on its
+    /// own environment's slots.
+    func testEachInstallOverTheOtherEnvironmentReadsFromTheStart() async throws {
+        let productionDatabase = InMemoryRecordDatabase()
+        let production = Zone(productionDatabase)
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        let lamp = SurfaceRecord(slot: "lamp", document: Self.document("on"), revision: 1, updated: Date(), runner: "phone-1", images: [:])
+        let records = SurfaceRecords(database: productionDatabase)
+        try await records.save(lamp, over: records.read(slot: "lamp"))
+
+        await cache.fetch()
+        XCTAssertEqual(store.slots(), ["weather"])
+        await cache(in: .production, over: production).fetch()
+        XCTAssertEqual(store.slots(), ["lamp"])
+        await cache.fetch()
+        XCTAssertEqual(store.slots(), ["weather"], "development read on from a token past what the group holds")
+        let asked = await zone.asked, askedProduction = await production.asked
+        XCTAssertEqual(asked, [nil, nil], "development was offered a token after production's install")
+        XCTAssertEqual(askedProduction, [nil], "production was offered development's token")
+    }
+
+    /// The other environment's install whose read keeps no token (a fetch by name that failed)
+    /// still ends the first environment's token, since its read changed the group.
+    func testAnInstallWhoseReadKeepsNoTokenStillEndsTheOthers() async throws {
+        let productionDatabase = InMemoryRecordDatabase()
+        let production = Zone(productionDatabase)
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        let lamp = SurfaceRecord(slot: "lamp", document: Self.document("on"), revision: 1, updated: Date(), runner: "phone-1", images: [:])
+        let records = SurfaceRecords(database: productionDatabase)
+        try await records.save(lamp, over: records.read(slot: "lamp"))
+
+        await cache.fetch()
+        await production.fail(feed: false, fetch: true)
+        await cache(in: .production, over: production).fetch()
+        XCTAssertNil(defaults.object(forKey: WatchSurfaceCache.feedKey), "development's token outlived production's read")
+        await cache.fetch()
+        let asked = await zone.asked
+        XCTAssertEqual(asked, [nil, nil])
+        XCTAssertEqual(store.slots(), ["weather"], "production's slot stayed on development's face")
+    }
+
+    /// A token kept with no environment beside it is offered to neither, and goes.
+    func testATokenKeptUnderNoEnvironmentIsNotOffered() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        await cache.fetch()
+        let token = try XCTUnwrap(defaults.dictionary(forKey: WatchSurfaceCache.feedKey)?["token"] as? Data)
+        defaults.removeObject(forKey: WatchSurfaceCache.feedKey)
+        defaults.set(token, forKey: WatchSurfaceCache.unnamedTokenKey)
+        await cache.fetch()
+        let asked = await zone.asked
+        XCTAssertEqual(asked, [nil, nil])
+        XCTAssertNil(defaults.data(forKey: WatchSurfaceCache.unnamedTokenKey))
+    }
+
+    /// With no environment to name, the feed is read from the start every time and no token kept.
+    func testNoEnvironmentKeepsNoToken() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        let cache = cache(in: nil, over: zone)
+        await cache.fetch()
+        await cache.fetch()
+        let asked = await zone.asked
+        XCTAssertEqual(asked, [nil, nil])
+        XCTAssertEqual(store.slots(), ["weather"])
+        XCTAssertNil(defaults.object(forKey: WatchSurfaceCache.feedKey))
     }
 
     func testEmptyCacheListsFromTheFeed() async throws {
