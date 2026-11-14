@@ -177,7 +177,9 @@ final class SimulatorSignInTests: XCTestCase {
                 return "signing out asks for a password; nothing was typed"
             }
             // iOS asks whether to erase the device after signing out; the answer is never to.
+            // Then that most data stays on the device, which Continue accepts.
             if let answer = first(settings.buttons["Sign Out But Don’t Erase"], settings.buttons["Sign Out But Don't Erase"],
+                                  settings.buttons["Continue"],
                                   springboard.alerts.buttons.matching(other).firstMatch, settings.alerts.buttons.matching(other).firstMatch,
                                   settings.sheets.buttons.matching(other).firstMatch, settings.buttons.matching(other).firstMatch) {
                 print("[sign-in] sign-out step \(step): tapped \(answer.label)")
