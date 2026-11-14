@@ -124,9 +124,18 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// the hook ends its marks with.
     public static let launchVariable = "TOPO_LAUNCH"
 
+    /// The most of a transcript the hook reads: its last 4 MB. A transcript grows for the life of
+    /// a conversation and the hook runs at every launch, so it reads a window of fixed size and
+    /// its cost does not grow with the file. Claude Code compacts a 200 000-token window inside
+    /// some 3 MB of transcript (at most 15 bytes a token of context), so there the window holds
+    /// everything since the last compaction; a larger window's model can run past it, and then a
+    /// mark before the window is not seen and its line is told again, once a window's growth.
+    public static let transcriptWindow = 4 * 1024 * 1024
+
     /// The hook's command: one pass over the conversation's transcript (the `transcript_path` of
-    /// what the hook is handed on stdin), reading only Claude Code's compaction boundaries and its
-    /// records of a SessionStart hook's output on the main chain — a line that is such a record
+    /// what the hook is handed on stdin), or over its last `transcriptWindow` bytes less the line
+    /// the window begins inside when it is longer, reading only Claude Code's compaction
+    /// boundaries and its records of a SessionStart hook's output on the main chain — a line that is such a record
     /// from its first byte, as 2.1.316 writes one, with marks read from its `content` alone — so a
     /// mark a person writes, a reply quotes or a tool call carries is not one the hook printed. A
     /// record laid out otherwise by a later Claude Code reads as none, which tells everything
@@ -135,8 +144,8 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// - `timePrompt`, unless a time mark since the last compaction is less than `timeGap` old;
     /// - `memoryPrompt` when `memory` is said, unless the last memory mark since the last
     ///   compaction is that state;
-    /// - the note in `TOPO_LAST_PROCESS`, unless its mark is in any SessionStart output of the
-    ///   transcript, since a process ended after its hook ran and before it began leaves the note
+    /// - the note in `TOPO_LAST_PROCESS`, unless its mark is in any SessionStart output read,
+    ///   before a compaction included, since a process ended after its hook ran and before it began leaves the note
     ///   for the next, and never on a compaction or a clear, whose process told it at its start
     ///   (that record is written only with the first input, so a `/compact` as the first one
     ///   finds no mark, and a clear's transcript is a new one). Neither unsays it: a cut is told
@@ -145,7 +154,7 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// A compaction ends what the conversation was told: what came before the boundary is not
     /// sent again. The hook a compaction runs (`source` `compact` on its stdin) is run before
     /// Claude Code has written that boundary, and a clear's (`clear`) is handed the new session's
-    /// transcript, so both take nothing as told and tell the time and the memory. A transcript that cannot be read, or a path the hook was not handed, tells all
+    /// transcript, so both take nothing as told and tell the time and the memory. A path that is not a readable file, or none, tells all
     /// of it, because a line told twice costs a line and one never told is a conversation without
     /// it. Nothing printed is nothing added to the conversation.
     public static func hookCommand(memory: Bool?) -> String {
@@ -153,16 +162,16 @@ public struct ClaudeLauncher: ResidentLauncher {
         var command = #"i=$(cat); f=$(printf '%s' "$i" | sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p'); id=${TOPO_LAUNCH:-$$}; "#
             + #"c=$(printf '%s' "$i" | sed -n 's/.*"source" *: *"\([a-z]*\)".*/\1/p'); now=$(date +%s); t=; m=; n=; o=; "#
             + #"say() { if [ -n "$o" ]; then o=$(printf '%s\n\n%s' "$o" "$1"); else o=$1; fi; }; "#
-            + #"if [ -n "$f" ]; then "#
-            + #"set -- $({ grep -F -e '"compact_boundary"' -e '"hook_success"' "$f" 2>/dev/null; echo "grep $?"; } | awk -v note="$TOPO_LAST_PROCESS_MARK" '"#
-            + #"/^grep [0-9]+$/ { r = $2; next } "#
+            + #"if [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ]; then z=$(ls -ln "$f" 2>/dev/null | awk '{ print $5 }'); "#
+            + #"set -- $({ if [ "$z" -le \#(transcriptWindow) ] 2>/dev/null; then cat "$f"; else tail -c \#(transcriptWindow + 1) "$f" | sed 1d; fi; } 2>/dev/null "#
+            + #"| grep -F -e '"compact_boundary"' -e '"hook_success"' | awk -v note="$TOPO_LAST_PROCESS_MARK" '"#
             + #"index($0, "\"type\":\"system\",\"subtype\":\"compact_boundary\"") { t = ""; m = ""; next } "#
             + #"match($0, /^\{"parentUuid":("[^"]*"|null),"isSidechain":false,"attachment":\{"type":"hook_success","hookName":"SessionStart:[a-z]+","toolUseID":"[^"]*","hookEvent":"SessionStart","content":"/) { "#
             + #"s = substr($0, RLENGTH + 1); s = substr(s, 1, index(s, "\",\"") - 1); c = s; "#
             + #"if (note != "" && index(c, note)) n = 1; "#
             + #"while (match(s, /\[topo: time [0-9]+ [0-9a-z-]+\]/)) { t = substr(s, RSTART + 12, RLENGTH - 13); sub(/ .*/, "", t); s = substr(s, RSTART + RLENGTH) } "#
             + #"s = c; while (match(s, /\[topo: memory [a-z]+ at [0-9]+ [0-9a-z-]+\]/)) { m = substr(s, RSTART + 14, RLENGTH - 15); sub(/ .*/, "", m); s = substr(s, RSTART + RLENGTH) } } "#
-            + #"END { if (r > 1) t = m = n = ""; print (t == "" ? "-" : t), (m == "" ? "-" : m), (n ? "told" : "-") }'); "#
+            + #"END { print (t == "" ? "-" : t), (m == "" ? "-" : m), (n ? "told" : "-") }'); "#
             + #"t=$1; m=$2; n=$3; fi; [ "$t" = - ] && t=; case "$c" in compact|clear) t=; m=;; esac; "#
             + #"if [ -z "$t" ] || [ "$t" -gt "$now" ] || [ $((now - t)) -ge \#(timeGap) ]; then "#
             + #"say "$(printf '%s\n[topo: time %s %s]' \#(quoted(timePrompt)) "$now" "$id")"; fi; "#

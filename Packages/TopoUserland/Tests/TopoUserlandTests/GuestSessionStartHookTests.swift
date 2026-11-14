@@ -198,9 +198,42 @@ final class GuestSessionStartHookTests: XCTestCase {
         XCTAssertTrue(toldMemory(output, mounted: true), output)
     }
 
-    /// A cut's note is told unless its mark is in the hook's output anywhere in the transcript,
-    /// before a compaction included, after the time and the memory; and a transcript that cannot
-    /// be read, or no path at all, tells everything.
+    /// `lines` with a line of no interest to the hook after them, sized so that they come to
+    /// `bytes` with their newlines.
+    private func padded(_ lines: [String], to bytes: Int) -> [String] {
+        let base = #"{"type":"filler","x":""}"#
+        let used = lines.reduce(0) { $0 + $1.utf8.count + 1 } + base.utf8.count + 1
+        precondition(used <= bytes)
+        let line = base.replacingOccurrences(of: #""x":"""#, with: #""x":"\#(String(repeating: "x", count: bytes - used))""#)
+        return lines + [line]
+    }
+
+    /// Over a transcript longer than `transcriptWindow` the hook reads its last window alone,
+    /// less the line the window begins inside: a record that begins on the window's first byte
+    /// is read, one that begins a byte before it is not, so its marks are told again, and a
+    /// record laid out inside a tool call's input is not read even when the window begins on
+    /// its first byte.
+    func testTheHookReadsOnlyTheTranscriptsLastWindow() async throws {
+        let window = ClaudeLauncher.transcriptWindow
+        let record = try told(at: now - 60)
+        let earlierLine = padded([], to: 1000)
+        let inside = try await hook(over: earlierLine + padded([record, prompt, reply], to: window), memory: true)
+        XCTAssertEqual(inside, "", "a record on the window's first byte was not read")
+        let outside = try await hook(over: earlierLine + padded([record, prompt, reply], to: window + 1), memory: true)
+        XCTAssertTrue(toldTime(outside), outside)
+        XCTAssertTrue(toldMemory(outside, mounted: true), outside)
+
+        let opening = #"{"parentUuid":"p","isSidechain":false,"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":"#
+        let closing = "}]}}"
+        let forged = try await hook(over: earlierLine + [opening + record + closing] + padded([prompt, reply], to: window - record.utf8.count - closing.utf8.count - 1),
+                                    memory: true)
+        XCTAssertTrue(toldTime(forged), forged)
+        XCTAssertTrue(toldMemory(forged, mounted: true), forged)
+    }
+
+    /// A cut's note is told unless its mark is in the hook's output anywhere in what the hook
+    /// reads, before a compaction included, after the time and the memory; and a path that is
+    /// not a readable file, or no path at all, tells everything.
     func testANoteIsToldOnceAndAnUnreadableTranscriptTellsAll() async throws {
         let note = "Your last process was cut short."
         let then = now - 60
