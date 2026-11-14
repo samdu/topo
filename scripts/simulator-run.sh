@@ -421,7 +421,8 @@ fail() {
 # Waits for the app to print `marker`: one prefixed line per step and a closing line when the
 # work has settled, rather than for the app to exit, which it never does. A launcher that exits
 # first is a launch or an app that died, and fails the run there rather than at the timeout.
-# TIMEOUT is the run's: every wait counts against the one budget.
+# TIMEOUT is one budget for every wait on the app's lines after the launch; the build, the boot
+# and the install before it are not under it.
 waited=0
 wait_for() {
   local marker="$1" what="$2"
