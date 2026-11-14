@@ -159,6 +159,19 @@ final class StreamJSONTests: XCTestCase {
                        [.other("stream_event")])
     }
 
+    /// A tool call begun in a message of the turn's own ends that message's words; a text or
+    /// thinking block begun is nothing, and a sub-agent's tool call is none of the turn's. The
+    /// first line is as Claude Code 2.1.323 wrote it, after the message's last text delta and
+    /// before the tool's input.
+    func testAToolCallBegunIsReadOnlyForTheTurnsOwnMessage() {
+        let start = #"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01LXN2XHpLbpMcgNaJQLcRY9","name":"Bash","input":{},"caller":{"type":"direct"}}},"session_id":"7da5fae3-44af-4870-bee0-24caa939026f","parent_tool_use_id":null,"uuid":"4d48f027-9165-4d08-b5aa-9c3a29a98a9b","api_message_id":"msg_011Ch1USbog3MQH4DHWUMpCR"}"#
+        XCTAssertEqual(StreamJSON.events(in: start), [.toolCallBegan])
+        let subagent = #"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_2","name":"Bash","input":{}}},"parent_tool_use_id":"toolu_0"}"#
+        XCTAssertEqual(StreamJSON.events(in: subagent), [.other("stream_event")])
+        let text = #"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}},"parent_tool_use_id":null}"#
+        XCTAssertEqual(StreamJSON.events(in: text), [.other("stream_event")])
+    }
+
     func testAnUnknownEventIsNamedAndNotRead() {
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"content_block_delta"}}"#),
                        [.other("stream_event")])

@@ -20,6 +20,10 @@ public enum StreamEvent: Sendable, Equatable {
     /// A message of the turn's own begun: what `writing` gives next is its words, not the last
     /// message's.
     case writingBegan
+    /// A tool call begun in a message of the turn's own (`content_block_start` of a `tool_use`
+    /// block), before its input streams: the message's words before it are whole. A sub-agent's
+    /// makes none, as its words make none.
+    case toolCallBegan
     /// A tool the assistant called, by name. For a tool that writes a file — `Write`, `Edit`,
     /// `MultiEdit`, `NotebookEdit` (`StreamJSON.fileTools`) — `path` is the file it names, which is
     /// what says whether the turn is writing code, prose or the memory; nothing else of a tool's
@@ -211,6 +215,9 @@ public enum StreamJSON {
             switch event["type"] as? String {
             case "message_start":
                 return [.writingBegan]
+            case "content_block_start":
+                guard (event["content_block"] as? [String: Any])?["type"] as? String == "tool_use" else { return [.other(type)] }
+                return [.toolCallBegan]
             case "content_block_delta":
                 guard let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
                       let text = delta["text"] as? String, !text.isEmpty else { return [.other(type)] }

@@ -58,8 +58,11 @@ final class GatedSentences: VoiceEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var opened: [Int: [[Float]]] = [:]
     private var asked = 0
+    private var _texts: [String] = []
 
     var sentencesAsked: Int { lock.withLock { asked } }
+    /// The sentences asked for, in order.
+    var texts: [String] { lock.withLock { _texts } }
     /// Lets sentence `number` (from 1) go, with `frames` frames of tone.
     func open(_ number: Int, frames: Int = 1) {
         lock.withLock { opened[number] = Array(repeating: toneFrame(0.5), count: frames) }
@@ -68,7 +71,7 @@ final class GatedSentences: VoiceEngine, @unchecked Sendable {
     func load(folder: URL, temperature: Float) async throws {}
 
     func stream(_ text: String, temperature: Float) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
-        let mine = lock.withLock { asked += 1; return asked }
+        let mine = lock.withLock { asked += 1; _texts.append(text); return asked }
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var frames: [[Float]]?
@@ -140,7 +143,7 @@ final class AudibleHoldTests: XCTestCase {
 
     /// The store never asked, unless a test keeps a mode, and the earcons off, so the players
     /// made are the keeper's.
-    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true) async -> Rig {
+    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true, ceiling: Duration = .seconds(120)) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = defaults()
@@ -158,7 +161,7 @@ final class AudibleHoldTests: XCTestCase {
         voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
-                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
+                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, ceiling: ceiling,
                               heard: .dataRendered, sounds: sounds)
         return Rig(speaker: speaker, sounds: sounds, audio: audio, seams: seams, defaults: defaults,
                    clock: clock, players: players, voice: engine, center: center)
@@ -393,6 +396,55 @@ final class AudibleHoldTests: XCTestCase {
         try await render(rig, "the next frame") { bed.fades.last == 0 }
         XCTAssertFalse(rig.speaker.voiceGap)
         rig.speaker.stop()
+    }
+
+    /// A first part heard out with the guest at its tools past the reading's ceiling: its hold
+    /// goes, and the reply is read from the top as the guest writes on, rather than never.
+    func testAFirstPartHeardOutPastTheCeilingIsReadFromTheTopAsMoreComes() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to end the reading's hold") { !rig.speaker.speaking }
+        XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the ceiling")
+        rig.speaker.speak(writing: "One moment.\n\nIt is on the shelf. ", answering: "turn")
+        XCTAssertTrue(rig.speaker.speaking, "what the guest wrote after the ceiling was not read")
+        await settle("the reply's first sentence to be asked for again") { rig.voice.sentencesAsked == 2 }
+        rig.voice.open(2)
+        await settle("the reply's second sentence to be asked for") { rig.voice.sentencesAsked == 3 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "One moment.", "It is on the shelf."])
+        rig.speaker.stop()
+    }
+
+    /// Under a call, a first part heard out past the ceiling with the guest at its tools is
+    /// forgotten as it is with no call: the hold goes, so the call does, and the reply that lands
+    /// is read from the top rather than taken as a reading stopped for good.
+    func testUnderACallAFirstPartHeardOutPastTheCeilingLetsTheReplyBeReadWhenItLands() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        let system = FakeCallSystem()
+        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
+        rig.speaker.attach(call)
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        call.start()
+        call.provider(system.provider, perform: try XCTUnwrap(system.starts.last))
+        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to end the reading's hold") { !rig.speaker.speaking }
+        XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the ceiling under the call")
+        XCTAssertTrue(rig.speaker.speak("One moment.\n\nIt is on the shelf.", answering: "turn"))
+        await settle("the landed reply to be read from the top") { rig.voice.sentencesAsked == 2 }
+        rig.voice.open(2)
+        await settle("the reply's second sentence to be asked for") { rig.voice.sentencesAsked == 3 }
+        XCTAssertEqual(rig.voice.texts, ["One moment.", "One moment.", "It is on the shelf."])
+        rig.speaker.stop()
+        call.end()
     }
 
     /// The red line's order: the queue drains while the last sentence is still being made, and
