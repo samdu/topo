@@ -349,6 +349,12 @@ extension DebugRun {
         if let guest = harness.guest {
             var said = ""
             while true {
+                // A viewer that could not take primary sends nothing: its login is gone with its
+                // arrival, and the guest would refuse Claude Code for as long as anyone waited.
+                if takeRefused {
+                    say("done")
+                    return
+                }
                 do {
                     try await guest.ready()
                     break
@@ -393,6 +399,32 @@ extension DebugRun {
         say(line(for: answered, nonce: nonce, run: run, by: by))
         say("turns in the log: \(harness.turns.count)")
         say("done")
+    }
+
+    /// Set when a sending launch found itself a viewer and the takeover was refused (`takePrimary`).
+    @MainActor static var takeRefused = false
+
+    /// A launch that sends (`TOPO_DEBUG_SEND`) on a device that is a viewer takes primary first,
+    /// through the viewer's own control (`RoleSelector.takePrimary`), and the harness keeps the
+    /// lease that made the claim, as the control's does. A simulator signed into a shared Apple ID
+    /// finds the lease of whichever device ran last, so without it every send would be a viewer's,
+    /// whose arrival signs it out. True when primary was taken, and then the viewer's arrival does
+    /// not run; false, with nothing written, for any launch that does not send or a device that
+    /// is not a viewer. A takeover refused, a live holder kept primary, is an `error:` line and
+    /// ends the send (`takeRefused`).
+    @MainActor
+    static func takePrimary(_ selector: RoleSelector, adopt: (PrimaryLease) -> Void,
+                            environment: [String: String] = ProcessInfo.processInfo.environment) async -> Bool {
+        guard words(environment) != nil, selector.role == .viewer else { return false }
+        say("role: viewer; taking primary as the viewer's control does")
+        guard let lease = await selector.takePrimary() else {
+            takeRefused = true
+            say("error: role: still a viewer: \(selector.trouble ?? "the takeover did not land")")
+            return false
+        }
+        adopt(lease)
+        say("role: primary, taken over")
+        return true
     }
 
     /// The turns a guest turn answers as the mascot's lines name them, joined by `+`: the refs

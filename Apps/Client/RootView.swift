@@ -27,6 +27,11 @@ struct RootView: View {
             // puts what was waiting into the log as a limb's turns and drops the login.
             // A viewer holds no login, so it draws no picture from a home a login left behind.
             ViewerRootView().environment(\.turnImageFiles, nil).task {
+                #if DEBUG
+                // A debug launch that sends takes primary as the viewer's control does, before
+                // the arrival would drop the login it was launched with (`DebugRun.takePrimary`).
+                if await DebugRun.takePrimary(roleSelector, adopt: { harness.adopt($0) }) { return }
+                #endif
                 await ViewerArrival(moveEpoch: { LoginLife.shared.moveEpoch() },
                                     forgetShares: { ShareStore.shared()?.close() },
                                     holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
