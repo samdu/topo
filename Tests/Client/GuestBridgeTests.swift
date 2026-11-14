@@ -1187,10 +1187,37 @@ final class GuestBridgeTests: XCTestCase {
         ])
     }
 
+    /// Words given ahead of their save, as `DebugRun.send` gives them (`willSend`, then `retry`):
+    /// the guest's turn on them begins and goes before any ref names their turn, so its lines
+    /// name the turn by the nonce the words were sent under.
+    func testTheMascotsLinesNameWordsGivenAheadByTheirNonce() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("Shared.")])
+        let (harness, _) = harness(db, guest)
+        await harness.send("hello")
+        await harness.refresh()
+        var seen: [String] = []
+        harness.onGuest = { activity in
+            switch activity {
+            case .began, .gone: seen.append(Self.label(activity))
+            case .update: break
+            }
+        }
+        await db.stall(true)
+        let nonce = harness.willSend("share this link")
+        let sending = Task { await harness.retry() }
+        try await eventually("the guest's reply, with iCloud still out") { harness.replies[nonce] == "Shared." }
+        XCTAssertEqual(seen, ["began 7 for heard:\(nonce)", "gone for heard:\(nonce)"])
+        await db.stall(false)
+        await sending.value
+        XCTAssertEqual(harness.turns.map(\.text), ["hello", "Hi.", "share this link", "Shared."])
+    }
+
     private static func label(_ activity: GuestActivity) -> String {
         switch activity {
-        case .began(let pid, let answering): "began \(pid.map(String.init) ?? "none") for \(DebugRun.refs(answering))"
-        case .gone(let answering): "gone for \(DebugRun.refs(answering))"
+        case .began(let pid, let answering, let heard):
+            "began \(pid.map(String.init) ?? "none") for \(DebugRun.refs(answering, heard: heard))"
+        case .gone(let answering, let heard): "gone for \(DebugRun.refs(answering, heard: heard))"
         case .update(.event(.started)): "started"
         case .update(.event(.text)): "text"
         case .update(.event(.usage)): "usage"

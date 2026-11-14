@@ -67,6 +67,13 @@ case "$2" in
                              say "mascot: turn gone for phone/1, idle"; say "mascot: turn began for phone/12, process 7, idle"
                              say "mascot: turn gone for phone/12, idle"
                              say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
+      answered-heard) say "sending under N1 in run $run: hello"; say "mascot: turn began for heard:N1, process 7, thinking"
+                      say "mascot: turn gone for heard:N1, idle"
+                      say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
+      answered-heard-other) say "sending under N1 in run $run: hello"; say "sending under N12 in run someone-else: hello"
+                            say "mascot: turn began for heard:N12, process 7, thinking"; say "mascot: turn gone for heard:N12, idle"
+                            say "mascot: turn began for none, process 7, thinking"; say "mascot: turn gone for none, idle"
+                            say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
       answered-no-mascot) say "sending: hello"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                           say "done"; exec sleep 600 ;;
       answered-old-format) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
@@ -266,6 +273,8 @@ case_ send-answered                        pass answered             quick  --se
 case_ send-answered-by-no-resident         fail answered-by-nobody   quick  --send hello
 case_ send-answered-mascot-silent          fail answered-no-mascot   quick  --send hello
 case_ send-answered-mascot-other-turn      fail answered-other-mascot quick --send hello
+case_ send-answered-heard-ahead            pass answered-heard       quick  --send hello
+case_ send-answered-heard-other-nonce      fail answered-heard-other quick --send hello
 case_ send-answered-no-provenance          fail answered-old-format  quick  --send hello
 case_ no-send-launched                     pass launched             quick
 case_ press-mic-no-send-exits              pass launched             quick --press-mic
