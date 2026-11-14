@@ -222,7 +222,7 @@ case " $* " in *" TopoTalk "*)
   ;;
 esac
 case " $* " in *" test-without-building "*" TopoTalk "*)
-  /usr/bin/python3 -c '
+  [ -n "${FAKE_TALK_UNREAD:-}" ] || /usr/bin/python3 -c '
 import socket, sys
 port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
@@ -512,6 +512,20 @@ if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && [ "$(cut -d"
 else
   echo "FAIL talk-token-served: exit $status, the app read $([ "$got" = "$token" ] && echo the token || echo "something else"), the token is in: ${leaks:-nothing}, xcodebuild was called with: $(tr "\n" "|" < "$FAKE_XCODEBUILD_CALLS")"
   sed 's/^/    | /' "$work/talk.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
+# A talk test that passes without the app having read the token (the app ran on some other
+# login) fails the run.
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
+  FAKE_TALK_ENV="$work/talk-unread.env" FAKE_TALK_GOT="$work/talk-unread.got" FAKE_TALK_UNREAD=1 \
+  "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk-unread.out" 2>&1 </dev/null
+status=$?
+if [ "$status" != 0 ] && grep -q "the app never read the served token" "$work/talk-unread.out"; then
+  echo "ok   talk-token-unread: a test that passed with the token never read exits $status and says so"
+else
+  echo "FAIL talk-token-unread: exit $status"
+  sed 's/^/    | /' "$work/talk-unread.out" | grep -vF "$token"
   failures=$((failures + 1))
 fi
 

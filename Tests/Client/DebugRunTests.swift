@@ -80,6 +80,44 @@ final class DebugRunTests: XCTestCase {
                      "an answer past the limit is no token")
     }
 
+    /// A launch that names a served token's port and gets none is signed out, even over a cache an
+    /// earlier launch left signed in, so it cannot run on another login's word.
+    func testAServedTokenThatNeverCameSignsTheLaunchOut() {
+        let cache = LoginCache(defaults: UserDefaults(suiteName: "debug-run-\(UUID().uuidString)")!)
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
+        XCTAssertFalse(DebugRun.signIn(cache: cache, environment: ["TOPO_DEBUG_TOKEN_PORT": "1"], served: nil))
+        XCTAssertNil(cache.status)
+
+        cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
+        XCTAssertFalse(DebugRun.signIn(cache: cache, environment: [:], served: nil))
+        XCTAssertNotNil(cache.status, "an ordinary debug launch leaves an engineer's own sign-in alone")
+
+        XCTAssertTrue(DebugRun.signIn(cache: cache, environment: ["TOPO_DEBUG_TOKEN_PORT": "1"], served: "sk-ant-oat01-served"))
+        XCTAssertEqual(cache.status, ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
+    }
+
+    /// One deadline covers the whole read: a listener that takes the connection and never answers
+    /// gives no token once it has passed.
+    func testAServedTokenThatNeverAnswersGivesUpAtTheDeadline() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, size) == 0 && listen(fd, 1) == 0 && getsockname(fd, $0, &size) == 0
+            }
+        }
+        XCTAssertTrue(bound)
+        let began = ContinuousClock.now
+        XCTAssertNil(DebugRun.served(["TOPO_DEBUG_TOKEN_PORT": "\(UInt16(bigEndian: address.sin_port))", "TOPO_DEBUG_TOKEN_NONCE": "n"], seconds: 1))
+        let took = ContinuousClock.now - began
+        XCTAssertGreaterThanOrEqual(took, .milliseconds(900))
+        XCTAssertLessThan(took, .seconds(3))
+    }
+
     /// A listener on the loopback that answers one connection: the secret when the first line
     /// it reads is the nonce, nothing otherwise.
     private final class OneAnswer {

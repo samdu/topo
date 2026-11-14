@@ -301,8 +301,10 @@ enum DebugRun {
     /// The token a listener on the host's loopback (which a simulator shares) serves to the
     /// request carrying `TOPO_DEBUG_TOKEN_NONCE` on `TOPO_DEBUG_TOKEN_PORT`, as
     /// `scripts/simulator-run.sh` stands one up, or nil when the launch names no port. A read that
-    /// fails is said and is nil, which is a launch signed out. Bounded: the whole read gives up
-    /// after `seconds`, and an answer longer than `limit` bytes is refused.
+    /// fails is said and is nil. Bounded: one deadline of `seconds` covers the connection, the ask
+    /// and the answer, each waited for with `poll` on a non-blocking socket, and an answer longer
+    /// than `limit` bytes is refused. It is synchronous because `signIn` is, before the first frame;
+    /// an `NWConnection` would want a wait on the main thread for its queue to say the same thing.
     static func served(_ environment: [String: String], seconds: Int = 10, limit: Int = 4096) -> String? {
         guard let text = environment[tokenPortVariable] else { return nil }
         guard let port = UInt16(text) else { say("no token served: \(tokenPortVariable) is not a port"); return nil }
@@ -313,9 +315,19 @@ enum DebugRun {
         defer { close(fd) }
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-        var bound = timeval(tv_sec: seconds, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
+        guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else { say("no token served: fcntl: \(errno)"); return nil }
+        /// Waits for `events` on the socket until the deadline; false once it has passed.
+        func ready(_ events: Int16) -> Bool {
+            while true {
+                let left = deadline - ContinuousClock.now
+                guard left > .zero else { return false }
+                let ms = Int32(min(left.components.seconds * 1000 + left.components.attoseconds / 1_000_000_000_000_000 + 1, 60_000))
+                var entry = pollfd(fd: fd, events: events, revents: 0)
+                let n = poll(&entry, 1, ms)
+                if n > 0 { return true }
+                if n < 0, errno != EINTR { return true }  // the call after it says what went wrong
+            }
+        }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
@@ -323,17 +335,28 @@ enum DebugRun {
         let connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
-        guard connected == 0 else { say("no token served: the listener refused the connection: \(errno)"); return nil }
-        let ask = Array((nonce + "\n").utf8)
-        guard write(fd, ask, ask.count) == ask.count else { say("no token served: could not ask: \(errno)"); return nil }
+        if connected != 0 {
+            guard errno == EINPROGRESS else { say("no token served: the listener refused the connection: \(errno)"); return nil }
+            guard ready(Int16(POLLOUT)) else { say("no token served: no connection within \(seconds) s"); return nil }
+            var failure: Int32 = 0
+            var size = socklen_t(MemoryLayout<Int32>.size)
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &size)
+            guard failure == 0 else { say("no token served: the listener refused the connection: \(failure)"); return nil }
+        }
+        var ask = Array((nonce + "\n").utf8)[...]
+        while !ask.isEmpty {
+            guard ready(Int16(POLLOUT)) else { say("no token served: could not ask within \(seconds) s"); return nil }
+            let n = ask.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            if n < 0, errno == EAGAIN || errno == EINTR { continue }
+            guard n > 0 else { say("no token served: could not ask: \(errno)"); return nil }
+            ask = ask.dropFirst(n)
+        }
         var bytes: [UInt8] = []
         var chunk = [UInt8](repeating: 0, count: 256)
         while true {
-            let left = deadline - ContinuousClock.now
-            guard left > .zero else { say("no token served: no answer within \(seconds) s"); return nil }
-            var wait = timeval(tv_sec: Int(left.components.seconds), tv_usec: min(Int32(left.components.attoseconds / 1_000_000_000_000) + 1, 999_999))
-            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+            guard ready(Int16(POLLIN)) else { say("no token served: no answer within \(seconds) s"); return nil }
             let n = read(fd, &chunk, chunk.count)
+            if n < 0, errno == EAGAIN || errno == EINTR { continue }
             if n < 0 { say("no token served: could not read: \(errno)"); return nil }
             if n == 0 { break }
             bytes += chunk[0..<n]
@@ -349,9 +372,15 @@ enum DebugRun {
     /// nothing when the launch carries neither the variable nor a served token's port, which is
     /// every ordinary debug build: an engineer's own sign-in is left exactly as it was.
     @discardableResult
+    /// A launch that names a served token's port and got none is signed out, whatever an earlier
+    /// launch left in the cache, so it runs on no other login's word.
     static func signIn(cache: LoginCache = .standard,
-                       environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
-        guard developerToken(environment) != nil else { return false }
+                       environment: [String: String] = ProcessInfo.processInfo.environment,
+                       served: String? = DebugRun.servedToken) -> Bool {
+        guard developerToken(environment, served: served) != nil else {
+            if environment[tokenPortVariable] != nil { cache.clear() }
+            return false
+        }
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "oauth_token"))
         say("signed in from a developer's token")
         return true

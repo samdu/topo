@@ -60,8 +60,8 @@
 # input and output), serves the token once on the host's loopback (as --sign-in serves the
 # password) to the app the test launches, which reads it itself from the port and nonce the test
 # hands it, so neither the runner's environment nor the app's launch environment, both of which
-# the result bundle records, carries it, and passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
-# lane is stopped and the Mac's defaults restored on every exit. Its turn is a real one.
+# the result bundle records, carries it, and passes only when the listener served it and
+# scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The lane is stopped and the Mac's defaults restored on every exit. Its turn is a real one.
 #
 # A --userland run needs no token. The app fetches or reuses the guest's rootfs and Claude Code,
 # boots the guest, verifies and mounts Claude Code at /usr/local/bin/claude, and runs the command
@@ -250,7 +250,8 @@ tracked() {
 # the first request carrying the nonce with the secret and exits, hands nothing to a request
 # without it, and gives up after 30 minutes unasked. The secret leaves its variable once, on a
 # pipe to the listener, never as an argument or a file. The listener is a recorded child, so
-# `cleanup` ends one nobody asked. Sets served_port.
+# `cleanup` ends one nobody asked. Sets served_port, and served_by to the listener's pid, whose
+# exit status is 0 once it has served the secret.
 # serve_once <nonce> <name of the variable holding the secret>
 serve_once() {
   local nonce="$1" portfile="$derived/served.$$.port" listener
@@ -280,6 +281,7 @@ while time.monotonic() < deadline:
             sys.exit(0)
 sys.exit(1)' "$nonce" "$portfile" < <(printf '%s' "${!2}") &
   listener=$!
+  served_by=$listener
   echo "$listener" >>"$pids"
   started_pids="$started_pids $listener"
   for _ in $(seq 50); do [ -s "$portfile" ] && break; sleep 0.2; done
@@ -376,6 +378,13 @@ if [ "$talk" = yes ]; then
       -configuration Debug -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-audio-lane.sh check after || status=1
+  # A test that passed on some other login proves nothing of the token: the listener has to have
+  # served it.
+  # A listener that has just answered may still be on its way out.
+  served=1
+  for _ in $(seq 10); do kill -0 "$served_by" 2>/dev/null || break; sleep 0.2; done
+  if ! kill -0 "$served_by" 2>/dev/null; then wait "$served_by" && served=0 || true; fi
+  [ "$served" = 0 ] || { echo "==> the app never read the served token" >&2; status=1; }
   scripts/ci-require-tests.sh xcresult "$results" TopoTalkTests || status=1
   [ "$status" = 0 ] && echo "==> the spoken question was heard, answered and read aloud" \
     || echo "==> the spoken turn failed; $results says where" >&2
