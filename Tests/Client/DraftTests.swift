@@ -404,8 +404,9 @@ final class DraftRowRenderTests: XCTestCase {
         let row = try render(draft("bins?", sending: true, margin: .resend), look: look)
         XCTAssertFalse(outline(row, .red).isEmpty, "the row the line stopped on is not drawn red")
         XCTAssertTrue(outline(row, Theme.signal).isEmpty, "the row the line stopped on is still drawn as sending")
-        let queued = try renderQueued("bins?", look: look, margin: .resend)
+        let queued = try renderQueued("bins?", look: look, margin: .resend, line: LineActions(cancel: { _ in }, resend: {}))
         XCTAssertFalse(outline(queued, .red).isEmpty, "a queued turn the line stopped on is not drawn red")
+        XCTAssertFalse(queued.pixels(matching: .green).isEmpty, "a queued turn the line stopped on has no resend in its margin")
         XCTAssertTrue(outline(queued, Theme.signal).isEmpty, "a queued turn the line stopped on is still drawn as sending")
         XCTAssertFalse(outline(try renderQueued("bins?", margin: .cancel), Theme.signal).isEmpty,
                        "a turn that waits is not drawn as sending")
@@ -447,6 +448,28 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertFalse(waiting.pixels(matching: .magenta).isEmpty, "the look's cancel ink does not reach the margin")
     }
 
+    /// The margin's symbols and their size are the look's too: a look that names another symbol
+    /// or font for a control draws that one.
+    func testTheMarginsSymbolsAndTheirSizeAreTheLooks() throws {
+        var look = Self.look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        look.draft.cancelInk = Color(red: 0, green: 1, blue: 0)
+        func ink(_ margin: TurnMargin, _ look: Look) throws -> [(x: Int, y: Int)] {
+            try render(draft("bins?", sending: true, margin: margin), look: look).pixels(matching: .green)
+        }
+        let resend = try ink(.resend, look)
+        var other = look
+        other.draft.resendSymbol = "square.fill"
+        XCTAssertNotEqual(try ink(.resend, other).count, resend.count, "the look's resend symbol does not reach the margin")
+        other = look
+        other.draft.marginFont = .caption2
+        XCTAssertLessThan(try ink(.resend, other).count, resend.count, "the look's margin font does not reach the margin")
+        let cancel = try ink(.cancel, look)
+        other = look
+        other.draft.cancelSymbol = "square.fill"
+        XCTAssertNotEqual(try ink(.cancel, other).count, cancel.count, "the look's cancel symbol does not reach the margin")
+    }
+
     /// The margin's control keeps the slot's space: the bubble is where it is whatever the
     /// margin holds.
     func testTheBubbleStaysPutWhateverTheMarginHolds() throws {
@@ -455,11 +478,13 @@ final class DraftRowRenderTests: XCTestCase {
         var look = Self.look()
         look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
         look.draft.cancelInk = Color(red: 1, green: 0, blue: 1)
-        let spinning = try box(try render(draft("bins?", sending: true), look: look), look.draft.sending.accent)
-        let failed = try box(try render(draft("bins?", sending: true, margin: .resend), look: look), look.draft.failed.accent)
-        let waiting = try box(try render(draft("bins?", sending: true, margin: .cancel), look: look), look.draft.sending.accent)
-        XCTAssertEqual(failed.right, spinning.right, "the bubble moved when the turn failed")
-        XCTAssertEqual(waiting.right, spinning.right, "the bubble moved when the margin offered a cancel")
+        // Words that wrap, so a margin that took room from the bubble would show in its height.
+        let words = "Is it bins tonight, or is it recycling, and does the garden waste go out too?"
+        let spinning = try box(try render(draft(words, sending: true), look: look), look.draft.sending.accent)
+        let failed = try box(try render(draft(words, sending: true, margin: .resend), look: look), look.draft.failed.accent)
+        let waiting = try box(try render(draft(words, sending: true, margin: .cancel), look: look), look.draft.sending.accent)
+        XCTAssertTrue(failed == spinning, "the bubble moved or changed size when the turn failed: \(failed) against \(spinning)")
+        XCTAssertTrue(waiting == spinning, "the bubble moved or changed size when the margin offered a cancel: \(waiting) against \(spinning)")
     }
 
     /// The room beside the bubble is the look's: the slot and what is between it and the bubble.

@@ -993,6 +993,22 @@ actor GuestBridge: Brain {
         try? save()
     }
 
+    /// Takes the words said under `nonce` back before the guest is given them, or refuses: an
+    /// input recorded for them — written before it goes, and kept until its turn is bound or
+    /// taken back — may already be with the guest. Nothing awaits between the look and the mark,
+    /// and `begin` asks the mark after every wait up to the record, so no input for the words is
+    /// recorded once this has said true.
+    func claim(nonce: String) async -> Bool {
+        guard readLedger(), ledger.early?.contains(where: { $0.person == nonce }) != true,
+              ledger.pending?.person != nonce else { return false }
+        stopping.insert(nonce)
+        return true
+    }
+
+    func unclaim(nonce: String) async {
+        if hearing[nonce] == nil { stopping.remove(nonce) }
+    }
+
     /// The words given ahead, and not bound, whose guest turn was cut off with no answer: the
     /// guest holds them and is not given them again unless the person asks, so nothing is coming
     /// for them. What the chat draws as failed.

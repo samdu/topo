@@ -115,7 +115,7 @@ final class NextTurn {
         let replies = harness.replies
         let unlanded = harness.unlanded.enumerated().map { place, turn in
             QueuedTurn(text: turn.text, nonce: turn.nonce, margin: harness.margin(turn.nonce),
-                       withdrawable: harness.canWithdraw(turn.nonce),
+                       withdrawable: harness.canCancel(turn.nonce),
                        reply: replies[turn.nonce].map { UnsavedReply.turn($0, place: place) })
         }
         guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {
@@ -170,12 +170,16 @@ final class NextTurn {
     /// it is never sent. Answers the nonce taken back, or nothing when the log refused it — the
     /// row is then left holding the turn, as it was.
     func cancel(via harness: Harness) async -> String? {
-        guard let nonce = sent, harness.canWithdraw(nonce) else { return nil }
+        guard let nonce = sent, harness.canCancel(nonce) else { return nil }
         // Only while the row still holds these words: one that moved on to others while the log
         // was read — a spoken turn sent over them — keeps them on the line.
-        guard await harness.withdraw(nonce, while: { self.sent == nonce }) else { return nil }
-        sent = nil
-        text = ""
+        guard await harness.withdraw(nonce, unsent: true, while: { self.sent == nonce }) else { return nil }
+        // Nothing waits between the words coming off the line and this, but the row is only
+        // cleared of the words it was cancelling.
+        if sent == nonce {
+            sent = nil
+            text = ""
+        }
         return nonce
     }
 
@@ -185,8 +189,10 @@ final class NextTurn {
     func withdraw(via harness: Harness) async -> String? {
         guard let nonce = sent, harness.canWithdraw(nonce) else { return nil }
         guard await harness.withdraw(nonce, while: { self.sent == nonce }) else { return nil }
-        sent = nil
-        typing = true
+        if sent == nonce {
+            sent = nil
+            typing = true
+        }
         return nonce
     }
 }

@@ -3047,6 +3047,76 @@ extension GuestBridgeTests {
         XCTAssertFalse((ledger.early ?? []).contains { $0.person == n2 }, "the ledger keeps an input for words no turn will carry")
     }
 
+    /// The guest has begun on the first of two words on the line, ahead of its turn, and is
+    /// writing; iCloud refuses the save.
+    private func givenAheadWhileWriting() async throws -> (Harness, GuestBridge, ScriptedGuest, first: String, second: String) {
+        let db = SavesRefused()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangWriting("Half of"), .reply("EXTRA")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.refuse(true)
+        let first = harness.willSend("first")
+        let second = harness.willSend("second")
+        await harness.retry()
+        try await eventually("the guest writing the first") { harness.writing == "Half of" }
+        return (harness, bridge, guest, first, second)
+    }
+
+    // A cancel is a promise that the words are never sent: words the guest has begun on are
+    // not cancelled, and the words behind them, which it has not, are.
+    func testWordsTheGuestHasAreNotCancelledAndWordsItHasNotAre() async throws {
+        let (harness, bridge, guest, first, second) = try await givenAheadWhileWriting()
+        XCTAssertTrue(harness.canWithdraw(first), "the words cannot be edited either")
+        XCTAssertFalse(harness.canCancel(first), "a cancel is offered for words the guest has")
+        XCTAssertNotEqual(harness.margin(first), .cancel)
+        let cancelled = await harness.withdraw(first, unsent: true)
+        XCTAssertFalse(cancelled, "words the guest has were cancelled")
+        XCTAssertEqual(harness.owed.map(\.text), ["first", "second"])
+        let recorded = await bridge.claim(nonce: first)
+        XCTAssertFalse(recorded, "the bridge gave up words it has an input recorded for")
+
+        XCTAssertTrue(harness.canCancel(second))
+        let took = await harness.withdraw(second, unsent: true)
+        XCTAssertTrue(took, "words the guest never had were not cancelled")
+        guest.finishHanging(with: "first's answer")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(guest.inputs, ["hello", "first"], "cancelled words were given to the guest")
+    }
+
+    // A claim stands between the words and the guest: once the bridge has said they are taken
+    // back, a hear of them sends nothing, and a claim handed back lets them go again.
+    func testAClaimedInputIsNeverGivenAndAnUnclaimedOneIs() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .reply("one"), .reply("two"))
+        let claimed = await bridge.claim(nonce: "n1")
+        XCTAssertTrue(claimed)
+        let heard = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertFalse(heard, "claimed words were given to the guest")
+        let other = await bridge.claim(nonce: "n2")
+        XCTAssertTrue(other)
+        await bridge.unclaim(nonce: "n2")
+        let given = await bridge.hear("second", nonce: "n2", context: [], model: .sonnet)
+        XCTAssertTrue(given, "words whose claim was handed back were not given")
+        XCTAssertEqual(guest.inputs, ["second"])
+        let late = await bridge.claim(nonce: "n2")
+        XCTAssertFalse(late, "words the guest was given were claimed")
+    }
+
+    // What the guest goes on writing for words taken back while it writes is not drawn.
+    func testWhatTheGuestWritesForWordsTakenBackIsNotDrawn() async throws {
+        let (harness, _, guest, first, _) = try await givenAheadWhileWriting()
+        let took = await harness.withdraw(first)
+        XCTAssertTrue(took, "the edit was refused")
+        XCTAssertNil(harness.writing, "the words taken back are still drawn being answered")
+        guest.writeMore(" a reply")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(harness.writing, "what the guest wrote after the words were taken back is drawn")
+        guest.finishHanging(with: "first's answer")
+    }
+
     // Coverage: the phone's guest answered ahead, the hub answered the turn under the same nonce.
     private func hubReplyCoverage(heardAhead: Bool) async throws -> (told: String, counted: Bool) {
         let db = InMemoryRecordDatabase()

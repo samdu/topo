@@ -773,7 +773,7 @@ struct ChatView: View {
             Task {
                 // Not words the row has taken up meanwhile (`NextTurn.resume`): those are the
                 // row's to take back, and a row holding words on no line is stuck on them.
-                guard await harness.withdraw(nonce, while: { row.sent != nonce }) else { return }
+                guard await harness.withdraw(nonce, unsent: true, while: { row.sent != nonce }) else { return }
                 // Nothing is coming for a turn that was never said, so nothing waits for it.
                 speaker.endAwaiting(nonce, "the turn was cancelled")
             }

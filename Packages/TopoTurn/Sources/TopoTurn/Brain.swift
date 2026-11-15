@@ -58,6 +58,13 @@ public protocol Brain: Sendable {
     func bind(nonce: String, person: Turn, reply: String) async
     /// The words heard under `nonce` were taken back: no turn of them will be saved.
     func withdrawn(nonce: String) async
+    /// The words said under `nonce` are to be taken back unsent: true when the brain has not been
+    /// given them, and from now is not, and false when it has them or may — an input recorded
+    /// for them, which may already be with the model. What a cancel asks before it acts, since
+    /// words the model has received cannot be called back.
+    func claim(nonce: String) async -> Bool
+    /// A claim that came to nothing — the words stay on the line — so they may be given again.
+    func unclaim(nonce: String) async
     /// Words said under `nonce` that are still on their way to the brain stop there: another
     /// device answers their turn. What the brain already has of them it keeps.
     func stopHearing(nonce: String) async
@@ -84,6 +91,8 @@ extension Brain {
     public func hear(_ words: String, nonce: String, context: [Turn]?, model: ClaudeModel) async -> Bool { false }
     public func bind(nonce: String, person: Turn, reply: String) async {}
     public func withdrawn(nonce: String) async {}
+    public func claim(nonce: String) async -> Bool { true }
+    public func unclaim(nonce: String) async {}
     public func stopHearing(nonce: String) async {}
     public func landed(_ reply: Turn, nonce: String) async {}
     public func unresolved() async -> Set<TurnRef> { [] }

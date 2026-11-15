@@ -1012,7 +1012,7 @@ final class HarnessIntegrationTests: XCTestCase {
             await seen.note(head: await MainActor.run { harness.margin(head) },
                             queued: await MainActor.run { harness.margin(queued) },
                             headWithdrawable: await MainActor.run { harness.canWithdraw(head) })
-            await seen.took(await harness.withdraw(queued))
+            await seen.took(await harness.withdraw(queued, unsent: true))
         }
         await harness.retry()
 
@@ -1089,7 +1089,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let row = NextTurn()
 
         await db.holdNextRead()
-        let cancel = Task { await harness.withdraw(nonce, while: { row.sent != nonce }) }
+        let cancel = Task { await harness.withdraw(nonce, unsent: true, while: { row.sent != nonce }) }
         try await eventually("the withdrawal's read is held") { await db.readHeld }
         XCTAssertTrue(row.resume(from: harness), "the row did not take the words up")
         await db.releaseRead()
@@ -1171,6 +1171,38 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(turns.map(\.text), ["bins?", "Tonight."], "asking again did not bring one reply to the one turn")
         XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
         XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
+    }
+
+    /// A person's turn another device wrote, answered by the pass here, whose reply fails: the
+    /// pass's own failure, which no send wraps, still draws the turn as stopped, and asking
+    /// again brings its one reply.
+    func testATurnWhoseReplyFailedInThePassIsStoppedUntilAskingAgainBringsIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            (200, reply("Tonight.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let person = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.refresh()
+        await harness.answerPending()
+
+        XCTAssertEqual(try await log(db).map(\.text), ["bins?"], "the reply did not fail")
+        XCTAssertEqual(harness.repliesStopped, [person.ref], "the turn whose reply failed in the pass is not drawn as stopped")
+        await harness.answerAgain(person.ref)
+        XCTAssertEqual(try await log(db).map(\.text), ["bins?", "Tonight."], "asking again did not bring one reply")
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
+    }
+
+    /// A withdrawal answers with nothing between the words leaving the line and its answer: the
+    /// brain is told after, so a caller acting on the answer acts on the state it was given.
+    func testAWithdrawalDoesNotWaitOnTheBrainBeingTold() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = Harness(database: db, ensureZone: {}, defaults: makeDefaults(), brain: SlowToHearWithdrawals())
+        let nonce = harness.willSend("bins?")
+        let answered = Task { await harness.withdraw(nonce) }
+        let took = await answered.value
+        XCTAssertTrue(took)
+        XCTAssertTrue(harness.waiting.isEmpty)
     }
 
     /// The reply failed and the person's turn is in the log: the words are said, so the row
@@ -3054,4 +3086,13 @@ private func lapsing(_ db: InMemoryRecordDatabase) -> @Sendable (TimeInterval) a
             _ = try await db.save(record)
         }
     }
+}
+
+/// A brain slow to hear of a withdrawal: one that waited on it would not answer in the test's time.
+private struct SlowToHearWithdrawals: Brain {
+    func answer(_ request: BrainRequest) async throws -> Reply { throw CancellationError() }
+    func withdrawn(nonce: String) async {
+        try? await Task.sleep(for: .seconds(60))
+    }
+    func describe() async -> String { "slow to hear withdrawals" }
 }
