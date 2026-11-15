@@ -911,8 +911,9 @@ final class Harness {
         // Every way out closes the turn, unless a sign-out or a demotion already has and the
         // flag is the next login's.
         defer { if inFlight == generation { turnOpen = false } }
-        // Each attempt is marked by its turn, begun and ended, so a reading of the marks pairs a
-        // turn's start and its end by the turn and not by what happens to be beside them.
+        // Each attempt is marked by its turn, begun and ended (`answered`, `unsaved` while the
+        // guest is still answering, else `ended`), so a reading of the marks pairs a turn's start
+        // and its end by the turn and not by what happens to be beside them.
         let turnMark = Self.turnMark(attempt.nonce)
         Perf.mark("turn.attempt \(turnMark)")
         var ended = "ended"
@@ -964,6 +965,8 @@ final class Harness {
             // person. The row keeps the words, the reply is drawn as it is written and stays once
             // it is whole, and the line goes again, as any stopped line does, to save both.
             guard inFlight == generation else { return false }
+            // The guest is still answering: the turn is not over, and its marks say so.
+            ended = "unsaved"
             // The lease could not be asked, so this device answers: the line behind is given too,
             // and what the guest makes of these words is drawn again.
             if handedBack {

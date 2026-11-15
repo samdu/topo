@@ -75,6 +75,9 @@ struct TurnTimeline: Sendable {
     var outcome: String
     var events: [Event]
     var total: Int64
+    /// What ran beside the events and is not in their sum: a save made while the guest worked,
+    /// `at` its start and `took` its length.
+    var beside: [Event]
     /// The voice's first sound, from its start to its first frame, in ms from the turn's start.
     var sound: ClosedRange<Int64>?
     /// Each model request's body, in bytes, in order.
@@ -96,7 +99,8 @@ struct TurnTimeline: Sendable {
     }
 
     /// Every finished turn in `marks`, in the order they ended. A turn is finished when each of
-    /// its attempts has ended: the turn asking, still in flight, is none.
+    /// its attempts has ended and the last did not leave the guest answering: the turn asking,
+    /// still in flight, is none.
     static func turns(in marks: [PerfMark]) -> [TurnTimeline] {
         let marks = marks.enumerated().sorted { ($0.element.ms, $0.offset) < ($1.element.ms, $1.offset) }.map(\.element)
         var order: [String] = []
@@ -131,7 +135,8 @@ struct TurnTimeline: Sendable {
                let released = marks.last(where: { $0.name == "voice.released" && $0.ms <= heard.ms }) {
                 origin = released.ms
             }
-            let done = (begun[id] ?? 0) > 0 && begun[id] == ended[id]
+            // An attempt that ended `unsaved` left the guest answering: the turn goes on.
+            let done = (begun[id] ?? 0) > 0 && begun[id] == ended[id] && last[id]?.detail.hasSuffix(" unsaved") == false
             return Span(id: id, origin: origin, end: done ? last[id]?.ms : nil, seen: seen[id] ?? start)
         }
         var found: [(end: Int64, turn: TurnTimeline)] = []
@@ -179,17 +184,28 @@ struct TurnTimeline: Sendable {
             raw.append((attempt.ms, .queue, n == 0 ? "Started on its way" : "Sent again"))
         }
         if let blur { raw.append((blur.upperBound, .mixed, "Alongside another message")) }
-        if let saved = clean.first(where: { $0.name == "turn.lease.fresh" || $0.name == "turn.saved" })
-            ?? clean.first(where: { $0.name == "turn.person.saved" }) {
-            raw.append((saved.ms, .save, "Your words saved to iCloud"))
-        }
-        if let unsaved = clean.first(where: { $0.name == "turn.unsaved" }) {
-            raw.append((unsaved.ms, .save, "iCloud had not taken your words yet"))
-        }
-        if let write = clean.first(where: { $0.name == "turn.guest.write" }) {
+        let write = clean.first { $0.name == "turn.guest.write" }
+        if let write {
             let afresh = clean.contains { ($0.name == "resident.launch.begin" || $0.name == "guest.boot.begin") && $0.ms <= write.ms }
             raw.append((write.ms, .ready, afresh ? "Claude Code started and had your words" : "Claude Code had your words"))
         }
+        // Words given to the guest ahead of their save are saved while it works: that save is no
+        // wait of the turn's, so it is said beside it, from the first send, and not in the sum.
+        var beside: [Event] = []
+        let sent = attempts.first?.ms ?? origin
+        func save(_ mark: PerfMark, _ title: String) {
+            if let write, write.ms < mark.ms {
+                beside.append(Event(key: .save, title: title + ", while Claude Code worked", at: sent - origin, took: mark.ms - sent))
+            } else {
+                raw.append((mark.ms, .save, title))
+            }
+        }
+        if let saved = clean.first(where: { $0.name == "turn.lease.fresh" || $0.name == "turn.saved" })
+            ?? clean.first(where: { $0.name == "turn.person.saved" }) {
+            save(saved, "Your words saved to iCloud")
+        }
+        if let unsaved = clean.first(where: { $0.name == "turn.unsaved" }) { save(unsaved, "iCloud had not taken your words yet") }
+        self.beside = beside
         // The model's requests, each followed by the id its marks share.
         var bytes: [Int] = [], previousDone = origin
         let requests = clean.filter { $0.name == "proxy.request" && $0.isMessages }
@@ -260,6 +276,7 @@ struct TurnTimeline: Sendable {
     var record: String {
         var fields = ["perf-turn", ToolDates.write(at, in: TimeZone(identifier: "UTC")!), kind.rawValue, outcome, "total=\(total)"]
         fields += byKey.map { "\($0.key.rawValue)=\($0.ms)" }
+        if let save = beside.first(where: { $0.key == .save }) { fields.append("saved=\(save.at + save.took)") }
         if let sound { fields.append("\(Self.soundKey)=\(sound.upperBound)") }
         fields += ["bytes=\(requestBytes.reduce(0, +))", "requests=\(requestBytes.count)", "tools=\(tools)", "sends=\(sends)"]
         if mixed { fields.append("mixed") }

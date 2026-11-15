@@ -27,14 +27,16 @@ struct PerfTool: Tool {
     Each event is titled by what happened and keyed by its kind: \(TurnTimeline.Key.allCases.map(\.rawValue).joined(separator: ", ")).
     An event's time is the wait that ended with it, so the times add up to the turn's: "Request 1 sent"
     is the upload, "The model began answering" the model's wait, "The model finished" its streaming.
+    Words given to Claude Code ahead of their save are saved while it works: that save is listed
+    beside the turn, from the send to the save, and is not in the sum.
     Where another message's turn overlapped this one, that stretch is one "Alongside another message"
     event (key mixed). "\(TurnTimeline.soundTitle)" (key sound) ran beside a spoken turn, not in the sum.
 
-    --tsv: a header line, then one row an event, tab-separated: key, at_ms, took_ms, title, with the
-    sound last where there was one (at_ms its start, took_ms its length), then the record: line.
+    --tsv: a header line, then one row an event, tab-separated: key, at_ms, took_ms, title, with what
+    ran beside the turn last (at_ms its start, took_ms its length), then the record: line.
     The record: line, without "record: ", is one line a turn: perf-turn, when it began (UTC), spoken
-    or typed, answered or ended, total=ms, then key=ms summed over each key's events, sound=ms from
-    the start to the voice's first sound, bytes= the model requests' bodies summed, requests=, tools=
+    or typed, answered or ended, total=ms, then key=ms summed over each key's events, saved=ms from
+    the start to a save beside the turn, sound=ms from the start to the voice's first sound, bytes= the model requests' bodies summed, requests=, tools=
     and sends= counts, and mixed where another turn overlapped.
 
     The turns go with the launch; to keep track over time, append that line to a file in your
@@ -128,8 +130,9 @@ struct PerfTool: Tool {
                 + "  at " + TurnTimeline.seconds(at) + "  " + what + " " + TurnTimeline.seconds(took)
         }
         lines += turn.events.map { row($0.title, $0.at, $0.took, "after") }
+        if !turn.beside.isEmpty || turn.sound != nil { lines.append("alongside:") }
+        lines += turn.beside.map { row($0.title, $0.at, $0.took, "took") }
         if let sound = turn.sound {
-            lines.append("alongside:")
             lines.append(row(TurnTimeline.soundTitle, sound.lowerBound, sound.upperBound - sound.lowerBound, "took"))
         }
         lines.append("record: \(turn.record)")
@@ -139,7 +142,7 @@ struct PerfTool: Tool {
     /// The events as rows for a program: tab-separated, a header first, the record last.
     static func rows(_ turn: TurnTimeline) -> String {
         var lines = ["key\tat_ms\ttook_ms\ttitle"]
-        lines += turn.events.map { "\($0.key.rawValue)\t\($0.at)\t\($0.took)\t\($0.title)" }
+        lines += (turn.events + turn.beside).map { "\($0.key.rawValue)\t\($0.at)\t\($0.took)\t\($0.title)" }
         if let sound = turn.sound {
             lines.append("\(TurnTimeline.soundKey)\t\(sound.lowerBound)\t\(sound.upperBound - sound.lowerBound)\t\(TurnTimeline.soundTitle)")
         }

@@ -98,8 +98,12 @@ final class PerfToolTests: XCTestCase {
                      line(2700, "proxy.done", "POST /v1/messages id=4"), line(2800, "turn.guest.result"),
                      line(3000, "turn.reply.saved"), line(3010, "turn.reply.shown", tag), line(3010, "turn.attempt.end", "\(tag) answered")]
         let turn = try XCTUnwrap(timelines(lines).first)
-        XCTAssertEqual(turn.events.map(\.key), [.ready, .queue, .save, .prepare, .upload, .model, .screen, .stream, .finish, .store, .show])
+        XCTAssertEqual(turn.events.map(\.key), [.ready, .queue, .prepare, .upload, .model, .screen, .stream, .finish, .store, .show])
         XCTAssertEqual(turn.events.first?.took, 40)
+        XCTAssertEqual(turn.events[2].took, 1440, "the save took the wait for the request")
+        XCTAssertEqual(turn.beside, [.init(key: .save, title: "Your words saved to iCloud, while Claude Code worked", at: 60, took: 840)])
+        XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
+        XCTAssertTrue(turn.record.contains(" saved=900 "), turn.record)
         XCTAssertEqual(turn.requestBytes, [2048])
     }
 
@@ -192,6 +196,71 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turn.tools, 1)
         XCTAssertEqual(turn.requestBytes, [1000, 1500])
         XCTAssertTrue(turn.record.contains(" bytes=2500 requests=2 tools=1 "), turn.record)
+    }
+
+    /// An attempt iCloud was behind for leaves the guest answering: the turn is still in flight,
+    /// so a `topo perf` from its own reply does not take it for the last.
+    func testATurnTheGuestIsStillAnsweringIsNotFinished() throws {
+        let tag = "turn=9999aaaa"
+        var lines = typed(at: 0)
+        lines += [line(10_000, "turn.line", tag), line(10_001, "turn.attempt", tag), line(10_020, "turn.guest.write"),
+                  line(14_000, "turn.unsaved"), line(14_000, "turn.attempt.end", "\(tag) unsaved")]
+        XCTAssertEqual(timelines(lines).map(\.total), [7795])
+        lines += [line(20_000, "turn.attempt", tag), line(20_500, "turn.saved"), line(20_600, "turn.reply.shown", tag),
+                  line(20_600, "turn.attempt.end", "\(tag) answered")]
+        let turns = timelines(lines)
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(turns[1].sends, 2)
+        XCTAssertEqual(turns[1].total, 10_600)
+    }
+
+    /// Two requests in flight at once are told apart by their ids, not by which mark came next.
+    func testARequestsMarksArePairedByItsId() throws {
+        let tag = "turn=1234abcd"
+        let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(50, "turn.saved"), line(60, "turn.guest.write"),
+                     line(100, "proxy.request", "POST /v1/messages bytes=9000 id=1"),
+                     line(150, "proxy.request", "POST /v1/messages bytes=500 id=2"), line(160, "proxy.sent", "POST /v1/messages id=2"),
+                     line(300, "proxy.sent", "POST /v1/messages id=1"), line(400, "proxy.firstByte", "POST /v1/messages id=2"),
+                     line(500, "proxy.firstByte", "POST /v1/messages id=1"), line(600, "proxy.done", "POST /v1/messages id=2"),
+                     line(700, "proxy.done", "POST /v1/messages id=1"), line(800, "turn.reply.shown", tag),
+                     line(800, "turn.attempt.end", "\(tag) answered")]
+        let turn = try XCTUnwrap(timelines(lines).first)
+        let at = Dictionary(turn.events.map { ($0.title, $0.at) }, uniquingKeysWith: { a, _ in a })
+        XCTAssertEqual(at["Request 1 sent (9 KB)"], 300)
+        XCTAssertEqual(at["Request 2 sent (500 bytes)"], 160)
+        XCTAssertEqual(at["The model began answering request 1"], 500)
+        XCTAssertEqual(at["The model finished request 2"], 600)
+    }
+
+    /// The simulator's proof run (dc522572), its second turn: words heard ahead, saved while the
+    /// guest worked, three model requests with two tools between them.
+    func testTheProofRunsTurnIsReadAsItHappened() throws {
+        let tag = "turn=8899060a"
+        let lines = [
+            line(-350, "turn.pass.done"), line(-350, "turn.attempt.end", "turn=8cd094c9 answered"),
+            line(0, "turn.line", tag), line(0, "turn.attempt", tag), line(0, "turn.send"), line(24, "turn.begin"),
+            line(50, "turn.guest.write"), line(51, "turn.heard"), line(62, "turn.guest.firstLine"), line(172, "turn.guest.init"),
+            line(297, "proxy.request", "POST /v1/messages bytes=66323 id=2"), line(308, "proxy.sent", "POST /v1/messages id=2"),
+            line(921, "turn.lease.fresh"), line(921, "turn.person.saved"), line(999, "proxy.head", "POST /v1/messages id=2 200"),
+            line(999, "proxy.firstByte", "POST /v1/messages id=2"), line(1742, "proxy.done", "POST /v1/messages id=2"),
+            line(1838, "turn.guest.toolUse"), line(4843, "proxy.request", "POST /v1/messages bytes=68934 id=3"),
+            line(4859, "proxy.sent", "POST /v1/messages id=3"), line(7826, "proxy.firstByte", "POST /v1/messages id=3"),
+            line(8395, "proxy.done", "POST /v1/messages id=3"), line(8440, "turn.guest.toolUse"),
+            line(8971, "proxy.request", "POST /v1/messages bytes=70073 id=4"), line(8986, "proxy.sent", "POST /v1/messages id=4"),
+            line(9777, "proxy.firstByte", "POST /v1/messages id=4"), line(10594, "turn.text.first"),
+            line(11234, "proxy.done", "POST /v1/messages id=4"), line(12154, "turn.guest.result"), line(12718, "turn.reply.saved"),
+            line(12727, "turn.reply.shown", tag), line(14049, "turn.pass.done"), line(14049, "turn.attempt.end", "\(tag) answered"),
+        ]
+        let turn = try XCTUnwrap(timelines(lines).first)
+        XCTAssertFalse(turn.mixed)
+        XCTAssertEqual(turn.total, 12727)
+        XCTAssertEqual(turn.events.map(\.key), [.queue, .ready, .prepare, .upload, .model, .stream, .tool, .upload, .model, .stream,
+                                                 .tool, .upload, .model, .screen, .stream, .finish, .store, .show])
+        XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
+        XCTAssertEqual(turn.events[4].took, 691, "the model's wait for request 1 is its own, not the save's")
+        XCTAssertEqual(turn.beside.map(\.took), [921])
+        XCTAssertEqual(turn.tools, 2)
+        XCTAssertEqual(turn.requestBytes, [66323, 68934, 70073])
     }
 
     func testTheLastIsTheNewestFinishedTurnNotTheOneAsking() async {
