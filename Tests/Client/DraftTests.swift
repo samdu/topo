@@ -447,9 +447,14 @@ final class DraftRowRenderTests: XCTestCase {
     /// The margin's control keeps the slot's space: the bubble is where it is whatever the
     /// margin holds.
     func testTheBubbleStaysPutWhateverTheMarginHolds() throws {
-        let spinning = try box(try render(draft("bins?", sending: true)), Look().draft.sending.accent)
-        let failed = try box(try render(draft("bins?", sending: true, margin: .resend)), Look().draft.failed.accent)
-        let waiting = try box(try render(draft("bins?", sending: true, margin: .cancel)), Look().draft.sending.accent)
+        // The margin's controls are drawn in inks of their own, so the box measured is the
+        // bubble's outline alone and not a symbol beside it that shares its colour.
+        var look = Self.look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        look.draft.cancelInk = Color(red: 1, green: 0, blue: 1)
+        let spinning = try box(try render(draft("bins?", sending: true), look: look), look.draft.sending.accent)
+        let failed = try box(try render(draft("bins?", sending: true, margin: .resend), look: look), look.draft.failed.accent)
+        let waiting = try box(try render(draft("bins?", sending: true, margin: .cancel), look: look), look.draft.sending.accent)
         XCTAssertEqual(failed.right, spinning.right, "the bubble moved when the turn failed")
         XCTAssertEqual(waiting.right, spinning.right, "the bubble moved when the margin offered a cancel")
     }
