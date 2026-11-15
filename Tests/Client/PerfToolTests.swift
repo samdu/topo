@@ -250,6 +250,18 @@ final class PerfToolTests: XCTestCase {
         XCTAssertTrue(rows.last!.contains(" sound=8900 "), rows.last!)
     }
 
+    /// A hearing in the line's own millisecond but after it, by the marks' order, is the next
+    /// utterance's: the turn begins at the release before its own.
+    func testASpokenTurnsReleaseIsReadByTheMarksOrder() throws {
+        var lines = [line(-4000, "voice.released"), line(-3800, "voice.heard"), line(-70, "turn.spoken", "turn=aaaa1111")]
+        lines += typed(at: 0) + [line(-30, "voice.released"), line(0, "voice.heard")]
+        let turn = try XCTUnwrap(timelines(lines).first)
+        XCTAssertEqual(turn.at, Date(timeIntervalSince1970: Double(Self.base - 4000) / 1000))
+        XCTAssertEqual(turn.events.first?.title, "Heard you")
+        XCTAssertEqual(turn.events.first?.took, 200)
+        XCTAssertEqual(turn.total, 11_795)
+    }
+
     /// A release from before another turn's words went on the line is not this turn's: it begins
     /// at its own line, with no hearing in it.
     func testASpokenTurnTakesNoReleaseFromBeforeAnotherTurn() throws {

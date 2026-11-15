@@ -130,12 +130,15 @@ struct TurnTimeline: Sendable {
         let spans: [Span] = order.compactMap { id in
             guard let start = line[id] ?? firstAttempt[id] else { return nil }
             var origin = start
-            // A spoken turn begins at the release whose hearing came before its words went on the line.
-            // One with another turn's words put on the line in between is not this turn's release.
-            if spoken.contains(id), let heard = marks.last(where: { $0.name == "voice.heard" && $0.ms <= start }),
-               let released = marks.last(where: { $0.name == "voice.released" && $0.ms <= heard.ms }),
-               !line.contains(where: { $0.key != id && $0.value > released.ms && $0.value < start }) {
-                origin = released.ms
+            // A spoken turn begins at the release whose hearing came before its words went on the line,
+            // by the marks' order, since the next utterance's can share the line's millisecond. One with
+            // another turn's words put on the line in between is not this turn's release.
+            if spoken.contains(id),
+               let at = marks.firstIndex(where: { $0.turn == id && $0.ms == start && ($0.name == "turn.line" || $0.name == "turn.attempt") }),
+               let heard = marks[..<at].lastIndex(where: { $0.name == "voice.heard" }),
+               let released = marks[..<heard].lastIndex(where: { $0.name == "voice.released" }),
+               !marks[released..<at].contains(where: { $0.name == "turn.line" && $0.turn != id }) {
+                origin = marks[released].ms
             }
             // An attempt that ended `unsaved` left the guest answering: the turn goes on.
             let done = (begun[id] ?? 0) > 0 && begun[id] == ended[id] && last[id]?.detail.hasSuffix(" unsaved") == false
