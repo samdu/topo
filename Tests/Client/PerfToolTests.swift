@@ -105,6 +105,8 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turn.beside, [.init(key: .save, title: "Your words saved to iCloud, while Claude Code worked", at: 60, took: 840)])
         XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
         XCTAssertTrue(turn.record.contains(" saved=900 "), turn.record)
+        let said = PerfTool.describe(turn, back: 1)
+        XCTAssertTrue(said.contains("Your words saved to iCloud, while Claude Code worked  at 0.06 s  took 0.84 s"), said)
         XCTAssertEqual(turn.requestBytes, [2048])
     }
 
@@ -273,6 +275,44 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turn.beside.map(\.took), [921])
         XCTAssertEqual(turn.tools, 2)
         XCTAssertEqual(turn.requestBytes, [66323, 68934, 70073])
+    }
+
+    /// The `--talk` run's spoken turn, from its real marks: the release, the hearing, the words
+    /// heard ahead and saved while the guest worked, and the voice beside the reply.
+    func testTheTalkRunsSpokenTurnIsReadAsItHappened() async {
+        let tag = "turn=14adda04", m = "POST /v1/messages"
+        let lines = [
+            line(0, "voice.released"), line(1173, "voice.heard"), line(1214, "turn.line", tag), line(1214, "turn.spoken", tag),
+            line(1267, "turn.attempt", tag), line(1267, "turn.send"), line(1284, "turn.guest.write"), line(1284, "turn.heard"),
+            line(1316, "turn.guest.firstLine"), line(1744, "turn.guest.init"), line(1802, "turn.lease.acquired"),
+            line(2286, "proxy.request", "\(m) bytes=77829 id=1 thread=create"), line(2362, "proxy.sent", "\(m) id=1"),
+            line(2448, "turn.saved"), line(2449, "turn.person.saved"), line(3267, "proxy.firstByte", "\(m) id=1"),
+            line(4986, "turn.text.first"), line(4987, "speak.begin"), line(5085, "speak.firstFrame"),
+            line(5496, "proxy.done", "\(m) id=1"), line(5505, "speak.firstFrame"), line(5605, "turn.guest.result"),
+            line(6115, "turn.reply.saved"), line(6124, "turn.reply.shown", tag), line(7438, "turn.pass.done"),
+            line(7438, "turn.attempt.end", "\(tag) answered"), line(7780, "speak.firstFrame"),
+        ]
+        let reply = await tool(lines).run(["turn", "--tsv"])
+        XCTAssertEqual(reply.text.split(separator: "\n").map(String.init), [
+            "key\tat_ms\ttook_ms\ttitle",
+            "hear\t1173\t1173\tHeard you",
+            "queue\t1267\t94\tStarted on its way",
+            "ready\t1284\t17\tClaude Code had your words",
+            "start\t1744\t460\tClaude Code started on your words",
+            "prepare\t2286\t542\tClaude Code made request 1",
+            "upload\t2362\t76\tRequest 1 sent (76 KB, a thread begun)",
+            "model\t3267\t905\tThe model began answering request 1",
+            "screen\t4986\t1719\tFirst words on your screen",
+            "stream\t5496\t510\tThe model finished request 1",
+            "finish\t5605\t109\tClaude Code finished the reply",
+            "store\t6115\t510\tThe reply saved to iCloud",
+            "show\t6124\t9\tThe reply on your screen",
+            "save\t1267\t1181\tYour words saved to iCloud, while Claude Code worked",
+            "sound\t4987\t98\tThe voice's first sound",
+            "record: perf-turn 2027-01-15T08:00:00Z spoken answered total=6124 hear=1173 queue=94 ready=17 start=460 prepare=542 "
+                + "upload=76 model=905 stream=510 screen=1719 finish=109 store=510 show=9 saved=2448 sound=5085 thread=create "
+                + "bytes=77829 requests=1 tools=0 sends=1",
+        ])
     }
 
     func testTheLastIsTheNewestFinishedTurnNotTheOneAsking() async {

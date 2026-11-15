@@ -125,7 +125,7 @@ struct PerfTool: Tool {
                      + "\(TurnTimeline.seconds(turn.total)) from \(from) to \(to)"]
         if turn.sends > 1 { lines.append("its words were sent \(turn.sends) times") }
         if turn.mixed { lines.append("another message's turn overlapped it, so part of its time is said as one") }
-        let width = (turn.events.map(\.title.count) + [TurnTimeline.soundTitle.count]).max() ?? 0
+        let width = ((turn.events + turn.beside).map(\.title.count) + [TurnTimeline.soundTitle.count]).max() ?? 0
         func row(_ title: String, _ at: Int64, _ took: Int64, _ what: String) -> String {
             "  " + title.padding(toLength: width, withPad: " ", startingAt: 0)
                 + "  at " + TurnTimeline.seconds(at) + "  " + what + " " + TurnTimeline.seconds(took)
