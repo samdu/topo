@@ -173,7 +173,7 @@ struct TurnTimeline: Sendable {
         for other in others {
             let reach = other.end ?? (other.origin >= origin ? end : other.seen)
             let from = max(other.origin, origin), to = min(reach, end)
-            guard from <= to else { continue }
+            guard from < to else { continue }
             shared.append(from...to)
         }
         var blurs: [ClosedRange<Int64>] = []
@@ -266,7 +266,13 @@ struct TurnTimeline: Sendable {
             raw.append((end, .end, "The turn ended with no reply here"))
         }
 
-        let sorted = raw.enumerated().sorted { ($0.element.ms, $0.offset) < ($1.element.ms, $1.offset) }.map(\.element)
+        // A shared stretch is one event from its start to its end: this turn's own marks inside it
+        // (an attempt sent again, say) are not said, so none takes part of the stretch's time, and
+        // at its end the stretch is said before anything that came at the same moment.
+        let said = raw.filter { item in item.key == .mixed || !blurs.contains { $0.lowerBound < item.ms && item.ms < $0.upperBound } }
+        let sorted = said.enumerated().sorted {
+            ($0.element.ms, $0.element.key == .mixed ? 0 : 1, $0.offset) < ($1.element.ms, $1.element.key == .mixed ? 0 : 1, $1.offset)
+        }.map(\.element)
         var cursor = origin
         events = sorted.map { item in
             defer { cursor = item.ms }
@@ -275,10 +281,12 @@ struct TurnTimeline: Sendable {
         total = (sorted.last?.ms ?? end) - origin
         // The voice's first sound for this turn's reply, by its own tag: a replay, or another
         // turn's reply, is never this turn's. Its first frame is the one before any other begins.
-        if let begin = marks.first(where: { $0.name == "speak.begin" && $0.turn == span.id && $0.ms >= origin }) {
-            let next = marks.first { $0.name == "speak.begin" && $0.ms > begin.ms }?.ms ?? .max
-            if let frame = marks.first(where: { $0.name == "speak.firstFrame" && $0.ms >= begin.ms && $0.ms < next }) {
-                sound = (begin.ms - origin)...(frame.ms - origin)
+        // Read by position in the marks' order, since two marks can share a millisecond.
+        if let i = marks.firstIndex(where: { $0.name == "speak.begin" && $0.turn == span.id && $0.ms >= origin }) {
+            let after = marks[(i + 1)...]
+            let next = after.firstIndex { $0.name == "speak.begin" } ?? marks.endIndex
+            if let frame = marks[(i + 1)..<next].first(where: { $0.name == "speak.firstFrame" }) {
+                sound = (marks[i].ms - origin)...(frame.ms - origin)
             }
         }
     }

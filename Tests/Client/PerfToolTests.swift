@@ -173,6 +173,32 @@ final class PerfToolTests: XCTestCase {
         XCTAssertNil(timelines(lines)[0].sound, "a replay's first frame was the turn's")
     }
 
+    /// A turn's own attempt inside a stretch another turn shared is not said, so the stretch keeps
+    /// its whole length and the attempt takes none of it.
+    func testAnAttemptInsideASharedStretchTakesNoneOfIt() throws {
+        let a = "turn=ffff6666"
+        let lines = [line(0, "turn.line", a), line(1, "turn.attempt", a), line(200, "turn.attempt.end", "\(a) unsaved"),
+                     line(600, "turn.attempt", a), line(1000, "turn.reply.shown", a), line(1000, "turn.attempt.end", "\(a) answered")]
+            + short("gggg7777", from: 500, to: 700)
+        let turn = try XCTUnwrap(timelines(lines).last)
+        XCTAssertEqual(turn.events, [.init(key: .queue, title: "Started on its way", at: 1, took: 1),
+                                     .init(key: .wait, title: "Another message began", at: 500, took: 499),
+                                     .init(key: .mixed, title: "Alongside another message", at: 700, took: 200),
+                                     .init(key: .show, title: "The reply on your screen", at: 1000, took: 300)])
+        XCTAssertEqual(turn.sends, 2)
+    }
+
+    /// Marks can share a millisecond, so the voice is read by the marks' order: a replay begun in
+    /// the same millisecond as the turn's own voice is not the turn's, nor a frame that came before.
+    func testTheVoiceIsReadByTheMarksOrderWithinAMillisecond() {
+        var lines = typed(at: 0) + [line(8000, "speak.begin", "turn=aaaa1111"), line(8000, "speak.begin", "replay"), line(8100, "speak.firstFrame")]
+        XCTAssertNil(timelines(lines)[0].sound, "a replay's first frame was the turn's")
+        lines = typed(at: 0) + [line(8000, "speak.firstFrame"), line(8000, "speak.begin", "turn=aaaa1111")]
+        XCTAssertNil(timelines(lines)[0].sound, "a frame before the turn's voice began was its first sound")
+        lines = typed(at: 0) + [line(8000, "speak.begin", "turn=aaaa1111"), line(8000, "speak.firstFrame")]
+        XCTAssertEqual(timelines(lines)[0].sound, 8000...8000)
+    }
+
     /// The store is this launch's alone and is read whole, so a turn of a launch days old is there.
     func testATurnOfALongLaunchIsRead() async {
         let reply = await tool(typed(at: -3 * 86_400_000)).run(["turns"])

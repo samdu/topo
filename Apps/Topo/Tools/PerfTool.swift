@@ -8,7 +8,12 @@ import TopoTools
 /// Nothing a turn said reaches an answer or a record: titles, times and counts are all either holds. The
 /// app keeps nothing: the mind keeps a turn's `record:` line in its own memory where it wants one.
 struct PerfTool: Tool {
-    let reader: any LogReading
+    /// The store's read blocks, so it runs on a queue of its own and never on the pool.
+    private let store: Confined<any LogReading>
+
+    init(reader: any LogReading) {
+        store = Confined(reader, label: "zone.hexagon.topo.perf-read")
+    }
     static let backs = 1...50
 
     let name = "perf"
@@ -91,17 +96,11 @@ struct PerfTool: Tool {
 
     // MARK: Reading
 
-    private static let queue = DispatchQueue(label: "zone.hexagon.topo.perf-read")
-
     /// This launch's finished turns, oldest first.
     private func read() async throws -> [TurnTimeline] {
-        let reader = reader
-        try Task.checkCancellation()
-        // The store's read blocks, so it has a thread of its own and never one of the pool's. The
-        // store is this launch's alone, so the whole of it is read: a turn is never cut at its start.
-        let lines: [LogLine] = try await withCheckedThrowingContinuation { continuation in
-            Self.queue.async { continuation.resume(with: Result { try reader.lines(since: .distantPast) }) }
-        }
+        // The store is this launch's alone, so the whole of it is read: a turn is never cut at its
+        // start. A call cancelled while it waited for the queue reads nothing.
+        let lines = try await store.run { reader, _ in try reader.lines(since: .distantPast) }
         try Task.checkCancellation()
         return TurnTimeline.turns(in: lines.filter { $0.category == LogCategory.perf.rawValue }.compactMap { PerfMark(message: $0.message) })
     }
