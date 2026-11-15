@@ -13,7 +13,8 @@ import TopoCore
 /// Inbound it speaks HTTP/1.1 with keep-alive: requests one after another on one connection,
 /// bodies framed by `Content-Length` or chunked, `Expect: 100-continue` answered. The request body
 /// is read whole before it is forwarded (the debug pin has to read it); the response body never
-/// is. A client that goes away mid-response cancels the upstream request.
+/// is. A release build parses a body only to note a request on the message threads beta
+/// (`ThreadLog`). A client that goes away mid-response cancels the upstream request.
 ///
 /// In a debug build the `model` of every `/v1/messages` body is rewritten to `pinnedModel`
 /// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
@@ -56,8 +57,9 @@ public actor APIProxy {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     public private(set) var port: UInt16?
 
-    public init(upstream: any Upstream = URLSessionUpstream(), log: @escaping Log = APIProxy.defaultLog) throws {
-        forwarder = Forwarder(upstream: upstream, log: log)
+    public init(upstream: any Upstream = URLSessionUpstream(), log: @escaping Log = APIProxy.defaultLog,
+                threads: ThreadLog = ThreadLog()) throws {
+        forwarder = Forwarder(upstream: upstream, log: log, threads: threads)
         self.log = log
     }
 
@@ -233,6 +235,8 @@ public actor APIProxy {
 struct Forwarder: Sendable {
     let upstream: any Upstream
     let log: APIProxy.Log
+    /// Where each `/v1/messages` request's thread is noted (`ThreadLog`).
+    var threads = ThreadLog()
 
     /// Request headers that belong to this hop and not the next, or that URLSession sets itself.
     /// `Authorization` is not among them: the guest's credential goes through unchanged.
@@ -334,13 +338,17 @@ struct Forwarder: Sendable {
         let response: UpstreamResponse
         let route = "\(request.method) \(Self.routeForMark(Self.canonical(request.path)))"
         Perf.mark("proxy.request \(route) bytes=\(body.count)")
+        let isMessages = request.method == "POST" && Self.canonical(request.path) == "/v1/messages"
+        let noted = isMessages ? threads.sent(bytes: body.count, kind: ThreadLog.kind(headers: request.headers, body: body)) : nil
         // A timed run also reads what the request is made of and what the API counted of it.
-        let counted = Perf.recording && request.method == "POST" && Self.canonical(request.path) == "/v1/messages"
+        let counted = Perf.recording && isMessages
         if counted, let shape = Self.shapeForMark(body) { Perf.mark("proxy.shape \(shape)") }
         do {
             response = try await upstream.send(outbound)
             Perf.mark("proxy.head \(route) \(response.status)")
+            if let noted { threads.answered(noted, status: response.status) }
         } catch {
+            if let noted { threads.answered(noted, status: 502) }
             if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
             // A target that would leave the one origin is the guest's request at fault; anything
             // else is the upstream failing, and a bad gateway.

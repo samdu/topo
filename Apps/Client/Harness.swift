@@ -411,6 +411,21 @@ final class Harness {
         }
     }
 
+    /// Whether the resident sends its turns on a message thread, and under which variable. A
+    /// change reaches the brain at once, as the threshold's does, and replaces the resident
+    /// process at its next idle moment.
+    var threads: MessageThreads.Setting {
+        get { MessageThreads.Setting(defaults: defaults) }
+        set {
+            newValue.keep(in: defaults)
+            let brain = brain
+            Task { [weak self] in
+                guard let self else { return }
+                await brain.use(threads: self.threads)
+            }
+        }
+    }
+
     /// The tokens of context the mind is compacted at, once a reply has said the window.
     var threshold: Int? { window.map { Compaction.threshold(window: $0, setting: compaction) } }
 

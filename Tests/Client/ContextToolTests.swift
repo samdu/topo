@@ -1,3 +1,4 @@
+import TopoProxy
 import TopoTools
 import TopoTurn
 import XCTest
@@ -11,6 +12,7 @@ final class ContextToolTests: XCTestCase {
     private final class Phone: @unchecked Sendable {
         var facts = ContextTool.Facts(context: 142_000, window: 200_000, setting: .auto)
         var set: [Compaction.Setting] = []
+        var threads: [MessageThreads.Setting] = []
         var asked = 0
         var canCompact = true
     }
@@ -22,7 +24,66 @@ final class ContextToolTests: XCTestCase {
                         phone.asked += 1
                         phone.facts.compacting = true
                         return true
-                    })
+                    },
+                    setThreads: { phone.threads.append($0); phone.facts.threads = $0 })
+    }
+
+    /// The check is what the proxy saw, not the setting: a launch whose name Claude Code does not
+    /// read shows on, with every request on none, which is how the mind tells a dead name.
+    func testThreadsShowsWhatTheProxySawBesideTheSetting() async {
+        let phone = Phone()
+        let now = Date(timeIntervalSince1970: 1_000)
+        phone.facts.now = now
+        phone.facts.sent = [
+            ThreadLog.Sent(at: now - 400, bytes: 600_123, kind: .create, status: 200),
+            ThreadLog.Sent(at: now - 380, bytes: 39_975, kind: .continue, status: 200),
+            ThreadLog.Sent(at: now - 3, bytes: 39_975, kind: .continue, status: 404),
+            ThreadLog.Sent(at: now - 2, bytes: 600_500, kind: .create, status: nil),
+        ]
+        let shown = await tool(phone).run(["threads"])
+        XCTAssertEqual(shown.status, ToolReply.ok)
+        XCTAssertTrue(shown.text.hasPrefix("threads: on, asked for with CLAUDE_CODE_TETHER_LIVE=1"), shown.text)
+        XCTAssertTrue(shown.text.contains("up to an hour after the last request; no delete; not zero data retention"), shown.text)
+        XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
+        XCTAssertTrue(shown.text.contains("  3 s ago  continue  39975 bytes  404 (the thread had gone"), shown.text)
+        XCTAssertTrue(shown.text.contains("  2 s ago  create  600500 bytes  waiting\n"), shown.text)
+        XCTAssertTrue(shown.text.hasSuffix("on a thread: 4 of 4\n"), shown.text)
+
+        phone.facts.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_WRONG_NAME")
+        phone.facts.sent = [ThreadLog.Sent(at: now - 1, bytes: 600_900, kind: .none, status: 200)]
+        let dead = await tool(phone).run(["threads"])
+        XCTAssertTrue(dead.text.hasPrefix("threads: on, asked for with CLAUDE_CODE_WRONG_NAME=1 (renamed on this phone)"), dead.text)
+        XCTAssertTrue(dead.text.hasSuffix("on a thread: none of these\n"), dead.text)
+
+        phone.facts.sent = []
+        let none = await tool(phone).run(["threads"])
+        XCTAssertTrue(none.text.contains("requests: none through the proxy"), none.text)
+        XCTAssertEqual(phone.threads, [], "showing changed the setting")
+    }
+
+    func testThreadsAreTurnedOffAndOnAndRenamedWithinTheReadersShape() async {
+        let phone = Phone()
+        let off = await tool(phone).run(["threads", "off"])
+        XCTAssertEqual(off.status, ToolReply.ok)
+        XCTAssertTrue(off.text.hasPrefix("threads: off"), off.text)
+        XCTAssertTrue(off.text.contains("from this turn's end"), off.text)
+        let renamed = await tool(phone).run(["threads", "variable", "CLAUDE_CODE_MESSAGE_THREADS"])
+        XCTAssertEqual(renamed.status, ToolReply.ok)
+        _ = await tool(phone).run(["threads", "on"])
+        _ = await tool(phone).run(["threads", "variable", "default"])
+        XCTAssertEqual(phone.threads, [
+            MessageThreads.Setting(on: false, variable: "CLAUDE_CODE_TETHER_LIVE"),
+            MessageThreads.Setting(on: false, variable: "CLAUDE_CODE_MESSAGE_THREADS"),
+            MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_MESSAGE_THREADS"),
+            MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_TETHER_LIVE"),
+        ])
+        for arguments in [["threads", "variable", "CLAUDE_CODE_OAUTH_TOKEN"], ["threads", "variable", "ANTHROPIC_BASE_URL"],
+                          ["threads", "variable", "HOME"], ["threads", "variable"], ["threads", "variable", "A", "B"],
+                          ["threads", "maybe"], ["threads", "on", "now"]] {
+            let reply = await tool(phone).run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments)")
+        }
+        XCTAssertEqual(phone.threads.count, 4, "a refused name changed the setting")
     }
 
     func testItShowsTheContextTheWindowAndTheThresholdOnOneScale() async {

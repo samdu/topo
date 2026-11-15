@@ -4089,6 +4089,7 @@ private final class SlowForgetGuest: GuestConversation, @unchecked Sendable {
     func warm() async {}
     func use(model: String?) async { await inner.use(model: model) }
     func use(compactAt: Int?) async { await inner.use(compactAt: compactAt) }
+    func use(threads: String?) async { await inner.use(threads: threads) }
     func sessionID() async -> String? { await inner.sessionID() }
     func residentPID() async -> Int32? { await inner.residentPID() }
     func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
@@ -4138,6 +4139,7 @@ private final class PIDGatedGuest: GuestConversation, @unchecked Sendable {
     func warm() async {}
     func use(model: String?) async { await inner.use(model: model) }
     func use(compactAt: Int?) async { await inner.use(compactAt: compactAt) }
+    func use(threads: String?) async { await inner.use(threads: threads) }
     func sessionID() async -> String? { await inner.sessionID() }
     func residentPID() async -> Int32? {
         if lock.withLock({ holding }) {

@@ -27,7 +27,7 @@ extension GuestProcess: ResidentProcess {
 /// is mounted (`memory`; nil tells it nothing), and with `note`, what became of the process before
 /// it when the way out cut that one short (`GuestSession.Cut`).
 public protocol ResidentLauncher: Sendable {
-    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess
+    func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, threads: String?, note: String?) async throws -> any ResidentProcess
 }
 
 /// How an idle resident is kept across a background rather than ended: every guest task stopped
@@ -297,6 +297,9 @@ public actor GuestSession {
     private var memory: Bool?
     /// The share of the window every process is told to compact at, or nil for Claude Code's own.
     private var compactAt: Int?
+    /// The variable every process is started with to send its turns on a message thread, or nil
+    /// for none.
+    private var threads: String?
     /// Counts `forgetSession(then:)`: a process started under an older count holds a conversation
     /// that has been forgotten.
     private var conversation = 0
@@ -359,6 +362,7 @@ public actor GuestSession {
         let model: String?
         let memory: Bool?
         let compactAt: Int?
+        let threads: String?
         let conversation: Int
         var reader: Task<Void, Never>?
         var turn: Turn?
@@ -373,8 +377,10 @@ public actor GuestSession {
         /// Whether it has answered the launch's `initialize`.
         var ready = false
 
-        init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, conversation: Int) {
+        init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, threads: String?,
+             conversation: Int) {
             self.compactAt = compactAt
+            self.threads = threads
             self.process = process
             self.resumed = resumed
             self.model = model
@@ -410,7 +416,7 @@ public actor GuestSession {
     /// `cuts` is where a cut is kept for the next process, beside `store` unless given.
     public init(launcher: any ResidentLauncher, store: SessionFile, cuts: CutFile? = nil, freezer: (any GuestFreezer)? = nil,
                 model: String? = nil, memory: Bool? = nil,
-                compactAt: Int? = nil, now: @escaping @Sendable () -> Date = Date.init,
+                compactAt: Int? = nil, threads: String? = nil, now: @escaping @Sendable () -> Date = Date.init,
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 signedIn: @escaping @Sendable () -> Bool = { true },
@@ -424,6 +430,7 @@ public actor GuestSession {
         self.model = model
         self.memory = memory
         self.compactAt = compactAt
+        self.threads = threads
         self.turnBound = turnBound
         self.sleep = sleep
         self.log = log
@@ -478,6 +485,17 @@ public actor GuestSession {
         guard compactAt != self.compactAt else { return }
         self.compactAt = compactAt
         log("the compaction threshold is now \(compactAt.map { "\($0)%" } ?? "Claude Code's own"); the resident process is replaced once idle")
+        renewIfStale()
+    }
+
+    /// Every process from here on is started with `threads`, the variable that turns on Claude
+    /// Code's message threads, or with none for nil. Like the threshold it is told once, in the
+    /// launch's environment, so a resident process started otherwise is replaced at the next idle
+    /// moment, never under a turn.
+    public func use(threads: String?) {
+        guard threads != self.threads else { return }
+        self.threads = threads
+        log("message threads are now \(threads.map { "on (\($0))" } ?? "off"); the resident process is replaced once idle")
         renewIfStale()
     }
 
@@ -790,7 +808,8 @@ public actor GuestSession {
         phase = .starting
         Perf.mark(resume == nil ? "resident.launch.begin fresh" : "resident.launch.begin resume")
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
-        let launcher = launcher, model = model, memory = memory, compactAt = compactAt, conversation = conversation
+        let launcher = launcher, model = model, memory = memory, compactAt = compactAt, threads = threads
+        let conversation = conversation
         // A stop still sending SIGSTOP to every guest task would stop this process too: it is
         // waited out first. It is the only one, since a way out waits for the thaw, which waits
         // for the stop, before it freezes again; and it is bounded (`GuestFreezer.stop`).
@@ -804,7 +823,7 @@ public actor GuestSession {
             let result: Result<any ResidentProcess, Error>
             do {
                 result = .success(try await launcher.launch(resume: resume, model: model, memory: memory, compactAt: compactAt,
-                                                            note: cut?.words))
+                                                            threads: threads, note: cut?.words))
             } catch {
                 result = .failure(error)
             }
@@ -821,16 +840,17 @@ public actor GuestSession {
             } else {
                 Perf.mark("resident.launch.failed")
             }
-            await self.launched(result, resume: resume, model: model, memory: memory, compactAt: compactAt, conversation: conversation,
-                                told: cut)
+            await self.launched(result, resume: resume, model: model, memory: memory, compactAt: compactAt, threads: threads,
+                                conversation: conversation, told: cut)
         }
     }
 
     /// Whether `resident` was started with what the session now says: its model, what it was told
-    /// of its memory, and the conversation that has not been forgotten since.
+    /// of its memory, its threshold, its threads variable, and the conversation that has not been
+    /// forgotten since.
     private func isStale(_ resident: Resident) -> Bool {
         resident.model != model || resident.memory != memory || resident.compactAt != compactAt
-            || resident.conversation != conversation
+            || resident.threads != threads || resident.conversation != conversation
     }
 
     /// Replaces a stale resident process, but only while it is idle and the app is in front: a
@@ -838,11 +858,11 @@ public actor GuestSession {
     /// the process is being ended anyway.
     private func renewIfStale() {
         guard inForeground, case .resident(let resident) = phase, resident.turn == nil, isStale(resident) else { return }
-        _ = end(resident, reason: "a change of model, memory, threshold or conversation", restart: true)
+        _ = end(resident, reason: "a change of model, memory, threshold, threads or conversation", restart: true)
     }
 
     private func launched(_ result: Result<any ResidentProcess, Error>, resume: String?, model: String?,
-                          memory: Bool?, compactAt: Int?, conversation: Int, told: Cut?) async {
+                          memory: Bool?, compactAt: Int?, threads: String?, conversation: Int, told: Cut?) async {
         startTask = nil
         switch result {
         case .failure(let error):
@@ -851,7 +871,7 @@ public actor GuestSession {
             settleReadiness(.failure(error))
         case .success(let process):
             let resident = Resident(process: process, resumed: resume, model: model, memory: memory,
-                                    compactAt: compactAt, conversation: conversation)
+                                    compactAt: compactAt, threads: threads, conversation: conversation)
             resident.told = told
             guard inForeground else {
                 // The app left while the start was pending: nothing may stay resident.

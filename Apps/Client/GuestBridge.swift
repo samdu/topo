@@ -22,6 +22,9 @@ protocol GuestConversation: Sendable {
     /// The share of its window the resident process compacts at, nil for Claude Code's own; a
     /// change replaces it once idle.
     func use(compactAt: Int?) async
+    /// The variable the resident process is started with to send its turns on a message thread,
+    /// nil for none; a change replaces it once idle.
+    func use(threads: String?) async
     /// The session id the resident process resumes, nil for a fresh one.
     func sessionID() async -> String?
     func residentPID() async -> Int32?
@@ -714,6 +717,10 @@ actor GuestBridge: Brain {
 
     func use(compaction: Compaction.Setting) async {
         await conversation.use(compactAt: compaction.percent)
+    }
+
+    func use(threads: MessageThreads.Setting) async {
+        await conversation.use(threads: threads.launched)
     }
 
     // MARK: - Compaction

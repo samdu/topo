@@ -211,9 +211,17 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// same sandbox (the bypass flag is an argument and is not inherited): the guest runs
     /// everything as root, and Claude Code refuses to bypass permissions as root unless it is told
     /// it is in a sandbox, which it is.
-    public func launchEnvironment(compactAt: Int? = nil, note: String? = nil) async throws -> [String: String] {
+    ///
+    /// `threads` is the name of the variable that turns on Claude Code's message threads
+    /// (`MessageThreads`), set to `1`, or nil to set none. It is the mind's to rename, so it is set
+    /// only where nothing else is: a name the guest's environment, the callback or the launcher
+    /// itself sets (`ownKeys`) is left as they have it, and the launch goes without threads.
+    public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, threads: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
+        if let threads, environment[threads] == nil, !Self.ownKeys.contains(threads) {
+            environment[threads] = Self.threadsValue
+        }
         environment["HOME"] = home
         environment["IS_SANDBOX"] = "1"
         // The threshold is the launcher's too. The window is always given, because Claude Code
@@ -234,6 +242,15 @@ public struct ClaudeLauncher: ResidentLauncher {
         return environment
     }
 
+    /// What the threads variable is set to: the one value, whatever its name.
+    public static let threadsValue = "1"
+
+    /// Every key this launcher sets or clears after the callback's, which no threads variable
+    /// may name.
+    public static var ownKeys: Set<String> {
+        ["HOME", "IS_SANDBOX", compactWindowVariable, compactAtVariable, noteVariable, noteMarkVariable, launchVariable, timingVariable]
+    }
+
     /// Claude Code puts `time_to_request_ms` and its phases on each result while this is set.
     public static let timingVariable = "CLAUDE_CODE_EMIT_STARTUP_TIMING"
 
@@ -248,8 +265,8 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// `memory` is the session's (`GuestSession.use(memory:)`): true or false says so to the
     /// resident (`memoryPrompt`), nil says nothing. A launch mounts nothing: what it says is what
     /// the last reconcile of the mount found, and the session replaces a process told otherwise.
-    public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, note: String?) async throws -> any ResidentProcess {
+    public func launch(resume session: String?, model: String?, memory: Bool?, compactAt: Int?, threads: String?, note: String?) async throws -> any ResidentProcess {
         try await guest.spawn("/bin/sh", commandLine(resume: session, model: model, memory: memory),
-                              environment: try await launchEnvironment(compactAt: compactAt, note: note))
+                              environment: try await launchEnvironment(compactAt: compactAt, note: note, threads: threads))
     }
 }

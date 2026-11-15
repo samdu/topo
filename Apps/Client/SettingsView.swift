@@ -194,6 +194,7 @@ struct ContextSection: View {
         } footer: {
             Text("Topo's context is summarised when it fills to this share of the model's window. Automatic is Claude Code's own.")
         }
+        MessageThreadsSection()
     }
 
     /// What the picker offers, as `Compaction.Setting.kept`: Automatic, half to 95% in fives, and
@@ -210,6 +211,28 @@ struct ContextSection: View {
         func thousands(_ tokens: Int) -> String { "\((tokens + 500) / 1000)k" }
         guard let context else { return "not known yet" }
         return window.map { "\(thousands(context)) of \(thousands($0))" } ?? thousands(context)
+    }
+}
+
+/// Message threads: on, each request carries only what is new and the conversation is held on
+/// Anthropic's side between requests. Off is the way back from any name the mind set, since a
+/// launch with it off sets no variable at all.
+struct MessageThreadsSection: View {
+    @Environment(Harness.self) private var harness
+    @AppStorage(MessageThreads.key) private var on = true
+    @AppStorage(MessageThreads.variableKey) private var variable = MessageThreads.defaultVariable
+
+    var body: some View {
+        Section {
+            Toggle("Message threads", isOn: Binding(get: { on }, set: { harness.threads.on = $0 }))
+                .accessibilityIdentifier("context-threads")
+            if on, MessageThreads.Setting(on: on, variable: variable).variable != MessageThreads.defaultVariable {
+                LabeledContent("Asked for with", value: MessageThreads.Setting(on: on, variable: variable).variable)
+                    .accessibilityIdentifier("context-threads-variable")
+            }
+        } footer: {
+            Text("On, each request sends only what is new, which is quicker on a slow connection. The conversation is then held on Anthropic's servers, encrypted in memory, for up to an hour after its last request; it cannot be deleted sooner, and it is outside zero data retention.")
+        }
     }
 }
 

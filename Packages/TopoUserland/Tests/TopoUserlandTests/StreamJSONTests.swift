@@ -212,6 +212,27 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.compactWindowVariable, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
     }
 
+    /// The threads variable is set to `1` under the name the session gives, and under no name
+    /// anything else of the launch sets: not one the callback supplies (the proxy's URL, a
+    /// token), not one of the guest's, and not one of the launcher's own, which keep their own
+    /// values. None given sets none.
+    func testTheThreadsVariableIsSetOnlyWhereNothingElseIs() async throws {
+        let launcher = ClaudeLauncher { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:1", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
+        let on = try await launcher.launchEnvironment(threads: "CLAUDE_CODE_TETHER_LIVE")
+        XCTAssertEqual(on["CLAUDE_CODE_TETHER_LIVE"], "1")
+        let off = try await launcher.launchEnvironment(threads: nil)
+        XCTAssertNil(off["CLAUDE_CODE_TETHER_LIVE"])
+        XCTAssertEqual(Set(on.keys).subtracting(off.keys), ["CLAUDE_CODE_TETHER_LIVE"], "the variable set more than itself")
+        for taken in ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "HOME"] {
+            let environment = try await launcher.launchEnvironment(threads: taken)
+            XCTAssertEqual(environment[taken], off[taken], "\(taken) was replaced by the threads variable")
+        }
+        for own in ClaudeLauncher.ownKeys {
+            let environment = try await launcher.launchEnvironment(threads: own)
+            XCTAssertNotEqual(environment[own] == "1" && off[own] != "1", true, "\(own), the launcher's own, was set to 1")
+        }
+    }
+
     /// A timed run's result says how the turn's time to its first request was spent: numbers and
     /// phase names, the largest phase first, and nothing else of the line in the mark's words.
     func testAResultsTimingIsReadAsNumbers() throws {

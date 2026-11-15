@@ -87,6 +87,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private var _ids: [String] = []
     private var _models: [String?] = []
     private var _thresholds: [Int?] = []
+    private var _threads: [String?] = []
     private var refusal: String?
     /// Turns the guest still has: `settle` waits for them, as the resident session does.
     private var hanging: [(continuation: AsyncStream<GuestSession.TurnUpdate>.Continuation, id: String, text: String,
@@ -111,6 +112,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     var models: [String?] { lock.withLock { _models } }
     /// Each threshold `use(compactAt:)` was told.
     var thresholds: [Int?] { lock.withLock { _thresholds } }
+    var threads: [String?] { lock.withLock { _threads } }
 
     /// Refuses every turn as not ready, with `why`, until it is nil again.
     func refuse(_ why: String?) { lock.withLock { refusal = why } }
@@ -176,6 +178,8 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     func use(model: String?) async { lock.withLock { _models.append(model) } }
 
     func use(compactAt: Int?) async { lock.withLock { _thresholds.append(compactAt) } }
+
+    func use(threads: String?) async { lock.withLock { _threads.append(threads) } }
 
     func sessionID() async -> String? { lock.withLock { session } }
 
