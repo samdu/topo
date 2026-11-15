@@ -14,7 +14,18 @@ import XCTest
 enum RedactedTyping {
     struct Unavailable: Error, CustomStringConvertible { let description: String }
 
-    static func type(_ text: String, record name: String) throws {
+    /// Types `text` into `field` once it holds the keyboard's focus, and throws, having typed
+    /// nothing, if it does not within `focusTimeout`: the synthesized keystrokes go to whatever has
+    /// the focus, and do not wait for an element to take it as `typeText` does.
+    static func type(_ text: String, into field: XCUIElement, record name: String, focusTimeout: TimeInterval = 10) throws {
+        let focus = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: field)
+        guard XCTWaiter().wait(for: [focus], timeout: focusTimeout) == .completed else {
+            throw Unavailable(description: "the field did not take the keyboard's focus within \(Int(focusTimeout)) s; nothing was typed")
+        }
+        try type(text, record: name)
+    }
+
+    private static func type(_ text: String, record name: String) throws {
         let pathClass: AnyClass = try someClass("XCPointerEventPath")
         let recordClass: AnyClass = try someClass("XCSynthesizedEventRecord")
 

@@ -25,19 +25,19 @@ final class SimulatorSignInTests: XCTestCase {
         let account = try XCTUnwrap(env["TOPO_SIGNIN_ACCOUNT"].flatMap { $0.isEmpty ? nil : $0 },
                                     "no TOPO_SIGNIN_ACCOUNT")
         let accountCell = settings.buttons["com.apple.settings.primaryAppleAccount"]
+        // A run that resumes types nothing and asks for no password, a code included: it takes up
+        // the screens after the password where a sign-in stopped on one it did not know.
+        if env["TOPO_SIGNIN_RESUME"] == "1" {
+            settings.activate()
+            snap("resume")
+            print("[sign-in] resuming the screens after the password")
+            return try finish(accountCell, account: account)
+        }
         if let code = env["TOPO_SIGNIN_CODE"], !code.isEmpty {
             settings.activate()
             guard asksForCode(screenWords()) != nil else { return stopped("given a code, but no screen asks for one") }
             snap("code")
             settings.typeText(code)
-            return try finish(accountCell, account: account)
-        }
-        // A run that resumes types nothing and asks for no password: it takes up the screens
-        // after the password where a sign-in stopped on one it did not know.
-        if env["TOPO_SIGNIN_RESUME"] == "1" {
-            settings.activate()
-            snap("resume")
-            print("[sign-in] resuming the screens after the password")
             return try finish(accountCell, account: account)
         }
         settings.terminate()
@@ -79,10 +79,8 @@ final class SimulatorSignInTests: XCTestCase {
 
         // A first sign-in asks in Settings' sheet; a lapse's may ask in a SpringBoard alert.
         var field = settings.secureTextFields.firstMatch
-        var host = settings
         if !field.waitForExistence(timeout: 30) {
             field = springboard.secureTextFields.firstMatch
-            host = springboard
             guard field.exists else { return stopped("no password field") }
         }
         snap("password")
@@ -92,10 +90,12 @@ final class SimulatorSignInTests: XCTestCase {
         }
         let secret = try servedSecret()
         field.tap()
-        // The synthesized keystrokes go to whatever has focus, and do not wait for it as typeText does.
-        _ = host.keyboards.firstMatch.waitForExistence(timeout: 5)
         // Never `typeText`, which writes what it types into its activity's title (RedactedTyping).
-        try RedactedTyping.type(secret, record: "the password")
+        do {
+            try RedactedTyping.type(secret, into: field, record: "the password")
+        } catch {
+            return stopped("\(error)")
+        }
         // A secure field shows its last character for a moment, and every screenshot is kept.
         sleep(3)
         let typed = (field.value as? String)?.count ?? 0

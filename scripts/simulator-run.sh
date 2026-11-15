@@ -186,6 +186,7 @@ print(max(found)[1] if found else "")' "$device")"
 
 [ "$renew" = no ] || [ "$signin" = yes ] || { echo "--renew is a way of --sign-in: --sign-in --renew" >&2; exit 2; }
 [ "$resume" = no ] || { [ "$signin" = yes ] && [ "$renew" = no ]; } || { echo "--resume is a way of --sign-in, without --renew: --sign-in --resume" >&2; exit 2; }
+[ "$resume" = no ] || [ -z "${SIGNIN_CODE:-}" ] || { echo "--resume types nothing, so it takes no SIGNIN_CODE" >&2; exit 2; }
 [ "$leakcheck" = no ] || [ "$signin" = no ] || { echo "--leak-check signs nothing in: run it alone, on a simulator signed into nothing that matters" >&2; exit 2; }
 
 if [ "$erase" = yes ]; then
@@ -331,14 +332,19 @@ sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") &
 }
 
 # When the process with this pid started, in seconds since the epoch, or nothing for no pid.
+# ps writes and date reads it in C and UTC whatever the caller's locale and zone, as
+# scripts/validate-and-push.sh's began_of does, and through env rather than an assignment of the
+# shell's own, for the reason given there.
 process_start() {
   [ -n "$1" ] || return 0
   local started
-  started="$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//')" || return 0
+  started="$(env LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//')" || return 0
   [ -n "$started" ] || return 0
-  LC_ALL=C date -j -f '%a %b %d %T %Y' "$started" +%s 2>/dev/null || true
+  env LC_ALL=C TZ=UTC date -j -f '%a %b %d %T %Y' "$started" +%s 2>/dev/null || true
 }
 
+# Exits non-zero, which a caller takes as nothing proven, when the secret cannot be read or is
+# shorter than a run.
 # How many times any 8-character run of the secret on fd 3 is in each path (a file, or a folder
 # read whole, its gzip and zstd blobs unpacked, which a result bundle's are) or, for "-", in
 # stdin. Prints "<label> <path>: <count>", "unreadable" for a blob it could not unpack, and the
@@ -350,9 +356,12 @@ count_runs() {
 import gzip, os, subprocess, sys
 label, paths = sys.argv[1], sys.argv[2:]
 unread, videos = set(), {}
-secret = os.fdopen(3, "rb").read()
-runs = {secret[i:i + 8] for i in range(len(secret) - 7)}
-runs |= {r.decode().encode("utf-16-le") for r in list(runs)}
+secret = os.fdopen(3, "rb").read().decode("utf-8")
+if len(secret) < 8:
+    sys.exit("the secret is shorter than the 8 characters a run is counted in")
+# Runs of characters, not bytes, so a character past ASCII is never split across two.
+chars = {secret[i:i + 8] for i in range(len(secret) - 7)}
+runs = {r.encode("utf-8") for r in chars} | {r.encode("utf-16-le") for r in chars}
 def blobs(path):
     videos[path] = 0
     if path == "-":
@@ -362,6 +371,7 @@ def blobs(path):
         try:
             data = open(f, "rb").read()
         except OSError:
+            unread.add(path)
             continue
         yield data
         if data[4:8] == b"ftyp":
@@ -375,7 +385,7 @@ def blobs(path):
             try:
                 yield gzip.decompress(data)
             except Exception:
-                pass
+                unread.add(path)
 for path in paths:
     found = path == "-" or os.path.exists(path)
     n = sum(blob.count(r) for blob in blobs(path) for r in runs) if found else "absent"
@@ -384,6 +394,18 @@ for path in paths:
     elif videos.get(path):
         n = f"{n} and {videos[path]} screen recording(s)"
     print(f"{label} {path}: {n}")' "$@"
+}
+
+# True once tee has written the run's log up to a mark printed now, so nothing printed before it
+# is still on its way to the file: a log is counted only after this, and a mark not seen within
+# ten seconds is a log not read.
+# log_drained <what the mark says>
+log_drained() {
+  local mark
+  mark="==> $1 ($(uuidgen))"
+  echo "$mark"
+  for _ in $(seq 50); do grep -qxF "$mark" "$runlog" && return 0; sleep 0.2; done
+  return 1
 }
 
 if [ "$leakcheck" = yes ]; then
@@ -440,6 +462,9 @@ server.serve_forever()' "$pagefile" &
         -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
         -only-testing:TopoSimulatorSignInTests/LeakCheckTests \
         -collect-test-diagnostics never -resultBundlePath "$results" && ran=0 || ran=$?
+    # Each run says it typed its own dummy whole, by the page's hash, before anything else fails.
+    [ "$(grep -cx "\[leak-check\] $route typed the dummy whole" "$runlog")" = 1 ] \
+      || { echo "==> the $route run did not type its dummy whole" >&2; status=1; }
     if [ "$route" = failing ]; then
       [ "$ran" != 0 ] && grep -q 'failing after the dummy' "$runlog" \
         || { echo "==> the failing run did not fail after typing the dummy" >&2; status=1; }
@@ -449,13 +474,14 @@ server.serve_forever()' "$pagefile" &
     fi
     # The logs are read on a pipe and counted, never kept: a device's log can hold what other
     # runs launched with.
+    log_drained "counting the $route dummy" || echo "$route $runlog: unreadable" >>"$counts"
     {
-      count_runs "$route" "$runlog" "$results" "$derived/Logs/Test" 3< <(printf '%s' "$dummy")
+      count_runs "$route" "$runlog" "$results" "$derived/Logs/Test" 3< <(printf '%s' "$dummy") || echo "$route count: unreadable"
       timeout 300 xcrun simctl spawn "$udid" log show --start "$since" --style compact --info --debug 2>/dev/null \
-        | count_runs "$route" - 3< <(printf '%s' "$dummy") | sed 's/ -:/ device log:/'
+        | { count_runs "$route" - 3< <(printf '%s' "$dummy") || echo "$route device log: unreadable"; } | sed 's/ -:/ device log:/'
       timeout 300 log show --start "$since" --style compact --info --debug \
           --predicate 'process == "xcodebuild" OR process == "testmanagerd" OR process BEGINSWITH "XC" OR process == "CoreSimulatorService"' 2>/dev/null \
-        | count_runs "$route" - 3< <(printf '%s' "$dummy") | sed 's/ -:/ Mac log:/'
+        | { count_runs "$route" - 3< <(printf '%s' "$dummy") || echo "$route Mac log: unreadable"; } | sed 's/ -:/ Mac log:/'
     } | tee -a "$counts"
     unset dummy
   done
@@ -522,7 +548,13 @@ if [ "$signin" = yes ]; then
   # What the run left is counted for the password itself, as --leak-check counts a dummy: any run
   # of 8 of its characters in the run's log or the bundle fails the run and says where, never what.
   if [ "$resume" = no ]; then
-    leaked="$(count_runs password "$runlog" "$results" 3< <(printf '%s' "$password") | grep -Ev ': (0|absent)$' || true)"
+    counted="" leaked=""
+    if log_drained "counting the password in what this run left" \
+      && counted="$(count_runs password "$runlog" "$results" 3< <(printf '%s' "$password"))"; then
+      leaked="$(printf '%s\n' "$counted" | grep -Ev ': (0|absent)$' || true)"
+    else
+      leaked="the count could not be made${counted:+: $counted}"
+    fi
     unset password
     if [ -n "$leaked" ]; then
       echo "==> the password is in what this run left, by count: $leaked. Delete those files before anything else" >&2

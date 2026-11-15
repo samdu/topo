@@ -224,6 +224,11 @@ sys.stdout.write(got.decode())' "$TEST_RUNNER_TOPO_SIGNIN_PORT" "$TEST_RUNNER_TO
     [ "${FAKE_LEAK_SINK:-both}" = bundle ] || echo "t = Type '${dummy:0:18}...' into SecureTextField"
     [ "${FAKE_LEAK_SINK:-both}" = output ] || echo "Type '${dummy:0:18}...'" >"$bundle/database.sqlite3"
   fi
+  as="$TEST_RUNNER_TOPO_LEAKCHECK_ROUTE"; [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" != 1 ] || as=failing
+  [ "${FAKE_LEAK_WRONG:-}" = "$as" ] || echo "[leak-check] $as typed the dummy whole"
+  if [ -n "${FAKE_LEAK_UNREADABLE:-}" ] && [ "$as" = redacted ]; then
+    echo x >"$bundle/attachment"; chmod 000 "$bundle/attachment"
+  fi
   if [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" = 1 ]; then
     echo "error: failing after the dummy, as a stopped sign-in does"
     [ -z "${FAKE_LEAK_RECORDS:-}" ] || printf '\0\0\0\x20ftypmp42' >"$bundle/recording"
@@ -297,11 +302,14 @@ case "$*" in
   *) exit 1 ;;
 esac
 EOF2
+# Outside the C locale it writes the day and month as a French locale would, which a reader that
+# does not ask for C cannot parse.
 cat >"$work/bin/ps" <<'EOF2'
 #!/bin/bash
+c() { if [ "${LC_ALL:-}" = C ]; then cat; else sed 's/^Sat/sam./; s/^Mon/lun./; s/^Wed/mer./; s/ Nov / nov. /'; fi; }
 case "$*" in
-  "-o lstart= -p 501") echo "${FAKE_SIM_BOOTED} " ;;
-  "-o lstart= -p 502") echo "${FAKE_AUDIO_STARTED:-Wed Nov 11 17:10:52 2026} " ;;
+  "-o lstart= -p 501") echo "${FAKE_SIM_BOOTED} " | c ;;
+  "-o lstart= -p 502") echo "${FAKE_AUDIO_STARTED:-Wed Nov 11 17:10:52 2026} " | c ;;
   *) exit 1 ;;
 esac
 EOF2
@@ -606,7 +614,8 @@ reboot_case() {
   : >"$work/simctl.calls"
   PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
     FAKE_TALK_ENV="$work/$1.env" FAKE_TALK_GOT="$work/$1.got" FAKE_SIMCTL_CALLS="$work/simctl.calls" FAKE_SIM_BOOTED="$2" \
-    FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" "$work/root/scripts/simulator-run.sh" --no-build --talk >"$out" 2>&1 </dev/null
+    FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" LC_ALL=fr_FR.UTF-8 \
+    "$work/root/scripts/simulator-run.sh" --no-build --talk >"$out" 2>&1 </dev/null
   status=$?
   calls="$(grep -xE 'boot|shutdown' "$work/simctl.calls" | tr '\n' ' ' | sed 's/ $//')"
   if [ "$status" = 0 ] && [ "$calls" = "$3" ] && { [ -z "${4:-}" ] || grep -Fq "$4" "$out"; }; then
@@ -731,6 +740,8 @@ leak_case leak-check-redacted-leaks 1 FAKE_LEAK_REDACTED=1
 leak_case leak-check-control-unseen-in-bundle 1 FAKE_LEAK_SINK=output
 leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
 leak_case leak-check-failing-run-recorded 1 FAKE_LEAK_RECORDS=1
+leak_case leak-check-failing-run-typed-wrong 1 FAKE_LEAK_WRONG=failing
+leak_case leak-check-unreadable-attachment 1 FAKE_LEAK_UNREADABLE=1
 # A sign-in whose run left any 8 characters of the password fails and names where, not what.
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_LEAKS=1 FAKE_SIGNIN_ENV="$work/leaks.env" FAKE_SIGNIN_GOT="$work/leaks.got" \
@@ -742,6 +753,26 @@ if [ "$status" = 1 ] && grep -q "the password is in what this run left, by count
   echo "ok   sign-in-counts-the-password: a run that left it fails, one that did not says so"
 else
   echo "FAIL sign-in-counts-the-password: exit $status"; sed 's/^/    | /' "$work/signin-leaks.out"; failures=$((failures + 1))
+fi
+# A password past ASCII is counted by its characters, and its leaked prefix found, rather than the
+# count failing on a byte split inside a character.
+wide="abcdefgé12345678Zq-$$"
+PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$wide" FAKE_SIGNIN_LEAKS=1 FAKE_SIGNIN_ENV="$work/wide.env" FAKE_SIGNIN_GOT="$work/wide.got" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-wide.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 1 ] && grep -q "the password is in what this run left, by count: password .*simulator-run.log: [1-9]" "$work/signin-wide.out"; then
+  echo "ok   sign-in-counts-a-wide-password: its leaked prefix is found"
+else
+  echo "FAIL sign-in-counts-a-wide-password: exit $status"; sed 's/^/    | /' "$work/signin-wide.out" | grep -vF "$wide"; failures=$((failures + 1))
+fi
+# A resume takes no code, since it types nothing.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" SIGNIN_CODE=123456 "$work/root/scripts/simulator-run.sh" --no-build --sign-in --resume >"$work/resume-code.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 2 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
+  echo "ok   refused: --sign-in --resume with SIGNIN_CODE exits 2"
+else
+  echo "FAIL refused: --sign-in --resume with SIGNIN_CODE exited $status"; failures=$((failures + 1))
 fi
 # A vault that gives no password stops the run before any test starts.
 : >"$FAKE_XCODEBUILD_CALLS"

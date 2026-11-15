@@ -8,7 +8,8 @@ import XCTest
 /// finds what XCTest records; with `TOPO_LEAKCHECK_FAIL` it fails once the dummy is typed, so the
 /// script sees what a failing sign-in leaves. The script counts the dummy in what the run left;
 /// this test only types it and says the field took it whole, by the hash of its value the page
-/// shows, since a symbol typed as another keeps the length.
+/// shows, since a symbol typed as another keeps the length; a run whose hash is wrong fails before
+/// the deliberate failure, and says which.
 @MainActor
 final class LeakCheckTests: XCTestCase {
     func testLeakCheck() throws {
@@ -28,17 +29,20 @@ final class LeakCheckTests: XCTestCase {
         guard field.exists else { return XCTFail("the leak check's page shows no password field") }
         let secret = try servedSecret()
         field.tap()
-        _ = safari.keyboards.firstMatch.waitForExistence(timeout: 5)
         switch route {
-        case "redacted": try RedactedTyping.type(secret, record: "the dummy")
+        case "redacted": try RedactedTyping.type(secret, into: field, record: "the dummy")
         case "typeText": field.typeText(secret)
         default: return XCTFail("TOPO_LEAKCHECK_ROUTE is \(route), not redacted or typeText")
         }
-        sleep(2)
+        let failing = env["TOPO_LEAKCHECK_FAIL"] == "1"
         let want = "sha " + SHA256.hash(data: Data(secret.utf8)).map { String(format: "%02x", $0) }.joined()
-        let shown = safari.webViews.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'sha '")).firstMatch.label
-        print("[leak-check] \(route) typed the dummy \(shown == want ? "whole" : "wrong")")
-        XCTAssertEqual(shown, want, "the field holds something other than the dummy")
-        if env["TOPO_LEAKCHECK_FAIL"] == "1" { XCTFail("failing after the dummy, as a stopped sign-in does") }
+        let digest = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true"),
+                                               object: safari.webViews.staticTexts[want])
+        guard XCTWaiter().wait(for: [digest], timeout: 10) == .completed else {
+            print("[leak-check] \(failing ? "failing" : route) typed the dummy wrong")
+            return XCTFail("the field holds something other than the dummy")
+        }
+        print("[leak-check] \(failing ? "failing" : route) typed the dummy whole")
+        if failing { XCTFail("failing after the dummy, as a stopped sign-in does") }
     }
 }
