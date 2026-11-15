@@ -398,10 +398,13 @@ final class DraftRowRenderTests: XCTestCase {
     /// A turn the line stopped on is drawn in the look's failed enclosure, red, and in neither
     /// the sending colour nor the landed one; on the row and outside it.
     func testATurnThatStoppedTheLineIsDrawnRed() throws {
-        let row = try render(draft("bins?", sending: true, margin: .resend), look: Look())
+        // The resend is drawn in an ink of its own, so the red found is the enclosure's alone.
+        var look = Look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        let row = try render(draft("bins?", sending: true, margin: .resend), look: look)
         XCTAssertFalse(outline(row, .red).isEmpty, "the row the line stopped on is not drawn red")
         XCTAssertTrue(outline(row, Theme.signal).isEmpty, "the row the line stopped on is still drawn as sending")
-        let queued = try renderQueued("bins?", margin: .resend)
+        let queued = try renderQueued("bins?", look: look, margin: .resend)
         XCTAssertFalse(outline(queued, .red).isEmpty, "a queued turn the line stopped on is not drawn red")
         XCTAssertTrue(outline(queued, Theme.signal).isEmpty, "a queued turn the line stopped on is still drawn as sending")
         XCTAssertFalse(outline(try renderQueued("bins?", margin: .cancel), Theme.signal).isEmpty,
