@@ -582,6 +582,62 @@ final class CallWantTests: XCTestCase {
         XCTAssertFalse(call.up)
     }
 
+    /// A call refused through its retries behind the lock is one round: neither the next hold nor
+    /// a conversation behind the same lock places another, and coming forward lets the next lock
+    /// place again (Daphne's `callGaveUp`).
+    @MainActor
+    func testACallThatFailedInTheBackgroundIsNotPlacedAgainUntilTheAppHasBeenInFront() async {
+        let system = FakeCallSystem()
+        let sleep = ManualSleep()
+        let call = SpokenCall(system: system, sleep: sleep.sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        for attempt in 0..<SpokenCall.placeAttempts {
+            XCTAssertEqual(system.starts.count, attempt + 1)
+            system.answer(system.requests.count - 1, FakeCallSystem.Refused())
+            guard attempt < SpokenCall.placeAttempts - 1 else { break }
+            for _ in 0..<100 where sleep.waiting == 0 { try? await Task.sleep(for: .milliseconds(10)) }
+            sleep.fire()
+            for _ in 0..<100 where system.starts.count == attempt + 1 { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        XCTAssertFalse(call.up)
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts)
+        driver.holdChanged(false)
+        driver.holdChanged(true)
+        driver.holdChanged(true, forATurn: true)
+        driver.conversingChanged(true)
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts, "a refused round was placed again behind the same lock")
+        driver.conversingChanged(false)
+        // On its way to the front (`willEnterForeground`) is the front, as Daphne's is.
+        driver.scene(.inactive)
+        driver.scene(.background)
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts + 1, "the next lock after the front placed nothing")
+    }
+
+    /// What the failure sets off reaches the driver at once: a conversation carried behind the
+    /// lock ends at the call's failure (`Conversation.call(.over)`) with a turn's hold standing,
+    /// and that end asks for no second round.
+    @MainActor
+    func testWhatAFailureSetsOffPlacesNoCallBehindIt() async {
+        let system = FakeCallSystem()
+        let sleep = ManualSleep()
+        let call = SpokenCall(system: system, sleep: sleep.sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
+        call.onFailed = { _ in driver.conversingChanged(false) }
+        driver.conversingChanged(true)
+        driver.holdChanged(true, forATurn: true)
+        driver.scene(.background)
+        for attempt in 0..<SpokenCall.placeAttempts {
+            system.answer(system.requests.count - 1, FakeCallSystem.Refused())
+            guard attempt < SpokenCall.placeAttempts - 1 else { break }
+            for _ in 0..<100 where sleep.waiting == 0 { try? await Task.sleep(for: .milliseconds(10)) }
+            sleep.fire()
+            for _ in 0..<100 where system.starts.count == attempt + 1 { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts, "the failure's own effects placed the call again")
+        XCTAssertFalse(call.up)
+    }
+
     /// The card's hang-up with the microphone flag still standing (a decode running past the
     /// hang-up) and the hang-up's own effects asking for the call (the hold's drop, then the
     /// conversation's end): no call is placed behind the one hung up.

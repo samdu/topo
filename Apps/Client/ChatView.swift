@@ -1089,8 +1089,7 @@ final class MicPress {
             // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
             // a send that took none returns.
             let release = speaks ? speaker.releasing() : nil
-            // A held release keeps its input running for the call's placing: the call service
-            // lets the call start behind the lock when the app is recording (`VoiceInput.inputKept`).
+            // A held release keeps its input running for the call's placing (`VoiceInput.inputKept`).
             let keeps = release != nil && calls() && speaker.callIdle
             // The gesture's verdict, taken here in the callback: whatever the task waits on, the
             // release is the hold or the tap the thumb made.
