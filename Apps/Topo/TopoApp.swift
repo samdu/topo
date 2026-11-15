@@ -204,11 +204,9 @@ struct TopoApp: App {
         let conversation = Conversation(voice: voice, speaker: speaker, endpoint: endpoint,
                                         holding: { [weak audio] in audio?.holding ?? false },
                                         otherCall: { calls.calls.contains { !$0.hasEnded } })
-        // Audio in use now, not the settings that would make it: the bed playing (a refused
-        // play is silence), or a conversation's input running (a suspended one hears nothing).
-        speaker.waitCarried = { [weak conversation, weak speaker, weak voice] in
-            (Mute.readsAloud() && speaker?.sounds?.bedPlaying == true)
-                || (conversation?.on == true && voice?.inputRunning == true)
+        // A wait past the ceiling is carried by audio in use: the speaker's own bed, or this.
+        speaker.conversationHears = { [weak conversation, weak voice] in
+            conversation?.on == true && voice?.inputRunning == true
         }
         voice.carries = { [weak conversation] in
             guard let conversation else { return false }

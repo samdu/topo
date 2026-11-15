@@ -361,11 +361,14 @@ final class VoiceInput {
     /// guard, the tap — at the interruption's end, the one moment the background may activate,
     /// so the reading's end opens the gate on it (`reopen`) with nothing started then. Nothing
     /// it hears reaches the sink. Answers whether the input is running; a refusal leaves none
-    /// kept and none owed.
+    /// kept and none owed. The open's record claim is the open's alone and goes as it returns,
+    /// as a release's does: a kept input holds the session as kept (`AudioSession.keptInput`),
+    /// with no owner to drop a claim, and its next reopen claims afresh.
     @discardableResult
     func restoreKept() -> Bool {
         guard let gate = keptOwed, !listening, !starting, !ending, !inputKept else { return false }
         keptOwed = nil
+        defer { audio.wantRecord(false, for: gate == .chat ? .chat : .firstRun) }
         do {
             let (suppress, resetsAt, _) = try prepareSession(as: gate)
             self.gate.shut()

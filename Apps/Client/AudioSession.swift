@@ -41,7 +41,7 @@ final class AudioSession {
         case sound
     }
 
-    private var recordClaims: Set<RecordClaim> = []
+    private(set) var recordClaims: Set<RecordClaim> = []
     private var screenClaims: Set<ScreenClaim> = []
     private var holds: Set<Hold> = []
     /// Told the answer on every claim taken or dropped, not only when it changes: the count is the

@@ -163,6 +163,7 @@ final class AudibleHoldTests: XCTestCase {
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, ceiling: ceiling,
                               outerBound: outerBound,
                               heard: .dataRendered, sounds: sounds)
+        speaker.readsAloud = { Mute.readsAloud(defaults) }
         return Rig(speaker: speaker, sounds: sounds, audio: audio, seams: seams, defaults: defaults,
                    clock: clock, players: players, voice: engine, center: center)
     }
@@ -425,7 +426,6 @@ final class AudibleHoldTests: XCTestCase {
     /// top as the guest writes on.
     func testAFirstPartHeardOutWithTheTurnRunningHandsItsHoldBackToTheTurnsWait() async throws {
         let rig = await rig(ceiling: .seconds(1))
-        rig.speaker.waitCarried = { [sounds = rig.sounds] in sounds.bedPlaying }
         rig.speaker.turnRunning = { true }
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.speaker.speak(writing: "One moment.\n", answering: "turn")
@@ -443,28 +443,31 @@ final class AudibleHoldTests: XCTestCase {
         rig.speaker.stop()
     }
 
-    /// What carries a wait past the ceiling is the bed playing, not the setting that wants it
-    /// (`KeeperSounds.bedPlaying`, which the app's `waitCarried` reads): a bed under the wait is,
-    /// and one an interruption stopped is not.
-    func testTheBedCarriesAWaitOnlyWhilePlaying() async throws {
-        let rig = await rig()
+    /// The speaker's own `waitCarried`, as the app runs it: under Sounds with replies read aloud
+    /// and a turn running, a wait over a bed that plays stands past the ceiling, and one whose
+    /// bed refused to play is silence and ends at it.
+    func testAWaitStandsPastTheCeilingOnlyOverABedThatPlays() async throws {
+        let rig = await rig(ceiling: .milliseconds(300))
+        rig.speaker.turnRunning = { true }
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        let bed = try XCTUnwrap(rig.players.bed)
-        XCTAssertTrue(bed.isPlaying)
-        XCTAssertTrue(rig.sounds.bedPlaying)
-        bed.interrupted()
-        XCTAssertFalse(rig.sounds.bedPlaying, "a bed the system stopped carried the wait")
+        XCTAssertTrue(try XCTUnwrap(rig.players.bed).isPlaying)
+        XCTAssertTrue(rig.speaker.waitCarried())
+        try? await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"], "a wait over a playing bed ended at the ceiling")
+        rig.players.bed?.interrupted()
+        XCTAssertFalse(rig.speaker.waitCarried(), "a bed the system stopped carried the wait")
         rig.speaker.stop()
     }
 
-    /// A bed whose player refuses to play leaves the wait silent: wanted is not playing.
-    func testABedThatWillNotPlayCarriesNoWait() async throws {
-        let rig = await rig()
+    func testABedThatWillNotPlayLetsTheWaitEndAtTheCeiling() async throws {
+        let rig = await rig(ceiling: .milliseconds(300))
+        rig.speaker.turnRunning = { true }
         rig.players.refusing = true
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        let bed = try XCTUnwrap(rig.players.bed)
-        XCTAssertFalse(bed.isPlaying)
-        XCTAssertFalse(rig.sounds.bedPlaying, "a bed that did not start carried the wait")
+        XCTAssertFalse(try XCTUnwrap(rig.players.bed).isPlaying)
+        XCTAssertFalse(rig.speaker.waitCarried(), "a bed that did not start carried the wait")
+        await settle("the wait capped at the ceiling") { rig.speaker.awaiting.isEmpty }
+        XCTAssertFalse(rig.audio.heldForATurn, "a silent wait held the process past the ceiling")
         rig.speaker.stop()
     }
 
@@ -472,7 +475,6 @@ final class AudibleHoldTests: XCTestCase {
     /// deadline, so it ends at the bound from the send and not from either hand-back.
     func testAWaitHandedBackAcrossReadingsKeepsTheSendsOuterBound() async throws {
         let rig = await rig(ceiling: .seconds(1), outerBound: .seconds(5))
-        rig.speaker.waitCarried = { [sounds = rig.sounds] in sounds.bedPlaying }
         rig.speaker.turnRunning = { true }
         let sent = ContinuousClock.now
         _ = rig.speaker.awaitReply("turn", readAloud: true)

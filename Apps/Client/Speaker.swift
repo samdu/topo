@@ -70,10 +70,18 @@ final class Speaker {
     /// keep a pocketed phone awake past it.
     private let outerBound: Duration
     /// Whether the wait for a reply is carried by audio in use rather than by the keeper's silence
-    /// alone — the working bed playing, or a conversation's input running — so it may stand
-    /// past `ceiling` while a turn is running (`capped`). The app answers; a speaker told nothing
-    /// has none, and every wait is capped at `ceiling`.
-    var waitCarried: @MainActor () -> Bool = { false }
+    /// alone, so it may stand past `ceiling` while a turn is running (`capped`): the working bed
+    /// playing (`KeeperSounds.bedPlaying`, not the setting that wants it: a refused play is
+    /// silence) with replies read aloud, or a conversation's input running.
+    func waitCarried() -> Bool {
+        (readsAloud() && sounds?.bedPlaying == true) || conversationHears()
+    }
+    /// Whether replies are read aloud (`Mute`).
+    var readsAloud: @MainActor () -> Bool = { Mute.readsAloud() }
+    /// Whether a conversation is on with its input running (`Conversation.on`,
+    /// `VoiceInput.inputRunning`; a suspended microphone hears nothing). The app answers; a
+    /// speaker told nothing has none.
+    var conversationHears: @MainActor () -> Bool = { false }
     /// Whether a turn this device sent is still running (`Harness.turnOpen`): from its attempt's
     /// start until its reply is shown, it failed, or it went to another device to answer. The app
     /// answers; a speaker told nothing has none running.

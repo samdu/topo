@@ -285,6 +285,35 @@ func toneFrame(_ level: Float) -> [Float] {
     (0 ..< 1_920).map { level * sin(Float($0) * 0.3) }
 }
 
+/// What `renderOffline` rendered: every frame, and the frames with sound in them.
+struct Rendered { var frames = 0; var sounding = 0 }
+
+/// Renders `engine()` offline a slice at a time, as hearing is in these suites, until `condition`
+/// holds or `slices` run out, and answers what it rendered: a reading heard out is rendered
+/// sound, which a buffer only scheduled is not. The condition failing is the test's failure.
+@MainActor @discardableResult
+func renderOffline(_ engine: @MainActor () -> AVAudioEngine?, _ what: String, slices: Int = 400,
+                   file: StaticString = #filePath, line: UInt = #line,
+                   until condition: @MainActor () -> Bool) async throws -> Rendered {
+    var rendered = Rendered()
+    for _ in 0..<slices {
+        if condition() { return rendered }
+        if let engine = engine() {
+            let out = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
+                                                     frameCapacity: engine.manualRenderingMaximumFrameCount))
+            if (try? engine.renderOffline(256, to: out)) == .success, let samples = out.floatChannelData?[0] {
+                let count = Int(out.frameLength)
+                rendered.frames += count
+                rendered.sounding += (0..<count).filter { abs(samples[$0]) > 0.001 }.count
+            }
+        }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    XCTAssertTrue(condition(), "rendered \(slices) slices waiting for \(what)", file: file, line: line)
+    return rendered
+}
+
 /// A frame of tone of an exact length, so a test can state the audio a reply made in seconds.
 func toneFrame(seconds: Double) -> [Float] {
     (0 ..< Int(seconds * Double(Voice.rate))).map { 0.5 * sin(Float($0) * 0.3) }
@@ -1454,14 +1483,14 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertFalse(speaker.keeping)
     }
 
-    /// A wait the person hears (`waitCarried`) over a turn still running (`turnRunning`) stands
+    /// A wait the person hears (`waitCarried`, here a conversation's input) over a turn still running (`turnRunning`) stands
     /// past the ceiling, pass after pass, and is capped at the outer bound from when it was taken.
     func testAHeardWaitOverARunningTurnStandsPastTheCeilingUntilTheOuterBound() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { false })
         let speaker = await self.speaker(seams, audio, center, ceiling: .milliseconds(40), outerBound: .milliseconds(600))
-        speaker.waitCarried = { true }
+        speaker.conversationHears = { true }
         speaker.turnRunning = { true }
         let taken = ContinuousClock.now
         speaker.awaitReply("a-turn", readAloud: true)
@@ -1481,7 +1510,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { false })
         let speaker = await self.speaker(seams, audio, center, ceiling: .milliseconds(40), outerBound: .seconds(60))
-        speaker.waitCarried = { false }
+        speaker.conversationHears = { false }
         speaker.turnRunning = { true }
         let taken = ContinuousClock.now
         speaker.awaitReply("a-turn", readAloud: true)
@@ -1498,7 +1527,7 @@ final class MediaServicesResetTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { false })
         let speaker = await self.speaker(seams, audio, center, ceiling: .milliseconds(40), outerBound: .seconds(60))
         var running = true
-        speaker.waitCarried = { true }
+        speaker.conversationHears = { true }
         speaker.turnRunning = { running }
         speaker.awaitReply("a-turn", readAloud: true)
         try? await Task.sleep(for: .milliseconds(150))
@@ -1515,7 +1544,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { false })
         let standing = await self.speaker(seams, audio, center, outerBound: .seconds(60))
-        standing.waitCarried = { true }
+        standing.conversationHears = { true }
         standing.turnRunning = { true }
         standing.awaitReply("a-turn", readAloud: true)
         XCTAssertEqual(standing.capped("a-turn"), "the ceiling passed with the turn running and the wait heard; it stands")
@@ -1523,7 +1552,7 @@ final class MediaServicesResetTests: XCTestCase {
         standing.endAwaiting("a-turn", "the test is done")
 
         let bounded = await self.speaker(seams, audio, center, outerBound: .zero)
-        bounded.waitCarried = { true }
+        bounded.conversationHears = { true }
         bounded.turnRunning = { true }
         bounded.awaitReply("b-turn", readAloud: true)
         XCTAssertEqual(bounded.capped("b-turn"), "capped at 0.0 seconds; the turn was still running")
