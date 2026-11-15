@@ -1781,6 +1781,74 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs.count, 1)
     }
 
+    /// The phone's guest answered words it then handed to the hub, and its reply stays in the
+    /// guest's ledger until this phone's next input, though the log is owed nothing of it. A pass
+    /// that fails puts its line up; once iCloud is back and the hub has answered, the pass that
+    /// completes takes it down.
+    func testAPassesFailureComesDownOverAReplyTheHubAnswersInstead() async throws {
+        let db = Outage()
+        let defaults = try await aPhoneThatAnswered(db)
+        defaults.set("elsewhere", forKey: "topo.harness.standing")
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: Confirms(), sleep: parked)
+        let took = try await hub.takeOver()
+        guard case .primary = took else { return XCTFail("the hub did not take the lease") }
+        let guest = ScriptedGuest(home: home, script: [.reply("From the phone.")])
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: Confirms(), sleep: parked))
+        await db.away(true)
+        let nonce = harness.willSend("share this link")
+        await harness.retry()
+        try await eventually("the guest's reply") { harness.replies[nonce] == "From the phone." }
+        await db.away(false)
+        await harness.retry()
+        XCTAssertEqual(harness.turns.last?.text, "share this link", "the words did not reach the log for the hub")
+        XCTAssertNotNil(harness.unsaved[nonce], "the guest's ledger no longer holds the reply the hub answers instead")
+
+        await db.away(true)
+        await harness.answerPending()
+        XCTAssertEqual(harness.failure?.source, .pass, "the pass's failure is not the last one up")
+        await db.away(false)
+        try await write(db, .assistant, "From the hub.", device: "hub")
+        await harness.refresh()
+        await harness.answerPending()
+        XCTAssertTrue(harness.waiting.isEmpty)
+        XCTAssertNil(harness.failure, "iCloud is back, nothing is owed, and the red line stands")
+
+        // A relaunch over the same ledger knows nothing of the hand-back, only the log.
+        let (relaunched, _) = self.harness(db, ScriptedGuest(home: home, script: []), defaults: defaults)
+        await relaunched.refresh()
+        XCTAssertNotNil(relaunched.unsaved[nonce], "the relaunch's ledger no longer holds the reply the hub answered instead")
+        await db.away(true)
+        await relaunched.answerPending()
+        XCTAssertEqual(relaunched.failure?.source, .pass, "the relaunch's pass did not fail")
+        await db.away(false)
+        await relaunched.answerPending()
+        XCTAssertNil(relaunched.failure, "after a relaunch the red line stands with nothing owed")
+    }
+
+    /// The hub holds the lease and a limb's turn waits for it at the log's head. A pass that fails
+    /// puts its line up; once iCloud is back the pass is told the hub answers, which is iCloud
+    /// answering, and the line comes down.
+    func testAPassesFailureComesDownWhenThePassFindsTheHubAnswers() async throws {
+        let db = Outage()
+        let defaults = try await aPhoneThatAnswered(db)
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: Confirms(), sleep: parked)
+        let took = try await hub.takeOver()
+        guard case .primary = took else { return XCTFail("the hub did not take the lease") }
+        let guest = ScriptedGuest(home: home, script: [.reply("never")])
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: Confirms(), sleep: parked))
+        try await write(db, .person, "what's the weather?", device: "watch")
+        await harness.refresh()
+        await db.away(true)
+        await harness.answerPending()
+        XCTAssertEqual(harness.failure?.source, .pass, "the pass's failure is not the last one up")
+        await db.away(false)
+        await harness.answerPending()
+        XCTAssertTrue(guest.inputs.isEmpty, "a turn the hub answers ran this phone's guest")
+        XCTAssertNil(harness.failure, "iCloud answered the pass and the red line stands")
+    }
+
     /// Warm, the app back from the background with its runner standing: a turn said while iCloud
     /// is slow is with the guest before the lease or the save has answered.
     func testAWarmPhoneGivesTheGuestTheWordsWhileTheLeaseAndTheSaveAreStillOut() async throws {

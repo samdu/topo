@@ -1784,6 +1784,35 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNotNil(phone.failure, "the red line came down with the turn's words still owed")
     }
 
+    /// A turn still owed, and a read that fails after it (the chat coming back to the front), so
+    /// the line is the read's; iCloud back for reads, the loop's retry of the line held by the
+    /// backoff and writes still refused, the read that gets through leaves it up: the words are
+    /// still owed.
+    func testAReadsFailureOverATurnStillOwedStaysUp() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let beats = Beats()
+        let clock = TestClock()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("pass 1") { await beats.passes >= 1 }
+        await db.refuseWrites(true)
+        // The loop's own attempt fails too, so the next waits out the backoff; the clock stands.
+        await phone.send("water the plants")
+        await beats.tick()
+        try await eventually("pass 2") { await beats.passes >= 2 }
+        await db.refuseReads(true)
+        await phone.refresh()
+        XCTAssertEqual(phone.failure?.source, .read, "the read did not fail last")
+        await db.refuseReads(false)
+        await beats.tick()
+        try await eventually("pass 3") { await beats.passes >= 3 }
+        open.cancel()
+        await open.value
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn went with writes refused")
+        XCTAssertNotNil(phone.failure, "the red line came down with the turn's words still owed")
+    }
+
     /// The race #615 names: offline, a read and a pass both fail, in either order, and the last
     /// one up is whichever failed last. Once iCloud is back, one pass of the loop leaves nothing
     /// standing either way.
