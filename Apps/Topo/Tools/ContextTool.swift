@@ -50,12 +50,15 @@ struct ContextTool: Tool {
                                         from this turn's end, since your process is replaced then
     topo context threads variable <NAME|default>
                                         the variable your launch sets to 1 to ask Claude Code for threads, if Claude
-                                        Code renames it: CLAUDE_CODE_ then capitals, digits and single underscores, no
-                                        credential's, provider's or launch's own; default is \(MessageThreads.defaultVariable)
+                                        Code renames it: CLAUDE_CODE_ then capitals, digits and single underscores,
+                                        with TETHER, THREADS or MESSAGE_THREAD in it, and no part a credential's, a
+                                        provider's, a URL's, a hook's or the like; default is \(MessageThreads.defaultVariable)
 
     A threshold can only be under Claude Code's own, so 100 is the same as auto.
     A launch that asked for threads under a name Claude Code does not read sends every request whole, and
     nothing fails: only the requests themselves tell, so after a change check that a turn's requests continue.
+    A none has other causes too: Claude Code sends without a thread once the conversation holds a web search's
+    results or its tools changed, so judge a name by several turns' requests, not one.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {

@@ -12,11 +12,12 @@ final class MessageThreadsTests: XCTestCase {
         XCTAssertEqual(MessageThreads.variable("CLAUDE_CODE_TETHER"), "CLAUDE_CODE_TETHER")
         XCTAssertEqual(MessageThreads.variable("default"), MessageThreads.defaultVariable)
         let refused = [
-            "", "CLAUDE_CODE_", "claude_code_tether_live", "CLAUDE_CODE__THREAD", "CLAUDE_CODE_THREAD_", "CLAUDE_TETHER", "TETHER_LIVE",
-            "CLAUDE_CODE_THREAD=1", "CLAUDE_CODE_THREAD X", "CLAUDE_CODE_THREADÉ",
-            "CLAUDE_CODE_THREAD_" + String(repeating: "A", count: MessageThreads.longest),
+            "", "CLAUDE_CODE_", "claude_code_tether_live", "CLAUDE_CODE__THREADS", "CLAUDE_CODE_THREADS_", "CLAUDE_TETHER", "TETHER_LIVE",
+            "CLAUDE_CODE_THREADS=1", "CLAUDE_CODE_THREADS X", "CLAUDE_CODE_THREADSÉ",
+            "CLAUDE_CODE_THREADS_" + String(repeating: "A", count: MessageThreads.longest),
             // Real names at the pin a 1 would change: none is about threads.
-            "CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SHELL_PREFIX", "CLAUDE_CODE_HOST_CREDS_FILE", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+            "CLAUDE_CODE_AUTO_MODE_COMPACT_THREAD_RULE", "CLAUDE_CODE_AUTO_MODE_THREAD_ASK_HELD", "CLAUDE_CODE_HOOKS_SAME_THREAD",
+            "CLAUDE_CODE_THREAD", "CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SHELL_PREFIX", "CLAUDE_CODE_HOST_CREDS_FILE", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EMIT_STARTUP_TIMING", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
             "ANTHROPIC_BASE_URL", "HOME", "IS_SANDBOX", "TOPO_LAUNCH",
         ]
@@ -27,9 +28,9 @@ final class MessageThreadsTests: XCTestCase {
         // Every part that reaches further refuses a name about threads that carries it, wherever
         // it sits. Named here, not read from the list, so a part dropped from it fails.
         let reaching = ["TOKEN", "KEY", "SECRET", "AUTH", "PASSWORD", "CREDENTIAL", "USE", "SKIP", "URL", "PROXY", "PROVIDER",
-                        "DANGEROUS", "BYPASS", "SANDBOX", "SIMPLE", "SHELL", "REMOTE", "MANAGED", "SETTINGS", "ENV"]
+                        "DANGEROUS", "BYPASS", "SANDBOX", "SIMPLE", "SHELL", "REMOTE", "MANAGED", "SETTINGS", "ENV", "HOOK", "MODE", "WORKER"]
         for clean in reaching {
-            for name in ["CLAUDE_CODE_THREAD_\(clean)_X", "CLAUDE_CODE_\(clean)_TETHER"] {
+            for name in ["CLAUDE_CODE_THREADS_\(clean)_X", "CLAUDE_CODE_\(clean)_TETHER"] {
                 XCTAssertNil(MessageThreads.variable(name), name)
             }
         }
