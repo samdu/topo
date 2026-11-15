@@ -218,6 +218,7 @@ final class Conversation {
         }
         guard carries() else { return false }
         on = true
+        voice.conversing(true)
         speaker.conversing = true
         goAheadOwed = true
         gates = []
@@ -264,6 +265,7 @@ final class Conversation {
     private func beginInFront() {
         on = true
         inFront = true
+        voice.conversing(true)
         speaker.conversing = true
         goAheadOwed = true
         gates = []
@@ -321,6 +323,10 @@ final class Conversation {
     /// start in front (a phone call over the open microphone) is dropped, as an interruption
     /// drops it there.
     private func becameActive() {
+        // An app in front holds its session: an interruption's start whose end iOS never sent
+        // (Apple: the two "get out of sync when the system can't deliver an end event") is over
+        // by now, and left standing it would hold every later conversation behind the lock deaf.
+        interrupted = false
         // A front conversation the app's inactive moment held back (Control Center, a lock that
         // went no further) picks up where it was.
         if on, inFront { return react() }
@@ -796,6 +802,11 @@ final class Conversation {
             if voice.listening, sending, policy.speaking || voice.suspended || unjudged {
                 handingOff = true
                 dropHandoff = false
+                // Held as a release is, as an utterance's end is: the decode and the send are a
+                // turn on its way, and behind the lock the session is not let go between the
+                // microphone closing and the send's wait.
+                let release = speaker.releasing()
+                let speaker = speaker
                 Task {
                     let heard = await voice.end(as: .chat)
                     handingOff = false
@@ -803,17 +814,24 @@ final class Conversation {
                     let dropped = dropHandoff
                     dropHandoff = false
                     if dropped {
+                        release.map { speaker.released($0, "its words were dropped") }
                         AudioLog.say("conversation: the handoff being decoded was dropped (the chat went)")
                     } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
+                        defer { release.map { speaker.released($0, "its send took no wait") } }
+                        speaker.sending(under: release)
                         await send(heard)
+                    } else {
+                        release.map { speaker.released($0, "it heard nothing to send") }
                     }
                 }
             } else {
                 voice.cancel(.chat)
             }
         }
-        // The engine kept running through the readings is the conversation's: it stops with it.
+        // The engine kept running through the readings is the conversation's: it stops with it,
+        // and the session the conversation kept is let go after it.
         voice.stopKeptInput("the conversation ended")
+        voice.conversing(false)
         ended()
     }
 }

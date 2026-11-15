@@ -14,7 +14,9 @@ import UIKit
 /// uncatchable exception rather than an error.
 @MainActor
 final class AudioSession {
-    enum RecordClaim: Hashable { case firstRun, chat, warm }
+    /// `.conversation` is a conversation's whole life (`conversation(_:)`), its utterances' ends
+    /// and the waits and readings between them included.
+    enum RecordClaim: Hashable { case firstRun, chat, warm, conversation }
     /// `.profiling` is a run from a Mac (`--stay-awake`): a locked phone takes no launch and no copy.
     enum ScreenClaim: Hashable { case listening, speaking, profiling }
     /// Who is keeping the process running behind the lock: a spoken press released and not yet
@@ -103,12 +105,16 @@ final class AudioSession {
     /// (`VoiceInput.inputKept`): its tap is on the format the session gave, so it keeps the
     /// session as an open microphone does.
     private var inputKept = false
+    /// True from a conversation's beginning to its end (`conversation(_:)`): its microphone closes
+    /// and opens again between utterances, behind the lock among them, and a session handed back
+    /// or configured for playback between two of them is one it cannot open on again from there.
+    private var conversing = false
     /// True only between a configuration that activated the session and the next reset or failure.
     private var valid = false
     private var resetObserver: NSObjectProtocol?
-    /// Whether the session is to be left as it is: a hold stands, the microphone is open, or an
-    /// input is kept.
-    private var kept: Bool { holding || microphoneOpen || inputKept }
+    /// Whether the session is to be left as it is: a hold stands, the microphone is open, an
+    /// input is kept, or a conversation lives.
+    private var kept: Bool { holding || microphoneOpen || inputKept || conversing }
     /// The outputs the session is routed to now, by port type (`currentRoute`).
     private let outputs: @MainActor () -> [AVAudioSession.Port]
 
@@ -249,6 +255,29 @@ final class AudioSession {
         if lettingGo { letGo(after: "the kept input has stopped") } else { applyDeferred(after: "the kept input has stopped") }
     }
 
+    /// A conversation began or ended (`Conversation`). From its beginning to its end the record
+    /// configuration is claimed and the session is kept as a hold keeps it: no utterance's end, no
+    /// reading's or wait's end and no interruption's end between two utterances hands it back or
+    /// configures it for playback, so an interruption's end resumes it as the microphone's and the
+    /// next utterance opens on it with nothing activated from the background. The end lets the
+    /// session go as the last hold going does: what waited is applied in front, and away it is
+    /// handed back once nothing else keeps it.
+    func conversation(_ on: Bool) {
+        guard conversing != on else { return }
+        if on {
+            wantRecord(true, for: .conversation)
+            conversing = true
+            AudioLog.say("the conversation keeps the session (record \(recordMode))")
+            return
+        }
+        conversing = false
+        let was = recordMode
+        recordClaims.remove(.conversation)
+        if recordMode != was { deferredClaims = true }
+        AudioLog.say("the conversation lets the session go (record \(recordMode))")
+        letGo(after: "the conversation has ended")
+    }
+
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
     /// first `playAndRecord` activation of a launch costs a route change, seconds of it on
     /// AirPods, and paying that at the press is what a press feeling slow is. Permission-gated,
@@ -354,7 +383,8 @@ final class AudioSession {
     }
 
     private var keptBy: String {
-        holding ? "a hold stands" : microphoneOpen ? "the microphone is open" : "the input is kept"
+        holding ? "a hold stands" : microphoneOpen ? "the microphone is open"
+            : inputKept ? "the input is kept" : "a conversation lives"
     }
 
     /// The session as a reply about to be read finds it: the mode, the voice processing it is

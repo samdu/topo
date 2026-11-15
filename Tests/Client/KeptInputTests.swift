@@ -365,7 +365,9 @@ final class KeptInputTests: XCTestCase {
     /// interruption's.
     func testTheKeptInputStopsAtAnInterruptionsStartAndNothingIsHandedBack() async {
         let (rig, _) = await rig(isActive: false)
-        await converse(rig)
+        // No wait taken, so no hold keeps the session: the stop at the interruption's start is
+        // the one thing that could hand it back.
+        await converse(rig, waits: nil)
         rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
         await settle("the input stopped") { !rig.voice.inputKept }

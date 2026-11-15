@@ -85,7 +85,7 @@ final class GatedSentences: VoiceEngine, @unchecked Sendable {
 
 /// The working bed under a spoken turn's hold, on the settings a phone never asked has: from the
 /// release's utterance taken, through the wait, to the reply's first frame, again in a reading's
-/// gaps while the guest works, and paused while the call's session changes hands; never with
+/// gaps while the guest works; never with
 /// replies muted, and never under Receipts or Off kept.
 @MainActor
 final class AudibleHoldTests: XCTestCase {
@@ -407,6 +407,30 @@ final class AudibleHoldTests: XCTestCase {
         rig.voice.open(2)
         await settle("the reply's second sentence to be asked for") { rig.voice.sentencesAsked == 3 }
         XCTAssertEqual(rig.voice.texts, ["One moment.", "One moment.", "It is on the shelf."])
+        rig.speaker.stop()
+    }
+
+    /// The same first part heard out past the reading's ceiling, under a wait the bed carries
+    /// and with the turn still running: the hold goes back to the turn's wait rather than ending,
+    /// so behind the lock the process is still held for the turn, and the reply is read from the
+    /// top as the guest writes on.
+    func testAFirstPartHeardOutWithTheTurnRunningHandsItsHoldBackToTheTurnsWait() async throws {
+        let rig = await rig(ceiling: .seconds(1))
+        rig.speaker.waitCarried = { true }
+        rig.speaker.turnRunning = { true }
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        XCTAssertEqual(rig.speaker.awaiting, [], "the turn's wait stood under its reading")
+        rig.voice.open(1)
+        try await render(rig, "the first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the voice heard out") { rig.speaker.voiceGap }
+        await settle("the ceiling to end the reading") { !rig.speaker.speaking }
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"], "the turn's wait was not taken again")
+        XCTAssertTrue(rig.audio.heldForATurn, "the turn still running was let go of at the reading's ceiling")
+        rig.speaker.speak(writing: "One moment.\n\nIt is on the shelf. ", answering: "turn")
+        XCTAssertTrue(rig.speaker.speaking, "what the guest wrote after the ceiling was not read")
+        await settle("the reply's first sentence to be asked for again") { rig.voice.sentencesAsked == 2 }
         rig.speaker.stop()
     }
 

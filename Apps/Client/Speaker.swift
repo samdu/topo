@@ -80,6 +80,10 @@ final class Speaker {
     var turnRunning: @MainActor () -> Bool = { false }
     /// When each wait was taken, by nonce: the outer bound counts from there.
     private var waitTaken: [String: ContinuousClock.Instant] = [:]
+    /// When the wait of the turn being read was taken, kept as its reading begins and ends that
+    /// wait: a reading heard out with the turn still running hands the hold back to that wait,
+    /// still bounded from when it was taken (`waitAgain`).
+    private var readingTaken: (nonce: String, at: ContinuousClock.Instant)?
     private let clock = ContinuousClock()
     /// How many times a reply for this turn landed and was not taken, by nonce. Kept only so the
     /// ceiling's line can say what happened; forgotten with the wait.
@@ -601,9 +605,10 @@ final class Speaker {
         // wait or a release has up is not under the replay's sentences.
         askForBed()
         // Where and how loud the reply is about to be heard, so a run that sounded quiet says
-        // which of the session's states it was read under: the call's or not, its mode, the
-        // voice processing the session is configured for, the route and the system's volume.
+        // which of the session's states it was read under: its mode, the voice processing the
+        // session is configured for, the route and the system's volume.
         AudioLog.say("the reply begins (\(audio.describeOutput()))")
+        readingTaken = nonce.flatMap { nonce in waitTaken[nonce].map { (nonce, $0) } }
         nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
@@ -986,18 +991,46 @@ final class Speaker {
         reading = Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
-            // Heard out with the guest still at its tools, which is no dead engine: its hold goes,
-            // and a call's with it, and the reading is forgotten rather than stopped for good, so
-            // what the guest writes next, or the reply as it lands, is read from the top — behind
-            // the lock with no call, at the unlock, the turn still marked spoken until then.
+            // Heard out with the guest still at its tools, which is no dead engine: the reading is
+            // forgotten rather than stopped for good, so what the guest writes next, or the reply
+            // as it lands, is read from the top, the turn still marked spoken until then. Its hold
+            // goes back to the turn's wait where that wait would stand, and otherwise goes, the
+            // reply read at the unlock.
             if self.written?.live == true, self.voiceHeard, self.voiceGap, self.making == 0, self.queue.isIdle {
-                AudioLog.say("the voice was heard out \(ceiling) ago with the guest still writing; its hold ends and the reply is read from the top as more comes")
+                AudioLog.say("the voice was heard out \(ceiling) ago with the guest still writing; the reading ends and the reply is read from the top as more comes")
+                let turn = self.written?.nonce
                 self.written = nil
+                // The turn's wait takes the hold back before the reading lets go of it, so behind
+                // the lock the process is held for the turn still running, as it was before its
+                // first words were read, and not let go between the two.
+                if let turn, let taken = self.readingTaken, taken.nonce == turn, self.waitAgain(turn, takenAt: taken.at) {
+                    self.waits.keys.filter { $0 != turn }.forEach { self.endAwaiting($0, "stopped") }
+                    self.cancel()
+                    return
+                }
             } else {
                 AudioLog.say("the reply made no progress for \(ceiling); it and its hold end")
             }
             self.stop()
         }
+    }
+
+    /// The wait for a turn whose first words were read and heard out with the turn still running,
+    /// taken again as `capped` would let it stand: carried by audio in use, the turn running, and
+    /// bounded by `outerBound` from when it was first taken. Answers whether it stands.
+    private func waitAgain(_ nonce: String, takenAt taken: ContinuousClock.Instant) -> Bool {
+        let left = outerBound - (clock.now - taken)
+        guard left > .zero, waitCarried(), turnRunning() else { return false }
+        audio.wantAlive(true, for: .awaitingReply(nonce))
+        guard queue.keeping else {
+            audio.wantAlive(false, for: .awaitingReply(nonce))
+            return false
+        }
+        waitTaken[nonce] = taken
+        waits[nonce] = ceilingWait(nonce, after: min(ceiling, left))
+        AudioLog.say("the wait for \(nonce) is taken again: the turn is still running")
+        askForBed()
+        return true
     }
 
     /// The reply came to its end, rather than being stopped. The cue first: its hold is taken

@@ -76,6 +76,10 @@ final class VoiceInput {
 
     let ear: Ear
     private let audio: AudioSession
+
+    /// A conversation on this microphone began or ended: the session is kept for it from one to
+    /// the other (`AudioSession.conversation(_:)`).
+    func conversing(_ on: Bool) { audio.conversation(on) }
     /// The input engine, its node and its tap, off the main actor (`InputEngine`): the engine is
     /// built at the press, once the session is active, and dropped by a media services reset or by
     /// a press that found the input dead; an engine outlives neither, and reading its input node

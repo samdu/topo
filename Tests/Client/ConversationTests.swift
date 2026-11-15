@@ -726,6 +726,83 @@ final class ConversationTests: XCTestCase {
         await settle("open again once the reading is over") { voice.listening && !voice.suspended }
     }
 
+    /// An interruption that comes and goes while the carried conversation waits for its reply, on
+    /// a session that refuses what iOS refuses behind the lock: the microphone open again for the
+    /// next utterance is suspended at its start, the conversation keeps the record configuration
+    /// through the wait, the interruption's end resumes it as that and the microphone opens on it,
+    /// and once the reply is read it opens again, with nothing handed back or activated from the
+    /// background.
+    func testAnInterruptionDuringTheWaitBehindTheLockLeavesTheConversationListening() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        seams.away = true
+        waitOnSend = true
+        utterance(into: voice.sink)
+        await settle("sent") { self.sent.count == 1 }
+        await settle("open again for the next utterance") { voice.listening && !voice.inputKept }
+        XCTAssertEqual(speaker.awaiting, ["spoken-1"], "the turn's wait does not stand")
+        seams.forget()
+        beganInterruption()
+        await settle("suspended at the interruption's start") { voice.suspended }
+        seams.resume()
+        endedInterruption()
+        await settle("resumed at its end") { voice.listening && !voice.suspended }
+        XCTAssertTrue(speaker.speak("The lights are off.", answering: "spoken-1"))
+        await drain()
+        speaker.stop()
+        await settle("open again once the reply is over") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
+        XCTAssertEqual(seams.records, [true], "the interruption's end resumed the session other than for the microphone")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
+    }
+
+    /// An interruption that comes and goes while a reply is read to the carried conversation: the
+    /// reading's end hands nothing back, and the microphone opens again on the session the
+    /// interruption's end resumed, with no activation from the background.
+    func testAnInterruptionDuringAReadingBehindTheLockLeavesTheConversationListening() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        seams.away = true
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening && voice.inputKept }
+        seams.forget()
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        seams.resume()
+        endedInterruption()
+        await drain()
+        speaker.stop()
+        await settle("open again once the reading is over") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
+        XCTAssertEqual(seams.records, [true], "the interruption's end resumed the session other than for the microphone")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
+    }
+
+    /// An interruption's start whose end never comes, then the app in front again: the next
+    /// conversation carried behind the lock is not held by it, and once its reply has been read
+    /// the microphone opens again.
+    func testAnInterruptionsStartWithNoEndDoesNotHoldTheNextConversation() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        await settle("the conversation over in front") { !conversation.on }
+        await drain()
+        await tap(voice)
+        leave()
+        XCTAssertTrue(conversation.on, "no conversation was carried the second time")
+        defer { conversation.stop("test", sending: false) }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening }
+        speaker.stop()
+        await settle("open again once the reading is over") { voice.listening && !voice.suspended }
+    }
+
     /// A reply that landed while a phone call held the session is read once the interruption is
     /// over and nothing has been said: it is judged at the resume, not left waiting for an
     /// utterance.

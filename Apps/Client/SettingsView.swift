@@ -66,7 +66,7 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier(SettingsView.workingSounds)
                 } footer: {
-                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed whenever Topo is not speaking, until the reply has been read. Only while a spoken turn is waited for. With the phone locked or Topo behind another app, Sounds keeps the phone awake for as long as Topo is working on the answer (fifteen minutes at most); under Receipts or Off it is two minutes at most, and an answer slower than that is read when you come back. Kept on this device.")
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed whenever Topo is not speaking, until the reply has been read. Only while a spoken turn is waited for. With the phone locked or Topo behind another app, Sounds keeps the phone awake for as long as Topo is working on the answer (fifteen minutes at most); under Receipts or Off an answer to a held press is waited for two minutes at most, and one slower than that is read when you come back. An open-mic conversation keeps the phone awake as long as it lasts. Kept on this device.")
                 }
                 Section {
                     Toggle("Earcons", isOn: $earcons)

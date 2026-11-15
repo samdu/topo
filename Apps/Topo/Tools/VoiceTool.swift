@@ -49,11 +49,9 @@ struct VoiceTool: Tool {
 
     Sounds unless changed. The sounds are the spoken turn's: nothing sounds unless one is being
     waited for aloud. A change applies from the next sound, on this phone only, and they can
-    change it back in Settings.
-
-
-    On unless turned off. A change applies from the next spoken reply, on this phone only, and
-    they can change it back in Settings.
+    change it back in Settings. With the phone locked or Topo behind another app, a pushed-to-talk
+    turn is waited for under sounds for as long as you are working on it (fifteen minutes at most),
+    and under receipts or off for two minutes at most; a slower answer is read when they come back.
 
     topo voice wait [status]                how long a pause runs before Topo may decide you have finished
     topo voice wait VALUE                   set it: seconds from \(QuietWait.said(QuietWait.range.lowerBound)) to \(QuietWait.said(QuietWait.range.upperBound)), in an open-mic conversation

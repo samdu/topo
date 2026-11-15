@@ -56,11 +56,35 @@ final class Seams {
     /// is activated.
     var onConfigure: (() -> Void)?
 
+    /// The app away from the front, as iOS judges a session there: set by a test once it has left
+    /// the front. A configure while away is refused, as a session activated or reconfigured from
+    /// the background is (#90), except the one an interruption's end allows (`resume()`); and while
+    /// away, an input node under a session last configured for playback reports no input.
+    nonisolated(unsafe) var away = false
+    nonisolated(unsafe) private var resumes = 0
+    /// What the session was last configured for, which `forget()` leaves standing.
+    nonisolated(unsafe) private var configuredRecord: Bool?
+
+    /// An interruption's end: iOS gives the session back, and the one configure that resumes it
+    /// from the background is allowed.
+    func resume() {
+        lock.lock(); defer { lock.unlock() }
+        resumes += 1
+    }
+
     func configure(_ record: Bool, _ processed: Bool) throws {
         onConfigure?()
         lock.lock(); defer { lock.unlock() }
+        if away {
+            guard resumes > 0 else {
+                lines.append("activate refused away")
+                throw Refused()
+            }
+            resumes -= 1
+        }
         records.append(record)
         modes.append(processed)
+        configuredRecord = record
         if let activationError {
             lines.append("activate failed")
             throw activationError
@@ -109,8 +133,10 @@ final class Seams {
         offMain.append(!Thread.isMainThread)
         lines.append("formats read")
         formatReads += 1
-        let read = stubFormats ?? (engine.inputNode.outputFormat(forBus: 0),
-                                   engine.inputNode.inputFormat(forBus: 0))
+        let playback = away && configuredRecord == false
+        let none = StubFormat(rate: 0, channels: 1)!
+        let read = stubFormats ?? (playback ? (none, none) : (engine.inputNode.outputFormat(forBus: 0),
+                                                            engine.inputNode.inputFormat(forBus: 0)))
         lastClient = read.client
         return read
     }
