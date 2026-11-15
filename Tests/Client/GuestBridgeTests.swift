@@ -153,6 +153,25 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.thresholds, [60, nil])
     }
 
+    /// Message threads reach the guest as the name the launch sets, and off as none; the harness
+    /// reads them on on a device that was never told otherwise, and keeps what it is told.
+    func testTheThreadsSettingReachesTheGuestAsTheNameOrNone() async throws {
+        let guest = ScriptedGuest(home: home, script: [])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let defaults = UserDefaults(suiteName: name)!
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let harness = Harness(database: InMemoryRecordDatabase(), device: phone, ensureZone: {},
+                              defaults: defaults, brain: bridge, relay: relay, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        XCTAssertEqual(harness.threads, .standard)
+        harness.threads = .off
+        try await eventually("off told") { guest.threads == [nil] }
+        harness.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_THREADS")
+        try await eventually("the rename told") { guest.threads == [nil, "CLAUDE_CODE_THREADS"] }
+        XCTAssertEqual(MessageThreads.Setting(defaults: defaults), MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_THREADS"))
+    }
+
     /// The harness's hand on it: the setting is kept and told to the guest, a compaction's end is
     /// kept for Settings and `topo context` and sets the context, a second asked meanwhile asks
     /// nothing, the window is the last result's, and a sign-out leaves none of it.
