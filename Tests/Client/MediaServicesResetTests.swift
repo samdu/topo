@@ -338,7 +338,10 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
                 while !self.lock.withLock({ self.released }) {
-                    try? await Task.sleep(for: .milliseconds(5))
+                    // A cancelled stream (the reply stopped) ends here: its sleep throws at once,
+                    // so a loop that swallowed that would spin without a suspension and, on the
+                    // suite's one-thread cooperative pool, starve every other task (#760).
+                    do { try await Task.sleep(for: .milliseconds(5)) } catch { continuation.finish(); return }
                 }
                 continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
                 self.lock.withLock { self.delivered = true }
@@ -370,7 +373,10 @@ final class HeldSecondSentence: VoiceEngine, @unchecked Sendable {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 while mine > 1, !self.lock.withLock({ self.released }) {
-                    try? await Task.sleep(for: .milliseconds(5))
+                    // A cancelled stream (the reply stopped) ends here: its sleep throws at once,
+                    // so a loop that swallowed that would spin without a suspension and, on the
+                    // suite's one-thread cooperative pool, starve every other task (#760).
+                    do { try await Task.sleep(for: .milliseconds(5)) } catch { continuation.finish(); return }
                 }
                 continuation.finish()
             }
@@ -399,7 +405,10 @@ final class FramesAfterTheInterruption: VoiceEngine, @unchecked Sendable {
             let task = Task {
                 continuation.yield(Voice.Frame(samples: toneFrame(seconds: Self.lengths[0]), rate: Voice.rate))
                 while !self.lock.withLock({ self.released }) {
-                    try? await Task.sleep(for: .milliseconds(5))
+                    // A cancelled stream (the reply stopped) ends here: its sleep throws at once,
+                    // so a loop that swallowed that would spin without a suspension and, on the
+                    // suite's one-thread cooperative pool, starve every other task (#760).
+                    do { try await Task.sleep(for: .milliseconds(5)) } catch { continuation.finish(); return }
                 }
                 for seconds in Self.lengths.dropFirst() {
                     continuation.yield(Voice.Frame(samples: toneFrame(seconds: seconds), rate: Voice.rate))
