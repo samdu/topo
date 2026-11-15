@@ -148,17 +148,21 @@ struct TurnTimeline: Sendable {
                 : nil
             return Span(id: id, origin: origin, end: shown?.ms ?? final.ms, seen: seen[id] ?? start)
         }
+        // Each mark's place in the marks' order, by its time: two can share a millisecond.
+        let positions = Dictionary(grouping: marks.indices, by: { marks[$0].ms })
         var found: [(end: Int64, turn: TurnTimeline)] = []
         for span in spans {
             guard let end = span.end, let final = last[span.id] else { continue }
-            let turn = TurnTimeline(span, end: end, final: final, marks: marks, others: spans.filter { $0.id != span.id },
+            let turn = TurnTimeline(span, end: end, final: final, marks: marks, positions: positions, others: spans.filter { $0.id != span.id },
                                     spoken: spoken.contains(span.id))
             found.append((end, turn))
         }
         return found.sorted { $0.end < $1.end }.map(\.turn)
     }
 
-    private init(_ span: Span, end: Int64, final: PerfMark, marks: [PerfMark], others: [Span], spoken: Bool) {
+    private init(_ span: Span, end: Int64, final: PerfMark, marks: [PerfMark], positions: [Int64: [Int]], others: [Span], spoken: Bool) {
+        /// A mark's place in the marks' order, which orders events of one millisecond.
+        func place(_ mark: PerfMark) -> Int { positions[mark.ms]?.first { marks[$0] == mark } ?? 0 }
         let origin = span.origin
         at = Date(timeIntervalSince1970: Double(origin) / 1000)
         kind = spoken ? .spoken : .typed
@@ -187,28 +191,28 @@ struct TurnTimeline: Sendable {
         mixed = !blurs.isEmpty
         let clean = window.filter { mark in !blurs.contains { $0.contains(mark.ms) } }
 
-        var raw: [(ms: Int64, key: Key, title: String)] = []
+        var raw: [(ms: Int64, place: Int, key: Key, title: String)] = []
         if spoken, let heard = window.first(where: { $0.name == "voice.heard" }) {
-            raw.append((heard.ms, .hear, "Heard you"))
+            raw.append((heard.ms, place(heard), .hear, "Heard you"))
         }
         let attempts = window.filter { $0.name == "turn.attempt" && $0.turn == span.id }
         sends = attempts.count
         for (n, attempt) in attempts.enumerated() {
-            raw.append((attempt.ms, .queue, n == 0 ? "Started on its way" : "Sent again"))
+            raw.append((attempt.ms, place(attempt), .queue, n == 0 ? "Started on its way" : "Sent again"))
         }
         // A stretch begins where the other turn did: the wait up to there is this turn's own,
         // whatever it was waiting on, and only the stretch itself is said as shared.
         for blur in blurs {
-            if blur.lowerBound > origin { raw.append((blur.lowerBound, .wait, "Another message began")) }
-            raw.append((blur.upperBound, .mixed, "Alongside another message"))
+            if blur.lowerBound > origin { raw.append((blur.lowerBound, Int.min, .wait, "Another message began")) }
+            raw.append((blur.upperBound, Int.min, .mixed, "Alongside another message"))
         }
         let write = clean.first { $0.name == "turn.guest.write" }
         if let write {
-            raw.append((write.ms, .ready, "Claude Code had your words"))
+            raw.append((write.ms, place(write), .ready, "Claude Code had your words"))
             // Its first word back on the turn: a process still starting (a launch, a resume, a
             // boot) spends its start here, not in making the request.
             if let begun = clean.first(where: { $0.name == "turn.guest.init" && $0.ms >= write.ms }) {
-                raw.append((begun.ms, .start, "Claude Code started on your words"))
+                raw.append((begun.ms, place(begun), .start, "Claude Code started on your words"))
             }
         }
         // Words given to the guest ahead of their save are saved while it works: that save is no
@@ -219,7 +223,7 @@ struct TurnTimeline: Sendable {
             if let write, write.ms < mark.ms {
                 beside.append(Event(key: .save, title: title + ", while Claude Code worked", at: sent - origin, took: mark.ms - sent))
             } else {
-                raw.append((mark.ms, .save, title))
+                raw.append((mark.ms, place(mark), .save, title))
             }
         }
         if let saved = clean.first(where: { $0.name == "turn.lease.fresh" || $0.name == "turn.saved" })
@@ -236,7 +240,7 @@ struct TurnTimeline: Sendable {
             let size = request.value("bytes").flatMap(Int.init)
             if let size { bytes.append(size) }
             let toolRan = clean.contains { $0.name == "turn.guest.toolUse" && $0.ms >= previousDone && $0.ms <= request.ms }
-            raw.append((request.ms, toolRan ? .tool : .prepare,
+            raw.append((request.ms, place(request), toolRan ? .tool : .prepare,
                         toolRan ? "A tool ran, then Claude Code made request \(number)" : "Claude Code made request \(number)"))
             guard let id else { continue }
             func mine(_ name: String) -> PerfMark? {
@@ -245,34 +249,33 @@ struct TurnTimeline: Sendable {
             if let thread = request.value("thread") { threads.append(thread) }
             if let sent = mine("proxy.sent") {
                 let about = [size.map(Self.size), request.value("thread").flatMap { Self.threadWords[$0] }].compactMap { $0 }
-                raw.append((sent.ms, .upload, "Request \(number) sent" + (about.isEmpty ? "" : " (\(about.joined(separator: ", ")))")))
+                raw.append((sent.ms, place(sent), .upload, "Request \(number) sent" + (about.isEmpty ? "" : " (\(about.joined(separator: ", ")))")))
             }
-            if let first = mine("proxy.firstByte") { raw.append((first.ms, .model, "The model began answering request \(number)")) }
+            if let first = mine("proxy.firstByte") { raw.append((first.ms, place(first), .model, "The model began answering request \(number)")) }
             if let done = mine("proxy.done") {
-                raw.append((done.ms, .stream, "The model finished request \(number)"))
+                raw.append((done.ms, place(done), .stream, "The model finished request \(number)"))
                 previousDone = done.ms
             }
         }
         requestBytes = bytes
         requestThreads = threads
         tools = clean.filter { $0.name == "turn.guest.toolUse" }.count
-        if let first = clean.first(where: { $0.name == "turn.text.first" }) { raw.append((first.ms, .screen, "First words on your screen")) }
-        if let result = clean.first(where: { $0.name == "turn.guest.result" }) { raw.append((result.ms, .finish, "Claude Code finished the reply")) }
-        if let saved = clean.first(where: { $0.name == "turn.reply.saved" }) { raw.append((saved.ms, .store, "The reply saved to iCloud")) }
-        if let failed = clean.last(where: { $0.name == "turn.reply.failed" }) { raw.append((failed.ms, .store, "The reply failed")) }
+        if let first = clean.first(where: { $0.name == "turn.text.first" }) { raw.append((first.ms, place(first), .screen, "First words on your screen")) }
+        if let result = clean.first(where: { $0.name == "turn.guest.result" }) { raw.append((result.ms, place(result), .finish, "Claude Code finished the reply")) }
+        if let saved = clean.first(where: { $0.name == "turn.reply.saved" }) { raw.append((saved.ms, place(saved), .store, "The reply saved to iCloud")) }
+        if let failed = clean.last(where: { $0.name == "turn.reply.failed" }) { raw.append((failed.ms, place(failed), .store, "The reply failed")) }
         if outcome == "answered" {
-            raw.append((end, .show, "The reply on your screen"))
+            raw.append((end, Int.max, .show, "The reply on your screen"))
         } else {
-            raw.append((end, .end, "The turn ended with no reply here"))
+            raw.append((end, Int.max, .end, "The turn ended with no reply here"))
         }
 
         // A shared stretch is one event from its start to its end: this turn's own marks inside it
-        // (an attempt sent again, say) are not said, so none takes part of the stretch's time, and
-        // at its end the stretch is said before anything that came at the same moment.
+        // (an attempt sent again, say) are not said, so none takes part of the stretch's time. Events
+        // are in the marks' order; a stretch begins and ends before anything else of its moment,
+        // and the turn's end comes after everything of its own.
         let said = raw.filter { item in item.key == .mixed || !blurs.contains { $0.lowerBound < item.ms && item.ms < $0.upperBound } }
-        let sorted = said.enumerated().sorted {
-            ($0.element.ms, $0.element.key == .mixed ? 0 : 1, $0.offset) < ($1.element.ms, $1.element.key == .mixed ? 0 : 1, $1.offset)
-        }.map(\.element)
+        let sorted = said.sorted { ($0.ms, $0.place) < ($1.ms, $1.place) }
         var cursor = origin
         events = sorted.map { item in
             defer { cursor = item.ms }

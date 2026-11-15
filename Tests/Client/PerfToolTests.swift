@@ -199,6 +199,18 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(timelines(lines)[0].sound, 8000...8000)
     }
 
+    /// Events of one millisecond are said in the order their marks were made.
+    func testEventsOfOneMillisecondAreInTheMarksOrder() throws {
+        func keys(textFirst: Bool) throws -> [TurnTimeline.Key] {
+            let words = line(7068, "turn.text.first"), done = line(7068, "proxy.done", "POST /v1/messages id=1")
+            let lines = typed(at: 0).filter { !$0.message.contains(" turn.text.first") && !$0.message.contains(" proxy.done ") }
+                + (textFirst ? [words, done] : [done, words])
+            return try XCTUnwrap(timelines(lines).first).events.map(\.key)
+        }
+        XCTAssertEqual(try keys(textFirst: true).suffix(6), [.model, .screen, .stream, .finish, .store, .show])
+        XCTAssertEqual(try keys(textFirst: false).suffix(6), [.model, .stream, .screen, .finish, .store, .show])
+    }
+
     /// The store is this launch's alone and is read whole, so a turn of a launch days old is there.
     func testATurnOfALongLaunchIsRead() async {
         let reply = await tool(typed(at: -3 * 86_400_000)).run(["turns"])
