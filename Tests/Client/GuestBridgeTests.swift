@@ -4947,7 +4947,7 @@ extension GuestBridgeTests {
         XCTAssertEqual(harness.margin(nonce), .resend, "the next attempt left the turn drawn as waiting")
         XCTAssertEqual(guest.inputs, ["hello", "bins?"], "the guest was given cut-off words again")
 
-        let relaunched = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        let relaunched = self.harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
         await relaunched.refresh()
         XCTAssertEqual(relaunched.margin(nonce), .resend, "a relaunch drew the cut-off turn as waiting")
     }
