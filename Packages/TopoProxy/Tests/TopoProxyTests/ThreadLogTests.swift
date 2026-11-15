@@ -50,6 +50,17 @@ struct ThreadLogTests {
         #expect(sent.map(\.bytes) == upstream.requests.prefix(4).map { $0.body?.count ?? 0 })
     }
 
+    /// A request's mark names a model request's thread by its kind alone, read from the request
+    /// as `ThreadLog` reads it, and nothing else the request carries.
+    @Test func aRequestsMarkNamesItsThreadByKindAlone() {
+        let body = Data(#"{"model":"m","thread":{"type":"continue","previous_message_id":"msg_secret"},"messages":[]}"#.utf8)
+        let kind = ThreadLog.kind(headers: [HTTPField("anthropic-beta", Self.beta)], body: body)
+        #expect(Forwarder.requestMark(route: "POST /v1/messages", bytes: body.count, id: "id=7", thread: kind)
+                == "proxy.request POST /v1/messages bytes=\(body.count) id=7 thread=continue")
+        #expect(Forwarder.requestMark(route: "GET /v1/models", bytes: 0, id: "id=8", thread: nil)
+                == "proxy.request GET /v1/models bytes=0 id=8")
+    }
+
     /// A thread is read only under the threads beta: the same field without it is a request on
     /// none, which is what the API would make of it. Under the beta, a body with no thread the
     /// proxy can read is said to be one.

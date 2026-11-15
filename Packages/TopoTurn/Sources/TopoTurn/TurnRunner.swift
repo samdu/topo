@@ -179,6 +179,8 @@ public actor TurnRunner {
                 // A caller that stopped before the person's turn is in the log writes nothing at all.
                 try Task.checkCancellation()
                 person = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce, justRead: true)
+                // The save itself, which `turn.person.saved` follows only once the brain has the words.
+                Perf.mark("turn.saved")
                 before = read
             }
         } catch {

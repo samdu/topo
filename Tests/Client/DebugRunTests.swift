@@ -178,10 +178,12 @@ final class DebugRunTests: XCTestCase {
         XCTAssertNil(DebugRun.developerToken(["TOPO_CLAUDE_SETUP_TOKEN": "   "]))
     }
 
-    func testOnlyAnAskedForTurnIsSent() {
-        XCTAssertNil(DebugRun.words([:]))
-        XCTAssertNil(DebugRun.words(["TOPO_DEBUG_SEND": " \n "]))
-        XCTAssertEqual(DebugRun.words(["TOPO_DEBUG_SEND": " what did I forget "]), "what did I forget")
+    func testOnlyAskedForTurnsAreSentInTheirOrder() {
+        XCTAssertEqual(DebugRun.turns([:]), [])
+        XCTAssertEqual(DebugRun.turns(["TOPO_DEBUG_SEND": " \n "]), [])
+        XCTAssertEqual(DebugRun.turns(["TOPO_DEBUG_SEND": " what did I forget "]), ["what did I forget"])
+        XCTAssertEqual(DebugRun.turns(["TOPO_DEBUG_SEND": "one ||  || two"]), ["one", "two"])
+        XCTAssertEqual(DebugRun.turns(["TOPO_DEBUG_SEND": "a||b"]), ["a||b"])
     }
 
     // MARK: Which reply is this run's
