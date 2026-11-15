@@ -4431,7 +4431,7 @@ private final class PIDGatedGuest: GuestConversation, @unchecked Sendable {
 private enum BindMoment { case never, beforeThePass, duringTheWait }
 
 extension GuestBridgeTests {
-    private static let owedFirst = GuestBridgeError.failed("a reply the guest finished is still to be written")
+    private static let owedFirst = GuestBridgeError.failed(GuestBridge.owedFirst)
 
     // MARK: the loop ends; bar 1 — nothing given twice, nothing lost
 
@@ -4460,7 +4460,7 @@ extension GuestBridgeTests {
         XCTAssertEqual(during.early?.compactMap { $0.bound?.person } ?? [], ["n2"], "control: the second waits bound")
         guest.releaseReady()
         let first = await passing.result
-        if case .failure(let error) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
+        if case .failure(TurnRunnerError.answerFailed(_, let error)) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
         XCTAssertEqual(guest.models.count - uses, 1, "the request went round the guest's wait again")
         let kept = await bridge.current
         XCTAssertEqual(kept.pending?.person, "n1", "the first bound record was lost: \(kept)")
@@ -4659,7 +4659,7 @@ extension GuestBridgeTests {
         await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
         guest.releaseReady()
         let first = await passing.result
-        if case .failure(let error) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
+        if case .failure(TurnRunnerError.answerFailed(_, let error)) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
         XCTAssertEqual(guest.models.count - uses, 2, "the request went round more often than there were binds")
         let kept = await bridge.current
         XCTAssertEqual(kept.pending?.person, "n1", "the bound reply was lost: \(kept)")

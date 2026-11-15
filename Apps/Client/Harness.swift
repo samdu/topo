@@ -1537,8 +1537,12 @@ final class Harness {
             if case TurnRunnerError.answerFailed(let answering, let underlying) = error {
                 // The turns the pass asked the brain to answer, as the runner read them: their
                 // reply has stopped. The pass held the lease to ask, so this device answers them.
+                // Save when the bridge refused for an owed reply: the next pass writes it, then
+                // answers them.
                 failure = Failure(words: Self.describe(underlying), source: .pass)
-                replyFailed.formUnion(answering.map(\.ref))
+                if underlying as? GuestBridgeError != .failed(GuestBridge.owedFirst) {
+                    replyFailed.formUnion(answering.map(\.ref))
+                }
             } else {
                 failure = Failure(words: Self.describe(error), source: .pass)
             }

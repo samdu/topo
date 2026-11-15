@@ -472,7 +472,7 @@ actor GuestBridge: Brain {
                         ledger.pending?.covers.formUnion(received)
                         try? save()
                     }
-                    throw failing(.failed("a reply the guest finished is still to be written"), at: "reconciling: a reply owed")
+                    throw failing(.failed(Self.owedFirst), at: "reconciling: a reply owed")
                 case .unresolved:
                     ledger.pending?.state = .unresolved
                     try save()
@@ -647,6 +647,9 @@ actor GuestBridge: Brain {
     static let unknown = "whether the guest received the turn is not known yet (its transcript could not be read, or may still be being written); nothing is sent until it is"
 
     /// Why a turn waits when the bridge's own ledger could not be read.
+    /// A pass refused because a reply the guest finished is owed the log first: the next pass
+    /// writes it and then answers, so no reply has stopped.
+    static let owedFirst = "a reply the guest finished is still to be written"
     static let ledgerUnreadable = "the record of what the guest was sent could not be read, so whether it received the turn is not known; nothing is sent until it can be"
 
     func landed(_ reply: Turn, nonce: String) async {
