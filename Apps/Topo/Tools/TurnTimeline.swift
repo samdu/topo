@@ -263,7 +263,7 @@ struct TurnTimeline: Sendable {
         if let first = clean.first(where: { $0.name == "turn.text.first" }) { raw.append((first.ms, place(first), .screen, "First words on your screen")) }
         if let result = clean.first(where: { $0.name == "turn.guest.result" }) { raw.append((result.ms, place(result), .finish, "Claude Code finished the reply")) }
         if let saved = clean.first(where: { $0.name == "turn.reply.saved" }) { raw.append((saved.ms, place(saved), .store, "The reply saved to iCloud")) }
-        if let failed = clean.last(where: { $0.name == "turn.reply.failed" }) { raw.append((failed.ms, place(failed), .store, "The reply failed")) }
+        if let failed = clean.last(where: { $0.name == "turn.reply.failed" }) { raw.append((failed.ms, place(failed), .store, outcome == "answered" ? "iCloud had not taken the reply yet" : "The reply failed")) }
         if outcome == "answered" {
             raw.append((end, Int.max, .show, "The reply on your screen"))
         } else {

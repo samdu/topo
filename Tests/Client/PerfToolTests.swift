@@ -199,6 +199,14 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(timelines(lines)[0].sound, 8000...8000)
     }
 
+    /// A reply kept on screen while only its save failed is answered, with iCloud behind on it.
+    func testAReplyKeptWhileItsSaveFailedIsAnswered() throws {
+        let lines = typed(at: 0).map { $0.message.hasSuffix(" turn.reply.saved") ? line(7780, "turn.reply.failed", "unavailable") : $0 }
+        let turn = try XCTUnwrap(timelines(lines).first)
+        XCTAssertTrue(turn.answered)
+        XCTAssertEqual(turn.events.suffix(2).map(\.title), ["iCloud had not taken the reply yet", "The reply on your screen"])
+    }
+
     /// Events of one millisecond are said in the order their marks were made.
     func testEventsOfOneMillisecondAreInTheMarksOrder() throws {
         func keys(textFirst: Bool) throws -> [TurnTimeline.Key] {

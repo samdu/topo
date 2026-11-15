@@ -1025,6 +1025,9 @@ final class Harness {
                 // The person's turn is in the log and the guest's reply is whole; only its save
                 // failed, and the next pass writes it. It stays on screen meanwhile.
                 guard inFlight == generation else { return false }
+                // The person has the reply: the turn was answered, whenever the log takes it.
+                Perf.mark("turn.reply.shown \(turnMark)")
+                ended = "answered"
                 turnOpen = false
                 handedBack = false
                 failure = Failure(words: Self.behind(underlying), source: .sync)

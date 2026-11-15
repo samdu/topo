@@ -2342,6 +2342,25 @@ extension GuestBridgeTests {
                        ["turn.attempt \(tag)", "turn.reply.shown \(tag)", "turn.attempt.end \(tag) answered"])
     }
 
+    /// A reply kept on screen while only its save failed is a turn answered: its marks say so.
+    func testAReplyKeptWhileItsSaveFailedEndsItsAttemptAnswered() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])
+        let (harness, _) = harness(db, guest)
+        await harness.refresh()
+        await harness.answerPending()
+        await db.refuseReplies(true)
+        let marks = TurnMarks()
+        let nonce = await Perf.$observer.withValue(marks.add) { () -> String in
+            let nonce = harness.willSend("capital of France?")
+            await harness.retry()
+            return nonce
+        }
+        let tag = Harness.turnMark(nonce)
+        XCTAssertEqual(marks.tagged(tag), ["turn.line \(tag)", "turn.attempt \(tag)", "turn.reply.shown \(tag)", "turn.attempt.end \(tag) answered"])
+        XCTAssertNotNil(harness.failure, "the reply's save is said to be behind")
+    }
+
     private final class TurnMarks: @unchecked Sendable {
         private let lock = NSLock()
         private var kept: [String] = []
