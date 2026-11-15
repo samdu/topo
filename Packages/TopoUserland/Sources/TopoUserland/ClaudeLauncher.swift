@@ -218,7 +218,7 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// they have it, and the launcher's own keys are set after it, so one of those keeps its own
     /// value; either way the launch goes without threads. A launch that sets it also leaves
     /// `nonessentialVariable` out, which threads want (below); one that sets none keeps it, so
-    /// off sends nothing beside the turns.
+    /// off sends Anthropic nothing beside the turns but the account's profile and connectors.
     public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, threads: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
@@ -252,7 +252,8 @@ public struct ClaudeLauncher: ResidentLauncher {
     }
 
     /// The guest's switch for Claude Code's traffic beside its turns, which a launch with threads
-    /// takes away (`Guest.environment` sets it for every other program the guest runs).
+    /// takes away (`Guest.environment` sets it for every other program the app starts in the guest;
+    /// what the resident starts inherits the resident's).
     public static let nonessentialVariable = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 
     /// What the threads variable is set to: the one value, whatever its name.

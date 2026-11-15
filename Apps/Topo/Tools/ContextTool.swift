@@ -48,9 +48,10 @@ struct ContextTool: Tool {
                                         side, encrypted in memory, up to an hour after its last request, with no way to
                                         delete it sooner, and outside zero data retention; and Claude Code also sends
                                         usage telemetry to Anthropic and Datadog (which features ran, timings, memory,
-                                        with this phone's device id and the session's id), fetches its feature flags
-                                        from Anthropic and reads the public MCP registry's list. Off sends none of that,
-                                        and every request carries the whole conversation. Kept on this phone; it holds
+                                        with the Anthropic account's and organisation's ids, the session's id and an id
+                                        it keeps for this install), asks Anthropic for its feature flags naming the
+                                        account and plan, and reads the public MCP registry's list. Off sends none of
+                                        that, and every request carries the whole conversation. Kept on this phone; it holds
                                         from this turn's end, since your process is replaced then
     topo context threads variable <NAME|default>
                                         the variable your launch sets to 1 to ask Claude Code for threads, if Claude

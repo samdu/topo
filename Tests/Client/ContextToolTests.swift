@@ -47,7 +47,7 @@ final class ContextToolTests: XCTestCase {
         XCTAssertTrue(shown.text.contains("up to an hour after the last request; no delete; not zero data retention"), shown.text)
         // What else on sends, and to whom, so the mind can say it to its person.
         XCTAssertTrue(shown.text.contains("also sent: \(MessageThreads.alsoSent)\noff: \(MessageThreads.whenOff)\n"), shown.text)
-        for named in ["Anthropic", "Datadog", "feature flags", "public MCP registry", "device id", "session's id"] {
+        for named in ["Anthropic", "Datadog", "feature flags", "public MCP registry", "account and organisation ids", "session's id", "plan"] {
             XCTAssertTrue(MessageThreads.alsoSent.contains(named), named)
         }
         XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
