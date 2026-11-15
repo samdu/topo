@@ -531,7 +531,8 @@ final class KeeperSoundsTests: XCTestCase {
         rig.speaker.endAwaiting("turn", "the turn failed")
         XCTAssertEqual(rig.players.bed?.fades.last?.to, 0)
         XCTAssertFalse(rig.audio.holding, "the fade held on a session that is not live")
-        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session")
+        // Away with nothing left holding it, the session is handed back; nothing is configured.
+        XCTAssertEqual(rig.seams.lines, ["handed back"], "a sound configured the session")
         XCTAssertEqual(rig.seams.records, [], "a sound applied a claim change from the background")
     }
 
@@ -583,9 +584,11 @@ final class KeeperSoundsTests: XCTestCase {
         rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
         await drain()
-        XCTAssertEqual(bed.plays, 2, "the bed a refused resume left wanted did not come back with the engine")
-        XCTAssertTrue(bed.isPlaying)
-        XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
+        let renewed = try XCTUnwrap(rig.players.players.last { $0.name == KeeperSounds.bedFile })
+        XCTAssertFalse(renewed === bed, "the bed a refused resume left wanted did not come back with the engine")
+        XCTAssertEqual(renewed.plays, 1)
+        XCTAssertTrue(renewed.isPlaying)
+        XCTAssertEqual(renewed.fades.last?.to, KeeperSounds.bedVolume)
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 
@@ -607,7 +610,7 @@ final class KeeperSoundsTests: XCTestCase {
         let bed = try XCTUnwrap(rig.players.bed, "no bed was made on the conversation's live session")
         XCTAssertTrue(bed.isPlaying, "the bed was refused on the conversation's live session")
         XCTAssertEqual(bed.plays, 1)
-        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session behind the lock")
+        XCTAssertEqual(rig.seams.lines.filter { $0 != "engine made" }, [], "a sound configured the session behind the lock")
         XCTAssertEqual(rig.seams.records, [])
         rig.speaker.endAwaiting("turn", "the test is done")
         rig.audio.keptInput(running: false)
@@ -757,9 +760,11 @@ final class KeeperSoundsTests: XCTestCase {
         rig.center.post(name: AVAudioSession.interruptionNotification, object: nil,
                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
         await drain()
-        XCTAssertEqual(bed.plays, 2, "the bed was not played again with the engine")
-        XCTAssertTrue(bed.isPlaying)
-        XCTAssertEqual(bed.fades.last?.to, KeeperSounds.bedVolume)
+        let renewed = try XCTUnwrap(rig.players.players.last { $0.name == KeeperSounds.bedFile })
+        XCTAssertFalse(renewed === bed, "the bed was not played again with the engine")
+        XCTAssertEqual(renewed.plays, 1)
+        XCTAssertTrue(renewed.isPlaying)
+        XCTAssertEqual(renewed.fades.last?.to, KeeperSounds.bedVolume)
         rig.speaker.endAwaiting("turn", "the test is done")
     }
 

@@ -119,7 +119,7 @@ final class KeptInputTests: XCTestCase {
         let voice = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
-                               permission: { true },
+                               permission: { true }, permitted: { true },
                                voiceProcessing: { try seams.process($0, $1) },
                                defaults: defaults())
         watch.voice = voice
@@ -323,16 +323,19 @@ final class KeptInputTests: XCTestCase {
         rig.speaker.stop()
     }
 
-    /// In front, the stop hands nothing back: the session is configured for what is claimed at
-    /// the next path, and nothing is reconfigured under the running input before the stop.
-    func testInFrontTheKeptInputsStopHandsNothingBack() async {
+    /// In front, a claim change made under the kept input waits for its stop, and is applied
+    /// there with the input already stopped: the session is reactivated for what is claimed, and
+    /// nothing is reconfigured under the running input before the stop.
+    func testInFrontTheKeptInputsStopAppliesTheClaimWithTheInputStopped() async {
         let (rig, _) = await rig()
         await converse(rig)
         rig.audio.wantRecord(false, for: .warm)
         rig.speaker.endAwaiting("a-turn", "the test's turn is over")
         XCTAssertTrue(rig.watch.underInput.isEmpty, "\(rig.watch.underInput)")
+        rig.seams.forget()
         rig.voice.stopKeptInput("the conversation ended")
-        XCTAssertEqual(rig.watch.atHandBack, [])
+        XCTAssertEqual(rig.watch.atHandBack, [false], "the claim was not applied once with the input stopped")
+        XCTAssertEqual(rig.seams.lines.last, "activate ok", "in front the session was left handed back")
         XCTAssertTrue(rig.watch.underInput.isEmpty, "\(rig.watch.underInput)")
         rig.speaker.stop()
     }

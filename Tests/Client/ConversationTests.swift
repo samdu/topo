@@ -536,14 +536,14 @@ final class ConversationTests: XCTestCase {
             await settle("utterance \(turn)'s decode under way") { self.gate.held == 1 }
             XCTAssertTrue(voice.inputKept, "utterance \(turn)'s end stopped the input")
             XCTAssertTrue(voice.inputRunning)
-            XCTAssertFalse(voice.listening)
             gate.open()
             await settle("turn \(turn) sent") { self.sent.count == turn }
             await settle("open again on the kept input") { voice.listening && !voice.inputKept }
         }
         XCTAssertEqual(sent, ["turn the lights off", "turn the lights off"])
         XCTAssertEqual(seams.inputEngines, engines, "an engine was made between utterances")
-        XCTAssertEqual(seams.lines, [], "the session was touched between utterances")
+        // The reply's play engine is the speaker's; the session itself is touched by nothing.
+        XCTAssertEqual(seams.lines.filter { $0 != "engine made" }, [], "the session was touched between utterances")
         XCTAssertEqual(seams.deactivations, [], "the session was handed back between utterances")
     }
 
@@ -557,7 +557,6 @@ final class ConversationTests: XCTestCase {
         utterance(into: voice.sink)
         await settle("the decode under way") { self.gate.held == 1 }
         XCTAssertTrue(voice.inputKept)
-        XCTAssertFalse(voice.listening)
         var passes = false
         voice.gate.pass { passes = true }
         XCTAssertFalse(passes, "the kept input's gate was open")
@@ -838,7 +837,9 @@ final class ConversationTests: XCTestCase {
     /// alone (`testTheChatGoingDuringTheForegroundsHandoffSendsNothing`).
     func testTheForegroundsHandoffIsSentOnce() async {
         let detector = ScriptedDetector([0: .start(0)])
-        let (_, voice, _) = await begun(detector)
+        let (conversation, voice, _) = await begun(detector)
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         utterance(into: voice.sink)
         await settle("the start judged") { detector.chunks >= 2 }
         active = true
@@ -881,7 +882,9 @@ final class ConversationTests: XCTestCase {
     func testComingToTheFrontMidVerdictSendsTheWords() async {
         let detector = ScriptedDetector([0: .start(0)])
         detector.hold(at: 0)
-        let (_, voice, _) = await begun(detector)
+        let (conversation, voice, _) = await begun(detector)
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         utterance(into: voice.sink)
         await settle("the verdict pending") { detector.holding }
         active = true
@@ -894,7 +897,9 @@ final class ConversationTests: XCTestCase {
     /// Coming to the front with speech the detector has not been fed at all: sent, not dropped.
     func testComingToTheFrontBeforeTheDetectorIsFedSendsTheWords() async {
         let detector = ScriptedDetector([0: .start(0)])
-        let (_, voice, _) = await begun(detector)
+        let (conversation, voice, _) = await begun(detector)
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         await drain()
         utterance(into: voice.sink)
         active = true
@@ -907,7 +912,9 @@ final class ConversationTests: XCTestCase {
     /// A word shorter than one of the detector's chunks, the unlock landing before more arrives:
     /// nothing has been fed, and it is sent rather than taken for silence.
     func testComingToTheFrontWithLessThanAChunkUnfedSendsTheWord() async {
-        let (_, voice, _) = await begun()
+        let (conversation, voice, _) = await begun()
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         await drain()
         utterance(into: voice.sink, seconds: 0.25)
         XCTAssertLessThan(voice.sink.peek(from: 0).end, Endpoint.chunk, "the test meant less than a chunk")

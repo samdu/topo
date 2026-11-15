@@ -713,7 +713,7 @@ final class EarconsTests: XCTestCase {
         XCTAssertTrue(rig.earcons.play(.sent))
         XCTAssertFalse(rig.audio.holding, "a cue held alone")
         rig.audio.wantRecord(false, for: .warm)
-        XCTAssertEqual(rig.seams.lines, ["activate ok"], "the claim waited on the cue")
+        XCTAssertEqual(rig.seams.lines, ["handed back", "activate ok"], "the claim waited on the cue")
         rig.cues.players.last?.finish()
         XCTAssertFalse(rig.audio.holding)
     }
