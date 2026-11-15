@@ -139,7 +139,8 @@ struct ContextTool: Tool {
             lines.append(line)
         }
         let onThread = facts.sent.filter { $0.kind == .create || $0.kind == .continue }.count
-        lines.append(onThread == 0 ? "on a thread: none of these" : "on a thread: \(onThread) of \(facts.sent.count)")
+        let newest = facts.sent[facts.sent.count - 1].kind.rawValue
+        lines.append((onThread == 0 ? "on a thread: none of these" : "on a thread: \(onThread) of \(facts.sent.count)") + "; the newest: \(newest)")
         return lines.joined(separator: "\n") + "\n"
     }
 

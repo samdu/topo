@@ -47,13 +47,13 @@ final class ContextToolTests: XCTestCase {
         XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  3 s ago  continue  39975 bytes  404 (the thread had gone"), shown.text)
         XCTAssertTrue(shown.text.contains("  2 s ago  create  600500 bytes  waiting\n"), shown.text)
-        XCTAssertTrue(shown.text.hasSuffix("on a thread: 4 of 4\n"), shown.text)
+        XCTAssertTrue(shown.text.hasSuffix("on a thread: 4 of 4; the newest: create\n"), shown.text)
 
         phone.facts.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_WRONG_NAME")
         phone.facts.sent = [ThreadLog.Sent(at: now - 1, bytes: 600_900, kind: .none, status: 200)]
         let dead = await tool(phone).run(["threads"])
         XCTAssertTrue(dead.text.hasPrefix("threads: on, asked for with CLAUDE_CODE_WRONG_NAME=1 (renamed on this phone)"), dead.text)
-        XCTAssertTrue(dead.text.hasSuffix("on a thread: none of these\n"), dead.text)
+        XCTAssertTrue(dead.text.hasSuffix("on a thread: none of these; the newest: none\n"), dead.text)
 
         phone.facts.sent = []
         let none = await tool(phone).run(["threads"])
