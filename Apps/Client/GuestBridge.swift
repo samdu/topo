@@ -302,6 +302,12 @@ actor GuestBridge: Brain {
     private var asking = false
     /// Nonces whose words, still on their way to the guest, are to stop there (`stopHearing`).
     private var stopping: Set<String> = []
+    /// Words taken back (`claim`, `withdrawn`): never given, by any hear after, until a claim
+    /// that came to nothing hands them back. Not cleared by a hear's end, as `stopping` is.
+    private var takenBack: Set<String> = []
+
+    /// Whether words under `nonce` are not to be given now: stopped for this hear, or taken back.
+    private func halted(_ nonce: String) -> Bool { stopping.contains(nonce) || takenBack.contains(nonce) }
     private var queue: [CheckedContinuation<Void, Never>] = []
     private var warming = false
     /// Which session and process wrote each reply this bridge returned, by its nonce.
@@ -803,10 +809,10 @@ actor GuestBridge: Brain {
         asking = true
         var flying = false
         defer { if !flying { release() } }
-        guard self.login == login, !stopping.contains(nonce), readLedger() else { return false }
+        guard self.login == login, !halted(nonce), readLedger() else { return false }
         // An input a killed launch left with its end unknown is read off the transcript first:
         // one the guest never received is sent now, and not held as heard.
-        guard await settleEarly(), self.login == login, !stopping.contains(nonce) else { return false }
+        guard await settleEarly(), self.login == login, !halted(nonce) else { return false }
         if holds(nonce) { return true }
         guard ledger.settled?.contains(nonce) != true else { return false }
         promote()
@@ -833,7 +839,7 @@ actor GuestBridge: Brain {
         guard (try? await conversation.ready()) != nil else { return false }
         Perf.mark("turn.bridge.guestReady")
         let session = await conversation.sessionID()
-        guard self.login == login, !stopping.contains(nonce) else { return false }
+        guard self.login == login, !halted(nonce) else { return false }
         let fresh = session == nil || session != ledger.session
         // A session with nothing of the conversation in it, and no read of the log to tell it:
         // the words wait for the read rather than be answered by a guest that knows none of it.
@@ -864,7 +870,7 @@ actor GuestBridge: Brain {
             return false
         }
         let pid = await conversation.residentPID()
-        guard self.login == login, !stopping.contains(nonce) else {
+        guard self.login == login, !halted(nonce) else {
             if self.login == login { drop(id) }
             return false
         }
@@ -986,7 +992,7 @@ actor GuestBridge: Brain {
     func withdrawn(nonce: String) async {
         // Whether or not a hear is under way: one that reaches the bridge after this, from a
         // giving of the line that read the line before the words came off it, sends nothing.
-        stopping.insert(nonce)
+        takenBack.insert(nonce)
         // A bound input's turn is in the log, and what is in the log is said.
         guard readLedger(), ledger.early?.contains(where: { $0.person == nonce && $0.bound == nil }) == true else { return }
         ledger.early?.removeAll { $0.person == nonce && $0.bound == nil }
@@ -1001,12 +1007,12 @@ actor GuestBridge: Brain {
     func claim(nonce: String) async -> Bool {
         guard readLedger(), ledger.early?.contains(where: { $0.person == nonce }) != true,
               ledger.pending?.person != nonce else { return false }
-        stopping.insert(nonce)
+        takenBack.insert(nonce)
         return true
     }
 
     func unclaim(nonce: String) async {
-        if hearing[nonce] == nil { stopping.remove(nonce) }
+        takenBack.remove(nonce)
     }
 
     /// The words given ahead, and not bound, whose guest turn was cut off with no answer: the
@@ -1140,6 +1146,7 @@ actor GuestBridge: Brain {
 
     func forget() async {
         login += 1
+        takenBack = []
         flown = [:]
         ledger = GuestLedger()
         loaded = true

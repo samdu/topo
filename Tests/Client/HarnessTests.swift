@@ -1186,23 +1186,31 @@ final class HarnessIntegrationTests: XCTestCase {
         await harness.refresh()
         await harness.answerPending()
 
-        XCTAssertEqual(try await log(db).map(\.text), ["bins?"], "the reply did not fail")
+        let failed = try await log(db).map(\.text)
+        XCTAssertEqual(failed, ["bins?"], "the reply did not fail")
         XCTAssertEqual(harness.repliesStopped, [person.ref], "the turn whose reply failed in the pass is not drawn as stopped")
         await harness.answerAgain(person.ref)
-        XCTAssertEqual(try await log(db).map(\.text), ["bins?", "Tonight."], "asking again did not bring one reply")
+        let answered = try await log(db).map(\.text)
+        XCTAssertEqual(answered, ["bins?", "Tonight."], "asking again did not bring one reply")
         XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
     }
 
-    /// A withdrawal answers with nothing between the words leaving the line and its answer: the
-    /// brain is told after, so a caller acting on the answer acts on the state it was given.
-    func testAWithdrawalDoesNotWaitOnTheBrainBeingTold() async throws {
-        let db = InMemoryRecordDatabase()
-        let harness = Harness(database: db, ensureZone: {}, defaults: makeDefaults(), brain: SlowToHearWithdrawals())
-        let nonce = harness.willSend("bins?")
-        let answered = Task { await harness.withdraw(nonce) }
-        let took = await answered.value
-        XCTAssertTrue(took)
-        XCTAssertTrue(harness.waiting.isEmpty)
+    /// A cancel clears the row of the words it cancelled and of nothing else: a row that takes
+    /// other words while the brain hears of the withdrawal keeps them.
+    func testACancelLeavesWordsTheRowTookWhileTheBrainHeardOfIt() async throws {
+        let row = NextTurn()
+        let taker = RowTaker()
+        let harness = Harness(database: InMemoryRecordDatabase(), ensureZone: {}, defaults: makeDefaults(),
+                              brain: TakesTheRowOnWithdrawal(taker: taker))
+        taker.act = { _ = row.send(heard: "second", via: harness) }
+        row.text = "first"
+        let first = try XCTUnwrap(row.send(via: harness))
+        let cancelled = await row.cancel(via: harness)
+        XCTAssertEqual(cancelled, first)
+        try await eventually("the brain heard of the withdrawal") { row.sent != nil }
+        XCTAssertNotEqual(row.sent, first)
+        XCTAssertEqual(row.text, "second", "the cancel cleared words the row took after it")
+        XCTAssertEqual(harness.owed.map(\.text), ["second"])
     }
 
     /// The reply failed and the person's turn is in the log: the words are said, so the row
@@ -3088,11 +3096,17 @@ private func lapsing(_ db: InMemoryRecordDatabase) -> @Sendable (TimeInterval) a
     }
 }
 
-/// A brain slow to hear of a withdrawal: one that waited on it would not answer in the test's time.
-private struct SlowToHearWithdrawals: Brain {
+/// What the row does when the brain hears of a withdrawal.
+@MainActor
+private final class RowTaker {
+    var act: () -> Void = {}
+}
+
+/// A brain whose hearing of a withdrawal has the row take other words, as a spoken release can
+/// while it is told.
+private struct TakesTheRowOnWithdrawal: Brain, @unchecked Sendable {
+    let taker: RowTaker
     func answer(_ request: BrainRequest) async throws -> Reply { throw CancellationError() }
-    func withdrawn(nonce: String) async {
-        try? await Task.sleep(for: .seconds(60))
-    }
-    func describe() async -> String { "slow to hear withdrawals" }
+    func withdrawn(nonce: String) async { await MainActor.run { taker.act() } }
+    func describe() async -> String { "takes the row on withdrawal" }
 }

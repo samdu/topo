@@ -1247,6 +1247,13 @@ final class Harness {
             // The guest has taken the words again: something is coming for them.
             failedNonces.remove(nonce)
             cutOffAhead.remove(nonce)
+        case .ended(let nonce, let reply) where takenBack.contains(nonce):
+            // Words taken back: whatever the guest came to for them is nobody's to draw or read.
+            _ = reply
+            if hearing == nonce {
+                dropWriting()
+                hearing = nil
+            }
         case .ended(let nonce, let reply):
             let drawn = !answeredElsewhere.contains(nonce) && !answered(nonce)
             if let reply, drawn { unsaved[nonce] = reply }
@@ -1522,11 +1529,13 @@ final class Harness {
             failure = Failure(words: Self.describe(error), source: .pass)
             if case TurnRunnerError.replyFailed(let person, let underlying) = error {
                 if case TurnRunnerError.displaced = underlying {} else { replyFailed.insert(person.ref) }
-            } else {
+            } else if !handedBack {
                 // The pass answers the log's newest turns when they are the person's, and its own
                 // errors come unwrapped: those turns are the ones whose reply has stopped, save
-                // one whose reply the guest has and the log does not yet.
-                for turn in turns.reversed().prefix(while: { $0.role == .person }) where unsaved[turn.nonce] == nil {
+                // one whose reply the guest has or is writing and the log does not yet. Not on a
+                // device that handed back: another device answers them.
+                for turn in turns.reversed().prefix(while: { $0.role == .person })
+                    where unsaved[turn.nonce] == nil && hearing != turn.nonce {
                     replyFailed.insert(turn.ref)
                 }
             }

@@ -3095,6 +3095,8 @@ extension GuestBridgeTests {
         XCTAssertTrue(claimed)
         let heard = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
         XCTAssertFalse(heard, "claimed words were given to the guest")
+        let again = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertFalse(again, "claimed words were given at the hear after a refused one")
         let other = await bridge.claim(nonce: "n2")
         XCTAssertTrue(other)
         await bridge.unclaim(nonce: "n2")
