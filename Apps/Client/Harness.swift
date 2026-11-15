@@ -1361,7 +1361,9 @@ final class Harness {
                 // This device answered: the lease is its own, and the line is given ahead again.
                 handedBack = false
                 show(reply)
-                failure = nil
+                // What this pass's write was about is in the log; a line stopped on a failure is
+                // not, and its failure stands until the drain.
+                if !hasWaiting { failure = nil }
                 await refresh()
                 // The reply is in the log, so anything the turn left in the memory goes out now.
                 await onPass?()

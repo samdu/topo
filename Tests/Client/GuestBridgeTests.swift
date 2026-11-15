@@ -1826,6 +1826,29 @@ extension GuestBridgeTests {
         XCTAssertNil(relaunched.failure, "after a relaunch the red line stands with nothing owed")
     }
 
+    /// A turn's reply is held for a save iCloud refused; iCloud then goes, and the next turn
+    /// stops the line. Back, a pass writes the first turn's reply, and the line stays up: the
+    /// second turn's words are still owed, and their last attempt failed.
+    func testAPassThatWritesAnOwedReplyLeavesAStoppedLinesFailureUp() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris."), .reply("Berlin.")])
+        let (harness, _) = harness(db, guest)
+        await harness.refresh()
+        await db.refuseReplies(true)
+        await harness.send("capital of France?")
+        XCTAssertTrue(harness.waiting.isEmpty, "the first turn's words did not land")
+        await db.refuseReplies(false)
+        await db.away(true)
+        await harness.send("and Germany?")
+        XCTAssertEqual(harness.waiting, ["and Germany?"])
+        let stopped = try XCTUnwrap(harness.failure, "the stopped line put nothing up")
+        await db.away(false)
+        await harness.answerPending()
+        XCTAssertEqual(harness.turns.last?.text, "Paris.", "the pass did not write the owed reply")
+        XCTAssertEqual(harness.waiting, ["and Germany?"])
+        XCTAssertEqual(harness.failure, stopped, "the pass took down the line with a turn's words still owed")
+    }
+
     /// The phone hands a turn to the hub with its guest's reply made, then answers it after all
     /// once the hub's lease lapses, and that reply's save is refused: the phone owes the log it,
     /// whatever the hand-back said. A pass that fails puts its line up, and a pass that completes
