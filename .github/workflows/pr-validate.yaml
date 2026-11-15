@@ -317,6 +317,7 @@ jobs:
             scripts/tests/fetch-phonon-test.sh scripts
             scripts/tests/mac-suite-test.sh scripts
             scripts/tests/maps-opens-nothing-test.sh scripts
+            scripts/tests/places-no-call-test.sh scripts
             scripts/model-manifest.sh others
             scripts/tests/model-manifest-test.sh scripts
             scripts/perf-run.sh scripts

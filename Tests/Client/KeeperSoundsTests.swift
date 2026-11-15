@@ -116,7 +116,7 @@ final class KeeperSoundsTests: XCTestCase {
         if let mode { defaults.set(mode.rawValue, forKey: WorkingSounds.key) }
         // The keeper's sounds alone unless a test asks: the earcons' own failure cue is theirs.
         defaults.set(earcons, forKey: EarconsSetting.key)
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { isActive })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { isActive })
         let players = WorkingRecorder()
         let clock = PausedSleep()
         let sounds = KeeperSounds(audio: audio, defaults: defaults, bundle: Bundle(for: KeeperSounds.self),
@@ -591,32 +591,26 @@ final class KeeperSoundsTests: XCTestCase {
 
     // MARK: - The bed
 
-    /// Under `sounds`, a conversation behind the lock on an active call: the utterance's end
-    /// drops the chat's claim and closes the microphone ahead of the turn's hold, and the bed is
-    /// played for the wait on the call's live session, configuring nothing. Placed and not yet
-    /// activated, the session is not live and the bed is refused.
-    func testTheBedPlaysOnTheCallsLiveSessionUnderAConversation() async throws {
+    /// Under `sounds`, a conversation behind the lock on the session it activated in front: the
+    /// utterance's end closes the microphone ahead of the turn's hold, the conversation's input
+    /// kept running, and the bed is played for the wait on that live session, configuring nothing.
+    func testTheBedPlaysOnTheConversationsLiveSessionBehindTheLock() async throws {
         let rig = await rig(mode: .sounds, isActive: false)
         rig.audio.wantRecord(true, for: .chat)
-        rig.audio.wantAlive(true, for: .awaitingReply("before"))
-        rig.audio.callPlaced()
-        rig.sounds.working(true)
-        XCTAssertNil(rig.players.bed, "a bed was made on a call not yet activated")
-        rig.audio.callActivated()
+        try rig.audio.ensureActive()
         rig.audio.microphone(open: true)
-        rig.audio.wantAlive(false, for: .awaitingReply("before"))
         rig.seams.forget()
 
-        rig.audio.wantRecord(false, for: .chat)
+        rig.audio.keptInput(running: true)
         rig.audio.microphone(open: false)
         _ = rig.speaker.awaitReply("turn", readAloud: true)
-        rig.audio.microphone(open: true)
-        let bed = try XCTUnwrap(rig.players.bed, "no bed was made on the call's live session")
-        XCTAssertTrue(bed.isPlaying, "the bed was refused on the call's live session")
+        let bed = try XCTUnwrap(rig.players.bed, "no bed was made on the conversation's live session")
+        XCTAssertTrue(bed.isPlaying, "the bed was refused on the conversation's live session")
         XCTAssertEqual(bed.plays, 1)
-        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session beside the call")
+        XCTAssertEqual(rig.seams.lines, [], "a sound configured the session behind the lock")
         XCTAssertEqual(rig.seams.records, [])
         rig.speaker.endAwaiting("turn", "the test is done")
+        rig.audio.keptInput(running: false)
     }
 
     /// Under `sounds` the bed fades in from the release and out at the reply's first frame, once,

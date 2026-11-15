@@ -4647,7 +4647,7 @@ extension GuestBridgeTests {
         await harness.answerPending()
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: ScriptedVoice())
         voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }

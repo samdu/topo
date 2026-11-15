@@ -19,7 +19,6 @@ struct TopoApp: App {
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
-    @State private var callDriver: SpokenCallDriver
     @State private var conversation: Conversation
     private let endpoint: Endpoint
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
@@ -174,15 +173,9 @@ struct TopoApp: App {
         let sounds = KeeperSounds(audio: audio)
         sounds.follow(harness)
         let speaker = Speaker(audio: audio, voice: spoken, sounds: sounds, earcons: Earcons(audio: audio))
-        // A spoken exchange behind the lock is a call: placed while a hold stands with the
-        // app in the background, ended as the app comes forward (`SpokenCall`).
-        let call = SpokenCall()
-        speaker.attach(call)
-        call.judged(on: audio, voice: voice)
-        let callDriver = SpokenCallDriver(call: call)
-        speaker.onHold = { [weak audio] in callDriver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
-        speaker.onMicrophone = { callDriver.microphoneChanged($0) }
-        _callDriver = State(initialValue: callDriver)
+        // A wait behind the lock stands past the ceiling only while a turn is running and the
+        // wait is heard: the bed under Sounds, or a conversation's microphone (`Speaker.capped`).
+        speaker.turnRunning = { [weak harness] in harness?.turnOpen ?? false }
         // The ear first: the voice's compile waits while the ear is to be fetched or compiling,
         // and goes when its compile ends. A debug stand-in ear, which may load for ever, holds
         // nothing back.
@@ -202,20 +195,17 @@ struct TopoApp: App {
         // The working bed waits for a release's utterance to be taken before it begins.
         voice.onTaken = { [weak speaker] in speaker?.utteranceTaken() }
         // An open hands-free spoken turn as the app goes behind the lock goes on as a
-        // conversation over the call: the call is placed for it, the resident stays up for it,
-        // and the microphone is suspended across the session changing hands, at whichever of
-        // the interruption's start and the call's placing comes first.
+        // conversation on the session it was activated on in front: the resident stays up for
+        // it, and the microphone is suspended across an interruption and resumed at its end.
         let endpoint = Endpoint()
         self.endpoint = endpoint
         let calls = CXCallObserver()
         let conversation = Conversation(voice: voice, speaker: speaker, endpoint: endpoint,
                                         holding: { [weak audio] in audio?.holding ?? false },
-                                        otherCall: { calls.calls.contains { !$0.hasEnded && $0.uuid != call.id } })
-        speaker.onCall = {
-            voice.call($0)
-            conversation.call($0)
+                                        otherCall: { calls.calls.contains { !$0.hasEnded } })
+        speaker.waitCarried = { [weak conversation] in
+            (WorkingSounds.mode() == .sounds && Mute.readsAloud()) || conversation?.on == true
         }
-        conversation.conversingChanged = { callDriver.conversingChanged($0) }
         voice.carries = { [weak conversation] in
             guard let conversation else { return false }
             // An interruption over a conversation in front (a phone call, the app still active)
@@ -345,8 +335,8 @@ struct TopoApp: App {
                 if signIn.phase == .signedIn { shares.follow(from: .signedIn, to: .signedIn, guestIsHere: owner) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
-                // Said in the audio log beside the call driver's own source, UIKit's, so a run
-                // says which of the two the lock reached first.
+                // Said in the audio log beside the interruption the lock posts, so a run says
+                // which of the two the lock reached first.
                 AudioLog.say("scene \(phase)")
                 audio.warmRecord(phase == .active)
                 if phase == .active {

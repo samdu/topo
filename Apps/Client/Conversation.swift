@@ -1,21 +1,24 @@
 #if os(iOS)
+import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
 
 /// A microphone tapped open hands-free on a spoken turn is a conversation: Topo keeps listening,
 /// ends each utterance itself when the person stops speaking (`Endpoint`), sends it through the
-/// chat's own send, closes the microphone while it reads the reply, and opens it again when the
-/// reading is done. It runs in two places. In front (`inFront`) it places no call (one already up
-/// stays up under it, as under any open microphone, and it runs on that call's session; with
-/// none it runs on the app's own, while the app is active), begun by the tap, and ended by any press of the microphone but Stop (a tap on the
-/// open microphone sends what it heard and closes it), the keyboard, the chat going, an
-/// interruption, or leaving the front with nothing to carry it. Behind the lock it is a call: with
-/// *Call for spoken replies* on, a session or a front conversation open as Topo leaves the front
-/// is carried into the call (`SpokenCall`) rather than dropped, and it ends at a hang-up from the
-/// card, when Topo comes back to the front, or when the call is over by any other way. Either ends
-/// after `idle` with nothing said; ending one behind the lock lets the call go, hands the session
-/// back, and lets the resident be frozen (`GuestLifecycle.conversing`).
+/// chat's own send, shuts the microphone's gate while it reads the reply, and opens it again when
+/// the reading is done. Its input engine runs from the conversation's start to its end and is
+/// never stopped for a reply (Daphne's half-duplex: `VoiceInput.end(keepingInput:)`,
+/// `VoiceInput.reopen`), so behind the lock no input is started from the background but the
+/// resume after an interruption's end. It runs in two places. In front (`inFront`), on the app's
+/// own session while the app is active, begun by the tap, and ended by any press of the microphone
+/// but Stop (a tap on the open microphone sends what it heard and closes it), the keyboard, the
+/// chat going, an interruption, or leaving the front with nothing to carry it. Behind the lock, a
+/// session or a front conversation open as Topo leaves the front is carried on the session it was
+/// activated on in front, and the running input is what keeps the process alive under the
+/// `audio` mode; it ends when Topo comes back to the front. Either ends after `idle` with nothing
+/// said; ending one behind the lock hands the session back and lets the resident be frozen
+/// (`GuestLifecycle.conversing`).
 ///
 /// One object for the app, started beside `MicrophoneWatch`, outside any view: behind the lock
 /// nothing is drawn, so nothing it needs may live in a view's `onChange`.
@@ -33,23 +36,22 @@ final class Conversation {
     /// cannot judge would otherwise never end.
     static let failuresTolerated = 9
     /// Listening this long with no samples arriving is a dead engine (a route change stops it
-    /// under the call): the session is suspended and rebuilt, and a second time running ends
+    /// with nothing to say so): the session is suspended and rebuilt, and a second time running ends
     /// the conversation.
     static let deafAfter: TimeInterval = 2
 
     private(set) var on = false
     /// The conversation is in front, on the app's own session, which a reopen may activate as a
-    /// press does; no call is placed for it until the app leaves the front.
+    /// press does.
     private(set) var inFront = false
 
     @ObservationIgnored private let voice: VoiceInput
     @ObservationIgnored private let speaker: Speaker
     @ObservationIgnored private let endpoint: Endpoint
-    @ObservationIgnored private let enabled: @MainActor () -> Bool
     @ObservationIgnored private let appActive: @MainActor () -> Bool
     @ObservationIgnored private let holding: @MainActor () -> Bool
-    /// Whether a call other than Topo's is up: a phone call the person is on. Topo's call placed
-    /// over one would put it on hold, so nothing is carried while one is.
+    /// Whether a phone call the person is on is up (`CXCallObserver`): its session is the call's,
+    /// so nothing is carried while one is.
     @ObservationIgnored private let otherCall: @MainActor () -> Bool
     @ObservationIgnored private let deafLimit: TimeInterval
     /// Times running the microphone was found deaf with no samples since: the second ends it.
@@ -74,19 +76,17 @@ final class Conversation {
     /// The chat's answer to whether the open session's own destination is a send
     /// (`Dictation.sends`): dictation into the draft is never carried.
     var sends: (@MainActor () -> Bool)?
-    /// Told the conversation's one fact for the call (`SpokenCallDriver.conversingChanged`).
-    var conversingChanged: @MainActor (Bool) -> Void = { _ in }
     /// Told once each conversation has ended (`GuestLifecycle.conversationEnded`).
     var ended: @MainActor () -> Void = {}
 
-    /// Whether the call's session is active: from its activation until a phone call takes it or
-    /// the call is over. Behind the lock the microphone is opened only on it, since a session
-    /// activated from the background without a call is refused and left invalid.
-    private var callUp = false
-    /// Whether the microphone may open, resume and take the go-ahead: on the call's live session
-    /// behind the lock, or on the app's own in front while the app is active. A front conversation
-    /// the lock is carrying (the app inactive, the call not yet live) waits for the call.
-    private var live: Bool { callUp || (inFront && appActive()) }
+    /// Whether an interruption has taken the session (a phone call, Siri, the lock's own `.began`)
+    /// and not yet ended: from its `.began` to its `.ended`.
+    private var interrupted = false
+    /// Whether the microphone may open, resume and take the go-ahead: in front while the app is
+    /// active; behind the lock on the session the conversation was carried on, while no
+    /// interruption has it. A front conversation at an inactive moment (Control Center, a lock
+    /// on its way) waits for the app to be active again or the background to carry it.
+    private var live: Bool { inFront ? appActive() : !interrupted }
     /// The session a front conversation was ended on: it never begins another, so a press's end
     /// does not see the session it is ending as a tap's to begin one for.
     private var frontEndedOn: Int?
@@ -122,13 +122,11 @@ final class Conversation {
     /// From a stop that sends what is open until that send has decoded it: the session is the
     /// stop's, and nothing else drops it.
     private var handingOff = false
-    /// Set by a hang-up or a mute while that send is decoding: its words go nowhere.
+    /// Set by the chat going while that send is decoding: its words go nowhere.
     private var dropHandoff = false
-    /// The card's mute: the microphone closed and kept closed until the unmute.
-    private var muted = false
     private var lastEnd: Date?
     /// The go-ahead is owed: the conversation began, an utterance was sent, a reply waited for
-    /// the microphone or was read, or the card unmuted it; paid once the microphone is open, the
+    /// the microphone or was read; paid once the microphone is open, the
     /// detector has judged what it holds, nobody is speaking and nothing is on its way, at an
     /// utterance's start or as the last of those clears (Daphne's `cueOwed`).
     private var goAheadOwed = false
@@ -139,12 +137,11 @@ final class Conversation {
     /// is its quiet counted for the judge, as Daphne's judge runs only on a turn an ungated onset
     /// opened. A tone's own onset, inside its gate, opens nothing for the judge to end.
     private(set) var heardOnset = false
-    /// Which of the lock's two moments came first, for the log: the interruption's start or the
-    /// call's placing.
+    /// Whether the microphone came off at the interruption's start before the conversation began
+    /// behind the lock, for the log.
     private var firstOff: String?
 
     init(voice: VoiceInput, speaker: Speaker, endpoint: Endpoint,
-         enabled: @escaping @MainActor () -> Bool = { SpokenCallSetting.enabled() },
          appActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active },
          holding: @escaping @MainActor () -> Bool,
          otherCall: @escaping @MainActor () -> Bool = { false },
@@ -156,7 +153,6 @@ final class Conversation {
         self.voice = voice
         self.speaker = speaker
         self.endpoint = endpoint
-        self.enabled = enabled
         self.appActive = appActive
         self.holding = holding
         self.otherCall = otherCall
@@ -174,6 +170,13 @@ final class Conversation {
             center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.becameActive() }
             },
+            // Both ends of an interruption: the start marks the session taken (the microphone is
+            // suspended by `VoiceInput`), and the end is when iOS gives it back.
+            center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+                guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+                MainActor.assumeIsolated { self?.interruption(began: type == .began) }
+            },
         ]
         speaker.sounds?.toneSounded = { [weak self] tone, length in self?.toneSounded(tone, length) }
         watch()
@@ -182,15 +185,15 @@ final class Conversation {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     /// Whether the open session is one the lock carries rather than drops: the chat's microphone
-    /// open hands-free on a spoken turn, the setting on, the detector loaded, the chat's send
-    /// installed, no phone call up, and the app not in front (UIKit's word, read now: SwiftUI's
+    /// open hands-free on a spoken turn, the detector loaded, the chat's send installed, no phone
+    /// call up, and the app not in front (UIKit's word, read now: SwiftUI's
     /// phase lags it).
     func carries() -> Bool {
         if on, !inFront { return true }
         // A front conversation carries where the lock would carry a session: the app no longer
-        // in front, the setting on, and no phone call up.
-        if on { return !appActive() && enabled() && !otherCall() }
-        return voice.listening && voice.owner == .chat && voice.handsFree && enabled()
+        // in front and no phone call up.
+        if on { return !appActive() && !otherCall() }
+        return voice.listening && voice.owner == .chat && voice.handsFree
             && endpoint.ready && send != nil && sends?() == true && !appActive() && !otherCall()
     }
 
@@ -202,12 +205,15 @@ final class Conversation {
         if on, !inFront { return true }
         if on {
             guard carries() else {
-                stop("Topo left the front with no call to carry it", sending: false, keepingDecode: true)
+                stop("Topo left the front with nothing to carry it", sending: false, keepingDecode: true)
                 return false
             }
             inFront = false
             voice.glancing = false
             AudioLog.say("conversation: carried behind the lock")
+            // A reopen refused at the inactive moment before the background (no live session in
+            // front) is owed now that the carried session is the one asked of.
+            react()
             return true
         }
         guard carries() else { return false }
@@ -220,17 +226,15 @@ final class Conversation {
         judge = endpoint.judge
         AudioLog.say("conversation: \(endpoint.judgeLine)")
         freshUtterance()
-        muted = false
         deafStrikes = 0
         failures = 0
         // A feeder of the last conversation still waiting on a verdict is not this one's.
         feederSerial += 1
         restartIdle()
-        conversingChanged(true)
-        // Suspended at the interruption's start, it waits for the call's activation; still
+        // Suspended at the interruption's start, it waits for the interruption's end; still
         // running, the detector is fed what the press has heard so far.
         if voice.suspended {
-            if callUp { resumeOnTheCall() }
+            if live { resume() }
         } else {
             startFeeding(reset: true)
         }
@@ -242,14 +246,13 @@ final class Conversation {
     /// (`VoiceInput.drop`).
     func scene(_ phase: ScenePhase) {
         guard phase != .active, !carries() else { return }
-        if on, inFront { return stop("Topo left the front with no call to carry it", sending: false, keepingDecode: true) }
+        if on, inFront { return stop("Topo left the front with nothing to carry it", sending: false, keepingDecode: true) }
         voice.drop(.chat)
     }
 
     /// Whether the chat's open session begins a conversation in front: hands-free on a spoken
     /// turn (`sends`, so dictation into the draft never does), the detector loaded, the chat's
-    /// send installed, the app in front and no phone call up. *Call for spoken replies* is not
-    /// asked: it is the call's, and the front makes none.
+    /// send installed, the app in front and no phone call up.
     private var beginsInFront: Bool {
         !on && voice.listening && !voice.suspended && !voice.ending && voice.owner == .chat && voice.handsFree
             && voice.generation != frontEndedOn && endpoint.ready && send != nil && sends?() == true
@@ -268,12 +271,10 @@ final class Conversation {
         judge = endpoint.judge
         AudioLog.say("conversation: \(endpoint.judgeLine)")
         freshUtterance()
-        muted = false
         deafStrikes = 0
         failures = 0
         feederSerial += 1
         restartIdle()
-        conversingChanged(true)
         startFeeding(reset: true)
     }
 
@@ -284,56 +285,17 @@ final class Conversation {
         stop("a press of the microphone", sending: false, leaving: true)
     }
 
-    /// The call's moments, from the speaker (`Speaker.onCall`).
-    func call(_ moment: Speaker.CallMoment) {
-        switch moment {
-        case .placing:
-            callUp = false
-            if voice.listening, voice.owner == .chat, carries() {
-                if firstOff == nil { firstOff = "the call's placing" }
-                voice.suspend("the call's placing")
-            }
-        case .active:
-            callUp = true
-            guard on else { return }
-            // A suspended session being decoded resumes nothing: the decode ends it, and the
-            // microphone opens again after.
-            if voice.suspended, !endingUtterance, !muted { resumeOnTheCall() } else { react() }
-        case .taken:
-            callUp = false
-            if on, voice.listening { voice.suspend("the call's session was taken") }
-        case .hungUp:
-            callUp = false
-            dropWhatIsDecoding()
-            stop("hung up from the call", sending: false)
-        case .ending:
-            // The microphone's own moment; the conversation ends at `.over`, just after.
-            break
-        case .over:
-            callUp = false
-            stop("the call is over", sending: true)
-        case .muted(let isMuted):
-            muted = isMuted
-            if isMuted { dropWhatIsDecoding() }
-            guard on else { return }
-            if isMuted {
-                // What is open goes unsent: the person muted it.
-                feeder?.cancel()
-                feeder = nil
-                // Opening counts: a cancel moves the generation, so a reopen waiting on its
-                // permission opens nothing.
-                if voice.owner == .chat, !endingUtterance { voice.cancel(.chat) }
-                AudioLog.say("conversation: muted from the card; the microphone is closed")
-            } else {
-                AudioLog.say("conversation: unmuted from the card")
-                goAheadOwed = true
-                restartIdle()
-                react()
-            }
-        }
+    /// An interruption began or ended. The start marks the session taken, whatever the app's state
+    /// (`VoiceInput` suspends a carried microphone at it); the end is iOS giving it back, and a
+    /// suspended microphone is resumed on it (`react`), behind the lock as in front.
+    private func interruption(began: Bool) {
+        interrupted = began
+        guard !began, on else { return }
+        AudioLog.say("conversation: the interruption ended")
+        react()
     }
 
-    /// The person ended it (a hang-up, a mute, the chat gone): whatever is being decoded to be
+    /// The chat went: whatever is being decoded to be
     /// sent goes nowhere — an utterance's own end, or the handoff of a stop that sends — whether
     /// or not the conversation is still on.
     private func dropWhatIsDecoding() {
@@ -341,12 +303,12 @@ final class Conversation {
         if handingOff { dropHandoff = true }
     }
 
-    private func resumeOnTheCall() {
+    private func resume() {
         guard voice.resume() else {
             AudioLog.say("conversation: the microphone did not resume; what was heard is sent")
             return stop("the microphone did not resume", sending: true)
         }
-        AudioLog.say("conversation: resumed on \(callUp ? "the call's session" : "the app's own session")")
+        AudioLog.say("conversation: resumed \(inFront ? "in front" : "behind the lock")")
         // A feeder waiting on a verdict carries on once it has it: replaced, the verdict would be
         // lost, and the detector, which has already judged that chunk, would not give it again.
         if !detecting { startFeeding(reset: fedTo == 0) }
@@ -383,11 +345,11 @@ final class Conversation {
     }
 
     /// The go-ahead, if it is owed and the microphone can take the next turn: open and running,
-    /// not muted, on a live session (`live`), with nothing on its way (Daphne's `cueIfReady`).
+    /// on a live session (`live`), with nothing on its way (Daphne's `cueIfReady`).
     /// A cue that has just sounded (the earcons') was this moment's receipt, and a second would
     /// say it twice.
     private func payGoAhead() {
-        guard goAheadOwed, on, !muted, live, voice.listening, !voice.suspended, !speaker.awaitingAny else { return }
+        guard goAheadOwed, on, live, voice.listening, !voice.suspended, !speaker.awaitingAny else { return }
         goAheadOwed = false
         if speaker.earcons?.recent(Self.earconReceipt) == true {
             return AudioLog.say("conversation: no go-ahead; a cue has just said it")
@@ -518,8 +480,8 @@ final class Conversation {
         }
     }
 
-    /// The microphone listened with nothing arriving: suspended so the call's live session
-    /// rebuilds it, once; deaf again with nothing heard since, the conversation ends with what
+    /// The microphone listened with nothing arriving: suspended so a live session rebuilds it,
+    /// once; deaf again with nothing heard since, the conversation ends with what
     /// was kept.
     private func deaf() {
         deafStrikes += 1
@@ -651,7 +613,10 @@ final class Conversation {
         feeder = nil
         AudioLog.say("conversation: ended an utterance (\(why))")
         let release = speaker.releasing()
-        let heard = await voice.end(as: .chat)
+        // The engine runs on with the gate shut (Daphne's half-duplex): the next utterance opens
+        // the gate again rather than starting an input, which behind the lock would be one
+        // started from the background.
+        let heard = await voice.end(as: .chat, keepingInput: true)
         endingUtterance = false
         let dropped = dropDecoded
         dropDecoded = false
@@ -659,7 +624,7 @@ final class Conversation {
         freshUtterance()
         if dropped {
             release.map { speaker.released($0, "its words were dropped") }
-            AudioLog.say("conversation: the utterance being decoded was dropped (hung up or muted)")
+            AudioLog.say("conversation: the utterance being decoded was dropped (the chat went)")
         } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
             // The turn sent owes the go-ahead, paid once nothing is on its way: its reply's wait,
             // taken by the send, holds it back until the reply has been read.
@@ -713,16 +678,16 @@ final class Conversation {
         if voice.listening, !voice.suspended, speaker.waitingForMicrophone, !policy.speaking, caughtUp {
             // A reply landed over an utterance with nothing said in it: the microphone closes
             // unsent, and the reply is read.
-            AudioLog.say("conversation: a reply landed over silence; the microphone closes for it")
+            AudioLog.say("conversation: a reply landed over silence; the microphone's gate shuts for it")
             feeder?.cancel()
             feeder = nil
-            voice.cancel(.chat)
+            voice.cancel(.chat, keepingInput: true)
             return
         }
-        if voice.suspended, live, !muted, !voice.ending {
-            // Suspended with a live session (the call's, or the app's own while it is active): resumed,
-            // whatever suspended it.
-            return resumeOnTheCall()
+        if voice.suspended, live, !voice.ending {
+            // Suspended with a live session (the interruption over, or the app active in front):
+            // resumed, whatever suspended it.
+            return resume()
         }
         // The microphone open, every whole chunk it holds judged, and nothing on its way or being
         // said: an owed go-ahead is paid (the conversation's start, a wait that has ended under an
@@ -734,13 +699,13 @@ final class Conversation {
            !speaker.waitingForMicrophone {
             payGoAhead()
         }
-        guard !voice.listening, !reopening, live, !muted, !speaker.speaking, !speaker.waitingForMicrophone else { return }
+        guard !voice.listening, !reopening, live, !speaker.speaking, !speaker.waitingForMicrophone else { return }
         reopening = true
         Task { await reopen() }
     }
 
     private func reopen() async {
-        // The call over or taken between `react` and this task: nothing opens on a session the
+        // The session taken between `react` and this task: nothing opens on a session the
         // background cannot activate.
         guard on, live else {
             reopening = false
@@ -748,14 +713,14 @@ final class Conversation {
         }
         let opened = await voice.reopen(as: .chat, live: { [weak self] in self?.live ?? false })
         reopening = false
-        guard on, !muted else {
+        guard on else {
             if opened { voice.cancel(.chat) }
             return
         }
         guard opened else {
-            // Refused as the session changed hands or stopped being live while the permission
-            // answered (a lock's placing or `.began` landing on a front conversation): it opens
-            // again once there is a live session.
+            // Refused as the session stopped being live while the permission answered (an
+            // interruption, or the lock's inactive moment landing on a front conversation): it
+            // opens again once there is a live session.
             if !live {
                 return AudioLog.say("conversation: the reopen was refused with no live session (\(voice.refusal ?? "refused")); it opens again once there is one")
             }
@@ -764,9 +729,10 @@ final class Conversation {
         }
         let gap = lastEnd.map { Int(now().timeIntervalSince($0) * 1000) }
         AudioLog.say("conversation: reopened\(gap.map { " after \($0) ms" } ?? "")")
-        // A reading begun while it opened: the microphone does not hear it.
+        // A reading begun while it opened: the microphone does not hear it, and its engine runs on
+        // under the reading with the gate shut.
         if speaker.speaking || speaker.waitingForMicrophone {
-            voice.cancel(.chat)
+            voice.cancel(.chat, keepingInput: true)
             return
         }
         startUtterance()
@@ -781,7 +747,7 @@ final class Conversation {
             do { try await sleep(Self.idle) } catch { return }
             guard let self, self.on, !Task.isCancelled else { return }
             // A microphone suspended this long is a dead one, whatever waits: what it kept is
-            // sent and the conversation ends, so nothing holds the call and the resident for it.
+            // sent and the conversation ends, so nothing holds the session and the resident for it.
             if self.voice.suspended {
                 return self.stop("two minutes with the microphone suspended", sending: true)
             }
@@ -792,12 +758,13 @@ final class Conversation {
                 self.restartIdle()
                 return
             }
-            self.stop(self.muted ? "two minutes muted" : "two minutes with nothing said", sending: false)
+            self.stop("two minutes with nothing said", sending: false)
         }
     }
 
     /// Ends the conversation: what is open is sent once if `sending` and it held speech, or
-    /// dropped; the call is let go, and the guest's lifecycle told. Nothing when none is on.
+    /// dropped; the input kept through the readings is stopped, which lets the session go, and
+    /// the guest's lifecycle told. Nothing when none is on.
     /// `leaving` leaves the open session to a press, untouched, and an utterance being decoded is
     /// still sent: the judge ended it before the press.
     /// `keepingDecode` leaves an utterance being decoded to be sent, as a released press's decode
@@ -826,17 +793,17 @@ final class Conversation {
         } else if !leaving, voice.owner == .chat {
             // Samples the detector has not judged — a suspended session's, a chunk with it or
             // not yet fed — are decoded, and silence decodes to nothing.
-            if voice.listening, sending, !muted, policy.speaking || voice.suspended || unjudged {
+            if voice.listening, sending, policy.speaking || voice.suspended || unjudged {
                 handingOff = true
                 dropHandoff = false
                 Task {
                     let heard = await voice.end(as: .chat)
                     handingOff = false
-                    // A hang-up or a mute while it decoded: the person ended it, unsent.
+                    // The chat went while it decoded: unsent.
                     let dropped = dropHandoff
                     dropHandoff = false
                     if dropped {
-                        AudioLog.say("conversation: the handoff being decoded was dropped (hung up or muted)")
+                        AudioLog.say("conversation: the handoff being decoded was dropped (the chat went)")
                     } else if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let send {
                         await send(heard)
                     }
@@ -845,8 +812,8 @@ final class Conversation {
                 voice.cancel(.chat)
             }
         }
-        muted = false
-        conversingChanged(false)
+        // The engine kept running through the readings is the conversation's: it stops with it.
+        voice.stopKeptInput("the conversation ended")
         ended()
     }
 }

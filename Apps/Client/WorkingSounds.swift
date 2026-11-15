@@ -87,13 +87,13 @@ final class WorkingAudioPlayer: WorkingPlayer {
 /// to the reply's first frame, again in a reading's gaps while the guest works, and again after a
 /// reading with another turn's wait standing — never begun under a sentence or with replies muted
 /// (`Mute`), paused rather than stopped so the next wait picks it up where the last left it, and
-/// paused under the call's session changing hands (`pause`). The mode is `WorkingSounds`: `off` sounds nothing,
+/// played on a new player after an interruption (`renew`). The mode is `WorkingSounds`: `off` sounds nothing,
 /// `receipts` the tones, `sounds` the tones over the bed.
 ///
 /// The receipts and the bleep are the keeper's, so they sound only while a hold that is not a
 /// sound's own stands (`AudioSession.heldForATurn`): a typed turn, which holds nothing, makes
 /// none, and a typed turn worked on while a spoken turn's wait stands receipts with it. The
-/// conversation's go-ahead sounds under the conversation, which the call or the front keeps running.
+/// conversation's go-ahead sounds under the conversation, whose running input keeps the process.
 /// They sound over Topo's voice and into an open microphone, as Daphne's do, and tell the
 /// conversation their length (`toneSounded`), which shuts its gate under them. Every sound is
 /// played on the session as it stands, live (`AudioSession.ensureLive()`) and refused when it is
@@ -309,8 +309,8 @@ final class KeeperSounds {
     /// Plays `tone` on the session as it stands. A receipt is the keeper's, so it sounds only
     /// where a turn's hold stands: a turn nothing waits for aloud sounds nothing, and a receipt
     /// under nothing but a sound's own hold would be the receipts keeping the process alive by
-    /// themselves. `armed` is a tone of the conversation's own, which the call or the front keeps
-    /// running, so it sounds without one and holds only beside one. Over Topo's voice and into
+    /// themselves. `armed` is a tone of the conversation's own, whose running input keeps the
+    /// process, so it sounds without one and holds only beside one. Over Topo's voice and into
     /// an open microphone it sounds, as Daphne's do: the conversation's gate is shut under it.
     @discardableResult
     private func play(_ tone: Tone, armed: Bool = false) -> Bool {
@@ -384,7 +384,7 @@ final class KeeperSounds {
         // to mean "still playing" too.
         if want == bedWanted, !want || bed?.isPlaying == true { return }
         // A bed wanted and asked for again with one of its conditions gone is said, so a device
-        // run names which: the call's pause and an interruption leave nothing else saying it.
+        // run names which: an interruption leaves nothing else saying it.
         if on, !want, bedWanted { AudioLog.say("the working bed is not wanted: \(whyNot)") }
         bedWanted = want
         parking?.cancel()
@@ -439,26 +439,11 @@ final class KeeperSounds {
         release(.fade, "the working bed is paused")
     }
 
-    /// The call's session is changing hands (placed, taken by a phone call, or over): the bed's
-    /// player is stopped before Topo's session moves for it — before `callPlaced` sets the call's
-    /// category, and before `callDeactivated` and `callOver`'s hand-back (the system has already
-    /// taken the session at those two) — and stays wanted, so the activation plays it again on a
-    /// new player (`renew`, then `resume`). Nothing is asked of the session and no hold is taken; a fade is stopped
-    /// where it is, and its hold goes at its own `park`.
-    func pause(_ why: String) {
-        dropStale()
-        guard let bed, bed.isPlaying else {
-            if bedWanted { AudioLog.say("the working bed was already stopped: \(why)") }
-            return
-        }
-        bed.pause()
-        AudioLog.say("the working bed is paused: \(why)")
-    }
-
-    /// The call's session is the system's and live: a bed player made on the session before it
-    /// changed hands is stopped and let go, since what it says of itself (`isPlaying`) is not to
-    /// be trusted across the change, and the resume after this makes one on the session as it now
-    /// is. Still wanted, so the resume plays it at the level the microphone asks for.
+    /// An interruption is over and the session is Topo's again: a bed player made on the session
+    /// before the interruption took it is stopped and let go, since what it says of itself
+    /// (`isPlaying`) is not to be trusted across the change, and the resume after this makes one on
+    /// the session as it now is. Still wanted, so the resume plays it at the level the microphone
+    /// asks for.
     func renew(_ why: String) {
         dropStale()
         guard let bed else { return }

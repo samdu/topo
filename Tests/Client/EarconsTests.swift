@@ -121,7 +121,7 @@ final class EarconsTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = makeDefaults()
-        let audio = AudioSession(center: center, configure: seams.configure, isActive: { isActive })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { isActive })
         let cues = CueRecorder()
         let earcons = Earcons(audio: audio, defaults: defaults, bundle: Bundle(for: Earcons.self),
                               makePlayer: { cues.make($0) }, sleep: sleep, tail: { tail })
@@ -768,39 +768,32 @@ final class EarconsTests: XCTestCase {
         XCTAssertTrue(clock.cancelled, "the bound was left running after the cue was heard out")
     }
 
-    /// The whole of the lock's end, wired as the app wires it (`speaker.onHold` into the call
-    /// driver with `heldForATurn`): a reply read behind the lock on the call, then `done` under
-    /// it, and the call is ended — the session handed back — only once the cue is heard out and
-    /// the route's tail has passed, never at the reply's end or the player's.
-    func testTheCallEndsOnlyOnceDoneAndItsTailAreOver() async throws {
+    /// The whole of the lock's end: a reply read behind the lock, then `done` under it, and the
+    /// session is handed back only once the cue is heard out and the route's tail has passed,
+    /// never at the reply's end or the player's.
+    func testTheSessionIsHandedBackOnlyOnceDoneAndItsTailAreOver() async throws {
         let clock = CueSleep()
         let tail: Duration = .milliseconds(300)
         let rig = await rig(isActive: false, heard: .dataRendered, sleep: { try await clock.sleep($0) }, tail: tail)
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
-        rig.speaker.onHold = { [audio = rig.audio] in driver.holdChanged($0, forATurn: audio.heldForATurn) }
-        defer { withExtendedLifetime(driver) {} }
 
         XCTAssertTrue(rig.speaker.speak("Hi."))
         await settle("the reply to start") { rig.speaker.report.started }
-        XCTAssertEqual(system.starts.count, 1, "the reply's hold behind the lock placed no call")
         try await render(rig, until: "the reply to finish") { rig.speaker.report.finished }
         XCTAssertEqual(rig.earcons.played, [.done])
-        XCTAssertEqual(system.ends.count, 0, "the call ended at the reply's end, under its done")
+        XCTAssertEqual(rig.seams.deactivations, [], "the session was handed back at the reply's end, under its done")
 
         rig.cues.players.last?.finish()
         await settle("the tail to be asked for") { clock.asked.contains(tail) }
         XCTAssertTrue(rig.audio.holding, "the cue's hold went at the player's finish, before the tail")
-        XCTAssertEqual(system.ends.count, 0, "the call ended inside the route's tail")
+        XCTAssertEqual(rig.seams.deactivations, [], "the session was handed back inside the route's tail")
 
         clock.fire()
         await settle("the hold to go") { !rig.audio.holding }
-        XCTAssertEqual(system.ends.count, 1, "the call outlived the cue and its tail")
+        XCTAssertEqual(rig.seams.deactivations, [true], "the session outlived the cue and its tail")
     }
 
     /// A cue the player has finished is still in the route: the hold stands for the route's tail,
-    /// so `done` behind the lock is not cut off by the call it ends, and goes when the tail has
+    /// so `done` behind the lock is not cut off by the hand-back, and goes when the tail has
     /// passed. A cue begun in the tail keeps the hold, and the first one's tail moves nothing.
     func testTheHoldStandsForTheRoutesTailAfterTheFinish() async {
         let clock = CueSleep()
@@ -883,18 +876,6 @@ final class EarconsTests: XCTestCase {
         XCTAssertTrue(rig.earcons.play(.done))
         XCTAssertEqual(rig.cues.files, ["earcon_done", "earcon_done"], "the next cue reused a player the reset invalidated")
         XCTAssertEqual(rig.cues.players[1].plays, 1)
-    }
-
-    /// A cue at the reset under an active call speaks to no player made before it.
-    func testACueAtTheResetUnderAnActiveCallSpeaksToNoPlayerMadeBeforeIt() async {
-        let rig = await rig()
-        rig.audio.callPlaced()
-        rig.audio.callActivated()
-        XCTAssertTrue(rig.earcons.play(.sent))
-        rig.center.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
-        XCTAssertFalse(rig.earcons.play(.sent), "a cue was played on a call's session the reset killed")
-        XCTAssertEqual(rig.cues.players[0].plays, 1, "a player made before the reset was spoken to")
-        rig.audio.callOver()
     }
 
     /// Every cue has its file in the bundle, at the root, where `Earcons` looks.
