@@ -563,19 +563,22 @@ final class Harness {
     /// person's nonce: the finished ones, and the one being written for words given ahead. The
     /// chat draws each under its words while iCloud is behind.
     var replies: [String: String] {
-        var all = stillOwed
+        // What the log is owed, less a reply another device was found to answer.
+        var all = stillOwed.filter { !answeredElsewhere.contains($0.key) }
         if let hearing, let writing, !writing.isEmpty, !said(hearing) { all[hearing] = writing }
         return all
     }
 
-    /// The replies in `unsaved` the log is still to have. A reply this device owes the log is
-    /// owed until it is there, under its own nonce and whatever else answers the turn meanwhile;
-    /// any other until the log has gone on from its turn, since it will not be written then, and
-    /// none another device was found to answer. The guest's ledger keeps such a reply until this
-    /// device's next input, so `unsaved` alone says nothing of what the log is owed.
+    /// The replies in `unsaved` the log is still to have. A reply this device owes the log
+    /// (`owedAhead`, from the guest's ledger) is owed until the log holds it, under its own nonce,
+    /// whatever else answers the turn meanwhile and whatever a hand-back said of it; any other is
+    /// owed until the log has gone on from its turn, since it will not be written then, and not at
+    /// all once another device was found to answer it. The guest's ledger keeps a reply that is
+    /// not owed until a later input's reply lands, so `unsaved` alone says nothing of what the
+    /// log is owed.
     private var stillOwed: [String: String] {
         unsaved.filter {
-            !(owedAhead.contains($0.key) ? replied($0.key) : movedPast($0.key)) && !answeredElsewhere.contains($0.key)
+            owedAhead.contains($0.key) ? !replied($0.key) : !movedPast($0.key) && !answeredElsewhere.contains($0.key)
         }
     }
 
@@ -633,12 +636,12 @@ final class Harness {
 
     /// A read got through, so a line saying the last one did not is no longer true, unless the
     /// line stopped on a failure: those words are still owed and their last attempt failed, so
-    /// the read's line stands over them until the drain. Any other failure stands until what it
-    /// was about is tried again.
+    /// a read that gets through leaves the read's line up over them. Any other failure stands
+    /// until what it was about is tried again.
     private func clearReadFailure() {
         if failure?.source == .read, !hasWaiting { failure = nil }
         // Nothing is left for iCloud to catch up on.
-        if failure?.source == .sync, pending.isEmpty, unsaved.isEmpty { failure = nil }
+        if failure?.source == .sync, pending.isEmpty, stillOwed.isEmpty { failure = nil }
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
@@ -1387,7 +1390,8 @@ final class Harness {
     /// to do, so a line saying the last pass failed is no longer true. Any other failure stands,
     /// and so does a pass's while anything said here is still owed the log, words on the line
     /// or a reply (`stillOwed`): a pass that failed can have put its line up over a turn's, and
-    /// the line is the person's sight of what is owed until it lands.
+    /// the line is the person's sight of what is owed until the drain sends the words or the
+    /// reply is in the log.
     private func clearPassFailure() {
         if failure?.source == .pass, pending.isEmpty, stillOwed.isEmpty { failure = nil }
     }
