@@ -265,8 +265,11 @@ final class AudioSession {
     func conversation(_ on: Bool) {
         guard conversing != on else { return }
         if on {
-            wantRecord(true, for: .conversation)
+            // Kept first, so a claim that changes the configuration waits for the session to be
+            // let go rather than configuring it here, which behind the lock (a conversation
+            // begun with its microphone suspended by the lock's own interruption) is refused.
             conversing = true
+            wantRecord(true, for: .conversation)
             AudioLog.say("the conversation keeps the session (record \(recordMode))")
             return
         }

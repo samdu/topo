@@ -781,6 +781,24 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
     }
 
+    /// A conversation begun behind the lock with its microphone already suspended by the lock's
+    /// own interruption: its keeping the session configures nothing from the background.
+    func testAConversationBegunUnderTheLocksInterruptionConfiguresNothing() async {
+        let (conversation, voice, _) = await make(isActive: false)
+        await tap(voice)
+        active = false
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
+        seams.away = true
+        seams.forget()
+        leave()
+        XCTAssertTrue(conversation.on, "no conversation was carried")
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        XCTAssertEqual(seams.records, [], "the session was configured from the background: \(seams.lines)")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "\(seams.lines)")
+    }
+
     /// An interruption's start whose end never comes, then the app in front again: the next
     /// conversation carried behind the lock is not held by it, and once its reply has been read
     /// the microphone opens again.
