@@ -109,6 +109,7 @@ struct TopoApp: App {
             ActivityTool(host: { ActivityKeeper.shared.host }, keeper: { ActivityKeeper.shared }),
             TimerTool(scheduler: TimerRecords.scheduler, records: .shared, broker: broker),
             LogTool(reader: UnifiedLogReader()),
+            PerfTool(reader: UnifiedLogReader()),
             VoiceTool(),
             OpenURLTool(),
             ContextTool(facts: { [weak harness] in
