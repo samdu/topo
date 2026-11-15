@@ -9,9 +9,10 @@ import XCTest
 /// marks (topo-perf `2026-10-04-roundtrips-after`, its second turn), with the tagged marks put where
 /// the app makes them.
 final class PerfToolTests: XCTestCase {
+    /// A store that holds `lines` and answers those from `since` on, as `OSLogStore`'s predicate does.
     private struct Fixed: LogReading {
         var lines: [LogLine]
-        func lines(since: Date) throws -> [LogLine] { lines }
+        func lines(since: Date) throws -> [LogLine] { lines.filter { $0.at >= since } }
     }
 
     private static let base: Int64 = 1_800_000_000_000
@@ -23,7 +24,7 @@ final class PerfToolTests: XCTestCase {
     }
 
     private func tool(_ lines: [LogLine]) -> PerfTool {
-        PerfTool(reader: Fixed(lines: lines), now: { Date(timeIntervalSince1970: Double(Self.base) / 1000 + 600) })
+        PerfTool(reader: Fixed(lines: lines))
     }
 
     private func timelines(_ lines: [LogLine]) -> [TurnTimeline] {
@@ -121,15 +122,63 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turns.count, 2)
         let first = turns[0]
         XCTAssertTrue(first.mixed)
-        XCTAssertEqual(first.events.map(\.key), [.queue, .save, .ready, .start, .prepare, .mixed, .show])
+        XCTAssertEqual(first.events.map(\.key), [.queue, .save, .ready, .start, .prepare, .wait, .mixed, .show])
+        XCTAssertEqual(first.events[5], .init(key: .wait, title: "Another message began", at: 5000, took: 532))
         XCTAssertEqual(first.events.last?.at, 7795)
         XCTAssertEqual(first.events.map(\.took).reduce(0, +), first.total)
         XCTAssertTrue(first.record.hasSuffix(" mixed"), first.record)
         let second = turns[1]
         XCTAssertTrue(second.mixed)
         XCTAssertFalse(second.events.contains { $0.key == .ready }, "the second turn took the first's guest write")
-        XCTAssertEqual(Array(second.events.prefix(2)), [.init(key: .queue, title: "Started on its way", at: 2800, took: 2800),
-                                                        .init(key: .mixed, title: "Alongside another message", at: 3401, took: 601)])
+        // The first's pass after its reply was drawn is no wait of either turn's, so the stretch
+        // ends at that reply and the second's own attempt after it is its own.
+        XCTAssertEqual(Array(second.events.prefix(2)), [.init(key: .mixed, title: "Alongside another message", at: 2795, took: 2795),
+                                                        .init(key: .queue, title: "Started on its way", at: 2800, took: 5)])
+    }
+
+    private func short(_ id: String, from t: Int64, to end: Int64) -> [LogLine] {
+        let tag = "turn=\(id)"
+        return [line(t, "turn.line", tag), line(t + 1, "turn.attempt", tag),
+                line(end, "turn.reply.shown", tag), line(end, "turn.attempt.end", "\(tag) answered")]
+    }
+
+    /// Two messages sent at two moments of a long turn are two stretches: the turn's own events
+    /// between them are read, and the wait up to each is its own, not the stretch's.
+    func testTwoOverlapsAreTwoStretchesEachFromWhereTheOtherBegan() throws {
+        let lines = typed(at: 0) + short("dddd4444", from: 1000, to: 2000) + short("eeee5555", from: 6000, to: 6500)
+        let turns = timelines(lines)
+        XCTAssertEqual(turns.count, 3)
+        let turn = turns[2]
+        XCTAssertEqual(turn.events.map(\.key), [.queue, .wait, .mixed, .save, .ready, .start, .prepare, .upload, .wait, .mixed,
+                                                 .model, .screen, .stream, .finish, .store, .show])
+        XCTAssertEqual(turn.events.filter { $0.key == .mixed }.map(\.took), [1000, 500])
+        XCTAssertEqual(turn.events.filter { $0.key == .wait }.map(\.took), [999, 900])
+        XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
+        XCTAssertTrue(turn.record.contains(" wait=1899 mixed=1500 "), turn.record)
+    }
+
+    /// The voice's first sound is the turn's own reply's, by its tag: another turn's, after a turn
+    /// that overlapped it, and a replay, which answers no turn, are never it.
+    func testTheVoiceIsTheTurnsOwnReplysAndNeverAReplay() throws {
+        var lines = typed(at: 0) + [line(5000, "turn.line", "turn=cccc3333"), line(5001, "turn.attempt", "turn=cccc3333"),
+                                    line(9100, "turn.reply.shown", "turn=cccc3333"), line(9100, "turn.attempt.end", "turn=cccc3333 answered"),
+                                    line(9200, "speak.begin", "turn=cccc3333"), line(9400, "speak.firstFrame")]
+        var turns = timelines(lines)
+        XCTAssertNil(turns[0].sound, "the first took the second's voice")
+        XCTAssertEqual(turns[1].sound, 4200...4400)
+        lines = typed(at: 0) + [line(8500, "speak.begin", "replay"), line(8700, "speak.firstFrame")]
+        turns = timelines(lines)
+        XCTAssertNil(turns[0].sound, "a replay's voice was the turn's")
+        lines = typed(at: 0) + [line(7000, "speak.begin", "turn=aaaa1111"), line(7100, "speak.begin", "replay"), line(7300, "speak.firstFrame")]
+        XCTAssertNil(timelines(lines)[0].sound, "a replay's first frame was the turn's")
+    }
+
+    /// The store is this launch's alone and is read whole, so a turn of a launch days old is there.
+    func testATurnOfALongLaunchIsRead() async {
+        let reply = await tool(typed(at: -3 * 86_400_000)).run(["turns"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertTrue(reply.text.contains("typed"), reply.text)
+        XCTAssertFalse(reply.text.contains(PerfTool.noTurns), reply.text)
     }
 
     /// A dictation is a release and a hearing with no turn: the typed turn after it is typed and
@@ -145,7 +194,7 @@ final class PerfToolTests: XCTestCase {
     func testASpokenTurnBeginsAtItsReleaseWithTheVoiceAlongside() async {
         var lines = [line(-4000, "voice.released"), line(-3800, "voice.heard"),
                      line(-500, "voice.released"), line(-80, "voice.heard"), line(-70, "turn.spoken", "turn=aaaa1111")]
-        lines += typed(at: 0) + [line(8100, "speak.begin"), line(8400, "speak.firstFrame")]
+        lines += typed(at: 0) + [line(8100, "speak.begin", "turn=aaaa1111"), line(8400, "speak.firstFrame")]
         let reply = await tool(lines).run(["turn", "--tsv"])
         let rows = reply.text.split(separator: "\n").map(String.init)
         XCTAssertEqual(rows[1], "hear\t420\t420\tHeard you")
@@ -287,7 +336,7 @@ final class PerfToolTests: XCTestCase {
             line(1316, "turn.guest.firstLine"), line(1744, "turn.guest.init"), line(1802, "turn.lease.acquired"),
             line(2286, "proxy.request", "\(m) bytes=77829 id=1 thread=create"), line(2362, "proxy.sent", "\(m) id=1"),
             line(2448, "turn.saved"), line(2449, "turn.person.saved"), line(3267, "proxy.firstByte", "\(m) id=1"),
-            line(4986, "turn.text.first"), line(4987, "speak.begin"), line(5085, "speak.firstFrame"),
+            line(4986, "turn.text.first"), line(4987, "speak.begin", tag), line(5085, "speak.firstFrame"),
             line(5496, "proxy.done", "\(m) id=1"), line(5505, "speak.firstFrame"), line(5605, "turn.guest.result"),
             line(6115, "turn.reply.saved"), line(6124, "turn.reply.shown", tag), line(7438, "turn.pass.done"),
             line(7438, "turn.attempt.end", "\(tag) answered"), line(7780, "speak.firstFrame"),

@@ -9,10 +9,6 @@ import TopoTools
 /// app keeps nothing: the mind keeps a turn's `record:` line in its own memory where it wants one.
 struct PerfTool: Tool {
     let reader: any LogReading
-    var now: @Sendable () -> Date = { Date() }
-
-    /// How far back the log is read: the reader is this launch's alone, so this only bounds a long one.
-    static let window: TimeInterval = 24 * 3600
     static let backs = 1...50
 
     let name = "perf"
@@ -29,8 +25,9 @@ struct PerfTool: Tool {
     is the upload, "The model began answering" the model's wait, "The model finished" its streaming.
     Words given to Claude Code ahead of their save are saved while it works: that save is listed
     beside the turn, from the send to the save, and is not in the sum.
-    Where another message's turn overlapped this one, that stretch is one "Alongside another message"
-    event (key mixed). "\(TurnTimeline.soundTitle)" (key sound) ran beside a spoken turn, not in the sum.
+    Where another message's turn overlapped this one, each stretch they shared is one "Alongside another
+    message" event (key mixed), after "Another message began" (key wait), this turn's own wait up to it.
+    "\(TurnTimeline.soundTitle)" (key sound), of this turn's own reply, ran beside it, not in the sum.
 
     --tsv: a header line, then one row an event, tab-separated: key, at_ms, took_ms, title, with what
     ran beside the turn last (at_ms its start, took_ms its length), then the record: line.
@@ -98,10 +95,12 @@ struct PerfTool: Tool {
 
     /// This launch's finished turns, oldest first.
     private func read() async throws -> [TurnTimeline] {
-        let reader = reader, since = now().addingTimeInterval(-Self.window)
-        // The store's read blocks, so it has a thread of its own and never one of the pool's.
+        let reader = reader
+        try Task.checkCancellation()
+        // The store's read blocks, so it has a thread of its own and never one of the pool's. The
+        // store is this launch's alone, so the whole of it is read: a turn is never cut at its start.
         let lines: [LogLine] = try await withCheckedThrowingContinuation { continuation in
-            Self.queue.async { continuation.resume(with: Result { try reader.lines(since: since) }) }
+            Self.queue.async { continuation.resume(with: Result { try reader.lines(since: .distantPast) }) }
         }
         try Task.checkCancellation()
         return TurnTimeline.turns(in: lines.filter { $0.category == LogCategory.perf.rawValue }.compactMap { PerfMark(message: $0.message) })

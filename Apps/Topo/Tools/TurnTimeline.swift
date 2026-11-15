@@ -45,7 +45,7 @@ struct PerfMark: Equatable, Sendable {
 struct TurnTimeline: Sendable {
     /// What kind of moment an event is: the key it is kept under, which the record sums by.
     enum Key: String, CaseIterable, Sendable {
-        case hear, queue, save, ready, start, prepare, tool, upload, model, stream, screen, finish, store, show, end, mixed
+        case hear, queue, save, ready, start, prepare, tool, upload, model, stream, screen, finish, store, show, end, wait, mixed
     }
 
     struct Event: Equatable, Sendable {
@@ -65,8 +65,6 @@ struct TurnTimeline: Sendable {
     static let soundTitle = "The voice's first sound"
     /// The model's own requests, by the route the proxy names them by.
     static let messages = "POST /v1/messages"
-    /// How long after a turn's end the voice's first sound is looked for, when no turn follows.
-    static let soundWindow: Int64 = 60_000
 
     /// When the turn began, on the wall clock.
     var at: Date
@@ -141,42 +139,53 @@ struct TurnTimeline: Sendable {
             }
             // An attempt that ended `unsaved` left the guest answering: the turn goes on.
             let done = (begun[id] ?? 0) > 0 && begun[id] == ended[id] && last[id]?.detail.hasSuffix(" unsaved") == false
-            return Span(id: id, origin: origin, end: done ? last[id]?.ms : nil, seen: seen[id] ?? start)
+            guard done, let final = last[id] else { return Span(id: id, origin: origin, end: nil, seen: seen[id] ?? start) }
+            // An answered turn stops at its reply handed to the view, by its own mark (an untagged
+            // one may be another turn's); the attempt's end comes after the pass's own work that
+            // follows, which is no turn's wait and overlaps none.
+            let shown = final.detail.hasSuffix(" answered")
+                ? marks.last { $0.name == "turn.reply.shown" && $0.turn == id && $0.ms >= origin && $0.ms <= final.ms }
+                : nil
+            return Span(id: id, origin: origin, end: shown?.ms ?? final.ms, seen: seen[id] ?? start)
         }
         var found: [(end: Int64, turn: TurnTimeline)] = []
-        for (index, span) in spans.enumerated() {
+        for span in spans {
             guard let end = span.end, let final = last[span.id] else { continue }
-            let next = spans.dropFirst(index + 1).map(\.origin).filter { $0 > end }.min() ?? end + soundWindow
             let turn = TurnTimeline(span, end: end, final: final, marks: marks, others: spans.filter { $0.id != span.id },
-                                    spoken: spoken.contains(span.id), soundUntil: next)
+                                    spoken: spoken.contains(span.id))
             found.append((end, turn))
         }
         return found.sorted { $0.end < $1.end }.map(\.turn)
     }
 
-    private init(_ span: Span, end: Int64, final: PerfMark, marks: [PerfMark], others: [Span], spoken: Bool, soundUntil: Int64) {
+    private init(_ span: Span, end: Int64, final: PerfMark, marks: [PerfMark], others: [Span], spoken: Bool) {
         let origin = span.origin
         at = Date(timeIntervalSince1970: Double(origin) / 1000)
         kind = spoken ? .spoken : .typed
         outcome = final.detail.split(separator: " ").last.map(String.init) ?? "ended"
-        // An answered turn stops at its reply handed to the view, by its own mark (an untagged one
-        // may be another turn's); the attempt's end comes after the pass's own work that follows.
-        let shown = marks.last { $0.name == "turn.reply.shown" && $0.turn == span.id && $0.ms >= origin && $0.ms <= end }
-        let end = outcome == "answered" ? shown?.ms ?? end : end
         let window = marks.filter { $0.ms >= origin && $0.ms <= end }
         // Where another turn was under way inside this one's time, the untagged marks of that
         // stretch belong to either: from the first of it to the last is said as one. One that has
         // not ended is under way to this turn's end if it began inside it, and otherwise only as
         // far as its own last mark (a line a hub answered, say, is no part of every turn after).
-        var blur: ClosedRange<Int64>?
+        // Stretches that do not touch stay apart, so this turn's own events between them are read.
+        var shared: [ClosedRange<Int64>] = []
         for other in others {
             let reach = other.end ?? (other.origin >= origin ? end : other.seen)
             let from = max(other.origin, origin), to = min(reach, end)
             guard from <= to else { continue }
-            blur = blur.map { min($0.lowerBound, from)...max($0.upperBound, to) } ?? from...to
+            shared.append(from...to)
         }
-        mixed = blur != nil
-        let clean = window.filter { mark in blur.map { !$0.contains(mark.ms) } ?? true }
+        var blurs: [ClosedRange<Int64>] = []
+        for range in shared.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = blurs.last, range.lowerBound <= last.upperBound {
+                blurs[blurs.count - 1] = last.lowerBound...max(last.upperBound, range.upperBound)
+            } else {
+                blurs.append(range)
+            }
+        }
+        mixed = !blurs.isEmpty
+        let clean = window.filter { mark in !blurs.contains { $0.contains(mark.ms) } }
 
         var raw: [(ms: Int64, key: Key, title: String)] = []
         if spoken, let heard = window.first(where: { $0.name == "voice.heard" }) {
@@ -187,7 +196,12 @@ struct TurnTimeline: Sendable {
         for (n, attempt) in attempts.enumerated() {
             raw.append((attempt.ms, .queue, n == 0 ? "Started on its way" : "Sent again"))
         }
-        if let blur { raw.append((blur.upperBound, .mixed, "Alongside another message")) }
+        // A stretch begins where the other turn did: the wait up to there is this turn's own,
+        // whatever it was waiting on, and only the stretch itself is said as shared.
+        for blur in blurs {
+            if blur.lowerBound > origin { raw.append((blur.lowerBound, .wait, "Another message began")) }
+            raw.append((blur.upperBound, .mixed, "Alongside another message"))
+        }
         let write = clean.first { $0.name == "turn.guest.write" }
         if let write {
             raw.append((write.ms, .ready, "Claude Code had your words"))
@@ -259,10 +273,13 @@ struct TurnTimeline: Sendable {
             return Event(key: item.key, title: item.title, at: item.ms - origin, took: item.ms - cursor)
         }
         total = (sorted.last?.ms ?? end) - origin
-        let after = marks.filter { $0.ms >= origin && $0.ms < soundUntil }
-        if let begin = after.first(where: { $0.name == "speak.begin" }),
-           let frame = after.first(where: { $0.name == "speak.firstFrame" && $0.ms >= begin.ms }) {
-            sound = (begin.ms - origin)...(frame.ms - origin)
+        // The voice's first sound for this turn's reply, by its own tag: a replay, or another
+        // turn's reply, is never this turn's. Its first frame is the one before any other begins.
+        if let begin = marks.first(where: { $0.name == "speak.begin" && $0.turn == span.id && $0.ms >= origin }) {
+            let next = marks.first { $0.name == "speak.begin" && $0.ms > begin.ms }?.ms ?? .max
+            if let frame = marks.first(where: { $0.name == "speak.firstFrame" && $0.ms >= begin.ms && $0.ms < next }) {
+                sound = (begin.ms - origin)...(frame.ms - origin)
+            }
         }
     }
 
