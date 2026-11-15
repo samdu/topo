@@ -29,7 +29,8 @@ public final class ThreadLog: Sendable {
         public let at: Date
         public let bytes: Int
         public let kind: Kind
-        /// The answer's status, nil until its head has come; 502 for one the upstream never answered.
+        /// The answer's status, nil until its head has come: the proxy's own 400 or 502 for one the
+        /// upstream never answered, and `ThreadLog.cancelled` for one the client went away from first.
         public var status: Int?
 
         public init(at: Date, bytes: Int, kind: Kind, status: Int? = nil) {
@@ -39,6 +40,10 @@ public final class ThreadLog: Sendable {
             self.status = status
         }
     }
+
+    /// The status noted for a request the client went away from before its answer's head: nginx's
+    /// "client closed request", which no answer of the API's is.
+    public static let cancelled = 499
 
     /// The one the app's proxy keeps.
     public static let shared = ThreadLog()
@@ -90,12 +95,13 @@ public final class ThreadLog: Sendable {
 
     /// What a request is, from its headers and, only under the threads beta, its body's top-level
     /// `thread.type`.
-    static func kind(headers: [HTTPField], body: Data) -> Kind {
+    static func kind(headers: [HTTPField], body: Data,
+                     parse: (Data) -> Any? = { try? JSONSerialization.jsonObject(with: $0) }) -> Kind {
         let betas = headers.filter { $0.name.lowercased() == "anthropic-beta" }
             .flatMap { $0.value.split(separator: ",") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
         guard betas.contains(where: { $0.hasPrefix(beta) }) else { return .none }
-        guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+        guard let object = parse(body) as? [String: Any],
               let thread = object["thread"] as? [String: Any], let type = thread["type"] as? String else { return .unread }
         switch type {
         case "create": return .create

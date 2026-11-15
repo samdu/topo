@@ -39,6 +39,7 @@ final class ContextToolTests: XCTestCase {
             ThreadLog.Sent(at: now - 380, bytes: 39_975, kind: .continue, status: 200),
             ThreadLog.Sent(at: now - 3, bytes: 39_975, kind: .continue, status: 404),
             ThreadLog.Sent(at: now - 2, bytes: 600_500, kind: .create, status: nil),
+            ThreadLog.Sent(at: now - 1, bytes: 40_100, kind: .continue, status: ThreadLog.cancelled),
         ]
         let shown = await tool(phone).run(["threads"])
         XCTAssertEqual(shown.status, ToolReply.ok)
@@ -47,7 +48,8 @@ final class ContextToolTests: XCTestCase {
         XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  3 s ago  continue  39975 bytes  404 (the thread had gone"), shown.text)
         XCTAssertTrue(shown.text.contains("  2 s ago  create  600500 bytes  waiting\n"), shown.text)
-        XCTAssertTrue(shown.text.hasSuffix("on a thread: 4 of 4; the newest: create\n"), shown.text)
+        XCTAssertTrue(shown.text.contains("  1 s ago  continue  40100 bytes  cancelled (the client went away before an answer)\n"), shown.text)
+        XCTAssertTrue(shown.text.hasSuffix("on a thread: 5 of 5; the newest: continue\n"), shown.text)
 
         phone.facts.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_THREADS_WRONG_NAME")
         phone.facts.sent = [ThreadLog.Sent(at: now - 1, bytes: 600_900, kind: .none, status: 200)]

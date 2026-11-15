@@ -135,7 +135,9 @@ struct ContextTool: Tool {
         for sent in facts.sent {
             let ago = max(0, Int(facts.now.timeIntervalSince(sent.at).rounded()))
             let kind = sent.kind == .unread ? "unread (the threads beta, no thread the proxy could read)" : sent.kind.rawValue
-            var line = "  \(ago) s ago  \(kind)  \(sent.bytes) bytes  \(sent.status.map(String.init) ?? "waiting")"
+            let status = sent.status == ThreadLog.cancelled ? "cancelled (the client went away before an answer)"
+                : sent.status.map(String.init) ?? "waiting"
+            var line = "  \(ago) s ago  \(kind)  \(sent.bytes) bytes  \(status)"
             if sent.kind == .continue, sent.status == 404 {
                 line += " (the thread had gone: Anthropic drops one 5 minutes after its last request, and Claude Code makes it again)"
             }

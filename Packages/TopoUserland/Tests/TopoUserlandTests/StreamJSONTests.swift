@@ -222,7 +222,13 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(on["CLAUDE_CODE_TETHER_LIVE"], "1")
         let off = try await launcher.launchEnvironment(threads: nil)
         XCTAssertNil(off["CLAUDE_CODE_TETHER_LIVE"])
-        XCTAssertEqual(Set(on.keys).subtracting(off.keys), ["CLAUDE_CODE_TETHER_LIVE"], "the variable set more than itself")
+        // Everything else is the same, key and value, but the launch's own id.
+        var rest = on
+        rest["CLAUDE_CODE_TETHER_LIVE"] = nil
+        var offRest = off
+        rest[ClaudeLauncher.launchVariable] = nil
+        offRest[ClaudeLauncher.launchVariable] = nil
+        XCTAssertEqual(rest, offRest, "the variable changed more than itself")
         for taken in ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "HOME"] {
             let environment = try await launcher.launchEnvironment(threads: taken)
             XCTAssertEqual(environment[taken], off[taken], "\(taken) was replaced by the threads variable")

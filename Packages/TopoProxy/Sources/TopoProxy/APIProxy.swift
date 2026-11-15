@@ -348,7 +348,10 @@ struct Forwarder: Sendable {
             Perf.mark("proxy.head \(route) \(response.status)")
             if let noted { threads.answered(noted, status: response.status) }
         } catch {
-            if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
+            if Task.isCancelled {
+                if let noted { threads.answered(noted, status: ThreadLog.cancelled) }
+                log("\(line) cancelled: the client went away"); return false
+            }
             // A target that would leave the one origin is the guest's request at fault; anything
             // else is the upstream failing, and a bad gateway.
             let status = { if case .foreignTarget? = error as? UpstreamError { 400 } else { 502 } }()
