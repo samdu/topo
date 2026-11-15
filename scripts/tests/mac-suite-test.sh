@@ -60,7 +60,7 @@ trap 'exit 143' TERM INT HUP
 
 tree="$work/tree"
 mkdir -p "$tree/scripts" "$tree/Womble" "$work/bin"
-cp "$root/scripts/mac-suite.sh" "$tree/scripts/"
+cp "$root/scripts/mac-suite.sh" "$root/scripts/secret-env.sh" "$tree/scripts/"
 
 # fake <path> <body> — a script that logs its name and arguments, then runs the body.
 fake() {
@@ -91,7 +91,9 @@ fake "$tree/scripts/model-manifest.sh" 'exit 0'
 # it is the version that Xcode's version.plist names, and nothing for one marked broken. Each build-for-testing notes the
 # DEVELOPER_DIR it ran under in $CALLS.developer.
 pin="$(sed -n 's/^XCODE_VERSION="\(.*\)"$/\1/p' "$root/scripts/mac-suite.sh")"
-fake "$work/bin/xcodebuild" '
+# Every build and test notes in $CALLS when its environment holds $MARKER under any other name.
+secret='if [ -n "${MARKER-}" ] && env | grep -v "^MARKER=" | grep -qF "$MARKER"; then echo "secret in $(basename "$0")" >> "$CALLS"; fi'
+fake "$work/bin/xcodebuild" "$secret"'
 case "$*" in *"-clonedSourcePackagesDirPath build/packages"*) echo "packages=$(cat build/packages/Package.resolved 2>/dev/null)" >> "$CALLS" ;; esac
 case "$*" in
   -version) [ ! -e "${DEVELOPER_DIR:-/nonexistent}/broken" ] || exit 1
@@ -109,7 +111,8 @@ case "$*" in
   *) exit 0 ;;
 esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
-fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
+fake "$work/bin/swift" "$secret"'
+[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
 # The display's hold: it lives while the pid `-w` names does, as the real one, and says whether
 # that pid is the script this run started (the script's pid is this one's parent's: the hold is
@@ -166,6 +169,33 @@ suite() {
 calls() { grep -c "^$1" "$CALLS"; }
 results() { tr '\n' ' ' < "$RESULTS_DIR/suites.txt"; }
 
+# scripts/secret-env.sh, which the script sources: which exported variables it takes for secrets,
+# by name and in any case, which it leaves (one naming where a secret is kept, an unexported one,
+# an ordinary one), and that a command started behind `scrubbed` has none of them and is the pid
+# its caller recorded.
+secret_env() {  # secret_env <code>: a clean shell with these variables exported, sourcing the helper first
+  env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" CLAUDE_SETUP_TOKEN=a GH_TOKEN=b OP_SERVICE_ACCOUNT_TOKEN=c HONCHO_API_KEY=d \
+    GOG_KEYRING_PASSWORD=e AWS_SECRET_ACCESS_KEY=f ASC_PRIVATE_KEY=g npm_config__authToken=h SOME_CREDENTIALS=i \
+    API_PRIVATE_KEYS_DIR=/keys SSH_AUTH_SOCK=/sock TOKEN_FILE=/file DEVELOPER_DIR=/dev TEST_RUNNER_TOPO_X=1 \
+    bash -c 'unexported_token=z; source "$1"; '"$1" _ "$root/scripts/secret-env.sh" </dev/null
+}
+
+is "secret-env: names: every secret-named variable, in any case, and only those" \
+  "$(secret_env 'secret_variables' | sort | tr '\n' ' ')" \
+  "ASC_PRIVATE_KEY AWS_SECRET_ACCESS_KEY CLAUDE_SETUP_TOKEN GH_TOKEN GOG_KEYRING_PASSWORD HONCHO_API_KEY OP_SERVICE_ACCOUNT_TOKEN SOME_CREDENTIALS npm_config__authToken "
+is "secret-env: scrubbed: the command started behind it has none of them and keeps the rest" \
+  "$(secret_env '"${scrubbed[@]}" env' | cut -d= -f1 | grep -v -e '^PATH$' -e '^HOME$' -e '^PWD$' -e '^SHLVL$' -e '^_$' -e '^TMPDIR$' | sort | tr '\n' ' ')" \
+  "API_PRIVATE_KEYS_DIR DEVELOPER_DIR SSH_AUTH_SOCK TEST_RUNNER_TOPO_X TOKEN_FILE "
+# The pid a caller records for a command started behind `scrubbed` is the command's: env execs it.
+is "secret-env: scrubbed: the recorded pid is the command's own" \
+  "$(secret_env '"${scrubbed[@]}" bash -c "echo \$\$" > "$TMPDIR/secret-env-test.$$" & pid=$!; wait "$pid"; [ "$(cat "$TMPDIR/secret-env-test.$$")" = "$pid" ] && echo same; rm -f "$TMPDIR/secret-env-test.$$"')" same
+is "secret-env: names under errexit inherited into the subshell (POSIX mode)" \
+  "$(env -i PATH="$PATH" POSIXLY_CORRECT=1 GH_TOKEN=b bash -c 'set -euo pipefail; source "$1"; echo "${scrubbed[@]}"' _ "$root/scripts/secret-env.sh" </dev/null)" \
+  "env -u GH_TOKEN"
+is "secret-env: drop_secrets: the shell keeps none of them and the rest, and its nocasematch setting" \
+  "$(secret_env 'drop_secrets; compgen -e | grep -v -e "^PATH$" -e "^HOME$" -e "^PWD$" -e "^SHLVL$" -e "^OLDPWD$" -e "^TMPDIR$" | sort | tr "\n" " "; shopt -q nocasematch && echo on || echo off')" \
+  "API_PRIVATE_KEYS_DIR DEVELOPER_DIR SSH_AUTH_SOCK TEST_RUNNER_TOPO_X TOKEN_FILE off"
+
 # Green: every suite, the lane started and stopped once, each simulator deleted.
 suite green topo_unit topo_ui others
 is "green: no port 53 holder here, none handed to the unit tests" "$(grep '^unit port53' "$CALLS")" "unit port53="
@@ -206,6 +236,14 @@ is "left behind: the dead run's device is shut down and deleted before the first
   "$(grep -E "^xcrun simctl (shutdown LEFT-$dead|delete LEFT-$dead|create)" "$CALLS" | head -n 3 | cut -d' ' -f1-3 | tr '\n' '|')" \
   "xcrun simctl shutdown|xcrun simctl delete|xcrun simctl create|"
 is "left behind: a running pid's device is left alone" "$(calls "xcrun simctl delete LEFT-$$")" 0
+
+# No exported variable whose name says it holds a secret reaches a build or a test: xcodebuild
+# writes its environment into the build description.
+MARKER="fake-secret-$$" CLAUDE_SETUP_TOKEN="fake-secret-$$" GH_TOKEN="fake-secret-$$" SOME_API_KEY="fake-secret-$$" \
+  suite secrets topo_unit topo_ui others
+is "secrets: exits 0" "$status" 0
+is "secrets: no build or test is started with one" "$(calls 'secret in')" 0
+is "secrets: builds and tests did run" "$( [ "$(calls 'xcodebuild ')" -gt 0 ] && [ "$(calls 'swift test')" -gt 0 ] && echo yes)" yes
 
 # The device build's directory and the package state are kept for the pins they were built
 # from, and no others. The pins are written as Package.resolved is, JSON, here on one line, so a

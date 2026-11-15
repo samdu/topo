@@ -101,5 +101,18 @@ got=$?
 [ "$got" = 4 ] || { echo "FAIL: a stale marks file was taken for this run's (exit $got, wanted 4)"; fail=1; }
 [ "$(cat "$fake/copies" 2>/dev/null)" = 2 ] || { echo "FAIL: the stale file ended the wait"; fail=1; }
 
+# The Release build runs with no exported variable whose name says it holds a secret in its
+# environment, which xcodebuild writes into the build description: the stand-in notes one and
+# fails, which ends the run there.
+cat > "$fake/xcodebuild" <<'FAKE'
+#!/bin/bash
+if env | grep -v '^MARKER=' | grep -qF "$MARKER"; then echo secret > "$FAKE_DIR/build"; else echo clean > "$FAKE_DIR/build"; fi
+exit 1
+FAKE
+chmod +x "$fake/xcodebuild"
+MARKER="fake-secret-$$" CLAUDE_SETUP_TOKEN="fake-secret-$$" GH_TOKEN="fake-secret-$$" FAKE_DIR="$fake" PATH="$fake:$PATH" \
+  scripts/perf-run.sh --device fake --build --out "$fake/build-marks.txt" 'hello' >/dev/null 2>&1
+[ "$(cat "$fake/build" 2>/dev/null)" = clean ] || { echo "FAIL: the build ran with a secret in its environment ($(cat "$fake/build" 2>/dev/null || echo "it did not run"))"; fail=1; }
+
 [ "$fail" = 0 ] && echo "perf-run-test: ok"
 exit "$fail"

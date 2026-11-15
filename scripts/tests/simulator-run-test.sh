@@ -2,8 +2,10 @@
 # Runs scripts/simulator-run.sh against a fake `xcrun` whose `simctl launch` plays one scripted
 # console per case, and holds that the script exits non-zero on every way a run can fail and zero
 # only on a turn that finished and was answered under this run's id. No simulator, no build, no
-# token, no network: CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails, or
-# with --sign-in gives a placeholder password the case then looks for everywhere it must not be.
+# token, no network: every exported variable whose name says it holds a secret is dropped before
+# anything runs (scripts/secret-env.sh), so no fake's record of its environment holds a real one;
+# CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails, or with --sign-in gives a
+# placeholder password the case then looks for everywhere it must not be.
 # With --talk and a fake audio lane, it holds that a `start` that refuses is never followed by `stop`,
 # and that `start` is given the script's own pid as the lane's owner.
 #
@@ -15,12 +17,17 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="${SCRIPT:-$here/../simulator-run.sh}"
 [ -f "$script" ] || { echo "no script at $script" >&2; exit 2; }
 
+source "$here/../secret-env.sh"
+drop_secrets
+
 work="$(mktemp -d -t simulator-run-test)"
 trap 'rm -rf "$work"' EXIT
 
-# A tree shaped like the repo as far as the script looks: itself under scripts/, and a built app.
+# A tree shaped like the repo as far as the script looks: itself and what it sources under
+# scripts/, and a built app.
 mkdir -p "$work/root/scripts" "$work/root/build/sim/Build/Products/Debug-iphonesimulator/Topo.app" "$work/bin"
 cp "$script" "$work/root/scripts/simulator-run.sh"
+cp "$(dirname "$script")/secret-env.sh" "$work/root/scripts/" 2>/dev/null || cp "$here/../secret-env.sh" "$work/root/scripts/"
 chmod +x "$work/root/scripts/simulator-run.sh"
 
 cat >"$work/bin/op-item" <<'EOF'
@@ -50,6 +57,19 @@ case "$2" in
   launch)
     # The launcher's pid, for the test to hold that no run leaves one behind.
     echo "$$" >"$FAKE_LAUNCHER_PID"
+    # What the launch carries, which is what the simulator's log records, and the token the app
+    # reads at launch from the port and nonce it was handed, unless FAKE_APP_UNREAD says it never asks.
+    [ -z "${FAKE_LAUNCH_ENV:-}" ] || { echo "$*"; env; } >"$FAKE_LAUNCH_ENV"
+    [ -z "${FAKE_LAUNCH_PORT:-}" ] || echo "${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT:-}" >"$FAKE_LAUNCH_PORT"
+    if [ -n "${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT:-}" ] && [ -z "${FAKE_APP_UNREAD:-}" ]; then
+      /usr/bin/python3 -c '
+import socket, sys
+port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+    s.sendall(nonce.encode() + b"\n"); got = b""
+    while chunk := s.recv(256): got += chunk
+open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_NONCE:-}" "${FAKE_LAUNCH_GOT:-/dev/null}" || exit 65
+    fi
     case "$FAKE_LAUNCH" in
       exits-42) echo "launch failed"; exit 42 ;;
       stale-reply-exits-42) say "reply: stale unrelated reply"; exit 42 ;;
@@ -187,6 +207,7 @@ EOF
 cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
+[ -z "${FAKE_BUILD_ENV:-}" ] || env >>"$FAKE_BUILD_ENV"
 # The leak check's test: it reads the dummy as the real one does, and records it as XCTest's
 # typeText does (its first 18 characters in the output and the bundle) for the control, and for
 # the redacted route only when FAKE_LEAK_REDACTED says the route leaks.
@@ -216,7 +237,6 @@ case " $* " in *" TopoSimulatorSignIn "*)
   env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
   [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
   [ -n "${TEST_RUNNER_TOPO_SIGNIN_PORT:-}" ] || exit 0  # a resume serves nothing to ask
-  [ -z "${FAKE_SIGNIN_LEAKS:-}" ] || echo "Type '${FAKE_APPLE_PASSWORD:0:18}...' into \"password-field\""
   /usr/bin/python3 -c '
 import socket, sys
 port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -241,6 +261,8 @@ for _ in range(20):
     time.sleep(0.1)
 open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + again)' \
     "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
+  # Typed as typeText would, the served password's first 18 characters in the output.
+  [ -z "${FAKE_SIGNIN_LEAKS:-}" ] || echo "Type '$(sed -n 's/^right://p' "$FAKE_SIGNIN_GOT" | cut -c1-18)...' into \"password-field\""
   ;;
 esac
 # The talk's build and test: what each was started with, and what the app the test launches
@@ -403,6 +425,10 @@ if ! grep -q -- '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS" 2>/dev/null
   echo "FAIL press-mic-no-send-exits: the suite did not run before the launch"
   failures=$((failures + 1))
 fi
+# Its test collects no diagnostics: they are the simulator's log archive, which records every
+# launch's environment.
+grep -- '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS" | grep -q -- '-collect-test-diagnostics never' \
+  || { echo "FAIL press-mic-no-diagnostics: the suite's test collects diagnostics"; failures=$((failures + 1)); }
 case_ userland-ran                         pass userland-fetched     quick  --userland "echo hi" --expect hi
 case_ userland-fetched-as-expected         pass userland-fetched     quick  --userland "echo hi" --expect-rootfs fetched
 case_ userland-reused-as-expected          pass userland-reused      quick  --userland "echo hi" --expect-rootfs reused
@@ -455,21 +481,25 @@ ended() {
   PATH="$path" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=60 FAKE_LAUNCH=silent FAKE_XCODEBUILD=hangs \
     "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null &
   runner=$!
-  until [ "$(cat "$sim/simulator-run.pids" 2>/dev/null | wc -l)" -ge 2 ] || [ "$waited" -ge $((10 + overhead)) ]; do
+  # The child is the recorded pid running that command: a token's listener may be recorded first.
+  find_child() {
+    local pid
+    for pid in $(sed 1d "$sim/simulator-run.pids" 2>/dev/null); do
+      [ "$(ps -o command= -p "$pid" 2>/dev/null)" = "$child" ] && { echo "$pid"; return; }
+    done
+  }
+  until [ -n "$(find_child)" ] || [ "$waited" -ge $((10 + overhead)) ]; do
     sleep 1
     waited=$((waited + 1))
   done
   script_pid="$(sed -n 1p "$sim/simulator-run.pids" 2>/dev/null)"
-  child_pid="$(sed -n 2p "$sim/simulator-run.pids" 2>/dev/null)"
+  child_pid="$(find_child)"
   start=$SECONDS
   if [ -z "$script_pid" ] || [ -z "$child_pid" ]; then
-    problem="the pids file did not name the script and its child"
+    problem="the pids file did not name the script and '$child'"
     kill "$runner" 2>/dev/null
   elif [ "$script_pid" != "$runner" ]; then
     problem="the pids file's first line is $script_pid, and the script is $runner"
-    kill "$runner" 2>/dev/null
-  elif [ "$(ps -o command= -p "$child_pid")" != "$child" ]; then
-    problem="the pids file's second line is not '$child'"
     kill "$runner" 2>/dev/null
   else
     kill "$script_pid"
@@ -611,15 +641,16 @@ fi
 secret="Fk9xQa7p-$$-Lm2wZr4t"  # no word a log line holds, which an 8-character count would find
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/signin.env" FAKE_SIGNIN_GOT="$work/signin.got" \
-  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
+  GH_TOKEN="fake-gh-signin-$$" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
 status=$?
 got="$(cat "$work/signin.got" 2>/dev/null)"
-leaks="$(grep -lF "$secret" "$FAKE_XCODEBUILD_CALLS" "$work/signin.env" "$work/signin.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
+leaks="$(grep -lF -e "$secret" -e "fake-gh-signin-$$" "$FAKE_XCODEBUILD_CALLS" "$work/signin.env" "$work/signin.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
 if [ "$status" = 0 ] && [ "$got" = "$(printf 'wrong:\nright:%s\nagain:refused' "$secret")" ] && [ -z "$leaks" ] \
-   && grep -q "TEST_RUNNER_TOPO_SIGNIN_ACCOUNT=buddy.durose@icloud.com" "$work/signin.env"; then
+   && grep -q "TEST_RUNNER_TOPO_SIGNIN_ACCOUNT=buddy.durose@icloud.com" "$work/signin.env" \
+   && grep -q -- '-collect-test-diagnostics never' "$FAKE_XCODEBUILD_CALLS"; then
   echo "ok   sign-in-password-once: the nonce's first request alone got the password, which no argument, environment or output carries"
 else
-  echo "FAIL sign-in-password-once: exit $status, the listener gave: $(printf %s "$got" | tr "\n" "|"), the password is in: ${leaks:-nothing}"
+  echo "FAIL sign-in-password-once: exit $status, the listener gave: $(printf %s "$got" | tr "\n" "|"), the password is in: ${leaks:-nothing}, xcodebuild was called with: $(tr "\n" "|" < "$FAKE_XCODEBUILD_CALLS")"
   sed 's/^/    | /' "$work/signin.out"
   failures=$((failures + 1))
 fi
@@ -732,6 +763,88 @@ if grep -q "id=AAA-NEWER" "$FAKE_XCODEBUILD_CALLS"; then
   echo "ok   newest-runtime: iPhone 17 is the device on iOS 27.2.1, not 27.2's"
 else
   echo "FAIL newest-runtime: xcodebuild was called with: $(cat "$FAKE_XCODEBUILD_CALLS")"
+  failures=$((failures + 1))
+fi
+
+# A signed-in launch, built first: the token is served once to the app, which reads it with the
+# launch's nonce, and is in none of the launch's arguments or environment (which the simulator's
+# log records), xcodebuild's arguments or environment (which the build description records), the
+# run's output or its log; and no variable whose name says it holds a secret reaches xcodebuild.
+for fake in build-ish.sh fetch-phonon.sh; do printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/$fake"; chmod +x "$work/root/scripts/$fake"; done
+token="fake-claude-token-launch-$$"
+others="fake-gh-$$ fake-op-$$ fake-key-$$"
+: >"$FAKE_XCODEBUILD_CALLS"; : >"$work/launch.build-env"; rm -f "$work/launch.got"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" GH_TOKEN="fake-gh-$$" OP_SERVICE_ACCOUNT_TOKEN="fake-op-$$" \
+  SOME_API_KEY="fake-key-$$" FAKE_LAUNCH=launched FAKE_LAUNCH_ENV="$work/launch.env" FAKE_LAUNCH_GOT="$work/launch.got" \
+  FAKE_BUILD_ENV="$work/launch.build-env" "$work/root/scripts/simulator-run.sh" --press-mic >"$work/launch.out" 2>&1 </dev/null
+status=$?
+got="$(cat "$work/launch.got" 2>/dev/null)"
+leaks="$(grep -lF "$token" "$FAKE_XCODEBUILD_CALLS" "$work/launch.build-env" "$work/launch.env" "$work/launch.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
+for other in $others; do
+  leaks="$leaks$(grep -lF "$other" "$FAKE_XCODEBUILD_CALLS" "$work/launch.build-env" 2>/dev/null)"
+done
+if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ] && [ -s "$work/launch.build-env" ] \
+   && grep -q '^SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT=[0-9]' "$work/launch.env" \
+   && [ "$(grep -c -e ' build$' -e '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS")" = 2 ]; then
+  echo "ok   launch-token-served: the app got the token from the launch's nonce, and no secret is in the build's or the launch's environment"
+else
+  echo "FAIL launch-token-served: exit $status, the app read $([ "$got" = "$token" ] && echo the token || echo "something else"), a secret is in: ${leaks:-nothing}"
+  sed 's/^/    | /' "$work/launch.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
+# The same of an attached launch with a turn to wait for.
+token="fake-claude-token-send-$$"
+rm -f "$work/send.got"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LAUNCH=answered FAKE_LAUNCH_ENV="$work/send.env" \
+  FAKE_LAUNCH_GOT="$work/send.got" TIMEOUT=30 "$work/root/scripts/simulator-run.sh" --no-build --send hello >"$work/send.out" 2>&1 </dev/null
+status=$?
+got="$(cat "$work/send.got" 2>/dev/null)"
+leaks="$(grep -lF "$token" "$work/send.env" "$work/send.out" "$work/root/build/sim/simulator-run.log" 2>/dev/null)"
+if [ "$status" = 0 ] && [ "$got" = "$token" ] && [ -z "$leaks" ]; then
+  echo "ok   send-token-served: the app got the token from the launch's nonce, and the launch does not carry it"
+else
+  echo "FAIL send-token-served: exit $status, the app read $([ "$got" = "$token" ] && echo the token || echo "something else"), the token is in: ${leaks:-nothing}"
+  sed 's/^/    | /' "$work/send.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
+# A run whose app never asked for the token (it ran on some other login) fails, saying so.
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LAUNCH=answered FAKE_APP_UNREAD=1 TIMEOUT=30 \
+  "$work/root/scripts/simulator-run.sh" --no-build --send hello >"$work/send-unread.out" 2>&1 </dev/null
+status=$?
+if [ "$status" != 0 ] && grep -q "the app never read the served token" "$work/send-unread.out"; then
+  echo "ok   send-token-unread: a turn answered with the token never read exits $status and says so"
+else
+  echo "FAIL send-token-unread: exit $status"
+  sed 's/^/    | /' "$work/send-unread.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
+# A detached launch whose app never asks fails within TIMEOUT, saying so, and leaves nothing
+# listening on the port it was handed.
+rm -f "$work/unread.port"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LAUNCH=launched FAKE_APP_UNREAD=1 FAKE_LAUNCH_PORT="$work/unread.port" TIMEOUT=3 \
+  "$work/root/scripts/simulator-run.sh" --no-build >"$work/launch-unread.out" 2>&1 </dev/null
+status=$?
+port="$(cat "$work/unread.port" 2>/dev/null)"
+if [ "$status" != 0 ] && grep -q "the app never read the served token" "$work/launch-unread.out" && [ -n "$port" ] \
+   && ! /usr/bin/python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2)' "$port" 2>/dev/null; then
+  echo "ok   launch-token-unread: a detached launch never read exits $status, says so, and its listener is gone"
+else
+  echo "FAIL launch-token-unread: exit $status, port '${port}'"
+  sed 's/^/    | /' "$work/launch-unread.out" | grep -vF "$token"
+  failures=$((failures + 1))
+fi
+
+# A guest command alone is launched with no token and no port, so the app is not signed out.
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LAUNCH=userland-fetched FAKE_LAUNCH_ENV="$work/userland.env" TIMEOUT=30 \
+  "$work/root/scripts/simulator-run.sh" --no-build --userland "echo hi" >"$work/userland.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 0 ] && ! grep -q 'TOKEN' "$work/userland.env"; then
+  echo "ok   userland-no-token: the guest command's launch names no token and no port"
+else
+  echo "FAIL userland-no-token: exit $status, the launch carried: $(grep -o '^[A-Z_]*TOKEN[A-Z_]*' "$work/userland.env" | tr '\n' ' ')"
   failures=$((failures + 1))
 fi
 

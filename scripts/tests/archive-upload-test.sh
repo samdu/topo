@@ -4,7 +4,8 @@
 # handed it as a .p8 openssl reads, altool finds it, and it is gone afterwards; with no key the
 # archive runs without one and an upload is refused before anything is built; the archive resolves
 # its packages into build/packages, kept for the pins they were resolved from and made afresh for
-# any other.
+# any other; and no exported variable whose name says it holds a secret, the key's own among
+# them, reaches either xcodebuild, which writes its environment into the build description.
 #
 #   scripts/tests/archive-upload-test.sh
 set -uo pipefail
@@ -20,7 +21,7 @@ fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 
 tree="$work/tree"
 mkdir -p "$tree/scripts" "$tree/Distribution" "$work/bin"
-cp "$here/../archive-upload.sh" "$here/../asc-pem.sh" "$here/../check-built-assets.sh" "$tree/scripts/"
+cp "$here/../archive-upload.sh" "$here/../asc-pem.sh" "$here/../check-built-assets.sh" "$here/../secret-env.sh" "$tree/scripts/"
 cat > "$tree/scripts/phonon-bundles.sh" <<'FAKE'
 #!/bin/sh
 echo "phonon-bundles.sh $*" >> "$CALLS"
@@ -62,6 +63,8 @@ if [ -n "$key" ]; then
   if openssl pkey -in "$key" -noout 2>/dev/null; then state=key; else state=not-a-key; fi
 fi
 echo "xcodebuild [$state] $line" >> "$CALLS"
+# Whether its environment holds MARKER's value under any other name.
+if [ -n "${MARKER-}" ] && env | grep -v '^MARKER=' | grep -qF "$MARKER"; then echo "xcodebuild secret in its environment" >> "$CALLS"; fi
 # What package state a resolution would run against, and a state left behind as Xcode leaves one.
 packages=""; previous=""
 for argument in "$@"; do [ "$previous" = -clonedSourcePackagesDirPath ] && packages="$argument"; previous="$argument"; done
@@ -115,6 +118,11 @@ mkdir -p "$work/tmp"
 # With a key, uploading.
 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/with" --upload \
     || fail "an upload with a key failed: $(cat "$work/out")"
+# The same, with secrets exported beside the key: neither the key nor they reach a build.
+MARKER="$hex" CLAUDE_SETUP_TOKEN="$hex" GH_TOKEN="$hex" ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" \
+    run "$work/secrets" --upload || fail "an upload with secrets exported failed: $(cat "$work/out")"
+[ "$(grep -c '^xcodebuild \[key\] ' "$work/secrets")" = 2 ] && ! grep -q '^xcodebuild secret' "$work/secrets" \
+    || fail "a secret reached xcodebuild's environment, or it did not run: $(grep -c '^xcodebuild' "$work/secrets") calls"
 [ "$(grep -c '^xcodebuild \[key\] ' "$work/with")" = 2 ] || fail "the archive and the export were not each handed a key: $(cat "$work/with")"
 for call in 'xcodebuild \[key\] archive ' 'xcodebuild \[key\] -exportArchive '; do
     grep "^$call" "$work/with" | grep -q -- '-allowProvisioningUpdates -authenticationKeyPath .*/AuthKey_KEYID12345.p8 -authenticationKeyID KEYID12345 -authenticationKeyIssuerID an-issuer' \

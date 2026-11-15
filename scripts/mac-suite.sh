@@ -68,6 +68,13 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root" || exit 2
 
+# Nothing a suite runs needs a secret, and xcodebuild writes its own environment into the build
+# description under the derived data's XCBuildData, so every exported variable whose name says it
+# holds one is dropped here (scripts/secret-env.sh): validation starts this script in a login
+# shell, which exports whatever the Mac's profile does.
+source "$root/scripts/secret-env.sh" || exit 2
+drop_secrets
+
 # The toolchain the suite is held to, so a new Xcode or runtime on the Mac cannot silently
 # change what it is compiled and run with. The Xcode is the selected one when it is the pin, and
 # otherwise the Xcode*.app under XCODE_APPS that is, run through DEVELOPER_DIR, so a Mac whose
