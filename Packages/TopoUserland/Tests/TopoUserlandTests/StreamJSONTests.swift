@@ -212,6 +212,39 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.compactWindowVariable, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
     }
 
+    /// The threads variable is set to `1` under the name the session gives, and under no name
+    /// anything else of the launch sets: not one the callback supplies (the proxy's URL, a
+    /// token), not one of the guest's, and not one of the launcher's own, which keep their own
+    /// values. None given sets none.
+    func testTheThreadsVariableIsSetOnlyWhereNothingElseIs() async throws {
+        let launcher = ClaudeLauncher { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:1", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
+        let on = try await launcher.launchEnvironment(threads: "CLAUDE_CODE_TETHER_LIVE")
+        XCTAssertEqual(on["CLAUDE_CODE_TETHER_LIVE"], "1")
+        let off = try await launcher.launchEnvironment(threads: nil)
+        XCTAssertNil(off["CLAUDE_CODE_TETHER_LIVE"])
+        // Everything else is the same, key and value, but the launch's own id.
+        var rest = on
+        rest["CLAUDE_CODE_TETHER_LIVE"] = nil
+        var offRest = off
+        rest[ClaudeLauncher.launchVariable] = nil
+        offRest[ClaudeLauncher.launchVariable] = nil
+        XCTAssertEqual(rest, offRest, "the variable changed more than itself")
+        for taken in ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "HOME"] {
+            let environment = try await launcher.launchEnvironment(threads: taken)
+            XCTAssertEqual(environment[taken], off[taken], "\(taken) was replaced by the threads variable")
+        }
+        // The launcher's own keys are set after it, and keep their values.
+        for own in ["HOME", ClaudeLauncher.compactWindowVariable, ClaudeLauncher.launchVariable] {
+            let environment = try await launcher.launchEnvironment(threads: own)
+            XCTAssertNotNil(environment[own], own)
+            XCTAssertNotEqual(environment[own], "1", "\(own), the launcher's own, was set to 1")
+        }
+        for cleared in [ClaudeLauncher.compactAtVariable, ClaudeLauncher.timingVariable, ClaudeLauncher.noteVariable] {
+            let environment = try await launcher.launchEnvironment(threads: cleared)
+            XCTAssertNil(environment[cleared], "\(cleared), which the launcher leaves out here, was set")
+        }
+    }
+
     /// A timed run's result says how the turn's time to its first request was spent: numbers and
     /// phase names, the largest phase first, and nothing else of the line in the mark's words.
     func testAResultsTimingIsReadAsNumbers() throws {

@@ -792,6 +792,40 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(launcher.compactions, [nil, 60, nil])
     }
 
+    /// The threads variable is the threshold's kind of setting: changed during a turn it replaces
+    /// the process once the turn has ended, never under it, the replacement is launched with it,
+    /// and the same name again, or turning it off and on to the same name, replaces nothing more.
+    func testAChangedThreadsVariableReplacesTheResidentOnceIdle() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", threads: "CLAUDE_CODE_TETHER_LIVE",
+                                   turnBound: bound, sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let (turn, done) = collect(try await session.send("a long one", id: "input-1"))
+        await eventually("written") { first.turns.count == 1 }
+
+        await session.use(threads: "CLAUDE_CODE_THREADS")
+        await settle()
+        XCTAssertFalse(first.terminated, "the rename ended the process mid-turn")
+        XCTAssertEqual(launcher.processes.count, 1)
+
+        answer(first, "done")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        await eventually("the process replaced after the turn") { launcher.processes.count == 2 }
+        XCTAssertTrue(first.terminated)
+        XCTAssertEqual(launcher.threads, ["CLAUDE_CODE_TETHER_LIVE", "CLAUDE_CODE_THREADS"])
+        XCTAssertEqual(launcher.resumed, [nil, "S1"], "the replacement resumes the conversation")
+
+        try await session.ready()
+        await session.use(threads: "CLAUDE_CODE_THREADS")
+        await settle()
+        XCTAssertEqual(launcher.processes.count, 2, "the same name restarted the process")
+        await session.use(threads: nil)
+        await eventually("replaced with threads off") { launcher.processes.count == 3 }
+        XCTAssertEqual(launcher.threads, ["CLAUDE_CODE_TETHER_LIVE", "CLAUDE_CODE_THREADS", nil])
+    }
+
     /// Forgetting the conversation clears the kept id, and the next process starts fresh.
     func testForgettingTheConversationStartsAFreshSession() async throws {
         store.save("OLD")

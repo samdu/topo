@@ -150,7 +150,7 @@ final class GuestResident {
             if let made = self.proxy {
                 proxy = made
             } else {
-                proxy = try APIProxy(log: Self.listening("proxy", log: log))
+                proxy = try APIProxy(log: Self.listening("proxy", log: log), threads: .shared)
                 self.proxy = proxy
             }
             _ = try await proxy.start()
@@ -168,6 +168,7 @@ final class GuestResident {
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, cuts: Self.cutFile,
                                        freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
+                                       threads: MessageThreads.Setting(defaults: .standard).launched,
                                        signedIn: { LoginCache.standard.isSignedIn }, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
@@ -559,6 +560,11 @@ struct ResidentConversation: GuestConversation {
         guard ProcessInfo.processInfo.environment[GuestResident.compactAtVariable].flatMap(Compaction.Setting.init) == nil else { return }
         #endif
         await GuestResident.shared.session?.use(compactAt: compactAt)
+    }
+
+    func use(threads: String?) async {
+        // A session not started yet starts with the setting (`MessageThreads.Setting(defaults:)`).
+        await GuestResident.shared.session?.use(threads: threads)
     }
 
     func sessionID() async -> String? {
