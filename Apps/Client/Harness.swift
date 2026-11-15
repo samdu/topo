@@ -650,6 +650,7 @@ final class Harness {
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
         pending.append(outgoing)
+        Perf.mark("turn.line \(Self.turnMark(outgoing.nonce))")
         return outgoing.nonce
     }
 
@@ -665,7 +666,14 @@ final class Harness {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         pending.append(Outgoing(text: whole ? text : trimmed, nonce: nonce))
+        Perf.mark("turn.line \(Self.turnMark(nonce))")
         return true
+    }
+
+    /// What names a turn in its marks: `turn=` and the first eight letters or digits of its nonce,
+    /// which is random, so the marks carry nothing of what was said.
+    nonisolated static func turnMark(_ nonce: String) -> String {
+        "turn=" + String(nonce.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(8)).lowercased()
     }
 
     /// Whether a turn under `nonce` is on the line or in the log.
@@ -903,6 +911,12 @@ final class Harness {
         // Every way out closes the turn, unless a sign-out or a demotion already has and the
         // flag is the next login's.
         defer { if inFlight == generation { turnOpen = false } }
+        // Each attempt is marked by its turn, begun and ended, so a reading of the marks pairs a
+        // turn's start and its end by the turn and not by what happens to be beside them.
+        let turnMark = Self.turnMark(attempt.nonce)
+        Perf.mark("turn.attempt \(turnMark)")
+        var ended = "ended"
+        defer { Perf.mark("turn.attempt.end \(turnMark) \(ended)") }
         do {
             Perf.mark("turn.send")
             if runner == nil { status = "Reaching iCloud…" }
@@ -933,6 +947,7 @@ final class Harness {
             show(result.person)
             show(result.assistant)
             Perf.mark("turn.reply.shown")
+            ended = "answered"
             if result.reply.context > 0 { context = result.reply.context }
             status = nil
             turnOpen = false

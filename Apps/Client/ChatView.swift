@@ -551,6 +551,8 @@ struct ChatView: View {
         // What was heard stands in the row as the turn on its way, rather than vanishing between
         // the release and the log: the bubble being written in is the bubble that lands.
         guard let nonce = row.send(heard: heard, via: harness) else { return }
+        // Said into the microphone: its hearing is part of its time (`topo perf`).
+        Perf.mark("turn.spoken \(Harness.turnMark(nonce))")
         if speaker.awaitReply(nonce, readAloud: readAloud).spoken { harness.markSpoken(nonce) }
         #if DEBUG
         spokenNonce = nonce

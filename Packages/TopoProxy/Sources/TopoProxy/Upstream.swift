@@ -7,6 +7,9 @@ public struct UpstreamRequest: Sendable {
     public var target: String
     public var headers: [HTTPField]
     public var body: Data?
+    /// Told once, as the network takes the body's last byte: the request has gone up, and what
+    /// follows is the API's wait before it answers. Not told for a request with no body.
+    public var sent: (@Sendable () -> Void)? = nil
 }
 
 /// A response on its way back: status and headers once they arrive, the body as a stream of
@@ -95,7 +98,7 @@ public final class URLSessionUpstream: Upstream, @unchecked Sendable {
         }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (head: CheckedContinuation<UpstreamResponse, Error>) in
-                relay.register(task.taskIdentifier, head: head, body: body, continuation: continuation)
+                relay.register(task.taskIdentifier, head: head, body: body, continuation: continuation, sent: request.sent)
                 task.resume()
             }
         } onCancel: {
@@ -110,14 +113,27 @@ public final class URLSessionUpstream: Upstream, @unchecked Sendable {
             var head: CheckedContinuation<UpstreamResponse, Error>?
             var body: AsyncThrowingStream<Data, Error>
             var continuation: AsyncThrowingStream<Data, Error>.Continuation
+            var sent: (@Sendable () -> Void)?
         }
 
         private let lock = NSLock()
         private var entries: [Int: Entry] = [:]
 
         func register(_ id: Int, head: CheckedContinuation<UpstreamResponse, Error>,
-                      body: AsyncThrowingStream<Data, Error>, continuation: AsyncThrowingStream<Data, Error>.Continuation) {
-            lock.withLock { entries[id] = Entry(head: head, body: body, continuation: continuation) }
+                      body: AsyncThrowingStream<Data, Error>, continuation: AsyncThrowingStream<Data, Error>.Continuation,
+                      sent: (@Sendable () -> Void)?) {
+            lock.withLock { entries[id] = Entry(head: head, body: body, continuation: continuation, sent: sent) }
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                        totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+            guard totalBytesExpectedToSend > 0, totalBytesSent >= totalBytesExpectedToSend else { return }
+            let sent: (@Sendable () -> Void)? = lock.withLock {
+                let sent = entries[task.taskIdentifier]?.sent
+                entries[task.taskIdentifier]?.sent = nil
+                return sent
+            }
+            sent?()
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
