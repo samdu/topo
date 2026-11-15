@@ -4908,6 +4908,12 @@ extension GuestBridgeTests {
     /// The phone was the one answering, iCloud is away and the guest takes the words: the line
     /// stops as iCloud behind. What the margin holds follows the guest's turn on them.
     private func behindTurn(_ answer: ScriptedGuest.Answer) async throws -> (Harness, String, ScriptedGuest) {
+        let (harness, nonce, guest, _, _) = try await behindTurnKept(answer)
+        return (harness, nonce, guest)
+    }
+
+    private func behindTurnKept(_ answer: ScriptedGuest.Answer) async throws
+        -> (Harness, String, ScriptedGuest, SavesRefused, UserDefaults) {
         let db = SavesRefused()
         let guest = ScriptedGuest(home: home, script: [.reply("Hi."), answer])
         let defaults = makeDefaults()
@@ -4919,7 +4925,7 @@ extension GuestBridgeTests {
         let nonce = harness.willSend("bins?")
         await harness.retry()
         try await eventually("the guest has the words") { guest.inputs == ["hello", "bins?"] }
-        return (harness, nonce, guest)
+        return (harness, nonce, guest, db, defaults)
     }
 
     /// The guest's turn on the words ends with no reply — the model out of reach, as in Airplane
@@ -4929,6 +4935,21 @@ extension GuestBridgeTests {
         let (harness, nonce, _) = try await behindTurn(.errorResult("the model is out of reach"))
         try await eventually("the turn drawn failed") { await MainActor.run { harness.margin(nonce) == .resend } }
         XCTAssertEqual(harness.waiting, ["bins?"], "the words left the line")
+    }
+
+    /// The guest holds the words as cut off, so the attempts after send it nothing and no end of
+    /// its turn comes again: the turn stays drawn failed through them, and a relaunch reads it off
+    /// the ledger.
+    func testATurnTheGuestHoldsCutOffStaysFailedThroughARetryAndARelaunch() async throws {
+        let (harness, nonce, guest, db, defaults) = try await behindTurnKept(.errorResult("the model is out of reach"))
+        try await eventually("the turn drawn failed") { await MainActor.run { harness.margin(nonce) == .resend } }
+        await harness.retry()
+        XCTAssertEqual(harness.margin(nonce), .resend, "the next attempt left the turn drawn as waiting")
+        XCTAssertEqual(guest.inputs, ["hello", "bins?"], "the guest was given cut-off words again")
+
+        let relaunched = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await relaunched.refresh()
+        XCTAssertEqual(relaunched.margin(nonce), .resend, "a relaunch drew the cut-off turn as waiting")
     }
 
     /// iCloud behind a turn the guest is still answering is no failure: it waits, and can be

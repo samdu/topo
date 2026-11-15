@@ -170,9 +170,9 @@ final class NextTurn {
     /// row is then left holding the turn, as it was.
     func cancel(via harness: Harness) async -> String? {
         guard let nonce = sent, harness.canWithdraw(nonce) else { return nil }
-        guard await harness.withdraw(nonce) else { return nil }
-        // A send made while the log was read is the row's now; it is not taken with these words.
-        guard sent == nonce else { return nonce }
+        // Only while the row still holds these words: one that moved on to others while the log
+        // was read — a spoken turn sent over them — keeps them on the line.
+        guard await harness.withdraw(nonce, while: { self.sent == nonce }) else { return nil }
         sent = nil
         text = ""
         return nonce
@@ -183,7 +183,7 @@ final class NextTurn {
     /// nonce taken back — a turn nothing is coming for — or nothing when the log refused it.
     func withdraw(via harness: Harness) async -> String? {
         guard let nonce = sent, harness.canWithdraw(nonce) else { return nil }
-        guard await harness.withdraw(nonce) else { return nil }
+        guard await harness.withdraw(nonce, while: { self.sent == nonce }) else { return nil }
         sent = nil
         typing = true
         return nonce

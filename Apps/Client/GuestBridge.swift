@@ -984,11 +984,21 @@ actor GuestBridge: Brain {
     }
 
     func withdrawn(nonce: String) async {
-        await stopHearing(nonce: nonce)
+        // Whether or not a hear is under way: one that reaches the bridge after this, from a
+        // giving of the line that read the line before the words came off it, sends nothing.
+        stopping.insert(nonce)
         // A bound input's turn is in the log, and what is in the log is said.
         guard readLedger(), ledger.early?.contains(where: { $0.person == nonce && $0.bound == nil }) == true else { return }
         ledger.early?.removeAll { $0.person == nonce && $0.bound == nil }
         try? save()
+    }
+
+    /// The words given ahead, and not bound, whose guest turn was cut off with no answer: the
+    /// guest holds them and is not given them again unless the person asks, so nothing is coming
+    /// for them. What the chat draws as failed.
+    func cutOffAhead() -> Set<String> {
+        guard readLedger() else { return [] }
+        return Set((ledger.early ?? []).filter { $0.state == .unresolved && $0.bound == nil }.map(\.person))
     }
 
     /// The nonces among `unsaved()` whose turns are saved and whose replies this device owes

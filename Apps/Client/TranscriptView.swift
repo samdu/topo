@@ -19,7 +19,8 @@ struct TranscriptView: View {
     /// drawn.
     var draft: Draft?
     /// Turns on their way that the row is not holding: said before its own, and said after it.
-    /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
+    /// Each is drawn as the row draws a turn on its way, with its margin, until the log has it
+    /// and it is a turn.
     var queued: (before: [QueuedTurn], after: [QueuedTurn]) = ([], [])
     /// What the margin beside a queued turn does when pressed. The default does nothing, and its
     /// controls are then not drawn.
@@ -518,11 +519,11 @@ struct Draft {
 /// drawn at the size the turn will be — the same type, the same width for the same words, an
 /// enclosure of the same shape — so nothing moves when it lands. What it is not yet is a turn,
 /// and the colour says so: it is drawn in `look.draft.written` while it is being written and in
-/// `look.draft.sending` while it is on its way, and becomes the person's own `look.bubble` by
-/// landing in the log.
+/// `look.draft.sending` while it is on its way (`look.draft.failed` once the line stopped on it),
+/// and becomes the person's own `look.bubble` by landing in the log.
 ///
 /// It is words and no field. A tap on what is being written raises the keyboard, and the words
-/// are then the glass's field's. A spinner beside a turn on its way says so a second way, and
+/// are then the glass's field's. The margin beside a turn on its way says so a second way (`TurnMargin`), and
 /// holding the row is the way back from that: it takes the words out of the outbox and puts them
 /// back to be changed, so what is said again is one turn and not two.
 struct DraftRow: View {
@@ -531,7 +532,7 @@ struct DraftRow: View {
 
     var body: some View {
         // Indented as the person's turn it is about to become, so it wraps where that will, as
-        // far as leaves the bubble its minimum width and the spinner its slot.
+        // far as leaves the bubble its minimum width and the margin its slot.
         DraftInset(inset: look.transcript.personLeadingInset, keep: Self.kept(look.draft)) {
             HStack(alignment: .bottom, spacing: look.draft.spacing) {
                 bubble
@@ -543,13 +544,13 @@ struct DraftRow: View {
     }
 
     /// What the row keeps of its width whatever the person's inset: the bubble at its minimum,
-    /// the room beside it and the spinner's slot.
+    /// the room beside it and the margin's slot.
     static func kept(_ draft: Look.Draft) -> CGFloat {
         draft.minimumWidth + draft.spacing + draft.slot
     }
 
     /// The person's inset as the row takes it in `width`: all of it where it leaves `kept`, and
-    /// only as much as does where it would not, so the inset yields and the spinner stays in
+    /// only as much as does where it would not, so the inset yields and the margin stays in
     /// the column.
     static func inset(_ inset: CGFloat, keeping kept: CGFloat, in width: CGFloat) -> CGFloat {
         guard inset.isFinite, width.isFinite else { return 0 }

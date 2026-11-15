@@ -787,9 +787,10 @@ struct Look: Equatable, Sendable {
     /// drawn at the size the landed turn will be, because it is that turn before it is said: what
     /// is here is only what the field and the row have of their own.
     ///
-    /// It is not a turn yet, and its two enclosures say so. A turn a process puts into the
+    /// It is not a turn yet, and its three enclosures say so. A turn a process puts into the
     /// transcript is `secondary`, and so is the person's own turn while it is still being
-    /// written; a turn on its way is `signal`, which is the palette's measured liveness. The
+    /// written; a turn on its way is `signal`, which is the palette's measured liveness, and one
+    /// the line stopped on with something failed is red. The
     /// draft becomes a turn of the person's, in `bubble`'s primary, by landing in the log.
     struct Draft: Equatable, Sendable {
         /// What the words are drawn on while they are being written, and while the turn is on

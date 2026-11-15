@@ -237,10 +237,6 @@ final class Harness {
     /// demotion and a takeover's adoption. A read begun under an earlier count lands on nothing.
     private var reads = 0
 
-    /// What the person said that is not settled yet, oldest first, each under the nonce it was
-    /// first attempted with and written to disk before any attempt. So a relaunch after a lost
-    /// acknowledgement sends the same words under the same nonce and gets the turn already
-    /// written, and a turn said behind a long one survives the app being killed during it.
     /// The entry on the line an attempt is running on, set by `drain` before the attempt's task
     /// is made and cleared when it settles, a sign-out or a demotion. Nil while no attempt is
     /// running, which is also what a demotion's writes of the line as a limb's leave it: they
@@ -250,9 +246,19 @@ final class Harness {
     /// while it read, since that read may predate the attempt's write.
     private var attemptsBegun = 0
     /// The entries whose last attempt failed for the person: it threw, or iCloud was behind and
-    /// the guest's turn on the words ended with no reply. An attempt beginning on one takes it
-    /// out again, as do a withdrawal and a sign-out.
+    /// the guest's turn on the words ended with no reply. They stay marked through the attempts
+    /// after, which fail the same way or end in the guest taking the words again (its turn on
+    /// them beginning) or the turn settling; a withdrawal, a sign-out and a demotion clear them.
     private var failedNonces: Set<String> = []
+    /// The words the guest holds as cut off ahead of their turn (`GuestBridge.cutOffAhead`, read
+    /// with the guest's replies): it is not given them again unless the person asks, so nothing
+    /// is coming for them. Read off the ledger, so a relaunch knows it too.
+    private var cutOffAhead: Set<String> = []
+
+    /// What the person said that is not settled yet, oldest first, each under the nonce it was
+    /// first attempted with and written to disk before any attempt. So a relaunch after a lost
+    /// acknowledgement sends the same words under the same nonce and gets the turn already
+    /// written, and a turn said behind a long one survives the app being killed during it.
     private struct Outgoing: Codable, Equatable {
         var text: String
         var nonce: String
@@ -586,6 +592,8 @@ final class Harness {
         hearing = nil
         heardEnded = [:]
         answeredElsewhere = []
+        failedNonces = []
+        cutOffAhead = []
     }
 
     /// The guest's replies to words said here that the log does not hold a reply to, by the
@@ -620,10 +628,11 @@ final class Harness {
     private func readUnsaved() async {
         guard let guest else { return }
         let login = self.login
-        let held = await guest.unsaved(), owed = await guest.owedAhead()
+        let held = await guest.unsaved(), owed = await guest.owedAhead(), cut = await guest.cutOffAhead()
         guard self.login == login else { return }
         unsaved = held
         owedAhead = owed
+        cutOffAhead = cut
         let line = Set(pending.map(\.nonce))
         heardEnded = heardEnded.filter { held[$0.key] != nil || line.contains($0.key) }
     }
@@ -784,7 +793,7 @@ final class Harness {
     /// red, with a resend in the margin. iCloud behind a turn the guest is answering, or has
     /// answered, is not this.
     func stoppedOnFailure(_ nonce: String) -> Bool {
-        !busy && failedNonces.contains(nonce) && pending.first?.nonce == nonce && !said(nonce)
+        !busy && (failedNonces.contains(nonce) || cutOffAhead.contains(nonce)) && pending.first?.nonce == nonce && !said(nonce)
     }
 
     /// What the margin beside a turn on its way holds: a resend when the line stopped on it with
@@ -803,18 +812,24 @@ final class Harness {
     /// know had landed. A read that failed is not an answer either, and refuses too: the words
     /// stay owed and the retry that is already the line's way forward sends them under this same
     /// nonce.
-    @discardableResult
     ///
     /// An attempt that began while the log was read refuses it too, whichever entry it is on: the
-    /// read may predate that attempt's write. Between the last check and the removal nothing
-    /// awaits, so no attempt can begin on the words in between.
-    func withdraw(_ nonce: String) async -> Bool {
-        guard canWithdraw(nonce) else { return false }
+    /// read may predate that attempt's write. So does `still` answering false once the read is
+    /// back — the caller's own view of the words, such as the row still holding them, which may
+    /// have moved on to other words while the log was read. Between the last check and the
+    /// removal nothing awaits, so no attempt can begin on the words, and nothing can move the
+    /// caller, in between.
+    @discardableResult
+    func withdraw(_ nonce: String, while still: @MainActor () -> Bool = { true }) async -> Bool {
+        guard canWithdraw(nonce), still() else { return false }
         let begun = attemptsBegun
         guard await refresh() else { return false }
-        guard attemptsBegun == begun, canWithdraw(nonce) else { return false }
+        guard attemptsBegun == begun, canWithdraw(nonce), still() else { return false }
         pending.removeAll { $0.nonce == nonce }
         failedNonces.remove(nonce)
+        cutOffAhead.remove(nonce)
+        // What the guest is writing for words nobody will send is not drawn or read on.
+        if hearing == nonce { dropWriting() }
         spokenNonces.removeAll { $0 == nonce }
         // The guest may have the words already, and an answer to them: neither is the log's now.
         unsaved[nonce] = nil
@@ -842,7 +857,6 @@ final class Harness {
             // never finds the words unmarked while their attempt may be writing them.
             attempting = next.nonce
             attemptsBegun += 1
-            failedNonces.remove(next.nonce)
             let task = Task { await run(next) }
             inFlight = task
             let settled = await task.value
@@ -851,6 +865,7 @@ final class Harness {
             inFlight = nil
             attempting = nil
             guard settled else { break }
+            failedNonces.remove(next.nonce)
             if pending.first == next { pending.removeFirst() }
         }
         attempting = nil
@@ -1031,7 +1046,9 @@ final class Harness {
             failure = Failure(words: Self.behind(underlying), source: .sync)
             // The guest has already ended its turn on the words with no reply: nothing is coming
             // for them until the line goes again, which is a failure the person sees.
-            if heardEnded[attempt.nonce] == false { failedNonces.insert(attempt.nonce) }
+            if let replied = heardEnded[attempt.nonce] {
+                if replied { failedNonces.remove(attempt.nonce) } else { failedNonces.insert(attempt.nonce) }
+            }
             if let replied = heardEnded[attempt.nonce] { settleHeard(attempt.nonce, replied: replied) }
             status = nil
             return false
@@ -1186,9 +1203,13 @@ final class Harness {
         switch heard {
         case .began(let nonce):
             hearing = nonce
+            // The guest has taken the words again: something is coming for them.
+            failedNonces.remove(nonce)
+            cutOffAhead.remove(nonce)
         case .ended(let nonce, let reply):
             let drawn = !answeredElsewhere.contains(nonce) && !answered(nonce)
             if let reply, drawn { unsaved[nonce] = reply }
+            if reply == nil, pending.contains(where: { $0.nonce == nonce }) { cutOffAhead.insert(nonce) }
             if hearing == nonce {
                 // The reply is whole and held by its nonce now, or there is none: either way
                 // the row for what is being written is done with. The reader is told below.

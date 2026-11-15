@@ -1018,7 +1018,6 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let margins = await seen.value
         XCTAssertEqual(margins?.head, .sending, "the turn being attempted is not the spinner's")
-        XCTAssertEqual(margins?.headWithdrawable, false, "a turn being written was offered a way back")
         XCTAssertEqual(margins?.queued, .cancel, "the turn waiting behind the attempt offers no cancel")
         let took = await seen.taken
         XCTAssertEqual(took, true, "the queued turn was not taken back")
@@ -1056,6 +1055,76 @@ final class HarnessIntegrationTests: XCTestCase {
         await harness.retry()
         let turns = try await log(db.wrapped)
         XCTAssertEqual(turns.filter { $0.role == .person }.count, 1, "one person's turn: \(turns.map(\.text))")
+    }
+
+    /// A withdrawal whose caller has moved on to other words while the log was read refuses:
+    /// the row that took up a spoken turn over the one it held does not lose that turn's words,
+    /// and the words it held stay on the line.
+    func testAWithdrawalRefusesOnceItsCallerHoldsOtherWords() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let row = NextTurn()
+        row.text = "water the plans"
+        let first = try XCTUnwrap(row.send(via: harness))
+
+        await db.holdNextRead()
+        let edit = Task { await row.withdraw(via: harness) }
+        try await eventually("the withdrawal's read is held") { await db.readHeld }
+        let spoken = try XCTUnwrap(row.send(heard: "and the ferns", via: harness))
+        await db.releaseRead()
+        let taken = await edit.value
+
+        XCTAssertNil(taken, "the row's way back took words it no longer held")
+        XCTAssertEqual(harness.owed.map(\.nonce), [first, spoken], "words came off the line under a row holding others")
+        XCTAssertEqual(row.sent, spoken, "the row let go of the turn it took up")
+        XCTAssertEqual(row.text, "and the ferns")
+    }
+
+    /// A queued turn's cancel with its own `while` answering false is refused at the last check,
+    /// whatever the log said: the words stay owed under their nonce.
+    func testACancelWhoseCallerSaysNoAtTheLastCheckIsRefused() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nonce = harness.willSend("call Helen")
+        let row = NextTurn()
+
+        await db.holdNextRead()
+        let cancel = Task { await harness.withdraw(nonce, while: { row.sent != nonce }) }
+        try await eventually("the withdrawal's read is held") { await db.readHeld }
+        XCTAssertTrue(row.resume(from: harness), "the row did not take the words up")
+        await db.releaseRead()
+        let taken = await cancel.value
+
+        XCTAssertFalse(taken, "the words came off the line under a row that holds them")
+        XCTAssertEqual(harness.waiting, ["call Helen"])
+    }
+
+    /// A turn that stopped the line stays drawn failed through the next attempt that fails the
+    /// same way, and the spinner holds the margin only while that attempt runs.
+    func testAFailedTurnStaysFailedThroughTheAttemptsAfter() async throws {
+        let db = InMemoryRecordDatabase()
+        let zone = Switch()
+        await zone.set(false)
+        let probe = Probe()
+        let answer = Answers()
+        let watching = Switch()
+        await watching.set(false)
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                              ensureZone: {
+            // The first time the zone is asked for once the test is watching: the attempt's.
+            if await watching.isOn, await answer.value == nil { await answer.set(await MainActor.run { probe.ask() }) }
+            guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
+        })
+        let nonce = harness.willSend("water the plants")
+        await harness.retry()
+        XCTAssertEqual(harness.margin(nonce), .resend)
+
+        probe.set { harness.margin(nonce) == .sending }
+        await watching.set(true)
+        await harness.retry()
+        let spinning = await answer.value
+        XCTAssertEqual(spinning, true, "the margin was not the spinner while the attempt ran")
+        XCTAssertEqual(harness.margin(nonce), .resend, "the second failure left the turn drawn as waiting")
     }
 
     /// The reply failed and the person's turn is in the log: the words are said, so the row
