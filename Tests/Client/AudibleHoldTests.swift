@@ -425,7 +425,7 @@ final class AudibleHoldTests: XCTestCase {
     /// top as the guest writes on.
     func testAFirstPartHeardOutWithTheTurnRunningHandsItsHoldBackToTheTurnsWait() async throws {
         let rig = await rig(ceiling: .seconds(1))
-        rig.speaker.waitCarried = { true }
+        rig.speaker.waitCarried = { [sounds = rig.sounds] in sounds.bedPlaying }
         rig.speaker.turnRunning = { true }
         _ = rig.speaker.awaitReply("turn", readAloud: true)
         rig.speaker.speak(writing: "One moment.\n", answering: "turn")
@@ -472,7 +472,7 @@ final class AudibleHoldTests: XCTestCase {
     /// deadline, so it ends at the bound from the send and not from either hand-back.
     func testAWaitHandedBackAcrossReadingsKeepsTheSendsOuterBound() async throws {
         let rig = await rig(ceiling: .seconds(1), outerBound: .seconds(5))
-        rig.speaker.waitCarried = { true }
+        rig.speaker.waitCarried = { [sounds = rig.sounds] in sounds.bedPlaying }
         rig.speaker.turnRunning = { true }
         let sent = ContinuousClock.now
         _ = rig.speaker.awaitReply("turn", readAloud: true)
