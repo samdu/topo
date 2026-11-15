@@ -13,7 +13,8 @@ import TopoCore
 /// Inbound it speaks HTTP/1.1 with keep-alive: requests one after another on one connection,
 /// bodies framed by `Content-Length` or chunked, `Expect: 100-continue` answered. The request body
 /// is read whole before it is forwarded (the debug pin has to read it); the response body never
-/// is. A client that goes away mid-response cancels the upstream request.
+/// is. Outside a timed run (`Perf.recording`, whose marks read each body's shape) a release build
+/// parses a body only to note a request on the message threads beta (`ThreadLog`). A client that goes away mid-response cancels the upstream request.
 ///
 /// In a debug build the `model` of every `/v1/messages` body is rewritten to `pinnedModel`
 /// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
@@ -56,8 +57,9 @@ public actor APIProxy {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     public private(set) var port: UInt16?
 
-    public init(upstream: any Upstream = URLSessionUpstream(), log: @escaping Log = APIProxy.defaultLog) throws {
-        forwarder = Forwarder(upstream: upstream, log: log)
+    public init(upstream: any Upstream = URLSessionUpstream(), log: @escaping Log = APIProxy.defaultLog,
+                threads: ThreadLog = ThreadLog()) throws {
+        forwarder = Forwarder(upstream: upstream, log: log, threads: threads)
         self.log = log
     }
 
@@ -233,6 +235,8 @@ public actor APIProxy {
 struct Forwarder: Sendable {
     let upstream: any Upstream
     let log: APIProxy.Log
+    /// Where each `/v1/messages` request's thread is noted (`ThreadLog`).
+    var threads = ThreadLog()
 
     /// Request headers that belong to this hop and not the next, or that URLSession sets itself.
     /// `Authorization` is not among them: the guest's credential goes through unchanged.
@@ -261,6 +265,12 @@ struct Forwarder: Sendable {
 
     /// The requests this process has forwarded, counted for their marks' `id=`.
     static let requestCount = OSAllocatedUnfairLock(initialState: 0)
+
+    /// A request's mark: its route, its body's size, the id its other marks carry and, for a model
+    /// request, its thread's kind, never its id or anything else the request holds.
+    static func requestMark(route: String, bytes: Int, id: String, thread: ThreadLog.Kind?) -> String {
+        "proxy.request \(route) bytes=\(bytes) \(id)" + (thread.map { " thread=\($0.rawValue)" } ?? "")
+    }
 
     /// The path segments a mark may name: the routes Claude Code is known to ask for. The path is
     /// the guest's to choose, so a segment is written only when it is one of these.
@@ -339,18 +349,28 @@ struct Forwarder: Sendable {
                                        body: body.isEmpty ? nil : body)
         outbound.sent = { Perf.mark("proxy.sent \(route) \(id)") }
         let response: UpstreamResponse
-        Perf.mark("proxy.request \(route) bytes=\(body.count) \(id)")
+        let isMessages = request.method == "POST" && Self.canonical(request.path) == "/v1/messages"
+        // A model request's thread (`ThreadLog.kind`, which reads a body only under the threads
+        // beta) is named on its mark by its kind alone, never its id.
+        let kind = isMessages ? ThreadLog.kind(headers: request.headers, body: body) : nil
+        let noted = kind.map { threads.sent(bytes: body.count, kind: $0) }
+        Perf.mark(Self.requestMark(route: route, bytes: body.count, id: id, thread: kind))
         // A timed run also reads what the request is made of and what the API counted of it.
-        let counted = Perf.recording && request.method == "POST" && Self.canonical(request.path) == "/v1/messages"
+        let counted = Perf.recording && isMessages
         if counted, let shape = Self.shapeForMark(body) { Perf.mark("proxy.shape \(shape)") }
         do {
             response = try await upstream.send(outbound)
             Perf.mark("proxy.head \(route) \(id) \(response.status)")
+            if let noted { threads.answered(noted, status: response.status) }
         } catch {
-            if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
+            if Task.isCancelled {
+                if let noted { threads.answered(noted, status: ThreadLog.cancelled) }
+                log("\(line) cancelled: the client went away"); return false
+            }
             // A target that would leave the one origin is the guest's request at fault; anything
             // else is the upstream failing, and a bad gateway.
             let status = { if case .foreignTarget? = error as? UpstreamError { 400 } else { 502 } }()
+            if let noted { threads.answered(noted, status: status) }
             log("\(line) \(status) in \(Self.elapsed(since: started)): failed upstream: \(Self.describe(error))")
             try? await inbound.send(Self.errorResponse(status: status, type: "api_error",
                                                        message: "Topo's proxy could not reach api.anthropic.com: \(Self.describe(error))"))

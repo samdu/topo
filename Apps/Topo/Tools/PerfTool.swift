@@ -36,7 +36,8 @@ struct PerfTool: Tool {
     ran beside the turn last (at_ms its start, took_ms its length), then the record: line.
     The record: line, without "record: ", is one line a turn: perf-turn, when it began (UTC), spoken
     or typed, answered or ended, total=ms, then key=ms summed over each key's events, saved=ms from
-    the start to a save beside the turn, sound=ms from the start to the voice's first sound, bytes= the model requests' bodies summed, requests=, tools=
+    the start to a save beside the turn, sound=ms from the start to the voice's first sound,
+    thread= the first model request's message thread (none, create, continue or unread), bytes= the model requests' bodies summed, requests=, tools=
     and sends= counts, and mixed where another turn overlapped.
 
     The turns go with the launch; to keep track over time, append that line to a file in your

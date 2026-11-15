@@ -3,6 +3,7 @@ import CallKit
 import SwiftUI
 import TopoAuth
 import TopoCore
+import TopoProxy
 import TopoTools
 
 @main
@@ -57,6 +58,8 @@ struct TopoApp: App {
         let signIn = SignIn(login: GuestLogin(), signInAgain: signInAgain, accept: accept)
         _signIn = State(initialValue: signIn)
         signIn.beginning = { LoginLife.shared.began() }
+        // What the proxy saw of the login's requests goes with it.
+        LoginLife.shared.onEnd { ThreadLog.shared.clear() }
         GuestResident.shared.booted = { await signIn.refresh() }
         Harness.recordsWhere = { await AppRecords.recordsWhere() }
         let harness = Harness.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
@@ -114,8 +117,10 @@ struct TopoApp: App {
             OpenURLTool(),
             ContextTool(facts: { [weak harness] in
                 ContextTool.Facts(context: harness?.context, window: harness?.window, setting: harness?.compaction ?? .auto,
-                                  compacting: harness?.compacting ?? false, last: harness?.lastCompaction)
-            }, set: { [weak harness] in harness?.compaction = $0 }, compact: { [weak harness] in harness?.compact() ?? false }),
+                                  compacting: harness?.compacting ?? false, last: harness?.lastCompaction,
+                                  threads: harness?.threads ?? .standard, sent: ThreadLog.shared.recent())
+            }, set: { [weak harness] in harness?.compaction = $0 }, compact: { [weak harness] in harness?.compact() ?? false },
+               setThreads: { [weak harness] in harness?.threads = $0 }),
         ]
         // A control's request to the home network asks for local network access in the
         // foreground only, since a background one while it is undetermined is denied unasked.

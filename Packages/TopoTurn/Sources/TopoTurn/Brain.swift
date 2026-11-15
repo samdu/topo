@@ -72,6 +72,8 @@ public protocol Brain: Sendable {
     func use(model: ClaudeModel) async
     /// The compaction setting changed; a brain that holds a process may restart it once idle.
     func use(compaction: Compaction.Setting) async
+    /// The message threads setting changed; a brain that holds a process may restart it once idle.
+    func use(threads: MessageThreads.Setting) async
     /// Sign-out: whatever the brain keeps of the last login's conversation goes.
     func forget() async
     /// One line for the diagnostics screen: what the brain is and where it stands.
@@ -88,6 +90,7 @@ extension Brain {
     public func owed() async -> OwedReply? { nil }
     public func use(model: ClaudeModel) async {}
     public func use(compaction: Compaction.Setting) async {}
+    public func use(threads: MessageThreads.Setting) async {}
     public func forget() async {}
 }
 

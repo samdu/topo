@@ -38,7 +38,7 @@ final class PerfToolTests: XCTestCase {
             line(t + 7, "zone.read.begin", "Turn"), line(t + 782, "turn.lease.acquired"), line(t + 2612, "turn.log.read"),
             line(t + 3150, "turn.saved"), line(t + 3184, "turn.person.saved"), line(t + 3205, "turn.bridge.begin"),
             line(t + 3213, "turn.guest.write"), line(t + 3701, "turn.guest.init"),
-            line(t + 4468, "proxy.request", "POST /v1/messages bytes=403495 \(r)"),
+            line(t + 4468, "proxy.request", "POST /v1/messages bytes=403495 \(r) thread=continue"),
             line(t + 4474, "proxy.shape", "system=99:20a610dc"), line(t + 5100, "proxy.sent", "POST /v1/messages \(r)"),
             line(t + 6542, "proxy.head", "POST /v1/messages \(r) 200"), line(t + 6542, "proxy.firstByte", "POST /v1/messages \(r)"),
             line(t + 6575, "turn.text.first"), line(t + 7068, "proxy.done", "POST /v1/messages \(r)"),
@@ -57,7 +57,7 @@ final class PerfToolTests: XCTestCase {
             "save\t3150\t3149\tYour words saved to iCloud",
             "ready\t3213\t63\tClaude Code had your words",
             "prepare\t4468\t1255\tClaude Code made request 1",
-            "upload\t5100\t632\tRequest 1 sent (394 KB)",
+            "upload\t5100\t632\tRequest 1 sent (394 KB, a thread continued)",
             "model\t6542\t1442\tThe model began answering request 1",
             "screen\t6575\t33\tFirst words on your screen",
             "stream\t7068\t493\tThe model finished request 1",
@@ -65,7 +65,7 @@ final class PerfToolTests: XCTestCase {
             "store\t7780\t596\tThe reply saved to iCloud",
             "show\t7795\t15\tThe reply on your screen",
             "record: perf-turn 2027-01-15T08:00:00Z typed answered total=7795 queue=1 save=3149 ready=63 prepare=1255 "
-                + "upload=632 model=1442 stream=493 screen=33 finish=116 store=596 show=15 bytes=403495 requests=1 tools=0 sends=1",
+                + "upload=632 model=1442 stream=493 screen=33 finish=116 store=596 show=15 thread=continue bytes=403495 requests=1 tools=0 sends=1",
         ])
         let turn = try XCTUnwrap(timelines(typed(at: 0)).first)
         XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
@@ -75,7 +75,7 @@ final class PerfToolTests: XCTestCase {
         let reply = await tool(typed(at: 0)).run(["turn"])
         XCTAssertTrue(reply.text.hasPrefix("the last turn, at "), reply.text)
         XCTAssertTrue(reply.text.contains("typed: 7.79 s from your send to the reply on your screen"), reply.text)
-        XCTAssertTrue(reply.text.contains("Request 1 sent (394 KB)"), reply.text)
+        XCTAssertTrue(reply.text.contains("Request 1 sent (394 KB, a thread continued)"), reply.text)
         for leak in ["turn.", "proxy.", "system=", "20a610dc", "aaaa1111", "id="] {
             XCTAssertFalse(reply.text.contains(leak), "\(leak) reached the answer:\n\(reply.text)")
         }
