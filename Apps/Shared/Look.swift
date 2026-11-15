@@ -798,6 +798,9 @@ struct Look: Equatable, Sendable {
         /// draft leaves the bubble — and the row keeps its shape as the turn lands.
         var written: Enclosure
         var sending: Enclosure
+        /// What the words of a turn the line stopped on are drawn on: something failed for the
+        /// person, and nothing goes until the line goes again. The same shape again, in red.
+        var failed: Enclosure
         /// The least width the field keeps in the glass, so the caret has somewhere to sit: the
         /// pane's own spacing yields before the field goes under it (`ComposerPlan.Columns`).
         var minimumWidth: CGFloat = 160
@@ -819,10 +822,25 @@ struct Look: Equatable, Sendable {
         /// What the send fades to with nothing to send, so an empty field's control says it is
         /// not to be pressed rather than being pressed and doing nothing.
         var sendRestingOpacity = 0.35
+        /// The margin beside a turn on its way, in the slot: the resend that stands in for the
+        /// spinner once the line stopped on the turn, and the cancel beside a turn that waits and
+        /// can be taken back. Each an SF Symbol's name and its ink; one type for both.
+        var resendSymbol = "arrow.clockwise.circle.fill"
+        var resendInk = Color.red
+        var cancelSymbol = "xmark.circle"
+        var cancelInk = Theme.textMuted
+        var marginFont: Font = .title2
 
         init(_ screen: Screen = .current) {
             written = .draft(screen, accent: Theme.secondary)
             sending = .draft(screen, accent: Theme.signal)
+            failed = .draft(screen, accent: .red)
+        }
+
+        /// What a turn on its way is drawn on: `failed` once the line stopped on it with
+        /// something failed, `sending` otherwise.
+        func onItsWay(stopped: Bool) -> Enclosure {
+            stopped ? failed : sending
         }
     }
 }

@@ -4901,3 +4901,44 @@ private final class Lines: @unchecked Sendable {
     func add(_ line: String) { lock.withLock { lines.append(line) } }
     var all: [String] { lock.withLock { lines } }
 }
+
+// MARK: - The margin beside a turn iCloud is behind on
+
+extension GuestBridgeTests {
+    /// The phone was the one answering, iCloud is away and the guest takes the words: the line
+    /// stops as iCloud behind. What the margin holds follows the guest's turn on them.
+    private func behindTurn(_ answer: ScriptedGuest.Answer) async throws -> (Harness, String, ScriptedGuest) {
+        let db = SavesRefused()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), answer])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.refuse(true)
+        let nonce = harness.willSend("bins?")
+        await harness.retry()
+        try await eventually("the guest has the words") { guest.inputs == ["hello", "bins?"] }
+        return (harness, nonce, guest)
+    }
+
+    /// The guest's turn on the words ends with no reply — the model out of reach, as in Airplane
+    /// Mode — with iCloud behind: nothing is coming for them until the line goes again, which is
+    /// a failure the person sees, red with a resend.
+    func testATurnICloudIsBehindOnWhoseGuestTurnFailedIsDrawnFailed() async throws {
+        let (harness, nonce, _) = try await behindTurn(.errorResult("the model is out of reach"))
+        try await eventually("the turn drawn failed") { await MainActor.run { harness.margin(nonce) == .resend } }
+        XCTAssertEqual(harness.waiting, ["bins?"], "the words left the line")
+    }
+
+    /// iCloud behind a turn the guest is still answering is no failure: it waits, and can be
+    /// taken back, and is never drawn red.
+    func testATurnICloudIsBehindOnWhileTheGuestAnswersIsNotDrawnFailed() async throws {
+        let (harness, nonce, guest) = try await behindTurn(.hangUnwritten)
+        XCTAssertFalse(harness.stoppedOnFailure(nonce), "a turn the guest is answering is drawn failed")
+        XCTAssertEqual(harness.margin(nonce), .cancel)
+        guest.finishHanging(with: "Tonight.")
+        try await eventually("the reply drawn") { await MainActor.run { harness.replies[nonce] == "Tonight." } }
+        XCTAssertFalse(harness.stoppedOnFailure(nonce), "a turn the guest answered is drawn failed because iCloud is behind")
+    }
+}

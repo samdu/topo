@@ -146,8 +146,9 @@ final class DraftRowRenderTests: XCTestCase {
     }
 
     /// A turn on its way that the row is not holding.
-    private func renderQueued(_ text: String, look: Look = Look()) throws -> Raster {
-        let view = QueuedTurnRow(turn: QueuedTurn(text: text, nonce: "n"))
+    private func renderQueued(_ text: String, look: Look = Look(), margin: TurnMargin = .sending,
+                              line: LineActions = LineActions()) throws -> Raster {
+        let view = QueuedTurnRow(turn: QueuedTurn(text: text, nonce: "n", margin: margin), line: line)
             .environment(\.look, look)
             .frame(width: width)
             .background(Color.white)
@@ -156,8 +157,9 @@ final class DraftRowRenderTests: XCTestCase {
         return try Raster(try XCTUnwrap(renderer.uiImage, "the queued turn rendered to nothing"))
     }
 
-    private func draft(_ text: String, typing: Bool = false, sending: Bool = false) -> Draft {
-        Draft(text: .constant(text), typing: .constant(typing), sending: sending)
+    private func draft(_ text: String, typing: Bool = false, sending: Bool = false, margin: TurnMargin = .sending) -> Draft {
+        Draft(text: .constant(text), typing: .constant(typing), sending: sending, margin: margin,
+              cancel: {}, resend: {})
     }
 
     /// A rendered row as bytes, and where in it a colour lands.
@@ -313,15 +315,17 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertTrue(outline(landed, Theme.signal).isEmpty, "the landed turn is still drawn as on its way")
     }
 
-    /// It is the landed bubble in another colour, where the landed bubble will be: nothing moves
-    /// when it lands. And its colour is the look's, so a look that changes the sending colour
-    /// changes it.
-    func testATurnOnItsWayOutsideTheRowIsWhereAndWhatSizeItWillLand() throws {
+    /// It is drawn as the row draws a turn on its way — the same bubble in the same place, the
+    /// slot beside it — so the two turns on their way read as one kind of thing, and it is the
+    /// landed turn's size. And its colour is the look's, so a look that changes the sending
+    /// colour changes it.
+    func testATurnOnItsWayOutsideTheRowIsDrawnAsTheRowDrawsOne() throws {
         let words = "Remind me to water"
         let queued = try box(try renderQueued(words), Look().draft.sending.accent)
+        let row = try box(try render(draft(words, sending: true), look: Look()), Look().draft.sending.accent)
         let landed = try box(try renderTurn(words), Look().bubble.accent)
-        XCTAssertEqual(queued.left, landed.left, accuracy: 6, "the bubble moves as it lands")
-        XCTAssertEqual(queued.right, landed.right, accuracy: 6, "the bubble moves as it lands")
+        XCTAssertEqual(queued.left, row.left, accuracy: 6, "a queued turn is not where the row draws one")
+        XCTAssertEqual(queued.right, row.right, accuracy: 6, "a queued turn is not where the row draws one")
         XCTAssertEqual(queued.bottom - queued.top, landed.bottom - landed.top, accuracy: 6,
                        "the bubble changes height as it lands")
 
@@ -387,6 +391,45 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertGreaterThan(sent.inkInTrailing(slot), 0, "nothing at all is drawn in the slot while the turn is on its way")
         XCTAssertEqual(try box(sent, Look().draft.sending.accent).right, try box(writing).right,
                        "the bubble moved when the turn went, so the slot did not keep its space")
+    }
+
+    // MARK: A turn that stopped the line, and one that waits
+
+    /// A turn the line stopped on is drawn in the look's failed enclosure, red, and in neither
+    /// the sending colour nor the landed one; on the row and outside it.
+    func testATurnThatStoppedTheLineIsDrawnRed() throws {
+        let row = try render(draft("bins?", sending: true, margin: .resend), look: Look())
+        XCTAssertFalse(outline(row, .red).isEmpty, "the row the line stopped on is not drawn red")
+        XCTAssertTrue(outline(row, Theme.signal).isEmpty, "the row the line stopped on is still drawn as sending")
+        let queued = try renderQueued("bins?", margin: .resend)
+        XCTAssertFalse(outline(queued, .red).isEmpty, "a queued turn the line stopped on is not drawn red")
+        XCTAssertTrue(outline(queued, Theme.signal).isEmpty, "a queued turn the line stopped on is still drawn as sending")
+        XCTAssertFalse(outline(try renderQueued("bins?", margin: .cancel), Theme.signal).isEmpty,
+                       "a turn that waits is not drawn as sending")
+    }
+
+    /// The failed enclosure and the margin's controls are the look's: a look that changes them
+    /// changes what is drawn.
+    func testTheFailedColourAndTheMarginsControlsAreTheLooks() throws {
+        var look = Look()
+        look.draft.failed.accent = Color(red: 0, green: 0, blue: 1)
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        let row = try render(draft("bins?", sending: true, margin: .resend), look: look)
+        XCTAssertFalse(row.pixels(matching: .blue).isEmpty, "the look's failed accent does not reach the row")
+        XCTAssertFalse(row.pixels(matching: .green).isEmpty, "the look's resend ink does not reach the margin")
+        look.draft.cancelInk = Color(red: 1, green: 0, blue: 1)
+        let waiting = try render(draft("bins?", sending: true, margin: .cancel), look: look)
+        XCTAssertFalse(waiting.pixels(matching: .magenta).isEmpty, "the look's cancel ink does not reach the margin")
+    }
+
+    /// The margin's control keeps the slot's space: the bubble is where it is whatever the
+    /// margin holds.
+    func testTheBubbleStaysPutWhateverTheMarginHolds() throws {
+        let spinning = try box(try render(draft("bins?", sending: true)), Look().draft.sending.accent)
+        let failed = try box(try render(draft("bins?", sending: true, margin: .resend)), Look().draft.failed.accent)
+        let waiting = try box(try render(draft("bins?", sending: true, margin: .cancel)), Look().draft.sending.accent)
+        XCTAssertEqual(failed.right, spinning.right, "the bubble moved when the turn failed")
+        XCTAssertEqual(waiting.right, spinning.right, "the bubble moved when the margin offered a cancel")
     }
 
     /// The room beside the bubble is the look's: the slot and what is between it and the bubble.

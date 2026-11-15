@@ -966,6 +966,98 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(answered, ["bins?", "Tonight."])
     }
 
+    // MARK: The margin beside a turn on its way
+
+    /// A turn that stopped the line is drawn as failed, with a resend in its margin and no
+    /// spinner; what waits behind it offers a cancel. The resend sends the same words under the
+    /// same nonce, and they land as one turn.
+    func testATurnThatStoppedTheLineOffersAResendAndTheTurnsBehindItACancel() async throws {
+        let db = InMemoryRecordDatabase()
+        let zone = Switch()
+        await zone.set(false)
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Done.")), (200, reply("And done."))),
+                              ensureZone: { guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) } })
+
+        let first = harness.willSend("water the plants")
+        let second = harness.willSend("and the ferns")
+        XCTAssertEqual(harness.margin(first), .cancel, "words not yet attempted cannot be taken back")
+        await harness.retry()
+
+        XCTAssertEqual(harness.margin(first), .resend, "the turn that stopped the line is not drawn as failed")
+        XCTAssertTrue(harness.stoppedOnFailure(first))
+        XCTAssertEqual(harness.margin(second), .cancel, "the turn waiting behind it offers no cancel")
+        XCTAssertFalse(harness.stoppedOnFailure(second), "a turn never attempted is drawn as failed")
+
+        await zone.set(true)
+        await harness.retry()
+        let turns = try await log(db)
+        XCTAssertEqual(turns.filter { $0.role == .person }.map(\.text), ["water the plants", "and the ferns"], "the resend made other turns than the two said")
+        XCTAssertTrue(harness.said(first) && harness.said(second), "the resend went under other nonces")
+        XCTAssertFalse(harness.stoppedOnFailure(first))
+    }
+
+    /// A turn queued behind one whose attempt is running can be cancelled: nothing is writing
+    /// it, so it comes off the line and is never sent, while the attempt on the head goes on. The
+    /// head itself is the spinner's, and cannot be taken back while its attempt runs.
+    func testATurnQueuedBehindAnAttemptInFlightIsCancelledAndNeverSent() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("Tonight.")), (200, reply("EXTRA")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let head = harness.willSend("bins?")
+        let queued = harness.willSend("and the recycling")
+
+        let seen = Margins()
+        transport.duringRequest = {
+            guard await seen.first() else { return }
+            await seen.note(head: await MainActor.run { harness.margin(head) },
+                            queued: await MainActor.run { harness.margin(queued) },
+                            headWithdrawable: await MainActor.run { harness.canWithdraw(head) })
+            await seen.took(await harness.withdraw(queued))
+        }
+        await harness.retry()
+
+        let margins = await seen.value
+        XCTAssertEqual(margins?.head, .sending, "the turn being attempted is not the spinner's")
+        XCTAssertEqual(margins?.headWithdrawable, false, "a turn being written was offered a way back")
+        XCTAssertEqual(margins?.queued, .cancel, "the turn waiting behind the attempt offers no cancel")
+        let took = await seen.taken
+        XCTAssertEqual(took, true, "the queued turn was not taken back")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["bins?", "Tonight."], "the cancelled turn was sent")
+        XCTAssertTrue(harness.waiting.isEmpty, "the cancelled turn is still on the line")
+        XCTAssertFalse(transport.sent.contains { $0.contains("and the recycling") }, "the model heard the cancelled words")
+    }
+
+    /// An attempt that begins while a withdrawal reads the log refuses the withdrawal, whatever
+    /// the log said: the read predates the attempt's write. Here the attempt writes the turn and
+    /// loses its acknowledgement with the log gone dark, so nothing after the held read can see
+    /// the turn either, and only the count of attempts keeps the words owed.
+    func testAnAttemptBegunWhileAWithdrawalReadsRefusesIt() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let transport = ScriptedTransport((200, reply("Calling.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let nonce = harness.willSend("call Helen")
+        XCTAssertTrue(harness.canWithdraw(nonce))
+
+        await db.holdNextRead()
+        let withdrawal = Task { await harness.withdraw(nonce) }
+        try await eventually("the withdrawal's read is held") { await db.readHeld }
+        await db.goDarkAfterTheNextTurn()
+        await harness.retry()
+        XCTAssertEqual(harness.waiting, ["call Helen"], "the attempt did not stop the line")
+        XCTAssertFalse(harness.said(nonce), "nothing this device could read said the turn had landed")
+
+        await db.releaseRead()
+        let taken = await withdrawal.value
+        XCTAssertFalse(taken, "words were taken back on a read made before their attempt began")
+        XCTAssertEqual(harness.waiting, ["call Helen"], "the entry left the line, so its retry would be a second turn")
+
+        await db.refuseReads(false)
+        await harness.retry()
+        let turns = try await log(db.wrapped)
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1, "one person's turn: \(turns.map(\.text))")
+    }
+
     /// The reply failed and the person's turn is in the log: the words are said, so the row
     /// clears and the bubble that lands is the one that was being written in. Nothing is owed on
     /// this device, and the answering pass is what brings the reply.
@@ -2652,7 +2744,24 @@ private actor FailingDatabase: ForwardingDatabase {
     /// What a refused read is under `unavailable`.
     private var readRefusal: any Error = Unexpected()
 
+    /// The next read is made and then held, its answer the log as it stood when it was made,
+    /// until `releaseRead`: a read that predates whatever happens while it is held.
+    private var holdingNextRead = false
+    private var held: CheckedContinuation<Void, Never>?
+    var readHeld: Bool { held != nil }
+
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+
+    func holdNextRead() { holdingNextRead = true }
+    func releaseRead() {
+        held?.resume()
+        held = nil
+    }
+    private func holdIfAsked() async {
+        guard holdingNextRead else { return }
+        holdingNextRead = false
+        await withCheckedContinuation { held = $0 }
+    }
 
     func loseAcknowledgementOfNextTurn() { loseNextTurnAcknowledgement = true }
     func refuseReads(_ on: Bool, with underlying: any Error = Unexpected()) {
@@ -2684,11 +2793,15 @@ private actor FailingDatabase: ForwardingDatabase {
     }
     func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         try refuse()
-        return try await base.query(query)
+        let found = try await base.query(query)
+        await holdIfAsked()
+        return found
     }
     func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         try refuse()
-        return try await base.records(ofType: type)
+        let found = try await base.records(ofType: type)
+        await holdIfAsked()
+        return found
     }
 
     private func refuse() throws {
@@ -2710,6 +2823,23 @@ private actor FailingDatabase: ForwardingDatabase {
 private actor Answers {
     private(set) var value: Bool?
     func set(_ answer: Bool) { value = answer }
+}
+
+/// What the margin held while an attempt ran, and whether the withdrawal made then was taken.
+private actor Margins {
+    struct Seen { var head: TurnMargin; var queued: TurnMargin; var headWithdrawable: Bool }
+    private(set) var value: Seen?
+    private(set) var taken: Bool?
+    private var asked = false
+    /// True the first time it is asked, and never again.
+    func first() -> Bool {
+        defer { asked = true }
+        return !asked
+    }
+    func note(head: TurnMargin, queued: TurnMargin, headWithdrawable: Bool) {
+        value = Seen(head: head, queued: queued, headWithdrawable: headWithdrawable)
+    }
+    func took(_ answer: Bool) { taken = answer }
 }
 
 private actor Switch {

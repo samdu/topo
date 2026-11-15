@@ -114,7 +114,7 @@ final class NextTurn {
     func queued(in harness: Harness) -> (before: [QueuedTurn], after: [QueuedTurn]) {
         let replies = harness.replies
         let unlanded = harness.unlanded.enumerated().map { place, turn in
-            QueuedTurn(text: turn.text, nonce: turn.nonce,
+            QueuedTurn(text: turn.text, nonce: turn.nonce, margin: harness.margin(turn.nonce),
                        reply: replies[turn.nonce].map { UnsavedReply.turn($0, place: place) })
         }
         guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {
@@ -157,6 +157,25 @@ final class NextTurn {
     func canWithdraw(in harness: Harness) -> Bool {
         guard let sent else { return false }
         return harness.canWithdraw(sent)
+    }
+
+    /// What the slot beside the row's turn on its way holds (`Harness.margin`).
+    func margin(in harness: Harness) -> TurnMargin {
+        guard let sent else { return .sending }
+        return harness.margin(sent)
+    }
+
+    /// The margin's cancel: the turn the row is holding comes off the line, its words with it, so
+    /// it is never sent. Answers the nonce taken back, or nothing when the log refused it — the
+    /// row is then left holding the turn, as it was.
+    func cancel(via harness: Harness) async -> String? {
+        guard let nonce = sent, harness.canWithdraw(nonce) else { return nil }
+        guard await harness.withdraw(nonce) else { return nil }
+        // A send made while the log was read is the row's now; it is not taken with these words.
+        guard sent == nonce else { return nonce }
+        sent = nil
+        text = ""
+        return nonce
     }
 
     /// The way back from a turn that never reached the log: the words come off the line and stay
