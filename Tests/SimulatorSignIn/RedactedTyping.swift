@@ -16,7 +16,11 @@ enum RedactedTyping {
 
     /// Types `text` into `field` once it holds the keyboard's focus, and throws, having typed
     /// nothing, if it does not within `focusTimeout`: the synthesized keystrokes go to whatever has
-    /// the focus, and do not wait for an element to take it as `typeText` does.
+    /// the focus, and do not wait for an element to take it as `typeText` does. The test asks the
+    /// field itself (`hasKeyboardFocus`) rather than whether a keyboard is up, as
+    /// `ChatReading.raiseKeyboard` does: a keyboard says some field has the focus, not which, and a
+    /// password belongs in one field only. `hasKeyboardFocus` is an attribute of the element's
+    /// snapshot that XCTest's headers do not declare, so it is not public API either.
     static func type(_ text: String, into field: XCUIElement, record name: String, focusTimeout: TimeInterval = 10) throws {
         let focus = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: field)
         guard XCTWaiter().wait(for: [focus], timeout: focusTimeout) == .completed else {

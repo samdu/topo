@@ -365,7 +365,10 @@ runs = {r.encode("utf-8") for r in chars} | {r.encode("utf-16-le") for r in char
 def blobs(path):
     videos[path] = 0
     if path == "-":
-        yield sys.stdin.buffer.read(); return
+        data = sys.stdin.buffer.read()
+        if not data:
+            unread.add(path)
+        yield data; return
     files = [path] if os.path.isfile(path) else [os.path.join(d, f) for d, _, fs in os.walk(path) for f in fs]
     for f in files:
         try:
@@ -406,6 +409,19 @@ log_drained() {
   echo "$mark"
   for _ in $(seq 50); do grep -qxF "$mark" "$runlog" && return 0; sleep 0.2; done
   return 1
+}
+
+# Counts the dummy in what a command prints, read on a pipe and never kept. A command that fails
+# or runs out its time, or prints nothing, is a log not read, which says "unreadable", not 0.
+# count_log <label> <name> <command…>
+count_log() {
+  local label="$1" name="$2" out
+  shift 2
+  if out="$("$@" 2>/dev/null | count_runs "$label" - 3< <(printf '%s' "$dummy"))"; then
+    printf '%s\n' "$out" | sed "s/ -:/ $name:/"
+  else
+    echo "$label $name: unreadable"
+  fi
 }
 
 if [ "$leakcheck" = yes ]; then
@@ -462,6 +478,9 @@ server.serve_forever()' "$pagefile" &
         -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
         -only-testing:TopoSimulatorSignInTests/LeakCheckTests \
         -collect-test-diagnostics never -resultBundlePath "$results" && ran=0 || ran=$?
+    # Everything below reads the run's log, so it waits for tee to have written all of it.
+    drained=yes
+    log_drained "reading the $route run's log" || drained=no
     # Each run says it typed its own dummy whole, by the page's hash, before anything else fails.
     [ "$(grep -cx "\[leak-check\] $route typed the dummy whole" "$runlog")" = 1 ] \
       || { echo "==> the $route run did not type its dummy whole" >&2; status=1; }
@@ -474,14 +493,12 @@ server.serve_forever()' "$pagefile" &
     fi
     # The logs are read on a pipe and counted, never kept: a device's log can hold what other
     # runs launched with.
-    log_drained "counting the $route dummy" || echo "$route $runlog: unreadable" >>"$counts"
+    [ "$drained" = yes ] || echo "$route $runlog: unreadable" >>"$counts"
     {
       count_runs "$route" "$runlog" "$results" "$derived/Logs/Test" 3< <(printf '%s' "$dummy") || echo "$route count: unreadable"
-      timeout 300 xcrun simctl spawn "$udid" log show --start "$since" --style compact --info --debug 2>/dev/null \
-        | { count_runs "$route" - 3< <(printf '%s' "$dummy") || echo "$route device log: unreadable"; } | sed 's/ -:/ device log:/'
-      timeout 300 log show --start "$since" --style compact --info --debug \
-          --predicate 'process == "xcodebuild" OR process == "testmanagerd" OR process BEGINSWITH "XC" OR process == "CoreSimulatorService"' 2>/dev/null \
-        | { count_runs "$route" - 3< <(printf '%s' "$dummy") || echo "$route Mac log: unreadable"; } | sed 's/ -:/ Mac log:/'
+      count_log "$route" "device log" timeout 300 xcrun simctl spawn "$udid" log show --start "$since" --style compact --info --debug
+      count_log "$route" "Mac log" timeout 300 log show --start "$since" --style compact --info --debug \
+        --predicate 'process == "xcodebuild" OR process == "testmanagerd" OR process BEGINSWITH "XC" OR process == "CoreSimulatorService"'
     } | tee -a "$counts"
     unset dummy
   done
@@ -560,7 +577,11 @@ if [ "$signin" = yes ]; then
       echo "==> the password is in what this run left, by count: $leaked. Delete those files before anything else" >&2
       status=1
     else
-      echo "==> the password is in nothing this run left: no 8 of its characters in the run's log or the bundle"
+      if [ -d "$results" ]; then
+        echo "==> the password is in nothing this run left: no 8 of its characters in the run's log or the bundle"
+      else
+        echo "==> no 8 of the password's characters are in the run's log, and the run wrote no bundle"
+      fi
     fi
   fi
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then

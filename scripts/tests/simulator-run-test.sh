@@ -197,6 +197,8 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
                        say "guest turn 1 answered in 3.00 s: ok"; say "guest turn done"; exec sleep 600 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
+  # A log show prints lines, and with FAKE_LOG_FAILS fails having printed none.
+  spawn) [ -z "${FAKE_LOG_FAILS:-}" ] || exit 1; echo "a line of the device's log" ;;
   *) exit 0 ;;
 esac
 EOF
@@ -722,7 +724,7 @@ done
 # The leak check passes only when the control's dummy is found in the output and the bundle, the
 # redacted one nowhere, and a failing run's bundle holds no screen recording; a control the count
 # cannot see fails it as a leak does.
-printf '#!/bin/sh\nexit 0\n' >"$work/bin/log"; chmod +x "$work/bin/log"
+printf '#!/bin/sh\n[ -z "$FAKE_LOG_FAILS" ] || exit 1\necho "a line of the Mac log"\n' >"$work/bin/log"; chmod +x "$work/bin/log"
 leak_case() {
   local name="$1" want="$2"; shift 2
   : >"$FAKE_XCODEBUILD_CALLS"
@@ -742,14 +744,15 @@ leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
 leak_case leak-check-failing-run-recorded 1 FAKE_LEAK_RECORDS=1
 leak_case leak-check-failing-run-typed-wrong 1 FAKE_LEAK_WRONG=failing
 leak_case leak-check-unreadable-attachment 1 FAKE_LEAK_UNREADABLE=1
+leak_case leak-check-log-unread 1 FAKE_LOG_FAILS=1
 # A sign-in whose run left any 8 characters of the password fails and names where, not what.
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_LEAKS=1 FAKE_SIGNIN_ENV="$work/leaks.env" FAKE_SIGNIN_GOT="$work/leaks.got" \
   "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-leaks.out" 2>&1 </dev/null
 status=$?
 if [ "$status" = 1 ] && grep -q "the password is in what this run left, by count: password .*simulator-run.log: [1-9]" "$work/signin-leaks.out" \
-   && [ "$(grep -c "the password is in" "$work/sign-in-renews-when-asked.out")" = 1 ] \
-   && grep -q "the password is in nothing this run left" "$work/sign-in-renews-when-asked.out"; then
+   && [ "$(grep -cE "the password is in|password's characters" "$work/sign-in-renews-when-asked.out")" = 1 ] \
+   && grep -q "no 8 of the password's characters are in the run's log, and the run wrote no bundle" "$work/sign-in-renews-when-asked.out"; then
   echo "ok   sign-in-counts-the-password: a run that left it fails, one that did not says so"
 else
   echo "FAIL sign-in-counts-the-password: exit $status"; sed 's/^/    | /' "$work/signin-leaks.out"; failures=$((failures + 1))
