@@ -1559,9 +1559,9 @@ final class Harness {
                 // The turns the pass asked the brain to answer, as the runner read them: their
                 // reply has stopped. The pass held the lease to ask, so this device answers them.
                 // Save when the bridge refused for an owed reply: the next pass writes it, then
-                // answers them.
+                // answers them; and save a pass that was stopped, which failed nothing.
                 failure = Failure(words: Self.describe(underlying), source: .pass)
-                if underlying as? GuestBridgeError != .failed(GuestBridge.owedFirst) {
+                if underlying as? GuestBridgeError != .failed(GuestBridge.owedFirst), !Task.isCancelled {
                     replyFailed.formUnion(answering.map(\.ref))
                 }
             } else {
@@ -1580,7 +1580,8 @@ final class Harness {
         if let unfinished { refs.insert(unfinished.ref) }
         return Set(refs.filter { ref in
             guard let person = turns.first(where: { $0.ref == ref && $0.role == .person }) else { return false }
-            return !movedPast(person.nonce)
+            // A reply the guest holds or is writing is on its way: no turn it answers is red.
+            return !movedPast(person.nonce) && unsaved[person.nonce] == nil && hearing != person.nonce
         })
     }
 
