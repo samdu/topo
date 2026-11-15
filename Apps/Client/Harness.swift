@@ -946,7 +946,7 @@ final class Harness {
             handedBack = false
             show(result.person)
             show(result.assistant)
-            Perf.mark("turn.reply.shown")
+            Perf.mark("turn.reply.shown \(turnMark)")
             ended = "answered"
             if result.reply.context > 0 { context = result.reply.context }
             status = nil

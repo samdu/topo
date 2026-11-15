@@ -150,6 +150,10 @@ struct TurnTimeline: Sendable {
         at = Date(timeIntervalSince1970: Double(origin) / 1000)
         kind = spoken ? .spoken : .typed
         outcome = final.detail.split(separator: " ").last.map(String.init) ?? "ended"
+        // An answered turn stops at its reply handed to the view, by its own mark (an untagged one
+        // may be another turn's); the attempt's end comes after the pass's own work that follows.
+        let shown = marks.last { $0.name == "turn.reply.shown" && $0.turn == span.id && $0.ms >= origin && $0.ms <= end }
+        let end = outcome == "answered" ? shown?.ms ?? end : end
         let window = marks.filter { $0.ms >= origin && $0.ms <= end }
         // Where another turn was under way inside this one's time, the untagged marks of that
         // stretch belong to either: from the first of it to the last is said as one. One that has
@@ -215,8 +219,6 @@ struct TurnTimeline: Sendable {
         if let result = clean.first(where: { $0.name == "turn.guest.result" }) { raw.append((result.ms, .finish, "Claude Code finished the reply")) }
         if let saved = clean.first(where: { $0.name == "turn.reply.saved" }) { raw.append((saved.ms, .store, "The reply saved to iCloud")) }
         if let failed = clean.last(where: { $0.name == "turn.reply.failed" }) { raw.append((failed.ms, .store, "The reply failed")) }
-        // The turn's own end, which the app marks as the reply is handed to the view: an untagged
-        // `turn.reply.shown` may be another turn's.
         if outcome == "answered" {
             raw.append((end, .show, "The reply on your screen"))
         } else {
