@@ -1784,6 +1784,63 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNotNil(phone.failure, "the red line came down with the turn's words still owed")
     }
 
+    /// A turn still owed, and a read that fails after it (the chat coming back to the front), so
+    /// the line is the read's; iCloud back for reads, the loop's retry of the line held by the
+    /// backoff and writes still refused, the read that gets through leaves it up: the words are
+    /// still owed.
+    func testAReadsFailureOverATurnStillOwedStaysUp() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let beats = Beats()
+        let clock = TestClock()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("pass 1") { await beats.passes >= 1 }
+        await db.refuseWrites(true)
+        // The loop's own attempt fails too, so the next waits out the backoff; the clock stands.
+        await phone.send("water the plants")
+        await beats.tick()
+        try await eventually("pass 2") { await beats.passes >= 2 }
+        await db.refuseReads(true)
+        await phone.refresh()
+        XCTAssertEqual(phone.failure?.source, .read, "the read did not fail last")
+        await db.refuseReads(false)
+        await beats.tick()
+        try await eventually("pass 3") { await beats.passes >= 3 }
+        open.cancel()
+        await open.value
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn went with writes refused")
+        XCTAssertNotNil(phone.failure, "the red line came down with the turn's words still owed")
+    }
+
+    /// A turn in flight is not a line stopped on a failure: a read that fails while the model has
+    /// the turn, and one that gets through after it with the turn still in flight, leave no line,
+    /// though the turn's words are still on the line. Asked inside the request, since the turn's
+    /// own reply takes any line down.
+    func testAReadsFailureDuringATurnInFlightComesDownAtTheNextRead() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let seen = Seen()
+        let inFlight = Answers(), failedAsRead = Answers(), cleared = Answers()
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            await inFlight.set(await MainActor.run { seen.harness.map { $0.busy && !$0.waiting.isEmpty } ?? false })
+            await db.refuseReads(true)
+            await seen.harness?.refresh()
+            await failedAsRead.set(await MainActor.run { seen.harness?.failure?.source == .read })
+            await db.refuseReads(false)
+            await seen.harness?.refresh()
+            await cleared.set(await MainActor.run { seen.harness?.failure == nil })
+        }
+        let phone = harness(db, defaults: makeDefaults(), transport: transport)
+        seen.harness = phone
+        await phone.send("When are the bins?")
+
+        let (wasInFlight, wasRead, wasCleared) = await (inFlight.value, failedAsRead.value, cleared.value)
+        XCTAssertEqual(wasInFlight, true, "the turn was not in flight with its words on the line")
+        XCTAssertEqual(wasRead, true, "the read did not fail as a read")
+        XCTAssertEqual(wasCleared, true, "a read that got through left a read's line up over a turn in flight")
+    }
+
     /// The race #615 names: offline, a read and a pass both fail, in either order, and the last
     /// one up is whichever failed last. Once iCloud is back, one pass of the loop leaves nothing
     /// standing either way.
