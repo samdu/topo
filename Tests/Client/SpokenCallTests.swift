@@ -582,6 +582,38 @@ final class CallWantTests: XCTestCase {
         XCTAssertFalse(call.up)
     }
 
+    /// A call refused through its retries behind the lock is one round: neither the next hold nor
+    /// a conversation behind the same lock places another, and coming forward lets the next lock
+    /// place again (Daphne's `callGaveUp`).
+    @MainActor
+    func testACallThatFailedInTheBackgroundIsNotPlacedAgainUntilTheAppHasBeenInFront() async {
+        let system = FakeCallSystem()
+        let sleep = ManualSleep()
+        let call = SpokenCall(system: system, sleep: sleep.sleep)
+        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .background)
+        driver.holdChanged(true)
+        for attempt in 0..<SpokenCall.placeAttempts {
+            XCTAssertEqual(system.starts.count, attempt + 1)
+            system.answer(system.requests.count - 1, FakeCallSystem.Refused())
+            guard attempt < SpokenCall.placeAttempts - 1 else { break }
+            for _ in 0..<100 where sleep.waiting == 0 { try? await Task.sleep(for: .milliseconds(10)) }
+            sleep.fire()
+            for _ in 0..<100 where system.starts.count == attempt + 1 { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        XCTAssertFalse(call.up)
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts)
+        driver.holdChanged(false)
+        driver.holdChanged(true)
+        driver.holdChanged(true, forATurn: true)
+        driver.conversingChanged(true)
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts, "a refused round was placed again behind the same lock")
+        driver.conversingChanged(false)
+        driver.scene(.inactive)
+        driver.scene(.active)
+        driver.scene(.background)
+        XCTAssertEqual(system.starts.count, SpokenCall.placeAttempts + 1, "the next lock after the front placed nothing")
+    }
+
     /// The card's hang-up with the microphone flag still standing (a decode running past the
     /// hang-up) and the hang-up's own effects asking for the call (the hold's drop, then the
     /// conversation's end): no call is placed behind the one hung up.

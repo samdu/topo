@@ -43,6 +43,9 @@ final class SpokenCall: NSObject {
     /// The call could not be placed, was never activated, or went with the system's call
     /// service restarting. The exchange carries on without one, on the keeper.
     var onFailed: (String) -> Void = { _ in }
+    /// The driver's: told after `onFailed`, so a call that failed in the background is not placed
+    /// again until the app has been in front (`SpokenCallDriver`).
+    var gaveUp: () -> Void = {}
 
     /// Who the call is with, as the card names it.
     static let name = "Topo"
@@ -59,8 +62,7 @@ final class SpokenCall: NSObject {
     var mayPlace: () -> Bool = { true }
     /// The session as each placing finds it (`AudioSession.describePlacing`), logged on the
     /// placing's line: the call service lets a call start from the background only when it judges
-    /// the person meant it, and the app recording is what it judges by when the app is no longer
-    /// visible, so a refusal is read against this.
+    /// the person meant it (`docs/voice.md`, *The call*), so a refusal is read against this.
     var session: () -> String = { "" }
 
     /// Each placing's line read off the session and the microphone's engine as they stand.
@@ -204,6 +206,7 @@ final class SpokenCall: NSObject {
         again = false
         say("call: \(why)")
         onFailed(why)
+        gaveUp()
     }
 
     private func report(_ call: UUID) {
@@ -455,6 +458,8 @@ final class SpokenCallDriver {
     private var turn = false
     /// The chat's microphone is open or opening: a call up is kept for it.
     private var microphone = false
+    /// A call failed in this background stay: none is placed until the app has been in front.
+    private var gaveUp = false
     private var phase: ScenePhase
     private var observers: [NSObjectProtocol] = []
 
@@ -465,6 +470,11 @@ final class SpokenCallDriver {
         self.enabled = enabled
         phase = initial
         call.mayPlace = { [weak self] in self?.phase == .background }
+        call.gaveUp = { [weak self] in
+            guard let self else { return }
+            gaveUp = phase == .background
+            if gaveUp { AudioLog.say("call driver: gave up: no call is placed again until the app has been in front") }
+        }
         let follow: [(Notification.Name, ScenePhase, String)] = [
             (UIApplication.didEnterBackgroundNotification, .background, "the app entered the background"),
             (UIApplication.willEnterForegroundNotification, .inactive, "the app is coming forward"),
@@ -483,10 +493,12 @@ final class SpokenCallDriver {
     /// The whole rule, as a function of the facts: placed in the background for a turn's hold
     /// (`turn`, which is `holding` when not given) or a conversation, and kept while it is up for
     /// any hold, a conversation or an open microphone, so a press in front under the call does not
-    /// end it under the session the microphone opens on.
+    /// end it under the session the microphone opens on. One that failed in this background stay
+    /// (`gaveUp`) is not placed again.
     nonisolated static func wants(holding: Bool, turn: Bool? = nil, conversing: Bool = false, phase: ScenePhase,
-                                  enabled: Bool, up: Bool = false, microphone: Bool = false) -> Bool {
-        let places = (turn ?? holding) || conversing
+                                  enabled: Bool, up: Bool = false, microphone: Bool = false,
+                                  gaveUp: Bool = false) -> Bool {
+        let places = ((turn ?? holding) || conversing) && !gaveUp
         let keeps = holding || conversing || microphone
         return enabled && (places && phase == .background || up && keeps)
     }
@@ -511,20 +523,22 @@ final class SpokenCallDriver {
 
     func scene(_ phase: ScenePhase) {
         self.phase = phase
+        // Daphne clears it at `willEnterForeground`, which is the driver's `.inactive`.
+        if phase != .background { gaveUp = false }
         decide()
     }
 
     private func decide() {
         let enabled = enabled()
         let wanted = Self.wants(holding: holding, turn: turn, conversing: conversing, phase: phase, enabled: enabled,
-                                up: call.up, microphone: microphone)
+                                up: call.up, microphone: microphone, gaveUp: gaveUp)
         // Each decision with its facts, so a run says why a lock placed no call.
         if wanted != call.up {
             AudioLog.say("call driver: \(wanted ? "placing" : "ending") (hold \(holding), a turn's \(turn), conversing \(conversing), microphone \(microphone), app \(phase), setting \(enabled))")
         } else if wanted, phase != .background, call.state == .up {
             AudioLog.say("call driver: the call stays up in front for the exchange (hold \(holding), conversing \(conversing), microphone \(microphone), app \(phase))")
         } else if holding || conversing, !wanted {
-            AudioLog.say("call driver: no call (app \(phase), setting \(enabled))")
+            AudioLog.say("call driver: no call (app \(phase), setting \(enabled)\(gaveUp ? ", gave up" : ""))")
         }
         if wanted { call.start() } else { call.end() }
     }

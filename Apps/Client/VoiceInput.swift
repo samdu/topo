@@ -115,8 +115,9 @@ final class VoiceInput {
     let gate = TapGate()
     /// True from a spoken release that asked for it until `stopKeptInput`: the release's engine
     /// and tap left running, the gate shut, so the app is recording when a lock straight after
-    /// the press places the call. The call service lets a call be started from the background
-    /// when the app placing it is recording, as Daphne's microphone is whenever she places hers.
+    /// the press places the call. The call service's checks for a placing from the background
+    /// do not include recording (`docs/voice.md`, *The call*), so this does not decide whether
+    /// the call is allowed.
     /// Kept only while a call can still be placed (`Speaker.callIdle`). Not the microphone
     /// left open: `listening` is false, nothing it hears reaches a turn, a caption or the row,
     /// and a reply is not held for it. The audio session is kept for it as for an open
