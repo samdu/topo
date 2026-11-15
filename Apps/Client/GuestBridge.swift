@@ -302,12 +302,18 @@ actor GuestBridge: Brain {
     private var asking = false
     /// Nonces whose words, still on their way to the guest, are to stop there (`stopHearing`).
     private var stopping: Set<String> = []
-    /// Words taken back (`claim`, `withdrawn`): never given, by any hear after, until a claim
-    /// that came to nothing hands them back. Not cleared by a hear's end, as `stopping` is.
+    /// Words withdrawn (`withdrawn`): never given, by any hear after. Not cleared by a hear's
+    /// end, as `stopping` is, nor by a claim's hand-back.
     private var takenBack: Set<String> = []
 
-    /// Whether words under `nonce` are not to be given now: stopped for this hear, or taken back.
-    private func halted(_ nonce: String) -> Bool { stopping.contains(nonce) || takenBack.contains(nonce) }
+    /// Whether words under `nonce` are not to be given now: stopped for this hear, withdrawn, or
+    /// claimed by a cancel.
+    /// Words a cancel has claimed and not yet withdrawn or handed back (`claim`, `unclaim`).
+    /// Kept apart from `takenBack`, so a hand-back never frees words a withdrawal took.
+    private var claimed: Set<String> = []
+    private func halted(_ nonce: String) -> Bool {
+        stopping.contains(nonce) || takenBack.contains(nonce) || claimed.contains(nonce)
+    }
     private var queue: [CheckedContinuation<Void, Never>] = []
     private var warming = false
     /// Which session and process wrote each reply this bridge returned, by its nonce.
@@ -1007,24 +1013,30 @@ actor GuestBridge: Brain {
     /// still outstanding, are refused too: a second claim's hand-back would take the first's
     /// mark away.
     func claim(nonce: String) async -> Bool {
-        guard !takenBack.contains(nonce), readLedger(), ledger.early?.contains(where: { $0.person == nonce }) != true,
-              ledger.pending?.person != nonce else { return false }
-        takenBack.insert(nonce)
+        guard !takenBack.contains(nonce), !claimed.contains(nonce), readLedger(), !holdsAhead(nonce) else { return false }
+        claimed.insert(nonce)
         return true
     }
 
     func unclaim(nonce: String) async {
-        takenBack.remove(nonce)
+        claimed.remove(nonce)
     }
 
     /// The words the guest has been given, or may have, and whose turn the log does not hold:
     /// an input recorded for them ahead of their turn, or the one being asked. What a cancel is
     /// not offered for, a relaunch included.
-    func givenAhead() -> Set<String> {
-        guard readLedger() else { return [] }
-        var given = Set((ledger.early ?? []).filter { $0.bound == nil }.map(\.person))
+    /// Nil when the ledger cannot be read: nothing is known of what the guest has.
+    func givenAhead() -> Set<String>? {
+        guard readLedger() else { return nil }
+        var given = Set((ledger.early ?? []).map(\.person))
         if let person = ledger.pending?.person { given.insert(person) }
         return given
+    }
+
+    /// Whether the ledger, as read, records an input for the words under `nonce`: what `claim`
+    /// refuses and `givenAhead` names.
+    private func holdsAhead(_ nonce: String) -> Bool {
+        ledger.early?.contains(where: { $0.person == nonce }) == true || ledger.pending?.person == nonce
     }
 
     /// The words given ahead, and not bound, whose guest turn was cut off with no answer: the
@@ -1159,6 +1171,7 @@ actor GuestBridge: Brain {
     func forget() async {
         login += 1
         takenBack = []
+        claimed = []
         flown = [:]
         ledger = GuestLedger()
         loaded = true

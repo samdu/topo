@@ -259,6 +259,8 @@ final class Harness {
     /// for them, since what the guest has received cannot be called back (`Brain.claim` is the
     /// word on it; this is the margin's view).
     private var givenAhead: Set<String> = []
+    /// The ledger could not be read at the last look, so what the guest has is not known.
+    private var givenAheadUnread = false
     /// Words taken off the line while the guest may still be writing for them: nothing more it
     /// writes for them is drawn or read.
     private var takenBack: Set<String> = []
@@ -510,7 +512,7 @@ final class Harness {
         logins += 1
         unfinished = nil
         pending = []
-        failedNonces = []; givenAhead = []; takenBack = []
+        failedNonces = []; givenAhead = []; givenAheadUnread = false; takenBack = []
         spokenNonces = []
         failedRetries = 0
         retryNotBefore = nil
@@ -604,7 +606,7 @@ final class Harness {
         hearing = nil
         heardEnded = [:]
         answeredElsewhere = []
-        failedNonces = []; givenAhead = []; takenBack = []
+        failedNonces = []; givenAhead = []; givenAheadUnread = false; takenBack = []
         cutOffAhead = []
         replyFailed = []
     }
@@ -648,7 +650,9 @@ final class Harness {
         owedAhead = owed
         cutOffAhead = cut
         // What the ledger says the guest has, which a relaunch finds and a live `.began` adds to.
-        givenAhead.formUnion(given)
+        // A ledger that could not be read says nothing, and no cancel is offered on it.
+        givenAhead.formUnion(given ?? [])
+        givenAheadUnread = given == nil
         let line = Set(pending.map(\.nonce))
         heardEnded = heardEnded.filter { held[$0.key] != nil || line.contains($0.key) }
     }
@@ -815,7 +819,7 @@ final class Harness {
     /// Whether the words said under `nonce` can be cancelled, so they are never sent: they can
     /// be taken back, and the guest has not begun on them ahead of their turn.
     func canCancel(_ nonce: String) -> Bool {
-        canWithdraw(nonce) && !givenAhead.contains(nonce)
+        canWithdraw(nonce) && !givenAheadUnread && !givenAhead.contains(nonce)
     }
 
     /// What the margin beside a turn on its way holds: a resend when the line stopped on it with

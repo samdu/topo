@@ -3109,6 +3109,20 @@ extension GuestBridgeTests {
         XCTAssertFalse(late, "words the guest was given were claimed")
     }
 
+    // A claim's hand-back frees only its own claim: words a withdrawal took stay taken, whatever
+    // a cancel that claimed them alongside it and came to nothing hands back.
+    func testAHandBackLeavesWordsAWithdrawalTookTaken() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .reply("one"))
+        let claimed = await bridge.claim(nonce: "n1")
+        XCTAssertTrue(claimed)
+        await bridge.withdrawn(nonce: "n1")
+        await bridge.unclaim(nonce: "n1")
+        let heard = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertFalse(heard, "words a withdrawal took were given after a claim's hand-back")
+        XCTAssertTrue(guest.inputs.isEmpty)
+    }
+
     // What the guest goes on writing for words taken back while it writes is not drawn.
     func testWhatTheGuestWritesForWordsTakenBackIsNotDrawn() async throws {
         let (harness, _, guest, first, _) = try await givenAheadWhileWriting()
