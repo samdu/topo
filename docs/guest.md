@@ -114,7 +114,16 @@ Whether the resident sends its turns on a message thread is the launcher's to sa
 
 On, the conversation is held on Anthropic's side, encrypted in memory, for up to an hour after its last request, with no API to delete it, and threads are not eligible for zero data retention (Claude Code turns them off itself for a ZDR organisation); the switch's footer and `topo context threads` say so. Thread state is the process's: every launch, resume, thaw of a process that was ended, `/compact` (its summarising request goes without a thread, the next is a create) and `/clear` is a create. Claude Code also sends without a thread when the history holds a web search's results or the tools changed mid-conversation. The API drops a thread five minutes after its last request, and Claude Code does not presume that, so the first request after a longer pause is a continue answered `404 thread_not_found` before the model runs, and Claude Code sends it again as a create. Nothing of this reaches a turn: a 404 or an unrecognised 400 falls back inside Claude Code, and a name Claude Code no longer reads leaves every request whole, as with the setting off. The only way to tell is what went over the wire, which the proxy notes (`ThreadLog`, below) and `topo context threads` shows.
 
-MEASURED
+What it buys is upload. Measured at 2.1.316 on Haiku 5.5, Claude Code on a Mac through a pass-through that paced the upload to a rate and added 60 ms each way. Each cell is the median of five warm turns: the time from the input to the reply's first token, and the request's upload within it.
+
+| conversation (request without a thread) | 0.5 Mbit/s up | 2 Mbit/s up | 8 Mbit/s up |
+|---|---|---|---|
+| 17k tokens (51 kB) | 2.06 s → 1.76 s | 1.42 s → 1.21 s | 1.31 s → 1.40 s |
+| 100k tokens (234 kB) | 5.38 s → 2.16 s | 2.63 s → 2.26 s | 1.76 s → 1.60 s |
+| 267k tokens (553 kB) | 10.58 s → 2.37 s | 3.87 s → 1.85 s | 2.19 s → 1.72 s |
+| about 850k tokens, near Automatic's threshold (1.75 MB) | 30.64 s → 3.22 s | 9.23 s → 2.49 s | 3.98 s → 2.23 s |
+
+A continue's upload is about 40 kB at every size (0.9 s at 0.5 Mbit/s, 0.4 s at 2); without a thread the 553 kB request takes 9.2 s and 2.4 s. Unshaped, the API's own time to first token is the same with and without (1.52 s and 1.51 s, median, on the 267k conversation), since prompt caching already serves the prefix. In the guest on a simulator the 267k conversation's requests were 40 kB against 600 kB, the head 1.21–1.42 s against 1.31–2.04 s. After 400 s idle the continue was answered 404 in 202 ms and the replayed create's head came 1.41 s later, against 1.45 s for the same turn without a thread: a turn after a pause costs one round trip more than no thread, and uploads the whole conversation like one.
 
 ## The bridge
 
