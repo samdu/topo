@@ -49,6 +49,7 @@ cat >"$work/bin/xcrun" <<'EOF'
 #!/bin/bash
 [ "$1" = simctl ] || exit 1
 run="${SIMCTL_CHILD_TOPO_DEBUG_RUN:-}"
+echo "$2" >>"${FAKE_SIMCTL_CALLS:-/dev/null}"
 say() { echo "[topo-debug] $*"; }
 case "$2" in
   list) if [ -n "${FAKE_SIM_LIST:-}" ]; then echo "$FAKE_SIM_LIST"
@@ -90,6 +91,7 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
                              say "mascot: turn gone for phone/2, idle"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                              say "records: on this phone (no iCloud account when Topo was first opened), protection none"; say "done"; exec sleep 600 ;;
       no-account) say "icloud: no account"; say "done"; exec sleep 600 ;;
+      unavailable) say "icloud: account temporarily unavailable"; say "done"; exec sleep 600 ;;
       lapsed) say "icloud: no answer within 30 s"; say "done"; exec sleep 600 ;;
       refused) say "icloud: refused (CKError 9)"; exec sleep 600 ;;
       answered-by-nobody) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
@@ -195,6 +197,8 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
                        say "guest turn 1 answered in 3.00 s: ok"; say "guest turn done"; exec sleep 600 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
+  # A log show prints lines, and with FAKE_LOG_FAILS fails having printed none.
+  spawn) echo "a line of the device's log"; [ -z "${FAKE_LOG_FAILS:-}" ] || exit 1 ;;
   *) exit 0 ;;
 esac
 EOF
@@ -206,10 +210,44 @@ cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
 [ -z "${FAKE_BUILD_ENV:-}" ] || env >>"$FAKE_BUILD_ENV"
+# The leak check's test: it reads the dummy as the real one does, and records it as XCTest's
+# typeText does (its first 18 characters in the output and the bundle) for the control, and for
+# the redacted route only when FAKE_LEAK_REDACTED says the route leaks.
+case " $* " in *" -only-testing:TopoSimulatorSignInTests/LeakCheckTests "*)
+  dummy="$(/usr/bin/python3 -c '
+import socket, sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5) as s:
+    s.sendall(sys.argv[2].encode() + b"\n"); got = b""
+    while chunk := s.recv(256): got += chunk
+sys.stdout.write(got.decode())' "$TEST_RUNNER_TOPO_SIGNIN_PORT" "$TEST_RUNNER_TOPO_SIGNIN_NONCE")" || exit 65
+  bundle="$(printf '%s\n' "$@" | grep -A1 -x -- -resultBundlePath | tail -1)"
+  mkdir -p "$bundle"
+  if [ "$TEST_RUNNER_TOPO_LEAKCHECK_ROUTE" = typeText ] || [ -n "${FAKE_LEAK_REDACTED:-}" ]; then
+    [ "${FAKE_LEAK_SINK:-both}" = bundle ] || echo "t = Type '${dummy:0:18}...' into SecureTextField"
+    [ "${FAKE_LEAK_SINK:-both}" = output ] || echo "Type '${dummy:0:18}...'" >"$bundle/database.sqlite3"
+  fi
+  as="$TEST_RUNNER_TOPO_LEAKCHECK_ROUTE"; [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" != 1 ] || as=failing
+  [ "${FAKE_LEAK_WRONG:-}" = "$as" ] || echo "[leak-check] $as typed the dummy whole"
+  if [ -n "${FAKE_LEAK_UNREADABLE:-}" ] && [ "$as" = redacted ]; then
+    if [ "$FAKE_LEAK_UNREADABLE" = folder ]; then
+      mkdir -p "$bundle/Attachments"; echo x >"$bundle/Attachments/a"; chmod 000 "$bundle/Attachments"
+    else
+      echo x >"$bundle/attachment"; chmod 000 "$bundle/attachment"
+    fi
+  fi
+  if [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" = 1 ]; then
+    echo "error: failing after the dummy, as a stopped sign-in does"
+    [ -z "${FAKE_LEAK_RECORDS:-}" ] || printf '\0\0\0\x20ftypmp42' >"$bundle/recording"
+    echo "** TEST FAILED **"; exit 65
+  fi
+  echo "** TEST SUCCEEDED **"; exit 0 ;;
+esac
 # The sign-in's test: what it was started with, and what the listener hands a request with a
 # wrong nonce and then with the run's own.
 case " $* " in *" TopoSimulatorSignIn "*)
   env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
+  [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
+  [ -n "${TEST_RUNNER_TOPO_SIGNIN_PORT:-}" ] || exit 0  # a resume serves nothing to ask
   /usr/bin/python3 -c '
 import socket, sys
 port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -234,6 +272,8 @@ for _ in range(20):
     time.sleep(0.1)
 open(out, "wb").write(b"wrong:" + wrong + b"\nright:" + right + b"\nagain:" + again)' \
     "${TEST_RUNNER_TOPO_SIGNIN_PORT:-0}" "${TEST_RUNNER_TOPO_SIGNIN_NONCE:-}" "$FAKE_SIGNIN_GOT" || exit 65
+  # Typed as typeText would, the served password's first 18 characters in the output.
+  [ -z "${FAKE_SIGNIN_LEAKS:-}" ] || echo "Type '$(sed -n 's/^right://p' "$FAKE_SIGNIN_GOT" | cut -c1-18)...' into \"password-field\""
   ;;
 esac
 # The talk's build and test: what each was started with, and what the app the test launches
@@ -258,7 +298,28 @@ if [ "${FAKE_XCODEBUILD:-}" = hangs ]; then
 fi
 echo "** TEST SUCCEEDED **"
 EOF
-chmod +x "$work/bin/xcrun" "$work/bin/op-item" "$work/bin/xcodebuild"
+# When the simulator and coreaudiod started, as `ps -o lstart=` gives it: FAKE_SIM_BOOTED
+# (none: the simulator is shut down) and FAKE_AUDIO_STARTED. Pids 501 and 502 stand for them.
+cat >"$work/bin/pgrep" <<'EOF2'
+#!/bin/bash
+case "$*" in
+  "-x coreaudiod") echo 502 ;;
+  *"/Devices/"*"/launchd_bootstrap.plist") [ -z "${FAKE_SIM_BOOTED:-}" ] || echo 501 ;;
+  *) exit 1 ;;
+esac
+EOF2
+# Outside the C locale it writes the day and month as a French locale would, which a reader that
+# does not ask for C cannot parse.
+cat >"$work/bin/ps" <<'EOF2'
+#!/bin/bash
+c() { if [ "${LC_ALL:-}" = C ]; then cat; else sed 's/^Sat/sam./; s/^Mon/lun./; s/^Wed/mer./; s/ Nov / nov. /'; fi; }
+case "$*" in
+  "-o lstart= -p 501") echo "${FAKE_SIM_BOOTED} " | c ;;
+  "-o lstart= -p 502") echo "${FAKE_AUDIO_STARTED:-Wed Nov 11 17:10:52 2026} " | c ;;
+  *) exit 1 ;;
+esac
+EOF2
+chmod +x "$work/bin/xcrun" "$work/bin/op-item" "$work/bin/xcodebuild" "$work/bin/pgrep" "$work/bin/ps"
 
 failures=0
 export FAKE_LAUNCHER_PID="$work/launcher.pid" FAKE_XCODEBUILD_CALLS="$work/xcodebuild.calls"
@@ -352,6 +413,12 @@ case_ send-answered-on-the-phone           fail answered-on-the-phone quick --se
 case_ send-no-icloud-account               fail no-account           quick  --send hello
 case_ send-icloud-lapsed                   fail lapsed               quick  --send hello
 case_ send-icloud-refused                  fail refused              quick  --send hello
+case_ send-icloud-unavailable              fail unavailable          quick  --send hello
+# Signed in with CloudKit refusing the account is a sign-in a restart ended, which only a
+# sign-out and sign-in mend: the failure says so and names --renew.
+grep -Fq "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in --renew" "$work/send-icloud-unavailable.out" \
+  && grep -Fq "a restart of the simulator ends it with no prompt; a change of the account's password ends it" "$work/send-icloud-unavailable.out" \
+  || { echo "FAIL send-icloud-unavailable: the failure does not name the restart and --renew"; sed 's/^/    | /' "$work/send-icloud-unavailable.out"; failures=$((failures + 1)); }
 # A device with no account or a lapsed one is named, with the sign-in that mends it.
 for c in send-no-icloud-account send-icloud-lapsed send-icloud-refused; do
   grep -Fq "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in" "$work/$c.out" \
@@ -544,6 +611,31 @@ else
   failures=$((failures + 1))
 fi
 
+# --talk reboots the simulator only when it booted before coreaudiod started, since a reboot ends
+# its iCloud sign-in: one booted since hears the lane as it is, one shut down is booted, and one
+# rebooted says the sign-in is gone and names --renew.
+# reboot_case <name> <when the simulator booted, or empty> <simctl calls expected among boot/shutdown> [text]
+reboot_case() {
+  local name="$1" out="$work/$1.out" status calls
+  : >"$work/simctl.calls"
+  PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
+    FAKE_TALK_ENV="$work/$1.env" FAKE_TALK_GOT="$work/$1.got" FAKE_SIMCTL_CALLS="$work/simctl.calls" FAKE_SIM_BOOTED="$2" \
+    FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" LC_ALL=fr_FR.UTF-8 \
+    "$work/root/scripts/simulator-run.sh" --no-build --talk >"$out" 2>&1 </dev/null
+  status=$?
+  calls="$(grep -xE 'boot|shutdown' "$work/simctl.calls" | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$status" = 0 ] && [ "$calls" = "$3" ] && { [ -z "${4:-}" ] || grep -Fq "$4" "$out"; }; then
+    echo "ok   $name: simctl was asked: ${calls:-neither boot nor shutdown}"
+  else
+    echo "FAIL $name: exit $status, wanted '$3'${4:+ and \"$4\"}, simctl was asked '$calls'"
+    sed 's/^/    | /' "$out" | grep -vF "$token"
+    failures=$((failures + 1))
+  fi
+}
+reboot_case talk-booted-since-audio  "Sat Nov 14 13:32:28 2026" ""
+reboot_case talk-booted-before-audio "Mon Nov  9 09:05:01 2026" "shutdown boot" "scripts/simulator-run.sh --sign-in --renew"
+reboot_case talk-shut-down           ""                         "boot"
+
 # A talk test that passes without the app having read the token (the app ran on some other
 # login) fails the run.
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
@@ -561,7 +653,7 @@ fi
 # --sign-in, against a fake vault and a fake test that asks the listener for the password: the
 # listener hands nothing to a request without the run's nonce and the password to one with it,
 # and the password is in none of the test runner's arguments, its environment or the run's output.
-secret="fake-apple-password-$$"
+secret="Fk9xQa7p-$$-Lm2wZr4t"  # no word a log line holds, which an 8-character count would find
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/signin.env" FAKE_SIGNIN_GOT="$work/signin.got" \
   GH_TOKEN="fake-gh-signin-$$" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
@@ -576,6 +668,119 @@ else
   echo "FAIL sign-in-password-once: exit $status, the listener gave: $(printf %s "$got" | tr "\n" "|"), the password is in: ${leaks:-nothing}, xcodebuild was called with: $(tr "\n" "|" < "$FAKE_XCODEBUILD_CALLS")"
   sed 's/^/    | /' "$work/signin.out"
   failures=$((failures + 1))
+fi
+# The sign-in's test collects no diagnostics, which are the simulator's log archive, and is told
+# to renew only when asked; --renew is refused without --sign-in.
+renew_case() {
+  local name="$1" want="$2"; shift 2
+  : >"$FAKE_XCODEBUILD_CALLS"
+  PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/$name.env" FAKE_SIGNIN_GOT="$work/$name.got" \
+    "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$work/$name.out" 2>&1 </dev/null
+  local status=$?
+  if [ "$status" = 0 ] && grep -qx "TEST_RUNNER_TOPO_SIGNIN_RENEW=$want" "$work/$name.env" \
+     && grep -q "^test .*-collect-test-diagnostics never" "$FAKE_XCODEBUILD_CALLS"; then
+    echo "ok   $name: the test was told TOPO_SIGNIN_RENEW=$want and collects no diagnostics"
+  else
+    echo "FAIL $name: exit $status, wanted TOPO_SIGNIN_RENEW=$want; the test got: $(grep RENEW "$work/$name.env" 2>/dev/null), xcodebuild: $(cat "$FAKE_XCODEBUILD_CALLS")"
+    sed 's/^/    | /' "$work/$name.out"
+    failures=$((failures + 1))
+  fi
+}
+renew_case sign-in-renews-when-asked 1 --sign-in --renew
+FAKE_SIGNIN_SAYS="[sign-in] already signed in as buddy.durose@icloud.com, and nothing asks for the password" \
+  renew_case sign-in-keeps-the-account 0 --sign-in
+grep -Fq "scripts/simulator-run.sh --sign-in --renew" "$work/sign-in-keeps-the-account.out" \
+  || { echo "FAIL sign-in-names-renew: an already-signed-in device's line does not name --renew"; failures=$((failures + 1)); }
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build --renew >"$work/renew-alone.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 2 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
+  echo "ok   renew-without-sign-in: refused with exit 2"
+else
+  echo "FAIL renew-without-sign-in: exit $status"; failures=$((failures + 1))
+fi
+# A resume reads no vault item (the fake one fails) and serves nothing, and its test runs only
+# the sign-in's suite; --resume is refused with --renew, and --leak-check with --sign-in.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" FAKE_SIGNIN_ENV="$work/resume.env" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in --resume >"$work/resume.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 0 ] && grep -qx "TEST_RUNNER_TOPO_SIGNIN_RESUME=1" "$work/resume.env" \
+   && grep -qx "TEST_RUNNER_TOPO_SIGNIN_PORT=" "$work/resume.env" \
+   && grep -q -- "-only-testing:TopoSimulatorSignInTests/SimulatorSignInTests " "$FAKE_XCODEBUILD_CALLS"; then
+  echo "ok   sign-in-resume: no password read or served, the test told to resume"
+else
+  echo "FAIL sign-in-resume: exit $status; the test got: $(grep -E 'RESUME|PORT' "$work/resume.env" 2>/dev/null | tr '\n' ' '), xcodebuild: $(cat "$FAKE_XCODEBUILD_CALLS")"
+  sed 's/^/    | /' "$work/resume.out"
+  failures=$((failures + 1))
+fi
+for refused in "--sign-in --resume --renew" "--sign-in --leak-check"; do
+  : >"$FAKE_XCODEBUILD_CALLS"
+  # shellcheck disable=SC2086
+  PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build $refused >"$work/refused.out" 2>&1 </dev/null
+  status=$?
+  if [ "$status" = 2 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
+    echo "ok   refused: $refused exits 2"
+  else
+    echo "FAIL refused: $refused exited $status"; failures=$((failures + 1))
+  fi
+done
+# The leak check passes only when the control's dummy is found in the output and the bundle, the
+# redacted one nowhere, and a failing run's bundle holds no screen recording; a control the count
+# cannot see fails it as a leak does.
+printf '#!/bin/sh\necho "a line of the Mac log"\n[ -z "$FAKE_LOG_FAILS" ] || exit 1\n' >"$work/bin/log"; chmod +x "$work/bin/log"
+leak_case() {
+  local name="$1" want="$2"; shift 2
+  : >"$FAKE_XCODEBUILD_CALLS"
+  env PATH="$work/bin:$PATH" "$@" "$work/root/scripts/simulator-run.sh" --no-build --leak-check >"$work/$name.out" 2>&1 </dev/null
+  local status=$?
+  if [ "$status" = "$want" ] && [ "$(grep -c -- '-only-testing:TopoSimulatorSignInTests/LeakCheckTests' "$FAKE_XCODEBUILD_CALLS")" = 3 ] \
+     && ! grep -q "TopoLeakCheck" <(ls "$work/root/build/sim"); then
+    echo "ok   $name: exit $status, every route run, no bundle kept"
+  else
+    echo "FAIL $name: exit $status, wanted $want"; sed 's/^/    | /' "$work/$name.out"; failures=$((failures + 1))
+  fi
+}
+leak_case leak-check-clean 0 FAKE_LEAK=none
+leak_case leak-check-redacted-leaks 1 FAKE_LEAK_REDACTED=1
+leak_case leak-check-control-unseen-in-bundle 1 FAKE_LEAK_SINK=output
+leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
+leak_case leak-check-failing-run-recorded 1 FAKE_LEAK_RECORDS=1
+leak_case leak-check-failing-run-typed-wrong 1 FAKE_LEAK_WRONG=failing
+leak_case leak-check-unreadable-attachment 1 FAKE_LEAK_UNREADABLE=1
+leak_case leak-check-unreadable-folder 1 FAKE_LEAK_UNREADABLE=folder
+leak_case leak-check-log-unread 1 FAKE_LOG_FAILS=1
+# A sign-in whose run left any 8 characters of the password fails and names where, not what.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_LEAKS=1 FAKE_SIGNIN_ENV="$work/leaks.env" FAKE_SIGNIN_GOT="$work/leaks.got" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-leaks.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 1 ] && grep -q "the password is in what this run left, by count: password .*simulator-run.log: [1-9]" "$work/signin-leaks.out" \
+   && [ "$(grep -cE "the password is in|password's characters" "$work/sign-in-renews-when-asked.out")" = 1 ] \
+   && grep -q "no 8 of the password's characters are in the run's log, and the run wrote no bundle" "$work/sign-in-renews-when-asked.out"; then
+  echo "ok   sign-in-counts-the-password: a run that left it fails, one that did not says so"
+else
+  echo "FAIL sign-in-counts-the-password: exit $status"; sed 's/^/    | /' "$work/signin-leaks.out"; failures=$((failures + 1))
+fi
+# A password past ASCII is counted by its characters, and its leaked prefix found, rather than the
+# count failing on a byte split inside a character.
+wide="abcdefgé12345678Zq-$$"
+PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$wide" FAKE_SIGNIN_LEAKS=1 FAKE_SIGNIN_ENV="$work/wide.env" FAKE_SIGNIN_GOT="$work/wide.got" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-wide.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 1 ] && grep -q "the password is in what this run left, by count: password .*simulator-run.log: [1-9]" "$work/signin-wide.out"; then
+  echo "ok   sign-in-counts-a-wide-password: its leaked prefix is found"
+else
+  echo "FAIL sign-in-counts-a-wide-password: exit $status"; sed 's/^/    | /' "$work/signin-wide.out" | grep -vF "$wide"; failures=$((failures + 1))
+fi
+# A resume takes no code, since it types nothing.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" SIGNIN_CODE=123456 "$work/root/scripts/simulator-run.sh" --no-build --sign-in --resume >"$work/resume-code.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 2 ] && [ ! -s "$FAKE_XCODEBUILD_CALLS" ]; then
+  echo "ok   refused: --sign-in --resume with SIGNIN_CODE exits 2"
+else
+  echo "FAIL refused: --sign-in --resume with SIGNIN_CODE exited $status"; failures=$((failures + 1))
 fi
 # A vault that gives no password stops the run before any test starts.
 : >"$FAKE_XCODEBUILD_CALLS"

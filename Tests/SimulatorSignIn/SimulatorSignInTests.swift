@@ -7,7 +7,8 @@ import XCTest
 /// The account arrives as `TOPO_SIGNIN_ACCOUNT`. The password never reaches the runner's
 /// environment, which the result bundle's session log records whole: the script serves it once
 /// on the host's loopback (`TOPO_SIGNIN_PORT`) to a request carrying `TOPO_SIGNIN_NONCE`, and
-/// it is typed only into a secure field, whose typing XCTest logs as `<redacted>`.
+/// it is typed only into a secure field, through `RedactedTyping` and never `typeText`, whose
+/// activity title carries what it types.
 ///
 /// It is typed once, and submitted only when the field holds as many characters as it has. A
 /// refusal, a passcode or a screen this test does not know fails with what the screen showed, and
@@ -24,6 +25,14 @@ final class SimulatorSignInTests: XCTestCase {
         let account = try XCTUnwrap(env["TOPO_SIGNIN_ACCOUNT"].flatMap { $0.isEmpty ? nil : $0 },
                                     "no TOPO_SIGNIN_ACCOUNT")
         let accountCell = settings.buttons["com.apple.settings.primaryAppleAccount"]
+        // A run that resumes types nothing and asks for no password, a code included: it takes up
+        // the screens after the password where a sign-in stopped on one it did not know.
+        if env["TOPO_SIGNIN_RESUME"] == "1" {
+            settings.activate()
+            snap("resume")
+            print("[sign-in] resuming the screens after the password")
+            return try finish(accountCell, account: account)
+        }
         if let code = env["TOPO_SIGNIN_CODE"], !code.isEmpty {
             settings.activate()
             guard asksForCode(screenWords()) != nil else { return stopped("given a code, but no screen asks for one") }
@@ -35,6 +44,16 @@ final class SimulatorSignInTests: XCTestCase {
         settings.activate()
         guard accountCell.waitForExistence(timeout: 20) else { return stopped("Settings showed no Apple Account cell") }
         snap("start")
+
+        // A sign-in that ended at a restart of the simulator shows nothing in Settings, and no
+        // prompt can mend it (docs/simulator.md, *A lapse*): asked to renew, the account is signed
+        // out first and signed in as on a device that never had one.
+        if env["TOPO_SIGNIN_RENEW"] == "1", !accountCell.label.hasPrefix("Apple Account, Sign in"), lapsePrompt() == nil {
+            guard shows(account, after: accountCell) else {
+                return stopped("signed in to an account that is not \(account); sign it out by hand first")
+            }
+            if let why = signOut(accountCell, account: account) { return stopped(why) }
+        }
 
         let firstSignIn = accountCell.label.hasPrefix("Apple Account, Sign in")
         if firstSignIn {
@@ -69,9 +88,17 @@ final class SimulatorSignInTests: XCTestCase {
         guard firstSignIn || screenWords().contains(where: { names($0, account) }) else {
             return stopped("the password prompt does not name \(account); nothing was typed")
         }
-        let secret = try password()
+        let secret = try servedSecret()
         field.tap()
-        field.typeText(secret)
+        // Never `typeText`, which writes what it types into its activity's title (RedactedTyping).
+        do {
+            try RedactedTyping.type(secret, into: field, record: "the password")
+        } catch {
+            // Some characters may have gone in before the failure, and the field shows its last
+            // one for a moment: the stop's screenshot waits for it to be hidden, as the check below does.
+            sleep(3)
+            return stopped("\(error)")
+        }
         // A secure field shows its last character for a moment, and every screenshot is kept.
         sleep(3)
         let typed = (field.value as? String)?.count ?? 0
@@ -105,11 +132,13 @@ final class SimulatorSignInTests: XCTestCase {
                 return stopped("Apple asks for a two-factor code (\(code)); the screen is left up for SIGNIN_CODE=<code> scripts/simulator-run.sh --sign-in")
             }
             // What a first sign-in asks after the password: keep the simulator's own data out of
-            // the account, agree to the terms, and decline the rest.
+            // the account, agree to the terms, decline the rest, and go past what only informs
+            // (Safety Settings' Continue).
             if let answer = first(
                 settings.buttons["Don’t Merge"], settings.buttons["Don't Merge"],
                 settings.buttons["Agree"], springboard.buttons["Agree"], settings.alerts.buttons["Agree"],
-                settings.buttons["Not Now"], springboard.buttons["Not Now"], settings.buttons["Skip"], settings.buttons["Later"]
+                settings.buttons["Not Now"], springboard.buttons["Not Now"], settings.buttons["Skip"], settings.buttons["Later"],
+                settings.buttons["Continue"]
             ) {
                 print("[sign-in] step \(step): \(answer.label)")
                 answer.tap()
@@ -134,9 +163,68 @@ final class SimulatorSignInTests: XCTestCase {
                 print("[sign-in] signed in: \(account) (\(label))")
                 return
             }
+            // A sign-in that went through the account's own page ends there: its Sign Out and
+            // the account named on it are the account signed in.
+            let whole = Self.wholePattern(account)
+            if !sheetUp, lapsePrompt() == nil, settings.buttons["AAUIDeleteButtonSpecifierID"].exists,
+               settings.staticTexts.matching(NSPredicate(format: "label MATCHES %@", whole)).firstMatch.exists {
+                snap("signed-in")
+                print("[sign-in] signed in: \(account) (its account page)")
+                return
+            }
             if step % 5 == 0 { snap("waiting-\(step)") }
         }
         stopped("Settings did not show the account signed in within 120 s")
+    }
+
+    /// Signs the account out from its own page, which `shows` left open, answering the sheets on
+    /// the way, until Settings offers a sign-in: nil then, or why it stopped. Nothing is typed: a
+    /// sign-out that asks for the password (Find My, on a phone) stops here.
+    private func signOut(_ accountCell: XCUIElement, account: String) -> String? {
+        let button = settings.buttons["AAUIDeleteButtonSpecifierID"].firstMatch
+        var swipes = 0
+        while !(button.exists && button.isHittable), swipes < 8 {
+            settings.swipeUp()
+            swipes += 1
+        }
+        guard button.exists, button.isHittable else { return "the account's page has no Sign Out" }
+        snap("sign-out")
+        print("[sign-in] signing \(account) out, to sign it in again")
+        settings.cells["AAUIDeleteButtonSpecifierID"].firstMatch.tap()
+        // The page's own Sign Out stays under whatever it opens, so a confirmation is any other
+        // button of that name, Settings' or SpringBoard's. Nothing that erases is ever tapped.
+        let other = NSPredicate(format: "label == 'Sign Out' AND identifier != 'AAUIDeleteButtonSpecifierID'")
+        let deadline = Date().addingTimeInterval(120)
+        var step = 0
+        while Date() < deadline {
+            sleep(2)
+            step += 1
+            snap("signing-out-\(step)")
+            print("[sign-in] sign-out step \(step) shows: \(screenWords().prefix(12).joined(separator: " | "))")
+            if settings.secureTextFields.firstMatch.exists || springboard.secureTextFields.firstMatch.exists {
+                return "signing out asks for a password; nothing was typed"
+            }
+            // iOS asks whether to erase the device after signing out, and the answer is never to;
+            // then says most data stays on the device (Continue), and that what an app has not
+            // synced goes (Continue Anyway: the simulator keeps nothing of its own). An alert
+            // stands over the sheet under it, so alerts are answered first.
+            if let answer = first(settings.alerts.buttons["Continue Anyway"], springboard.alerts.buttons["Continue Anyway"],
+                                  springboard.alerts.buttons.matching(other).firstMatch, settings.alerts.buttons.matching(other).firstMatch,
+                                  settings.buttons["Sign Out But Don’t Erase"], settings.buttons["Sign Out But Don't Erase"],
+                                  settings.buttons["Continue"],
+                                  settings.sheets.buttons.matching(other).firstMatch, settings.buttons.matching(other).firstMatch) {
+                print("[sign-in] sign-out step \(step): tapped \(answer.label)")
+                answer.tap()
+                continue
+            }
+            // Signed out, Settings goes back to its list, where the cell offers a sign-in.
+            if accountCell.exists, accountCell.label.hasPrefix("Apple Account, Sign in") {
+                snap("signed-out")
+                print("[sign-in] signed out")
+                return nil
+            }
+        }
+        return "Settings did not offer a sign-in within 120 s of Sign Out"
     }
 
     /// Whether the account's own page, opened from its cell, names this account.
@@ -194,38 +282,6 @@ final class SimulatorSignInTests: XCTestCase {
         return nil
     }
 
-    /// The password, read once from the script's loopback listener.
-    private func password() throws -> String {
-        let env = ProcessInfo.processInfo.environment
-        let port = try XCTUnwrap(env["TOPO_SIGNIN_PORT"].flatMap(UInt16.init), "no TOPO_SIGNIN_PORT")
-        let nonce = try XCTUnwrap(env["TOPO_SIGNIN_NONCE"], "no TOPO_SIGNIN_NONCE")
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw failure("socket: \(errno)") }
-        defer { close(fd) }
-        var bound = timeval(tv_sec: 10, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
-        var address = sockaddr_in()
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-        }
-        guard connected == 0 else { throw failure("the password's listener refused the connection: \(errno)") }
-        let ask = Array((nonce + "\n").utf8)
-        guard write(fd, ask, ask.count) == ask.count else { throw failure("could not ask for the password: \(errno)") }
-        var bytes: [UInt8] = []
-        var chunk = [UInt8](repeating: 0, count: 256)
-        while true {
-            let n = read(fd, &chunk, chunk.count)
-            if n < 0 { throw failure("could not read the password: \(errno)") }
-            if n == 0 { break }
-            bytes += chunk[0..<n]
-        }
-        let password = String(decoding: bytes, as: UTF8.self)
-        guard !password.isEmpty else { throw failure("the listener gave no password") }
-        return password
-    }
 
     private func first(_ candidates: XCUIElement...) -> XCUIElement? {
         // A sheet's buttons are in the hierarchy twice, and a query matching two cannot be asked
@@ -261,4 +317,42 @@ final class SimulatorSignInTests: XCTestCase {
     private func failure(_ why: String) -> Error {
         NSError(domain: "SimulatorSignIn", code: 1, userInfo: [NSLocalizedDescriptionKey: why])
     }
+}
+
+/// The secret the script serves once on the host's loopback (`TOPO_SIGNIN_PORT`), to a request
+/// carrying `TOPO_SIGNIN_NONCE`: the password for a sign-in, a dummy for a leak check.
+func servedSecret() throws -> String {
+    let env = ProcessInfo.processInfo.environment
+    let port = try XCTUnwrap(env["TOPO_SIGNIN_PORT"].flatMap(UInt16.init), "no TOPO_SIGNIN_PORT")
+    let nonce = try XCTUnwrap(env["TOPO_SIGNIN_NONCE"], "no TOPO_SIGNIN_NONCE")
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw served("socket: \(errno)") }
+    defer { close(fd) }
+    var bound = timeval(tv_sec: 10, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &bound, socklen_t(MemoryLayout<timeval>.size))
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    guard connected == 0 else { throw served("the password's listener refused the connection: \(errno)") }
+    let ask = Array((nonce + "\n").utf8)
+    guard write(fd, ask, ask.count) == ask.count else { throw served("could not ask for the password: \(errno)") }
+    var bytes: [UInt8] = []
+    var chunk = [UInt8](repeating: 0, count: 256)
+    while true {
+        let n = read(fd, &chunk, chunk.count)
+        if n < 0 { throw served("could not read the password: \(errno)") }
+        if n == 0 { break }
+        bytes += chunk[0..<n]
+    }
+    let password = String(decoding: bytes, as: UTF8.self)
+    guard !password.isEmpty else { throw served("the listener gave no password") }
+    return password
+}
+
+private func served(_ why: String) -> Error {
+    NSError(domain: "SimulatorSignIn", code: 1, userInfo: [NSLocalizedDescriptionKey: why])
 }

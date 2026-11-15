@@ -609,7 +609,8 @@ targets:
   # Signs the simulator into its iCloud account, or signs it in again once the sign-in has
   # lapsed, by driving Settings (`scripts/simulator-run.sh --sign-in`). It needs the account's
   # password and a simulator nobody else is using, so it is in its own scheme and never in the
-  # Topo scheme's test action. It drives Settings and SpringBoard alone, so it has no target app.
+  # Topo scheme's test action. It drives Settings and SpringBoard, and its leak check
+  # (`--leak-check`) Safari, and no app of Topo's, so it has no target app.
   TopoSimulatorSignInTests:
     type: bundle.ui-testing
     platform: iOS
@@ -684,6 +685,9 @@ schemes:
     test:
       config: Debug
       targets: [TopoSimulatorSignInTests]
+      # XCTest's own capture records the screen, on which a secure field shows each character
+      # it is given for a moment: the test keeps only the screenshots it takes itself, after.
+      captureScreenshotsAutomatically: false
   TopoWatch:
     build:
       targets: { TopoWatch: all, TopoWatchTests: [test] }

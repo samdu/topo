@@ -31,6 +31,7 @@
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   scripts/simulator-run.sh --sign-in              # sign the simulator into buddy's iCloud account
+#   scripts/simulator-run.sh --sign-in --renew      # sign it out and in again after a restart ended it
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
 #
 # The token comes from the environment (CLAUDE_SETUP_TOKEN, which is what the vault item
@@ -46,7 +47,7 @@
 # the build description under build/sim's XCBuildData; and every test it runs collects no
 # diagnostics, which are the simulator's log archive.
 #
-# --sign-in runs the TopoSimulatorSignIn scheme's one UI test (Tests/SimulatorSignIn), which signs
+# --sign-in runs the TopoSimulatorSignIn scheme's sign-in test (Tests/SimulatorSignIn), which signs
 # the device into SIGNIN_ACCOUNT (buddy.durose@icloud.com) through Settings, as a first sign-in or
 # again after a lapse, and passes only when scripts/ci-require-tests.sh finds it ran and passed.
 # The password is the vault item `Buddy Apple ID`, read with `op-item` and handed to the test
@@ -54,6 +55,22 @@
 # It is typed once: a refusal, a two-factor code or a screen the test does not know stops the run
 # with what the screen showed. A two-factor stop leaves the code screen up, and
 # SIGNIN_CODE=<code> scripts/simulator-run.sh --sign-in types the code into it and goes on.
+# The sign-in does not survive a restart of the simulator: it keeps no continuation key and no
+# CloudKit token on disk, so after a reboot Settings still shows the account, nothing asks for the
+# password, and CloudKit answers "temporarily unavailable"; a change of the account's password
+# ends it without a restart, with an Apple Account Verification alert. --renew signs the account out in
+# Settings and in again, typing the password once; it is asked for by name, never taken.
+# The password is typed through RedactedTyping, never XCTest's typeText, which writes what it
+# types into its activity's title and so into the run's output and the result bundle.
+#
+# --leak-check proves that on a dummy, on a simulator signed into nothing that matters: it types a
+# random dummy, served as the password is, into a web page's password field in Safari, once with
+# typeText (the control) and through RedactedTyping in a run that passes and one that fails after
+# typing, and counts every 8-character run of each dummy in the run's output, the result bundle
+# (its compressed blobs unpacked with zstd), build/sim/Logs/Test and the device's and the Mac's
+# logs for the run. It passes only when the control's dummy is found in the output and the bundle,
+# the redacted one nowhere, and neither redacted bundle holds a screen recording. It prints
+# counts, never a dummy.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
 # ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
@@ -125,6 +142,9 @@ expect_claude=""
 expect_bash=""
 fresh=no
 signin=no
+renew=no
+resume=no
+leakcheck=no
 timeout="${TIMEOUT:-180}"
 
 while [ $# -gt 0 ]; do
@@ -144,7 +164,10 @@ while [ $# -gt 0 ]; do
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
     --sign-in) signin=yes; shift ;;
-    -h|--help) sed -n '2,101p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --renew) renew=yes; shift ;;
+    --resume) resume=yes; shift ;;
+    --leak-check) leakcheck=yes; shift ;;
+    -h|--help) sed -n '2,121p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -160,6 +183,11 @@ def version(runtime):
 found = [(version(r), d["udid"]) for r, ds in json.load(sys.stdin)["devices"].items() for d in ds if n in (d["name"], d["udid"])]
 print(max(found)[1] if found else "")' "$device")"
 [ -n "$udid" ] || { echo "no available simulator named '$device'; xcrun simctl list devices available" >&2; exit 1; }
+
+[ "$renew" = no ] || [ "$signin" = yes ] || { echo "--renew is a way of --sign-in: --sign-in --renew" >&2; exit 2; }
+[ "$resume" = no ] || { [ "$signin" = yes ] && [ "$renew" = no ]; } || { echo "--resume is a way of --sign-in, without --renew: --sign-in --resume" >&2; exit 2; }
+[ "$resume" = no ] || [ -z "${SIGNIN_CODE:-}" ] || { echo "--resume types nothing, so it takes no SIGNIN_CODE" >&2; exit 2; }
+[ "$leakcheck" = no ] || [ "$signin" = no ] || { echo "--leak-check signs nothing in: run it alone, on a simulator signed into nothing that matters" >&2; exit 2; }
 
 if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
@@ -303,6 +331,193 @@ sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") &
   [ -n "$served_port" ] || { echo "the listener that serves the $2 did not start" >&2; exit 1; }
 }
 
+# When the process with this pid started, in seconds since the epoch, or nothing for no pid.
+# ps writes and date reads it in C and UTC whatever the caller's locale and zone, as
+# scripts/validate-and-push.sh's began_of does, and through env rather than an assignment of the
+# shell's own, for the reason given there.
+process_start() {
+  [ -n "$1" ] || return 0
+  local started
+  started="$(env LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//')" || return 0
+  [ -n "$started" ] || return 0
+  env LC_ALL=C TZ=UTC date -j -f '%a %b %d %T %Y' "$started" +%s 2>/dev/null || true
+}
+
+# Exits non-zero, which a caller takes as nothing proven, when the secret cannot be read or is
+# shorter than a run.
+# How many times any 8-character run of the secret on fd 3 is in each path (a file, or a folder
+# read whole, its gzip and zstd blobs unpacked, which a result bundle's are) or, for "-", in
+# stdin. Prints "<label> <path>: <count>", "unreadable" for a blob it could not unpack, and the
+# screen recordings among the files, which show what a secure field is given and which no count
+# of bytes can read; nothing of the secret, which arrives on a pipe and never as an argument.
+# count_runs <label> <path>...
+count_runs() {
+  /usr/bin/python3 -c '
+import gzip, os, subprocess, sys
+label, paths = sys.argv[1], sys.argv[2:]
+unread, videos = set(), {}
+secret = os.fdopen(3, "rb").read().decode("utf-8")
+if len(secret) < 8:
+    sys.exit("the secret is shorter than the 8 characters a run is counted in")
+# Runs of characters, not bytes, so a character past ASCII is never split across two.
+chars = {secret[i:i + 8] for i in range(len(secret) - 7)}
+runs = {r.encode("utf-8") for r in chars} | {r.encode("utf-16-le") for r in chars}
+def blobs(path):
+    videos[path] = 0
+    if path == "-":
+        data = sys.stdin.buffer.read()
+        if not data:
+            unread.add(path)
+        yield data; return
+    files = [path] if os.path.isfile(path) else [os.path.join(d, f) for d, _, fs in os.walk(path, onerror=lambda e: unread.add(path)) for f in fs]
+    for f in files:
+        try:
+            data = open(f, "rb").read()
+        except OSError:
+            unread.add(path)
+            continue
+        yield data
+        if data[4:8] == b"ftyp":
+            videos[path] += 1
+        if data[:4] == b"\x28\xb5\x2f\xfd":
+            try:
+                yield subprocess.run(["zstd", "-dcq", f], capture_output=True, check=True, timeout=120).stdout
+            except Exception:
+                unread.add(path)
+        if data[:2] == b"\x1f\x8b":
+            try:
+                yield gzip.decompress(data)
+            except Exception:
+                unread.add(path)
+for path in paths:
+    found = path == "-" or os.path.exists(path)
+    n = sum(blob.count(r) for blob in blobs(path) for r in runs) if found else "absent"
+    if path in unread:
+        n = "unreadable"
+    elif videos.get(path):
+        n = f"{n} and {videos[path]} screen recording(s)"
+    print(f"{label} {path}: {n}")' "$@"
+}
+
+# True once tee has written the run's log up to a mark printed now, so nothing printed before it
+# is still on its way to the file: a log is counted only after this, and a mark not seen within
+# ten seconds is a log not read.
+# log_drained <what the mark says>
+log_drained() {
+  local mark
+  mark="==> $1 ($(uuidgen))"
+  echo "$mark"
+  for _ in $(seq 50); do grep -qxF "$mark" "$runlog" && return 0; sleep 0.2; done
+  return 1
+}
+
+# Counts the dummy in what a command prints, read on a pipe and never kept. A command that fails
+# or runs out its time, or prints nothing, is a log not read, which says "unreadable", not 0.
+# count_log <label> <name> <command…>
+count_log() {
+  local label="$1" name="$2" out
+  shift 2
+  if out="$("$@" 2>/dev/null | count_runs "$label" - 3< <(printf '%s' "$dummy"))"; then
+    printf '%s\n' "$out" | sed "s/ -:/ $name:/"
+  else
+    echo "$label $name: unreadable"
+  fi
+}
+
+if [ "$leakcheck" = yes ]; then
+  # The page the dummy is typed into, served on the host's loopback until the run ends.
+  pagefile="$derived/leak-check.$$.port"
+  rm -f "$pagefile"
+  /usr/bin/python3 -c '
+import http.server, sys
+page = b"""<!doctype html><meta name=viewport content="width=device-width">
+<form><input type=password aria-label="leak-check" autocomplete=off oninput="shown(this.value)"></form><p id=h>sha none</p>
+<script>
+function shown(value) {
+  crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)).then(function (b) {
+    document.getElementById("h").textContent = "sha " + Array.from(new Uint8Array(b), function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+  });
+}
+</script>"""
+class Page(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers(); self.wfile.write(page)
+    def log_message(self, *_): pass
+server = http.server.HTTPServer(("127.0.0.1", 0), Page)
+open(sys.argv[1], "w").write(str(server.server_address[1]))
+server.timeout = 1800
+server.serve_forever()' "$pagefile" &
+  page_pid=$!
+  echo "$page_pid" >>"$pids"
+  started_pids="$started_pids $page_pid"
+  for _ in $(seq 50); do [ -s "$pagefile" ] && break; sleep 0.2; done
+  page_port="$(cat "$pagefile" 2>/dev/null)"
+  rm -f "$pagefile"
+  [ -n "$page_port" ] || { echo "the leak check's page did not start" >&2; exit 1; }
+  xcrun simctl boot "$udid" 2>/dev/null || true
+  xcrun simctl bootstatus "$udid" -b >/dev/null
+  status=0
+  counts="$derived/leak-check.$$.counts"
+  : >"$counts"
+  # A failing run is the one a stopped sign-in leaves, which keeps what a passing one may not.
+  for route in typeText redacted failing; do
+    # Letters and digits with symbols among them, as a password has, in runs longer than eight.
+    dummy="$(openssl rand -base64 48 | tr -dc A-Za-z0-9 | cut -c1-30)"
+    dummy="${dummy:0:10}#${dummy:10:10}%!${dummy:20}"
+    nonce="$(uuidgen)"
+    serve_once "$nonce" dummy
+    results="$derived/TopoLeakCheck-$route.xcresult"
+    rm -rf "$results"
+    since="$(date '+%Y-%m-%d %H:%M:%S')"
+    xcrun simctl openurl "$udid" "http://127.0.0.1:$page_port/"
+    echo "==> typing a dummy into Safari's password field by $route"
+    TEST_RUNNER_TOPO_SIGNIN_PORT="$served_port" TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" \
+    TEST_RUNNER_TOPO_LEAKCHECK_ROUTE="$([ "$route" = failing ] && echo redacted || echo "$route")" \
+    TEST_RUNNER_TOPO_LEAKCHECK_FAIL="$([ "$route" = failing ] && echo 1 || echo 0)" \
+      tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
+        -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
+        -only-testing:TopoSimulatorSignInTests/LeakCheckTests \
+        -collect-test-diagnostics never -resultBundlePath "$results" && ran=0 || ran=$?
+    # Everything below reads the run's log, so it waits for tee to have written all of it.
+    drained=yes
+    log_drained "reading the $route run's log" || drained=no
+    # Each run says it typed its own dummy whole, by the page's hash, before anything else fails.
+    [ "$(grep -cx "\[leak-check\] $route typed the dummy whole" "$runlog")" = 1 ] \
+      || { echo "==> the $route run did not type its dummy whole" >&2; status=1; }
+    if [ "$route" = failing ]; then
+      [ "$ran" != 0 ] && grep -q 'failing after the dummy' "$runlog" \
+        || { echo "==> the failing run did not fail after typing the dummy" >&2; status=1; }
+    else
+      [ "$ran" = 0 ] || status=1
+      scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/LeakCheckTests || status=1
+    fi
+    # The logs are read on a pipe and counted, never kept: a device's log can hold what other
+    # runs launched with.
+    [ "$drained" = yes ] || echo "$route $runlog: unreadable" >>"$counts"
+    {
+      count_runs "$route" "$runlog" "$results" "$derived/Logs/Test" 3< <(printf '%s' "$dummy") || echo "$route count: unreadable"
+      count_log "$route" "device log" timeout 300 xcrun simctl spawn "$udid" log show --start "$since" --style compact --info --debug
+      count_log "$route" "Mac log" timeout 300 log show --start "$since" --style compact --info --debug \
+        --predicate 'process == "xcodebuild" OR process == "testmanagerd" OR process BEGINSWITH "XC" OR process == "CoreSimulatorService"'
+    } | tee -a "$counts"
+    unset dummy
+  done
+  # The control's bundle holds its dummy, which is worth nothing, but is not kept either.
+  # A folder the count could not read is one rm cannot empty either, until it may be read.
+  chmod -R u+rwX "$derived"/TopoLeakCheck-*.xcresult 2>/dev/null || true
+  rm -rf "$derived"/TopoLeakCheck-*.xcresult
+  for sink in "$runlog" "TopoLeakCheck-typeText.xcresult"; do
+    grep -E "^typeText [^ ]*$(basename "$sink" | sed 's/[.]/[.]/g'): [1-9]" "$counts" >/dev/null \
+      || { echo "==> the control's dummy is not in $(basename "$sink"): this check cannot see what typeText records there" >&2; status=1; }
+  done
+  if grep -E '^(redacted|failing) .*: ([1-9]|absent|unreadable|0 and)' "$counts" | grep -v 'Logs/Test: absent' >&2; then
+    echo "==> the redacted dummy is in what the run left, a sink was not read, or the screen was recorded" >&2; status=1
+  fi
+  rm -f "$counts"
+  [ "$status" = 0 ] && echo "==> leak check passed: typeText's dummy is in the run's output and bundle, RedactedTyping's in nothing a passing or a failing run left"
+  exit "$status"
+fi
+
 # Whether the listener served the token within <seconds>. Whether it is still running is asked
 # of the shell's own jobs, not of the pid, which the system may have given another process once
 # the shell reaped it; the shell keeps a reaped child's status for `wait`.
@@ -321,15 +536,19 @@ if [ "$signin" = yes ]; then
   # The password is read into a variable and leaves it once, on a pipe to a listener on the
   # host's loopback that answers one request carrying this run's nonce and exits. It is never an
   # argument, a file or a variable of the test runner's environment, which the result bundle's
-  # session log records whole; the runner types it into a secure field, which XCTest logs as
-  # <redacted>. Tests/SimulatorSignIn says what the test answers and what it refuses to.
+  # session log records whole; the runner types it into a secure field through RedactedTyping,
+  # which --leak-check proves records nothing of it. Tests/SimulatorSignIn says what the test
+  # answers and what it refuses to.
   account="${SIGNIN_ACCOUNT:-buddy.durose@icloud.com}"
-  password="$(op-item get 'Buddy Apple ID' password)" || password=""
-  [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
-  nonce="$(uuidgen)"
-  serve_once "$nonce" password
-  unset password
-  port="$served_port"
+  nonce="" port=""
+  # --resume reads no password and serves none: it only answers the screens after one.
+  if [ "$resume" = no ]; then
+    password="$(op-item get 'Buddy Apple ID' password)" || password=""
+    [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
+    nonce="$(uuidgen)"
+    serve_once "$nonce" password
+    port="$served_port"
+  fi
   results="$derived/TopoSimulatorSignIn.xcresult"
   rm -rf "$results"
   xcrun simctl boot "$udid" 2>/dev/null || true
@@ -338,12 +557,37 @@ if [ "$signin" = yes ]; then
   status=0
   TEST_RUNNER_TOPO_SIGNIN_ACCOUNT="$account" TEST_RUNNER_TOPO_SIGNIN_PORT="$port" \
   TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" TEST_RUNNER_TOPO_SIGNIN_CODE="${SIGNIN_CODE:-}" \
+  TEST_RUNNER_TOPO_SIGNIN_RENEW="$([ "$renew" = yes ] && echo 1 || echo 0)" \
+  TEST_RUNNER_TOPO_SIGNIN_RESUME="$([ "$resume" = yes ] && echo 1 || echo 0)" \
     tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
+      -only-testing:TopoSimulatorSignInTests/SimulatorSignInTests \
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
-  scripts/ci-require-tests.sh xcresult "$results" TopoSimulatorSignInTests || status=1
+  scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/SimulatorSignInTests || status=1
+  # What the run left is counted for the password itself, as --leak-check counts a dummy: any run
+  # of 8 of its characters in the run's log or the bundle fails the run and says where, never what.
+  if [ "$resume" = no ]; then
+    counted="" leaked=""
+    if log_drained "counting the password in what this run left" \
+      && counted="$(count_runs password "$runlog" "$results" 3< <(printf '%s' "$password"))"; then
+      leaked="$(printf '%s\n' "$counted" | grep -Ev ': (0|absent)$' || true)"
+    else
+      leaked="the count could not be made${counted:+: $counted}"
+    fi
+    unset password
+    if [ -n "$leaked" ]; then
+      echo "==> the password is in what this run left, by count: $leaked. Delete those files before anything else" >&2
+      status=1
+    else
+      if [ -d "$results" ]; then
+        echo "==> the password is in nothing this run left: no 8 of its characters in the run's log or the bundle"
+      else
+        echo "==> no 8 of the password's characters are in the run's log, and the run wrote no bundle"
+      fi
+    fi
+  fi
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
-    echo "==> $udid was signed in already and Settings asks for no password; if --send still reports a lapse, the test does not know the screen the lapse shows"
+    echo "==> $udid was signed in already and Settings asks for no password. If --send reports 'account temporarily unavailable', its sign-in has ended (a restart of the simulator ends it with no prompt; a change of the account's password ends it with an Apple Account Verification alert, and dismissing that does not mend it): DEVICE=$udid scripts/simulator-run.sh --sign-in --renew signs the account out and in again, typing the password once. If --send reports another lapse, the test does not know the screen it shows"
   elif [ "$status" = 0 ]; then
     echo "==> $udid is signed in; DEVICE=$udid scripts/simulator-run.sh --send hello proves CloudKit answers"
   else
@@ -368,13 +612,24 @@ if [ "$talk" = yes ]; then
     exit "$status"
   }
   # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
-  # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input.
-  # Booting it again after the lane is up binds it to the loopback; its iCloud account and
-  # keychain survive a reboot.
-  echo "==> rebooting the simulator onto the lane's audio devices"
-  xcrun simctl shutdown "$udid" 2>/dev/null || true
-  xcrun simctl boot "$udid"
-  xcrun simctl bootstatus "$udid" -b >/dev/null
+  # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input,
+  # and booting it again binds it to the loopback. A reboot also ends the device's iCloud
+  # sign-in (docs/simulator.md, *A lapse*), so a device booted since coreaudiod started, which
+  # already hears the lane, is not rebooted.
+  booted="$(process_start "$(pgrep -f "/Devices/$udid/data/var/run/launchd_bootstrap.plist" | head -1)")"
+  audio="$(process_start "$(pgrep -x coreaudiod | head -1)")"
+  if [ -n "$booted" ] && [ -n "$audio" ] && [ "$booted" -gt "$audio" ]; then
+    echo "==> the simulator booted after coreaudiod started, so it hears the lane without a reboot"
+  elif [ -z "$booted" ]; then
+    echo "==> booting the simulator onto the lane's audio devices"
+    xcrun simctl boot "$udid" 2>/dev/null || true
+    xcrun simctl bootstatus "$udid" -b >/dev/null
+  else
+    echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started; the reboot ends its iCloud sign-in, so the turn's iCloud half will be refused until: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew"
+    xcrun simctl shutdown "$udid" 2>/dev/null || true
+    xcrun simctl boot "$udid"
+    xcrun simctl bootstatus "$udid" -b >/dev/null
+  fi
   # The result bundle's session log records the test runner's environment whole, and the
   # environment the runner launches the app with, so the token is in neither: it is served once
   # on the loopback, and the runner hands the app only the port and the nonce, from which the
@@ -511,6 +766,9 @@ if [ -n "$send" ]; then
   case "$icloud" in
     answered) ;;
     "no account") fail "the simulator $udid has no iCloud account; sign it in with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
+    # Signed in to Settings with CloudKit refusing and nothing asking: a sign-in the device's last
+    # restart ended, which only signing out and in again mends (docs/simulator.md, *A lapse*).
+    "account temporarily unavailable") fail "the simulator $udid is signed in to Settings but CloudKit refuses its account (account temporarily unavailable): its sign-in has ended (a restart of the simulator ends it with no prompt; a change of the account's password ends it with an Apple Account Verification alert, and dismissing that does not mend it). Sign it out and in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew" ;;
     *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
   esac
   wait_for done "the turn"
