@@ -1,6 +1,7 @@
 #if os(iOS)
 import AVFoundation
 import Observation
+import TopoCore
 
 /// Push to talk: speech to text from the microphone between a press and a release, on the device
 /// where it can be. The microphone opens as the thumb comes down; hold to talk and release to
@@ -659,6 +660,7 @@ final class VoiceInput {
         capture.ended = "release"
         #endif
         let samples = sink.take()
+        Perf.mark("voice.released")
         // The utterance is taken and nothing more reaches the sink: the tap is off, or the kept
         // input's gate shut. The speaker's bed may begin under the decode from here.
         onTaken?()
@@ -680,6 +682,7 @@ final class VoiceInput {
                 heard = text
             }
         }
+        Perf.mark("voice.heard")
         #if DEBUG
         capture.heard = heard
         #endif

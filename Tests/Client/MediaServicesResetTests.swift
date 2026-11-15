@@ -851,6 +851,25 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
+    /// A reply's voice names its turn and a replay's names none, so `topo perf` gives a turn only
+    /// its own reply's first sound.
+    func testAReplysVoiceBeginsUnderItsTurnAndAReplayUnderNone() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        let marks = SpokenMarks("speak.begin")
+        await Perf.$observer.withValue(marks.add) {
+            speaker.speak("Hello there.", answering: "C0FFEE12-3456-7890-ABCD-EF0123456789")
+            await settle("the reply begun") { marks.sentences.count == 1 }
+            speaker.stop()
+            speaker.speak("Hello again.")
+            await settle("the replay begun") { marks.sentences.count == 2 }
+        }
+        XCTAssertEqual(marks.sentences, ["speak.begin turn=c0ffee12", "speak.begin replay"])
+        speaker.stop()
+    }
+
     /// No press anywhere: Say it again is what reactivates the session and rebuilds the queue.
     func testAReplyAfterAResetActivatesTheSessionAgainAndBuildsAFreshQueue() async {
         let seams = Seams()
@@ -2030,13 +2049,15 @@ final class WatchedTimePitch: AVAudioUnitTimePitch {
     }
 }
 
-/// The `speak.sentence` marks one task made, in order (`Perf.observer`).
+/// The marks one task made under `prefix`, in order (`Perf.observer`).
 final class SpokenMarks: @unchecked Sendable {
     private let lock = NSLock()
+    private let prefix: String
     private var kept: [String] = []
+    init(_ prefix: String = "speak.sentence") { self.prefix = prefix }
     var sentences: [String] { lock.withLock { kept } }
     var add: @Sendable (String) -> Void {
-        { [self] name in if name.hasPrefix("speak.sentence") { lock.withLock { kept.append(name) } } }
+        { [self] name in if name.hasPrefix(prefix) { lock.withLock { kept.append(name) } } }
     }
 }
 
