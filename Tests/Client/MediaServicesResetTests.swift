@@ -33,6 +33,8 @@ final class Seams {
     nonisolated(unsafe) private(set) var offMain: [Bool] = []
     /// The microphone's engines made, play engines left out.
     var inputEngines: Int { engines.filter { $0 is CapturingEngine }.count }
+    /// The play queue's engine last made: the one a test renders to hear a reading out.
+    var playEngine: AVAudioEngine? { engines.last { !($0 is CapturingEngine) } }
     nonisolated(unsafe) private(set) var formatReads = 0
     /// Each voice processing a press asked its engine for, with the format reads, whether the
     /// engine was running and how many configures the session had been asked for at that moment: the offline engine has no voice unit to turn on.
@@ -58,29 +60,28 @@ final class Seams {
 
     /// The app away from the front, as iOS judges a session there: set by a test once it has left
     /// the front. A configure while away is refused, as a session activated or reconfigured from
-    /// the background is (#90), except the one an interruption's end allows (`resume()`); and while
+    /// the background is (#90), except while an interruption's end is being handled (`resume(_:)`); and while
     /// away, an input node under a session last configured for playback reports no input.
     nonisolated(unsafe) var away = false
-    nonisolated(unsafe) private var resumes = 0
+    nonisolated(unsafe) private var resuming = false
     /// What the session was last configured for, which `forget()` leaves standing.
     nonisolated(unsafe) private var configuredRecord: Bool?
 
-    /// An interruption's end: iOS gives the session back, and the one configure that resumes it
-    /// from the background is allowed.
-    func resume() {
+    /// An interruption's end: iOS gives the session back, and a configure that resumes it from the
+    /// background is allowed while the end is being handled, from `resume(true)`, just before the
+    /// end is posted, to `resume(false)` once its handlers have run. Nothing is banked past it, so
+    /// a configure moved to a later moment is refused as iOS would refuse it.
+    func resume(_ open: Bool) {
         lock.lock(); defer { lock.unlock() }
-        resumes += 1
+        resuming = open
     }
 
     func configure(_ record: Bool, _ processed: Bool) throws {
         onConfigure?()
         lock.lock(); defer { lock.unlock() }
-        if away {
-            guard resumes > 0 else {
-                lines.append("activate refused away")
-                throw Refused()
-            }
-            resumes -= 1
+        if away, !resuming {
+            lines.append("activate refused away")
+            throw Refused()
         }
         records.append(record)
         modes.append(processed)
@@ -856,7 +857,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplysVoiceBeginsUnderItsTurnAndAReplayUnderNone() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         let marks = SpokenMarks("speak.begin")
         await Perf.$observer.withValue(marks.add) {

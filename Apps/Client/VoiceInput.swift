@@ -128,6 +128,12 @@ final class VoiceInput {
     private(set) var inputKept = false
     /// The gate whose session kept the input: its cancel stops it, and only its reopen takes it.
     private var keptFor: Gate?
+    /// The gate of an input kept running for a conversation the lock carries that an
+    /// interruption's start stopped: owed again with its gate shut at the interruption's end
+    /// (`restoreKept`), so the reading under it ends on an input already running rather than one
+    /// started from the background once the reading is over. Cleared by anything else that opens,
+    /// stops or cancels.
+    private(set) var keptOwed: Gate?
     /// Whether the input engine is running: a session's, or one kept through a reading.
     var inputRunning: Bool { input.isRunning }
     /// Whether a tap is on the input node: a session's, or a kept input's.
@@ -187,13 +193,17 @@ final class VoiceInput {
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in
                 guard let self else { return }
-                // No input engine crosses a session event, a kept one included.
+                // No input engine crosses a session event, a kept one included; one a carried
+                // conversation kept is owed again at the event's end (`restoreKept`).
+                let kept = self.inputKept ? self.keptFor : nil
                 self.stopKeptInput("the interruption's start", lettingGo: false)
+                let carried = self.carries?() == true
+                if carried, let kept { self.keptOwed = kept }
                 // An open in flight keeps no engine across the event: one it started is dropped
                 // as it answers. A session the conversation carries is suspended there, as an
                 // open one is below; any other press is over.
                 if self.opening {
-                    guard self.carries?() == true else { return self.cancel() }
+                    guard carried else { return self.cancel() }
                     self.suspendWhenOpened = self.openingFor
                     self.input.drop()
                     return
@@ -201,7 +211,7 @@ final class VoiceInput {
                 // A session the conversation carries is suspended, never carried across the
                 // event on its engine: it is rebuilt when the session is live again
                 // (`Conversation`, at the interruption's end).
-                if self.carries?() == true { self.suspend("the interruption's start") } else { self.drop() }
+                if carried { self.suspend("the interruption's start") } else { self.drop() }
             }
         }
         resetObserver = center.addObserver(
@@ -296,6 +306,7 @@ final class VoiceInput {
     /// conversation's utterance's end does, for a reading the microphone is not to hear.
     func cancel(_ gate: Gate? = nil, keepingInput keeps: Bool = false) {
         if !keeps, gate == nil || gate == keptFor { stopKeptInput("the session was cancelled") }
+        if !keeps, gate == nil || gate == keptOwed { keptOwed = nil }
         if let gate, owner != gate { return }
         if keeps, listening, !suspended, !ending, !starting, let owner, input.isRunning { keepInput(for: owner) }
         generation += 1
@@ -339,6 +350,33 @@ final class VoiceInput {
             input.drop()
             if error is SessionInactive || (error as? InputEngine.Refusal).map(\.deadSession) == true { audio.invalidate() }
             refusal = "the microphone did not resume: \(error)"
+            AudioLog.say(refusal ?? "")
+            return false
+        }
+    }
+
+    /// Starts again, with its gate shut, the input an interruption's start stopped under a
+    /// carried conversation's reading (`keptOwed`), on a session live again: the press's own path
+    /// — `ensureActive`, a new engine, voice processing before the one read of the formats, the
+    /// guard, the tap — at the interruption's end, the one moment the background may activate,
+    /// so the reading's end opens the gate on it (`reopen`) with nothing started then. Nothing
+    /// it hears reaches the sink. Answers whether the input is running; a refusal leaves none
+    /// kept and none owed.
+    @discardableResult
+    func restoreKept() -> Bool {
+        guard let gate = keptOwed, !listening, !starting, !ending, !inputKept else { return false }
+        keptOwed = nil
+        do {
+            let (suppress, resetsAt, _) = try prepareSession(as: gate)
+            self.gate.shut()
+            _ = try input.openNow(suppress: suppress, resetsAt: resetsAt, tap: tap)
+            keepInput(for: gate)
+            AudioLog.say("the kept input runs again with its gate shut: the interruption is over")
+            return true
+        } catch {
+            input.drop()
+            if error is SessionInactive || (error as? InputEngine.Refusal).map(\.deadSession) == true { audio.invalidate() }
+            refusal = "the kept input did not start again: \(error)"
             AudioLog.say(refusal ?? "")
             return false
         }
@@ -711,6 +749,7 @@ final class VoiceInput {
     /// `lettingGo` false, at an interruption's start, keeps the session from being handed back
     /// under the interruption that has it (`AudioSession.microphone(open:lettingGo:)`).
     func stopKeptInput(_ why: String, lettingGo: Bool = true) {
+        keptOwed = nil
         guard inputKept else { return }
         inputKept = false
         keptFor = nil

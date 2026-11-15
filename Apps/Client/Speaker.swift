@@ -70,7 +70,7 @@ final class Speaker {
     /// keep a pocketed phone awake past it.
     private let outerBound: Duration
     /// Whether the wait for a reply is carried by audio in use rather than by the keeper's silence
-    /// alone — the working bed under `sounds`, or a conversation's microphone — so it may stand
+    /// alone — the working bed playing, or a conversation's input running — so it may stand
     /// past `ceiling` while a turn is running (`capped`). The app answers; a speaker told nothing
     /// has none, and every wait is capped at `ceiling`.
     var waitCarried: @MainActor () -> Bool = { false }
@@ -322,8 +322,8 @@ final class Speaker {
     /// every pass, end the same wait, and only the count tells a run's log them apart. It is the
     /// ceiling's own path, and returns its line so a test reads what a run would.
     ///
-    /// A wait carried by audio in use (`waitCarried`: the bed under `sounds`, or a conversation's
-    /// microphone) stands for another pass while a turn is running (`turnRunning`), up to
+    /// A wait carried by audio in use (`waitCarried`: the bed playing, or a conversation's input
+    /// running) stands for another pass while a turn is running (`turnRunning`), up to
     /// `outerBound` from when it was taken; a silent one — the keeper's silence alone, under
     /// Receipts or Off — is capped at the first pass, since a process held by silence only to wait
     /// is what App Review's 2.5.4 refuses, and its reply is read on the next foreground.

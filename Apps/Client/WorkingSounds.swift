@@ -144,6 +144,9 @@ final class KeeperSounds {
     private let sleep: @Sendable (Duration) async throws -> Void
     private var players: [Tone: any WorkingPlayer] = [:]
     private var bed: (any WorkingPlayer)?
+    /// Whether the bed is playing now, which is what carries a wait past the ceiling
+    /// (`Speaker.waitCarried`): a bed wanted whose player refused to play is silence.
+    var bedPlaying: Bool { bed?.isPlaying == true }
     /// The reset count the players were made under (`AudioSession.resets`): one made before a
     /// reset is a dead handle however live the session is now.
     private var madeUnder = 0

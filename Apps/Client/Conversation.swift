@@ -695,6 +695,14 @@ final class Conversation {
             // resumed, whatever suspended it.
             return resume()
         }
+        if live, voice.keptOwed == .chat, !voice.listening, speaker.speaking || speaker.waitingForMicrophone {
+            // The input kept under a reading, stopped at the interruption's start, runs again
+            // with its gate shut at the interruption's end, the one moment the background may
+            // activate: the reading's end opens its gate rather than starting an input then.
+            guard voice.restoreKept() else {
+                return stop("the kept input did not start again", sending: false)
+            }
+        }
         // The microphone open, every whole chunk it holds judged, and nothing on its way or being
         // said: an owed go-ahead is paid (the conversation's start, a wait that has ended under an
         // open microphone), never over a whole chunk the detector has yet to judge; an onset in

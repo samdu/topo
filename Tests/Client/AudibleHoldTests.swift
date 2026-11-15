@@ -20,7 +20,11 @@ final class MomentPlayer: WorkingPlayer {
 
     var name: String { url.deletingPathExtension().lastPathComponent }
 
+    /// Set to make `play()` refuse, as a player on a session the system will not play is.
+    var refuses = false
+
     func play() -> Bool {
+        guard !refuses else { return false }
         moments.append("play")
         isPlaying = true
         return true
@@ -111,8 +115,11 @@ final class AudibleHoldTests: XCTestCase {
         /// The bed's players, in the order made: one is made again at an interruption's end.
         var beds: [MomentPlayer] { made.filter { $0.name == KeeperSounds.bedFile } }
         var bed: MomentPlayer? { beds.last }
+        /// Makes every player from here on refuse to play.
+        var refusing = false
         func make(_ url: URL) -> MomentPlayer {
             let player = MomentPlayer(url: url)
+            player.refuses = refusing
             made.append(player)
             return player
         }
@@ -135,7 +142,8 @@ final class AudibleHoldTests: XCTestCase {
 
     /// The store never asked, unless a test keeps a mode, and the earcons off, so the players
     /// made are the keeper's.
-    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true, ceiling: Duration = .seconds(120)) async -> Rig {
+    private func rig(mode: WorkingSounds.Mode? = nil, isActive: Bool = true, ceiling: Duration = .seconds(120),
+                     outerBound: Duration = .seconds(15 * 60)) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
         let defaults = defaults()
@@ -153,6 +161,7 @@ final class AudibleHoldTests: XCTestCase {
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, ceiling: ceiling,
+                              outerBound: outerBound,
                               heard: .dataRendered, sounds: sounds)
         return Rig(speaker: speaker, sounds: sounds, audio: audio, seams: seams, defaults: defaults,
                    clock: clock, players: players, voice: engine, center: center)
@@ -432,6 +441,61 @@ final class AudibleHoldTests: XCTestCase {
         XCTAssertTrue(rig.speaker.speaking, "what the guest wrote after the ceiling was not read")
         await settle("the reply's first sentence to be asked for again") { rig.voice.sentencesAsked == 2 }
         rig.speaker.stop()
+    }
+
+    /// What carries a wait past the ceiling is the bed playing, not the setting that wants it
+    /// (`KeeperSounds.bedPlaying`, which the app's `waitCarried` reads): a bed under the wait is,
+    /// and one an interruption stopped is not.
+    func testTheBedCarriesAWaitOnlyWhilePlaying() async throws {
+        let rig = await rig()
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertTrue(bed.isPlaying)
+        XCTAssertTrue(rig.sounds.bedPlaying)
+        bed.interrupted()
+        XCTAssertFalse(rig.sounds.bedPlaying, "a bed the system stopped carried the wait")
+        rig.speaker.stop()
+    }
+
+    /// A bed whose player refuses to play leaves the wait silent: wanted is not playing.
+    func testABedThatWillNotPlayCarriesNoWait() async throws {
+        let rig = await rig()
+        rig.players.refusing = true
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        let bed = try XCTUnwrap(rig.players.bed)
+        XCTAssertFalse(bed.isPlaying)
+        XCTAssertFalse(rig.sounds.bedPlaying, "a bed that did not start carried the wait")
+        rig.speaker.stop()
+    }
+
+    /// The hand-back twice under a short outer bound: the wait taken again keeps the send's
+    /// deadline, so it ends at the bound from the send and not from either hand-back.
+    func testAWaitHandedBackAcrossReadingsKeepsTheSendsOuterBound() async throws {
+        let rig = await rig(ceiling: .seconds(1), outerBound: .seconds(5))
+        rig.speaker.waitCarried = { true }
+        rig.speaker.turnRunning = { true }
+        let sent = ContinuousClock.now
+        _ = rig.speaker.awaitReply("turn", readAloud: true)
+        rig.speaker.speak(writing: "One moment.\n", answering: "turn")
+        await settle("the first part to be asked for") { rig.voice.sentencesAsked == 1 }
+        rig.voice.open(1)
+        try await render(rig, "the first part's first frame") { !rig.speaker.voiceGap }
+        try await render(rig, "the first part heard out") { rig.speaker.voiceGap }
+        await settle("the first hand-back") { !rig.speaker.speaking }
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"], "the turn's wait was not taken again")
+        rig.speaker.speak(writing: "One moment.\n\nStill looking.\n", answering: "turn")
+        await settle("the reply asked for from the top") { rig.voice.sentencesAsked == 2 }
+        rig.voice.open(2)
+        try await render(rig, "the second reading's first frame") { !rig.speaker.voiceGap }
+        await settle("its next sentence asked for") { rig.voice.sentencesAsked == 3 }
+        rig.voice.open(3)
+        try await render(rig, "the second part heard out") { rig.speaker.voiceGap }
+        await settle("the second hand-back") { !rig.speaker.speaking }
+        XCTAssertEqual(rig.speaker.awaiting, ["turn"], "the turn's wait was not taken again the second time")
+        await settle("the wait ended at its outer bound") { rig.speaker.awaiting.isEmpty }
+        let took = ContinuousClock.now - sent
+        XCTAssertLessThan(took, .milliseconds(6_300), "the wait was bounded from a hand-back rather than from the send")
+        XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the outer bound")
     }
 
     /// The red line's order: the queue drains while the last sentence is still being made, and

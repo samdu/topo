@@ -271,7 +271,7 @@ final class ConversationTests: XCTestCase {
         }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
-                              sounds: sounds, earcons: earcons)
+                              heard: .dataRendered, sounds: sounds, earcons: earcons)
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: gate)
         let nowhere = URL(fileURLWithPath: "/dev/null")
@@ -337,6 +337,31 @@ final class ConversationTests: XCTestCase {
     private func endedInterruption() {
         center.post(name: AVAudioSession.interruptionNotification, object: nil,
                     userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
+    }
+
+    /// The interruption's end behind the lock: the session may be configured while its handlers
+    /// run, and is refused again once they have.
+    private func endedAway() async {
+        seams.resume(true)
+        endedInterruption()
+        await drain()
+        seams.resume(false)
+    }
+
+    /// Renders the play queue's engine, offline, until `condition` holds: the reading heard out.
+    private func render(_ what: String, file: StaticString = #filePath, line: UInt = #line,
+                        until condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<400 {
+            if condition() { return }
+            if let engine = seams.playEngine {
+                let out = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
+                                                         frameCapacity: engine.manualRenderingMaximumFrameCount))
+                _ = try? engine.renderOffline(256, to: out)
+            }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(condition(), "rendered 400 slices waiting for \(what)", file: file, line: line)
     }
 
     /// The audio thread handing the installed tap a tenth of a second of tone, in the format the
@@ -745,8 +770,7 @@ final class ConversationTests: XCTestCase {
         seams.forget()
         beganInterruption()
         await settle("suspended at the interruption's start") { voice.suspended }
-        seams.resume()
-        endedInterruption()
+        await endedAway()
         await settle("resumed at its end") { voice.listening && !voice.suspended }
         XCTAssertTrue(speaker.speak("The lights are off.", answering: "spoken-1"))
         await drain()
@@ -759,9 +783,10 @@ final class ConversationTests: XCTestCase {
     }
 
     /// An interruption that comes and goes while a reply is read to the carried conversation: the
-    /// reading's end hands nothing back, and the microphone opens again on the session the
-    /// interruption's end resumed, with no activation from the background.
-    func testAnInterruptionDuringAReadingBehindTheLockLeavesTheConversationListening() async {
+    /// input kept under the reading, stopped at the interruption's start, runs again with its gate
+    /// shut at its end, the rest of the reading is played, and its end opens the gate on that input
+    /// with nothing started, activated or handed back from the background.
+    func testAnInterruptionDuringAReadingBehindTheLockLeavesTheConversationListening() async throws {
         let (conversation, voice, speaker) = await begun(isActive: false)
         defer { conversation.stop("test", sending: false) }
         seams.away = true
@@ -770,14 +795,22 @@ final class ConversationTests: XCTestCase {
         seams.forget()
         beganInterruption()
         await settle("the kept input stopped") { !voice.inputKept }
-        seams.resume()
-        endedInterruption()
-        await drain()
-        speaker.stop()
+        await endedAway()
+        XCTAssertTrue(voice.inputKept && voice.inputRunning, "the kept input was not started again at the interruption's end")
+        XCTAssertFalse(voice.listening, "the microphone opened under the reading")
+        let engines = seams.inputEngines, starts = EngineWatch.starts
+        CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
+        spoken.releaseTheHeldFrame()
+        try await render("the reading heard out") { !speaker.speaking }
+        XCTAssertTrue(spoken.yieldedTheHeldFrame)
+        XCTAssertFalse(CapturingPlayerNode.peaks.filter { $0 > 0 }.isEmpty, "the rest of the reading was not played after the interruption")
         await settle("open again once the reading is over") { voice.listening && !voice.suspended }
+        XCTAssertEqual(seams.inputEngines, engines, "an input engine was made once the reading was over")
+        XCTAssertEqual(EngineWatch.starts, starts, "an input was started from the background once the reading was over")
         XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
         XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
-        XCTAssertEqual(seams.records, [true], "the interruption's end resumed the session other than for the microphone")
+        XCTAssertTrue(seams.records.allSatisfy { $0 }, "the interruption's end resumed the session other than for the microphone")
         XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
     }
 
