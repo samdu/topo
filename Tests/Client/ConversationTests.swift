@@ -836,6 +836,33 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(audio.recordClaims, [], "the refused restore's record claim stood")
     }
 
+    /// An interruption that comes and goes while an utterance is being decoded behind the lock:
+    /// the input kept for the decode stops at its start, and once the words are sent the
+    /// microphone opens again on the session the interruption's end resumed, with nothing
+    /// activated or configured from the background. The engine that start makes is the one input
+    /// started away from that end, on the session already active, beside the deaf rebuild's.
+    func testAnInterruptionDuringADecodeBehindTheLockActivatesNothingAfterItsEnd() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, _) = await begun(detector, isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        seams.away = true
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the decode under way") { self.gate.held == 1 }
+        XCTAssertTrue(voice.inputKept, "the decode's input was not kept")
+        seams.forget()
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        await endedAway()
+        gate.open()
+        await settle("sent") { self.sent.count == 1 }
+        await settle("open again for the next utterance") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
+        XCTAssertTrue(seams.records.allSatisfy { $0 }, "the session was configured other than for the microphone")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
+    }
+
     /// A conversation begun behind the lock with its microphone already suspended by the lock's
     /// own interruption: its keeping the session configures nothing from the background.
     func testAConversationBegunUnderTheLocksInterruptionConfiguresNothing() async {
