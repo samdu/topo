@@ -45,6 +45,11 @@ final class ContextToolTests: XCTestCase {
         XCTAssertEqual(shown.status, ToolReply.ok)
         XCTAssertTrue(shown.text.hasPrefix("threads: on, asked for with CLAUDE_CODE_TETHER_LIVE=1"), shown.text)
         XCTAssertTrue(shown.text.contains("up to an hour after the last request; no delete; not zero data retention"), shown.text)
+        // What else on sends, and to whom, so the mind can say it to its person.
+        XCTAssertTrue(shown.text.contains("also sent: \(MessageThreads.alsoSent)\noff: \(MessageThreads.whenOff)\n"), shown.text)
+        for named in ["Anthropic", "Datadog", "feature flags", "public MCP registry", "device id", "session's id"] {
+            XCTAssertTrue(MessageThreads.alsoSent.contains(named), named)
+        }
         XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  3 s ago  continue  39975 bytes  404 (the thread had gone"), shown.text)
         XCTAssertTrue(shown.text.contains("  2 s ago  create  600500 bytes  waiting\n"), shown.text)
@@ -68,6 +73,7 @@ final class ContextToolTests: XCTestCase {
         let off = await tool(phone).run(["threads", "off"])
         XCTAssertEqual(off.status, ToolReply.ok)
         XCTAssertTrue(off.text.hasPrefix("threads: off"), off.text)
+        XCTAssertTrue(off.text.contains("off: \(MessageThreads.whenOff)\non would send: \(MessageThreads.alsoSent)\n"), off.text)
         XCTAssertTrue(off.text.contains("from this turn's end"), off.text)
         let renamed = await tool(phone).run(["threads", "variable", "CLAUDE_CODE_MESSAGE_THREADS"])
         XCTAssertEqual(renamed.status, ToolReply.ok)

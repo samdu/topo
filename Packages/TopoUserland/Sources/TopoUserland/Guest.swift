@@ -77,13 +77,15 @@ public final class Guest: Sendable {
     /// (`RootfsInstaller` lays it in). The binary is a pin the app fetches (`ClaudeCodeInstaller`),
     /// a bump is a new pin, and the updater's own fetch speaks TLS through a library that never
     /// completes a handshake under the emulator. Claude Code's nonessential traffic (telemetry,
-    /// error reports, its start-up fetches) is off as well: none of it serves a turn, and a
-    /// start under the emulator is about a fifth shorter without it (`docs/perf.md`).
+    /// error reports, its start-up fetches) is off as well, and its error reports separately, so
+    /// they stay off where the resident's launch lets the rest out for message threads
+    /// (`ClaudeLauncher.launchEnvironment(threads:)`).
     public static let environment = [
         "HOME": "/root",
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "SHELL": "/bin/bash",
         "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_ERROR_REPORTING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     ]
 

@@ -216,12 +216,20 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// (`MessageThreads`), set to `1`, or nil to set none. It is the mind's to rename, so it is set
     /// only where nothing else is: a name the guest's environment or the callback sets is left as
     /// they have it, and the launcher's own keys are set after it, so one of those keeps its own
-    /// value; either way the launch goes without threads.
+    /// value; either way the launch goes without threads. A launch that sets it also leaves
+    /// `nonessentialVariable` out, which threads want (below); one that sets none keeps it, so
+    /// off sends nothing beside the turns.
     public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, threads: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
         if let threads, environment[threads] == nil {
             environment[threads] = Self.threadsValue
+            // With its nonessential traffic off, Claude Code 2.1.316 sent a phone's full-scope
+            // login's turns on no thread at all (samdu/topo#782), and any login's continues with
+            // system and tools again, since what leaves them to the thread is a feature flag it
+            // fetches. So asking for threads lets that traffic out: the flags, the usage
+            // telemetry to Anthropic and Datadog, the public MCP registry's listing.
+            environment[Self.nonessentialVariable] = nil
         }
         environment["HOME"] = home
         environment["IS_SANDBOX"] = "1"
@@ -242,6 +250,10 @@ public struct ClaudeLauncher: ResidentLauncher {
         environment[Self.timingVariable] = Perf.recording ? "1" : nil
         return environment
     }
+
+    /// The guest's switch for Claude Code's traffic beside its turns, which a launch with threads
+    /// takes away (`Guest.environment` sets it for every other program the guest runs).
+    public static let nonessentialVariable = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 
     /// What the threads variable is set to: the one value, whatever its name.
     public static let threadsValue = "1"
