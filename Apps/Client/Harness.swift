@@ -254,7 +254,8 @@ final class Harness {
     /// after, which fail the same way or end in the guest taking the words again (its turn on
     /// them beginning) or the turn settling; a withdrawal, a sign-out and a demotion clear them.
     private var failedNonces: Set<String> = []
-    /// Words the guest has begun on ahead of their turn, this launch: a cancel is not offered
+    /// Words the guest has begun on ahead of their turn, heard this launch or read off the
+    /// ledger (`GuestBridge.givenAhead`): a cancel is not offered
     /// for them, since what the guest has received cannot be called back (`Brain.claim` is the
     /// word on it; this is the margin's view).
     private var givenAhead: Set<String> = []
@@ -641,10 +642,13 @@ final class Harness {
         guard let guest else { return }
         let login = self.login
         let held = await guest.unsaved(), owed = await guest.owedAhead(), cut = await guest.cutOffAhead()
+        let given = await guest.givenAhead()
         guard self.login == login else { return }
         unsaved = held
         owedAhead = owed
         cutOffAhead = cut
+        // What the ledger says the guest has, which a relaunch finds and a live `.began` adds to.
+        givenAhead.formUnion(given)
         let line = Set(pending.map(\.nonce))
         heardEnded = heardEnded.filter { held[$0.key] != nil || line.contains($0.key) }
     }
@@ -1526,18 +1530,13 @@ final class Harness {
         } catch {
             guard self.login == login else { return }
             dropWriting()
-            failure = Failure(words: Self.describe(error), source: .pass)
-            if case TurnRunnerError.replyFailed(let person, let underlying) = error {
-                if case TurnRunnerError.displaced = underlying {} else { replyFailed.insert(person.ref) }
-            } else if !handedBack {
-                // The pass answers the log's newest turns when they are the person's, and its own
-                // errors come unwrapped: those turns are the ones whose reply has stopped, save
-                // one whose reply the guest has or is writing and the log does not yet. Not on a
-                // device that handed back: another device answers them.
-                for turn in turns.reversed().prefix(while: { $0.role == .person })
-                    where unsaved[turn.nonce] == nil && hearing != turn.nonce {
-                    replyFailed.insert(turn.ref)
-                }
+            if case TurnRunnerError.answerFailed(let answering, let underlying) = error {
+                // The turns the pass asked the brain to answer, as the runner read them: their
+                // reply has stopped. The pass held the lease to ask, so this device answers them.
+                failure = Failure(words: Self.describe(underlying), source: .pass)
+                replyFailed.formUnion(answering.map(\.ref))
+            } else {
+                failure = Failure(words: Self.describe(error), source: .pass)
             }
             await refreshUnfinished()
         }

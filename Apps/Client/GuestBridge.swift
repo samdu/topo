@@ -1003,9 +1003,11 @@ actor GuestBridge: Brain {
     /// input recorded for them — written before it goes, and kept until its turn is bound or
     /// taken back — may already be with the guest. Nothing awaits between the look and the mark,
     /// and `begin` asks the mark after every wait up to the record, so no input for the words is
-    /// recorded once this has said true.
+    /// recorded once this has said true. Words already taken back, by a withdrawal or a claim
+    /// still outstanding, are refused too: a second claim's hand-back would take the first's
+    /// mark away.
     func claim(nonce: String) async -> Bool {
-        guard readLedger(), ledger.early?.contains(where: { $0.person == nonce }) != true,
+        guard !takenBack.contains(nonce), readLedger(), ledger.early?.contains(where: { $0.person == nonce }) != true,
               ledger.pending?.person != nonce else { return false }
         takenBack.insert(nonce)
         return true
@@ -1013,6 +1015,16 @@ actor GuestBridge: Brain {
 
     func unclaim(nonce: String) async {
         takenBack.remove(nonce)
+    }
+
+    /// The words the guest has been given, or may have, and whose turn the log does not hold:
+    /// an input recorded for them ahead of their turn, or the one being asked. What a cancel is
+    /// not offered for, a relaunch included.
+    func givenAhead() -> Set<String> {
+        guard readLedger() else { return [] }
+        var given = Set((ledger.early ?? []).filter { $0.bound == nil }.map(\.person))
+        if let person = ledger.pending?.person { given.insert(person) }
+        return given
     }
 
     /// The words given ahead, and not bound, whose guest turn was cut off with no answer: the

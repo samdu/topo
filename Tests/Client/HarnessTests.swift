@@ -1195,6 +1195,23 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
     }
 
+    /// The turns marked stopped are the ones the pass asked about, as it read them, and not the
+    /// screen's last read: a turn a limb wrote after that read is the one whose reply failed.
+    func testATurnWhoseReplyFailedInAPassReadingPastTheScreenIsStopped() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        await harness.refresh()
+        let person = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.answerPending()
+
+        let failed = try await log(db).map(\.text)
+        XCTAssertEqual(failed, ["bins?"], "the reply did not fail")
+        await harness.refresh()
+        XCTAssertEqual(harness.repliesStopped, [person.ref], "a turn the screen had not read when its reply failed is not drawn as stopped")
+    }
+
     /// A cancel clears the row of the words it cancelled and of nothing else: a row that takes
     /// other words while the brain hears of the withdrawal keeps them.
     func testACancelLeavesWordsTheRowTookWhileTheBrainHeardOfIt() async throws {
