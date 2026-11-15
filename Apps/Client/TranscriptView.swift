@@ -287,9 +287,16 @@ struct QueuedTurnRow: View {
     var line = LineActions()
     @Environment(\.look) private var look
 
+    /// The margin's cancel, for this turn's nonce.
+    private var cancel: (@MainActor () -> Void)? {
+        guard let cancel = line.cancel else { return nil }
+        let nonce = turn.nonce
+        return { cancel(nonce) }
+    }
+
     var body: some View {
-        let enclosure = look.draft.onItsWay(stopped: turn.margin == .resend)
-        DraftInset(inset: look.transcript.personLeadingInset, keep: DraftRow.kept(look.draft)) {
+        let enclosure: Look.Enclosure = look.draft.onItsWay(stopped: turn.margin == .resend)
+        return DraftInset(inset: look.transcript.personLeadingInset, keep: DraftRow.kept(look.draft)) {
             HStack(alignment: .bottom, spacing: look.draft.spacing) {
                 PersonWords(text: turn.text)
                     .padding(.horizontal, enclosure.horizontalPadding)
@@ -297,9 +304,7 @@ struct QueuedTurnRow: View {
                     .background { TurnShape.fill(enclosure) }
                     .accessibilityElement(children: .combine)
                     .accessibilityValue(turn.margin.said)
-                TurnMarginSlot(margin: turn.margin,
-                               cancel: line.cancel.map { cancel in { [nonce = turn.nonce] in cancel(nonce) } },
-                               resend: line.resend)
+                TurnMarginSlot(margin: turn.margin, cancel: cancel, resend: line.resend)
             }
             .mascotObstacle()
         }

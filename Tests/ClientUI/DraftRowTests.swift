@@ -191,7 +191,7 @@ final class DraftRowTests: XCTestCase {
     /// What the margin beside a turn on its way holds, in any of its states: the spinner while
     /// an attempt runs, the cancel while the turn waits, the resend once the line stopped on it.
     /// Which it is at a moment depends on how far the line has got, which no suite controls.
-    private func onItsWay(_ app: XCUIApplication) -> XCUIElement {
+    private func onItsWay(_ app: TopoApplication) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label IN %@", ["Sending", "Cancel sending", "Send again"])).firstMatch
     }
