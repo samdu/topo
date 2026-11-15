@@ -369,7 +369,7 @@ def blobs(path):
         if not data:
             unread.add(path)
         yield data; return
-    files = [path] if os.path.isfile(path) else [os.path.join(d, f) for d, _, fs in os.walk(path) for f in fs]
+    files = [path] if os.path.isfile(path) else [os.path.join(d, f) for d, _, fs in os.walk(path, onerror=lambda e: unread.add(path)) for f in fs]
     for f in files:
         try:
             data = open(f, "rb").read()
@@ -503,6 +503,8 @@ server.serve_forever()' "$pagefile" &
     unset dummy
   done
   # The control's bundle holds its dummy, which is worth nothing, but is not kept either.
+  # A folder the count could not read is one rm cannot empty either, until it may be read.
+  chmod -R u+rwX "$derived"/TopoLeakCheck-*.xcresult 2>/dev/null || true
   rm -rf "$derived"/TopoLeakCheck-*.xcresult
   for sink in "$runlog" "TopoLeakCheck-typeText.xcresult"; do
     grep -E "^typeText [^ ]*$(basename "$sink" | sed 's/[.]/[.]/g'): [1-9]" "$counts" >/dev/null \

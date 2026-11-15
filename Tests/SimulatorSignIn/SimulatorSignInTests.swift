@@ -94,6 +94,9 @@ final class SimulatorSignInTests: XCTestCase {
         do {
             try RedactedTyping.type(secret, into: field, record: "the password")
         } catch {
+            // Some characters may have gone in before the failure, and the field shows its last
+            // one for a moment: the stop's screenshot waits for it to be hidden, as the check below does.
+            sleep(3)
             return stopped("\(error)")
         }
         // A secure field shows its last character for a moment, and every screenshot is kept.

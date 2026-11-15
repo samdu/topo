@@ -18,15 +18,13 @@ final class LeakCheckTests: XCTestCase {
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
         safari.activate()
         let field = safari.webViews.secureTextFields.firstMatch
-        let deadline = Date().addingTimeInterval(60)
-        while !field.exists, Date() < deadline {
-            // A first launch of Safari puts its own sheet over the page.
+        // A first launch of Safari puts its own sheet over the page.
+        if !field.waitForExistence(timeout: 20) {
             for label in ["Continue", "Not Now", "Close"] where safari.buttons[label].exists {
                 safari.buttons[label].firstMatch.tap()
             }
-            _ = field.waitForExistence(timeout: 2)
         }
-        guard field.exists else { return XCTFail("the leak check's page shows no password field") }
+        guard field.waitForExistence(timeout: 40) else { return XCTFail("the leak check's page shows no password field") }
         let secret = try servedSecret()
         field.tap()
         switch route {

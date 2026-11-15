@@ -198,7 +198,7 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
   # A log show prints lines, and with FAKE_LOG_FAILS fails having printed none.
-  spawn) [ -z "${FAKE_LOG_FAILS:-}" ] || exit 1; echo "a line of the device's log" ;;
+  spawn) echo "a line of the device's log"; [ -z "${FAKE_LOG_FAILS:-}" ] || exit 1 ;;
   *) exit 0 ;;
 esac
 EOF
@@ -229,7 +229,11 @@ sys.stdout.write(got.decode())' "$TEST_RUNNER_TOPO_SIGNIN_PORT" "$TEST_RUNNER_TO
   as="$TEST_RUNNER_TOPO_LEAKCHECK_ROUTE"; [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" != 1 ] || as=failing
   [ "${FAKE_LEAK_WRONG:-}" = "$as" ] || echo "[leak-check] $as typed the dummy whole"
   if [ -n "${FAKE_LEAK_UNREADABLE:-}" ] && [ "$as" = redacted ]; then
-    echo x >"$bundle/attachment"; chmod 000 "$bundle/attachment"
+    if [ "$FAKE_LEAK_UNREADABLE" = folder ]; then
+      mkdir -p "$bundle/Attachments"; echo x >"$bundle/Attachments/a"; chmod 000 "$bundle/Attachments"
+    else
+      echo x >"$bundle/attachment"; chmod 000 "$bundle/attachment"
+    fi
   fi
   if [ "${TEST_RUNNER_TOPO_LEAKCHECK_FAIL:-0}" = 1 ]; then
     echo "error: failing after the dummy, as a stopped sign-in does"
@@ -724,7 +728,7 @@ done
 # The leak check passes only when the control's dummy is found in the output and the bundle, the
 # redacted one nowhere, and a failing run's bundle holds no screen recording; a control the count
 # cannot see fails it as a leak does.
-printf '#!/bin/sh\n[ -z "$FAKE_LOG_FAILS" ] || exit 1\necho "a line of the Mac log"\n' >"$work/bin/log"; chmod +x "$work/bin/log"
+printf '#!/bin/sh\necho "a line of the Mac log"\n[ -z "$FAKE_LOG_FAILS" ] || exit 1\n' >"$work/bin/log"; chmod +x "$work/bin/log"
 leak_case() {
   local name="$1" want="$2"; shift 2
   : >"$FAKE_XCODEBUILD_CALLS"
@@ -744,6 +748,7 @@ leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
 leak_case leak-check-failing-run-recorded 1 FAKE_LEAK_RECORDS=1
 leak_case leak-check-failing-run-typed-wrong 1 FAKE_LEAK_WRONG=failing
 leak_case leak-check-unreadable-attachment 1 FAKE_LEAK_UNREADABLE=1
+leak_case leak-check-unreadable-folder 1 FAKE_LEAK_UNREADABLE=folder
 leak_case leak-check-log-unread 1 FAKE_LOG_FAILS=1
 # A sign-in whose run left any 8 characters of the password fails and names where, not what.
 : >"$FAKE_XCODEBUILD_CALLS"
