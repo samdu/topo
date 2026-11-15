@@ -698,8 +698,6 @@ final class Speaker {
         // replay, which answers no turn, has no bed under it at all.
         answering = nonce != nil
         voiceGap = answering
-        // A reply names its turn (`Harness.turnMark`); a replay answers none.
-        Perf.mark("speak.begin " + (nonce.map(Harness.turnMark) ?? "replay"))
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
         // And a hold that could not be honoured is a refused reply, like a rebuild that refuses:
@@ -711,6 +709,9 @@ final class Speaker {
             done()
             return false
         }
+        // A reply names its turn (`Harness.turnMark`); a replay answers none. Marked once the reply
+        // is taken, so one refused and offered again begins once.
+        Perf.mark("speak.begin " + (nonce.map(Harness.turnMark) ?? "replay"))
         progressed()
         // With the reading's hold taken: a spoken turn's reply keeps the bed to its first frame,
         // or has it begun where nothing else had it up; a replay takes it away now, so a bed a
