@@ -573,7 +573,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draft, queued: queued, line: lineActions,
+                                  draft: draft, queued: queued, line: lineActions, stopped: harness.repliesStopped,
                                   answer: row.answer(in: harness), cue: speaker.cue)
             // Until the first read of the log returns, the empty page says it is being read. A
             // read that failed says so in the bar, and the loop's next pass reads again.
@@ -777,7 +777,7 @@ struct ChatView: View {
                 // Nothing is coming for a turn that was never said, so nothing waits for it.
                 speaker.endAwaiting(nonce, "the turn was cancelled")
             }
-        }, resend: resend)
+        }, resend: resend, askAgain: { ref in Task { await harness.answerAgain(ref) } })
     }
 
     /// The margin's cancel beside the row's own turn: it comes off the line and its words go

@@ -408,6 +408,28 @@ final class DraftRowRenderTests: XCTestCase {
                        "a turn that waits is not drawn as sending")
     }
 
+    /// A landed turn of the person's whose reply has stopped is drawn in the same failed
+    /// enclosure, red, with the ask-again in the margin; every other landed turn as it was.
+    func testALandedTurnWhoseReplyStoppedIsDrawnRed() throws {
+        let turn = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 1), parents: [],
+                        role: .person, text: "bins?", at: Date(timeIntervalSince1970: 1_700_000_000))
+        var look = Look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        let stopped = try raster(TurnRow(turn: turn, askAgain: {}), look: look)
+        XCTAssertFalse(outline(stopped, .red).isEmpty, "the turn whose reply stopped is not drawn red")
+        XCTAssertTrue(outline(stopped, Theme.primary).isEmpty, "the turn whose reply stopped is drawn as landed")
+        XCTAssertFalse(stopped.pixels(matching: .green).isEmpty, "the margin holds no ask-again")
+        let landed = try raster(TurnRow(turn: turn), look: look)
+        XCTAssertTrue(outline(landed, .red).isEmpty, "a landed turn is drawn red")
+        XCTAssertTrue(landed.pixels(matching: .green).isEmpty, "a landed turn has a margin")
+    }
+
+    private func raster(_ view: some View, look: Look) throws -> Raster {
+        let renderer = ImageRenderer(content: view.environment(\.look, look).frame(width: width).background(Color.white))
+        renderer.scale = 3
+        return try Raster(try XCTUnwrap(renderer.uiImage, "the turn rendered to nothing"))
+    }
+
     /// The failed enclosure and the margin's controls are the look's: a look that changes them
     /// changes what is drawn.
     func testTheFailedColourAndTheMarginsControlsAreTheLooks() throws {

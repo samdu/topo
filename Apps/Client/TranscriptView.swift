@@ -25,6 +25,9 @@ struct TranscriptView: View {
     /// What the margin beside a queued turn does when pressed. The default does nothing, and its
     /// controls are then not drawn.
     var line = LineActions()
+    /// The person's turns whose reply has stopped (`Harness.repliesStopped`), drawn failed with
+    /// `line.askAgain` in their margin.
+    var stopped: Set<TurnRef> = []
     /// The guest's reply to the turn the row holds, as far as it is written, while that turn is
     /// not in the log: drawn under the row, as the reply to a queued turn is under its words.
     var answer: Turn?
@@ -63,7 +66,8 @@ struct TranscriptView: View {
                         }
                         ForEach(turns) { turn in
                             TurnRow(turn: turn, replay: replay, actions: actions,
-                                    cue: cue?.reply == turn.ref ? cue : nil).id(turn.ref)
+                                    cue: cue?.reply == turn.ref ? cue : nil,
+                                    askAgain: askAgain(turn)).id(turn.ref)
                                 .onAppear { made.turns.insert(turn.ref) }
                                 .onDisappear { made.turns.remove(turn.ref) }
                         }
@@ -191,23 +195,25 @@ struct TurnRow: View {
     var actions = TurnActions()
     /// The code block of this turn the voice has reached, if any.
     var cue: CodeBlockCue?
+    /// Asks again for the reply to one of the person's turns whose reply has stopped
+    /// (`Harness.repliesStopped`): the turn is drawn in the look's failed enclosure with this in
+    /// its margin, as a turn the line stopped on is. Nil for every other turn.
+    var askAgain: (@MainActor () -> Void)?
     @Environment(\.look) private var look
 
     private var mine: Bool { turn.role == .person }
+    private var stopped: Bool { mine && askAgain != nil }
 
     /// What the words are drawn on. The view chooses the side and the look chooses everything
     /// drawn on it, Topo's side included, which is why there is no number here.
-    private var enclosure: Look.Enclosure { mine ? look.bubble : look.plain }
+    private var enclosure: Look.Enclosure { mine ? (stopped ? look.draft.failed : look.bubble) : look.plain }
 
     /// Nothing is drawn around the words, so what Topo stands clear of is the words themselves.
     private var bare: Bool { enclosure.drawsNothing }
 
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
-            words
-                .padding(.horizontal, enclosure.horizontalPadding)
-                .padding(.vertical, enclosure.verticalPadding)
-                .background { TurnShape.fill(enclosure) }
+            enclosed
             Text(turn.at, format: .dateTime.hour().minute())
                 .font(look.transcript.labelFont)
                 .foregroundStyle(look.transcript.caption)
@@ -240,6 +246,24 @@ struct TurnRow: View {
         #endif
     }
 
+    /// The words on their enclosure, and beside a turn whose reply has stopped, the margin's
+    /// ask-again in the slot a turn on its way keeps.
+    @ViewBuilder
+    private var enclosed: some View {
+        let drawn = words
+            .padding(.horizontal, enclosure.horizontalPadding)
+            .padding(.vertical, enclosure.verticalPadding)
+            .background { TurnShape.fill(enclosure) }
+        if stopped {
+            HStack(alignment: .bottom, spacing: look.draft.spacing) {
+                drawn.accessibilityValue(TurnMargin.resend.said)
+                TurnMarginSlot(margin: .resend, resend: askAgain)
+            }
+        } else {
+            drawn
+        }
+    }
+
     /// Topo's words are markdown, drawn as their blocks. The person's are drawn as they were
     /// typed: the row they are written in is drawn at the size the landed turn will be, which a
     /// turn restyled on landing would not be, and what they typed is theirs to see as typed. The
@@ -258,6 +282,13 @@ struct TurnRow: View {
 }
 
 extension TranscriptView {
+    /// The margin's ask-again for a turn whose reply has stopped, and nil for any other.
+    fileprivate func askAgain(_ turn: Turn) -> (@MainActor () -> Void)? {
+        guard stopped.contains(turn.ref), let ask = line.askAgain else { return nil }
+        let ref = turn.ref
+        return { ask(ref) }
+    }
+
     /// A turn on its way, and under it the guest's reply when it has one the log does not.
     @ViewBuilder fileprivate func queued(_ turn: QueuedTurn) -> some View {
         QueuedTurnRow(turn: turn, line: line).id(turn.id)
@@ -272,6 +303,9 @@ struct QueuedTurn: Identifiable, Equatable {
     let nonce: String
     /// What the slot beside it holds (`Harness.margin`).
     var margin: TurnMargin = .sending
+    /// It can be taken back (`Harness.canWithdraw`): holding it offers Cancel, which is the way
+    /// back from a failed turn the row is not holding, whose margin is the resend.
+    var withdrawable = false
     /// The guest's reply to these words, written before iCloud took the turn: no turn of the
     /// log's, drawn under the words until the log has both.
     var reply: Turn?
@@ -305,6 +339,15 @@ struct QueuedTurnRow: View {
                     .background { TurnShape.fill(enclosure) }
                     .accessibilityElement(children: .combine)
                     .accessibilityValue(turn.margin.said)
+                    #if os(iOS)
+                    .contextMenu {
+                        if turn.withdrawable, let cancel {
+                            Button(role: .destructive) { cancel() } label: {
+                                Label("Cancel", systemImage: look.draft.cancelSymbol)
+                            }
+                        }
+                    }
+                    #endif
                 TurnMarginSlot(margin: turn.margin, cancel: cancel, resend: line.resend)
             }
             .mascotObstacle()
@@ -318,6 +361,8 @@ struct QueuedTurnRow: View {
 struct LineActions {
     var cancel: (@MainActor (String) -> Void)?
     var resend: (@MainActor () -> Void)?
+    /// Asks again for the reply to a landed turn whose reply has stopped (`Harness.answerAgain`).
+    var askAgain: (@MainActor (TurnRef) -> Void)?
 }
 
 /// What the slot beside a turn on its way holds. Which it is, is the harness's word
@@ -347,7 +392,7 @@ struct TurnMarginSlot: View {
     var resend: (@MainActor () -> Void)?
     @Environment(\.look) private var look
 
-    /// What the UI suites find the margin's controls by.
+    /// What the margin's controls say they are to whoever reads the screen.
     static let cancelLabel = "Cancel sending"
     static let resendLabel = "Send again"
 

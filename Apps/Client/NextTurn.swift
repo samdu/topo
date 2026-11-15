@@ -115,6 +115,7 @@ final class NextTurn {
         let replies = harness.replies
         let unlanded = harness.unlanded.enumerated().map { place, turn in
             QueuedTurn(text: turn.text, nonce: turn.nonce, margin: harness.margin(turn.nonce),
+                       withdrawable: harness.canWithdraw(turn.nonce),
                        reply: replies[turn.nonce].map { UnsavedReply.turn($0, place: place) })
         }
         guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {

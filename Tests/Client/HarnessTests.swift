@@ -1099,8 +1099,8 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.waiting, ["call Helen"])
     }
 
-    /// A turn that stopped the line stays drawn failed through the next attempt that fails the
-    /// same way, and the spinner holds the margin only while that attempt runs.
+    /// While a later attempt on a turn that stopped the line runs, the margin is the spinner, and
+    /// the resend is back once it fails the same way.
     func testAFailedTurnStaysFailedThroughTheAttemptsAfter() async throws {
         let db = InMemoryRecordDatabase()
         let zone = Switch()
@@ -1125,6 +1125,52 @@ final class HarnessIntegrationTests: XCTestCase {
         let spinning = await answer.value
         XCTAssertEqual(spinning, true, "the margin was not the spinner while the attempt ran")
         XCTAssertEqual(harness.margin(nonce), .resend, "the second failure left the turn drawn as waiting")
+    }
+
+    /// The reply failed after the person's turn was saved, and the read after it fails too — the
+    /// network gone mid-turn, as in Airplane Mode: the save said the turn is in the log, so the
+    /// row clears on it rather than drawing a settled turn as on its way with nothing on the line.
+    func testAFailedReplyWithTheLogUnreadableAfterItStillClearsTheRow() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
+        transport.duringRequest = { await db.refuseReads(true) }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+
+        let row = NextTurn()
+        row.text = "bins?"
+        let nonce = try XCTUnwrap(row.send(via: harness))
+        await harness.retry()
+
+        XCTAssertTrue(harness.waiting.isEmpty, "the settled turn is still on the line")
+        XCTAssertTrue(harness.said(nonce), "the saved turn is not known to be in the log")
+        XCTAssertFalse(row.sending(in: harness), "the row draws a settled turn as on its way")
+        XCTAssertTrue(row.clearIfLanded(in: harness))
+        XCTAssertEqual(harness.repliesStopped.count, 1, "the landed turn whose reply failed is not drawn as stopped")
+        let turns = try await log(db.wrapped)
+        XCTAssertEqual(turns.map(\.text), ["bins?"])
+    }
+
+    /// A turn whose reply failed is drawn as stopped until a reply is on its way: asking again
+    /// through its margin runs the answering pass now, under no new nonce and with no second
+    /// person's turn, and the reply landing takes the mark down.
+    func testATurnWhoseReplyFailedIsStoppedUntilAskingAgainBringsIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            (200, reply("Tonight.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let nonce = harness.willSend("bins?")
+        await harness.retry()
+
+        let person = try XCTUnwrap(harness.turns.first { $0.nonce == nonce })
+        XCTAssertEqual(harness.repliesStopped, [person.ref], "the turn whose reply failed is not drawn as stopped")
+        await harness.answerAgain(person.ref)
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["bins?", "Tonight."], "asking again did not bring one reply to the one turn")
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
     }
 
     /// The reply failed and the person's turn is in the log: the words are said, so the row

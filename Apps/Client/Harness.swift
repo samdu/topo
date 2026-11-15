@@ -109,6 +109,10 @@ final class Harness {
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
     private(set) var unfinished: Turn?
+    /// The person's turns in the log whose reply failed on this device (a turn's or a pass's
+    /// attempt), until the guest begins answering one, a reply to it is in the log, or the login
+    /// ends. With `unfinished`, what `repliesStopped` draws as failed.
+    private var replyFailed: Set<TurnRef> = []
     /// Told what the guest is doing while it answers: Topo on the glass follows it.
     var onGuest: (@MainActor (GuestActivity) -> Void)? {
         get { relay.handler }
@@ -594,6 +598,7 @@ final class Harness {
         answeredElsewhere = []
         failedNonces = []
         cutOffAhead = []
+        replyFailed = []
     }
 
     /// The guest's replies to words said here that the log does not hold a reply to, by the
@@ -1068,7 +1073,12 @@ final class Harness {
             await refresh()
             status = nil
             return true
-        } catch TurnRunnerError.replyFailed(_, let underlying) {
+        } catch TurnRunnerError.replyFailed(let person, let underlying) {
+            // The person's turn is in the log, which the runner's save of it said: the screen
+            // knows so now, and not only once a read gets through, since the read after a reply's
+            // failure is often one that fails too, and the row would draw a settled turn as on its
+            // way, its spinner turning on nothing.
+            if inFlight == generation { show(person) }
             if await keptUnsaved(attempt.nonce, underlying) {
                 // The person's turn is in the log and the guest's reply is whole; only its save
                 // failed, and the next pass writes it. It stays on screen meanwhile.
@@ -1095,7 +1105,10 @@ final class Harness {
             }
             // The failure is told before what was drawn of the reply goes, so a reading of it ends
             // as a failure's; a displaced turn is another device's to answer, and no failure.
-            if !handedBack { onTurnFailure?(attempt.nonce) }
+            if !handedBack {
+                onTurnFailure?(attempt.nonce)
+                replyFailed.insert(person.ref)
+            }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
@@ -1252,6 +1265,8 @@ final class Harness {
         }
         switch activity {
         case .began(_, let answering, _):
+            // A reply is on its way for these: no longer stopped.
+            replyFailed.subtract(answering)
             writing = nil
             handed = nil
             words = ReplyWords()
@@ -1314,6 +1329,7 @@ final class Harness {
         defer { if turn.role == .assistant { dropWriting() } }
         guard !turns.contains(where: { $0.ref == turn.ref }) else { return }
         turns.append(turn)
+        if turn.role == .assistant { replyFailed.subtract(turn.parents) }
         // A reply in the log is drawn as the turn it is, and no longer as one iCloud is behind on.
         if turn.role == .assistant {
             for person in turns where person.role == .person && turn.parents.contains(person.ref) {
@@ -1476,8 +1492,33 @@ final class Harness {
             guard self.login == login else { return }
             dropWriting()
             failure = Failure(words: Self.describe(error), source: .pass)
+            if case TurnRunnerError.replyFailed(let person, let underlying) = error {
+                if case TurnRunnerError.displaced = underlying {} else { replyFailed.insert(person.ref) }
+            }
             await refreshUnfinished()
         }
+    }
+
+    /// The person's turns in the log whose reply has stopped: it failed here, or the guest was cut
+    /// off answering (`unfinished`), and no reply is in the log or on its way, nor has the log gone
+    /// on from the turn. Drawn as failed, with a way to ask again in the margin (`answerAgain`):
+    /// nothing else brings their reply while iCloud or the model is out of reach.
+    var repliesStopped: Set<TurnRef> {
+        var refs = replyFailed
+        if let unfinished { refs.insert(unfinished.ref) }
+        return Set(refs.filter { ref in
+            guard let person = turns.first(where: { $0.ref == ref && $0.role == .person }) else { return false }
+            return !movedPast(person.nonce)
+        })
+    }
+
+    /// The margin's way to ask again for a stopped reply: a turn the guest was cut off answering
+    /// through `askAgain`, the one way such a turn is sent a second time; any other by the
+    /// answering pass, now. No turn is written and no nonce made: the turn stays the log's.
+    func answerAgain(_ ref: TurnRef) async {
+        if unfinished?.ref == ref { await askAgain(); return }
+        guard replyFailed.contains(ref) else { return }
+        if answeringLoop { await wake() } else { await answerPending() }
     }
 
     /// A pass completed or found another device answers, or the loop's read showed it had nothing
