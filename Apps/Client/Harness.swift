@@ -676,6 +676,7 @@ final class Harness {
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
         pending.append(outgoing)
+        Perf.mark("turn.line \(Self.turnMark(outgoing.nonce))")
         return outgoing.nonce
     }
 
@@ -691,7 +692,14 @@ final class Harness {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         pending.append(Outgoing(text: whole ? text : trimmed, nonce: nonce))
+        Perf.mark("turn.line \(Self.turnMark(nonce))")
         return true
+    }
+
+    /// What names a turn in its marks: `turn=` and the first eight letters or digits of its nonce,
+    /// which is random, so the marks carry nothing of what was said.
+    nonisolated static func turnMark(_ nonce: String) -> String {
+        "turn=" + String(nonce.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(8)).lowercased()
     }
 
     /// Whether a turn under `nonce` is on the line or in the log.
@@ -929,6 +937,13 @@ final class Harness {
         // Every way out closes the turn, unless a sign-out or a demotion already has and the
         // flag is the next login's.
         defer { if inFlight == generation { turnOpen = false } }
+        // Each attempt is marked by its turn, begun and ended (`answered`, `unsaved` while the
+        // guest is still answering, else `ended`), so a reading of the marks pairs a turn's start
+        // and its end by the turn and not by what happens to be beside them.
+        let turnMark = Self.turnMark(attempt.nonce)
+        Perf.mark("turn.attempt \(turnMark)")
+        var ended = "ended"
+        defer { Perf.mark("turn.attempt.end \(turnMark) \(ended)") }
         do {
             Perf.mark("turn.send")
             if runner == nil { status = "Reaching iCloud…" }
@@ -958,7 +973,8 @@ final class Harness {
             handedBack = false
             show(result.person)
             show(result.assistant)
-            Perf.mark("turn.reply.shown")
+            Perf.mark("turn.reply.shown \(turnMark)")
+            ended = "answered"
             if result.reply.context > 0 { context = result.reply.context }
             status = nil
             turnOpen = false
@@ -975,6 +991,8 @@ final class Harness {
             // person. The row keeps the words, the reply is drawn as it is written and stays once
             // it is whole, and the line goes again, as any stopped line does, to save both.
             guard inFlight == generation else { return false }
+            // The guest is still answering: the turn is not over, and its marks say so.
+            ended = "unsaved"
             // The lease could not be asked, so this device answers: the line behind is given too,
             // and what the guest makes of these words is drawn again.
             if handedBack {
@@ -1007,6 +1025,9 @@ final class Harness {
                 // The person's turn is in the log and the guest's reply is whole; only its save
                 // failed, and the next pass writes it. It stays on screen meanwhile.
                 guard inFlight == generation else { return false }
+                // The person has the reply: the turn was answered, whenever the log takes it.
+                Perf.mark("turn.reply.shown \(turnMark)")
+                ended = "answered"
                 turnOpen = false
                 handedBack = false
                 failure = Failure(words: Self.behind(underlying), source: .sync)

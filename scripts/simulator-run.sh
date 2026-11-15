@@ -20,6 +20,7 @@
 #
 #   scripts/simulator-run.sh                        # build, boot, install, launch signed in
 #   scripts/simulator-run.sh --send "hello"         # ... and send one turn, asserting the reply
+#   scripts/simulator-run.sh --send "hi || again"   # ... two turns, one after the other, in one launch
 #   scripts/simulator-run.sh --press-mic            # ... after pressing the microphone (TopoUITests)
 #   scripts/simulator-run.sh --talk                 # speak a question, assert it is answered aloud
 #   scripts/simulator-run.sh --userland "echo hi" --expect hi   # boot the guest, run a command

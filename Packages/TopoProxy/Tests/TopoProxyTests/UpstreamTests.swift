@@ -30,6 +30,38 @@ import Testing
         #expect(elsewhere.requests.isEmpty, "the redirect was followed to \(elsewhere.url)")
     }
 
+    /// The request's body leaving is told once, before the origin has answered, so the time it
+    /// took to go up is told apart from the API's wait for its answer (#773); a request with no
+    /// body is not told.
+    @Test func aBodysLastByteIsToldOnceBeforeTheAnswer() async throws {
+        let answer = Signal()
+        let origin = try StubOrigin { _, inbound in
+            _ = await answer.wait(5)
+            try await inbound.send(Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".utf8))
+        }
+        _ = try await origin.start()
+        defer { origin.stop() }
+        let upstream = URLSessionUpstream(origin: origin.url)
+        let told = Count()
+        var request = UpstreamRequest(method: "POST", target: "/v1/messages", headers: [HTTPField("Content-Type", "application/json")],
+                                      body: Data(repeating: 0x61, count: 300_000))
+        request.sent = { told.add() }
+        async let response = upstream.send(request)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while told.value == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(told.value == 1, "the body's leaving was not told before the origin answered")
+        answer.fire()
+        #expect(try await response.status == 200)
+        #expect(told.value == 1)
+
+        var bare = UpstreamRequest(method: "GET", target: "/v1/models", headers: [], body: nil)
+        let none = Count()
+        bare.sent = { none.add() }
+        answer.fire()
+        #expect(try await upstream.send(bare).status == 200)
+        #expect(none.value == 0)
+    }
+
     /// Review focus 2 over URLSession: the session hands each event on as it arrives, so the first
     /// reaches the guest before the origin sends the second.
     @Test func urlSessionPassesEachEventOnAsItArrives() async throws {
@@ -176,4 +208,12 @@ final class NotHTTPProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+/// A count kept across threads.
+final class Count: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func add() { lock.withLock { n += 1 } }
+    var value: Int { lock.withLock { n } }
 }

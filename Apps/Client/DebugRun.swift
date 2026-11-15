@@ -400,10 +400,12 @@ enum DebugRun {
         return { status in status.loggedIn }
     }
 
-    /// What `TOPO_DEBUG_SEND` asks to be said, or nil.
-    static func words(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
-        let text = (environment[sendVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+    /// What `TOPO_DEBUG_SEND` asks to be said: turns separated by `" || "`, sent one after
+    /// another in this launch, blank ones dropped; none when it is absent or blank.
+    static func turns(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        (environment[sendVariable] ?? "").components(separatedBy: " || ")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     /// Every line this prints is prefixed, so a script watching `simctl launch --console` can find
@@ -440,7 +442,8 @@ extension DebugRun {
     @MainActor
     static func send(with harness: Harness, mascot: Mascot, role: RoleSelector,
                      environment: [String: String] = ProcessInfo.processInfo.environment) async {
-        guard let text = words(environment) else { return }
+        let texts = turns(environment)
+        guard !texts.isEmpty else { return }
         let run = environment[runVariable] ?? ""
         let icloud = await iCloud()
         say("icloud: \(icloud)")
@@ -491,17 +494,19 @@ extension DebugRun {
             }
         }
         defer { harness.onGuest = chat }
-        let nonce = harness.willSend(text)
-        say("sending under \(nonce) in run \(run): \(text)")
-        await harness.retry()
-        await harness.refresh()
-        if let error = harness.error {
-            say("error: \(error)")
+        for text in texts {
+            let nonce = harness.willSend(text)
+            say("sending under \(nonce) in run \(run): \(text)")
+            await harness.retry()
+            await harness.refresh()
+            if let error = harness.error {
+                say("error: \(error)")
+            }
+            let answered = answer(to: nonce, in: harness.turns)
+            var by: (session: String?, pid: Int32?)?
+            if case .answered(_, let reply) = answered { by = await harness.guest?.provenance(of: reply.nonce) }
+            say(line(for: answered, nonce: nonce, run: run, by: by))
         }
-        let answered = answer(to: nonce, in: harness.turns)
-        var by: (session: String?, pid: Int32?)?
-        if case .answered(_, let reply) = answered { by = await harness.guest?.provenance(of: reply.nonce) }
-        say(line(for: answered, nonce: nonce, run: run, by: by))
         say("turns in the log: \(harness.turns.count)")
         say("records: \(await AppRecords.recordsWhere())")
         say("done")
@@ -593,7 +598,7 @@ extension DebugRun {
     @MainActor
     static func takePrimary(_ selector: RoleSelector, adopt: (PrimaryLease) -> Void,
                             environment: [String: String] = ProcessInfo.processInfo.environment) async -> Bool {
-        guard words(environment) != nil, selector.role == .viewer, !takeTried else { return false }
+        guard !turns(environment).isEmpty, selector.role == .viewer, !takeTried else { return false }
         takeTried = true
         say("role: viewer; taking primary as the viewer's control does")
         guard let lease = await selector.takePrimary() else {
