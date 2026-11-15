@@ -485,7 +485,6 @@ if [ "$signin" = yes ]; then
     [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
     nonce="$(uuidgen)"
     serve_once "$nonce" password
-    unset password
     port="$served_port"
   fi
   results="$derived/TopoSimulatorSignIn.xcresult"
@@ -503,6 +502,18 @@ if [ "$signin" = yes ]; then
       -only-testing:TopoSimulatorSignInTests/SimulatorSignInTests \
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
   scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/SimulatorSignInTests || status=1
+  # What the run left is counted for the password itself, as --leak-check counts a dummy: any run
+  # of 8 of its characters in the run's log or the bundle fails the run and says where, never what.
+  if [ "$resume" = no ]; then
+    leaked="$(count_runs password "$runlog" "$results" 3< <(printf '%s' "$password") | grep -Ev ': (0|absent)$' || true)"
+    unset password
+    if [ -n "$leaked" ]; then
+      echo "==> the password is in what this run left, by count: $leaked. Delete those files before anything else" >&2
+      status=1
+    else
+      echo "==> the password is in nothing this run left: no 8 of its characters in the run's log or the bundle"
+    fi
+  fi
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
     echo "==> $udid was signed in already and Settings asks for no password. If --send reports 'account temporarily unavailable', its sign-in has ended (a restart of the simulator ends it, and so does a change of the account's password), and no prompt will come for it: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew signs the account out and in again, typing the password once. If --send reports another lapse, the test does not know the screen it shows"
   elif [ "$status" = 0 ]; then

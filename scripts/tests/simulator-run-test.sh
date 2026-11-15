@@ -216,6 +216,7 @@ case " $* " in *" TopoSimulatorSignIn "*)
   env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
   [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
   [ -n "${TEST_RUNNER_TOPO_SIGNIN_PORT:-}" ] || exit 0  # a resume serves nothing to ask
+  [ -z "${FAKE_SIGNIN_LEAKS:-}" ] || echo "Type '${FAKE_APPLE_PASSWORD:0:18}...' into \"password-field\""
   /usr/bin/python3 -c '
 import socket, sys
 port, nonce, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -607,7 +608,7 @@ fi
 # --sign-in, against a fake vault and a fake test that asks the listener for the password: the
 # listener hands nothing to a request without the run's nonce and the password to one with it,
 # and the password is in none of the test runner's arguments, its environment or the run's output.
-secret="fake-apple-password-$$"
+secret="Fk9xQa7p-$$-Lm2wZr4t"  # no word a log line holds, which an 8-character count would find
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_ENV="$work/signin.env" FAKE_SIGNIN_GOT="$work/signin.got" \
   "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin.out" 2>&1 </dev/null
@@ -699,6 +700,18 @@ leak_case leak-check-redacted-leaks 1 FAKE_LEAK_REDACTED=1
 leak_case leak-check-control-unseen-in-bundle 1 FAKE_LEAK_SINK=output
 leak_case leak-check-control-unseen-in-output 1 FAKE_LEAK_SINK=bundle
 leak_case leak-check-failing-run-recorded 1 FAKE_LEAK_RECORDS=1
+# A sign-in whose run left any 8 characters of the password fails and names where, not what.
+: >"$FAKE_XCODEBUILD_CALLS"
+PATH="$work/bin:$PATH" FAKE_APPLE_PASSWORD="$secret" FAKE_SIGNIN_LEAKS=1 FAKE_SIGNIN_ENV="$work/leaks.env" FAKE_SIGNIN_GOT="$work/leaks.got" \
+  "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-leaks.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 1 ] && grep -q "the password is in what this run left, by count: password .*simulator-run.log: [1-9]" "$work/signin-leaks.out" \
+   && [ "$(grep -c "the password is in" "$work/sign-in-renews-when-asked.out")" = 1 ] \
+   && grep -q "the password is in nothing this run left" "$work/sign-in-renews-when-asked.out"; then
+  echo "ok   sign-in-counts-the-password: a run that left it fails, one that did not says so"
+else
+  echo "FAIL sign-in-counts-the-password: exit $status"; sed 's/^/    | /' "$work/signin-leaks.out"; failures=$((failures + 1))
+fi
 # A vault that gives no password stops the run before any test starts.
 : >"$FAKE_XCODEBUILD_CALLS"
 PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --no-build --sign-in >"$work/signin-none.out" 2>&1 </dev/null
