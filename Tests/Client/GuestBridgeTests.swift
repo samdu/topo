@@ -2158,6 +2158,41 @@ extension GuestBridgeTests {
 
     // MARK: The row
 
+    /// The marks `topo perf` pairs a turn by (#773): an attempt iCloud is behind for ends
+    /// `unsaved`, which keeps the turn in flight, and the attempt that lands it marks its reply
+    /// drawn and then its end `answered`, each tagged with the turn.
+    func testATurnsMarksCarryItsTagAndAnUnsavedAttemptEndsUnsaved() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])
+        let (harness, _) = harness(db, guest)
+        await harness.refresh()
+        await harness.answerPending()
+        await db.away(true)
+        let marks = TurnMarks()
+        let first = await Perf.$observer.withValue(marks.add) { () -> String in
+            let nonce = harness.willSend("capital of France?")
+            await harness.retry()
+            return nonce
+        }
+        try await eventually("the reply") { harness.replies[first] == "Paris." }
+        let tag = Harness.turnMark(first)
+        XCTAssertEqual(tag.count, "turn=".count + 8)
+        XCTAssertFalse(tag.contains("France"))
+        XCTAssertEqual(marks.tagged(tag), ["turn.line \(tag)", "turn.attempt \(tag)", "turn.attempt.end \(tag) unsaved"])
+        await db.away(false)
+        await Perf.$observer.withValue(marks.add) { await harness.retry() }
+        XCTAssertEqual(harness.turns.map(\.text), ["capital of France?", "Paris."])
+        XCTAssertEqual(Array(marks.tagged(tag).dropFirst(3)),
+                       ["turn.attempt \(tag)", "turn.reply.shown \(tag)", "turn.attempt.end \(tag) answered"])
+    }
+
+    private final class TurnMarks: @unchecked Sendable {
+        private let lock = NSLock()
+        private var kept: [String] = []
+        func tagged(_ tag: String) -> [String] { lock.withLock { kept.filter { $0.contains(tag) } } }
+        var add: @Sendable (String) -> Void { { [self] name in lock.withLock { kept.append(name) } } }
+    }
+
     /// iCloud is away: the words stay on the line, the reply is drawn under them as it is written
     /// and stays once whole, across the next message's start; the notice says iCloud is behind and
     /// nothing is told failed. When iCloud is back the log's turns replace all of it.

@@ -56,7 +56,8 @@ final class PerfToolTests: XCTestCase {
             "queue\t1\t1\tStarted on its way",
             "save\t3150\t3149\tYour words saved to iCloud",
             "ready\t3213\t63\tClaude Code had your words",
-            "prepare\t4468\t1255\tClaude Code made request 1",
+            "start\t3701\t488\tClaude Code started on your words",
+            "prepare\t4468\t767\tClaude Code made request 1",
             "upload\t5100\t632\tRequest 1 sent (394 KB, a thread continued)",
             "model\t6542\t1442\tThe model began answering request 1",
             "screen\t6575\t33\tFirst words on your screen",
@@ -64,7 +65,7 @@ final class PerfToolTests: XCTestCase {
             "finish\t7184\t116\tClaude Code finished the reply",
             "store\t7780\t596\tThe reply saved to iCloud",
             "show\t7795\t15\tThe reply on your screen",
-            "record: perf-turn 2027-01-15T08:00:00Z typed answered total=7795 queue=1 save=3149 ready=63 prepare=1255 "
+            "record: perf-turn 2027-01-15T08:00:00Z typed answered total=7795 queue=1 save=3149 ready=63 start=488 prepare=767 "
                 + "upload=632 model=1442 stream=493 screen=33 finish=116 store=596 show=15 thread=continue bytes=403495 requests=1 tools=0 sends=1",
         ])
         let turn = try XCTUnwrap(timelines(typed(at: 0)).first)
@@ -118,7 +119,7 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turns.count, 2)
         let first = turns[0]
         XCTAssertTrue(first.mixed)
-        XCTAssertEqual(first.events.map(\.key), [.queue, .save, .ready, .prepare, .mixed, .show])
+        XCTAssertEqual(first.events.map(\.key), [.queue, .save, .ready, .start, .prepare, .mixed, .show])
         XCTAssertEqual(first.events.last?.at, 7795)
         XCTAssertEqual(first.events.map(\.took).reduce(0, +), first.total)
         XCTAssertTrue(first.record.hasSuffix(" mixed"), first.record)
@@ -150,6 +151,17 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(rows[rows.count - 2], "sound\t8600\t300\tThe voice's first sound")
         XCTAssertTrue(rows.last!.contains(" spoken answered total=8295 hear=420 queue=81 "), rows.last!)
         XCTAssertTrue(rows.last!.contains(" sound=8900 "), rows.last!)
+    }
+
+    /// A release from before another turn's words went on the line is not this turn's: it begins
+    /// at its own line, with no hearing in it.
+    func testASpokenTurnTakesNoReleaseFromBeforeAnotherTurn() throws {
+        var lines = [line(-60_000, "voice.released"), line(-59_600, "voice.heard"), line(-59_590, "turn.line", "turn=0000ffff")]
+        lines += [line(-70, "turn.spoken", "turn=aaaa1111")] + typed(at: 0)
+        let turn = try XCTUnwrap(timelines(lines).first { $0.total == 7795 })
+        XCTAssertEqual(turn.kind, .spoken)
+        XCTAssertEqual(turn.at, Date(timeIntervalSince1970: Double(Self.base) / 1000))
+        XCTAssertFalse(turn.events.contains { $0.key == .hear })
     }
 
     /// A turn that never ended here (a hub answered it, or it is still under way) is no turn, and
@@ -254,10 +266,10 @@ final class PerfToolTests: XCTestCase {
         let turn = try XCTUnwrap(timelines(lines).first)
         XCTAssertFalse(turn.mixed)
         XCTAssertEqual(turn.total, 12727)
-        XCTAssertEqual(turn.events.map(\.key), [.queue, .ready, .prepare, .upload, .model, .stream, .tool, .upload, .model, .stream,
+        XCTAssertEqual(turn.events.map(\.key), [.queue, .ready, .start, .prepare, .upload, .model, .stream, .tool, .upload, .model, .stream,
                                                  .tool, .upload, .model, .screen, .stream, .finish, .store, .show])
         XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
-        XCTAssertEqual(turn.events[4].took, 691, "the model's wait for request 1 is its own, not the save's")
+        XCTAssertEqual(turn.events[5].took, 691, "the model's wait for request 1 is its own, not the save's")
         XCTAssertEqual(turn.beside.map(\.took), [921])
         XCTAssertEqual(turn.tools, 2)
         XCTAssertEqual(turn.requestBytes, [66323, 68934, 70073])

@@ -45,7 +45,7 @@ struct PerfMark: Equatable, Sendable {
 struct TurnTimeline: Sendable {
     /// What kind of moment an event is: the key it is kept under, which the record sums by.
     enum Key: String, CaseIterable, Sendable {
-        case hear, queue, save, ready, prepare, tool, upload, model, stream, screen, finish, store, show, end, mixed
+        case hear, queue, save, ready, start, prepare, tool, upload, model, stream, screen, finish, store, show, end, mixed
     }
 
     struct Event: Equatable, Sendable {
@@ -133,8 +133,10 @@ struct TurnTimeline: Sendable {
             guard let start = line[id] ?? firstAttempt[id] else { return nil }
             var origin = start
             // A spoken turn begins at the release whose hearing came before its words went on the line.
+            // One with another turn's words put on the line in between is not this turn's release.
             if spoken.contains(id), let heard = marks.last(where: { $0.name == "voice.heard" && $0.ms <= start }),
-               let released = marks.last(where: { $0.name == "voice.released" && $0.ms <= heard.ms }) {
+               let released = marks.last(where: { $0.name == "voice.released" && $0.ms <= heard.ms }),
+               !line.contains(where: { $0.key != id && $0.value > released.ms && $0.value < start }) {
                 origin = released.ms
             }
             // An attempt that ended `unsaved` left the guest answering: the turn goes on.
@@ -188,8 +190,12 @@ struct TurnTimeline: Sendable {
         if let blur { raw.append((blur.upperBound, .mixed, "Alongside another message")) }
         let write = clean.first { $0.name == "turn.guest.write" }
         if let write {
-            let afresh = clean.contains { ($0.name == "resident.launch.begin" || $0.name == "guest.boot.begin") && $0.ms <= write.ms }
-            raw.append((write.ms, .ready, afresh ? "Claude Code started and had your words" : "Claude Code had your words"))
+            raw.append((write.ms, .ready, "Claude Code had your words"))
+            // Its first word back on the turn: a process still starting (a launch, a resume, a
+            // boot) spends its start here, not in making the request.
+            if let begun = clean.first(where: { $0.name == "turn.guest.init" && $0.ms >= write.ms }) {
+                raw.append((begun.ms, .start, "Claude Code started on your words"))
+            }
         }
         // Words given to the guest ahead of their save are saved while it works: that save is no
         // wait of the turn's, so it is said beside it, from the first send, and not in the sum.
@@ -287,7 +293,7 @@ struct TurnTimeline: Sendable {
         fields += byKey.map { "\($0.key.rawValue)=\($0.ms)" }
         if let save = beside.first(where: { $0.key == .save }) { fields.append("saved=\(save.at + save.took)") }
         if let sound { fields.append("\(Self.soundKey)=\(sound.upperBound)") }
-        if let thread = requestThreads.first { fields.append("thread=\(thread)") }
+        if let thread = requestThreads.first, Self.threadWords[thread] != nil { fields.append("thread=\(thread)") }
         fields += ["bytes=\(requestBytes.reduce(0, +))", "requests=\(requestBytes.count)", "tools=\(tools)", "sends=\(sends)"]
         if mixed { fields.append("mixed") }
         return fields.joined(separator: " ")
