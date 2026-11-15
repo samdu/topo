@@ -1813,6 +1813,34 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNotNil(phone.failure, "the red line came down with the turn's words still owed")
     }
 
+    /// A turn in flight is not a line stopped on a failure: a read that fails while the model has
+    /// the turn, and one that gets through after it with the turn still in flight, leave no line,
+    /// though the turn's words are still on the line. Asked inside the request, since the turn's
+    /// own reply takes any line down.
+    func testAReadsFailureDuringATurnInFlightComesDownAtTheNextRead() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let seen = Seen()
+        let inFlight = Answers(), failedAsRead = Answers(), cleared = Answers()
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            await inFlight.set(await MainActor.run { seen.harness.map { $0.busy && !$0.waiting.isEmpty } ?? false })
+            await db.refuseReads(true)
+            await seen.harness?.refresh()
+            await failedAsRead.set(await MainActor.run { seen.harness?.failure?.source == .read })
+            await db.refuseReads(false)
+            await seen.harness?.refresh()
+            await cleared.set(await MainActor.run { seen.harness?.failure == nil })
+        }
+        let phone = harness(db, defaults: makeDefaults(), transport: transport)
+        seen.harness = phone
+        await phone.send("When are the bins?")
+
+        let (wasInFlight, wasRead, wasCleared) = await (inFlight.value, failedAsRead.value, cleared.value)
+        XCTAssertEqual(wasInFlight, true, "the turn was not in flight with its words on the line")
+        XCTAssertEqual(wasRead, true, "the read did not fail as a read")
+        XCTAssertEqual(wasCleared, true, "a read that got through left a read's line up over a turn in flight")
+    }
+
     /// The race #615 names: offline, a read and a pass both fail, in either order, and the last
     /// one up is whichever failed last. Once iCloud is back, one pass of the loop leaves nothing
     /// standing either way.
