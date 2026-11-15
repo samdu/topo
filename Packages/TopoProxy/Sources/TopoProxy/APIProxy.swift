@@ -13,8 +13,8 @@ import TopoCore
 /// Inbound it speaks HTTP/1.1 with keep-alive: requests one after another on one connection,
 /// bodies framed by `Content-Length` or chunked, `Expect: 100-continue` answered. The request body
 /// is read whole before it is forwarded (the debug pin has to read it); the response body never
-/// is. A release build parses a body only to note a request on the message threads beta
-/// (`ThreadLog`). A client that goes away mid-response cancels the upstream request.
+/// is. Outside a timed run (`Perf.recording`, whose marks read each body's shape) a release build
+/// parses a body only to note a request on the message threads beta (`ThreadLog`). A client that goes away mid-response cancels the upstream request.
 ///
 /// In a debug build the `model` of every `/v1/messages` body is rewritten to `pinnedModel`
 /// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
@@ -348,11 +348,11 @@ struct Forwarder: Sendable {
             Perf.mark("proxy.head \(route) \(response.status)")
             if let noted { threads.answered(noted, status: response.status) }
         } catch {
-            if let noted { threads.answered(noted, status: 502) }
             if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
             // A target that would leave the one origin is the guest's request at fault; anything
             // else is the upstream failing, and a bad gateway.
             let status = { if case .foreignTarget? = error as? UpstreamError { 400 } else { 502 } }()
+            if let noted { threads.answered(noted, status: status) }
             log("\(line) \(status) in \(Self.elapsed(since: started)): failed upstream: \(Self.describe(error))")
             try? await inbound.send(Self.errorResponse(status: status, type: "api_error",
                                                        message: "Topo's proxy could not reach api.anthropic.com: \(Self.describe(error))"))

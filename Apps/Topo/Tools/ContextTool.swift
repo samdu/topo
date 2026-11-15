@@ -125,7 +125,7 @@ struct ContextTool: Tool {
             lines.append("held: on Anthropic's side, encrypted in memory, up to an hour after the last request; no delete; not zero data retention")
         }
         guard !facts.sent.isEmpty else {
-            lines.append("requests: none through the proxy since this app launched or the last sign-out")
+            lines.append("requests: none through the proxy since this app launched or the last login ended")
             return lines.joined(separator: "\n") + "\n"
         }
         lines.append("requests the proxy saw, oldest first:")

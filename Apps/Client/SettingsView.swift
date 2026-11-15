@@ -226,12 +226,14 @@ struct MessageThreadsSection: View {
         Section {
             Toggle("Message threads", isOn: Binding(get: { on }, set: { harness.threads.on = $0 }))
                 .accessibilityIdentifier("context-threads")
-            if on, MessageThreads.Setting(on: on, variable: variable).variable != MessageThreads.defaultVariable {
+            if MessageThreads.Setting(on: on, variable: variable).variable != MessageThreads.defaultVariable {
                 LabeledContent("Asked for with", value: MessageThreads.Setting(on: on, variable: variable).variable)
                     .accessibilityIdentifier("context-threads-variable")
+                Button("Use Claude Code's own name") { harness.threads.variable = MessageThreads.defaultVariable }
+                    .accessibilityIdentifier("context-threads-reset")
             }
         } footer: {
-            Text("On, each request sends only what is new, which is quicker on a slow connection. The conversation is then held on Anthropic's servers, encrypted in memory, for up to an hour after its last request; it cannot be deleted sooner, and it is outside zero data retention.")
+            Text("On, each request sends only what is new, which is quicker on a slow connection. The conversation is then held on Anthropic's servers, encrypted in memory, for up to an hour after its last request; it cannot be deleted sooner, and it is outside zero data retention. Off asks for nothing, whatever name Topo set.")
         }
     }
 }

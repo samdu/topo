@@ -227,9 +227,15 @@ final class StreamJSONTests: XCTestCase {
             let environment = try await launcher.launchEnvironment(threads: taken)
             XCTAssertEqual(environment[taken], off[taken], "\(taken) was replaced by the threads variable")
         }
-        for own in ClaudeLauncher.ownKeys {
+        // The launcher's own keys are set after it, and keep their values.
+        for own in ["HOME", ClaudeLauncher.compactWindowVariable, ClaudeLauncher.launchVariable] {
             let environment = try await launcher.launchEnvironment(threads: own)
-            XCTAssertNotEqual(environment[own] == "1" && off[own] != "1", true, "\(own), the launcher's own, was set to 1")
+            XCTAssertNotNil(environment[own], own)
+            XCTAssertNotEqual(environment[own], "1", "\(own), the launcher's own, was set to 1")
+        }
+        for cleared in [ClaudeLauncher.compactAtVariable, ClaudeLauncher.timingVariable, ClaudeLauncher.noteVariable] {
+            let environment = try await launcher.launchEnvironment(threads: cleared)
+            XCTAssertNil(environment[cleared], "\(cleared), which the launcher leaves out here, was set")
         }
     }
 

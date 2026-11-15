@@ -889,7 +889,7 @@ public actor GuestSession {
             // What changed while it was starting replaces it before any turn goes to it; whoever
             // is waiting for a process waits for the replacement.
             if isStale(resident) {
-                _ = end(resident, reason: "a change of model, memory, threshold or conversation while it started", restart: true)
+                _ = end(resident, reason: "a change of model, memory, threshold, threads or conversation while it started", restart: true)
                 return
             }
             settleReadiness(.success(()))

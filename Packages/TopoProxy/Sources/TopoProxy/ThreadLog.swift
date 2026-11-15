@@ -11,7 +11,8 @@ import os
 ///
 /// The body is read only for a request whose `anthropic-beta` header names the threads beta,
 /// which Claude Code sends with every thread request and with none other; so a request on no
-/// thread is never parsed, and the saving reads as nothing more than a 40 kB parse.
+/// thread is never parsed outside a timed run; a continue is some 40 kB to parse, and only a
+/// process's create carries the whole conversation.
 public final class ThreadLog: Sendable {
     public enum Kind: String, Sendable, Equatable {
         /// No threads beta: the whole conversation in the request.

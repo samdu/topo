@@ -214,12 +214,13 @@ public struct ClaudeLauncher: ResidentLauncher {
     ///
     /// `threads` is the name of the variable that turns on Claude Code's message threads
     /// (`MessageThreads`), set to `1`, or nil to set none. It is the mind's to rename, so it is set
-    /// only where nothing else is: a name the guest's environment, the callback or the launcher
-    /// itself sets (`ownKeys`) is left as they have it, and the launch goes without threads.
+    /// only where nothing else is: a name the guest's environment or the callback sets is left as
+    /// they have it, and the launcher's own keys are set after it, so one of those keeps its own
+    /// value; either way the launch goes without threads.
     public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, threads: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
-        if let threads, environment[threads] == nil, !Self.ownKeys.contains(threads) {
+        if let threads, environment[threads] == nil {
             environment[threads] = Self.threadsValue
         }
         environment["HOME"] = home
@@ -244,12 +245,6 @@ public struct ClaudeLauncher: ResidentLauncher {
 
     /// What the threads variable is set to: the one value, whatever its name.
     public static let threadsValue = "1"
-
-    /// Every key this launcher sets or clears after the callback's, which no threads variable
-    /// may name.
-    public static var ownKeys: Set<String> {
-        ["HOME", "IS_SANDBOX", compactWindowVariable, compactAtVariable, noteVariable, noteMarkVariable, launchVariable, timingVariable]
-    }
 
     /// Claude Code puts `time_to_request_ms` and its phases on each result while this is set.
     public static let timingVariable = "CLAUDE_CODE_EMIT_STARTUP_TIMING"

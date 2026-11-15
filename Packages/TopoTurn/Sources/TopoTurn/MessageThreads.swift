@@ -54,16 +54,24 @@ public enum MessageThreads {
     public static let longest = 64
 
     /// The one reader of a name: `CLAUDE_CODE_` and then upper-case letters, digits and single
-    /// underscores, at most `longest` long, and none that names a credential, a provider, a
-    /// skip, a URL, a proxy, or a variable Topo's own launch or proxy sets. `default` is
-    /// `defaultVariable`. Anything else is no name.
+    /// underscores, at most `longest` long, with `THREAD` or `TETHER` in it (`meaningParts`), and
+    /// none with a part that names a credential, a provider, a skip, a URL, a proxy, settings or
+    /// the environment (`refusedParts`). `default` is `defaultVariable`. Anything else is no name. Claude Code reads
+    /// some 800 `CLAUDE_CODE_` variables, any of which a launch's `1` would change, and a list of
+    /// the ones that are safe cannot be written for a version not yet out; a rename of this one
+    /// keeps what it is about, so the reader takes only names that say so, and a rename that does
+    /// not is an app update.
     public static func variable(_ word: String) -> String? {
         let name = word.trimmingCharacters(in: .whitespaces)
         if name.lowercased() == "default" { return defaultVariable }
-        guard name.count <= longest, name.wholeMatch(of: /CLAUDE_CODE_[A-Z0-9]+(_[A-Z0-9]+)*/) != nil else { return nil }
-        guard !reserved.contains(name), !refusedParts.contains(where: name.contains) else { return nil }
+        guard name.count <= longest, name.wholeMatch(of: /CLAUDE_CODE_[A-Z0-9]+(_[A-Z0-9]+)*/) != nil,
+              meaningParts.contains(where: name.contains) else { return nil }
+        guard !refusedParts.contains(where: name.contains) else { return nil }
         return name
     }
+
+    /// What a name has to be about: one of these is in every name `variable(_:)` takes.
+    public static let meaningParts = ["THREAD", "TETHER"]
 
     /// Why `word` is no name, for the person or the mind to read.
     public static func refusal(_ word: String) -> String {
@@ -72,21 +80,17 @@ public enum MessageThreads {
         if name.wholeMatch(of: /CLAUDE_CODE_[A-Z0-9]+(_[A-Z0-9]+)*/) == nil {
             return "a name is CLAUDE_CODE_ then capitals, digits and single underscores"
         }
-        if reserved.contains(name) { return "\(name) is a variable Topo's launch sets itself" }
+        if !meaningParts.contains(where: name.contains) {
+            return "a name has THREAD or TETHER in it; a rename without either is an app update"
+        }
         if let part = refusedParts.first(where: name.contains) { return "a name with \(part) in it is refused" }
         return "no name"
     }
-
-    /// Variables the guest's launch sets itself (`Guest.environment`, `ClaudeLauncher`), which
-    /// the launcher would not let this one replace in any case.
-    public static let reserved: Set<String> = [
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EMIT_STARTUP_TIMING", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-    ]
 
     /// Parts of a name that make it one the mind may not set: what would change who the
     /// resident signs in as, which provider or URL it reaches, or a check it skips.
     public static let refusedParts = [
         "TOKEN", "KEY", "SECRET", "AUTH", "PASSWORD", "CREDENTIAL", "_USE_", "SKIP", "URL", "PROXY", "PROVIDER",
-        "DANGEROUS", "BYPASS", "SANDBOX",
+        "DANGEROUS", "BYPASS", "SANDBOX", "SIMPLE", "SHELL", "REMOTE", "MANAGED", "SETTINGS", "ENV",
     ]
 }
