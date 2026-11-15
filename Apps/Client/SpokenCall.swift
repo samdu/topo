@@ -43,7 +43,7 @@ final class SpokenCall: NSObject {
     /// The call could not be placed, was never activated, or went with the system's call
     /// service restarting. The exchange carries on without one, on the keeper.
     var onFailed: (String) -> Void = { _ in }
-    /// The driver's: told after `onFailed`, so a call that failed in the background is not placed
+    /// The driver's: told before `onFailed`, so a call that failed in the background is not placed
     /// again until the app has been in front (`SpokenCallDriver`).
     var gaveUp: () -> Void = {}
 
@@ -205,8 +205,11 @@ final class SpokenCall: NSObject {
         active = false
         again = false
         say("call: \(why)")
-        onFailed(why)
+        // Before `onFailed`, as Daphne's give-up is the first thing her failure does: what
+        // `onFailed` sets off (a conversation's end, a hold's change) reaches the driver at once,
+        // and would place the call again before the driver knew this one had failed.
         gaveUp()
+        onFailed(why)
     }
 
     private func report(_ call: UUID) {

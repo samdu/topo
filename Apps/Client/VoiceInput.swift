@@ -708,8 +708,7 @@ final class VoiceInput {
         }
     }
 
-    /// The call's moments (`Speaker.onCall`): the input kept past a release is what the call
-    /// service judged the placing by, so it runs until the system performs the start, where the
+    /// The call's moments (`Speaker.onCall`): the input kept past a release runs until the system performs the start, where the
     /// session becomes the system's (`AudioSession.callPlaced` follows at once), and through a
     /// refused placing's retries until the call is over, refused for good or failed.
     func call(_ moment: Speaker.CallMoment) {
