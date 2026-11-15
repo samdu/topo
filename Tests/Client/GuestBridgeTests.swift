@@ -5024,12 +5024,12 @@ extension GuestBridgeTests {
         XCTAssertEqual(relaunched.margin(nonce), .resend, "a relaunch drew the cut-off turn as waiting")
     }
 
-    /// iCloud behind a turn the guest is still answering is no failure: it waits, and can be
-    /// taken back, and is never drawn red.
+    /// iCloud behind a turn the guest is still answering is no failure: it is drawn as on its
+    /// way, never red. The guest has the words, so it offers no cancel.
     func testATurnICloudIsBehindOnWhileTheGuestAnswersIsNotDrawnFailed() async throws {
         let (harness, nonce, guest) = try await behindTurn(.hangUnwritten)
         XCTAssertFalse(harness.stoppedOnFailure(nonce), "a turn the guest is answering is drawn failed")
-        XCTAssertEqual(harness.margin(nonce), .cancel)
+        XCTAssertEqual(harness.margin(nonce), .sending, "words the guest has were offered a cancel")
         guest.finishHanging(with: "Tonight.")
         try await eventually("the reply drawn") { await MainActor.run { harness.replies[nonce] == "Tonight." } }
         XCTAssertFalse(harness.stoppedOnFailure(nonce), "a turn the guest answered is drawn failed because iCloud is behind")
