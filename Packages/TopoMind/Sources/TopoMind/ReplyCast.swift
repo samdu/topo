@@ -53,6 +53,15 @@ public final class ReplyCast: @unchecked Sendable {
         }
     }
 
+    /// The mind's turn on the reply being written ended with no reply to come from it (the
+    /// brain's answer threw): its followers are handed `.cut`.
+    func cut() {
+        lock.withLock {
+            guard let reply = current else { return }
+            for follower in followers.values where reply.marks.contains(follower.mark) { follower.hand(.cut) }
+        }
+    }
+
     /// The reply's turn is over, answered or not.
     func end() {
         lock.withLock { current = nil }
@@ -75,6 +84,25 @@ public final class ReplyCast: @unchecked Sendable {
 
     func stop(_ id: UUID) {
         lock.withLock { followers[id] = nil }
+    }
+
+    /// `hand`, while `on` says so: from the first frame handed with `on` false, nothing more of
+    /// the reply is handed but `.cut`, which carries no words, so a reply stopped mid-stream is
+    /// not resumed with a gap in it. For the hub's "Stream replies to the phone", which turned off
+    /// stops a stream in progress.
+    public static func gated(_ hand: @escaping Hand, while on: @escaping @Sendable () -> Bool) -> Hand {
+        let stopped = Latch()
+        return { frame in
+            if frame != .cut, stopped.trip(if: !on()) { return }
+            hand(frame)
+        }
+    }
+
+    private final class Latch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tripped = false
+        /// True from the first call whose `condition` is true.
+        func trip(if condition: Bool) -> Bool { lock.withLock { if condition { tripped = true }; return tripped } }
     }
 
     /// How many follow now, for the suites.

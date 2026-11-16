@@ -85,6 +85,10 @@ public actor LeaseProbeServer {
     public static let nudgeBound: TimeInterval = 600
     /// How long a connection is given to say its one line.
     public static let requestBound: TimeInterval = 5
+    /// The longest line of a streamed reply this sends: a quarter of what the phone reads
+    /// (`HubNudge.frameMaximum`), so a line is never near it however the reader's buffer runs.
+    /// Words handed in one frame past it (a follower's catch-up, one long delta) go as several.
+    static let frameLine = HubNudge.frameMaximum / 4
 
     private let listener: NWListener
     private let holds: Holds
@@ -173,7 +177,9 @@ public actor LeaseProbeServer {
             // answer below is sent after the last frame, once the pass has ended.
             var frames: (@Sendable (ReplyFrame) -> Void)?
             if stream {
-                frames = { @Sendable frame in connection.send(content: frame.line, completion: .idempotent) }
+                frames = { @Sendable frame in
+                    for line in frame.lines(within: Self.frameLine) { connection.send(content: line, completion: .idempotent) }
+                }
             }
             let handed = frames
             let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark, handed) }

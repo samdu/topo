@@ -385,11 +385,13 @@ public actor TurnRunner {
         standing = .elsewhere
     }
 
-    /// The lease's `acquire()`, with what it found of another holder kept for `hear`.
-    private func acquire() async throws -> LeaseOutcome {
+    /// The lease's `acquire()`, with what it found of another holder kept for `hear`. With
+    /// `since`, a mark of the lease's `abandons`: nothing is claimed once the lease has been
+    /// abandoned since (`PrimaryLease.acquire(since:)`).
+    private func acquire(since mark: Int? = nil) async throws -> LeaseOutcome {
         let outcome: LeaseOutcome
         do {
-            outcome = try await lease.acquire()
+            outcome = try await lease.acquire(since: mark)
         } catch {
             if !(error is CancellationError) { away = true }
             throw error
@@ -432,11 +434,26 @@ public actor TurnRunner {
         try await answerPending(choosing: { model })
     }
 
+    /// `answerPending(choosing:)` claims nothing once the lease has been abandoned since `mark`,
+    /// a mark of the lease's `abandons` (`PrimaryLease.acquire(since:)`); nil takes one as the pass
+    /// begins. A caller whose passes belong to something an abandon ends, the hub's mind, takes
+    /// its mark before it can be stopped and hands it to every pass, so a stop that lands while a
+    /// pass reads the log or renews the lease leaves that pass nothing to claim: it throws
+    /// `notPrimary(.contended)` with the brain unasked.
+    public func answerPending(since mark: Int?, choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
+        let mark = if let mark { mark } else { await lease.abandons }
+        return try await answering(since: mark, choosing: choosing)
+    }
+
     /// `answerPending(model:)`, with the model asked for only once there is a turn to answer:
     /// `choosing` is called at most once a pass, after the log was read, and never on a pass with
     /// no person's turn to answer. It is asked beside the lease's renewal and the reply's marker,
     /// so a pass that finds the reply written or the lease taken may have asked it for nothing.
     public func answerPending(choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
+        try await answerPending(since: nil, choosing: choosing)
+    }
+
+    private func answering(since mark: Int, choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
         var transcript = try await log.read()
         guard transcript.isComplete else { return nil }
         // An owed reply is written whatever the head is: another device may have answered past
@@ -453,7 +470,7 @@ public actor TurnRunner {
         let fresh = await lease.isPrimary()
         let acquired = owes || !fresh
         if acquired {
-            let outcome = try await acquire()
+            let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
         }
         let settled = try await settleOwed()
@@ -491,7 +508,7 @@ public actor TurnRunner {
             return answered
         }
         guard try await renewed else {
-            let outcome = try await acquire()
+            let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
             return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
         }

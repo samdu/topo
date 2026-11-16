@@ -338,10 +338,20 @@ public actor PrimaryLease {
         }
     }
 
+    /// How many times the lease has been abandoned: a mark for a caller whose claims belong to
+    /// something an `abandon()` ends (a mind's session, a pass), taken before it may claim and
+    /// handed to `acquire(since:)` and `takeOver(since:)`, which then claim nothing once the lease
+    /// has been abandoned since. The comparison is the lease's own, made as the call begins, so a
+    /// claim asked for after the abandon is refused however late it reaches the lease.
+    public var abandons: Int { generation }
+
     /// The turn-time path. Returns `.primary` when this device holds the
     /// lease afterwards, whether by keeping, retaking or claiming it.
-    public func acquire() async throws -> LeaseOutcome {
-        let began = generation
+    ///
+    /// With `since`, a mark of `abandons`: `.contended`, with nothing read or written, when the
+    /// lease has been abandoned since the mark was taken.
+    public func acquire(since mark: Int? = nil) async throws -> LeaseOutcome {
+        let began = mark ?? generation
         await enter()
         defer { leave() }
         for _ in 0..<3 {
@@ -414,9 +424,10 @@ public actor PrimaryLease {
     /// without a probe. A hub is primary for as long as it is awake, so a
     /// phone holding the lease when the hub launches or wakes is displaced,
     /// learns so at its next heartbeat or turn, and yields. Nothing but the
-    /// hub calls this; every other device goes through `acquire()`.
-    public func takeOver() async throws -> LeaseOutcome {
-        let began = generation
+    /// hub calls this; every other device goes through `acquire()`. `since` is as
+    /// `acquire(since:)`'s.
+    public func takeOver(since mark: Int? = nil) async throws -> LeaseOutcome {
+        let began = mark ?? generation
         await enter()
         defer { leave() }
         for _ in 0..<3 {

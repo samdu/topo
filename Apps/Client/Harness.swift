@@ -87,8 +87,13 @@ final class Harness {
     /// shown, and it gives way once the log has gone on from the turn in any other way.
     private(set) var streamedWriting: String?
     /// The replies hubs are streaming for this device's limb turns, oldest first, by the person's
-    /// turn (`Streamed`); the first one with words is what `streamedWriting` draws.
+    /// turn (`Streamed`); the first one with words whose turn the log holds no reply to and has not
+    /// gone on from is what `streamedWriting` draws (`rowStream`).
     @ObservationIgnored private var streamed: [Streamed] = []
+    /// Streams that gave way to this device's own answering and were read as they came: off the
+    /// row already, their readers are told they ended once the next read of the log has offered
+    /// whatever reply landed for them (`dropStreamed(endingAfterRead:)`).
+    @ObservationIgnored private var streamsEnding: [Streamed] = []
     /// The guest's finished replies to words said on this device whose turns the log does not
     /// hold yet, by the person's nonce: iCloud is behind, and each is drawn under its words until
     /// the turn lands (`replies`).
@@ -182,7 +187,9 @@ final class Harness {
     /// is coming for it, and the screen's error line is not a place to work out whose. Told too
     /// of a turn the guest finished while iCloud had not taken it, its reply read as it was
     /// written: nothing more is coming to wait for. Not called for a turn another primary is
-    /// answering, whose reply is still on its way.
+    /// answering, whose reply is still on its way, unless the hub answering it streamed its reply
+    /// and then said its answer ended without one (`ReplyFrame.cut`): a reply that comes later
+    /// lands in the log as any does.
     var onTurnFailed: (@MainActor (String) -> Void)?
     /// Told the nonce of a turn that failed for the person — the attempt threw, or saving their
     /// words did — before what was drawn of its reply is dropped (`onWriting` with nil) and
@@ -191,7 +198,9 @@ final class Harness {
     /// result while its reply is being read, before that reading is told the words have stopped
     /// (a guest that exited or went silent is not that end: its transcript may hold the reply).
     /// Not told of a turn another device answered (displaced, or not this device's to answer)
-    /// or one the guest finished with iCloud behind, which end the same wait and are no failure.
+    /// or one the guest finished with iCloud behind, which end the same wait and are no failure;
+    /// told of a limb's turn whose hub streamed its reply and then said its answer ended without
+    /// one (`ReplyFrame.cut`), before the stream's reader is told the words stopped.
     var onTurnFailure: (@MainActor (String) -> Void)?
     /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
     /// owed, and what the install above reads the newest of.
@@ -663,7 +672,7 @@ final class Harness {
             // read as it streamed is not read again.
             let landed = takeLanded()
             turns.forEach(seen)
-            endStreamed(landed)
+            endStreamed(landed + takeEnding())
             notice = TranscriptStore.notice(for: transcript)
             hasRead = true
             lastRead = transcript
@@ -1019,9 +1028,11 @@ final class Harness {
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
             handedBack = false
-            dropStreamed()
+            // The reply is offered before any stream it replaces hears it ended, so what was read
+            // of a hub's stream of the same reply is not read again.
             show(result.person)
             show(result.assistant)
+            dropStreamed(endingAfterRead: true)
             Perf.mark("turn.reply.shown \(turnMark)")
             ended = "answered"
             if result.reply.context > 0 { context = result.reply.context }
@@ -1281,18 +1292,36 @@ final class Harness {
         case .tool:
             guard entry.answering != nil else { return }
             entry.settled = !entry.text.isEmpty
+        case .cut:
+            // The hub's mind was cut off on the reply, and none is to come from it: the row goes,
+            // and so does the spoken wait, as for a turn that failed here.
+            guard entry.answering != nil else { return }
+            streamed.remove(at: i)
+            Perf.mark("turn.stream.cut \(entry.mark)")
+            onTurnFailure?(entry.nonce)
+            if entry.handed != nil { onWriting?(nil, entry.nonce) }
+            onTurnFailed?(entry.nonce)
+            drawStreamed()
+            return
         }
         streamed[i] = entry
         drawStreamed()
     }
 
-    /// The first stream with words is the row's, and its reader is handed what extends what it
+    /// The stream the row draws: the first with words whose turn the log holds no reply to and
+    /// has not gone on from, so a stream left behind by its turn hides none after it.
+    private var rowStream: Int? {
+        let continued = Set(turns.flatMap(\.parents))
+        return streamed.firstIndex { $0.answering != nil && !$0.text.isEmpty && !continued.contains($0.ref) }
+    }
+
+    /// The row's stream (`rowStream`) is drawn, and its reader is handed what extends what it
     /// was last handed. A stream drawn behind another is drawn and read once the one before it
     /// gives way; one reply streamed down two limb turns' nudges (one reply continuing both) is
     /// drawn and read from the first alone, and both give way together, since the log's reply
     /// continues both turns.
     private func drawStreamed() {
-        guard let i = streamed.firstIndex(where: { $0.answering != nil && !$0.text.isEmpty }) else {
+        guard let i = rowStream else {
             streamedWriting = nil
             return
         }
@@ -1322,7 +1351,7 @@ final class Harness {
         streamed.removeAll { continued.contains($0.ref) }
         // The row now draws the next stream's words, if one has any; its reader is handed them
         // only once the landed reply has been offered and its own reader told (`endStreamed`).
-        streamedWriting = streamed.first { $0.answering != nil && !$0.text.isEmpty }?.text
+        streamedWriting = rowStream.map { streamed[$0].text }
         return gone
     }
 
@@ -1335,13 +1364,27 @@ final class Harness {
         drawStreamed()
     }
 
-    /// Every stream goes, with its reader told: a sign-out, a demotion or a takeover, or this
-    /// device answering itself.
-    private func dropStreamed() {
+    /// Every stream goes. With `endingAfterRead` (this device answering itself, the guest
+    /// beginning, a takeover adopted) the hub may have saved the reply a reader was reading as it
+    /// streamed, so the readers hear they ended only after the next read of the log has offered
+    /// it (`streamsEnding`), and what was read is not read again; without (a sign-out, a demotion)
+    /// nothing is offered after, and they hear it at once, with every stream still waiting to.
+    private func dropStreamed(endingAfterRead: Bool = false) {
         let gone = streamed
         streamed = []
         streamedWriting = nil
-        endStreamed(gone)
+        if endingAfterRead {
+            streamsEnding += gone.filter { $0.handed != nil }
+        } else {
+            endStreamed(gone + takeEnding())
+        }
+    }
+
+    /// The streams waiting to be told they ended (`streamsEnding`) that `matching` takes, taken.
+    private func takeEnding(_ matching: (Streamed) -> Bool = { _ in true }) -> [Streamed] {
+        let taken = streamsEnding.filter(matching)
+        streamsEnding.removeAll(where: matching)
+        return taken
     }
 
     /// A read that brought the reply to a limb's turn this device wrote marks it, once.
@@ -1451,14 +1494,17 @@ final class Harness {
             // Words given ahead that another device answers: nothing of the guest's turn on them
             // is drawn or read, and the row stays whatever it is.
             if let heard, answeredElsewhere.contains(heard) { return }
-            // The guest answers here: a reply a hub streamed gives way to it.
-            dropStreamed()
+            // The guest answers here: a reply a hub streamed gives way to it, and its reader hears
+            // it ended after the next read, which offers a reply the hub saved meanwhile first.
+            dropStreamed(endingAfterRead: true)
             guestWriting = nil
             handed = nil
             words = ReplyWords()
             if !answering.isEmpty { hearing = nil }
             writingSpoken = hearing.flatMap { spokenNonces.contains($0) ? $0 : nil }
                 ?? turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
+            // The guest's own words of the same turn take over its reader at once.
+            if let writingSpoken { endStreamed(takeEnding { $0.nonce == writingSpoken }) }
         case .update(.event(.writingBegan)):
             words.begin()
         case .update(.event(.writing(let more))):
@@ -1660,8 +1706,8 @@ final class Harness {
             if let reply = answered {
                 // This device answered: the lease is its own, and the line is given ahead again.
                 handedBack = false
-                dropStreamed()
                 show(reply)
+                dropStreamed(endingAfterRead: true)
                 // What this pass's write was about is in the log; a line stopped on a failure is
                 // not, and its failure stands until the drain.
                 if !hasWaiting { failure = nil }
@@ -1720,10 +1766,11 @@ final class Harness {
     /// device never yielded to.
     func adopt(_ lease: PrimaryLease) {
         self.lease = lease
-        // This device answers from here: nothing a hub streams is drawn.
+        // This device answers from here: nothing a hub streams is drawn, and a reader of one hears
+        // it ended after the next read, which offers a reply the hub saved meanwhile first.
         nudges.values.forEach { $0.cancel() }
         nudges = [:]
-        dropStreamed()
+        dropStreamed(endingAfterRead: true)
         // What was read before this device was last primary says nothing of the log now: another
         // device answered meanwhile. The transcript stays drawn; whether the log is empty is not
         // decided again until it has been read again.

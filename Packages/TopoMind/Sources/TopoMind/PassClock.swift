@@ -119,7 +119,14 @@ struct TimedBrain: Brain {
         clock.asked(turnAge: newest.map { Int(Date().timeIntervalSince($0) * 1000) })
         cast.begin(request.answering)
         defer { cast.end() }
-        let reply = try await inner.answer(request)
+        let reply: Reply
+        do {
+            reply = try await inner.answer(request)
+        } catch {
+            // No reply is to come of this turn: what the phones were handed of it goes.
+            cast.cut()
+            throw error
+        }
         clock.reached("answered")
         return reply
     }

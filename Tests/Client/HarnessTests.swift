@@ -1228,8 +1228,8 @@ final class HarnessIntegrationTests: XCTestCase {
         _ = hubID
     }
 
-    /// A stream cut off mid-reply keeps what it drew, and the log brings the reply as it always
-    /// does: the provisional words give way to the log's, which say otherwise.
+    /// A stream whose connection drops mid-reply keeps what it drew, and the log brings the reply
+    /// as it always does: the provisional words give way to the log's, which say otherwise.
     func testAStreamCutOffKeepsItsWordsUntilTheLogsReplyReplacesThem() async throws {
         let db = InMemoryRecordDatabase()
         let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
@@ -1253,6 +1253,102 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(phone.turns.map(\.text), ["hi?", "A whole other reply."])
         // Mutant: the stream left standing once the log has gone on from its turn.
         XCTAssertNil(phone.writing, "the provisional words outlived the log's reply")
+    }
+
+    /// A hub that says it was cut off on the reply (`ReplyFrame.cut`) takes the row away at once,
+    /// tells the reader the words ended, and ends the turn's spoken wait as a failure does: none
+    /// is coming from it, which a dropped connection does not say.
+    func testAStreamTheHubCutsOffGoesAtOnceWithItsWait() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let heard = Heard()
+        heard.wire(phone)
+        phone.onTurnFailure = { [weak heard] _ in heard?.events.append("failure") }
+        phone.onTurnFailed = { [weak heard] _ in heard?.events.append("failed") }
+        let nudges = Nudges()
+        phone.nudge = { _, _, frames in
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            await frames(.turn([person.ref]))
+            await frames(.message)
+            await frames(.text("Half a sentence. "))
+            await nudges.hold()
+            await frames(.cut)
+            return true
+        }
+        let nonce = phone.willSend("hi?")
+        phone.markSpoken(nonce)
+        await phone.retry()
+        try await eventually("the stream drawn") { phone.writing == "Half a sentence. " }
+        nudges.release()
+        // Mutant: `cut` passed over, the words left drawn until the log goes on.
+        try await eventually("the row gone") { phone.writing == nil }
+        XCTAssertEqual(heard.events, ["writing Half a sentence. ", "failure", "ended", "failed"])
+        XCTAssertEqual(phone.turns.map(\.text), ["hi?"])
+    }
+
+    /// A stream whose connection dropped stays behind its turn, and the person says more: the row
+    /// draws the stream of the turn the log has not gone on from, not the one left behind.
+    func testTheRowDrawsTheStreamOfTheTurnStillUnanswered() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        let calls = Nudges()
+        phone.nudge = { lease, mark, frames in
+            calls.record(lease, mark)
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            await frames(.turn([person.ref]))
+            if calls.calls.count == 1 {
+                await frames(.text("Half a"))
+                // The connection dropped: no answer, and no word of a cut.
+                return false
+            }
+            await frames(.text("The next reply"))
+            await nudges.hold()
+            return true
+        }
+        await phone.send("hi?")
+        try await eventually("the first stream drawn") { phone.writing == "Half a" }
+        await phone.send("are you there?")
+        try await eventually("the second nudge") { calls.calls.count == 2 }
+        // Mutant: the row's stream picked as the first with words, whatever its turn.
+        try await eventually("the second stream drawn") { phone.writing == "The next reply" }
+        nudges.release()
+    }
+
+    /// The phone takes the lease over while a hub's stream is being read aloud and the hub has
+    /// saved the reply already: the stream leaves the row, and its reader hears it ended only once
+    /// the next read has offered the landed reply, so what was read as it streamed is not read
+    /// again from the top.
+    func testAStreamDroppedForATakeoverIsEndedAfterTheReplyItBecameIsOffered() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let heard = Heard()
+        heard.wire(phone)
+        let nudges = Nudges()
+        phone.nudge = { _, _, frames in
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            await frames(.turn([person.ref]))
+            await frames(.message)
+            await frames(.text("Hello there."))
+            try? await hubReplies(db, as: hubID, "Hello there.")
+            await nudges.hold()
+            return true
+        }
+        let nonce = phone.willSend("hi?")
+        phone.markSpoken(nonce)
+        await phone.retry()
+        try await eventually("the stream drawn") { phone.writing == "Hello there." }
+        try await eventually("the hub's reply saved") { try await TurnLog(database: db).read().ordered.count == 2 }
+        phone.adopt(PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: HubLeaseProbe(), sleep: parked))
+        XCTAssertNil(phone.writing)
+        await phone.refresh()
+        XCTAssertEqual(phone.turns.map(\.text), ["hi?", "Hello there."])
+        // Mutant: the reader told at the drop, before the landed reply was offered.
+        XCTAssertEqual(heard.events, ["writing Hello there.", "reply Hello there.", "ended"])
+        nudges.release()
     }
 
     /// A stream that arrives after a sign-out reaches nothing, and the reply's row is gone.

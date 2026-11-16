@@ -118,7 +118,8 @@ public actor HubMind {
     private let clock = PassClock()
     /// The reply being written, for the phones whose nudge asked for it (`nudge`).
     private let cast = ReplyCast()
-    private let lease: PrimaryLease
+    /// Internal for the suites, which read what it holds after a stop.
+    let lease: PrimaryLease
     private let log: TurnLog
     private let login: @Sendable () async -> MindLogin
     private let prepare: @Sendable () throws -> Void
@@ -370,6 +371,12 @@ public actor HubMind {
     private func current(_ g: Int) -> Bool { g == generation && !Task.isCancelled }
 
     private func run(_ g: Int) async {
+        // Every claim of this session's is made since this mark (`PrimaryLease.abandons`), taken
+        // before anything that can be stopped: a stop moves `generation` before it abandons the
+        // lease, so a mark read after the abandon is a session `current(g)` has ended, and every
+        // claim made under a mark read before it is refused by the lease, however late it lands.
+        let mark = await lease.abandons
+        guard current(g) else { return }
         phase = .starting
         await publish()
         do {
@@ -398,7 +405,7 @@ public actor HubMind {
             return
         }
         guard current(g), let runner = await made(g) else { return }
-        guard await heldOff(g), await tookOver(g) else { return }
+        guard await heldOff(g), await tookOver(g, since: mark) else { return }
         phase = .answering
         requested = .start
         await publish()
@@ -410,7 +417,7 @@ public actor HubMind {
             // The nudges this pass serves: those that came before it read the log.
             let served = nudged
             nudged = []
-            let (stop, outcome) = await pass(runner, source, g)
+            let (stop, outcome) = await pass(runner, source, g, since: mark)
             if let stop {
                 served.forEach { $0.answer.resume(returning: false) }
                 await halt(stop, g)
@@ -522,12 +529,13 @@ public actor HubMind {
         return false
     }
 
-    /// The start's one takeover, sent again until it is answered. False once the session is over.
-    private func tookOver(_ g: Int) async -> Bool {
+    /// The start's one takeover, sent again until it is answered, and refused by the lease once it
+    /// has been abandoned since the session's `mark`. False once the session is over.
+    private func tookOver(_ g: Int, since mark: Int) async -> Bool {
         var delay: Duration = .seconds(1)
         while current(g) {
             do {
-                let outcome = try await lease.takeOver()
+                let outcome = try await lease.takeOver(since: mark)
                 guard current(g) else { return false }
                 takeovers += 1
                 Perf.mark("hub.lease.takeOver \(Self.name(of: outcome))")
@@ -552,14 +560,15 @@ public actor HubMind {
     }
 
     /// One pass: the lease asked for if this Mac does not hold it, then whatever waits answered.
-    /// A reason to stop the mind, or nil.
-    private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int) async -> (Stop?, Pass.Outcome?) {
+    /// Every claim of it is made since the session's `mark`, so none is made after a stop's
+    /// abandon. A reason to stop the mind, or nil.
+    private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int, since mark: Int) async -> (Stop?, Pass.Outcome?) {
         passes += 1
         clock.begin(source.rawValue)
         if !(await lease.isPrimary()) {
             // Lapsed, or taken: asked for, never taken from a holder this Mac yielded to.
             do {
-                let outcome = try await lease.acquire()
+                let outcome = try await lease.acquire(since: mark)
                 Perf.mark("hub.lease.acquire \(Self.name(of: outcome))")
             } catch {
                 Perf.mark("hub.lease.acquire.failed \(Self.kind(of: error))")
@@ -567,7 +576,7 @@ public actor HubMind {
         }
         let outcome: Pass.Outcome
         do {
-            outcome = try await runner.answerPending(choosing: { await self.chosen(mark: true) }) == nil ? .nothing : .answered
+            outcome = try await runner.answerPending(since: mark, choosing: { await self.chosen(mark: true) }) == nil ? .nothing : .answered
         } catch TurnRunnerError.notPrimary {
             outcome = .elsewhere
         } catch TurnRunnerError.displaced {

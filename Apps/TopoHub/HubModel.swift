@@ -452,11 +452,13 @@ final class HubModel {
 
     /// A phone's nudge (`HubNudge`): the mind's pass now, answered when it has ended, with the
     /// reply streamed down the nudge's connection as it is written when the phone asked for it
-    /// and the switch is on.
+    /// and while the switch is on: turned off, it stops a stream in progress at the next frame
+    /// (`ReplyCast.gated`).
     private nonisolated func nudged(_ holder: DeviceID, epoch: Int64, mark: String,
                                     stream: (@Sendable (ReplyFrame) -> Void)?) async -> Bool {
         guard let mind = await hubMind else { return false }
-        return await mind.nudge(holder: holder, epoch: epoch, mark: mark, stream: Self.streamsNow ? stream : nil)
+        let gated = Self.streamsNow ? stream.map { ReplyCast.gated($0, while: { Self.streamsNow }) } : nil
+        return await mind.nudge(holder: holder, epoch: epoch, mark: mark, stream: gated)
     }
 
     private nonisolated func holds(_ holder: DeviceID, epoch: Int64) async -> Bool {

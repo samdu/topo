@@ -634,6 +634,23 @@ import TopoCoreTesting
         guard case .primary = try await h.acquire() else { Issue.record("should claim"); return }
     }
 
+    /// A claim asked for after an abandon, under a mark of `abandons` taken before it, is refused
+    /// with nothing read or written; one under a mark taken since claims as ever.
+    @Test func aClaimUnderAMarkFromBeforeAnAbandonIsRefused() async throws {
+        let p = lease(hub)
+        _ = try await p.acquire()
+        let mark = await p.abandons
+        await p.abandon()
+        let before = try #require(await db.current(Lease.recordID))
+        // Mutant: `since` not read (`let began = generation`).
+        #expect(try await p.acquire(since: mark) == .contended)
+        #expect(try await p.takeOver(since: mark) == .contended)
+        #expect(!(await p.isPrimary()))
+        #expect(try #require(await db.current(Lease.recordID)).changeTag == before.changeTag)
+        guard case .primary = try await p.takeOver(since: await p.abandons) else { Issue.record("a fresh mark claims"); return }
+        await p.abandon()
+    }
+
     @Test func aLeaseAbandonedWhileATurnProbesTheHolderIsNotClaimed() async throws {
         _ = try await lease(hub).acquire()
         clock.advance(1)
