@@ -166,6 +166,8 @@ struct MindSection: View {
         case .notStarted(let why): "Claude Code could not be started: \(why)"
         case .ledgerUnreadable(let why): "The mind's record could not be read: \(why)"
         case .home(let why): "The mind's home could not be made: \(why)"
+        case .stalled(.silent(let bound)): "Claude Code went silent for \(bound.formatted(.units(allowed: [.minutes, .seconds]))) on a turn, so the mind stopped and the phone answers it."
+        case .stalled(.tooLong(let bound)): "A turn ran past \(bound.formatted(.units(allowed: [.minutes, .seconds]))), so the mind stopped and the phone answers it."
         }
     }
 

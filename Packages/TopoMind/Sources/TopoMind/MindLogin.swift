@@ -35,7 +35,7 @@ public enum MindLogin: Sendable, Equatable {
                     switch await process.stdout.next() {
                     case .line(let line): lines.append(line)
                     case .end: return lines.joined(separator: "\n")
-                    case .cancelled: return nil
+                    case .cancelled, .timedOut: return nil
                     }
                 }
             }

@@ -70,9 +70,10 @@ struct HubRig {
     let phoneID = DeviceID("phone-1a2b3c4d")
     let brain: NativeBrain
 
-    init(_ environment: [String: String] = [:]) throws {
+    init(_ environment: [String: String] = [:], silence: Duration = NativeBrain.standardSilence,
+         turn: Duration = NativeBrain.standardTurn) throws {
         rig = try Rig(environment)
-        brain = rig.brain()
+        brain = rig.brain(silence: silence, turn: turn)
     }
 
     var configuration: NativeBrain.Configuration {

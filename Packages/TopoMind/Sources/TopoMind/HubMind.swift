@@ -22,10 +22,12 @@ import TopoTurn
 /// process down; sleep does the same but leaves the process, which the Mac suspends with
 /// everything else and which a turn cut off by the sleep is listened to again on at wake. A pass
 /// that is cancelled writes nothing more: the runner checks before each append, and the abandoned
-/// lease refuses any batch sent after it. A turn that finds Claude Code signed out, or a process
-/// that cannot be started or a ledger that cannot be read, stops the mind as turning it off does,
-/// and it stays stopped, saying why, until it is turned on again, asked to try again, or the Mac
-/// wakes; the phone answers once the lease lapses.
+/// lease refuses any batch sent after it. A turn that finds Claude Code signed out, a turn given up
+/// on (Claude Code silent on it for `NativeBrain.standardSilence`, or running past
+/// `standardTurn`), or a process that cannot be started or a ledger that cannot be read, stops
+/// the mind as turning it off does, and it stays stopped, saying why, until it is turned on again,
+/// asked to try again, or the Mac wakes; the phone answers once the lease lapses. A stalled mind
+/// is not started again on a timer, since it would take the lease from the phone to stall again.
 ///
 /// **Triggers.** A pass runs when one is asked for (`trigger`: the push of a turn being created)
 /// and every `poll` otherwise. One pass at a time: a trigger while the loop waits starts the
@@ -62,6 +64,9 @@ public actor HubMind {
         case ledgerUnreadable(String)
         /// The mind's home could not be made.
         case home(String)
+        /// A turn was given up on (`NativeBrainError.stalled`): Claude Code went silent on it, or it
+        /// ran past its bound. The phone answers it once the lease lapses.
+        case stalled(NativeBrainError.Stall)
     }
 
     public struct Pass: Sendable, Equatable {
@@ -93,8 +98,11 @@ public actor HubMind {
         public var passes: Int
         /// `takeOver()` calls answered since launch.
         public var takeovers: Int
-        /// The brain's own line (`NativeBrain.describe()`).
+        /// The brain's own line (`NativeBrain.describe()`), for the menu: with the reasons a start
+        /// or a read failed, which may be Claude Code's own words.
         public var mind: String
+        /// The same line with no reason in it (`describe(reasons: false)`), for the status a shell reads.
+        public var mindKinds: String
     }
 
     private let database: any RecordDatabase
@@ -236,7 +244,8 @@ public actor HubMind {
 
     public func snapshot() async -> Snapshot {
         Snapshot(phase: phase, login: loginState, holds: await lease.isPrimary(), lastPass: lastPass,
-                 passes: passes, takeovers: takeovers, mind: await brain.describe())
+                 passes: passes, takeovers: takeovers, mind: await brain.describe(),
+                 mindKinds: await brain.describe(reasons: false))
     }
 
     /// The resident's pid, for the suites.
@@ -425,6 +434,7 @@ public actor HubMind {
         case .notSignedIn?: .signedOut
         case .notStarted(let why)?: .notStarted(why)
         case .ledgerUnreadable(let why)?: .ledgerUnreadable(why)
+        case .stalled(let stall)?: .stalled(stall)
         default: nil
         }
     }
@@ -440,6 +450,8 @@ public actor HubMind {
             case .failed: return "failed"
             case .unresolved: return "unresolved"
             case .ledgerUnreadable: return "ledgerUnreadable"
+            case .stalled(.silent): return "stalled silent"
+            case .stalled(.tooLong): return "stalled tooLong"
             }
         case RecordDatabaseError.serverRecordChanged(let id, _): return "serverRecordChanged \(id.name)"
         case RecordDatabaseError.unknownItem(let id): return "unknownItem \(id.name)"
@@ -477,6 +489,8 @@ public actor HubMind {
         case .notStarted: "notStarted"
         case .ledgerUnreadable: "ledgerUnreadable"
         case .home: "home"
+        case .stalled(.silent): "stalled silent"
+        case .stalled(.tooLong): "stalled tooLong"
         }
     }
 }

@@ -8,7 +8,11 @@
 # FAKE_STRAY=1       a turn of its own (a background task's notice) ends before each input's echo
 # FAKE_CHILD=1       starts two children at launch: one in its group, one in a session of its own
 # FAKE_IGNORE_TERM=1 ignores SIGTERM, and stays after its stdin closes
-# An input containing FAIL ends with an error result; one containing SLOW waits 1.5 s to answer.
+# FAKE_DIE=1         exits at launch, saying FAKE_DIE_SAYS (or "it died") on stderr
+# An input containing FAIL ends with an error result; one containing SLOW waits 1.5 s to answer;
+# one containing HANG writes nothing more after its echo, ever; one containing CHATTY writes a
+# tool_progress heartbeat (2.1.325's line, every 30 s while a tool runs) every 0.25 s for 3 s and
+# then answers; one containing BUSY writes that heartbeat every 0.25 s and never answers.
 import json, os, signal, subprocess, sys, time, uuid
 
 log = os.environ["FAKE_LOG"]
@@ -33,6 +37,9 @@ if args[:2] == ["auth", "status"]:
                       "configDirectory": config}, indent=2))
     sys.exit(0 if signed_in else 1)
 record("launches.jsonl", {"pid": os.getpid(), "args": args, "cwd": os.getcwd(), "env": dict(os.environ)})
+if os.environ.get("FAKE_DIE") == "1":
+    sys.stderr.write(os.environ.get("FAKE_DIE_SAYS", "it died") + "\n")
+    sys.exit(1)
 if os.environ.get("FAKE_IGNORE_TERM") == "1":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
@@ -84,12 +91,37 @@ def turn(line):
         return
     if "SLOW" in content:
         time.sleep(1.5)
+    if "HANG" in content:
+        while True:
+            time.sleep(60)
+    if "CHATTY" in content or "BUSY" in content:
+        tool = "toolu_" + uuid.uuid4().hex[:24]
+        beat = 0
+        while "BUSY" in content or beat < 12:
+            time.sleep(0.25)
+            emit({"type": "tool_progress", "tool_use_id": tool + "-heartbeat-" + str(beat), "tool_name": "Bash",
+                  "parent_tool_use_id": tool, "elapsed_time_seconds": 30 * (beat + 1), "heartbeat": True,
+                  "session_id": session})
+            beat += 1
     if "FAIL" in content:
         emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": session,
               "user_message_uuid": input_id, "errors": ["boom"]})
         return
     words = content.split("\n\n")[-1]
     message = str(uuid.uuid4())
+    if "--include-partial-messages" in args:
+        # The pieces 2.1.325 writes as the model makes the reply (trimmed), before the whole message.
+        emit({"type": "system", "subtype": "status", "status": "requesting", "session_id": session})
+        emit({"type": "stream_event", "event": {"type": "message_start", "message": {"model": model, "id": message,
+              "type": "message", "role": "assistant", "content": []}}, "session_id": session, "parent_tool_use_id": None})
+        emit({"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
+              "content_block": {"type": "text", "text": ""}}, "session_id": session, "parent_tool_use_id": None})
+        for piece in ["echo: ", words]:
+            emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
+                  "delta": {"type": "text_delta", "text": piece}}, "session_id": session, "parent_tool_use_id": None})
+        emit({"type": "stream_event", "event": {"type": "content_block_stop", "index": 0}, "session_id": session,
+              "parent_tool_use_id": None})
+        emit({"type": "stream_event", "event": {"type": "message_stop"}, "session_id": session, "parent_tool_use_id": None})
     emit({"type": "assistant", "message": {"id": message, "model": model, "role": "assistant",
           "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": "echo: " + words}],
           "usage": {"input_tokens": 10, "cache_creation_input_tokens": 5, "cache_read_input_tokens": 100,

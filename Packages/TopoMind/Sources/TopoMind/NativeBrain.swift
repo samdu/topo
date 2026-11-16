@@ -19,6 +19,17 @@ public enum NativeBrainError: Error, Equatable, CustomStringConvertible {
     /// The mind's record could not be read, so whether an input it records was received is not
     /// known; nothing is sent until it can be.
     case ledgerUnreadable(String)
+    /// The turn was given up on: Claude Code wrote nothing for the silence bound, or the turn ran
+    /// past the turn bound. A turn it had taken up is unresolved and is not asked again; one it
+    /// had not is asked again by the next request. The process is not used again.
+    case stalled(Stall)
+
+    public enum Stall: Sendable, Equatable {
+        /// No line on stdout for this long, the turn asked.
+        case silent(Duration)
+        /// The turn ran this long without ending.
+        case tooLong(Duration)
+    }
 
     public var description: String {
         switch self {
@@ -27,6 +38,8 @@ public enum NativeBrainError: Error, Equatable, CustomStringConvertible {
         case .failed(let why): "The reply failed: \(why)"
         case .unresolved(let why): "Topo was cut off before answering (\(why)). Ask again when you want the answer."
         case .ledgerUnreadable(let why): "The mind's record could not be read (\(why)); nothing is sent until it can be."
+        case .stalled(.silent(let bound)): "Claude Code on this Mac wrote nothing for \(bound) of a turn, so the turn was given up on."
+        case .stalled(.tooLong(let bound)): "A turn on this Mac ran past \(bound), so it was given up on."
         }
     }
 }
@@ -67,12 +80,18 @@ public actor NativeBrain: Brain {
         public var environment: [String: String]
         /// How long a process is given to start and answer its `initialize`.
         public var startBound: Duration
+        /// How long a turn may go with no line at all on stdout before it is given up on
+        /// (`NativeBrainError.stalled`). Every line counts, whatever it is.
+        public var silenceBound: Duration
+        /// How long one turn may run, however much it writes, before it is given up on.
+        public var turnBound: Duration
 
         public static let defaultClaude = URL(fileURLWithPath: NSHomeDirectory()).appending(path: ".local/bin/claude")
 
         public init(workingDirectory: URL, configDirectory: URL?, stateDirectory: URL? = nil,
                     claude: URL = Configuration.defaultClaude, permissionMode: String = "auto",
-                    environment: [String: String] = [:], startBound: Duration = .seconds(60)) {
+                    environment: [String: String] = [:], startBound: Duration = .seconds(60),
+                    silenceBound: Duration = NativeBrain.standardSilence, turnBound: Duration = NativeBrain.standardTurn) {
             precondition(configDirectory != nil || stateDirectory != nil, "the ledger needs a directory")
             self.workingDirectory = workingDirectory
             self.configDirectory = configDirectory
@@ -81,12 +100,27 @@ public actor NativeBrain: Brain {
             self.permissionMode = permissionMode
             self.environment = environment
             self.startBound = startBound
+            self.silenceBound = silenceBound
+            self.turnBound = turnBound
         }
     }
 
     /// How many turns of the log a conversation that has seen nothing is told; the older ones are
     /// counted seen without being told.
     public static let contextLimit = 40
+
+    /// Three minutes. With `--include-partial-messages` Claude Code writes a line for every piece
+    /// of a reply or a tool call's input as the model makes it, `system/thinking_tokens` while it
+    /// thinks, `system/status` and `system/api_retry` while it waits on the API, and a
+    /// `tool_progress` heartbeat every 30 s while a tool runs (2.1.325). Its longest quiet in
+    /// a working turn is the wait for a request's first token. Three minutes of nothing is a
+    /// process that has stopped: wedged, or its event loop stuck.
+    public static let standardSilence: Duration = .seconds(180)
+
+    /// Thirty minutes: many times a working turn, and past any single Bash call, which Claude Code
+    /// ends at its timeout. A tool that never returns heartbeats all the while, so this is what
+    /// bounds it.
+    public static let standardTurn: Duration = .seconds(1800)
 
     /// The variables of this process the resident inherits; nothing else of this environment is
     /// passed, so a hub (or a test run) started by Claude Code leaks none of its variables.
@@ -97,6 +131,8 @@ public actor NativeBrain: Brain {
         let model: String
         /// The inputs written to this process.
         var sent: Set<String> = []
+        /// A turn on it was given up on: it is torn down and never asked again.
+        var stalled = false
     }
 
     private let configuration: Configuration
@@ -143,7 +179,7 @@ public actor NativeBrain: Brain {
                 case .unresolved:
                     throw NativeBrainError.unresolved("this turn was cut off earlier")
                 case .sent, .received:
-                    if let resident, !resident.process.hasExited, resident.sent.contains(pending.input) {
+                    if let resident, !resident.stalled, !resident.process.hasExited, resident.sent.contains(pending.input) {
                         // Still with the process that has it: listened to again, not sent again.
                         return try await listen(pending.input, begun: pending.state == .received, to: resident.process,
                                                 epoch: epoch, model: model)
@@ -237,15 +273,22 @@ public actor NativeBrain: Brain {
         if let gone { _ = await gone.process.terminate() }
     }
 
-    public func describe() async -> String {
+    public func describe() async -> String { describe(reasons: true) }
+
+    /// The line `describe()` gives, or without `reasons` the same with no reason a start or a read
+    /// of the ledger failed for: those are Claude Code's stderr and the file system's words.
+    public func describe(reasons: Bool) -> String {
         var parts: [String] = []
-        if let resident, !resident.process.hasExited {
+        if let resident, resident.stalled {
+            parts.append("Claude Code on this Mac, pid \(resident.process.pid), stalled on a turn")
+        } else if let resident, !resident.process.hasExited {
             parts.append("Claude Code on this Mac, pid \(resident.process.pid), model \(resident.model)")
         } else {
-            parts.append("Claude Code on this Mac, not running" + (lastFailure.map { " (last start: \($0))" } ?? ""))
+            let failure = reasons ? lastFailure.map { " (last start: \($0))" } : lastFailure.map { _ in " (the last start failed)" }
+            parts.append("Claude Code on this Mac, not running" + (failure ?? ""))
         }
         if let unread {
-            parts.append("the ledger could not be read (\(unread)); nothing is sent until it can be")
+            parts.append("the ledger could not be read" + (reasons ? " (\(unread))" : "") + "; nothing is sent until it can be")
             return parts.joined(separator: "; ")
         }
         parts.append("told \(ledger.seen.count) turns" + (ledger.session.map { " of session \($0)" } ?? ", no session yet"))
@@ -278,22 +321,29 @@ public actor NativeBrain: Brain {
     public func shutdown() async -> Bool {
         guard let gone = resident else { return true }
         resident = nil
-        return await gone.process.terminate().confirmed
+        let confirmed = await gone.process.terminate().confirmed
+        if confirmed { forgetResident(gone.process.pid) }
+        return confirmed
     }
 
     /// The resident process's pid, for the hub's diagnostics and the suites.
     public var pid: Int32? { resident.flatMap { $0.process.hasExited ? nil : $0.process.pid } }
+
+    /// The resident's watcher's pid, for the suites.
+    var watcherPID: Int32? { resident?.process.watcherPID }
 
     // MARK: - Inside
 
     /// Claude Code's arguments: stream-json both ways (`--verbose` is what stream-json output
     /// requires), each input echoed as its turn begins (`--replay-user-messages`), the
     /// permission mode, nothing that would prompt left to wait on a host (`--permission-prompts
-    /// none` denies it), the model, and the session to resume when there is one.
+    /// none` denies it), the reply's pieces as they are made (`--include-partial-messages`, so a
+    /// working turn is never quiet for long: `standardSilence`), the model, and the session to
+    /// resume when there is one.
     static func arguments(model: String, resume: String?, permissionMode: String) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--replay-user-messages", "--permission-mode", permissionMode, "--permission-prompts", "none",
-                         "--model", model]
+                         "--include-partial-messages", "--model", model]
         if let resume { arguments += ["--resume", resume] }
         return arguments
     }
@@ -338,12 +388,14 @@ public actor NativeBrain: Brain {
     /// The resident process asking `model`, started (resuming the ledger's session) when there is
     /// none, it has exited, or it asks another model.
     private func running(model: String, epoch: Int) async throws -> MindProcess {
-        if let resident, !resident.process.hasExited, resident.model == model { return resident.process }
+        if let resident, !resident.stalled, !resident.process.hasExited, resident.model == model { return resident.process }
         if let gone = resident {
             resident = nil
-            _ = await gone.process.terminate()
+            if await gone.process.terminate().confirmed { forgetResident(gone.process.pid) }
             try current(epoch)
         }
+        await reapLeftover()
+        try current(epoch)
         for _ in 0..<2 {
             let session = ledger.session
             let process: MindProcess
@@ -352,11 +404,12 @@ public actor NativeBrain: Brain {
                                           arguments: Self.arguments(model: model, resume: session,
                                                                     permissionMode: configuration.permissionMode),
                                           environment: Self.environment(for: configuration),
-                                          directory: configuration.workingDirectory.path)
+                                          directory: configuration.workingDirectory.path, lifeline: true)
             } catch {
                 lastFailure = String(describing: error)
                 throw NativeBrainError.notStarted(String(describing: error))
             }
+            recordResident(process.pid)
             let outcome = await Self.ready(process, within: configuration.startBound)
             guard self.epoch == epoch else {
                 _ = await process.terminate()
@@ -398,7 +451,7 @@ public actor NativeBrain: Brain {
             group.addTask {
                 while true {
                     switch await process.stdout.next() {
-                    case .cancelled: return nil
+                    case .cancelled, .timedOut: return nil
                     case .end: return .ended
                     case .line(let line):
                         for event in MindStream.events(in: line) {
@@ -428,14 +481,25 @@ public actor NativeBrain: Brain {
     /// Reads the process's events for the input `id` to its result. Nothing before the input's
     /// echo is the turn's (a turn Claude Code ran of its own, a cancelled turn's end), and a result
     /// that names another input is not its end.
+    ///
+    /// Bounded twice, from when this listen began: no line at all for `silenceBound`, or no
+    /// result within `turnBound`, and the turn is given up on (`stall`). Every line resets the
+    /// silence, whatever it is, the turn's own or not, since any line is the process at work.
     private func listen(_ id: String, begun: Bool, to process: MindProcess, epoch: Int, model: String) async throws -> Reply {
         var begun = begun
         var words = MindWords()
         var answeredWith: String?
         var usage: (context: Int, output: Int)?
         var signedOut = false
+        let deadline = ContinuousClock.now + configuration.turnBound
         while true {
-            switch await process.stdout.next() {
+            let left = deadline - ContinuousClock.now
+            guard left > .zero else { throw stall(id, .tooLong(configuration.turnBound), begun: begun, process: process, epoch: epoch) }
+            switch await process.stdout.next(within: min(configuration.silenceBound, left)) {
+            case .timedOut:
+                let stall: NativeBrainError.Stall = ContinuousClock.now >= deadline
+                    ? .tooLong(configuration.turnBound) : .silent(configuration.silenceBound)
+                throw self.stall(id, stall, begun: begun, process: process, epoch: epoch)
             case .cancelled:
                 // The record stays as it is; a retry under the same nonce listens again.
                 throw CancellationError()
@@ -488,6 +552,56 @@ public actor NativeBrain: Brain {
                 }
             }
         }
+    }
+
+    /// The turn given up on: the process is marked never to be asked again (`shutdown` or the next
+    /// start tears it down), and the record says what the next request does. A turn the
+    /// conversation took up may have run tools, so it is unresolved, as a process gone mid-turn
+    /// leaves it; one never echoed is cleared, and the next request asks it again.
+    private func stall(_ id: String, _ stall: NativeBrainError.Stall, begun: Bool, process: MindProcess,
+                       epoch: Int) -> any Error {
+        if resident?.process === process { resident?.stalled = true }
+        guard self.epoch == epoch else { return CancellationError() }
+        if ledger.pending?.input == id {
+            if begun { ledger.pending?.state = .unresolved } else { ledger.pending = nil }
+            try? save()
+        }
+        return NativeBrainError.stalled(stall)
+    }
+
+    // MARK: - A resident left behind
+
+    /// Where the resident's pid and start time are kept while it runs: a hub that ended without
+    /// tearing it down (killed, crashed) finds it at its next start, and reaps it first.
+    private var residentFile: URL { configuration.stateDirectory.appending(path: "resident.json") }
+
+    private struct ResidentRecord: Codable {
+        var pid: Int32
+        var started: String
+    }
+
+    private func recordResident(_ pid: pid_t) {
+        guard let started = MindProcess.startTime(of: pid),
+              let data = try? JSONEncoder().encode(ResidentRecord(pid: pid, started: started)) else { return }
+        try? data.write(to: residentFile, options: .atomic)
+    }
+
+    private func forgetResident(_ pid: pid_t) {
+        guard let data = try? Data(contentsOf: residentFile),
+              let record = try? JSONDecoder().decode(ResidentRecord.self, from: data), record.pid == pid else { return }
+        try? FileManager.default.removeItem(at: residentFile)
+    }
+
+    /// Kills the process the record names, its group and its descendants, when it is the one the
+    /// record was written for (the same pid, started at the same moment) and not this brain's.
+    private func reapLeftover() async {
+        guard let data = try? Data(contentsOf: residentFile),
+              let record = try? JSONDecoder().decode(ResidentRecord.self, from: data) else { return }
+        if resident?.process.pid == record.pid { return }
+        if MindProcess.startTime(of: record.pid) == record.started {
+            await MindProcess.reap(left: record.pid)
+        }
+        try? FileManager.default.removeItem(at: residentFile)
     }
 
     private func finish(_ id: String, _ result: MindEvent.Result, words: MindWords, signedOut: Bool, epoch: Int,

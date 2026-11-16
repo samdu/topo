@@ -29,9 +29,10 @@ struct Rig {
         self.environment = environment.merging(["FAKE_LOG": log.path]) { $1 }
     }
 
-    func brain(grace: Duration = .seconds(20)) -> NativeBrain {
+    func brain(grace: Duration = .seconds(20), silence: Duration = NativeBrain.standardSilence,
+               turn: Duration = NativeBrain.standardTurn) -> NativeBrain {
         NativeBrain(.init(workingDirectory: work, configDirectory: config, claude: claude,
-                          environment: environment, startBound: grace))
+                          environment: environment, startBound: grace, silenceBound: silence, turnBound: turn))
     }
 
     func lines(_ name: String) -> [[String: Any]] {
@@ -73,6 +74,8 @@ func gone(_ pid: pid_t) -> Bool { !MindProcess.alive(pid) }
                                           "--verbose", "--replay-user-messages"])
         #expect(args.contains("--permission-mode") && args[args.firstIndex(of: "--permission-mode")! + 1] == "auto")
         #expect(!args.contains("--dangerously-skip-permissions"))
+        // Every piece of a reply is a line as it is made, so a working turn is never long quiet.
+        #expect(args.contains("--include-partial-messages"))
         // A debug build (which `swift test` is) asks Haiku whatever the request says.
         #expect(args[args.firstIndex(of: "--model")! + 1] == ClaudeModel.effective(.sonnet).rawValue)
         #expect(!args.contains("--resume"))

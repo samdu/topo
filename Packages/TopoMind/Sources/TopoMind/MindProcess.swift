@@ -3,15 +3,18 @@ import Foundation
 
 /// Lines read off a pipe, handed to one reader at a time. The pipe is read on a thread of its own,
 /// so nothing here blocks Swift's cooperative pool; a reader whose task is cancelled gets
-/// `.cancelled` and the lines stay for the next reader.
+/// `.cancelled`, and one whose bound passes with no line `.timedOut`, and the lines stay for the
+/// next reader.
 final class LineQueue: @unchecked Sendable {
-    enum Next: Sendable, Equatable { case line(String), end, cancelled }
+    enum Next: Sendable, Equatable { case line(String), end, cancelled, timedOut }
 
     private let lock = NSLock()
     private var lines: [String] = []
     private var head = 0
     private var finished = false
     private var waiter: CheckedContinuation<Next, Never>?
+    /// Moves at every wait, so a bound's timer resumes only the wait it was set for.
+    private var waits = 0
 
     func push(_ line: String) {
         lock.lock()
@@ -34,8 +37,10 @@ final class LineQueue: @unchecked Sendable {
         waiter?.resume(returning: .end)
     }
 
-    /// The next line, `.end` once the pipe is closed and every line has been read, or `.cancelled`.
-    func next() async -> Next {
+    /// The next line, `.end` once the pipe is closed and every line has been read, `.cancelled`, or
+    /// `.timedOut` once `bound` has passed with no line. A line and the bound are settled under
+    /// one lock, so a line that arrives as the bound passes is either handed over or kept.
+    func next(within bound: Duration? = nil) async -> Next {
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Next, Never>) in
                 lock.lock()
@@ -54,7 +59,18 @@ final class LineQueue: @unchecked Sendable {
                 } else {
                     precondition(waiter == nil, "one reader at a time")
                     waiter = continuation
+                    waits &+= 1
+                    let wait = waits
                     lock.unlock()
+                    if let bound {
+                        DispatchQueue.global().asyncAfter(deadline: .now() + bound.seconds) { [self] in
+                            lock.lock()
+                            guard waits == wait, let waiter else { return lock.unlock() }
+                            self.waiter = nil
+                            lock.unlock()
+                            waiter.resume(returning: .timedOut)
+                        }
+                    }
                 }
             }
         } onCancel: {
@@ -65,6 +81,11 @@ final class LineQueue: @unchecked Sendable {
             waiter?.resume(returning: .cancelled)
         }
     }
+}
+
+extension Duration {
+    /// The duration in seconds, for a dispatch deadline.
+    var seconds: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }
 
 enum MindProcessError: Error, CustomStringConvertible {
@@ -81,6 +102,13 @@ enum MindProcessError: Error, CustomStringConvertible {
 
 /// One `claude` process: spawned in a process group of its own with its three pipes, read and
 /// waited on by threads of its own, written to on a queue of its own.
+///
+/// With a lifeline, a watcher (`/bin/sh`, in a group of its own) is started beside it, reading a
+/// pipe whose only write end this process holds. Whatever ends this process, a `kill -9`
+/// included, closes that end, and the watcher kills the mind's group and every descendant of it
+/// at once: Claude Code reads its stdin's end only between turns, so an orphan would otherwise
+/// carry the turn under way, its tools included, to its end. The watcher is stopped once the
+/// mind is reaped or torn down, so it never kills a group whose id has been used again.
 final class MindProcess: @unchecked Sendable {
     let pid: pid_t
     let stdout = LineQueue()
@@ -92,9 +120,13 @@ final class MindProcess: @unchecked Sendable {
     private var errorTail = Data()
     private var inputClosing = false
     private var inputClosed = false
+    /// The watcher's pid and the write end of its lifeline, while it watches.
+    private var watcher: (pid: pid_t, lifeline: Int32)?
 
-    /// Spawns `executable` with `arguments` and exactly `environment`, in `directory`.
-    init(executable: String, arguments: [String], environment: [String: String], directory: String) throws {
+    /// Spawns `executable` with `arguments` and exactly `environment`, in `directory`, with a
+    /// watcher beside it when `lifeline` is set.
+    init(executable: String, arguments: [String], environment: [String: String], directory: String,
+         lifeline: Bool = false) throws {
         var stdinPipe: [Int32] = [-1, -1], stdoutPipe: [Int32] = [-1, -1], stderrPipe: [Int32] = [-1, -1]
         guard pipe(&stdinPipe) == 0, pipe(&stdoutPipe) == 0, pipe(&stderrPipe) == 0 else {
             throw MindProcessError.spawn(executable, errno)
@@ -141,6 +173,7 @@ final class MindProcess: @unchecked Sendable {
         }
         self.pid = pid
         input = stdinPipe[1]
+        watcher = lifeline ? Self.watch(pid) : nil
 
         let out = stdout
         Self.reader(stdoutPipe[0], name: "topo.mind.stdout") { out.push($0) } end: { out.finish() }
@@ -157,6 +190,8 @@ final class MindProcess: @unchecked Sendable {
             exitWaiters = []
             lock.unlock()
             waiters.forEach { $0.resume(returning: raw) }
+            // A reaped mind's group id may be used again; the watcher must not outlive it.
+            self.stopWatching()
         }
         thread.name = "topo.mind.wait"
         thread.start()
@@ -164,6 +199,90 @@ final class MindProcess: @unchecked Sendable {
 
     deinit {
         if !inputClosed { close(input) }
+        stopWatching()
+    }
+
+    /// The watcher's script: it waits for its stdin to end, then kills the mind's group (`$1`)
+    /// and every descendant of the mind it finds, in its group or not.
+    static let watcherScript = """
+        read -r _
+        all="$1"; frontier="$1"
+        while [ -n "$frontier" ]; do
+          next=""
+          for p in $frontier; do next="$next $(/usr/bin/pgrep -P "$p")"; done
+          frontier="$(echo $next)"
+          all="$all $frontier"
+        done
+        /bin/kill -9 -- -"$1" $all 2>/dev/null
+        """
+
+    /// Starts the watcher of `mind`: nil when it cannot be started, which leaves the mind without one.
+    private static func watch(_ mind: pid_t) -> (pid: pid_t, lifeline: Int32)? {
+        var line: [Int32] = [-1, -1]
+        guard pipe(&line) == 0 else { return nil }
+        _ = fcntl(line[1], F_SETFD, FD_CLOEXEC)
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_adddup2(&actions, line[0], 0)
+        posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+                                                    | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var all = sigset_t(), none = sigset_t()
+        sigfillset(&all)
+        sigemptyset(&none)
+        posix_spawnattr_setsigdefault(&attributes, &all)
+        posix_spawnattr_setsigmask(&attributes, &none)
+        let words: [String] = ["/bin/sh", "-c", watcherScript, "topo-mind-lifeline", "\(mind)"]
+        let path: [String] = ["PATH=/usr/bin:/bin"]
+        let argv = words.map { strdup($0) } + [nil]
+        let envp = path.map { strdup($0) } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let code = posix_spawn(&pid, "/bin/sh", &actions, &attributes, argv, envp)
+        close(line[0])
+        guard code == 0 else {
+            close(line[1])
+            return nil
+        }
+        let watcher = pid
+        let thread = Thread {
+            var raw: Int32 = 0
+            while waitpid(watcher, &raw, 0) == -1 && errno == EINTR {}
+        }
+        thread.name = "topo.mind.watcher.wait"
+        thread.start()
+        return (watcher, line[1])
+    }
+
+    /// The watcher's pid while it watches, for the suites.
+    var watcherPID: pid_t? { lock.withLock { watcher?.pid } }
+
+    /// Stops the watcher without letting it act: it is killed before its lifeline is closed.
+    private func stopWatching() {
+        guard let gone = lock.withLock({ () -> (pid: pid_t, lifeline: Int32)? in
+            defer { watcher = nil }
+            return watcher
+        }) else { return }
+        kill(gone.pid, SIGKILL)
+        close(gone.lifeline)
+    }
+
+    /// Closes the lifeline as this process's end would, leaving the watcher to act: for the suites.
+    func cutLifeline() {
+        guard let cut = lock.withLock({ () -> (pid: pid_t, lifeline: Int32)? in
+            defer { watcher = nil }
+            return watcher
+        }) else { return }
+        close(cut.lifeline)
     }
 
     /// Reads `fd` to its end on a thread of its own, a line at a time, split on newline bytes.
@@ -293,6 +412,27 @@ final class MindProcess: @unchecked Sendable {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return hasExited
+    }
+
+    /// When a live process started, as a string to compare: with the pid, what tells a process
+    /// from a later one given the same pid. Nil when there is none, or it is a zombie.
+    static func startTime(of pid: pid_t) -> String? {
+        var info = proc_bsdinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size))
+        guard size == Int32(MemoryLayout<proc_bsdinfo>.size), info.pbi_status != UInt32(SZOMB) else { return nil }
+        return "\(info.pbi_start_tvsec).\(info.pbi_start_tvusec)"
+    }
+
+    /// Kills a process this one did not start (a resident an earlier hub left), its group and its
+    /// descendants, and waits a bounded moment for them to go.
+    static func reap(left pid: pid_t) async {
+        let all = [pid] + descendants(of: pid)
+        kill(-pid, SIGKILL)
+        all.forEach { kill($0, SIGKILL) }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline, all.contains(where: alive) {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     /// Whether a process is still there and not a zombie.

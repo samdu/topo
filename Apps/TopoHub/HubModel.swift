@@ -24,9 +24,7 @@ final class HubModel {
         case failed(String)
     }
 
-    enum Store: String {
-        case cloudKit, memory
-    }
+    typealias Store = HubLaunch.Store
 
     /// This Mac's device ID, read from the keychain at launch and, while it
     /// cannot be, at every try of `bringUp`; nothing registers, claims or
@@ -50,9 +48,10 @@ final class HubModel {
     /// under. Made in `init` because its reader is this hub's databases.
     private(set) var pages: SurfacePages!
 
-    /// Whether the mind runs on this Mac: the menu's switch, off by default. Kept in the hub's
-    /// defaults on the real store only, so a build on the in-memory one never leaves it on for
-    /// the next.
+    /// Whether the mind runs on this Mac: the menu's switch, off by default, kept in the hub's
+    /// defaults (`MindSwitch`, under `HubLaunch.switchKey`), where a shell sets it too
+    /// (`scripts/hub-mind.sh`). The in-memory store keeps a key of its own, so a run against
+    /// nothing real never leaves the real switch on.
     private(set) var mindOn: Bool
     /// What the mind last said of itself; nil until it is made.
     private(set) var mind: HubMind.Snapshot?
@@ -67,7 +66,6 @@ final class HubModel {
     /// Where the mind's home is.
     let mindRoot: URL
 
-    nonisolated static let mindKey = "mind.on"
     nonisolated static let modelKey = "model"
 
     private static let log = Logger(subsystem: "zone.hexagon.topo.hub", category: "hub")
@@ -75,14 +73,15 @@ final class HubModel {
     private let directory: DeviceDirectory
     private let presence = LANPresence()
     private let mindConfiguration: NativeBrain.Configuration
+    private let launch: HubLaunch
     private var hubMind: HubMind?
+    private var mindSwitch: MindSwitch?
     private var server: LeaseProbeServer?
     private var loop: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var signals: [DispatchSourceSignal] = []
     private var signalledAsleep = false
     private var subscribed = false
-    private var switching: Task<Void, Never>?
 
     /// CloudKit when the bundle carries the iCloud entitlement, otherwise the
     /// testing package's in-memory store: an unsigned build runs, shows every
@@ -97,30 +96,27 @@ final class HubModel {
             Self.log.error("hub identity unreadable: \(String(describing: error), privacy: .public)")
         }
         name = Host.current().localizedName ?? "Mac"
-        let environment = ProcessInfo.processInfo.environment
-        if environment["TOPO_STORE"] != "memory", HubIdentity.hasCloudKitEntitlement {
-            store = .cloudKit
-            database = CloudKitRecordDatabase()
-        } else {
-            store = .memory
-            database = InMemoryRecordDatabase()
-        }
+        launch = HubLaunch(environment: ProcessInfo.processInfo.environment, entitled: HubIdentity.hasCloudKitEntitlement)
+        store = launch.store
+        // The smoke-test controls reach the in-memory store alone (`HubLaunch`, and its suite).
+        precondition(launch.controls == nil || store == .memory, "smoke-test controls on the real store")
+        database = store == .cloudKit ? CloudKitRecordDatabase() : InMemoryRecordDatabase()
         // The first line the hub writes: which records it is about to touch.
         Self.log.notice("hub store \(self.store.rawValue, privacy: .public)")
         model = UserDefaults.standard.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default
+        mindOn = MindSwitch.persisted(key: launch.switchKey)
         if store == .cloudKit {
-            mindOn = UserDefaults.standard.bool(forKey: Self.mindKey)
             mindRoot = MindHome.root
             mindConfiguration = MindHome.configuration()
         } else {
             // A mind over records that live in memory keeps a home of its own: its ledger names
-            // turns no real log has. `TOPO_HUB_MIND=on` turns it on, and `TOPO_HUB_CLAUDE` names
-            // the `claude` it runs, for a run of the hub against nothing real; neither is kept.
-            mindOn = environment["TOPO_HUB_MIND"] == "on"
+            // turns no real log has. The controls name the `claude` it runs and its silence bound.
             mindRoot = MindHome.root.deletingLastPathComponent().appending(path: "Topo Hub (memory store)", directoryHint: .isDirectory)
-            let claude = environment["TOPO_HUB_CLAUDE"].map { URL(fileURLWithPath: $0) } ?? NativeBrain.Configuration.defaultClaude
-            mindConfiguration = MindHome.configuration(work: mindRoot.appending(path: "home"),
-                                                       config: mindRoot.appending(path: "claude"), claude: claude)
+            var configuration = MindHome.configuration(work: mindRoot.appending(path: "home"),
+                                                       config: mindRoot.appending(path: "claude"),
+                                                       claude: launch.controls?.claude ?? NativeBrain.Configuration.defaultClaude)
+            if let silence = launch.controls?.silence { configuration.silenceBound = silence }
+            mindConfiguration = configuration
         }
         signInCommand = "CLAUDE_CONFIG_DIR='\(mindConfiguration.configDirectory?.path ?? "")' \(mindConfiguration.claude.path) auth login --claudeai"
         directory = DeviceDirectory(database: database)
@@ -166,23 +162,49 @@ final class HubModel {
     func start() {
         guard loop == nil else { return }
         watchSleep()
-        if store == .memory { listenForSignals() }
+        listenForSignals()
+        writeStatus()
         loop = Task { await run() }
     }
 
-    /// On the in-memory store alone, the switch and the sleep can be driven from a shell: SIGUSR1
-    /// flips the switch as the menu does, and SIGUSR2 posts the workspace's will-sleep, then its
-    /// did-wake, in turn, to the observers the real ones reach.
+    /// What another process can ask of a running hub by its pid. SIGUSR1: follow the switch in
+    /// the defaults now rather than at the next refresh (`scripts/hub-mind.sh`; idempotent, never
+    /// a flip). SIGTERM: quit as the menu's Quit does, so the lease is let go and the mind's
+    /// process reaped before the hub exits, within 10 s. On the in-memory store alone, SIGUSR2
+    /// posts the workspace's will-sleep, then its did-wake, in turn, to the observers the real
+    /// ones reach.
     private func listenForSignals() {
         signal(SIGUSR1, SIG_IGN)
-        signal(SIGUSR2, SIG_IGN)
-        let flip = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-        flip.setEventHandler { [weak self] in
+        signal(SIGTERM, SIG_IGN)
+        let follow = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        follow.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.setMind(!self.mindOn)
+                Self.log.notice("mind: asked to follow the switch")
+                Task { await self.followSwitch() }
             }
         }
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        term.setEventHandler { [weak self] in
+            Self.log.notice("hub: SIGTERM, quitting")
+            // Off the main queue, which the quit itself needs.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                Self.log.error("hub: the quit was not done within 10 s; exiting")
+                exit(0)
+            }
+            // Not NSApplication.terminate: called from a main-queue handler, its wait for the
+            // quit's reply blocks the very queue the quit runs on. Quit's work, then the exit.
+            Task { @MainActor in
+                await self?.quit()
+                Self.log.notice("hub: quit after SIGTERM")
+                exit(0)
+            }
+        }
+        follow.resume()
+        term.resume()
+        signals = [follow, term]
+        guard launch.controls != nil else { return }
+        signal(SIGUSR2, SIG_IGN)
         let sleep = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
         sleep.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
@@ -192,40 +214,49 @@ final class HubModel {
                 NSWorkspace.shared.notificationCenter.post(name: name, object: nil)
             }
         }
-        flip.resume()
         sleep.resume()
-        signals = [flip, sleep]
+        signals.append(sleep)
     }
 
     /// The menu's switch. On takes the lease over and starts the mind; off stops renewing the
     /// lease at once, stops the loop and shuts the mind's process down, and the phone answers
-    /// once the lease lapses.
+    /// once the lease lapses. Kept in the defaults before it is applied.
     func setMind(_ on: Bool) {
         guard on != mindOn else { return }
         mindOn = on
-        if store == .cloudKit { UserDefaults.standard.set(on, forKey: Self.mindKey) }
+        // Kept first, so a follow that runs meanwhile (the refresh, SIGUSR1) reads this and not
+        // what it replaces. Before the mind is made the switch is only kept; it is followed once made.
+        MindSwitch.keep(on, key: launch.switchKey)
         Self.log.notice("mind switched \(on ? "on" : "off", privacy: .public)")
-        applySwitch()
+        writeStatus()
+        Task { await followSwitch() }
     }
 
-    /// Brings the mind to where the switch is when this runs. Each waits for the one before it,
-    /// so the mind ends where the switch did however fast it is flipped.
-    private func applySwitch() {
-        guard let hubMind else { return }
-        let before = switching
-        switching = Task { [weak self] in
-            await before?.value
-            guard let self else { return }
-            if self.mindOn {
-                await hubMind.turnOn()
-                await self.subscribe()
-            } else {
-                await hubMind.turnOff()
-            }
+    /// Brings the mind to the switch the defaults hold, which a shell may have set: at launch once
+    /// the mind is made, at every refresh, and at SIGUSR1.
+    private func followSwitch() async {
+        guard let mindSwitch else { return }
+        let on = await mindSwitch.follow()
+        if on != mindOn {
+            Self.log.notice("mind switched \(on ? "on" : "off", privacy: .public) by the defaults")
+            mindOn = on
+        }
+        if on { await subscribe() }
+        writeStatus()
+    }
+
+    /// The status a shell reads (`HubStatus`, `scripts/hub-mind.sh status`). A write that fails is
+    /// logged and left: the next change writes it again.
+    private func writeStatus() {
+        let status = HubStatus(pid: getpid(), store: store, on: mindOn, snapshot: mind, leaseHolder: leaseHolder?.rawValue)
+        do {
+            try status.write(in: mindRoot)
+        } catch {
+            Self.log.error("hub status not written: \(String(describing: error), privacy: .public)")
         }
     }
 
-    /// A mind that stopped (signed out, could not start) starts again from its login.
+    /// A mind that stopped (signed out, could not start, stalled) starts again from its login.
     func tryMindAgain() {
         guard let hubMind else { return }
         Task { await hubMind.tryAgain() }
@@ -302,7 +333,9 @@ final class HubModel {
         }
         status = .up
         while !Task.isCancelled {
+            await followSwitch()
             await refreshLease()
+            writeStatus()
             await refreshDevices()
             await surfaces.refresh()
             // A screen this hub is on the roster of is a screen it serves a
@@ -340,8 +373,8 @@ final class HubModel {
         pairingCode = PairingCode(record)
         if hubMind == nil {
             makeMind(endpoint: endpoints.first)
-            applySwitch()
             await sayAsALimb()
+            await followSwitch()
             await presence.start()
             await presence.observe { [weak self] names in
                 Task { @MainActor in self?.onLAN = names }
@@ -370,16 +403,18 @@ final class HubModel {
                         Self.log.notice("mind \(snapshot.phase.name, privacy: .public), holds the lease: \(snapshot.holds, privacy: .public)")
                     }
                     self.mind = snapshot
+                    self.writeStatus()
                 }
             })
         hubMind = mind
+        mindSwitch = MindSwitch(mind: mind, key: launch.switchKey)
         Self.log.notice("mind made, \(self.mindOn ? "on" : "off", privacy: .public), home \(self.mindRoot.path, privacy: .public)")
     }
 
     /// On the in-memory store alone, `TOPO_HUB_LIMB_SAYS` is a limb's turn written to the log at
     /// launch, for the mind to answer in a run of the hub against nothing real.
     private func sayAsALimb() async {
-        guard store == .memory, let words = ProcessInfo.processInfo.environment["TOPO_HUB_LIMB_SAYS"] else { return }
+        guard let words = launch.controls?.limbSays else { return }
         let log = TurnLog(database: database)
         do {
             let writer = try await log.writer(for: DeviceID("phone-memory00"))
