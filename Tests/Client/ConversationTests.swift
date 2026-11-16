@@ -2629,6 +2629,30 @@ extension ConversationTests {
         speaker.stop()
     }
 
+    /// The same, with the stopped turn's writing ended before the next turn's part: the stop is
+    /// still remembered, so the stopped reply is taken unread and the next reading keeps its place.
+    func testAStoppedReadingIsRememberedPastItsWritingsEnd() async {
+        let (_, _, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await settle("the first part read") { self.spoken.streams == 1 }
+        speaker.stop()
+        speaker.writingEnded("a")
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await settle("the next turn's part read") { self.spoken.streams == 2 }
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "a"))
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the stopped reply was read when it landed after its writing ended")
+        XCTAssertTrue(speaker.speak("Okay.\n\nThe lamp is off too.", answering: "b"))
+        await settle("the rest of the next reply") { self.spoken.streams == 3 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 3, "the next turn's part was read again from the top")
+        speaker.stop()
+    }
+
     /// A reply that landed and is still being read: the next turn's part waits behind it rather
     /// than cutting it off.
     func testTheNextTurnsPartWaitsBehindALandedReplyStillBeingRead() async {
