@@ -133,6 +133,9 @@ final class Speaker {
     private var stoppedReadings: [String] = []
     /// The turn whose writing was last held behind another turn's reading, so it is logged once.
     private var heldBehind: String?
+    /// The spoken turn whose reply is being read, from its `begin` to its reading's end, its reply
+    /// landed or not: another turn's writing begins nothing under it.
+    private var readingTurn: String?
     /// The spoken turns whose failure has been cued, so one the harness tells of twice — at the
     /// guest's end and at the turn's — sounds once. Cleared as the wait ends.
     private var failedCued: Set<String> = []
@@ -516,11 +519,12 @@ final class Speaker {
             if making == 0, queue.isIdle { finished() }
             return true
         }
-        forgetWritten()
+        // A stopped reply landing is taken unread, and touches nothing of the reading standing now.
         if let nonce, let stopped = stoppedReadings.firstIndex(of: nonce) {
             stoppedReadings.remove(at: stopped)
             return true
         }
+        forgetWritten()
         return begin(text, answering: nonce, reply: reply, reading: true)
     }
 
@@ -542,9 +546,10 @@ final class Speaker {
     /// log; `speak` is still called with the reply when it lands, and reads what is left. The
     /// guest's next message of the turn is more of the same text after a paragraph break, so
     /// its sentences are read behind the last message's, each once. Nothing begins while another
-    /// turn's reading is live, until its reply lands, its turn ends or it is stopped: the turn
-    /// after it is read as more is written once the earlier one is done, or when its own reply
-    /// lands, so neither is read twice. A stopped reading gives its place up and is remembered
+    /// turn's reply is being read (`readingTurn`), as it is written or after it landed, until that
+    /// reading ends or is stopped: the turn after it is read as more is written once the earlier
+    /// one is done, or when its own reply lands, so neither is read twice. Nothing begins for
+    /// what has no word to say (`spoken`), so a rule or a bare mark holds no microphone shut. A stopped reading gives its place up and is remembered
     /// (`stoppedReadings`), so its reply is not read when it lands. Nothing begins while the voice
     /// is not resident: the reply is offered whole when it lands, as ever. And nothing begins
     /// while a microphone is open: what is written waits for it to close, as a reply that lands
@@ -553,17 +558,15 @@ final class Speaker {
     func speak(writing text: String, answering nonce: String) {
         let settled = Self.settled(text)
         if written?.nonce != nonce {
-            guard !settled.isEmpty, voice.ready, !stoppedReadings.contains(nonce) else { return }
-            if let written {
-                guard !written.live else {
-                    if heldBehind != nonce {
-                        heldBehind = nonce
-                        AudioLog.say("what the guest has written waits behind another turn's reading")
-                    }
-                    return
+            guard !Self.spoken(settled).isEmpty, voice.ready, !stoppedReadings.contains(nonce) else { return }
+            if written?.live == true || (speaking && readingTurn.map { $0 != nonce } == true) {
+                if heldBehind != nonce {
+                    heldBehind = nonce
+                    AudioLog.say("what the guest has written waits behind another turn's reading")
                 }
-                forgetWritten()
+                return
             }
+            if written != nil { forgetWritten() }
             if microphoneBusy {
                 if writingWaited?.nonce != nonce { AudioLog.say("what the guest has written waits for the microphone to close") }
                 writingWaited = (text, nonce)
@@ -587,9 +590,10 @@ final class Speaker {
     /// out, and nothing more is waited for.
     func writingEnded(_ nonce: String) {
         if writingWaited?.nonce == nonce { writingWaited = nil }
-        stoppedReadings.removeAll { $0 == nonce }
         guard let reading = written, reading.nonce == nonce else { return }
-        written = nil
+        // A stopped reading is remembered past its writing's end: a reply that lands after it is
+        // still the one the person stopped.
+        forgetWritten()
         if reading.live, making == 0, queue.isIdle { finished() }
     }
 
@@ -640,6 +644,7 @@ final class Speaker {
             return false
         }
         speaking = true
+        readingTurn = nonce
         // A reply to a spoken turn is quiet until its first frame, and the bed fills that; a
         // replay, which answers no turn, has no bed under it at all.
         answering = nonce != nil
@@ -1145,6 +1150,7 @@ final class Speaker {
     /// this — `made` and `drained` both have to agree before either calls it.
     private func done() {
         speaking = false
+        readingTurn = nil
         voiceGap = false
         voiceHeard = false
         answering = false

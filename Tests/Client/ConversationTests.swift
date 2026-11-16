@@ -2529,7 +2529,7 @@ extension ConversationTests {
 
     /// The first turn's part read, then the second turn's part written before the first reply
     /// lands: the second waits behind the first, so the first's landing reads only what is left.
-    func testTheNextTurnsPartWaitsBehindAPartReadSoNeitherIsReadTwice() async {
+    func testTheNextTurnsPartWaitsBehindAPartReadSoNeitherIsReadTwice() async throws {
         waitOnSend = true
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, speaker) = await begun(detector)
@@ -2543,6 +2543,10 @@ extension ConversationTests {
         await settle("the rest of the first reply") { self.spoken.streams == 2 }
         await drain()
         XCTAssertEqual(spoken.streams, 2, "the first turn's part was read again when its reply landed")
+        speaker.speak(writing: "Okay.\n\n", answering: "spoken-2")
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the next turn's part cut off the first reply's reading")
+        _ = try await renderOffline({ self.seams.playEngine }, "the first reply heard out") { !speaker.speaking }
         speaker.speak(writing: "Okay.\n\nThe lamp is off too.\n\n", answering: "spoken-2")
         await settle("the next turn read once the first is done") { self.spoken.streams == 4 }
         speaker.endAwaiting("spoken-2", "the test is done")
@@ -2578,7 +2582,7 @@ extension ConversationTests {
 
     /// With no conversation, a part read and the next turn's part written before the first reply:
     /// the first's landing reads only what is left.
-    func testHoldToTalkTheNextTurnsPartWaitsBehindAPartRead() async {
+    func testHoldToTalkTheNextTurnsPartWaitsBehindAPartRead() async throws {
         let (_, _, speaker) = await make()
         spoken.releaseTheHeldFrame()
         _ = speaker.awaitReply("a", readAloud: true)
@@ -2593,8 +2597,89 @@ extension ConversationTests {
         await settle("the rest of the first reply") { self.spoken.streams == 2 }
         await drain()
         XCTAssertEqual(spoken.streams, 2, "the first turn's part was read again when its reply landed")
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the next turn's part cut off the first reply's reading")
+        _ = try await renderOffline({ self.seams.playEngine }, "the first reply heard out") { !speaker.speaking }
         speaker.speak(writing: "Okay.\n\nThe lamp is off too.\n\n", answering: "b")
         await settle("the next turn read once the first is done") { self.spoken.streams == 4 }
+        speaker.stop()
+    }
+
+    /// A stopped part, the next turn's part read, then the stopped reply lands: it is taken
+    /// unread, and the next turn's reading keeps its place, so its reply reads only what is left.
+    func testAStoppedReplyLandingLeavesTheNextTurnsReadingStanding() async {
+        let (_, _, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await settle("the first part read") { self.spoken.streams == 1 }
+        speaker.stop()
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await settle("the next turn's part read") { self.spoken.streams == 2 }
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "a"))
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the stopped reply was read when it landed")
+        XCTAssertTrue(speaker.speak("Okay.\n\nThe lamp is off too.", answering: "b"))
+        await settle("the rest of the next reply") { self.spoken.streams == 3 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 3, "the next turn's part was read again from the top")
+        speaker.stop()
+    }
+
+    /// A reply that landed and is still being read: the next turn's part waits behind it rather
+    /// than cutting it off.
+    func testTheNextTurnsPartWaitsBehindALandedReplyStillBeingRead() async {
+        let (_, _, speaker) = await make()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        XCTAssertTrue(speaker.speak("The lights are off.", answering: "a"))
+        await settle("the reply being read") { self.spoken.streams == 1 && speaker.speaking }
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await drain()
+        XCTAssertEqual(spoken.streams, 1, "the next turn's part cut off the reply being read")
+        XCTAssertTrue(speaker.speaking, "the reply being read was stopped")
+        spoken.releaseTheHeldFrame()
+        speaker.stop()
+    }
+
+    /// A part with no word to say (a rule) written over an open conversation microphone waits for
+    /// nothing, so the gate stays open.
+    func testAPartWithNoWordsHoldsNoMicrophoneShut() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again after the send") { voice.listening }
+        await drain()
+        speaker.speak(writing: "---\n\n", answering: "spoken-1")
+        XCTAssertFalse(speaker.waitingForMicrophone, "a part with nothing to say waits for the microphone")
+        await drain()
+        XCTAssertTrue(voice.listening, "a part with nothing to say shut the microphone")
+        XCTAssertEqual(spoken.streams, 0)
+    }
+
+    /// Hold-to-talk: a part written while a press holds the microphone open is not begun into it,
+    /// and is read once the release closes it.
+    func testAPartWrittenUnderAHeldPressIsReadAtTheRelease() async {
+        let (_, voice, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = await voice.pressDown(as: .chat)
+        XCTAssertTrue(voice.listening)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await drain()
+        XCTAssertFalse(speaker.speaking, "the part was begun into the held microphone")
+        XCTAssertEqual(spoken.streams, 0)
+        _ = await voice.pressUp(as: .chat, held: true)
+        await settle("the part read at the release") { self.spoken.streams == 1 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 1)
         speaker.stop()
     }
 
