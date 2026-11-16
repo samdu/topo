@@ -342,6 +342,34 @@ final class GuestSessionTests: XCTestCase {
 
     /// The same order in miniature, and a result before any echo: the turn is not ended by it, and
     /// one whose echo never comes is ended at the bound, as any turn that hears nothing is.
+    /// A turn's request moments reach the app as they happen: the words written, each model
+    /// request's answer starting, the turn's own and a sub-agent's told apart with their context,
+    /// and the turn's end.
+    func testATurnsRequestMomentsAreToldAsTheyHappen() async throws {
+        final class Moments: @unchecked Sendable {
+            private let lock = NSLock()
+            private var kept: [GuestSession.RequestMoment] = []
+            var all: [GuestSession.RequestMoment] { lock.withLock { kept } }
+            func add(_ moment: GuestSession.RequestMoment) { lock.withLock { kept.append(moment) } }
+        }
+        let moments = Moments()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   requests: { moments.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        let (_, done) = collect(try await session.send("hi"))
+        await eventually("written") { process.turns.count == 1 }
+        XCTAssertEqual(moments.all, [.written])
+        process.emit(Lines.`init`("S1"))
+        process.emit(#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":3,"cache_creation_input_tokens":400,"cache_read_input_tokens":12000}}},"parent_tool_use_id":null}"#)
+        process.emit(#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}},"parent_tool_use_id":"toolu_1"}"#)
+        process.emit(Lines.text("ok"))
+        process.emit(Lines.result("ok", session: "S1"))
+        await done.value
+        XCTAssertEqual(moments.all, [.written, .answered(subagent: false, tokens: 12_403), .answered(subagent: true, tokens: 50), .ended])
+    }
+
     func testAResultBeforeTheTurnsEchoDoesNotEndIt() async throws {
         let lines = Logged()
         let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,

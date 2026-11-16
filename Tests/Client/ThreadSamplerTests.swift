@@ -106,6 +106,35 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(sampler.recent(), [])
     }
 
+    /// A lookup that failed is no baseline: the request after it is not told, rather than counting
+    /// each connection's whole life, and the next one is read from the counters that did come.
+    func testAFailedReadLeavesTheNextRequestNotTold() {
+        final class Reads: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value: [Socket: UInt64]?
+            var now: [Socket: UInt64]? {
+                get { lock.withLock { value } }
+                set { lock.withLock { value = newValue } }
+            }
+        }
+        let reads = Reads()
+        let at = Date(timeIntervalSince1970: 1_000)
+        let sampler = ThreadSampler(read: { reads.now }, now: { at })
+        reads.now = nil
+        sampler.take(.written)
+        reads.now = [messages: 90_000]
+        sampler.take(.answered(subagent: false, tokens: 30_000))
+        reads.now = [messages: 92_600]
+        sampler.take(.answered(subagent: false, tokens: 31_000))
+        reads.now = nil
+        sampler.take(.answered(subagent: false, tokens: 32_000))
+        XCTAssertEqual(sampler.recent(), [
+            .init(at: at, bytes: nil, tokens: 30_000, kind: .unknown),
+            .init(at: at, bytes: 2_600, tokens: 31_000, kind: .thread),
+            .init(at: at, bytes: nil, tokens: 32_000, kind: .unknown),
+        ])
+    }
+
     /// A note is its time, bytes, tokens and kind, and nothing else: no word, header or id.
     func testANoteHoldsNothingButTimeBytesTokensAndKind() {
         let note = ThreadSampler.Note(at: Date(), bytes: 1, tokens: 2, kind: .thread)
@@ -198,10 +227,13 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(firstIn.wait(timeout: .now() + 5), .success)
         let before = ThreadSampler.sockets(addresses: ["127.0.0.1"], port: port)
         XCTAssertEqual(before.values.first, 150_000)
-        close(first)
-        let (second, secondPeer) = connected()
+        // The next connection takes the very descriptor the first had: `dup2` closes the first and
+        // puts the new one in its place in one call, so no other thread can take it between.
+        let (fresh, secondPeer) = connected()
+        XCTAssertEqual(dup2(fresh, first), first)
+        close(fresh)
+        let second = first
         defer { close(second); close(secondPeer) }
-        XCTAssertEqual(second, first, "the lowest free descriptor is taken again")
         let secondIn = received(160_000, at: secondPeer)
         send(160_000, on: second)
         XCTAssertEqual(secondIn.wait(timeout: .now() + 5), .success)

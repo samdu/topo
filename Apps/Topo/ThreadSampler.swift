@@ -79,7 +79,10 @@ final class ThreadSampler: Sendable {
 
     private struct State {
         var notes: [Note] = []
-        /// The counters at the last moment of the turn in flight; nil with none in flight.
+        /// Whether a turn is in flight.
+        var inFlight = false
+        /// The counters at the last moment of the turn in flight; nil with none in flight or when
+        /// that moment's read failed, which leaves the next request not told.
         var mark: [Socket: UInt64]?
         /// Moved by every clear, so a moment whose read began before one keeps nothing after it.
         var generation = 0
@@ -87,10 +90,10 @@ final class ThreadSampler: Sendable {
 
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let queue = DispatchQueue(label: "zone.hexagon.topo.thread-sampler", qos: .utility)
-    private let read: @Sendable () -> [Socket: UInt64]
+    private let read: @Sendable () -> [Socket: UInt64]?
     private let now: @Sendable () -> Date
 
-    init(read: @escaping @Sendable () -> [Socket: UInt64] = { ThreadSampler.sockets(to: ThreadSampler.host) },
+    init(read: @escaping @Sendable () -> [Socket: UInt64]? = { ThreadSampler.sockets(to: ThreadSampler.host) },
          now: @escaping @Sendable () -> Date = Date.init) {
         self.read = read
         self.now = now
@@ -110,15 +113,17 @@ final class ThreadSampler: Sendable {
             let counters = read()
             state.withLock { state in
                 guard state.generation == generation else { return }
+                state.inFlight = true
                 state.mark = counters
             }
         case .answered(let subagent, let tokens):
-            guard case let (before, generation)? = state.withLock({ state in state.mark.map { ($0, state.generation) } }) else { return }
+            guard case let (before, generation)? = state.withLock({ state in state.inFlight ? (state.mark, state.generation) : nil })
+            else { return }
             let after = read()
-            let bytes = Self.upload(from: before, to: after)
+            let bytes = before.flatMap { before in after.flatMap { Self.upload(from: before, to: $0) } }
             let note = Note(at: now(), bytes: bytes, tokens: tokens, kind: Self.kind(bytes: bytes, tokens: tokens))
             let kept = state.withLock { state -> Bool in
-                guard state.generation == generation, state.mark != nil else { return false }
+                guard state.generation == generation, state.inFlight else { return false }
                 state.mark = after
                 // A sub-agent's request is told by its own answer's start, but its upload ran beside
                 // the turn's own: only the turn's requests are kept.
@@ -129,7 +134,7 @@ final class ThreadSampler: Sendable {
             }
             if kept { Perf.mark("turn.guest.upload kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")") }
         case .ended:
-            state.withLock { $0.mark = nil }
+            state.withLock { $0.inFlight = false; $0.mark = nil }
         }
     }
 
@@ -143,9 +148,12 @@ final class ThreadSampler: Sendable {
     // MARK: The counters
 
     /// Bytes sent so far on each of this process's TCP sockets whose peer is an address `host`
-    /// resolves to, at port 443. Blocking: the lookup and the reads are the sampler queue's.
-    static func sockets(to host: String) -> [Socket: UInt64] {
-        sockets(addresses: addresses(of: host), port: 443)
+    /// resolves to, at port 443; nil when the name resolves to nothing, since an empty answer
+    /// would make the next read count each connection's whole life. Blocking: the lookup and the
+    /// reads are the sampler queue's.
+    static func sockets(to host: String) -> [Socket: UInt64]? {
+        let addresses = addresses(of: host)
+        return addresses.isEmpty ? nil : sockets(addresses: addresses, port: 443)
     }
 
     /// Bytes sent so far on each of this process's TCP sockets whose peer is one of `addresses`
