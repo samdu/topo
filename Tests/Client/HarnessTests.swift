@@ -1212,6 +1212,36 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.repliesStopped, [person.ref], "a turn the screen had not read when its reply failed is not drawn as stopped")
     }
 
+    /// A pass the bridge refused because a reply it finished is still owed the log stops no turn:
+    /// the next pass writes that reply, then answers.
+    func testAPassRefusedForAnOwedReplyStopsNoTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = Harness(database: db, ensureZone: {}, defaults: makeDefaults(),
+                              brain: AnswerFails(error: GuestBridgeError.failed(GuestBridge.owedFirst)))
+        _ = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.refresh()
+        await harness.answerPending()
+
+        XCTAssertNotNil(harness.error, "control: the pass did not fail")
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "a pass refused for an owed reply drew its turn as stopped")
+    }
+
+    /// A pass that was stopped fails no turn, whatever the brain threw as it stopped.
+    func testAStoppedPassStopsNoTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = FailsOnceStopped()
+        let harness = Harness(database: db, ensureZone: {}, defaults: makeDefaults(), brain: brain)
+        _ = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.refresh()
+        let pass = Task { await harness.answerPending() }
+        try await eventually("the brain asked") { brain.asked }
+        pass.cancel()
+        await pass.value
+
+        XCTAssertTrue(brain.threw, "control: the brain did not throw as the pass stopped")
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "a stopped pass drew its turn as stopped")
+    }
+
     /// A cancel clears the row of the words it cancelled and of nothing else: a row that takes
     /// other words while the brain hears of the withdrawal keeps them.
     func testACancelLeavesWordsTheRowTookWhileTheBrainHeardOfIt() async throws {
@@ -3117,6 +3147,30 @@ private func lapsing(_ db: InMemoryRecordDatabase) -> @Sendable (TimeInterval) a
 @MainActor
 private final class RowTaker {
     var act: () -> Void = {}
+}
+
+/// A brain whose every answer fails with `error`.
+private struct AnswerFails: Brain {
+    let error: any Error & Sendable
+    func answer(_ request: BrainRequest) async throws -> Reply { throw error }
+    func describe() async -> String { "answer fails" }
+}
+
+/// A brain whose answer waits until its task is cancelled, then fails with an error that is not
+/// a cancellation, as a request torn down mid-flight does.
+private final class FailsOnceStopped: Brain, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _asked = false
+    private var _threw = false
+    var asked: Bool { lock.withLock { _asked } }
+    var threw: Bool { lock.withLock { _threw } }
+    func answer(_ request: BrainRequest) async throws -> Reply {
+        lock.withLock { _asked = true }
+        while !Task.isCancelled { await Task.yield() }
+        lock.withLock { _threw = true }
+        throw URLError(.cancelled)
+    }
+    func describe() async -> String { "fails once stopped" }
 }
 
 /// A brain whose hearing of a withdrawal has the row take other words, as a spoken release can

@@ -5111,6 +5111,27 @@ extension GuestBridgeTests {
         XCTAssertEqual(relaunched.margin(nonce), .sending, "a relaunch offered a cancel for words the guest has")
     }
 
+    /// Over a ledger that cannot be read nothing says what the guest has, so words on the line
+    /// are offered no cancel after a relaunch; over one that reads, words it never had are.
+    func testWordsOnTheLineAreOfferedNoCancelOverALedgerThatCannotBeRead() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let nonce = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0.willSend("bins?")
+
+        let readable = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await readable.refresh()
+        XCTAssertEqual(readable.waiting, ["bins?"], "control: the relaunch lost the words on the line")
+        XCTAssertEqual(readable.margin(nonce), .cancel, "control: words the guest never had were offered no cancel")
+
+        try FileManager.default.createDirectory(at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a ledger".utf8).write(to: ledgerFile)
+        let unread = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await unread.refresh()
+        XCTAssertEqual(unread.waiting, ["bins?"], "the relaunch lost the words on the line")
+        XCTAssertFalse(unread.canCancel(nonce), "words were offered a cancel over a ledger that could not be read")
+        XCTAssertEqual(unread.margin(nonce), .sending)
+    }
+
     /// iCloud behind a turn the guest is still answering is no failure: it is drawn as on its
     /// way, never red. The guest has the words, so it offers no cancel.
     func testATurnICloudIsBehindOnWhileTheGuestAnswersIsNotDrawnFailed() async throws {
