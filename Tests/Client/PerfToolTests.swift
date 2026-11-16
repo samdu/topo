@@ -103,7 +103,8 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turn.events.map(\.took).reduce(0, +), turn.total)
         XCTAssertTrue(turn.record.contains(" saved=900 "), turn.record)
         let said = PerfTool.describe(turn, back: 1)
-        XCTAssertTrue(said.contains("Your words saved to iCloud, while Claude Code worked  at 0.06 s  took 0.84 s"), said)
+        let row = said.split(separator: "\n").first { $0.contains("Your words saved to iCloud, while Claude Code worked") }
+        XCTAssertTrue(row?.hasSuffix("  at 0.06 s  took 0.84 s") == true, said)
         XCTAssertEqual(turn.requestBytes, [2048])
     }
 

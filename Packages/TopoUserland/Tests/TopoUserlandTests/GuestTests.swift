@@ -48,7 +48,7 @@ final class GuestTests: XCTestCase {
         let path = Guest.managedSettings
         _ = try await Guest.shared.run("/bin/sh", ["-c", "rm -rf \"$1\" /tmp/policy-aside", "sh", path])
         try await Guest.shared.writeManagedSettings(#"{"a":1}"#)
-        let written = try await Guest.shared.run("/bin/sh", ["-c", "[ -f \"$1\" ] && [ ! -L \"$1\" ] && cat \"$1\"; ls \"$1.topo\" 2>/dev/null", "sh", path])
+        let written = try await Guest.shared.run("/bin/sh", ["-c", "[ -f \"$1\" ] && [ ! -L \"$1\" ] && cat \"$1\" && [ ! -e \"$1.topo\" ]", "sh", path])
         XCTAssertEqual(written.status, 0, written.errors)
         XCTAssertEqual(written.output, #"{"a":1}"#)
 
