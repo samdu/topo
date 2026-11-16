@@ -377,7 +377,11 @@ final class HubAppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
-        guard HubPush.isOurs(userInfo) else { return }
+        // Every push is logged as it arrives, before it is judged: the subscription id and the
+        // kind, never the payload. A push that starts no pass says so here and nowhere else.
+        let kind = HubPush.kind(userInfo)
+        Self.log.notice("remote notification: \(kind.described, privacy: .public)\(kind.triggers ? "" : "; no pass", privacy: .public)")
+        guard kind.triggers else { return }
         Self.hub?.pushed()
     }
 

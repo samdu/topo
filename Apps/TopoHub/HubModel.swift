@@ -307,9 +307,9 @@ final class HubModel {
     private func subscribe() async {
         guard store == .cloudKit, mindOn, !subscribed else { return }
         do {
-            let saved = try await HubPush.ensureSubscription()
+            let outcome = try await HubPush.ensureSubscription()
             subscribed = true
-            Self.log.notice("push subscription \(HubPush.subscriptionID, privacy: .public) \(saved ? "saved" : "already there", privacy: .public)")
+            Self.log.notice("push subscription \(HubPush.subscriptionID, privacy: .public) \(outcome.described, privacy: .public)")
         } catch {
             Self.log.error("push subscription failed: \(String(describing: error), privacy: .public)")
         }
