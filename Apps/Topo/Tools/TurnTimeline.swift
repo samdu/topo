@@ -241,9 +241,9 @@ struct TurnTimeline: Sendable {
         // are matched by their place in the marks' order, since two can share a millisecond.
         var bytes: [Int] = [], threads: [String] = []
         let messages = clean.indices.filter { clean[$0].name == "turn.guest.message" && clean[$0].isOwn }
-        // What a request uploaded is marked by its number once its answer has ended, read on the
-        // sampler's own queue, so it can come after the turn's other marks, up to the next turn's.
-        let nextWrite = marks.first { $0.name == "turn.guest.write" && $0.ms > (write?.ms ?? origin) }?.ms ?? .max
+        // What a request uploaded is marked once its answer has ended, read on the sampler's own
+        // queue, so it can come after any later mark, the next turn's included: it is the request's
+        // by the session's number for the turn and the turn's for the request, which both carry.
         var previous = write.flatMap { mark in clean.firstIndex { $0.name == mark.name && $0.ms == mark.ms } } ?? clean.startIndex
         for (n, i) in messages.enumerated() {
             let message = clean[i]
@@ -252,8 +252,10 @@ struct TurnTimeline: Sendable {
             if let result = clean[previous..<i].last(where: { $0.name == "turn.guest.toolResult" }) {
                 raw.append((result.ms, place(result), .tool, "A tool ran"))
             }
-            let upload = marks.last { $0.name == "turn.guest.upload" && $0.value("request") == String(number)
-                && $0.ms >= message.ms && $0.ms < nextWrite }
+            let guest = message.value("guest")
+            let upload = guest.flatMap { guest in
+                marks.last { $0.name == "turn.guest.upload" && $0.value("guest") == guest && $0.value("request") == String(number) }
+            }
             let size = upload?.value("bytes").flatMap(Int.init)
             if let size { bytes.append(size) }
             threads.append(upload?.value("kind") ?? "unknown")

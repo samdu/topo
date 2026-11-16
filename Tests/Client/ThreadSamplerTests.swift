@@ -94,7 +94,7 @@ final class ThreadSamplerTests: XCTestCase {
         reader.now = [messages: 500, telemetry: 40]
         sampler.heard(.ended)
         sampler.settled()
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         reader.now = [messages: 21_500, telemetry: 40]
         request(sampler, 1, tokens: 12_800)
         sampler.settled()
@@ -117,7 +117,7 @@ final class ThreadSamplerTests: XCTestCase {
         let reader = Reader()
         let sampler = sampler(reader)
         reader.now = [messages: 21_000]
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         request(sampler, 1, tokens: 12_800)
         sampler.settled()
         XCTAssertEqual(sampler.recent(), [.init(at: at, bytes: nil, tokens: 12_800, kind: .unknown)])
@@ -131,7 +131,7 @@ final class ThreadSamplerTests: XCTestCase {
         reader.now = [messages: 500]
         sampler.heard(.ended)
         sampler.settled()
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         reader.now = [messages: 21_500]
         sampler.heard(.answered(own: 1, tokens: 12_800))
         sampler.settled()
@@ -158,7 +158,7 @@ final class ThreadSamplerTests: XCTestCase {
         reader.hold()
         sampler.heard(.ended)
         reader.reading.wait()
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         reader.now = [messages: 20_500]
         reader.let()
         reader.now = [messages: 21_500]
@@ -175,7 +175,7 @@ final class ThreadSamplerTests: XCTestCase {
         reader.now = [messages: 500]
         sampler.heard(.ended)
         sampler.settled()
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         sampler.settled()
         reader.now = [messages: 21_500]
         reader.hold()
@@ -201,14 +201,14 @@ final class ThreadSamplerTests: XCTestCase {
         reader.now = [messages: 500]
         sampler.heard(.ended)
         sampler.settled()
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         sampler.settled()
         reader.hold()
         sampler.heard(.answered(own: 1, tokens: 12_800))
         reader.reading.wait()
         sampler.heard(.finished(own: true))
         sampler.heard(.ended)
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         sampler.heard(.answered(own: 1, tokens: 13_000))
         sampler.heard(.finished(own: true))
         sampler.heard(.ended)
@@ -218,7 +218,7 @@ final class ThreadSamplerTests: XCTestCase {
         sampler.settled()
         XCTAssertEqual(sampler.recent(), [])
         // And the next login's first turn starts from nothing of the last's.
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         reader.now = [messages: 24_100]
         request(sampler, 1, tokens: 13_300)
         sampler.settled()
@@ -233,7 +233,7 @@ final class ThreadSamplerTests: XCTestCase {
         reader.now = nil
         sampler.heard(.ended)
         sampler.settled()
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         reader.now = [messages: 90_000]
         request(sampler, 1, tokens: 30_000)
         reader.now = [messages: 92_600]
@@ -271,7 +271,7 @@ final class ThreadSamplerTests: XCTestCase {
     func testOnlyTheLastTwentyAreKept() {
         let reader = Reader()
         let sampler = sampler(reader)
-        sampler.heard(.written)
+        sampler.heard(.written(turn: 1))
         for n in 1...25 {
             reader.now = [messages: UInt64(n * 1_000)]
             request(sampler, n, tokens: n)

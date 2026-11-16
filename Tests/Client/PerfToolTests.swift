@@ -40,7 +40,7 @@ final class PerfToolTests: XCTestCase {
             line(t + 7, "zone.read.begin", "Turn"), line(t + 782, "turn.lease.acquired"), line(t + 2612, "turn.log.read"),
             line(t + 3150, "turn.saved"), line(t + 3184, "turn.person.saved"), line(t + 3205, "turn.bridge.begin"),
             line(t + 3213, "turn.guest.write"), line(t + 3701, "turn.guest.init"),
-            line(t + 6542, "turn.guest.message", "own request=1 tokens=13305"), line(t + 6543, "turn.guest.upload", "request=1 kind=thread bytes=2662"),
+            line(t + 6542, "turn.guest.message", "own guest=1 request=1 tokens=13305"), line(t + 6543, "turn.guest.upload", "guest=1 request=1 kind=thread bytes=2662"),
             line(t + 6575, "turn.text.first"), line(t + 7068, "turn.guest.message.done", "own"),
             line(t + 7184, "turn.guest.result"), line(t + 7191, "turn.brain.answered"), line(t + 7780, "turn.reply.saved"),
             line(t + 7795, "turn.reply.shown", tag), line(t + 8400, "turn.pass.done"), line(t + 8401, "turn.attempt.end", "\(tag) answered"),
@@ -92,7 +92,7 @@ final class PerfToolTests: XCTestCase {
         let tag = "turn=bbbb2222"
         let lines = [line(0, "turn.line", tag), line(40, "turn.guest.write"), line(60, "turn.attempt", tag),
                      line(900, "turn.saved"), line(950, "turn.person.saved"),
-                     line(2500, "turn.guest.message", "own request=1 tokens=8000"), line(2501, "turn.guest.upload", "request=1 kind=thread bytes=2048"),
+                     line(2500, "turn.guest.message", "own guest=1 request=1 tokens=8000"), line(2501, "turn.guest.upload", "guest=1 request=1 kind=thread bytes=2048"),
                      line(2600, "turn.text.first"), line(2700, "turn.guest.message.done", "own"), line(2800, "turn.guest.result"),
                      line(3000, "turn.reply.saved"), line(3010, "turn.reply.shown", tag), line(3010, "turn.attempt.end", "\(tag) answered")]
         let turn = try XCTUnwrap(timelines(lines).first)
@@ -301,9 +301,9 @@ final class PerfToolTests: XCTestCase {
     func testAToolBeforeAnyWordsIsItsOwnWaitBeforeTheNextRequest() throws {
         let tag = "turn=abcd0000"
         let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(300, "turn.saved"), line(320, "turn.guest.write"),
-                     line(1900, "turn.guest.message", "own request=1 tokens=800"), line(1901, "turn.guest.upload", "request=1 kind=whole bytes=1000"),
+                     line(1900, "turn.guest.message", "own guest=1 request=1 tokens=800"), line(1901, "turn.guest.upload", "guest=1 request=1 kind=whole bytes=1000"),
                      line(2000, "turn.guest.message.done", "own"), line(2100, "turn.guest.toolUse"), line(2400, "turn.guest.toolResult"),
-                     line(3000, "turn.guest.message", "own request=2 tokens=900"), line(3001, "turn.guest.upload", "request=2 kind=thread bytes=150"),
+                     line(3000, "turn.guest.message", "own guest=1 request=2 tokens=900"), line(3001, "turn.guest.upload", "guest=1 request=2 kind=thread bytes=150"),
                      line(3050, "turn.text.first"), line(3300, "turn.guest.message.done", "own"),
                      line(3400, "turn.guest.result"), line(3600, "turn.reply.saved"), line(3610, "turn.reply.shown", tag),
                      line(3610, "turn.attempt.end", "\(tag) answered")]
@@ -341,7 +341,7 @@ final class PerfToolTests: XCTestCase {
         let tag = "turn=1234abcd"
         let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(50, "turn.saved"), line(60, "turn.guest.write"),
                      line(200, "turn.guest.retry", "attempt=1 status=529"),
-                     line(400, "turn.guest.message", "own request=1 tokens=1000"), line(401, "turn.guest.upload", "request=1 kind=unknown bytes=unknown"),
+                     line(400, "turn.guest.message", "own guest=1 request=1 tokens=1000"), line(401, "turn.guest.upload", "guest=1 request=1 kind=unknown bytes=unknown"),
                      line(450, "turn.guest.message", "agent tokens=300"), line(600, "turn.guest.message.done", "agent"),
                      line(700, "turn.guest.message.done", "own"), line(800, "turn.reply.shown", tag),
                      line(800, "turn.attempt.end", "\(tag) answered")]
@@ -356,26 +356,33 @@ final class PerfToolTests: XCTestCase {
         XCTAssertTrue(turn.record.contains(" thread=unknown bytes=0 requests=1 "), turn.record)
     }
 
-    /// Each request's upload is its own by number, however late the sampler's queue marks it: after
-    /// the next request has begun, or after the turn has ended; and a request whose answer ends in the
+    /// Each request's upload is its own by its turn's number and its own, however late the sampler's
+    /// queue marks it: after the next request has begun, after the turn has ended, after the next
+    /// turn's words were written and its own request's upload; and a request whose answer ends in the
     /// millisecond the next begins is ended where it ended, by the marks' order.
     func testARequestsMarksAreItsOwnByNumberAndOrder() throws {
-        let tag = "turn=5ca1ab1e"
-        let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(50, "turn.saved"), line(60, "turn.guest.write"),
-                     line(400, "turn.guest.message", "own request=1 tokens=13000"),
-                     line(900, "turn.guest.message.done", "own"), line(900, "turn.guest.message", "own request=2 tokens=13100"),
-                     line(901, "turn.guest.upload", "request=1 kind=whole bytes=21000"),
+        let tag = "turn=5ca1ab1e", next = "turn=0ddba11e"
+        let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(50, "turn.saved"), line(60, "turn.guest.write", "guest=4"),
+                     line(400, "turn.guest.message", "own guest=4 request=1 tokens=13000"),
+                     line(900, "turn.guest.message.done", "own"), line(900, "turn.guest.message", "own guest=4 request=2 tokens=13100"),
+                     line(901, "turn.guest.upload", "guest=4 request=1 kind=whole bytes=21000"),
                      line(1500, "turn.guest.message.done", "own"), line(1600, "turn.reply.shown", tag),
                      line(1600, "turn.attempt.end", "\(tag) answered"),
-                     line(1700, "turn.guest.upload", "request=2 kind=thread bytes=2600"),
-                     line(5000, "turn.line", "turn=0ddba11"), line(5001, "turn.guest.write"),
-                     line(5300, "turn.guest.upload", "request=1 kind=whole bytes=99000")]
-        let turn = try XCTUnwrap(timelines(lines).first)
-        XCTAssertEqual(turn.requestBytes, [21000, 2600], "an upload was given to another request, or lost past the turn's end")
-        XCTAssertEqual(turn.requestThreads, ["whole", "thread"])
-        XCTAssertEqual(turn.events.filter { $0.key == .stream }.map(\.at), [900, 1500],
+                     line(5000, "turn.line", next), line(5001, "turn.attempt", next), line(5002, "turn.saved"),
+                     line(5003, "turn.guest.write", "guest=5"),
+                     line(5300, "turn.guest.message", "own guest=5 request=1 tokens=13200"),
+                     line(5301, "turn.guest.upload", "guest=5 request=1 kind=thread bytes=2700"),
+                     line(5400, "turn.guest.upload", "guest=4 request=2 kind=thread bytes=2600"),
+                     line(5900, "turn.guest.message.done", "own"), line(6000, "turn.reply.shown", next),
+                     line(6000, "turn.attempt.end", "\(next) answered")]
+        let turns = timelines(lines)
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(turns[0].requestBytes, [21000, 2600], "an upload was given to another request, or lost past the next turn's words")
+        XCTAssertEqual(turns[0].requestThreads, ["whole", "thread"])
+        XCTAssertEqual(turns[1].requestBytes, [2700], "the next turn took the last turn's upload")
+        XCTAssertEqual(turns[0].events.filter { $0.key == .stream }.map(\.at), [900, 1500],
                        "request 2 was ended by request 1's end")
-        XCTAssertEqual(turn.events.filter { $0.key == .stream }.map(\.title), ["The model finished request 1", "The model finished request 2"])
+        XCTAssertEqual(turns[0].events.filter { $0.key == .stream }.map(\.title), ["The model finished request 1", "The model finished request 2"])
     }
 
     /// The simulator's proof run (dc522572), its second turn, with its requests marked as the
@@ -388,11 +395,11 @@ final class PerfToolTests: XCTestCase {
             line(0, "turn.line", tag), line(0, "turn.attempt", tag), line(0, "turn.send"), line(24, "turn.begin"),
             line(50, "turn.guest.write"), line(51, "turn.heard"), line(62, "turn.guest.firstLine"), line(172, "turn.guest.init"),
             line(921, "turn.lease.fresh"), line(921, "turn.person.saved"),
-            line(999, "turn.guest.message", "own request=1 tokens=14000"), line(1000, "turn.guest.upload", "request=1 kind=whole bytes=21000"),
+            line(999, "turn.guest.message", "own guest=1 request=1 tokens=14000"), line(1000, "turn.guest.upload", "guest=1 request=1 kind=whole bytes=21000"),
             line(1742, "turn.guest.message.done", "own"), line(1838, "turn.guest.toolUse"), line(4800, "turn.guest.toolResult"),
-            line(7826, "turn.guest.message", "own request=2 tokens=14600"), line(7827, "turn.guest.upload", "request=2 kind=thread bytes=2600"),
+            line(7826, "turn.guest.message", "own guest=1 request=2 tokens=14600"), line(7827, "turn.guest.upload", "guest=1 request=2 kind=thread bytes=2600"),
             line(8395, "turn.guest.message.done", "own"), line(8440, "turn.guest.toolUse"), line(8900, "turn.guest.toolResult"),
-            line(9777, "turn.guest.message", "own request=3 tokens=15100"), line(9778, "turn.guest.upload", "request=3 kind=thread bytes=2700"),
+            line(9777, "turn.guest.message", "own guest=1 request=3 tokens=15100"), line(9778, "turn.guest.upload", "guest=1 request=3 kind=thread bytes=2700"),
             line(10594, "turn.text.first"), line(11234, "turn.guest.message.done", "own"), line(12154, "turn.guest.result"),
             line(12718, "turn.reply.saved"), line(12727, "turn.reply.shown", tag), line(14049, "turn.pass.done"),
             line(14049, "turn.attempt.end", "\(tag) answered"),
@@ -419,7 +426,7 @@ final class PerfToolTests: XCTestCase {
             line(1267, "turn.attempt", tag), line(1267, "turn.send"), line(1284, "turn.guest.write"), line(1284, "turn.heard"),
             line(1316, "turn.guest.firstLine"), line(1744, "turn.guest.init"), line(1802, "turn.lease.acquired"),
             line(2448, "turn.saved"), line(2449, "turn.person.saved"),
-            line(3267, "turn.guest.message", "own request=1 tokens=48000"), line(3268, "turn.guest.upload", "request=1 kind=whole bytes=21500"),
+            line(3267, "turn.guest.message", "own guest=1 request=1 tokens=48000"), line(3268, "turn.guest.upload", "guest=1 request=1 kind=whole bytes=21500"),
             line(4986, "turn.text.first"), line(4987, "speak.begin", tag), line(5085, "speak.firstFrame"),
             line(5496, "turn.guest.message.done", "own"), line(5505, "speak.firstFrame"), line(5605, "turn.guest.result"),
             line(6115, "turn.reply.saved"), line(6124, "turn.reply.shown", tag), line(7438, "turn.pass.done"),

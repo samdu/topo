@@ -109,6 +109,7 @@ final class ThreadSampler: Sendable {
 
     /// A request of the turn's own whose answer has begun and not yet ended.
     private struct Open {
+        let turn: Int
         let request: Int
         let tokens: Int
         let bytes: Int?
@@ -118,8 +119,9 @@ final class ThreadSampler: Sendable {
 
     private struct State {
         var notes: [Note] = []
-        /// Whether a turn is in flight.
+        /// Whether a turn is in flight, and the number the session gave it.
         var inFlight = false
+        var turn = 0
         /// The read the next request is counted from; nil when there is none it can be.
         var mark: Reading?
         var open: Open?
@@ -155,22 +157,23 @@ final class ThreadSampler: Sendable {
 
     private func take(_ moment: GuestSession.RequestMoment, heard: UInt64, generation: Int) {
         switch moment {
-        case .written:
+        case .written(let turn):
             update(generation) { state in
                 state.inFlight = true
+                state.turn = turn
                 state.open = nil
                 state.mark = Self.usable(state.mark, before: heard)
             }
         case .answered(own: nil, _):
             update(generation) { state in if state.inFlight { state.mark = nil } }
         case .answered(own: let request?, let tokens):
-            guard let before = current(generation, { $0.inFlight ? .some($0.mark) : nil }) else { return }
+            guard case let (before, turn)? = current(generation, { $0.inFlight ? ($0.mark, $0.turn) : nil }) else { return }
             let after = read()
             let at = ticks()
             let bytes = before.flatMap { before in
                 before.usable ? after.flatMap { Self.upload(from: before.counters, to: $0) } : nil
             }
-            let opened = Open(request: request, tokens: tokens, bytes: bytes, read: at, at: now())
+            let opened = Open(turn: turn, request: request, tokens: tokens, bytes: bytes, read: at, at: now())
             let unended = update(generation) { state -> Open? in
                 guard state.inFlight else { return nil }
                 let unended = state.open
@@ -207,7 +210,8 @@ final class ThreadSampler: Sendable {
         }
     }
 
-    /// Keeps a request's note, its bytes only when `told`, and marks it for `topo perf` by its number.
+    /// Keeps a request's note, its bytes only when `told`, and marks it for `topo perf` by its turn's
+    /// number and its own.
     private func keep(_ open: Open, told: Bool, _ generation: Int) {
         let bytes = told ? open.bytes : nil
         let note = Note(at: open.at, bytes: bytes, tokens: open.tokens, kind: Self.kind(bytes: bytes, tokens: open.tokens))
@@ -217,7 +221,7 @@ final class ThreadSampler: Sendable {
             return true
         } ?? false
         if kept {
-            Perf.mark("turn.guest.upload request=\(open.request) kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")")
+            Perf.mark("turn.guest.upload guest=\(open.turn) request=\(open.request) kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")")
         }
     }
 
