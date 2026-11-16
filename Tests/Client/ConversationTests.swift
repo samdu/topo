@@ -2543,12 +2543,14 @@ extension ConversationTests {
         await settle("the rest of the first reply") { self.spoken.streams == 2 }
         await drain()
         XCTAssertEqual(spoken.streams, 2, "the first turn's part was read again when its reply landed")
+        speaker.speak(writing: "Okay.\n\nThe lamp is off too.\n\n", answering: "spoken-2")
+        await settle("the next turn read once the first is done") { self.spoken.streams == 4 }
         speaker.endAwaiting("spoken-2", "the test is done")
         speaker.stop()
     }
 
     /// A part read and stopped, then the next turn's part: the stopped reply is not read when it
-    /// lands, and its turn is settled whatever else waits.
+    /// lands, its turn is settled whatever else waits, and the next turn's part is read.
     func testAStoppedPartsReplyIsNotReadWhenItLandsAfterTheNextTurnsPart() async {
         waitOnSend = true
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
@@ -2567,8 +2569,9 @@ extension ConversationTests {
         XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "spoken-1"))
         XCTAssertFalse(speaker.replyWaitsForMicrophone("spoken-1"), "the stopped turn's mark would stand")
         detector.release()
+        await settle("the next turn's part read") { self.spoken.streams == 2 }
         await drain()
-        XCTAssertEqual(spoken.streams, 1, "the stopped reply was read when it landed")
+        XCTAssertEqual(spoken.streams, 2, "the stopped reply was read when it landed")
         speaker.endAwaiting("spoken-2", "the test is done")
         speaker.stop()
     }
@@ -2590,6 +2593,8 @@ extension ConversationTests {
         await settle("the rest of the first reply") { self.spoken.streams == 2 }
         await drain()
         XCTAssertEqual(spoken.streams, 2, "the first turn's part was read again when its reply landed")
+        speaker.speak(writing: "Okay.\n\nThe lamp is off too.\n\n", answering: "b")
+        await settle("the next turn read once the first is done") { self.spoken.streams == 4 }
         speaker.stop()
     }
 

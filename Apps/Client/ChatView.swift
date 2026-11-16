@@ -1014,8 +1014,6 @@ enum SpokenReply {
         // unless the person has muted replies since, which is them saying they will not hear it.
         guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
         if muted {
-            // A reading of the turn the mute stopped is done with: the next turn's is not held behind it.
-            speaker.writingEnded(asked)
             speaker.endAwaiting(asked, "replies are muted")
             harness.answeredAloud(asked)
             return true
