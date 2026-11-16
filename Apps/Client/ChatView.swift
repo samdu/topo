@@ -1055,7 +1055,7 @@ enum SpokenReply {
         guard speaker.speak(reply.text, answering: asked, reply: reply.ref) else { return false }
         // A reply waiting for the microphone keeps its turn marked until it is read
         // (`Speaker.settled`), so one the session refuses when the microphone closes is still owed.
-        if !speaker.waitingForMicrophone { harness.answeredAloud(asked) }
+        if !speaker.replyWaitsForMicrophone(asked) { harness.answeredAloud(asked) }
         return true
     }
 }
