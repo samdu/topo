@@ -542,10 +542,12 @@ final class ModelDownloads {
 
     /// The replacement for a cancelled task, from the resume data its cancel wrote, under the same
     /// key, with the bytes it was at when cancelled. Nothing for a file since verified or
-    /// forgotten.
+    /// forgotten, or of a model this launch has not asked for (a task an earlier build left in
+    /// the session, v2's after the ear moved to Ultra), which is let go rather than made again.
     private func restart(_ key: String) {
         guard let (model, file) = parse(key), inFlight[key] != nil, !verifying.contains(key),
               !present.contains(model.id) else { return }
+        guard wanted.contains(model.id) else { inFlight[key] = nil; return }
         let (task, fromResume) = makeTask(model, file)
         Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: fromResume))
         watchdog.restarted(key, resumed: fromResume)
@@ -707,6 +709,7 @@ final class ModelDownloads {
             live.remove(key)
             watchdog.forget(key)
             guard let (model, file) = parse(key), !present.contains(model.id) else { break }
+            guard wanted.contains(model.id) else { inFlight[key] = nil; break }
             let (task, fromResume) = makeTask(model, file)
             Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: 0, resumed: fromResume))
             watchdog.restarted(key, resumed: fromResume)

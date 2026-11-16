@@ -513,6 +513,35 @@ final class ModelDownloadsGlueTests: XCTestCase {
         XCTAssertTrue(downloads.relay.madeFromResume(key))
     }
 
+    /// A task of a model this launch has not asked for, carried in the session from an earlier
+    /// build (v2's, once the ear is Ultra): the watchdog's cancel of it, or the server's refusal of
+    /// its resume data, makes no replacement, and the key leaves flight.
+    func testATaskOfAModelNobodyAskedForIsNotMadeAgain() throws {
+        let manifest = manifest()
+        let store = ModelStore(root: scratch())
+        let downloads = downloads(manifest, store: store)
+        let key = "ear|encoder.bin"
+        let model = try XCTUnwrap(manifest.model("ear"))
+        downloads.handle(.progress(key, 36 * 1024))
+        crawl(downloads, key)
+        let resume = store.resumeData(for: model.files[0], in: model)
+        try FileManager.default.createDirectory(at: resume.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: [String: Any](), format: .binary, options: 0).write(to: resume)
+        downloads.handle(.restarting(key))
+
+        downloads.tick()
+
+        XCTAssertFalse(downloads.watchdog.restarting(key))
+        XCTAssertFalse(downloads.live.contains(key), "no replacement")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resume.path), "nothing made from the resume data")
+        XCTAssertEqual(downloads.status(for: "ear"), .absent)
+
+        downloads.handle(.progress(key, 1))
+        downloads.handle(.staleResume(key))
+        XCTAssertFalse(downloads.live.contains(key), "no fresh fetch from the URL either")
+        XCTAssertEqual(downloads.status(for: "ear"), .absent)
+    }
+
     /// A resumed task the server answered from the start (offset 0) is never cancelled again,
     /// since its replacement would start from nothing too; one that picked up past 0 is.
     func testAResumeFromNothingIsNotCancelledAgain() {
