@@ -33,7 +33,9 @@ import TopoCore
     }
 
     @Test func theWire() {
-        #expect(ProbeWire.parse("moved mac-hub 3 ab12cd34\n") == .moved(DeviceID("mac-hub"), 3, mark: "ab12cd34"))
+        #expect(ProbeWire.parse("moved mac-hub 3 ab12cd34\n") == .moved(DeviceID("mac-hub"), 3, mark: "ab12cd34", stream: false))
+        #expect(ProbeWire.parse("moved mac-hub 3 ab12cd34 stream\n") == .moved(DeviceID("mac-hub"), 3, mark: "ab12cd34", stream: true))
+        #expect(ProbeWire.parse("moved mac-hub 3 ab12cd34 words") == nil)
         #expect(ProbeWire.parse("hold mac-hub 3") == .hold(DeviceID("mac-hub"), 3))
         #expect(ProbeWire.parse("moved mac-hub 3") == nil)
         #expect(ProbeWire.parse("moved mac-hub x ab") == nil)
@@ -44,7 +46,7 @@ import TopoCore
 
     @Test func aNudgeIsAnsweredReadOnceItsPassHasEnded() async throws {
         let passes = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { device, epoch, mark in
+        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { device, epoch, mark, _ in
             guard device == DeviceID("mac-hub"), epoch == 3 else { return false }
             return await passes.nudged(mark, hold: true)
         }
@@ -72,7 +74,7 @@ import TopoCore
 
     @Test func moreNudgesThanTheCapAreAnsweredNoAtOnce() async throws {
         let passes = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark in
+        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark, _ in
             await passes.nudged(mark, hold: true)
         }
         let port = try await server.start()
@@ -102,7 +104,7 @@ import TopoCore
 
     @Test func aListenerThatNeverAnswersIsGivenUpOnAtTheBound() async throws {
         let passes = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark in
+        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark, _ in
             await passes.nudged(mark, hold: true)
         }
         let port = try await server.start()
@@ -126,6 +128,93 @@ import TopoCore
         let took = Date().timeIntervalSince(began)
         #expect(line == "no" || line == nil || line == "")
         #expect(took >= LeaseProbeServer.requestBound - 0.5 && took < LeaseProbeServer.requestBound + 3)
+    }
+
+    /// What a streamed nudge was handed, in order.
+    final class Received: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _frames: [ReplyFrame] = []
+        var frames: [ReplyFrame] { lock.withLock { _frames } }
+        func add(_ frame: ReplyFrame) { lock.withLock { _frames.append(frame) } }
+    }
+
+    @Test func aStreamedNudgeHandsEveryFrameInOrderBeforeItsAnswer() async throws {
+        let ref = TurnRef(device: DeviceID("phone-a"), sequence: 4)
+        let words = ["Hel", "lo.\nA line", " with \"quotes\" and ünïcode", "\n\nDone."]
+        let gate = Passes()
+        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark, stream in
+            guard let stream else { return false }
+            stream(.turn([ref]))
+            stream(.message)
+            for word in words { stream(.text(word)) }
+            stream(.tool)
+            // The pass runs on after the last frame; the answer waits for its end.
+            return await gate.nudged(mark, hold: true)
+        }
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        let received = Received()
+        let sent = Task { await HubNudge.send(for: lease(port: port), mark: "ab12cd34", stream: { received.add($0) }) }
+        try await waitFor { received.frames.count == words.count + 3 }
+        // Mutant: frames held back to the pass's end, or a line split across reads dropped.
+        #expect(received.frames == [.turn([ref]), .message] + words.map(ReplyFrame.text) + [.tool])
+        gate.release()
+        #expect(await sent.value == .read)
+    }
+
+    @Test func aNudgeThatAsksNoStreamIsSentNoFrames() async throws {
+        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, _, stream in
+            stream == nil
+        }
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        #expect(await HubNudge.send(for: lease(port: port), mark: "ab") == .read)
+    }
+
+    @Test func framesSurviveTheWire() {
+        let frames: [ReplyFrame] = [.turn([TurnRef(device: DeviceID("a/b"), sequence: 9)]), .message, .text("x\ny\u{2028}"), .tool]
+        for frame in frames {
+            let line = String(decoding: frame.line, as: UTF8.self)
+            #expect(line.filter { $0 == "\n" }.count == 1 && line.hasSuffix("\n"))
+            #expect(ReplyFrame(line: String(line.dropLast())) == frame)
+        }
+        #expect(ReplyFrame(line: "read") == nil)
+        #expect(ReplyFrame(line: "{\"k\":\"turn\",\"refs\":[]}") == nil)
+    }
+
+    @Test func aFailedConnectIsRememberedUntilTheNetworkChanges() async throws {
+        var clock: TimeInterval = 100
+        let box = Clock(clock)
+        let unreached = HubNudge.Unreached(now: { box.now }, watchPath: false)
+        unreached.pathChanged("satisfied pdp_ip0:cellular")
+        #expect(!unreached.recently("10.0.0.2:5"))
+        unreached.failed("10.0.0.2:5")
+        #expect(unreached.recently("10.0.0.2:5"))
+        #expect(!unreached.recently("10.0.0.3:5"))
+        // The same network: still remembered, until the while is up.
+        unreached.pathChanged("satisfied pdp_ip0:cellular")
+        #expect(unreached.recently("10.0.0.2:5"))
+        clock += HubNudge.Unreached.forgetAfter
+        box.now = clock
+        #expect(!unreached.recently("10.0.0.2:5"))
+        // A change of network forgets at once.
+        unreached.failed("10.0.0.2:5")
+        unreached.pathChanged("satisfied en0:wifi")
+        // Mutant: failures kept across a change of network.
+        #expect(!unreached.recently("10.0.0.2:5"))
+        unreached.failed("10.0.0.2:5")
+        unreached.forget()
+        #expect(!unreached.recently("10.0.0.2:5"))
+    }
+
+    final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: TimeInterval
+        init(_ value: TimeInterval) { self.value = value }
+        var now: TimeInterval {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
+        }
     }
 
     private func waitFor(_ condition: () -> Bool) async throws {

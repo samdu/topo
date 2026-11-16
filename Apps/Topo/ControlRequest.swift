@@ -174,12 +174,22 @@ struct ControlSecrets: Sendable {
     }
 }
 
-/// Local network access for a control's request to the home network. A background request made
-/// while it is undetermined is denied with no prompt (TN3179), so it is asked for in the
-/// foreground only: `ask` opens a connection to the request's host and port and cancels it with
-/// nothing sent, which raises the system's prompt without making the request. A host asked for
-/// while the app is away waits for the next foreground. What the last ask found is kept, for
-/// `topo control` to report.
+/// Local network access: the system's Local Network privilege, which a control's request to the
+/// home network and the nudge to a hub on the LAN (`HubNudge`) both need. iOS has no API that asks
+/// for it or says it (TN3179, *Understanding local network privacy*): the system raises its prompt
+/// at the first local network operation the app makes in the foreground, denies one made in the
+/// background while it is undetermined without asking or recording anything, and may deny an
+/// operation at once while its prompt is still up. So `ask` opens a TCP connection to the host
+/// and cancels it with nothing sent, which raises the prompt without making the request, and
+/// reads the answer off that connection: ready on a local address is allowed, and the system
+/// retries a waiting connection by itself once the person allows it; waiting with the path's
+/// unsatisfied reason `localNetworkDenied` is denied only once the app is in front again at the
+/// ask's bound, since while the prompt is up the app is not active and the same reason is what a
+/// pending prompt shows. A host asked for while the app is away waits for the next foreground.
+/// What the last ask found is kept: a refusal is never asked again by Topo (a later operation
+/// raises no prompt, the system having recorded its answer), and only a control's request that
+/// lands on a local address afterwards, the person having allowed it in Settings, makes it
+/// allowed again.
 @MainActor
 final class LocalNetworkAccess {
     static let shared = LocalNetworkAccess()
@@ -252,33 +262,75 @@ final class LocalNetworkAccess {
     func becameActive() {
         let asked = waiting
         waiting = []
-        asked.forEach(open)
+        asked.forEach { open($0) }
     }
 
-    private func open(_ endpoint: NWEndpoint) {
+    /// One ask's connection: whether it was last refused for local network access, and whether
+    /// its answer has been taken.
+    @MainActor private final class Ask {
+        var refused = false
+        var done = false
+    }
+
+    /// An ask for a hub's endpoint is under way: a second turn meanwhile asks nothing.
+    private var askingHub = false
+
+    /// How long an ask watches its connection for the person's answer.
+    static let askBound: Duration = .seconds(30)
+
+    /// Asks for access to a hub's `host`:`port`, the endpoint its lease names, when it has never
+    /// been asked and the app is in front, and returns what the ask found once it is known or the
+    /// ask's bound has passed: nil when nothing was asked or nothing was learned. A refusal or an
+    /// access already known is returned at once, with nothing asked.
+    func askForHub(host: String, port: UInt16) async -> State? {
+        switch state {
+        case .allowed, .denied: return state
+        case .notAsked: break
+        }
+        guard isActive(), !askingHub, let endpointPort = NWEndpoint.Port(rawValue: port) else { return nil }
+        askingHub = true
+        defer { askingHub = false }
+        return await withCheckedContinuation { continuation in
+            open(.hostPort(host: NWEndpoint.Host(host), port: endpointPort)) { continuation.resume(returning: $0) }
+        }
+    }
+
+    private func open(_ endpoint: NWEndpoint, answered: (@MainActor (State?) -> Void)? = nil) {
         let connection = NWConnection(to: endpoint, using: .tcp)
         connections.append(connection)
-        let finish: @MainActor (State?) -> Void = { [weak self, weak connection] found in
-            guard let self, let connection else { return }
-            if let found { self.defaults.set(found.rawValue, forKey: Self.key) }
+        let ask = Ask()
+        let finish: @MainActor (State?) -> Void = { [weak self] found in
+            guard !ask.done else { return }
+            ask.done = true
+            if let found, let self { self.defaults.set(found.rawValue, forKey: Self.key) }
             connection.cancel()
-            self.connections.removeAll { $0 === connection }
+            self?.connections.removeAll { $0 === connection }
+            answered?(found)
         }
         connection.stateUpdateHandler = { @Sendable state in
-            let found: State?
+            let ready: Bool, denied: Bool
             switch state {
-            case .ready: found = Self.landedLocal(connection.currentPath?.remoteEndpoint) ? .allowed : nil
+            case .ready:
+                ready = true
+                denied = false
             case .waiting, .failed:
-                found = connection.currentPath?.unsatisfiedReason == .localNetworkDenied ? .denied : nil
+                ready = false
+                denied = connection.currentPath?.unsatisfiedReason == .localNetworkDenied
             default: return
             }
-            Task { @MainActor in finish(found) }
+            let local = ready && Self.landedLocal(connection.currentPath?.remoteEndpoint)
+            Task { @MainActor in
+                if ready { finish(local ? .allowed : nil) } else { ask.refused = denied }
+            }
         }
         connection.start(queue: .global(qos: .utility))
-        // A host that never answers is given up on; nothing is ever sent on the connection.
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(10))
-            finish(nil)
+        // A host that never answers is given up on, and nothing is ever sent on the connection. A
+        // connection still refused for local network access with the app in front again is the
+        // person's refusal; with the app not in front the prompt may still be up, and nothing is
+        // recorded.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.askBound)
+            finish(ask.refused && self?.isActive() == true ? .denied : nil)
         }
     }
 }

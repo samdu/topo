@@ -95,6 +95,17 @@ public actor TurnRunner {
     /// the brain hears every turn at once until a call to the lease gets through.
     private var away = false
 
+    /// The log as `run` read it beside the lease when another device turned out to hold it, for
+    /// the caller to write the person's turn as a limb's over (`takeRead`).
+    private var yieldedRead: Transcript?
+
+    /// The read `run` made before it threw `notPrimary`, once: the transcript a limb's turn is
+    /// appended to, read moments ago. Nil when it failed or was taken already.
+    public func takeRead() -> Transcript? {
+        defer { yieldedRead = nil }
+        return yieldedRead
+    }
+
     /// What a device knows of the lease from the last time it asked: nothing yet, that it held
     /// it, or that another device did.
     public enum Standing: String, Sendable {
@@ -130,6 +141,7 @@ public actor TurnRunner {
     public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString, known: [Turn]? = nil,
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
         Perf.mark("turn.begin")
+        yieldedRead = nil
         // The brain hears the words in a task of its own, so the lease and the save do not wait
         // for it to be ready, nor it for them.
         let brain = self.brain
@@ -184,7 +196,12 @@ public actor TurnRunner {
                     throw error
                 }
                 Perf.mark("turn.lease.acquired")
-                guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+                guard case .primary = outcome else {
+                    // The read made beside the lease is the one a limb's turn continues: kept for
+                    // the caller (`takeRead`), so it does not read the log a second time.
+                    yieldedRead = try? await reading
+                    throw TurnRunnerError.notPrimary(outcome)
+                }
                 // A caller that stopped while the lease was asked — a sign-out — gives the brain nothing.
                 try Task.checkCancellation()
                 if hearing == nil {
@@ -416,8 +433,9 @@ public actor TurnRunner {
     }
 
     /// `answerPending(model:)`, with the model asked for only once there is a turn to answer:
-    /// `choosing` is called at most once a pass, after the log was read and the lease taken, and
-    /// never on a pass that asks the brain nothing.
+    /// `choosing` is called at most once a pass, after the log was read, and never on a pass with
+    /// no person's turn to answer. It is asked beside the lease's renewal and the reply's marker,
+    /// so a pass that finds the reply written or the lease taken may have asked it for nothing.
     public func answerPending(choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
         var transcript = try await log.read()
         guard transcript.isComplete else { return nil }
@@ -427,8 +445,17 @@ public actor TurnRunner {
         if !waiting {
             guard await brain.owed() != nil else { return nil }
         }
-        let outcome = try await acquire()
-        guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+        // A lease held fresh with nothing owed is renewed while the reply's marker and the model
+        // are read, rather than read and written before them: one compare-and-set the server
+        // answers, which a claim by another device since this one last wrote refuses, and then
+        // `acquire()` the long way. The brain is asked only once one of the two said primary.
+        let owes = await brain.owed() != nil
+        let fresh = await lease.isPrimary()
+        let acquired = owes || !fresh
+        if acquired {
+            let outcome = try await acquire()
+            guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+        }
         let settled = try await settleOwed()
         if settled != nil {
             // The owed reply moved the log; what waits is read again.
@@ -443,23 +470,60 @@ public actor TurnRunner {
         if transcript.heads.count == 1, let person = transcript.heads.first.flatMap({ transcript[$0] }), person.role == .person {
             await brain.bind(nonce: person.nonce, person: person, reply: nonce)
         }
-        if let answered = try await log.turn(appendedUnder: nonce) {
-            await brain.landed(answered, nonce: nonce)
-            return answered
-        }
         let skipped = await brain.unresolved()
         let answering = transcript.heads.compactMap { transcript[$0] }
             .filter { $0.role == .person && !skipped.contains($0.ref) }
-        // Settling what was owed can find the waiting turn cut off: nothing is left to answer.
-        guard !answering.isEmpty else { return settled }
-        let model = await choosing()
+        // The reply's marker, the renewal and the model are asked at once: none depends on another.
+        async let found = log.turn(appendedUnder: nonce)
+        async let renewed = acquired ? true : renewFresh()
+        guard !answering.isEmpty else {
+            // Settling what was owed can find the waiting turn cut off: nothing is left to answer,
+            // unless the reply is there already.
+            if let answered = try await found {
+                await brain.landed(answered, nonce: nonce)
+                return answered
+            }
+            return settled
+        }
+        async let chosen = choosing()
+        if let answered = try await found {
+            await brain.landed(answered, nonce: nonce)
+            return answered
+        }
+        guard try await renewed else {
+            let outcome = try await acquire()
+            guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
+        }
+        return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
+    }
+
+    /// The renewal of a lease this device holds fresh, answered by the server: true while it is
+    /// still held. A failure to send it is not an answer, and is asked the long way too.
+    private func renewFresh() async -> Bool {
+        do {
+            guard try await lease.heartbeat() else { return false }
+            away = false
+            standing = .mine
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Asks the brain for the reply to `answering` and writes it continuing `transcript`, under
+    /// `nonce`, in one batch with a heartbeat of the lease.
+    private func answer(_ answering: [Turn], in transcript: Transcript, nonce: String, model: ClaudeModel) async throws -> Turn {
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
                                    answering: answering, parents: transcript.heads, nonce: nonce, model: model)
         let reply = try await brain.answer(request)
         // A pass that was stopped — a sign-out cancels the one in flight — writes nothing.
         try Task.checkCancellation()
+        // The read the pass made is the transcript the reply continues, and the writer is not
+        // asked again for its next record: one this device wrote since the read is the save's
+        // to find, which takes that number or writes nothing (`TurnWriter.append`, `justRead`).
         guard let assistant = try await writer.append(.assistant, reply.text, continuing: transcript,
-                                                      nonce: nonce, renewing: lease) else {
+                                                      nonce: nonce, justRead: true, renewing: lease) else {
             // Another device took the lease: it answers from here, and nothing is heard ahead of it.
             standing = .elsewhere
             throw TurnRunnerError.displaced

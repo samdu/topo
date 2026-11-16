@@ -147,6 +147,9 @@ public actor NativeBrain: Brain {
     /// Moves at every `forget`: an answer begun before it records nothing and returns nothing.
     private var epoch = 0
     private var wanted = ClaudeModel.default
+    /// Told each piece of a turn's reply as Claude Code writes it, once the turn is its own: a
+    /// message begun, its words, a tool call begun (`ReplyCast`). Never a tool's name or input.
+    private var writes: (@Sendable (ReplyFrame) -> Void)?
 
     public init(_ configuration: Configuration) {
         self.configuration = configuration
@@ -253,6 +256,11 @@ public actor NativeBrain: Brain {
     public func owed() async -> OwedReply? {
         guard readLedger(), let pending = ledger.pending, pending.state == .answered, let text = pending.text else { return nil }
         return OwedReply(parents: pending.parents, nonce: pending.nonce, text: text)
+    }
+
+    /// Where the pieces of each reply go as they are written (`writes`); nil for nowhere.
+    public func writes(to hand: (@Sendable (ReplyFrame) -> Void)?) {
+        writes = hand
     }
 
     /// Recorded for `start()`; every request carries its own model, and a process asked with a
@@ -542,6 +550,12 @@ public actor NativeBrain: Brain {
                         answeredWith = started
                     case .text(let text, let message):
                         words.append(text, of: message)
+                    case .writingBegan:
+                        writes?(.message)
+                    case .writing(let more):
+                        writes?(.text(more))
+                    case .toolCallBegan:
+                        writes?(.tool)
                     case .signedOut:
                         signedOut = true
                     case .usage(let context, let output):

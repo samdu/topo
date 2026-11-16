@@ -208,9 +208,11 @@ import TopoCoreTesting
         brain.hears = true
         let (runner, lease) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
         _ = try await runner.run("first", model: .sonnet, nonce: "n1", known: [])
-        // A pass cannot ask the lease: iCloud is away as far as this device can tell.
+        // A pass cannot ask the lease: iCloud is away as far as this device can tell. The fresh
+        // lease's renewal is lost, and so is the read of the long way after it.
         let log = TurnLog(database: store)
         _ = try await log.writer(for: DeviceID("watch")).append(.person, "from the wrist", continuing: try await log.read(), nonce: "w1")
+        db.loseNextSave()
         db.loseNextLeaseFetch()
         await #expect(throws: RecordDatabaseError.self) { try await runner.answerPending(model: .sonnet) }
         #expect(await lease.isPrimary())

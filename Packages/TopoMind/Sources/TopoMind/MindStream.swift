@@ -10,6 +10,13 @@ enum MindEvent: Sendable, Equatable {
     case started(session: String, model: String)
     /// A text block of an assistant message of the turn's own, with the message's id.
     case text(String, message: String?)
+    /// A message of the turn's own begun (`stream_event` `message_start`, from
+    /// `--include-partial-messages`): the words `writing` gives next are its own.
+    case writingBegan
+    /// The next characters of a text block of the turn's own (`content_block_delta`, `text_delta`).
+    case writing(String)
+    /// A tool call begun in a message of the turn's own (`content_block_start` of a `tool_use`).
+    case toolCallBegan
     /// An assistant line Claude Code wrote because the login failed (`error: authentication_failed`).
     case signedOut
     /// An assistant message's usage: context tokens (input and cache together) and output tokens.
@@ -69,6 +76,23 @@ enum MindStream {
                 events.append(.usage(context: context, output: int(usage["output_tokens"])))
             }
             return events
+        case ("stream_event", _):
+            // A sub-agent's message is written inside a tool call of the turn's: none of it is the
+            // reply's words. The phone's rules (`StreamJSON`).
+            guard !subagents, let event = object["event"] as? [String: Any] else { return [.other(type)] }
+            switch event["type"] as? String {
+            case "message_start":
+                return [.writingBegan]
+            case "content_block_start":
+                guard (event["content_block"] as? [String: Any])?["type"] as? String == "tool_use" else { return [.other(type)] }
+                return [.toolCallBegan]
+            case "content_block_delta":
+                guard let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
+                      let text = delta["text"] as? String, !text.isEmpty else { return [.other(type)] }
+                return [.writing(text)]
+            default:
+                return [.other(type)]
+            }
         case ("user", _) where object["isReplay"] as? Bool == true:
             guard let id = object["uuid"] as? String else { return [.other("user/replay")] }
             return [.received(id: id)]

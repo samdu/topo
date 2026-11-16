@@ -15,19 +15,21 @@ public enum TopoService {
 /// after the nudge has ended, or `no` at once when it holds no such lease, has no pass to run or
 /// has too many nudges waiting already. `mark` is one to sixteen letters or digits, the turn's
 /// mark (`Harness.turnMark`'s eight) for the marks on both sides to be paired by, and nothing
-/// else. Anything else, or silence, is no.
+/// else. `moved <device> <epoch> <mark> stream` asks the same and for the reply to the turn the
+/// mark names as the mind writes it: before `read`, a line of JSON per `ReplyFrame`. Anything
+/// else, or silence, is no.
 enum ProbeWire {
     static func request(_ lease: Lease) -> Data {
         Data("hold \(lease.holder.rawValue) \(lease.epoch)\n".utf8)
     }
 
-    static func nudge(_ lease: Lease, mark: String) -> Data {
-        Data("moved \(lease.holder.rawValue) \(lease.epoch) \(mark)\n".utf8)
+    static func nudge(_ lease: Lease, mark: String, stream: Bool = false) -> Data {
+        Data("moved \(lease.holder.rawValue) \(lease.epoch) \(mark)\(stream ? " stream" : "")\n".utf8)
     }
 
     enum Request: Equatable {
         case hold(DeviceID, Int64)
-        case moved(DeviceID, Int64, mark: String)
+        case moved(DeviceID, Int64, mark: String, stream: Bool)
     }
 
     static func parse(_ line: String) -> Request? {
@@ -35,8 +37,9 @@ enum ProbeWire {
         if parts.count == 3, parts[0] == "hold", let epoch = Int64(parts[2]) {
             return .hold(DeviceID(String(parts[1])), epoch)
         }
-        if parts.count == 4, parts[0] == "moved", let epoch = Int64(parts[2]), isMark(parts[3]) {
-            return .moved(DeviceID(String(parts[1])), epoch, mark: String(parts[3]))
+        if (parts.count == 4 || (parts.count == 5 && parts[4] == "stream")), parts[0] == "moved",
+           let epoch = Int64(parts[2]), isMark(parts[3]) {
+            return .moved(DeviceID(String(parts[1])), epoch, mark: String(parts[3]), stream: parts.count == 5)
         }
         return nil
     }
@@ -68,8 +71,11 @@ public actor LeaseProbeServer {
     public typealias Holds = @Sendable (DeviceID, Int64) async -> Bool
     /// A nudge for the lease `device` at `epoch`, with its mark: true once a pass that read the
     /// log after it has ended, false at once when there is none to run (no such lease held, the
-    /// mind not answering). Waited for as long as the pass runs, up to `nudgeBound`.
-    public typealias Nudged = @Sendable (DeviceID, Int64, String) async -> Bool
+    /// mind not answering). Waited for as long as the pass runs, up to `nudgeBound`. With a
+    /// `stream`, the nudge asked for its turn's reply as it is written: each frame handed to it is
+    /// sent down the connection at once, in the order handed, ahead of the answer. It never waits
+    /// on the phone, so a slow or gone one holds up nothing of the mind's.
+    public typealias Nudged = @Sendable (DeviceID, Int64, String, _ stream: (@Sendable (ReplyFrame) -> Void)?) async -> Bool
 
     /// The most nudges answered at once. One more is answered `no` with no pass asked: as many as
     /// this already wait for a pass that will read after them, and a pass's end answers them all.
@@ -157,13 +163,20 @@ public actor LeaseProbeServer {
         case .hold(let device, let epoch):
             let answer = await holds(device, epoch)
             try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
-        case .moved(let device, let epoch, let mark):
+        case .moved(let device, let epoch, let mark, let stream):
             guard let nudged, nudging < Self.nudgesAtOnce else {
                 try? await connection.send(ProbeWire.no)
                 return
             }
             nudging += 1
-            let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark) }
+            // Sent as handed: NWConnection sends in the order its sends are called, and the
+            // answer below is sent after the last frame, once the pass has ended.
+            var frames: (@Sendable (ReplyFrame) -> Void)?
+            if stream {
+                frames = { @Sendable frame in connection.send(content: frame.line, completion: .idempotent) }
+            }
+            let handed = frames
+            let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark, handed) }
             nudging -= 1
             try? await connection.send(read == true ? ProbeWire.read : ProbeWire.no)
         }
@@ -254,6 +267,35 @@ extension NWConnection {
         try await box.value()
     }
 
+    /// The lines of the connection one at a time, however TCP splits or joins them.
+    final class Lines: @unchecked Sendable {
+        private let connection: NWConnection
+        private var buffer = Data()
+        private var ended = false
+        init(_ connection: NWConnection) { self.connection = connection }
+
+        /// The next line without its newline, or nil at the end of the stream; a line longer than
+        /// `maximum` bytes throws. Called from one task at a time.
+        func next(maximum: Int) async throws -> String? {
+            while true {
+                if let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                    let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                    buffer = Data(buffer[buffer.index(after: newline)...])
+                    return line
+                }
+                if ended {
+                    guard !buffer.isEmpty else { return nil }
+                    defer { buffer = Data() }
+                    return String(decoding: buffer, as: UTF8.self)
+                }
+                guard buffer.count < maximum else { throw ProbeWire.LineTooLong() }
+                let (chunk, complete) = try await connection.receiveSome(maximum: 65_536)
+                if let chunk { buffer.append(chunk) }
+                if complete { ended = true }
+            }
+        }
+    }
+
     /// Reads until a newline, the end of the stream, or `maximum` bytes,
     /// however TCP splits it, and returns the line without its newline.
     func readLine(maximum: Int) async throws -> String {
@@ -272,7 +314,7 @@ extension NWConnection {
         }
     }
 
-    private func receiveSome(maximum: Int) async throws -> (Data?, Bool) {
+    fileprivate func receiveSome(maximum: Int) async throws -> (Data?, Bool) {
         let box = OneShot<ReceivedChunk>()
         receive(minimumIncompleteLength: 1, maximumLength: maximum) { data, _, complete, error in
             if let error { box.resume(.failure(error)); return }

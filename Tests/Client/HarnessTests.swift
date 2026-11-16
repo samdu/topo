@@ -1082,7 +1082,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
         let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         let nudges = Nudges()
-        phone.nudge = { lease, mark in
+        phone.nudge = { lease, mark, _ in
             nudges.record(lease, mark)
             // The hub's pass: it answers the turn at the log's head.
             let log = TurnLog(database: db)
@@ -1127,7 +1127,7 @@ final class HarnessIntegrationTests: XCTestCase {
         _ = try await hubClaim(db, endpoint: nil)
         let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         let nudges = Nudges()
-        phone.nudge = { lease, mark in nudges.record(lease, mark); return true }
+        phone.nudge = { lease, mark, _ in nudges.record(lease, mark); return true }
         await phone.send("bins?")
         let logged = try await log(db).map(\.text)
         XCTAssertEqual(logged, ["bins?"])
@@ -1143,7 +1143,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
         let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         let nudges = Nudges()
-        phone.nudge = { lease, mark in
+        phone.nudge = { lease, mark, _ in
             nudges.record(lease, mark)
             await nudges.hold()
             return true
@@ -1159,6 +1159,154 @@ final class HarnessIntegrationTests: XCTestCase {
         nudges.release()
         for _ in 0..<500 { await Task.yield() }
         XCTAssertTrue(phone.turns.isEmpty, "a read for the last login reached the screen")
+    }
+
+    /// What reached the reader and the reply handler, in order, as the speaker would hear it.
+    @MainActor private final class Heard {
+        var events: [String] = []
+        func wire(_ phone: Harness) {
+            phone.onWriting = { [weak self] text, _ in self?.events.append(text.map { "writing \($0)" } ?? "ended") }
+            phone.onReply = { [weak self] reply in self?.events.append("reply \(reply.text)"); return true }
+        }
+    }
+
+    /// A limb's turn whose reply the hub streams: the words are drawn in the reply's row as they
+    /// come and read aloud as they come for a spoken turn, the log's reply replaces them in one
+    /// step, it is offered to the reader before the reader hears the words have ended (so what was
+    /// read as it streamed is not read again), and nothing is drawn twice.
+    func testAStreamedReplyIsDrawnAsItComesAndGivesWayToTheLogsOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let heard = Heard()
+        heard.wire(phone)
+        let nudges = Nudges()
+        phone.nudge = { lease, mark, frames in
+            nudges.record(lease, mark)
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            await frames(.turn([person.ref]))
+            await frames(.message)
+            await frames(.text("Hello "))
+            await frames(.text("there."))
+            await nudges.hold()
+            try? await hubReplies(db, as: hubID, "Hello there.")
+            return true
+        }
+        let nonce = phone.willSend("hi?")
+        phone.markSpoken(nonce)
+        await phone.retry()
+        try await eventually("the stream drawn") { phone.writing == "Hello there." }
+        XCTAssertEqual(phone.turns.map(\.text), ["hi?"], "the streamed words are no turn")
+        XCTAssertNil(phone.guestWriting)
+        nudges.release()
+        try await eventually("the reply read") { phone.turns.map(\.text) == ["hi?", "Hello there."] }
+        // Mutant: the stream left standing under the landed reply, drawn twice.
+        XCTAssertNil(phone.writing)
+        // Mutant: the reader told the words ended before the landed reply was offered, which
+        // reads it again from the top.
+        XCTAssertEqual(heard.events, ["writing Hello ", "writing Hello there.", "reply Hello there.", "ended"])
+    }
+
+    /// A stream that names another turn draws nothing.
+    func testAStreamForAnotherTurnDrawsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        phone.nudge = { _, _, frames in
+            await frames(.turn([TurnRef(device: DeviceID("pad-00000000"), sequence: 3)]))
+            await frames(.message)
+            await frames(.text("not yours"))
+            await nudges.hold()
+            return false
+        }
+        await phone.send("hi?")
+        for _ in 0..<500 { await Task.yield() }
+        // Mutant: frames drawn without the turn's refs checked.
+        XCTAssertNil(phone.writing)
+        nudges.release()
+        _ = hubID
+    }
+
+    /// A stream cut off mid-reply keeps what it drew, and the log brings the reply as it always
+    /// does: the provisional words give way to the log's, which say otherwise.
+    func testAStreamCutOffKeepsItsWordsUntilTheLogsReplyReplacesThem() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let ended = Nudges()
+        phone.nudge = { _, _, frames in
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            await frames(.turn([person.ref]))
+            await frames(.text("Half a"))
+            ended.record(Lease(holder: hubID, endpoint: nil, epoch: 0, expiresAt: Date()), "")
+            // The connection dropped: no answer.
+            return false
+        }
+        await phone.send("hi?")
+        try await eventually("the nudge ended") { ended.calls.count == 1 }
+        try await Task.sleep(for: .milliseconds(300))
+        // Mutant: the row dropped as the connection ends.
+        XCTAssertEqual(phone.writing, "Half a")
+        try await hubReplies(db, as: hubID, "A whole other reply.")
+        await phone.refresh()
+        XCTAssertEqual(phone.turns.map(\.text), ["hi?", "A whole other reply."])
+        // Mutant: the stream left standing once the log has gone on from its turn.
+        XCTAssertNil(phone.writing, "the provisional words outlived the log's reply")
+    }
+
+    /// A stream that arrives after a sign-out reaches nothing, and the reply's row is gone.
+    func testAStreamAfterASignOutReachesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        phone.nudge = { _, _, frames in
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            await frames(.turn([person.ref]))
+            await frames(.text("before"))
+            await nudges.hold()
+            await frames(.text(" and after"))
+            return true
+        }
+        await phone.send("hi?")
+        try await eventually("the stream drawn") { phone.writing == "before" }
+        await phone.forget()
+        XCTAssertNil(phone.writing)
+        nudges.release()
+        for _ in 0..<500 { await Task.yield() }
+        // Mutant: frames followed under the next login.
+        XCTAssertNil(phone.writing)
+    }
+
+    /// One reply answering two limb turns at once, streamed down both turns' nudges, is drawn once.
+    func testOneReplyStreamedForTwoTurnsIsDrawnOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        let both = Nudges()
+        phone.nudge = { lease, mark, frames in
+            both.record(lease, mark)
+            await nudges.hold()
+            let people = (try? await TurnLog(database: db).read().ordered.filter { $0.role == .person }.map(\.ref)) ?? []
+            await frames(.turn(people))
+            await frames(.text("for both"))
+            return false
+        }
+        // Two turns said as limbs, the second saved before the hub answers the first.
+        await phone.send("one")
+        let log = TurnLog(database: db)
+        _ = try await log.writer(for: DeviceID("watch-00000000")).append(.person, "two", continuing: try await log.read())
+        await phone.send("three")
+        try await eventually("both nudged") { both.calls.count == 2 }
+        nudges.release()
+        try await eventually("the stream drawn") { phone.writing == "for both" }
+        // Drawn once: a second stream carrying the same reply is no second row.
+        XCTAssertEqual(phone.writing, "for both")
+        try await hubReplies(db, as: hubID, "for both")
+        await phone.refresh()
+        XCTAssertNil(phone.writing)
     }
 
     /// A phone that was the one answering is suspended past its lease's duration, and the hub
@@ -2305,6 +2453,59 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the mark outlived it too")
     }
 
+    /// A hub's streamed reply to a spoken limb turn, through the speaker as the chat wires it: each
+    /// sentence is read once, as it streams, and the log's reply landing reads nothing again;
+    /// muted, nothing of it is read.
+    func testAStreamedReplyIsReadOnceAndNotAgainWhenTheLogsLands() async throws {
+        for muted in [false, true] {
+            let db = InMemoryRecordDatabase()
+            let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+            let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+            let sentences = SentenceLog()
+            let seams = Seams()
+            let center = NotificationCenter()
+            let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+            let voice = Voice(engine: ScriptedVoice(frames: { sentence in sentences.add(sentence); return [toneFrame(0.5)] }))
+            voice.load(folder: URL(fileURLWithPath: "/dev/null"))
+            try await eventually("the voice to load") { voice.state == .ready }
+            let speaker = Speaker(audio: audio, voice: voice, center: center, makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+            defer { speaker.stop() }
+            // Muted, for the second run, after the release: the turn is marked spoken and the
+            // mute stops what streams of its reply being read.
+            var readsAloud = true
+            SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
+            let nonces = Nudges()
+            harness.nudge = { _, _, frames in
+                guard let person = try? await newestPerson(db) ?? nil else { return false }
+                await frames(.turn([person.ref]))
+                await frames(.message)
+                await frames(.text("First one. "))
+                await frames(.text("Second one."))
+                await frames(.tool)
+                await frames(.message)
+                await frames(.text("Third one."))
+                await nonces.hold()
+                try? await hubReplies(db, as: hubID, "First one. Second one.\n\nThird one.")
+                return true
+            }
+            let nonce = harness.willSend("tell me")
+            XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
+            harness.markSpoken(nonce)
+            readsAloud = !muted
+            await harness.retry()
+            try await eventually("the stream drawn") { harness.writing == "First one. Second one.\n\nThird one." }
+            if !muted {
+                try await eventually("the settled sentences read") { sentences.all.count >= 2 }
+            }
+            nonces.release()
+            try await eventually("the reply landed") { harness.turns.count == 2 }
+            try await Task.sleep(for: .milliseconds(800))
+            // Mutant: the landed reply read from the top (the reader told the stream ended before it).
+            XCTAssertEqual(sentences.all, muted ? [] : ["First one.", "Second one.", "Third one."], "muted \(muted)")
+            XCTAssertNil(harness.writing)
+        }
+    }
+
     /// What the look calls a model is what the notice says is being asked: the mind renames Opus,
     /// and the turn in flight says the new name.
     func testTheAskingNoticeSaysTheLooksNameForTheModel() async throws {
@@ -3050,4 +3251,23 @@ private func lapsing(_ db: InMemoryRecordDatabase) -> @Sendable (TimeInterval) a
             _ = try await db.save(record)
         }
     }
+}
+
+/// The person's turn a hub would be answering: the newest person turn in the log.
+private func newestPerson(_ db: any RecordDatabase) async throws -> Turn? {
+    try await TurnLog(database: db).read().ordered.last { $0.role == .person }
+}
+
+/// A hub's mind writes the reply into the log, as its pass would.
+private func hubReplies(_ db: any RecordDatabase, as hubID: DeviceID, _ text: String) async throws {
+    let log = TurnLog(database: db)
+    _ = try await log.writer(for: hubID).append(.assistant, text, continuing: try await log.read())
+}
+
+/// The sentences a scripted voice was asked to say, in order.
+private final class SentenceLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var said: [String] = []
+    var all: [String] { lock.withLock { said } }
+    func add(_ sentence: String) { lock.withLock { said.append(sentence) } }
 }

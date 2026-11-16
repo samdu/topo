@@ -59,6 +59,12 @@ final class HubModel {
     var model: ClaudeModel {
         didSet { UserDefaults.standard.set(model.rawValue, forKey: Self.modelKey) }
     }
+    /// Whether a phone that nudges this Mac is sent its turn's reply as the mind writes it, over
+    /// the LAN in the clear (`ReplyFrame`, `docs/hub.md`, *The reply as it is written*): on by
+    /// default, kept in the hub's defaults under `streamKey`.
+    var streams: Bool {
+        didSet { UserDefaults.standard.set(streams, forKey: Self.streamKey) }
+    }
     /// The lease as last read, for the menu; the mind's own decides everything.
     private(set) var lease: Lease?
     /// The command that signs the mind's Claude Code in, for the menu to show.
@@ -67,6 +73,9 @@ final class HubModel {
     let mindRoot: URL
 
     nonisolated static let modelKey = "model"
+    nonisolated static let streamKey = "stream.replies"
+    /// The switch as the defaults hold it, read off the main actor by each nudge: on unless set off.
+    nonisolated static var streamsNow: Bool { UserDefaults.standard.object(forKey: streamKey) as? Bool ?? true }
 
     private static let log = Logger(subsystem: "zone.hexagon.topo.hub", category: "hub")
     private let database: any RecordDatabase
@@ -104,6 +113,7 @@ final class HubModel {
         // The first line the hub writes: which records it is about to touch.
         Self.log.notice("hub store \(self.store.rawValue, privacy: .public)")
         model = UserDefaults.standard.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default
+        streams = Self.streamsNow
         mindOn = MindSwitch.persisted(key: launch.switchKey)
         if store == .cloudKit {
             mindRoot = MindHome.root
@@ -361,9 +371,9 @@ final class HubModel {
             let server = try LeaseProbeServer(advertising: device, holds: { [weak self] holder, epoch in
                 guard let self else { return false }
                 return await self.holds(holder, epoch: epoch)
-            }, nudged: { [weak self] holder, epoch, mark in
+            }, nudged: { [weak self] holder, epoch, mark, stream in
                 guard let self else { return false }
-                return await self.nudged(holder, epoch: epoch, mark: mark)
+                return await self.nudged(holder, epoch: epoch, mark: mark, stream: stream)
             })
             port = try await server.start()
             self.server = server
@@ -440,10 +450,13 @@ final class HubModel {
         lanFailure = await presence.failure
     }
 
-    /// A phone's nudge (`HubNudge`): the mind's pass now, answered when it has ended.
-    private nonisolated func nudged(_ holder: DeviceID, epoch: Int64, mark: String) async -> Bool {
+    /// A phone's nudge (`HubNudge`): the mind's pass now, answered when it has ended, with the
+    /// reply streamed down the nudge's connection as it is written when the phone asked for it
+    /// and the switch is on.
+    private nonisolated func nudged(_ holder: DeviceID, epoch: Int64, mark: String,
+                                    stream: (@Sendable (ReplyFrame) -> Void)?) async -> Bool {
         guard let mind = await hubMind else { return false }
-        return await mind.nudge(holder: holder, epoch: epoch, mark: mark)
+        return await mind.nudge(holder: holder, epoch: epoch, mark: mark, stream: Self.streamsNow ? stream : nil)
     }
 
     private nonisolated func holds(_ holder: DeviceID, epoch: Int64) async -> Bool {

@@ -116,6 +116,8 @@ public actor HubMind {
     private let brain: NativeBrain
     private let timed: TimedBrain
     private let clock = PassClock()
+    /// The reply being written, for the phones whose nudge asked for it (`nudge`).
+    private let cast = ReplyCast()
     private let lease: PrimaryLease
     private let log: TurnLog
     private let login: @Sendable () async -> MindLogin
@@ -172,7 +174,7 @@ public actor HubMind {
         self.database = timedDatabase
         self.device = device
         self.brain = brain
-        self.timed = TimedBrain(inner: brain, clock: clock)
+        self.timed = TimedBrain(inner: brain, clock: clock, cast: cast)
         self.lease = PrimaryLease(database: timedDatabase, device: device, endpoint: endpoint, probe: probe,
                                   timing: timing, sleep: leaseSleep)
         self.log = TurnLog(database: timedDatabase)
@@ -279,10 +281,18 @@ public actor HubMind {
     /// it has ended, false at once when this Mac holds no such lease or the loop is not answering
     /// (off, asleep, stopped, starting or holding off), and false if the mind stops meanwhile.
     /// Any number of nudges during a pass are one more pass after it; a forged one costs a read.
-    public func nudge(holder: DeviceID, epoch: Int64, mark: String) async -> Bool {
+    ///
+    /// With `stream`, the reply to the turn `mark` names is handed to it as the mind writes it
+    /// (`ReplyCast`), from the moment the mind is asked for a reply that answers that turn, or at
+    /// once with what it has missed if that reply is being written already, until the call
+    /// returns. What it is handed is the reply's words and where its messages and tool calls
+    /// begin, nothing of a tool's; and only while this call stands, which a stop of the mind ends.
+    public func nudge(holder: DeviceID, epoch: Int64, mark: String, stream: ReplyCast.Hand? = nil) async -> Bool {
         guard on, !asleep, session != nil, phase == .answering, await holds(holder, epoch: epoch),
               on, !asleep, session != nil, phase == .answering else { return false }
-        Perf.mark("hub.nudge.received nudge=\(mark)")
+        Perf.mark("hub.nudge.received nudge=\(mark)\(stream == nil ? "" : " stream")")
+        let following = stream.map { cast.follow(mark, $0) }
+        defer { if let following { cast.stop(following) } }
         if requested == nil { requested = .nudge }
         waiting?.cancel()
         return await withCheckedContinuation { nudged.append((mark.lowercased(), $0)) }
@@ -377,6 +387,8 @@ public actor HubMind {
         case .unknown(let why): await halt(.loginUnknown(why), g); return
         }
         do {
+            // What the mind writes of a reply goes to the phones that follow its turn.
+            await brain.writes(to: { [cast] in cast.write($0) })
             // The process starts with the model the next turn most likely asks for.
             await brain.use(model: await chosen(mark: false))
             try await brain.start()

@@ -107,14 +107,18 @@ struct TimedDatabase: RecordDatabase {
 }
 
 /// The mind as the runner sees it: every call forwarded to the `NativeBrain`, with the ask and
-/// the answer marked.
+/// the answer marked, and the reply's turn named to the cast while it is written.
 struct TimedBrain: Brain {
     let inner: NativeBrain
     let clock: PassClock
+    /// Where the reply being written is handed to the phones that follow its turn.
+    let cast: ReplyCast
 
     func answer(_ request: BrainRequest) async throws -> Reply {
         let newest = request.answering.map(\.at).max()
         clock.asked(turnAge: newest.map { Int(Date().timeIntervalSince($0) * 1000) })
+        cast.begin(request.answering)
+        defer { cast.end() }
         let reply = try await inner.answer(request)
         clock.reached("answered")
         return reply

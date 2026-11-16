@@ -127,15 +127,20 @@ struct TopoApp: App {
         // foreground only, since a background one while it is undetermined is denied unasked.
         LocalNetworkAccess.shared.isActive = { UIApplication.shared.applicationState == .active }
         // A limb's turn tells the hub that holds the lease that the log moved, over the LAN
-        // (`HubNudge`). Only once this phone has local network access: the nudge never raises the
-        // system's prompt, whose words are the controls', and a background attempt while it is
-        // undetermined would be denied unasked. Without it the hub finds the turn by its poll.
-        harness.nudge = { lease, mark in
-            guard await MainActor.run(body: { LocalNetworkAccess.shared.state == .allowed }) else {
-                Perf.mark("nudge.skipped localNetwork")
+        // (`HubNudge`), and asks for the reply as the hub's mind writes it. Only with local network
+        // access: the first time a hub's lease names an endpoint and the access was never asked
+        // for, it is asked for now, the app being in front since the person just sent the turn
+        // (`LocalNetworkAccess.askForHub`), and the nudge goes once it is allowed. The turn waits
+        // for none of this: its send was over when the turn was saved. A refusal is kept and never
+        // asked again; the hub then finds the turn by its poll and push.
+        harness.nudge = { lease, mark, frames in
+            guard let endpoint = lease.endpoint, let (host, port) = HubNudge.hostAndPort(endpoint) else { return false }
+            let state = await LocalNetworkAccess.shared.askForHub(host: host, port: port)
+            guard state == .allowed else {
+                Perf.mark("nudge.skipped localNetwork \((state ?? .notAsked).rawValue.replacingOccurrences(of: " ", with: ""))")
                 return false
             }
-            let answer = await HubNudge.send(for: lease, mark: mark)
+            let answer = await HubNudge.send(for: lease, mark: mark, stream: frames)
             if case .unreached(let why) = answer { Perf.mark("nudge.unreached \(why)") }
             return answer == .read
         }
@@ -374,6 +379,8 @@ struct TopoApp: App {
                     // A copy of a still whose ten minutes ran out while Topo was suspended goes now.
                     Task.detached(priority: .utility) { ScreenTool.sweep(under: GuestResident.homeDirectory) }
                     LocalNetworkAccess.shared.becameActive()
+                    // Back in front, perhaps on another network: a hub not reached lately is tried.
+                    HubNudge.Unreached.shared.forget()
                     voice.prepare()
                     endpoint.prepare()
                     speaker.prepare()
