@@ -2358,6 +2358,38 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the mark outlived it too")
     }
 
+    /// A stopped reply lands while another turn's part waits for the microphone: the reply is
+    /// taken unread and its turn's mark is cleared, since only that turn's own reply waiting would
+    /// keep it (`Speaker.replyWaitsForMicrophone`); a mark left standing is read at the next launch.
+    func testAStoppedReplyLandingWhileAnotherTurnsPartWaitsClearsItsMark() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        SpokenReply.wire(harness: harness, speaker: speaker) { true }
+
+        let nonce = harness.willSend("what is the capital of France")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
+        harness.markSpoken(nonce)
+        speaker.speak(writing: "Let me check.\n\n", answering: nonce)
+        try await eventually("the part read") { speaker.speaking }
+        speaker.stop()
+        var open = true
+        speaker.microphoneOpen = { open }
+        speaker.speak(writing: "Okay.\n\n", answering: "another")
+        XCTAssertTrue(speaker.waitingForMicrophone, "the other turn's part did not wait")
+
+        await harness.retry()
+        try await eventually("the reply in the log") { harness.turns.count == 2 }
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the stopped turn's mark outlived its reply")
+        open = false
+    }
+
     /// What the look calls a model is what the notice says is being asked: the mind renames Opus,
     /// and the turn in flight says the new name.
     func testTheAskingNoticeSaysTheLooksNameForTheModel() async throws {
