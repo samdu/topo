@@ -358,10 +358,13 @@ final class HubModel {
         }
         if let ck = database as? CloudKitRecordDatabase { try await ck.ensureZone() }
         if server == nil {
-            let server = try LeaseProbeServer(advertising: device) { [weak self] holder, epoch in
+            let server = try LeaseProbeServer(advertising: device, holds: { [weak self] holder, epoch in
                 guard let self else { return false }
                 return await self.holds(holder, epoch: epoch)
-            }
+            }, nudged: { [weak self] holder, epoch, mark in
+                guard let self else { return false }
+                return await self.nudged(holder, epoch: epoch, mark: mark)
+            })
             port = try await server.start()
             self.server = server
             Self.log.notice("hub \(self.device.rawValue, privacy: .public) listening on \(self.port ?? 0) store \(self.store.rawValue, privacy: .public)")
@@ -435,6 +438,12 @@ final class HubModel {
         try? await directory.touch(device, at: Date())
         if let all = try? await directory.all() { devices = all }
         lanFailure = await presence.failure
+    }
+
+    /// A phone's nudge (`HubNudge`): the mind's pass now, answered when it has ended.
+    private nonisolated func nudged(_ holder: DeviceID, epoch: Int64, mark: String) async -> Bool {
+        guard let mind = await hubMind else { return false }
+        return await mind.nudge(holder: holder, epoch: epoch, mark: mark)
     }
 
     private nonisolated func holds(_ holder: DeviceID, epoch: Int64) async -> Bool {

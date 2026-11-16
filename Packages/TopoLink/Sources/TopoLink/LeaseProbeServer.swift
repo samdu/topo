@@ -8,22 +8,51 @@ public enum TopoService {
     public static let type = "_topo._tcp"
 }
 
-/// The wire form of a lease probe: one line each way over TCP.
+/// The wire form of the listener: one line each way over TCP.
 /// `hold <device> <epoch>` asks whether the listener still holds that lease;
-/// `yes` or `no` answers. Anything else, or silence, is no.
+/// `yes` or `no` answers. `moved <device> <epoch> <mark>` says the log moved, to the holder of
+/// that lease (`HubNudge`): the listener runs a pass and answers `read` when the pass that read
+/// after the nudge has ended, or `no` at once when it holds no such lease, has no pass to run or
+/// has too many nudges waiting already. `mark` is one to sixteen letters or digits, the turn's
+/// mark (`Harness.turnMark`'s eight) for the marks on both sides to be paired by, and nothing
+/// else. Anything else, or silence, is no.
 enum ProbeWire {
     static func request(_ lease: Lease) -> Data {
         Data("hold \(lease.holder.rawValue) \(lease.epoch)\n".utf8)
     }
 
-    static func parseRequest(_ line: String) -> (DeviceID, Int64)? {
+    static func nudge(_ lease: Lease, mark: String) -> Data {
+        Data("moved \(lease.holder.rawValue) \(lease.epoch) \(mark)\n".utf8)
+    }
+
+    enum Request: Equatable {
+        case hold(DeviceID, Int64)
+        case moved(DeviceID, Int64, mark: String)
+    }
+
+    static func parse(_ line: String) -> Request? {
         let parts = line.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
-        guard parts.count == 3, parts[0] == "hold", let epoch = Int64(parts[2]) else { return nil }
-        return (DeviceID(String(parts[1])), epoch)
+        if parts.count == 3, parts[0] == "hold", let epoch = Int64(parts[2]) {
+            return .hold(DeviceID(String(parts[1])), epoch)
+        }
+        if parts.count == 4, parts[0] == "moved", let epoch = Int64(parts[2]), isMark(parts[3]) {
+            return .moved(DeviceID(String(parts[1])), epoch, mark: String(parts[3]))
+        }
+        return nil
+    }
+
+    static func parseRequest(_ line: String) -> (DeviceID, Int64)? {
+        guard case .hold(let device, let epoch)? = parse(line) else { return nil }
+        return (device, epoch)
+    }
+
+    static func isMark(_ mark: Substring) -> Bool {
+        (1...16).contains(mark.count) && mark.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
     }
 
     static let yes = Data("yes\n".utf8)
     static let no = Data("no\n".utf8)
+    static let read = Data("read\n".utf8)
 
     struct LineTooLong: Error {}
 }
@@ -37,9 +66,24 @@ enum ProbeWire {
 /// record names, and its Bonjour registration is the device's presence.
 public actor LeaseProbeServer {
     public typealias Holds = @Sendable (DeviceID, Int64) async -> Bool
+    /// A nudge for the lease `device` at `epoch`, with its mark: true once a pass that read the
+    /// log after it has ended, false at once when there is none to run (no such lease held, the
+    /// mind not answering). Waited for as long as the pass runs, up to `nudgeBound`.
+    public typealias Nudged = @Sendable (DeviceID, Int64, String) async -> Bool
+
+    /// The most nudges answered at once. One more is answered `no` with no pass asked: as many as
+    /// this already wait for a pass that will read after them, and a pass's end answers them all.
+    public static let nudgesAtOnce = 8
+    /// How long a nudge is held for its pass's end before it is answered `no`: a pass is a model's
+    /// whole turn, and the phone gives up waiting after `HubNudge.answerBound` anyway.
+    public static let nudgeBound: TimeInterval = 600
+    /// How long a connection is given to say its one line.
+    public static let requestBound: TimeInterval = 5
 
     private let listener: NWListener
     private let holds: Holds
+    private let nudged: Nudged?
+    private var nudging = 0
     private var ready: CheckedContinuation<UInt16, any Error>?
     public private(set) var port: UInt16?
 
@@ -47,7 +91,7 @@ public actor LeaseProbeServer {
     ///   - advertising: the device ID to register under `TopoService.type`,
     ///     or nil to listen without advertising.
     ///   - port: 0 picks a free one.
-    public init(advertising device: DeviceID?, port: UInt16 = 0, holds: @escaping Holds) throws {
+    public init(advertising device: DeviceID?, port: UInt16 = 0, holds: @escaping Holds, nudged: Nudged? = nil) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
@@ -56,6 +100,7 @@ public actor LeaseProbeServer {
         }
         self.listener = listener
         self.holds = holds
+        self.nudged = nudged
     }
 
     /// Starts listening. Returns the port once bound.
@@ -101,13 +146,42 @@ public actor LeaseProbeServer {
     private func serve(_ connection: NWConnection) async {
         connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.serve"))
         defer { connection.cancel() }
-        guard let line = try? await connection.readLine(maximum: 256),
-              let (device, epoch) = ProbeWire.parseRequest(line) else {
+        // A connection that says nothing is closed at the bound, so nothing on the network holds
+        // a serving task open by connecting.
+        let request = await Self.within(Self.requestBound) { try await connection.readLine(maximum: 256) }
+        guard let line = request, let parsed = ProbeWire.parse(line) else {
             try? await connection.send(ProbeWire.no)
             return
         }
-        let answer = await holds(device, epoch)
-        try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
+        switch parsed {
+        case .hold(let device, let epoch):
+            let answer = await holds(device, epoch)
+            try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
+        case .moved(let device, let epoch, let mark):
+            guard let nudged, nudging < Self.nudgesAtOnce else {
+                try? await connection.send(ProbeWire.no)
+                return
+            }
+            nudging += 1
+            let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark) }
+            nudging -= 1
+            try? await connection.send(read == true ? ProbeWire.read : ProbeWire.no)
+        }
+    }
+
+    /// `work`'s answer, or nil once `seconds` pass first (or it throws); `work` is left to end on
+    /// its own.
+    static func within<T: Sendable>(_ seconds: TimeInterval, _ work: @escaping @Sendable () async throws -> T) async -> T? {
+        let box = OneShot<T?>()
+        let running = Task { box.resume(.success(try? await work())) }
+        let timer = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            box.resume(.success(nil))
+        }
+        let answer = (try? await box.value()) ?? nil
+        timer.cancel()
+        _ = running
+        return answer
     }
 }
 

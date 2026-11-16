@@ -389,6 +389,15 @@ public actor NativeBrain: Brain {
     /// none, it has exited, or it asks another model.
     private func running(model: String, epoch: Int) async throws -> MindProcess {
         if let resident, !resident.stalled, !resident.process.hasExited, resident.model == model { return resident.process }
+        // What a start costs, a model's change among them: the old process ended, and a new one
+        // resuming the session until it answers `initialize`.
+        let began = ContinuousClock.now
+        let replacing = resident.map { $0.model == model ? "exited" : "model" } ?? "none"
+        defer {
+            if resident?.model == model {
+                Perf.mark("hub.mind.started \(model) replaced=\(replacing) ms=\(Int((ContinuousClock.now - began) / .milliseconds(1)))")
+            }
+        }
         if let gone = resident {
             resident = nil
             if await gone.process.terminate().confirmed { forgetResident(gone.process.pid) }

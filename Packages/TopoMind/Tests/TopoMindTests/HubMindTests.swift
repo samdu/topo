@@ -28,6 +28,15 @@ final class GatedReads: ForwardingDatabase, @unchecked Sendable {
 
     func close() { lock.withLock { closed = true } }
 
+    /// Lets the reads held now go, and holds the next.
+    func releaseHeld() {
+        let resumed = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            defer { waiters = []; held = 0 }
+            return waiters
+        }
+        resumed.forEach { $0.resume() }
+    }
+
     func open() {
         let resumed = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             closed = false

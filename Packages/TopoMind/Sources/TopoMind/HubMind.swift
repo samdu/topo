@@ -29,8 +29,8 @@ import TopoTurn
 /// asked to try again, or the Mac wakes; the phone answers once the lease lapses. A stalled mind
 /// is not started again on a timer, since it would take the lease from the phone to stall again.
 ///
-/// **Triggers.** A pass runs when one is asked for (`trigger`: the push of a turn being created)
-/// and every `poll` otherwise. One pass at a time: a trigger while the loop waits starts the
+/// **Triggers.** A pass runs when one is asked for (`trigger`: the push of a turn being created;
+/// `nudge`: a phone on the LAN saying the log moved) and every `poll` otherwise. One pass at a time: a trigger while the loop waits starts the
 /// next pass now, any number of triggers before it begins are that one pass, and any number during
 /// a pass are one more pass after it, since that pass may have read the log before their turn.
 public actor HubMind {
@@ -41,6 +41,9 @@ public actor HubMind {
         case push
         /// The loop's own interval.
         case poll
+        /// A phone on the LAN saying the log moved (`nudge`), or a pass after one that found
+        /// nothing, in case the log's change feed was behind the phone's save.
+        case nudge
     }
 
     public enum Phase: Sendable, Equatable {
@@ -48,6 +51,9 @@ public actor HubMind {
         case off
         /// Asking the login, starting the process, taking the lease.
         case starting
+        /// Started, and holding off the start's takeover while a phone answers the person's turn
+        /// at the log's head (`HubMind.HoldOff`).
+        case deferring
         /// The loop is running.
         case answering
         /// On, with the Mac asleep: nothing is written until it wakes.
@@ -116,6 +122,9 @@ public actor HubMind {
     private let prepare: @Sendable () throws -> Void
     private let model: @Sendable () -> ClaudeModel
     private let poll: Duration
+    private let answeringPoll: Duration
+    private let holdBound: TimeInterval
+    private let holdCheck: Duration
     private let pause: @Sendable (Duration) async throws -> Void
     private let observe: @Sendable (Snapshot) -> Void
 
@@ -134,6 +143,10 @@ public actor HubMind {
     /// A pass asked for and not yet begun, and what asked first.
     private var requested: Trigger?
     private var waiting: Task<Void, any Error>?
+    /// Nudges waiting for the end of the pass that reads after them (`nudge`).
+    private var nudged: [(mark: String, answer: CheckedContinuation<Bool, Never>)] = []
+    /// Passes run again after a nudged one found nothing, since the last that found something.
+    private var againAfterNudge = 0
 
     /// - Parameters:
     ///   - database: the log's store; the lease, the log and the writer all go through it.
@@ -141,7 +154,7 @@ public actor HubMind {
     ///   - endpoint: where this Mac answers lease probes.
     ///   - login: asks Claude Code whether it is signed in (`MindLogin.check`).
     ///   - prepare: makes the mind's home (`MindHome.prepare`) before anything starts.
-    ///   - model: the model setting, read at every start and pass.
+    ///   - model: the menu's picker: the model where no device has said one (`ModelChoice`).
     ///   - poll: the backstop interval between passes.
     ///   - leaseSleep: how the lease's heartbeats wait; tests drive it.
     ///   - pause: how the loop and its retries wait; tests drive it.
@@ -150,7 +163,8 @@ public actor HubMind {
                 brain: NativeBrain, login: @escaping @Sendable () async -> MindLogin,
                 prepare: @escaping @Sendable () throws -> Void = {},
                 model: @escaping @Sendable () -> ClaudeModel, timing: LeaseTiming = .standard,
-                poll: Duration = HubMind.standardPoll,
+                poll: Duration = HubMind.standardPoll, answeringPoll: Duration? = nil,
+                holdBound: Duration = HubMind.standardHoldBound, holdCheck: Duration = HubMind.standardHoldCheck,
                 leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
                 pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
                 observe: @escaping @Sendable (Snapshot) -> Void = { _ in }) {
@@ -166,15 +180,45 @@ public actor HubMind {
         self.prepare = prepare
         self.model = model
         self.poll = poll
+        self.answeringPoll = answeringPoll ?? min(poll, HubMind.standardAnsweringPoll)
+        self.holdBound = TimeInterval(holdBound.components.seconds) + TimeInterval(holdBound.components.attoseconds) / 1e18
+        self.holdCheck = holdCheck
         self.pause = pause
         self.observe = observe
     }
 
-    /// Ten seconds. A pass with nothing waiting is one read of the log (the zone's change feed and
-    /// a fetch by ID of each device's next sequence number) and touches nothing else; the push is
-    /// the fast path, and this bounds what a dropped one costs. The phone's loop reads every five
-    /// seconds while it is on the screen; this is half that.
+    /// Ten seconds: the poll while this Mac does not hold the lease (a phone does, or it lapsed). A
+    /// pass with nothing waiting is one read of the log (the zone's change feed and a fetch by ID
+    /// of each device's next sequence number) and touches nothing else. While it holds the lease
+    /// the poll is `standardAnsweringPoll`; on the LAN a phone's nudge starts a pass at once.
     public static let standardPoll: Duration = .seconds(10)
+
+    /// Five seconds: the poll while this Mac holds the lease, which off the LAN, with the push at
+    /// APNs' low priority, is how a turn is found. It is the read the phone's loop makes every five
+    /// seconds while its chat is open, in the same private database: two requests (the zone's
+    /// change feed from its token, a fetch by ID of each device's next sequence number), so 0.4
+    /// a second. Apple publishes no per-user rate for the private database; the figure quoted for
+    /// CloudKit is 40 requests a second, and a throttle answers `requestRateLimited` with a retry
+    /// after, which fails that pass and no other.
+    public static let standardAnsweringPoll: Duration = .seconds(5)
+
+    /// How many passes a nudge that found nothing is followed by, a second apart, while the turn
+    /// it named is not in the log: a pass begun the moment the phone's save was answered may read
+    /// the zone's change feed before it has the turn, and then finds the log incomplete and waits.
+    static let againAfterNudgeLimit = 3
+
+    /// Ten minutes: how long the start's takeover holds off for a phone that holds a fresh lease
+    /// while the person's turn at the log's head goes unanswered, counted from when the turn was
+    /// said. A phone that is answering renews its lease while it does, and its guest has no bound on
+    /// a whole turn, only on silence (`GuestSession.defaultTurnBound`, 3 min, after which the turn
+    /// fails and the phone's own loop answers it again), so the bound is not a turn's length: it is
+    /// what a phone that is alive and never answers (its guest not up, the turn held cut off) costs
+    /// the turn before the hub answers it. A phone that stops renewing is no reason to wait at all.
+    public static let standardHoldBound: Duration = .seconds(600)
+
+    /// How often the hold reads the lease and the log: one fetch by ID, and while the lease is a
+    /// phone's and fresh, one read of the log.
+    public static let standardHoldCheck: Duration = .seconds(2)
 
     // MARK: - The switch, sleep and wake
 
@@ -230,6 +274,44 @@ public actor HubMind {
         waiting?.cancel()
     }
 
+    /// A phone's word that the log moved, for the lease `holder` at `epoch` (`HubNudge`): a pass
+    /// runs now, as a push's does, and the call returns true once the pass that read the log after
+    /// it has ended, false at once when this Mac holds no such lease or the loop is not answering
+    /// (off, asleep, stopped, starting or holding off), and false if the mind stops meanwhile.
+    /// Any number of nudges during a pass are one more pass after it; a forged one costs a read.
+    public func nudge(holder: DeviceID, epoch: Int64, mark: String) async -> Bool {
+        guard on, !asleep, session != nil, phase == .answering, await holds(holder, epoch: epoch),
+              on, !asleep, session != nil, phase == .answering else { return false }
+        Perf.mark("hub.nudge.received nudge=\(mark)")
+        if requested == nil { requested = .nudge }
+        waiting?.cancel()
+        return await withCheckedContinuation { nudged.append((mark.lowercased(), $0)) }
+    }
+
+    /// Whether a turn a nudge named is not in the log as read now: a pass that found nothing may
+    /// have read the zone's change feed before it had the phone's save. A mark is the first eight
+    /// letters or digits of the turn's nonce (`Harness.turnMark`). A read that fails is unseen.
+    private func unseen(_ marks: [String]) async -> Bool {
+        let named = Set(marks)
+        guard !named.isEmpty else { return false }
+        guard let transcript = try? await log.read() else { return true }
+        let seen = Set(transcript.turns.values.map { Self.mark(of: $0.nonce) })
+        return !named.isSubset(of: seen)
+    }
+
+    /// A turn's mark by its nonce, as the phone writes it on the wire.
+    static func mark(of nonce: String) -> String {
+        String(nonce.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(8)).lowercased()
+    }
+
+    /// Every nudge waiting is answered: the loop has stopped.
+    private func releaseNudges() {
+        let waiting = nudged
+        nudged = []
+        againAfterNudge = 0
+        waiting.forEach { $0.answer.resume(returning: false) }
+    }
+
     /// Quit: as turning off, keeping the switch where it is.
     public func shutdown() async {
         await stop()
@@ -272,6 +354,7 @@ public actor HubMind {
         waiting?.cancel()
         await lease.abandon()
         await running?.value
+        releaseNudges()
     }
 
     private func current(_ g: Int) -> Bool { g == generation && !Task.isCancelled }
@@ -294,7 +377,8 @@ public actor HubMind {
         case .unknown(let why): await halt(.loginUnknown(why), g); return
         }
         do {
-            await brain.use(model: model())
+            // The process starts with the model the next turn most likely asks for.
+            await brain.use(model: await chosen(mark: false))
             try await brain.start()
         } catch {
             guard current(g) else { return }
@@ -302,18 +386,36 @@ public actor HubMind {
             return
         }
         guard current(g), let runner = await made(g) else { return }
-        guard await tookOver(g) else { return }
+        guard await heldOff(g), await tookOver(g) else { return }
         phase = .answering
         requested = .start
         await publish()
         while current(g) {
-            await wait(g)
+            await wait(g, for: againAfterNudge > 0 ? .seconds(1) : (await lease.isPrimary() ? answeringPoll : poll))
             guard current(g) else { return }
-            let source = requested ?? .poll
+            let source = requested ?? (againAfterNudge > 0 ? .nudge : .poll)
             requested = nil
-            if let stop = await pass(runner, source, g) {
+            // The nudges this pass serves: those that came before it read the log.
+            let served = nudged
+            nudged = []
+            let (stop, outcome) = await pass(runner, source, g)
+            if let stop {
+                served.forEach { $0.answer.resume(returning: false) }
                 await halt(stop, g)
                 return
+            }
+            guard current(g) else {
+                served.forEach { $0.answer.resume(returning: false) }
+                return
+            }
+            if source == .nudge, outcome == .nothing, againAfterNudge < Self.againAfterNudgeLimit,
+               await unseen(served.map(\.mark)), current(g) {
+                againAfterNudge += 1
+                Perf.mark("hub.nudge.again n=\(againAfterNudge)")
+                nudged = served + nudged
+            } else {
+                againAfterNudge = 0
+                served.forEach { $0.answer.resume(returning: true) }
             }
         }
     }
@@ -339,6 +441,75 @@ public actor HubMind {
         return nil
     }
 
+    /// Why the start's takeover waits, or why it goes: the phone that holds a fresh lease may be
+    /// answering the person's turn at the log's head, and a takeover then would have two brains run
+    /// that turn and its tools (the phone's reply is refused by the lease, but its tools ran).
+    public enum HoldOff: Equatable, Sendable {
+        /// Wait, for the turn at the head (nil when the log could not be read).
+        case hold(TurnRef?)
+        /// Take over now, and why: `none` (no phone's fresh lease, or nothing of the person's
+        /// waiting, at the first look), `replied` (the head is answered or gone on from),
+        /// `lapsed` (the phone stopped renewing), `holder` (the lease is no longer a phone's),
+        /// `bound` (the turn waited `standardHoldBound`).
+        case go(String)
+    }
+
+    /// The hold's verdict on one look: `lease` the record as read (nil: none, or unreadable when
+    /// `leaseRead` is false), `transcript` the log (nil: unreadable). Holds only over a lease of a
+    /// device that is not a hub and not this Mac and has not expired, while a person's turn at the
+    /// log's head goes unanswered and was said less than `bound` ago, and while the hold itself
+    /// (from `began`) is younger than `bound`. A read that failed holds, within the same bound.
+    static func holdOff(lease: Lease?, leaseRead: Bool, transcript: Transcript?, device: DeviceID,
+                        now: Date, began: Date, bound: TimeInterval, holding: Bool) -> HoldOff {
+        let goReason = holding ? nil : "none"
+        if now.timeIntervalSince(began) >= bound { return .go("bound") }
+        guard leaseRead else { return .hold(nil) }
+        guard let lease, lease.holder != device, !HubLeaseProbe.isHub(lease.holder) else { return .go(goReason ?? "holder") }
+        guard !lease.isExpired(at: now) else { return .go(goReason ?? "lapsed") }
+        guard let transcript else { return .hold(nil) }
+        let waiting = transcript.heads.compactMap { transcript[$0] }.filter { $0.role == .person }
+        guard let newest = waiting.max(by: { $0.at < $1.at }) else { return .go(goReason ?? "replied") }
+        if now.timeIntervalSince(newest.at) >= bound { return .go(goReason ?? "bound") }
+        return .hold(newest.ref)
+    }
+
+    /// Before the start's one takeover: while a phone holds a fresh lease and the person's turn at
+    /// the log's head is unanswered and young, the hub claims nothing and asks nothing, reading the
+    /// lease and the log every `holdCheck`, until the phone's reply lands, its lease lapses or the
+    /// bound passes; then the takeover goes. The loop has not started, so no pass's `acquire()`
+    /// can claim over the phone meanwhile. False once the session is over.
+    private func heldOff(_ g: Int) async -> Bool {
+        let began = Date()
+        var holding = false
+        while current(g) {
+            var lease: Lease?, leaseRead = true, transcript: Transcript?
+            do {
+                lease = try await database.fetch(Lease.recordID).flatMap(Lease.init(record:))
+            } catch {
+                leaseRead = false
+            }
+            if leaseRead, let lease, lease.holder != device, !HubLeaseProbe.isHub(lease.holder), !lease.isExpired(at: Date()) {
+                transcript = try? await log.read()
+            }
+            guard current(g) else { return false }
+            switch Self.holdOff(lease: lease, leaseRead: leaseRead, transcript: transcript, device: device,
+                                now: Date(), began: began, bound: holdBound, holding: holding) {
+            case .go(let why):
+                if holding { Perf.mark("hub.lease.holdOff.end \(why) ms=\(Int(Date().timeIntervalSince(began) * 1000))") }
+                return true
+            case .hold:
+                if !holding {
+                    holding = true
+                    Perf.mark("hub.lease.holdOff.begin")
+                    phase = .deferring
+                    await publish()
+                }
+                try? await pause(holdCheck)
+            }
+        }
+        return false
+    }
+
     /// The start's one takeover, sent again until it is answered. False once the session is over.
     private func tookOver(_ g: Int) async -> Bool {
         var delay: Duration = .seconds(1)
@@ -360,9 +531,9 @@ public actor HubMind {
     }
 
     /// Waits for a trigger or the poll, whichever is first. At once when a pass is asked for.
-    private func wait(_ g: Int) async {
+    private func wait(_ g: Int, for interval: Duration) async {
         guard requested == nil else { return }
-        let pausing = Task { [pause, poll] in try await pause(poll) }
+        let pausing = Task { [pause] in try await pause(interval) }
         waiting = pausing
         _ = await withTaskCancellationHandler { await pausing.result } onCancel: { pausing.cancel() }
         if waiting == pausing { waiting = nil }
@@ -370,7 +541,7 @@ public actor HubMind {
 
     /// One pass: the lease asked for if this Mac does not hold it, then whatever waits answered.
     /// A reason to stop the mind, or nil.
-    private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int) async -> Stop? {
+    private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int) async -> (Stop?, Pass.Outcome?) {
         passes += 1
         clock.begin(source.rawValue)
         if !(await lease.isPrimary()) {
@@ -384,7 +555,7 @@ public actor HubMind {
         }
         let outcome: Pass.Outcome
         do {
-            outcome = try await runner.answerPending(model: model()) == nil ? .nothing : .answered
+            outcome = try await runner.answerPending(choosing: { await self.chosen(mark: true) }) == nil ? .nothing : .answered
         } catch TurnRunnerError.notPrimary {
             outcome = .elsewhere
         } catch TurnRunnerError.displaced {
@@ -392,22 +563,39 @@ public actor HubMind {
         } catch {
             if !current(g) || error is CancellationError {
                 clock.end("cancelled")
-                return nil
+                return (nil, nil)
             }
             if let stop = Self.stop(for: error) {
                 clock.end(Self.kind(of: error))
-                return stop
+                return (stop, nil)
             }
             outcome = .failed(Self.kind(of: error))
         }
         guard current(g) else {
             clock.end("cancelled")
-            return nil
+            return (nil, nil)
         }
         clock.end(Self.name(of: outcome))
         lastPass = Pass(outcome: outcome, trigger: source, at: Date())
         await publish()
-        return nil
+        return (nil, outcome)
+    }
+
+    /// The model a turn is answered with: the person's choice in the zone (`ModelChoice`), which
+    /// the device they hold says before it hands this Mac a turn, or this Mac's own picker where no
+    /// device has said or the record cannot be read. Read once a pass, only by a pass with a turn
+    /// to answer (`answerPending(choosing:)`), one fetch by ID.
+    private func chosen(mark: Bool) async -> ClaudeModel {
+        let said: ClaudeModel?
+        do {
+            said = try await ModelChoice.read(from: database)
+        } catch {
+            said = nil
+            if mark { Perf.mark("hub.pass.model.unread \(Self.kind(of: error))") }
+        }
+        let model = said ?? self.model()
+        if mark { Perf.mark("hub.pass.model \(model.rawValue) \(said == nil ? "picker" : "chosen")") }
+        return model
     }
 
     /// The mind stops, saying why: the lease let go and the process shut down. The session ends
@@ -419,6 +607,7 @@ public actor HubMind {
         guard current(g) else { return }
         if stop == .signedOut { loginState = .signedOut }
         phase = .stopped(stop)
+        releaseNudges()
         session = nil
         Perf.mark("hub.mind.stopped \(Self.name(of: stop))")
         await publish()
@@ -501,6 +690,7 @@ extension HubMind.Phase {
         switch self {
         case .off: "off"
         case .starting: "starting"
+        case .deferring: "deferring"
         case .answering: "answering"
         case .asleep: "asleep"
         case .stopped(let stop): "stopped " + HubMind.name(of: stop)

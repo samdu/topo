@@ -412,6 +412,13 @@ public actor TurnRunner {
     /// the log under its nonce, or, with nothing left to ask, the owed one it wrote. Nil when
     /// there was none.
     public func answerPending(model: ClaudeModel) async throws -> Turn? {
+        try await answerPending(choosing: { model })
+    }
+
+    /// `answerPending(model:)`, with the model asked for only once there is a turn to answer:
+    /// `choosing` is called at most once a pass, after the log was read and the lease taken, and
+    /// never on a pass that asks the brain nothing.
+    public func answerPending(choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
         var transcript = try await log.read()
         guard transcript.isComplete else { return nil }
         // An owed reply is written whatever the head is: another device may have answered past
@@ -445,6 +452,7 @@ public actor TurnRunner {
             .filter { $0.role == .person && !skipped.contains($0.ref) }
         // Settling what was owed can find the waiting turn cut off: nothing is left to answer.
         guard !answering.isEmpty else { return settled }
+        let model = await choosing()
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
                                    answering: answering, parents: transcript.heads, nonce: nonce, model: model)
         let reply = try await brain.answer(request)

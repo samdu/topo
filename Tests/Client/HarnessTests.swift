@@ -1046,6 +1046,121 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "topo.harness.standing"), "elsewhere")
     }
 
+    /// A hub's fresh lease that names an endpoint, as the hub's own does.
+    private func hubClaim(_ db: any RecordDatabase, endpoint: String?) async throws -> (DeviceID, PrimaryLease) {
+        let hubID = DeviceID("mac-" + UUID().uuidString.lowercased())
+        let lease = PrimaryLease(database: db, device: hubID, endpoint: endpoint, probe: NoSocketProbe(), sleep: parked)
+        guard case .primary = try await lease.acquire() else { XCTFail("the hub's claim"); throw Unexpected() }
+        return (hubID, lease)
+    }
+
+    /// What the app's nudge was asked, and when it is answered.
+    private final class Nudges: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [(Lease, String)] = []
+        private var held: CheckedContinuation<Void, Never>?
+        private var released = false
+        var calls: [(Lease, String)] { lock.withLock { asked } }
+        func record(_ lease: Lease, _ mark: String) { lock.withLock { asked.append((lease, mark)) } }
+        func hold() async {
+            await withCheckedContinuation { c in
+                let now = lock.withLock { () -> Bool in if released { return true }; held = c; return false }
+                if now { c.resume() }
+            }
+        }
+        func release() {
+            let c = lock.withLock { () -> CheckedContinuation<Void, Never>? in released = true; defer { held = nil }; return held }
+            c?.resume()
+        }
+    }
+
+    /// A limb's turn for a hub tells the hub over the LAN, with the hub's lease and the turn's mark
+    /// and nothing else; once the hub says its pass has ended the log is read now, so the reply is
+    /// on the screen with no loop's pass and no push.
+    func testALimbsTurnNudgesTheHubAndReadsTheLogWhenItsPassHasEnded() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        phone.nudge = { lease, mark in
+            nudges.record(lease, mark)
+            // The hub's pass: it answers the turn at the log's head.
+            let log = TurnLog(database: db)
+            let transcript = try? await log.read()
+            guard let transcript, let writer = try? await log.writer(for: hubID) else { return false }
+            _ = try? await writer.append(.assistant, "from the Mac", continuing: transcript)
+            return true
+        }
+        let nonce = phone.willSend("bins?")
+        await phone.retry()
+        try await eventually("the reply read") { phone.turns.map(\.text) == ["bins?", "from the Mac"] }
+        XCTAssertEqual(nudges.calls.count, 1)
+        XCTAssertEqual(nudges.calls.first?.0.holder, hubID)
+        XCTAssertEqual(nudges.calls.first?.0.endpoint, "192.168.1.20:50123")
+        XCTAssertEqual(nudges.calls.first?.1, String(Harness.turnMark(nonce).dropFirst("turn=".count)))
+    }
+
+    /// A limb's turn says the person's choice of model before it is saved, so the device that
+    /// answers it reads the choice made here; said once, and again when it changes.
+    func testALimbsTurnSaysTheModelChosenHereBeforeItIsSaved() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: nil)
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        phone.model = .opus
+        await phone.send("bins?")
+        let logged = try await log(db).map(\.text)
+        XCTAssertEqual(logged, ["bins?"])
+        let first = try await ModelChoice.read(from: db)
+        XCTAssertEqual(first, .opus)
+        let by = await db.current(ModelChoice.recordID)?.string("device")
+        XCTAssertEqual(by, self.phone.rawValue)
+        phone.model = .fable
+        await phone.send("and?")
+        let second = try await ModelChoice.read(from: db)
+        XCTAssertEqual(second, .fable)
+    }
+
+    /// A hub's lease that names no endpoint has nowhere to be told: no nudge, and the turn is the
+    /// hub's to find by its poll as before.
+    func testAHubWithNoEndpointIsNotNudged() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: nil)
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        phone.nudge = { lease, mark in nudges.record(lease, mark); return true }
+        await phone.send("bins?")
+        let logged = try await log(db).map(\.text)
+        XCTAssertEqual(logged, ["bins?"])
+        XCTAssertEqual(phone.info, "Saved. Your Mac will answer here.")
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertTrue(nudges.calls.isEmpty)
+    }
+
+    /// A nudge the hub answers after a sign-out reads nothing into the next login's screen, and the
+    /// turn's send never waited on it.
+    func testANudgeAnsweredAfterASignOutReadsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        phone.nudge = { lease, mark in
+            nudges.record(lease, mark)
+            await nudges.hold()
+            return true
+        }
+        await phone.send("bins?")
+        // The send is over while the hub has not answered.
+        XCTAssertEqual(phone.info, "Saved. Your Mac will answer here.")
+        try await eventually("the nudge sent") { nudges.calls.count == 1 }
+        await phone.forget()
+        let log = TurnLog(database: db)
+        let writer = try await log.writer(for: hubID)
+        _ = try await writer.append(.assistant, "from the Mac", continuing: try await log.read())
+        nudges.release()
+        for _ in 0..<500 { await Task.yield() }
+        XCTAssertTrue(phone.turns.isEmpty, "a read for the last login reached the screen")
+    }
+
     /// A phone that was the one answering is suspended past its lease's duration, and the hub
     /// wakes and takes the lease meanwhile: nothing yielded, so the harness still stands `.mine`.
     /// The next words go into the log for the hub and the phone's guest is never asked them,

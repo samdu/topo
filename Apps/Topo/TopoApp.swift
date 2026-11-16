@@ -3,6 +3,7 @@ import CallKit
 import SwiftUI
 import TopoAuth
 import TopoCore
+import TopoLink
 import TopoProxy
 import TopoTools
 
@@ -125,6 +126,19 @@ struct TopoApp: App {
         // A control's request to the home network asks for local network access in the
         // foreground only, since a background one while it is undetermined is denied unasked.
         LocalNetworkAccess.shared.isActive = { UIApplication.shared.applicationState == .active }
+        // A limb's turn tells the hub that holds the lease that the log moved, over the LAN
+        // (`HubNudge`). Only once this phone has local network access: the nudge never raises the
+        // system's prompt, whose words are the controls', and a background attempt while it is
+        // undetermined would be denied unasked. Without it the hub finds the turn by its poll.
+        harness.nudge = { lease, mark in
+            guard await MainActor.run(body: { LocalNetworkAccess.shared.state == .allowed }) else {
+                Perf.mark("nudge.skipped localNetwork")
+                return false
+            }
+            let answer = await HubNudge.send(for: lease, mark: mark)
+            if case .unreached(let why) = answer { Perf.mark("nudge.unreached \(why)") }
+            return answer == .read
+        }
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
         let widgetTable = WidgetActions.table(GuestResident.shared.toolTable)

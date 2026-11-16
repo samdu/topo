@@ -230,6 +230,16 @@ final class Harness {
     private var inFlight: Task<Bool, Never>?
     /// The answering passes running now, which a sign-out cancels as it cancels the turn in flight.
     private var passes: Set<Task<Void, Never>> = []
+    /// Tells the hub that holds the lease that the log moved, and answers true once the hub's pass
+    /// after it has ended (`HubNudge`, over the LAN; the app sets it, and it says no without trying
+    /// while this phone has no local network access to ask with). Nil: no nudge, and the hub finds
+    /// the turn by its poll or push as it always can.
+    var nudge: (@Sendable (_ lease: Lease, _ mark: String) async -> Bool)?
+    /// The nudges waiting for their hub's answer, which a sign-out or a demotion cancels.
+    private var nudges: [UUID: Task<Void, Never>] = [:]
+    /// A limb's turns this device wrote for a hub to answer, by ref, with each turn's mark, until a
+    /// read finds their reply: the reply's arrival is a mark of its own (`turn.limb.reply.shown`).
+    private var limbTurns: [TurnRef: String] = [:]
     /// Counts sign-outs and demotions. A pass or a loop begun under an earlier count belongs to a
     /// login that has gone: it shows nothing and writes nothing, and the loop ends.
     private var login = 0
@@ -499,6 +509,9 @@ final class Harness {
     /// the loop's pause, each cancelled, and the count moved so none of them shows or writes
     /// anything once it wakes. The runner checks its task before each reply it appends.
     private func stopAnswering() {
+        nudges.values.forEach { $0.cancel() }
+        nudges = [:]
+        limbTurns = [:]
         login += 1
         reads += 1
         inFlight?.cancel()
@@ -627,6 +640,7 @@ final class Harness {
             let dropped = turns.filter { transcript[$0.ref] == nil }.count
             if dropped > 0 { Perf.mark("chat.refresh.dropped \(dropped)") }
             turns = transcript.ordered
+            markLimbReplies(in: transcript)
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
             hasRead = true
@@ -1083,11 +1097,24 @@ final class Harness {
             // device is primary answers them there. Settled once they are in the log.
             do {
                 status = "Saving what you said…"
+                // The person's choice of model is what the other device answers this turn with:
+                // said before the turn is saved, while the log is read, so it is there to be read
+                // when that device answers. A choice that cannot be said leaves the turn to that
+                // device's own setting; the turn goes either way.
+                // Bounded per request, so a stalled save holds the turn no longer than the lease's
+                // patience; a choice that ran out is a choice unsaid.
+                let model = self.model, database = self.database.answering(within: LeaseTiming.standard.patience), device = self.device
+                let saying = Task {
+                    do { try await ModelChoice.say(model, by: device, to: database) } catch { Perf.mark("turn.model.unsaid") }
+                }
                 let transcript = try await log.read()
+                await saying.value
                 // A sign-out during the read: the outbox went with it, and so do these words.
                 guard inFlight == generation, !Task.isCancelled, let writer else { return false }
                 let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
+                Perf.mark("turn.limb.saved \(turnMark)")
                 show(person)
+                nudgeHub(outcome, for: person)
                 info = Self.limbInfo(outcome)
                 status = nil
                 return true
@@ -1108,6 +1135,47 @@ final class Harness {
         }
         status = nil
         return false
+    }
+
+    /// A limb's turn is in the log for a hub to answer: the hub is told so over the LAN, and once
+    /// its pass has ended the log is read now rather than at the loop's next pass. Only a hub's
+    /// lease that names an endpoint is nudged, and nothing waits on it: what it carries is the
+    /// lease and the turn's mark, and a nudge that never arrives leaves the hub's poll and push and
+    /// this device's loop to bring the same reply.
+    private func nudgeHub(_ outcome: LeaseOutcome, for person: Turn) {
+        let lease: Lease
+        switch outcome {
+        case .held(let held): lease = held
+        case .unreachable(let held): lease = held
+        case .primary, .contended: return
+        }
+        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil, let nudge else { return }
+        let mark = Self.turnMark(person.nonce)
+        let wire = String(mark.dropFirst("turn=".count))
+        guard !wire.isEmpty else { return }
+        limbTurns[person.ref] = mark
+        let login = self.login, id = UUID()
+        Perf.mark("turn.nudge.begin \(mark)")
+        nudges[id] = Task { [weak self] in
+            let read = await nudge(lease, wire)
+            guard let self else { return }
+            self.nudges[id] = nil
+            guard self.login == login, !Task.isCancelled else { return }
+            Perf.mark("turn.nudge.end \(mark) \(read ? "read" : "no")")
+            guard read else { return }
+            // The hub's pass has ended: its reply, if it wrote one, is in the log now.
+            if self.answeringLoop { await self.wake() } else { await self.refresh() }
+        }
+    }
+
+    /// A read that brought the reply to a limb's turn this device wrote marks it, once.
+    private func markLimbReplies(in transcript: Transcript) {
+        guard !limbTurns.isEmpty else { return }
+        for turn in transcript.turns.values where turn.role == .assistant {
+            for parent in turn.parents {
+                if let mark = limbTurns.removeValue(forKey: parent) { Perf.mark("turn.limb.reply.shown \(mark)") }
+            }
+        }
     }
 
     /// A step of the turn in flight, as words on the screen. The person's turn shows the moment

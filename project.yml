@@ -115,6 +115,8 @@ targets:
         product: TopoCoreTesting
       - package: TopoAuth
       - package: TopoTurn
+      # The nudge to the hub that holds the lease (`HubNudge`), over the LAN.
+      - package: TopoLink
       - package: FluidAudio
       - package: PhononTTS
       - package: TopoUserland

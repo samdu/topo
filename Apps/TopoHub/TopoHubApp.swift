@@ -115,6 +115,7 @@ struct MindSection: View {
                     ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .help("The model where no device has said one. A turn from the phone is answered with the phone's choice.")
                 if let pinned = ClaudeModel.pinned {
                     Text("Debug build: every turn goes to \(pinned.displayName)").font(.caption2).foregroundStyle(.secondary)
                 }
@@ -137,6 +138,8 @@ struct MindSection: View {
             Label("Starting…", systemImage: "circle.dotted")
         case .starting?:
             Label("Starting the mind…", systemImage: "circle.dotted")
+        case .deferring?:
+            Label("The phone is answering; this Mac takes over when it is done", systemImage: "hourglass")
         case .answering?:
             Label(hub.mind?.holds == true ? "Answering on this Mac" : "Waiting for the lease; the phone answers",
                   systemImage: hub.mind?.holds == true ? "brain" : "hourglass")
