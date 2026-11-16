@@ -485,7 +485,10 @@ suite_topo_unit() {
 
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather
-    # than on a phone.
+    # than on a phone. The host app's ear is held at loading (`TOPO_DEBUG_EAR`): its real ear
+    # fetches Parakeet and compiles it with CoreML on that one thread, about three seconds that
+    # land in whichever test is running and hold back every timed wait in it. The tests that
+    # want a real model load their own (`TEST_RUNNER_TOPO_UNIT_EAR_MODELS`).
     # GuestDNSTests' stub stands on port 53, which a VM's DNS proxy holds while one runs here; a
     # Mac that runs VMs keeps the port from its login (dotfiles tools/port53-holder) and lends it.
     # A socket left by a holder that died refuses the connection, and the stub binds the port itself.
@@ -496,7 +499,7 @@ suite_topo_unit() {
     run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
       "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" "TEST_RUNNER_TOPO_UNIT_EAR_MODELS=$cache/ear-models" \
-      TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
+      TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 TEST_RUNNER_TOPO_DEBUG_EAR=loading \
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" \

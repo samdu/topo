@@ -495,8 +495,11 @@ final class AudibleHoldTests: XCTestCase {
         await settle("the second hand-back") { !rig.speaker.speaking }
         XCTAssertEqual(rig.speaker.awaiting, ["turn"], "the turn's wait was not taken again the second time")
         await settle("the wait ended at its outer bound") { rig.speaker.awaiting.isEmpty }
+        // A wait bounded from either hand-back ends no sooner than the ceiling and the bound after
+        // the send, since the first hand-back is a ceiling's sleep after the first part is heard
+        // out and a sleep never wakes early; one bounded from the send ends a ceiling before that.
         let took = ContinuousClock.now - sent
-        XCTAssertLessThan(took, .milliseconds(6_300), "the wait was bounded from a hand-back rather than from the send")
+        XCTAssertLessThan(took, .seconds(5) + .seconds(1), "the wait was bounded from a hand-back rather than from the send")
         XCTAssertFalse(rig.audio.heldForATurn, "a hold outlived the outer bound")
     }
 
