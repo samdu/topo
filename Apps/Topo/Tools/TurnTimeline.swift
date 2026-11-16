@@ -32,8 +32,9 @@ struct PerfMark: Equatable, Sendable {
     /// The turn a tagged mark names (`Harness.turnMark`).
     var turn: String? { value("turn") }
 
-    /// Whether the mark is one of the model's own requests' (`proxy.* POST /v1/messages …`).
-    var isMessages: Bool { detail.hasPrefix(TurnTimeline.messages + " ") }
+    /// Whether the mark is of the turn's own request rather than a sub-agent's
+    /// (`turn.guest.message own …`).
+    var isOwn: Bool { detail == "own" || detail.hasPrefix("own ") }
 }
 
 /// Where one turn's time went, from the person's release or send to the reply on the screen: the
@@ -45,7 +46,7 @@ struct PerfMark: Equatable, Sendable {
 struct TurnTimeline: Sendable {
     /// What kind of moment an event is: the key it is kept under, which the record sums by.
     enum Key: String, CaseIterable, Sendable {
-        case hear, queue, save, ready, start, prepare, tool, upload, model, stream, screen, finish, store, show, end, wait, mixed
+        case hear, queue, save, ready, start, tool, model, stream, screen, finish, store, show, end, wait, mixed
     }
 
     struct Event: Equatable, Sendable {
@@ -63,8 +64,6 @@ struct TurnTimeline: Sendable {
 
     static let soundKey = "sound"
     static let soundTitle = "The voice's first sound"
-    /// The model's own requests, by the route the proxy names them by.
-    static let messages = "POST /v1/messages"
 
     /// When the turn began, on the wall clock.
     var at: Date
@@ -78,9 +77,11 @@ struct TurnTimeline: Sendable {
     var beside: [Event]
     /// The voice's first sound, from its start to its first frame, in ms from the turn's start.
     var sound: ClosedRange<Int64>?
-    /// Each model request's body, in bytes, in order.
+    /// What each model request uploaded, in bytes, in order, for those whose upload was told.
     var requestBytes: [Int]
-    /// Each model request's message thread, as the proxy named its kind (`ThreadLog.Kind`), in order.
+    /// How many model requests the turn made of its own.
+    var requests: Int
+    /// Each model request's kind as its upload read (`ThreadSampler.Kind`), in order.
     var requestThreads: [String]
     var tools: Int
     /// How many times its words were sent: more than one is a retry.
@@ -235,31 +236,34 @@ struct TurnTimeline: Sendable {
         }
         if let unsaved = clean.first(where: { $0.name == "turn.unsaved" }) { save(unsaved, "iCloud had not taken your words yet") }
         self.beside = beside
-        // The model's requests, each followed by the id its marks share.
-        var bytes: [Int] = [], threads: [String] = [], previousDone = origin
-        let requests = clean.filter { $0.name == "proxy.request" && $0.isMessages }
-        for (n, request) in requests.enumerated() {
-            let number = n + 1, id = request.value("id")
-            let size = request.value("bytes").flatMap(Int.init)
+        // The model's requests, from the stream: each answer's start and end. A request's going is
+        // not seen apart from the model's wait for it, so the stage before an answer is both.
+        var bytes: [Int] = [], threads: [String] = [], previous = write?.ms ?? origin
+        let messages = clean.filter { $0.name == "turn.guest.message" && $0.isOwn }
+        for (n, message) in messages.enumerated() {
+            let number = n + 1
+            let next = n + 1 < messages.count ? messages[n + 1].ms : Int64.max
+            if let result = clean.last(where: { $0.name == "turn.guest.toolResult" && $0.ms >= previous && $0.ms <= message.ms }) {
+                raw.append((result.ms, place(result), .tool, "A tool ran"))
+            }
+            // What the request uploaded is read just after its answer began, before the next's.
+            let upload = clean.first { $0.name == "turn.guest.upload" && $0.ms >= message.ms && $0.ms < next }
+            let size = upload?.value("bytes").flatMap(Int.init)
             if let size { bytes.append(size) }
-            let toolRan = clean.contains { $0.name == "turn.guest.toolUse" && $0.ms >= previousDone && $0.ms <= request.ms }
-            raw.append((request.ms, place(request), toolRan ? .tool : .prepare,
-                        toolRan ? "A tool ran, then Claude Code made request \(number)" : "Claude Code made request \(number)"))
-            guard let id else { continue }
-            func mine(_ name: String) -> PerfMark? {
-                clean.first { $0.name == name && $0.isMessages && $0.value("id") == id && $0.ms >= request.ms }
-            }
-            if let thread = request.value("thread") { threads.append(thread) }
-            if let sent = mine("proxy.sent") {
-                let about = [size.map(Self.size), request.value("thread").flatMap { Self.threadWords[$0] }].compactMap { $0 }
-                raw.append((sent.ms, place(sent), .upload, "Request \(number) sent" + (about.isEmpty ? "" : " (\(about.joined(separator: ", ")))")))
-            }
-            if let first = mine("proxy.firstByte") { raw.append((first.ms, place(first), .model, "The model began answering request \(number)")) }
-            if let done = mine("proxy.done") {
+            if let kind = upload?.value("kind") { threads.append(kind) }
+            let about = [size.map(Self.size), upload?.value("kind").flatMap { Self.threadWords[$0] }].compactMap { $0 }
+            raw.append((message.ms, place(message), .model,
+                        "Request \(number) sent and the model began answering" + (about.isEmpty ? "" : " (\(about.joined(separator: ", ")))")))
+            if let done = clean.first(where: { $0.name == "turn.guest.message.done" && $0.isOwn && $0.ms >= message.ms && $0.ms <= next }) {
                 raw.append((done.ms, place(done), .stream, "The model finished request \(number)"))
-                previousDone = done.ms
+                previous = done.ms
             }
         }
+        for retry in clean where retry.name == "turn.guest.retry" {
+            let status = retry.value("status").flatMap { $0 == "none" ? nil : $0 }
+            raw.append((retry.ms, place(retry), .wait, "A request failed and Claude Code tried again" + (status.map { " (\($0))" } ?? "")))
+        }
+        requests = messages.count
         requestBytes = bytes
         requestThreads = threads
         tools = clean.filter { $0.name == "turn.guest.toolUse" }.count
@@ -301,9 +305,9 @@ struct TurnTimeline: Sendable {
 
     static func seconds(_ ms: Int64) -> String { String(format: "%.2f s", Double(ms) / 1000) }
 
-    /// A request's thread in a person's words, by the kind the proxy names (`ThreadLog.Kind`).
-    static let threadWords = ["none": "the whole conversation", "create": "a thread begun",
-                              "continue": "a thread continued", "unread": "a thread not read"]
+    /// A request's kind in a person's words, as its upload read (`ThreadSampler.Kind`).
+    static let threadWords = ["thread": "a small upload: on a thread", "whole": "the whole conversation",
+                              "unknown": "upload not told"]
 
     static func size(_ bytes: Int) -> String {
         bytes < 1024 ? "\(bytes) bytes" : String(format: "%.0f KB", Double(bytes) / 1024)
@@ -325,7 +329,7 @@ struct TurnTimeline: Sendable {
         if let save = beside.first(where: { $0.key == .save }) { fields.append("saved=\(save.at + save.took)") }
         if let sound { fields.append("\(Self.soundKey)=\(sound.upperBound)") }
         if let thread = requestThreads.first, Self.threadWords[thread] != nil { fields.append("thread=\(thread)") }
-        fields += ["bytes=\(requestBytes.reduce(0, +))", "requests=\(requestBytes.count)", "tools=\(tools)", "sends=\(sends)"]
+        fields += ["bytes=\(requestBytes.reduce(0, +))", "requests=\(requests)", "tools=\(tools)", "sends=\(sends)"]
         if mixed { fields.append("mixed") }
         return fields.joined(separator: " ")
     }

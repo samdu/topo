@@ -30,6 +30,8 @@ public final class Guest: Sendable {
         case resolver(String)
         /// `/tmp` could not be emptied, with what the guest said.
         case temporary(String)
+        /// Claude Code's managed settings could not be written or removed, with what the guest said.
+        case managedSettings(String)
         /// `/etc/localtime` could not be pointed at the zone: not a zone name, no zoneinfo for it in
         /// the guest, or the write failed, with why.
         case timeZone(String)
@@ -49,6 +51,7 @@ public final class Guest: Sendable {
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
             case .temporary(let said): "/tmp could not be emptied: \(said)"
+            case .managedSettings(let said): "\(Guest.managedSettings) could not be written: \(said)"
             case .timeZone(let why): "/etc/localtime could not be written: \(why)"
             case .hung(let bound, let running):
                 "the program had not finished after \(bound), and was killed"
@@ -149,6 +152,24 @@ public final class Guest: Sendable {
         let script = #"printf '%s' "$1" > /etc/resolv.conf.topo && mv -f /etc/resolv.conf.topo /etc/resolv.conf"#
         let exit = try await run("/bin/sh", ["-c", script, "resolver", Self.resolverFile(for: servers)])
         if exit.status != 0 { throw Failure.resolver(exit.errors) }
+    }
+
+    /// Where Claude Code reads the machine's managed settings on Linux: a policy no setting, flag or
+    /// `/model` of a session's can widen, read by every claude the guest starts.
+    public static let managedSettings = "/etc/claude-code/managed-settings.json"
+
+    /// Makes Claude Code's managed settings `json`, or takes them away for nil, through the guest so
+    /// the fakefs records it. The file is written beside and moved into place; whatever stands at the
+    /// name is removed first, since a move onto a link to a directory would land inside it, and a
+    /// directory there is refused. Run once per process, after the boot and before any claude
+    /// starts, since nothing may read the name between the removal and the move. Requires a
+    /// booted kernel.
+    public func writeManagedSettings(_ json: String?) async throws {
+        let script = json == nil
+            ? #"rm -f "$1""#
+            : #"mkdir -p "${1%/*}" && printf '%s' "$2" > "$1.topo" && rm -f "$1" && mv -f "$1.topo" "$1""#
+        let exit = try await run("/bin/sh", ["-c", script, "policy", Self.managedSettings] + (json.map { [$0] } ?? []))
+        if exit.status != 0 { throw Failure.managedSettings(exit.errors) }
     }
 
     /// Empties `/tmp`, as a Linux boot with a tmpfs there would: the guest's `/tmp` is on the

@@ -26,7 +26,7 @@ final class ApplicationBackgroundTime: BackgroundTime {
 }
 
 /// The resident Claude Code on this phone: the guest booted once per process, the app's
-/// `Library/Application Support/home` mounted as its home, the API proxy and the tool service on loopback with the
+/// `Library/Application Support/home` mounted as its home, the tool service on loopback with the
 /// `topo` command and its skill written into the home, and the one `GuestSession`,
 /// carried through the app's lifecycle by a `GuestLifecycle` — started on the foreground, ended on
 /// the way out once the grace is spent. The session id the next process resumes is kept in
@@ -42,7 +42,6 @@ final class GuestResident {
     /// What of the start is done, so a start tried again after a failure does not do it twice.
     private var homeMounted = false
     private var lifecycle: GuestLifecycle?
-    private var proxy: APIProxy?
     /// The tool service, made once; its listener is started again wherever it was lost.
     private var tools: ToolService?
     /// `topo`, its skill and the GitHub shims written into the home and linked onto the path.
@@ -139,25 +138,17 @@ final class GuestResident {
     /// tries again from the step that failed (the kernel's own boot is once per process, and its
     /// answer is `Userland.bootGuest`'s to keep). Once the guest is up, and before any process
     /// starts, `booted` asks Claude Code whether it is still signed in (`SignIn.refresh`); a launch
-    /// while it is not is refused. `log` hears the session's and the proxy's lines, and each way
+    /// while it is not is refused. `log` hears the session's and the tool service's lines, and each way
     /// out's outcome.
     func start(userland: Userland = .shared, log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
         try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
             _ = try await self.prepareTools(log: log)
             Perf.mark("guest.tools.ready")
-            let proxy: APIProxy
-            if let made = self.proxy {
-                proxy = made
-            } else {
-                proxy = try APIProxy(log: Self.listening("proxy", log: log), threads: .shared)
-                self.proxy = proxy
-            }
-            _ = try await proxy.start()
             guard let tools = self.tools else { throw CancellationError() }
-            let ports = LaunchPorts(proxy: proxy, tools: tools)
+            let ports = LaunchPorts(tools: tools)
             await self.booted?()
-            let made = Self.launchEnvironment(ports: ports) { port in try Self.launchCredential(port: port) }
+            let made = Self.launchEnvironment(ports: ports) { try Self.launchCredential() }
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
                 // after the phone changed zones starts in the new one: its runtime keeps the zone it
@@ -169,14 +160,15 @@ final class GuestResident {
                                        freezer: GuestFreeze(ports: ports, userland: userland), model: Self.model,
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
                                        threads: MessageThreads.Setting(defaults: .standard).launched,
-                                       signedIn: { LoginCache.standard.isSignedIn }, log: log)
+                                       signedIn: { LoginCache.standard.isSignedIn },
+                                       requests: { ThreadSampler.shared.heard($0) }, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
             lifecycle.conversing = { [weak self] beginning in self?.conversing(beginning) ?? false }
             self.lifecycle = lifecycle
             self.follow(lifecycle)
-            Perf.mark("guest.proxy.up")
+            Perf.mark("guest.session.up")
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
         }
@@ -217,11 +209,12 @@ final class GuestResident {
     }
 
     /// What every launch of the resident is given for its login: refused while the cache says
-    /// signed out, so nothing launches between a sign-out and its logout; otherwise the proxy and,
-    /// in a debug build launched with one, the developer's token.
-    nonisolated static func launchCredential(port: UInt16, cache: LoginCache = .standard) throws -> [String: String] {
+    /// signed out, so nothing launches between a sign-out and its logout; otherwise nothing but, in
+    /// a debug build launched with one, the developer's token. No base URL is set: Claude Code
+    /// reaches Anthropic itself, through the guest's resolver and the app's sockets.
+    nonisolated static func launchCredential(cache: LoginCache = .standard) throws -> [String: String] {
         guard cache.isSignedIn else { throw GuestBridgeError.notReady("signed out") }
-        return APIProxy.guestEnvironment(port: port).merging(developerEnvironment) { _, new in new }
+        return developerEnvironment
     }
 
     /// The guest's home, made if it is not there: excluded from backup, since Claude Code keeps
@@ -297,31 +290,28 @@ final class GuestResident {
     }
 }
 
-/// What each launch of the resident is told of the proxy and the tool service. Claude Code reads
-/// their ports once, from its environment at launch, so every launch starts both listeners anew
-/// (`relisten`) and is told the ports they have now: a listener bound a moment ago is the app's
-/// own, where one held across a suspension may have been taken away, its word of that not come
-/// yet, and its port bound again by another process. A launch has no resident beside it, so no
-/// connection is lost by it.
+/// What each launch of the resident is told of the tool service. Claude Code reads its port
+/// once, from its environment at launch, so every launch starts the listener anew (`relisten`) and
+/// is told the port it has now: a listener bound a moment ago is the app's own, where one held
+/// across a suspension may have been taken away, its word of that not come yet, and its port bound
+/// again by another process. A launch has no resident beside it, so no connection is lost by it.
 @MainActor
 final class LaunchPorts {
-    let proxy: APIProxy
     let tools: ToolService
     private let zone: @Sendable () -> String
     private let login: LoginLife
 
-    init(proxy: APIProxy, tools: ToolService,
+    init(tools: ToolService,
          zone: @escaping @Sendable () -> String = { NSTimeZone.resetSystemTimeZone(); return TimeZone.current.identifier },
          login: LoginLife = .shared) {
-        self.proxy = proxy
         self.tools = tools
         self.zone = zone
         self.login = login
     }
 
-    /// The ports the last launch was told, which a frozen resident still holds in its environment.
-    private(set) var told: (proxy: UInt16, tools: UInt16)?
-    /// The phone's zone when the last launch was told its ports, after the guest's was brought up
+    /// The port the last launch was told, which a frozen resident still holds in its environment.
+    private(set) var told: UInt16?
+    /// The phone's zone when the last launch was told its port, after the guest's was brought up
     /// to date: the zone its runtime read once and keeps for its life.
     private(set) var toldZone: String?
 
@@ -330,11 +320,11 @@ final class LaunchPorts {
     /// is started, so no call of that launch can carry a login begun after it.
     private(set) var toldLogin: LoginLife.Epoch?
 
-    /// The ports to tell the next launch: each service's, on a listener started for it, the tool
-    /// service's carrying the standing login's mark to every call it accepts.
-    func ports() async throws -> (proxy: UInt16, tools: UInt16) {
+    /// The port to tell the next launch: the tool service's, on a listener started for it, carrying
+    /// the standing login's mark to every call it accepts.
+    func ports() async throws -> UInt16 {
         let epoch = login.epoch
-        let now = (try await proxy.relisten(), try await tools.relisten(context: epoch))
+        let now = try await tools.relisten(context: epoch)
         told = now
         toldLogin = epoch
         toldZone = zone()
@@ -348,24 +338,23 @@ final class LaunchPorts {
         return zone() == toldZone
     }
 
-    /// Both services listening again on the very ports the last launch was told, for a frozen
-    /// resident on its way back; false when either cannot be taken back (another process bound it
-    /// while the app was away) or no launch was told any.
+    /// The tool service listening again on the very port the last launch was told, for a frozen
+    /// resident on its way back; false when it cannot be taken back (another process bound it
+    /// while the app was away) or no launch was told one.
     func reclaim() async -> Bool {
         guard let told, let toldLogin else { return false }
         do {
-            _ = try await proxy.relisten(on: told.proxy)
-            _ = try await tools.relisten(on: told.tools, context: toldLogin)
+            _ = try await tools.relisten(on: told, context: toldLogin)
             return true
         } catch {
-            GuestResident.listenerLog.notice("guest: a port the frozen resident was told could not be taken back: \(String(describing: error))")
+            GuestResident.listenerLog.notice("guest: the port the frozen resident was told could not be taken back: \(String(describing: error))")
             return false
         }
     }
 }
 
-/// The app's freezer: every guest task stopped on the way out, and on the way back the proxy and
-/// the tool service taken back on the ports the resident was told and the DNS forwarder up before
+/// The app's freezer: every guest task stopped on the way out, and on the way back the tool
+/// service taken back on the port the resident was told and the DNS forwarder up before
 /// any task is continued, so nothing in the guest runs toward a listener the app does not hold.
 @MainActor
 final class GuestFreeze: GuestFreezer {
@@ -408,21 +397,21 @@ final class GuestFreeze: GuestFreezer {
 }
 
 extension GuestResident {
-    /// What the resident's launcher answers at each launch: the proxy's and the tool service's
-    /// ports from `ports`, the credential `credential` makes for the proxy's, `topo`'s own
+    /// What the resident's launcher answers at each launch: the tool service's port from `ports`,
+    /// what `credential` gives the launch, `topo`'s own
     /// variables and the app's build (`BuildFacts`). Says at notice what the launch is told, once the environment is made; a launch
     /// that then fails to start says so in the session's own line.
     nonisolated static func launchEnvironment(
         ports: LaunchPorts, note: @escaping @Sendable (String) -> Void = { GuestResident.listenerLog.notice($0) },
-        credential: @escaping @Sendable (UInt16) async throws -> [String: String]
+        credential: @escaping @Sendable () async throws -> [String: String]
     ) -> @Sendable () async throws -> [String: String] {
         { @Sendable in
             let now = try await ports.ports()
-            let environment = try await credential(now.proxy)
-                .merging(ToolService.environment(port: now.tools, token: ports.tools.token)) { own, _ in own }
+            let environment = try await credential()
+                .merging(ToolService.environment(port: now, token: ports.tools.token)) { own, _ in own }
                 .merging(GuestTools.environment) { own, _ in own }
                 .merging(BuildFacts.current) { own, _ in own }
-            note("guest: the launch is told the proxy at \(now.proxy) and the tools at \(now.tools)")
+            note("guest: the launch is told the tools at \(now)")
             return environment
         }
     }
@@ -623,9 +612,9 @@ struct ResidentConversation: GuestConversation {
 }
 
 extension GuestResident {
-    /// Where the session's, the proxy's and the tool service's lines go, and each way out's
-    /// outcome: the unified log, under the category `topo log --category resident` reads, the
-    /// proxy's starting `proxy:` and the tool service's `tools:`, and printed in a debug build,
+    /// Where the session's and the tool service's lines go, and each way out's outcome: the
+    /// unified log, under the category `topo log --category resident` reads, the tool service's
+    /// starting `tools:`, and printed in a debug build,
     /// where a simulator run reads them.
     nonisolated static let log: @Sendable (String) -> Void = { line in
         // A cut the way out kept is a line a device check reads after the fact, so it is kept
@@ -685,7 +674,7 @@ extension DebugRun {
 
     /// `TOPO_DEBUG_GUEST_TURN="<turn> || <turn> || …"`: on launch, bring the resident Claude Code up
     /// (`GuestResident`, the guest booted and Claude Code mounted as `TOPO_DEBUG_USERLAND` does,
-    /// the proxy started, the home mounted) and send the turns to it one at a time, each once the
+    /// the home mounted) and send the turns to it one at a time, each once the
     /// app is in the foreground and the process is resident, printing each turn's model and
     /// session from its `system/init`, the tools it called and what each one's result said (named
     /// by the call it answers, in the order the calls were made, as `toolResultLine` writes it),

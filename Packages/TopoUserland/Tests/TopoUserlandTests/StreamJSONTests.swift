@@ -134,8 +134,10 @@ final class StreamJSONTests: XCTestCase {
     func testASubagentsWordsAndASyntheticMessageAreNoTextOfTheReply() {
         let subagent = #"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"id":"msg_s","model":"claude-haiku-4-5","content":[{"type":"thinking","thinking":""},{"type":"text","text":"sub-agent words"},{"type":"tool_use","name":"Read","input":{}}]}}"#
         XCTAssertEqual(StreamJSON.events(in: subagent), [.thinking, .toolUse(name: "Read")])
-        for event in [#"{"type":"message_start","message":{}}"#,
-                      #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"sub"}}"#] {
+        // A sub-agent's request is seen, as a request of its own and no message of the reply's.
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","parent_tool_use_id":"toolu_1","event":{"type":"message_start","message":{}}}"#),
+                       [.requestBegan(subagent: true, tokens: 0)])
+        for event in [#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"sub"}}"#] {
             XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","parent_tool_use_id":"toolu_1","event":\#(event)}"#),
                            [.other("stream_event")], event)
             XCTAssertNotEqual(StreamJSON.events(in: #"{"type":"stream_event","parent_tool_use_id":null,"event":\#(event)}"#),
@@ -149,7 +151,7 @@ final class StreamJSONTests: XCTestCase {
 
     func testAMessageAsItIsWrittenIsItsTextAPieceAtATime() {
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#),
-                       [.writingBegan])
+                       [.writingBegan, .requestBegan(subagent: false, tokens: 0)])
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Twel"}}}"#),
                        [.writing("Twel")])
         // A tool's input as it is written, and thinking, are not the reply's text.
@@ -170,6 +172,22 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(StreamJSON.events(in: subagent), [.other("stream_event")])
         let text = #"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}},"parent_tool_use_id":null}"#
         XCTAssertEqual(StreamJSON.events(in: text), [.other("stream_event")])
+    }
+
+    /// Each model request is marked from the stream, nothing of the app's being between Claude Code
+    /// and Anthropic: its answer's start with the context it was sent (as Claude Code 2.1.316 wrote
+    /// it), its end, and a retry with its status.
+    func testAModelRequestIsReadFromItsStreamEvents() {
+        let start = #"{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_1","type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":412,"cache_read_input_tokens":12890,"output_tokens":1,"service_tier":"standard"}}},"session_id":"s","parent_tool_use_id":null,"uuid":"u"}"#
+        XCTAssertEqual(StreamJSON.events(in: start), [.writingBegan, .requestBegan(subagent: false, tokens: 13305)])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}"#),
+                       [.requestEnded(subagent: false)])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":"toolu_1"}"#),
+                       [.requestEnded(subagent: true)])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":1200,"error_status":529,"error":"overloaded"}"#),
+                       [.retry(attempt: 2, status: 529)])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"system","subtype":"api_retry","attempt":1,"error_status":null,"error":"connection"}"#),
+                       [.retry(attempt: 1, status: nil)])
     }
 
     func testAnUnknownEventIsNamedAndNotRead() {
@@ -213,7 +231,7 @@ final class StreamJSONTests: XCTestCase {
     }
 
     /// The threads variable is set to `1` under the name the session gives, and under no name
-    /// anything else of the launch sets: not one the callback supplies (the proxy's URL, a
+    /// anything else of the launch sets: not one the callback supplies (a base URL, a
     /// token), not one of the guest's, and not one of the launcher's own, which keep their own
     /// values. None given sets none.
     func testTheThreadsVariableIsSetOnlyWhereNothingElseIs() async throws {
@@ -326,6 +344,7 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.arguments(model: "claude-haiku-4-5-20251001", resume: nil),
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                         "--include-partial-messages", "--replay-user-messages", "--dangerously-skip-permissions",
+                        "--disallowedTools", "SendToProject,SendToProjectContext",
                         "--model", "claude-haiku-4-5-20251001", "--settings", ClaudeLauncher.settings(memory: nil)])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
         let launcher = ClaudeLauncher { [:] }

@@ -1,4 +1,3 @@
-import TopoProxy
 import TopoTools
 import TopoTurn
 import XCTest
@@ -28,18 +27,17 @@ final class ContextToolTests: XCTestCase {
                     setThreads: { phone.threads.append($0); phone.facts.threads = $0 })
     }
 
-    /// The check is what the proxy saw, not the setting: a launch whose name Claude Code does not
-    /// read shows on, with every request on none, which is how the mind tells a dead name.
-    func testThreadsShowsWhatTheProxySawBesideTheSetting() async {
+    /// The check is what the requests uploaded, not the setting: a launch whose name Claude Code
+    /// does not read shows on, with every request whole, which is how the mind tells a dead name.
+    func testThreadsShowsWhatTheRequestsUploadedBesideTheSetting() async {
         let phone = Phone()
         let now = Date(timeIntervalSince1970: 1_000)
         phone.facts.now = now
         phone.facts.sent = [
-            ThreadLog.Sent(at: now - 400, bytes: 600_123, kind: .create, status: 200),
-            ThreadLog.Sent(at: now - 380, bytes: 39_975, kind: .continue, status: 200),
-            ThreadLog.Sent(at: now - 3, bytes: 39_975, kind: .continue, status: 404),
-            ThreadLog.Sent(at: now - 2, bytes: 600_500, kind: .create, status: nil),
-            ThreadLog.Sent(at: now - 1, bytes: 40_100, kind: .continue, status: ThreadLog.cancelled),
+            ThreadSampler.Note(at: now - 400, bytes: 21_000, tokens: 14_000, kind: .whole),
+            ThreadSampler.Note(at: now - 380, bytes: 2_600, tokens: 14_600, kind: .thread),
+            ThreadSampler.Note(at: now - 2, bytes: nil, tokens: 15_000, kind: .unknown),
+            ThreadSampler.Note(at: now - 1, bytes: 2_700, tokens: 15_100, kind: .thread),
         ]
         let shown = await tool(phone).run(["threads"])
         XCTAssertEqual(shown.status, ToolReply.ok)
@@ -54,21 +52,21 @@ final class ContextToolTests: XCTestCase {
         for named in ["profile", "claude.ai connectors", "whole conversation"] {
             XCTAssertTrue(MessageThreads.whenOff.contains(named), named)
         }
-        XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
-        XCTAssertTrue(shown.text.contains("  3 s ago  continue  39975 bytes  404 (the thread had gone"), shown.text)
-        XCTAssertTrue(shown.text.contains("  2 s ago  create  600500 bytes  waiting\n"), shown.text)
-        XCTAssertTrue(shown.text.contains("  1 s ago  continue  40100 bytes  cancelled (the client went away before an answer)\n"), shown.text)
-        XCTAssertTrue(shown.text.hasSuffix("on a thread: 5 of 5; the newest: continue\n"), shown.text)
+        XCTAssertTrue(shown.text.contains("judged by their uploads (inferred, never read)"), shown.text)
+        XCTAssertTrue(shown.text.contains("  400 s ago  whole conversation  21 KB for 14000 tokens\n"), shown.text)
+        XCTAssertTrue(shown.text.contains("  380 s ago  small upload: on a thread  3 KB for 14600 tokens\n"), shown.text)
+        XCTAssertTrue(shown.text.contains("  2 s ago  can't tell  upload not told apart"), shown.text)
+        XCTAssertTrue(shown.text.hasSuffix("small uploads: 2 of 4; the newest: small upload: on a thread\n"), shown.text)
 
         phone.facts.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_THREADS_WRONG_NAME")
-        phone.facts.sent = [ThreadLog.Sent(at: now - 1, bytes: 600_900, kind: .none, status: 200)]
+        phone.facts.sent = [ThreadSampler.Note(at: now - 1, bytes: 16_100, tokens: 9_800, kind: .whole)]
         let dead = await tool(phone).run(["threads"])
         XCTAssertTrue(dead.text.hasPrefix("threads: on, asked for with CLAUDE_CODE_THREADS_WRONG_NAME=1 (renamed on this phone)"), dead.text)
-        XCTAssertTrue(dead.text.hasSuffix("on a thread: none of these; the newest: none\n"), dead.text)
+        XCTAssertTrue(dead.text.hasSuffix("small uploads: none of these; the newest: whole conversation\n"), dead.text)
 
         phone.facts.sent = []
         let none = await tool(phone).run(["threads"])
-        XCTAssertTrue(none.text.contains("requests: none through the proxy"), none.text)
+        XCTAssertTrue(none.text.contains("requests: none seen since this app launched"), none.text)
         XCTAssertEqual(phone.threads, [], "showing changed the setting")
     }
 

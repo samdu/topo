@@ -71,7 +71,9 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// requires), a message's text as it is written (`--include-partial-messages`), each input
     /// echoed as its turn begins (`--replay-user-messages`, `StreamEvent.received`), permissions bypassed, the model when one is given, and the session to resume
     /// when there is one. Bypassed because the guest is the sandbox: what the mind can reach is
-    /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
+    /// decided by the holes poked in it (the mounts, the tool service), and nothing inside it
+    /// prompts. The tools Claude Code adds that reach the person's claude.ai account rather than
+    /// the guest (`disallowed`) are taken away, since nothing would ask before one ran.
     ///
     /// What the conversation is told of its time (`timePrompt`), of its memory when `memory` is
     /// said, and of what became of the process before it when that was cut short (the note,
@@ -82,12 +84,17 @@ public struct ClaudeLauncher: ResidentLauncher {
     public static func arguments(model: String?, resume: String?, memory: Bool? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--include-partial-messages", "--replay-user-messages",
-                         "--dangerously-skip-permissions"]
+                         "--dangerously-skip-permissions", "--disallowedTools", disallowed.joined(separator: ",")]
         if let model { arguments += ["--model", model] }
         arguments += ["--settings", settings(memory: memory)]
         if let resume { arguments += ["--resume", resume] }
         return arguments
     }
+
+    /// The tools the resident is launched without: Claude Code's sending of the session's work to a
+    /// Claude Project in the person's claude.ai account, which it offers a session that talks to
+    /// Anthropic directly. An argument, so a claude the resident starts is not launched without them.
+    public static let disallowed = ["SendToProject", "SendToProjectContext"]
 
     /// The variables a launch's note and its mark are in (`launchEnvironment(note:)`), for the
     /// hook to print.

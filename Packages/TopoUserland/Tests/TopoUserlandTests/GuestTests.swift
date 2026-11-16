@@ -40,6 +40,45 @@ final class GuestTests: XCTestCase {
         XCTAssertEqual(fallback.output, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
     }
 
+    /// Claude Code's managed policy is written as a file at its path, over a file, and over a link
+    /// the guest made there without writing through it; a folder at the path is refused, not
+    /// written into; and none asked for removes what stands.
+    func testTheManagedPolicyIsWrittenAtItsPathAndNowhereElse() async throws {
+        _ = try SharedGuest.booted()
+        let path = Guest.managedSettings
+        _ = try await Guest.shared.run("/bin/sh", ["-c", "rm -rf \"$1\" /tmp/policy-aside", "sh", path])
+        try await Guest.shared.writeManagedSettings(#"{"a":1}"#)
+        let written = try await Guest.shared.run("/bin/sh", ["-c", "[ -f \"$1\" ] && [ ! -L \"$1\" ] && cat \"$1\"; ls \"$1.topo\" 2>/dev/null", "sh", path])
+        XCTAssertEqual(written.status, 0, written.errors)
+        XCTAssertEqual(written.output, #"{"a":1}"#)
+
+        // A link to a folder and a link to a file: the policy replaces the link, and neither target is written.
+        for target in ["/tmp/policy-aside", "/tmp/policy-aside/file"] {
+            let made = try await Guest.shared.run("/bin/sh", ["-c", "rm -rf /tmp/policy-aside && mkdir -p /tmp/policy-aside && echo kept > /tmp/policy-aside/file && rm -f \"$1\" && ln -s \"$2\" \"$1\"", "sh", path, target])
+            XCTAssertEqual(made.status, 0, made.errors)
+            try await Guest.shared.writeManagedSettings(#"{"b":2}"#)
+            let after = try await Guest.shared.run("/bin/sh", ["-c", "[ ! -L \"$1\" ] && cat \"$1\" && echo && cat /tmp/policy-aside/file && ls /tmp/policy-aside", "sh", path])
+            XCTAssertEqual(after.status, 0, after.errors)
+            XCTAssertEqual(after.output, "{\"b\":2}\nkept\nfile\n", target)
+        }
+
+        _ = try await Guest.shared.run("/bin/sh", ["-c", "rm -f \"$1\" && mkdir \"$1\"", "sh", path])
+        do {
+            try await Guest.shared.writeManagedSettings(#"{"c":3}"#)
+            XCTFail("a folder at the policy's path was written into")
+        } catch Guest.Failure.managedSettings {}
+        let folder = try await Guest.shared.run("/bin/sh", ["-c", "[ -d \"$1\" ] && ls -A \"$1\"", "sh", path])
+        XCTAssertEqual(folder.output, "", "the policy was written inside the folder")
+
+        _ = try await Guest.shared.run("/bin/sh", ["-c", "rmdir \"$1\"", "sh", path])
+        try await Guest.shared.writeManagedSettings(#"{"a":1}"#)
+        try await Guest.shared.writeManagedSettings(nil)
+        try await Guest.shared.writeManagedSettings(nil)
+        let gone = try await Guest.shared.run("/bin/sh", ["-c", "[ ! -e \"$1\" ] && [ ! -L \"$1\" ]", "sh", path])
+        XCTAssertEqual(gone.status, 0, "the policy stood after its removal")
+        _ = try await Guest.shared.run("/bin/rm", ["-rf", "/tmp/policy-aside"])
+    }
+
     /// Only numeric addresses with no scope reach the file, IPv4 first, three at most, each once;
     /// a list with none of those is the fallback.
     func testTheResolverFileTakesAddressesOnly() {

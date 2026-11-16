@@ -260,7 +260,7 @@ selects true false false "the guest's tests, which the Topo scheme runs" $'Packa
 selects true true true "TopoCore's test double, which is source" $'Packages/TopoCore/Sources/TopoCoreTesting/HoldingDatabase.swift\n'
 selects true true true "a package's manifest" $'Packages/TopoCore/Package.swift\n'
 selects true true false "the unit and UI tests together" $'Tests/Client/LookToolTests.swift\nTests/ClientUI/MicrophonePressTests.swift\n' true
-selects true false true "the unit tests beside a package's" $'Tests/Client/LookToolTests.swift\nPackages/TopoProxy/Tests/TopoProxyTests/ProxyTests.swift\n'
+selects true false true "the unit tests beside a package's" $'Tests/Client/LookToolTests.swift\nPackages/TopoProxy/Tests/TopoProxyTests/DNSForwarderTests.swift\n'
 selects true true true "a test beside the app" $'Tests/Client/LookToolTests.swift\nApps/Client/Ear.swift\n'
 
 # A union: each path's suites.

@@ -352,6 +352,11 @@ final class Userland {
             Perf.mark("guest.dns.up")
             // Nor is a /tmp left full: what it clears is what a killed process left behind.
             try? await Guest.shared.clearTemporary()
+            // Claude Code's managed policy before any claude can start: the debug build's Haiku pin,
+            // or, in a release build, the removal of one a debug build left (`GuestPolicy`).
+            try await GuestPolicy.apply(GuestPolicy.forBuild, write: { try await Guest.shared.writeManagedSettings($0) },
+                                        log: { TopoLog(.resident).error($0) })
+            Perf.mark("guest.policy.done")
             // The same for the zone: the phone's zoneinfo mounted, then the link kept to its zone. With
             // the mount refused the guest is on UTC; with a write refused, on whatever link stood.
             try? Guest.shared.mountZoneinfo()
@@ -473,24 +478,23 @@ extension DebugRun {
     /// `stopped`: the guest command runs with the DNS forwarder stopped once the guest is booted.
     static let dnsVariable = "TOPO_DEBUG_DNS"
 
-    /// What the guest's command is handed beside the base URL, and the launch's line about it:
-    /// the developer's token as `CLAUDE_CODE_OAUTH_TOKEN` when the launch carried one, otherwise
+    /// What the guest's command is handed for its login, and the launch's line about it: the
+    /// developer's token as `CLAUDE_CODE_OAUTH_TOKEN` when the launch carried one, otherwise
     /// nothing, and the command runs on whatever Claude Code's own login in the home holds.
-    static func handOver(port: UInt16, developer: [String: String]) -> (environment: [String: String], lines: [String]) {
+    static func handOver(developer: [String: String]) -> (environment: [String: String], lines: [String]) {
         let credential = developer.isEmpty ? "none" : "the developer's token"
-        return (developer, ["userland: proxy on \(APIProxy.baseURL(port: port)), credential: \(credential)"])
+        return (developer, ["userland: direct to Anthropic, credential: \(credential)"])
     }
 
     /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs and Claude Code, boot
-    /// the guest, verify Claude Code and mount it at `/usr/local/bin/claude`, start the API proxy on
-    /// loopback, start the tool service with `topo` in the home the resident gets (mounted, as the
-    /// resident's is), run the command under `/bin/sh -c` in `Guest.environment` (the environment every
-    /// launch path hands the guest, Claude Code's updater off in it) with `ANTHROPIC_BASE_URL`
-    /// pointing at the proxy, the developer's token as `CLAUDE_CODE_OAUTH_TOKEN` when the launch
-    /// carried one (`handOver`) and the tool service's two variables, and print
-    /// what it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh
-    /// --userland` to assert on. The proxy's own lines are printed as `proxy:`. With no token the
-    /// command runs with the base URL and no credential. Nothing at all when the variable is absent.
+    /// the guest (Claude Code's managed policy, the Haiku pin, written in the boot), verify Claude
+    /// Code and mount it at `/usr/local/bin/claude`, start the tool service with `topo` in the home
+    /// the resident gets (mounted, as the resident's is), run the command under `/bin/sh -c` in
+    /// `Guest.environment` (the environment every launch path hands the guest, Claude Code's updater
+    /// off in it) with the developer's token as `CLAUDE_CODE_OAUTH_TOKEN` when the launch carried one
+    /// (`handOver`) and the tool service's two variables, and print what it wrote and how it exited,
+    /// each line prefixed, for `scripts/simulator-run.sh --userland` to assert on. With no token the
+    /// command runs on the home's login. Nothing at all when the variable is absent.
     /// What the guest's command wrote and how it exited, as the userland run prints them, every
     /// credential redacted: `env` there prints the guest's token and the tool service's.
     static func guestLines(output: String, errors: String, status: Int32) -> [String] {
@@ -529,15 +533,11 @@ extension DebugRun {
             }
             let milliseconds = Int(installed.verification / .milliseconds(1))
             say("userland: claude code \(installed.version) verified in \(milliseconds) ms, mounted at \(installed.command)")
-            let proxy = try APIProxy(log: { line in say("proxy: \(line)") })
-            let port = try await proxy.start()
-            defer { Task { await proxy.stop() } }
             var guestEnvironment = Guest.environment
-            guestEnvironment["ANTHROPIC_BASE_URL"] = APIProxy.baseURL(port: port)
             // The tool service and `topo`, as the resident has them, so a command can call a tool.
             guestEnvironment.merge(try await GuestResident.shared.prepareTools { line in say(line) }) { _, new in new }
             say("userland: tools on \(guestEnvironment[ToolService.urlVariable] ?? "nothing"), topo at \(GuestTools.command)")
-            let handed = handOver(port: port, developer: GuestResident.developerEnvironment)
+            let handed = handOver(developer: GuestResident.developerEnvironment)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
             // A debug command can be a whole `claude -p` turn under the emulator, and the script
