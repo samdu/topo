@@ -77,8 +77,8 @@ struct TurnTimeline: Sendable {
     var beside: [Event]
     /// The voice's first sound, from its start to its first frame, in ms from the turn's start.
     var sound: ClosedRange<Int64>?
-    /// What each model request uploaded, in bytes, in order, for those one connection alone told (a sum
-    /// over several is an upper bound, and is left out).
+    /// What each model request uploaded, in bytes, in order, for those one connection alone told (the most
+    /// of several is an upper bound, and is left out).
     var requestBytes: [Int]
     /// How many model requests the turn made of its own.
     var requests: Int

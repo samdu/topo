@@ -356,17 +356,17 @@ final class PerfToolTests: XCTestCase {
         XCTAssertTrue(turn.record.contains(" thread=unknown bytes=0 requests=1 "), turn.record)
     }
 
-    /// An upload summed over several connections is said as at most, and kept out of the record's bytes.
+    /// An upload bounded by the most of several connections is said as at most, and kept out of the record's bytes.
     func testASharedUploadIsSaidAsAtMostAndLeftOutOfTheBytes() throws {
         let tag = "turn=5ab1e5ab"
         let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(50, "turn.saved"), line(60, "turn.guest.write", "guest=3"),
                      line(400, "turn.guest.message", "own guest=3 request=1 tokens=60400"),
-                     line(401, "turn.guest.upload", "guest=3 request=1 kind=thread bytes=11000 connections=several"),
+                     line(401, "turn.guest.upload", "guest=3 request=1 kind=thread bytes=8400 connections=several"),
                      line(700, "turn.guest.message.done", "own"), line(800, "turn.reply.shown", tag),
                      line(800, "turn.attempt.end", "\(tag) answered")]
         let turn = try XCTUnwrap(timelines(lines).first)
         XCTAssertEqual(turn.events.first { $0.key == .model }?.title,
-                       "Request 1 sent and the model began answering (at most 11 KB, a small upload: on a thread)")
+                       "Request 1 sent and the model began answering (at most 8 KB, a small upload: on a thread)")
         XCTAssertEqual(turn.requestBytes, [])
         XCTAssertTrue(turn.record.contains(" thread=thread bytes=0 "), turn.record)
     }

@@ -14,11 +14,11 @@ import TopoUserland
 ///
 /// The counters are read at three of a turn's moments, on a queue of its own, so nothing waits on
 /// a read: when each of the turn's own requests begins answering, by which time it has gone, and
-/// when the turn ends, which is the next turn's first baseline. A request's upload is what the
-/// connections sent between the read before it and the read at its answer, all of them summed. When
-/// one connection alone grew that is the request's; when more did (the event batch Claude Code
-/// sends to the same host, a second connection open between turns), the sum is an upper bound on
-/// it, which can say a thread (small even summed) and never the whole conversation. It is not told
+/// when the turn ends, which is the next turn's first baseline. A request's upload is what its
+/// connection sent between the read before it and the read at its answer. When one connection alone
+/// grew that is the request's; when more did (the event batch Claude Code sends to the same host, a
+/// second connection open between turns), a request goes out on one connection, so its upload is at
+/// most the largest one's, which can say a thread (small even so) and never the whole conversation. It is not told
 /// — and nothing is guessed — when none grew, when a connection read before is gone
 /// at the answer (what it sent last is not known), when the read before it finished after the
 /// request could have begun (after the turn's words were written, for its first; after the app
@@ -38,22 +38,23 @@ final class ThreadSampler: Sendable {
         case thread
         /// An upload the size of the context: the whole conversation went (a thread begun, or none).
         case whole
-        /// Not told: no one connection's upload to read, or a ratio between the two.
+        /// Not told: no upload to read, or a ratio between the two (or over a thread's, when more than one
+        /// connection sent).
         case unknown
     }
 
     struct Note: Sendable, Equatable {
         let at: Date
-        /// What the request's connection sent, or the sum of what more than one did (`shared`), nil
-        /// when it could not be told.
+        /// What the request's connection sent, or the most any one sent when more than one did
+        /// (`shared`), nil when it could not be told.
         let bytes: Int?
         let tokens: Int
         let kind: Kind
-        /// Whether `bytes` is more than one connection's, an upper bound on the request's.
+        /// Whether more than one connection sent, so `bytes` is an upper bound on the request's.
         var shared = false
     }
 
-    /// What the connections sent between two reads: the sum, and whether one connection alone sent it.
+    /// What the connections sent between two reads: the most any one sent, and whether it was alone.
     struct Upload: Sendable, Equatable {
         let bytes: Int
         let alone: Bool
@@ -90,15 +91,16 @@ final class ThreadSampler: Sendable {
         return .unknown
     }
 
-    /// What the connections sent between `before` and `after`, summed; nil when none did or one in
-    /// `before` is gone from `after`. A socket not in `before` was opened since, and all it sent counts.
+    /// The most any one connection sent between `before` and `after`, which a request, going out on one
+    /// connection, cannot exceed; nil when none sent or one in `before` is gone from `after`. A socket
+    /// not in `before` was opened since, and all it sent counts.
     static func upload(from before: [Socket: UInt64], to after: [Socket: UInt64]) -> Upload? {
         guard before.keys.allSatisfy({ after[$0] != nil }) else { return nil }
         let grew = after.compactMap { socket, sent -> UInt64? in
             let was = before[socket] ?? 0
             return sent > was ? sent - was : nil
         }
-        return grew.isEmpty ? nil : Upload(bytes: Int(grew.reduce(0, +)), alone: grew.count == 1)
+        return grew.isEmpty ? nil : Upload(bytes: Int(grew.max()!), alone: grew.count == 1)
     }
 
     /// The counters as one moment read them, and when that read finished.

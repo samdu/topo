@@ -38,7 +38,7 @@ final class ContextToolTests: XCTestCase {
             ThreadSampler.Note(at: now - 380, bytes: 2_600, tokens: 14_600, kind: .thread),
             ThreadSampler.Note(at: now - 2, bytes: nil, tokens: 15_000, kind: .unknown),
             ThreadSampler.Note(at: now - 1, bytes: 2_700, tokens: 15_100, kind: .thread),
-            ThreadSampler.Note(at: now, bytes: 11_000, tokens: 60_400, kind: .thread, shared: true),
+            ThreadSampler.Note(at: now, bytes: 8_400, tokens: 60_400, kind: .thread, shared: true),
         ]
         let shown = await tool(phone).run(["threads"])
         XCTAssertEqual(shown.status, ToolReply.ok)
@@ -57,7 +57,7 @@ final class ContextToolTests: XCTestCase {
         XCTAssertTrue(shown.text.contains("  400 s ago  whole conversation  21 KB for 14000 tokens\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  380 s ago  small upload: on a thread  3 KB for 14600 tokens\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  2 s ago  can't tell  upload not told (no read to count it from"), shown.text)
-        XCTAssertTrue(shown.text.contains("  0 s ago  small upload: on a thread  at most 11 KB for 60400 tokens"), shown.text)
+        XCTAssertTrue(shown.text.contains("  0 s ago  small upload: on a thread  at most 8 KB for 60400 tokens"), shown.text)
         XCTAssertTrue(shown.text.hasSuffix("small uploads: 3 of 5; the newest: small upload: on a thread\n"), shown.text)
 
         phone.facts.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_THREADS_WRONG_NAME")

@@ -65,7 +65,8 @@ struct ContextTool: Tool {
     conversation holds a web search's results or its tools changed, a thread Anthropic dropped and Claude Code
     made again, a request carrying a big tool result in a short conversation, or another request that went on
     the same connection between the two reads. When more than one connection sent between the reads, the
-    size is their sum, "at most" the request's: small even so is a thread, and larger is can't tell. Can't
+    size is the largest one's, "at most" the request's, since a request goes out on one connection: small
+    even so is a thread, and larger is can't tell. Can't
     tell is also a turn's first request after a launch or a login, one after a sub-agent's, one whose reads
     ran late, and one whose connection closed between them. Sizes are
     compressed, so very repetitive words read small. Judge by several turns' requests, not one.

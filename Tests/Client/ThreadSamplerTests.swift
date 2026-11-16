@@ -22,7 +22,7 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(ThreadSampler.kind(bytes: 2_600, tokens: 0), .unknown)
     }
 
-    /// What the connections that grew sent, summed, and whether one alone did; none, or one gone since
+    /// The most any connection that grew sent, and whether one alone did; none, or one gone since
     /// the read before, is not told; a socket opened since counts whole, and a descriptor opened again
     /// on another connection is another socket.
     func testAnUploadIsWhatTheConnectionsThatGrewSent() {
@@ -30,7 +30,9 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(ThreadSampler.upload(from: [messages: 100, telemetry: 50], to: [messages: 2_700, telemetry: 50]),
                        Upload(bytes: 2_600, alone: true))
         XCTAssertEqual(ThreadSampler.upload(from: [messages: 100, telemetry: 50], to: [messages: 2_700, telemetry: 900]),
-                       Upload(bytes: 3_450, alone: false), "two connections that grew are summed, and said not to be alone")
+                       Upload(bytes: 2_600, alone: false), "the larger of two that grew, the request's, said not to be alone")
+        XCTAssertEqual(ThreadSampler.upload(from: [messages: 100, telemetry: 50], to: [messages: 2_700, telemetry: 8_450]),
+                       Upload(bytes: 8_400, alone: false), "the larger of two that grew, another connection's, as the bound")
         XCTAssertNil(ThreadSampler.upload(from: [messages: 100], to: [messages: 100]))
         XCTAssertEqual(ThreadSampler.upload(from: [:], to: [messages: 21_000]), Upload(bytes: 21_000, alone: true))
         let again = Socket(descriptor: 21, port: 52_140)
@@ -40,11 +42,11 @@ final class ThreadSamplerTests: XCTestCase {
                      "a connection gone between the reads may have sent too")
     }
 
-    /// A sum over several connections is an upper bound: small even so is a thread, and large is not
+    /// The most of several connections is an upper bound: small even so is a thread, and large is not
     /// told, never the whole conversation (the paced run at 938ee637: 2.6 KB of the request's beside
     /// 8 KB of a second connection's, for 60,000 tokens).
     func testASharedUploadCanSayAThreadAndNeverTheWholeConversation() {
-        XCTAssertEqual(ThreadSampler.kind(bytes: 11_000, tokens: 60_400, shared: true), .thread)
+        XCTAssertEqual(ThreadSampler.kind(bytes: 8_400, tokens: 60_400, shared: true), .thread)
         XCTAssertEqual(ThreadSampler.kind(bytes: 41_000, tokens: 60_400, shared: true), .unknown, "between the two")
         XCTAssertEqual(ThreadSampler.kind(bytes: 90_000, tokens: 60_400, shared: true), .unknown, "a sum read as the whole conversation")
         XCTAssertEqual(ThreadSampler.kind(bytes: 90_000, tokens: 60_400), .whole)
@@ -125,8 +127,8 @@ final class ThreadSamplerTests: XCTestCase {
     }
 
     /// A second connection that sends between turns (as one did on the simulator at 938ee637, some
-    /// 8 KB a turn) leaves the request's upload summed with it: a thread still, said as at most, and a
-    /// sum too large for one is not told rather than the whole conversation.
+    /// 8 KB a turn) leaves the request's upload bounded by the larger of the two: a thread still, said
+    /// as at most, and a bound too large for one is not told rather than the whole conversation.
     func testASecondConnectionSendingBetweenTurnsLeavesAnUpperBound() {
         let reader = Reader()
         let sampler = sampler(reader)
@@ -134,20 +136,20 @@ final class ThreadSamplerTests: XCTestCase {
         sampler.heard(.ended)
         sampler.settled()
         sampler.heard(.written(turn: 3))
-        reader.now = [messages: 74_000, telemetry: 55_100]
+        reader.now = [messages: 80_400, telemetry: 55_100]
         request(sampler, 1, tokens: 60_400)
         sampler.settled()
         sampler.heard(.ended)
         sampler.settled()
         sampler.heard(.written(turn: 4))
-        reader.now = [messages: 76_600, telemetry: 93_900]
+        reader.now = [messages: 116_400, telemetry: 63_500]
         request(sampler, 1, tokens: 60_500)
         sampler.settled()
         sampler.heard(.ended)
         sampler.settled()
         XCTAssertEqual(sampler.recent(), [
-            .init(at: at, bytes: 11_000, tokens: 60_400, kind: .thread, shared: true),
-            .init(at: at, bytes: 41_400, tokens: 60_500, kind: .unknown, shared: true),
+            .init(at: at, bytes: 9_000, tokens: 60_400, kind: .thread, shared: true),
+            .init(at: at, bytes: 36_000, tokens: 60_500, kind: .unknown, shared: true),
         ])
     }
 
