@@ -8,7 +8,7 @@
 #   scripts/check-built-assets.sh --embedded <path to Topo.app>   # carries the whole of both
 #
 # Without `--embedded`, any of these anywhere in the app is a failure: a `phonon-40m-en` or
-# `parakeet-ultra-coreml` folder; a
+# `parakeet-ultra` folder; a
 # model in any of Core ML's forms (`.mlpackage`, `.mlmodel`, `.mlmodelc`, the compiled one Xcode
 # makes of the other two); weights by their own extensions (`.safetensors`, `.gguf`, `.onnx`,
 # `.pt`, `.pth`, `.ckpt`, `.npz`) or the `.aar` the pack is shipped as; and any file larger than
@@ -21,7 +21,7 @@ embedded=no
 if [ "${1-}" = --embedded ]; then embedded=yes; shift; fi
 app="${1:?usage: check-built-assets.sh [--embedded] <Topo.app>}"
 [ -d "$app" ] || { echo "$app is not a built app" >&2; exit 1; }
-names=(phonon-40m-en parakeet-ultra-coreml)
+names=(phonon-40m-en parakeet-ultra)
 
 if [ "$embedded" = no ]; then
   found="$(find "$app" \( -name "${names[0]}" -o -name "${names[1]}" -o -name '*.mlpackage' -o -name '*.mlmodel' -o -name '*.mlmodelc' \

@@ -19,7 +19,7 @@ manifest="$root/Apps/Topo/Resources/models.json"
 dest="${1:?usage: scripts/fetch-ear-models.sh <directory> [<id>...]}"
 shift
 mkdir -p "$dest"
-ear='["parakeet-ultra-coreml", "parakeet-ctc-110m-coreml"]'
+ear='["parakeet-ultra", "parakeet-ctc-110m-coreml"]'
 if [ "$#" -gt 0 ]; then
   wanted="$(jq -cn '$ARGS.positional' --args "$@")"
   bad="$(jq -rn --argjson w "$wanted" --argjson e "$ear" '$w - $e - ["silero-vad-coreml", "smart-turn-v3"] | join(" ")')"
@@ -28,7 +28,7 @@ else
   wanted="$ear"
 fi
 
-if jq -e --argjson w "$wanted" '$w | index("parakeet-ultra-coreml")' -n >/dev/null; then
+if jq -e --argjson w "$wanted" '$w | index("parakeet-ultra")' -n >/dev/null; then
   "$root/scripts/ear-bundle.sh" "$dest" >/dev/null
 fi
 jq -r --argjson wanted "$wanted" '.models[] | select(.id as $id | $wanted | index($id))

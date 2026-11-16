@@ -667,7 +667,7 @@ extension DebugRun {
     /// how a test has something heard without a recogniser. `TOPO_DEBUG_EAR=loading` is one
     /// whose load never finishes, so every press is refused with the ear's reason, however fast
     /// the real models would have downloaded. `TOPO_DEBUG_EAR=` an
-    /// absolute directory holding `parakeet-ultra-coreml` (scripts/ear-bundle.sh's) and
+    /// absolute directory holding `parakeet-ultra` (scripts/ear-bundle.sh's) and
     /// `parakeet-ctc-110m-coreml` is the real ear, Ultra and its spotter loaded from there in place
     /// of the store and the app's own download, which is how the UI test gets Parakeet resident in
     /// a simulator with no asset pack and without the background download. Any other launch

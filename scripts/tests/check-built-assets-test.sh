@@ -37,7 +37,7 @@ cat > "$source/bundle.json" <<JSON
 JSON
 
 # The ear's, as ear-bundle.sh leaves one, with a stray partial download beside it.
-ear="$work/parakeet-ultra-coreml"
+ear="$work/parakeet-ultra"
 mkdir -p "$ear/Encoder.mlmodelc/weights"
 printf 'encoder' > "$ear/Encoder.mlmodelc/weights/weight.bin"
 printf 'stray' > "$ear/Encoder.mlmodelc/weights/weight.bin.part"
@@ -56,18 +56,18 @@ mkdir -p "$dev"
 embeds "$dev" YES >/dev/null || fail "embed-bundles.sh YES refused whole bundles"
 passes --embedded "$dev"
 refuses "carries a model or weights" "$dev"
-[ ! -e "$dev/parakeet-ultra-coreml/Encoder.mlmodelc/weights/weight.bin.part" ] || fail "embed-bundles.sh copied a file bundle.json does not name"
-for name in phonon-40m-en parakeet-ultra-coreml; do
+[ ! -e "$dev/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin.part" ] || fail "embed-bundles.sh copied a file bundle.json does not name"
+for name in phonon-40m-en parakeet-ultra; do
   alone="$work/alone-$name/Topo.app"
   mkdir -p "$alone" && cp -R "$dev/$name" "$alone/"
   refuses "$name" "$alone"
 done
-rm -rf "$work/alone-parakeet-ultra-coreml/Topo.app/parakeet-ultra-coreml"
-refuses "does not carry parakeet-ultra-coreml/bundle.json" --embedded "$work/alone-phonon-40m-en/Topo.app"
+rm -rf "$work/alone-parakeet-ultra/Topo.app/parakeet-ultra"
+refuses "does not carry parakeet-ultra/bundle.json" --embedded "$work/alone-phonon-40m-en/Topo.app"
 
 embeds "$dev" NO || fail "embed-bundles.sh NO failed"
 [ ! -e "$dev/phonon-40m-en" ] || fail "embed-bundles.sh NO left the voice in the product"
-[ ! -e "$dev/parakeet-ultra-coreml" ] || fail "embed-bundles.sh NO left the ear in the product"
+[ ! -e "$dev/parakeet-ultra" ] || fail "embed-bundles.sh NO left the ear in the product"
 passes "$dev"
 
 # Every form a model or its weights takes, under any name, in any bundle of the app.

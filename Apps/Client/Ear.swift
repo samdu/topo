@@ -16,7 +16,7 @@ private let log = TopoLog(.models)
 /// jargon from either — measured on FluidAudio 0.17.7's decode path, which 0.18.2's long-form
 /// path has changed since.
 ///
-/// The model is a bundle (`BundleStore`, `parakeet-ultra-coreml`, 632 MB of CoreML), copied and
+/// The model is a bundle (`BundleStore`, `parakeet-ultra`, 632 MB of CoreML), copied and
 /// checked into `Application Support/Ear` from whichever source the build has: the Apple-hosted
 /// pack, the app's own resources (an install-page build) or a folder a debug launch names. The
 /// CTC spotter the vocabulary is rescored with (98 MB) is a download of `ModelDownloads`'s, into
@@ -303,6 +303,7 @@ final class Ear {
                 loadSpotterIfDue()
             } catch {
                 progress = ""
+                log.error("ear: \(model.name) did not load from \(acoustic.lastPathComponent): \(String(describing: error))")
                 // Ultra that will not load on a phone that still has v2 hears with v2, which stays
                 // until Ultra is resident; the next launch tries Ultra again.
                 if model == .ultra, downloads.present.contains(ModelManifest.parakeet),
@@ -536,7 +537,7 @@ actor EarEngine: SpeechEngine {
     var boosted: Bool { boost != nil }
 
     /// The acoustic model from disk. `acoustic` is the model's folder, named as FluidAudio's
-    /// loader expects (`parakeet-ultra-coreml`, the store's; `parakeet-tdt-0.6b-v2`, the
+    /// loader expects (`parakeet-ultra`, the store's; `parakeet-tdt-0.6b-v2`, the
     /// manifest's), since it appends that name to the parent it is given.
     func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         if asr != nil { return }

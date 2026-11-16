@@ -56,7 +56,7 @@ Use: The source of Smart Turn's filterbank, which `scripts/smartturn-mel.py` wri
 ## Parakeet Ultra
 Licence: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/), © moondream, from NVIDIA's parakeet-tdt-0.6b-v3 (CC-BY-4.0, © NVIDIA); converted to Core ML by FluidInference, and used here as converted
 Where: https://huggingface.co/FluidInference/parakeet-ultra-coreml at 95eaa59a39d4394f047a4dc5cce480388a60d1b6 (the files `scripts/ear-bundle.json` pins), from moondream's https://huggingface.co/moondream/parakeet-ultra, a post-training of https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
-Use: The speech-to-text model the ear runs (632 MB). Conveyed by Topo: as the Apple-hosted asset pack `parakeet-ultra-coreml` in a TestFlight or App Store build, and in the app's resources in a build from the install page; copied into the app's Application Support and loaded from there. The model is provided as-is and without warranties, as the licence says.
+Use: The speech-to-text model the ear runs (632 MB). Conveyed by Topo: as the Apple-hosted asset pack `parakeet-ultra` in a TestFlight or App Store build, and in the app's resources in a build from the install page; copied into the app's Application Support and loaded from there. The model is provided as-is and without warranties, as the licence says.
 
 ## Parakeet
 Licence: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/), © NVIDIA; converted to CoreML by FluidInference, and used here as converted

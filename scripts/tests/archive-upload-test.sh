@@ -287,7 +287,7 @@ ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/
 order="$(grep -oE '^(ear-bundle.sh package|phonon-bundles.sh package|xcrun \[[^]]*\] altool --upload-asset-pack|xcrun \[[^]]*\] altool --upload-app)' "$work/ear" | sed 's/\[[^]]*\] //')"
 [ "$order" = "$(printf 'ear-bundle.sh package\nxcrun altool --upload-asset-pack\nxcrun altool --upload-app')" ] \
     || fail "the ear's pack was not packaged, then uploaded, then the build: $(cat "$work/ear")"
-grep -q -- '--upload-asset-pack .*/ear/parakeet-ultra-coreml.aar --apple-id 6826966978 --wait --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/ear" \
+grep -q -- '--upload-asset-pack .*/ear/parakeet-ultra.aar --apple-id 6826966978 --wait --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/ear" \
     || fail "the ear's pack was not uploaded to Topo's record with the key: $(cat "$work/ear")"
 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-local" --ear \
     || fail "packaging the ear failed: $(cat "$work/out")"

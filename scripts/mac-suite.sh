@@ -553,7 +553,7 @@ quiet_launches() {
 # quiet_models <udid> — the proof the quiet part fetched no model: the app's data container on
 # that simulator, read after the part's tests and before the run deletes the simulator, holds no
 # file under the ear's or the voice's homes (in Application Support: the ear's store,
-# `BundleStore`'s `Ear/parakeet-ultra-coreml`, and the `Ear/parakeet-ultra-coreml.partial` its copy
+# `BundleStore`'s `Ear/parakeet-ultra`, and the `Ear/parakeet-ultra.partial` its copy
 # is made in; the `ModelStore.directory(for:)` of a phone's earlier Parakeet v2,
 # `Models/parakeet-tdt-0.6b-v2`; FluidAudio's own `FluidAudio/Models` where the spotter lives, and
 # `Models/parakeet-ctc-110m-coreml`, where a set made before its home sits until `rehome` moves it;
@@ -567,7 +567,7 @@ quiet_models() {
   local container home at part parts files found="" unread="" status=0
   container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
     || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
-  for home in Ear/parakeet-ultra-coreml Ear/parakeet-ultra-coreml.partial Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Voice/phonon-40m-en Voice/phonon-40m-en.partial FluidAudio/Models; do
+  for home in Ear/parakeet-ultra Ear/parakeet-ultra.partial Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Voice/phonon-40m-en Voice/phonon-40m-en.partial FluidAudio/Models; do
     # Down to the home a folder at a time: a folder that cannot be listed or entered is unread,
     # and only a name missing from one that can be is no home.
     IFS=/ read -ra parts <<<"Library/Application Support/$home"

@@ -33,9 +33,9 @@ encoder_sha="$(digest "$repo/Encoder.mlmodelc/weights/weight.bin")"
 
 pin 7 "$encoder_sha"
 if fetches "$work/whole"; then
-  [ "$(cat "$work/whole/parakeet-ultra-coreml/Encoder.mlmodelc/weights/weight.bin" 2>/dev/null)" = encoder ] \
+  [ "$(cat "$work/whole/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin" 2>/dev/null)" = encoder ] \
     || fail "a pinned file was not fetched: $(cat "$work/log")"
-  cmp -s "$work/pin.json" "$work/whole/parakeet-ultra-coreml/bundle.json" || fail "the bundle's bundle.json is not the pin"
+  cmp -s "$work/pin.json" "$work/whole/parakeet-ultra/bundle.json" || fail "the bundle's bundle.json is not the pin"
 else
   fail "a whole bundle at its pin was refused: $(cat "$work/log")"
 fi
@@ -43,13 +43,13 @@ fi
 pin 8 "$encoder_sha"
 if fetches "$work/size"; then fail "a file of the wrong size was admitted"
 else grep -q "Encoder.mlmodelc/weights/weight.bin is 7 bytes" "$work/log" || fail "the size refusal does not name the file: $(cat "$work/log")"; fi
-[ ! -e "$work/size/parakeet-ultra-coreml/Encoder.mlmodelc/weights/weight.bin" ] || fail "a file of the wrong size was kept"
-[ ! -e "$work/size/parakeet-ultra-coreml/bundle.json" ] || fail "a refused bundle was given a bundle.json"
+[ ! -e "$work/size/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin" ] || fail "a file of the wrong size was kept"
+[ ! -e "$work/size/parakeet-ultra/bundle.json" ] || fail "a refused bundle was given a bundle.json"
 
 pin 7 "$(printf '%064d' 0)"
 if fetches "$work/digest"; then fail "a file with the wrong digest was admitted"
 else grep -q "the pin says 7 bytes, $(printf '%064d' 0)" "$work/log" || fail "the digest refusal does not name the pin: $(cat "$work/log")"; fi
-[ ! -e "$work/digest/parakeet-ultra-coreml/Encoder.mlmodelc/weights/weight.bin" ] || fail "a file with the wrong digest was kept"
+[ ! -e "$work/digest/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin" ] || fail "a file with the wrong digest was kept"
 [ -z "$(find "$work/size" "$work/digest" -name '*.part' 2>/dev/null)" ] || fail "a refused file's partial download was left behind"
 
 # The committed pin: FluidAudio's `.ultra` contract (requiredModelsV3 and the vocabulary), at

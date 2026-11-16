@@ -354,10 +354,10 @@ support="Library/Application Support"
 models an-ears-file "1:topo_ui:quiet=failure " "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin" \
   "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/coremldata.bin"
 models a-voice-mid-copy "1:topo_ui:quiet=failure " "$support/Voice/phonon-40m-en.partial/host.safetensors" "$support/Voice/phonon-40m-en.partial/host.safetensors"
-models the-ears-store "1:topo_ui:quiet=failure " "$support/Ear/parakeet-ultra-coreml/Encoder.mlmodelc/weights/weight.bin" \
-  "$support/Ear/parakeet-ultra-coreml/Encoder.mlmodelc/weights/weight.bin"
-models the-ears-partial-copy "1:topo_ui:quiet=failure " "$support/Ear/parakeet-ultra-coreml.partial/bundle.json" \
-  "$support/Ear/parakeet-ultra-coreml.partial/bundle.json"
+models the-ears-store "1:topo_ui:quiet=failure " "$support/Ear/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin" \
+  "$support/Ear/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin"
+models the-ears-partial-copy "1:topo_ui:quiet=failure " "$support/Ear/parakeet-ultra.partial/bundle.json" \
+  "$support/Ear/parakeet-ultra.partial/bundle.json"
 models a-spotter-before-its-home "1:topo_ui:quiet=failure " "$support/Models/parakeet-ctc-110m-coreml/vocab.json" "$support/Models/parakeet-ctc-110m-coreml/vocab.json"
 models a-voices-record "1:topo_ui:quiet=failure " "$support/Voice/phonon-40m-en/.installed" "$support/Voice/phonon-40m-en/.installed"
 models resume-data "1:topo_ui:quiet=failure " "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/weights.bin.resume" "$support/Models/parakeet-tdt-0.6b-v2/Encoder.mlmodelc/weights.bin.resume"

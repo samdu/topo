@@ -26,7 +26,9 @@ struct BundleStore: Sendable {
     /// The voice's bundle, by its folder's name in the pack, in the app's resources and in the store.
     static let voiceName = "phonon-40m-en"
     /// The ear's: Parakeet Ultra as FluidInference's Core ML build.
-    static let earName = "parakeet-ultra-coreml"
+    /// FluidAudio's own local name for Ultra's repository (`Repo.parakeetUltra.folderName`): it
+    /// loads the models from that folder beneath the parent of the one it is handed.
+    static let earName = "parakeet-ultra"
 
     /// The bundle's folder name, in the pack, in the app's resources and in the store.
     let name: String
@@ -59,7 +61,7 @@ struct BundleStore: Sendable {
 
     /// The voice's store, `Application Support/Voice/phonon-40m-en`.
     static func voice() -> BundleStore { standard(folder: "Voice", name: voiceName, noun: "voice") }
-    /// The ear's store, `Application Support/Ear/parakeet-ultra-coreml`.
+    /// The ear's store, `Application Support/Ear/parakeet-ultra`.
     static func ear() -> BundleStore { standard(folder: "Ear", name: earName, noun: "ear") }
 
     private static func standard(folder: String, name: String, noun: String) -> BundleStore {
@@ -273,7 +275,7 @@ struct FolderSource: BundleSource {
     func copied() async -> Bool { true }
 }
 
-/// An Apple-hosted pack (`phonon-40m-en`, `parakeet-ultra-coreml`, each essential at first
+/// An Apple-hosted pack (`phonon-40m-en`, `parakeet-ultra`, each essential at first
 /// installation), which TopoAssets downloads with the app. A pack's one folder is named as its id,
 /// so a file's path in the pack is its path in the bundle under that folder.
 struct AssetPackSource: BundleSource {

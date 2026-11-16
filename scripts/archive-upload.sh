@@ -19,7 +19,7 @@
 # `--voice` packages it (scripts/phonon-bundles.sh) and, with `--upload`, sends
 # it as a new version of the pack before the build; it is wanted only when the
 # bundle has changed, since a build uses the pack's current version. The ear's
-# weights are the pack `parakeet-ultra-coreml` the same way, and `--ear`
+# weights are the pack `parakeet-ultra` the same way, and `--ear`
 # packages it (scripts/ear-bundle.sh) and, with `--upload`, sends it.
 set -euo pipefail
 
@@ -191,7 +191,7 @@ fi
 
 if [ "$upload" = yes ] && [ "$ear" = yes ]; then
   echo "==> uploading the ear's asset pack"
-  xcrun altool --upload-asset-pack "$out/ear/parakeet-ultra-coreml.aar" --apple-id "$apple_id" --wait \
+  xcrun altool --upload-asset-pack "$out/ear/parakeet-ultra.aar" --apple-id "$apple_id" --wait \
     --apiKey "$key_id" --apiIssuer "$issuer"
 fi
 

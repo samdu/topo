@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetches the ear's bundle — Parakeet Ultra as FluidInference's Core ML build (docs/voice.md) —
 # from its Hugging Face repository at the revision scripts/ear-bundle.json pins, into a directory
-# (build/ear by default), as `parakeet-ultra-coreml/`. Every file is admitted only at the size and
+# (build/ear by default), as `parakeet-ultra/`. Every file is admitted only at the size and
 # sha256 the pin names, and the pin itself is written beside them as the bundle's `bundle.json`,
 # which is what the app's store checks the copy against. A file already there and matching is kept.
 #
@@ -16,7 +16,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # EAR_BUNDLE_PIN and EAR_REPO_URL stand a fixture's pin and repository in for the test.
 pin="${EAR_BUNDLE_PIN:-$root/scripts/ear-bundle.json}"
-name=parakeet-ultra-coreml
+name=parakeet-ultra
 repo="$(jq -r .repo "$pin")"
 revision="$(jq -r .revision "$pin")"
 base="${EAR_REPO_URL:-https://huggingface.co/$repo/resolve/$revision}"

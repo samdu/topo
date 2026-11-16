@@ -2,7 +2,7 @@
 # The Topo target's build phase for the voice's and the ear's bundles. With YES it puts each into
 # the product's resources under its name — the voice's as scripts/phonon-bundles.sh fetched it
 # (build/phonon/phonon-40m-en, or PHONON_BUNDLE), the ear's as scripts/ear-bundle.sh fetched it
-# (build/ear/parakeet-ultra-coreml, or EAR_BUNDLE) — each as exactly the files its bundle.json
+# (build/ear/parakeet-ultra, or EAR_BUNDLE) — each as exactly the files its bundle.json
 # names and bundle.json itself, refusing one whose files are not all there at the sizes it names;
 # with anything else it removes a copy an earlier build left there, so a build that does not ask
 # for the bundles never carries one.
@@ -36,4 +36,4 @@ embed_one() {  # embed_one <name> <source> <what fetches it>
 }
 
 embed_one phonon-40m-en "${PHONON_BUNDLE:-$root/build/phonon/phonon-40m-en}" scripts/phonon-bundles.sh
-embed_one parakeet-ultra-coreml "${EAR_BUNDLE:-$root/build/ear/parakeet-ultra-coreml}" scripts/ear-bundle.sh
+embed_one parakeet-ultra "${EAR_BUNDLE:-$root/build/ear/parakeet-ultra}" scripts/ear-bundle.sh

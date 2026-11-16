@@ -1,4 +1,5 @@
 import CryptoKit
+import FluidAudio
 import XCTest
 
 @testable import Topo
@@ -115,6 +116,13 @@ final class EarStoreTests: XCTestCase {
         }
         let settled = await condition()
         XCTAssertTrue(settled, what)
+    }
+
+    /// FluidAudio loads Ultra from the folder its repository names locally, beneath the parent
+    /// of the one it is handed, so the store's folder is that name or no file of it is found.
+    func testTheStoresFolderIsTheOneFluidAudioLoadsUltraFrom() {
+        XCTAssertEqual(BundleStore.earName, Repo.parakeetUltra.folderName)
+        XCTAssertEqual(EarEngine.version(.ultra), .ultra)
     }
 
     func testAFreshPhoneHearsWithUltraFromItsSourceBeforeTheSpotterArrives() async throws {
