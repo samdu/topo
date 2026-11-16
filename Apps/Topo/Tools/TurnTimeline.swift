@@ -77,7 +77,8 @@ struct TurnTimeline: Sendable {
     var beside: [Event]
     /// The voice's first sound, from its start to its first frame, in ms from the turn's start.
     var sound: ClosedRange<Int64>?
-    /// What each model request uploaded, in bytes, in order, for those whose upload was told.
+    /// What each model request uploaded, in bytes, in order, for those one connection alone told (a sum
+    /// over several is an upper bound, and is left out).
     var requestBytes: [Int]
     /// How many model requests the turn made of its own.
     var requests: Int
@@ -257,9 +258,10 @@ struct TurnTimeline: Sendable {
                 marks.last { $0.name == "turn.guest.upload" && $0.value("guest") == guest && $0.value("request") == String(number) }
             }
             let size = upload?.value("bytes").flatMap(Int.init)
-            if let size { bytes.append(size) }
+            let shared = upload?.value("connections") == "several"
+            if let size, !shared { bytes.append(size) }
             threads.append(upload?.value("kind") ?? "unknown")
-            let about = [size.map(Self.size), upload?.value("kind").flatMap { Self.threadWords[$0] }].compactMap { $0 }
+            let about = [size.map { (shared ? "at most " : "") + Self.size($0) }, upload?.value("kind").flatMap { Self.threadWords[$0] }].compactMap { $0 }
             raw.append((message.ms, place(message), .model,
                         "Request \(number) sent and the model began answering" + (about.isEmpty ? "" : " (\(about.joined(separator: ", ")))")))
             if let done = clean[(i + 1)..<next].firstIndex(where: { $0.name == "turn.guest.message.done" && $0.isOwn }) {

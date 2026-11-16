@@ -64,8 +64,10 @@ struct ContextTool: Tool {
     A whole upload has other causes too: a thread begun, Claude Code sending without a thread once the
     conversation holds a web search's results or its tools changed, a thread Anthropic dropped and Claude Code
     made again, a request carrying a big tool result in a short conversation, or another request that went on
-    the same connection between the two reads. Can't tell is a turn's first request after a launch or a login,
-    one after a sub-agent's, one whose reads ran late, and one whose connection was not alone. Sizes are
+    the same connection between the two reads. When more than one connection sent between the reads, the
+    size is their sum, "at most" the request's: small even so is a thread, and larger is can't tell. Can't
+    tell is also a turn's first request after a launch or a login, one after a sub-agent's, one whose reads
+    ran late, and one whose connection closed between them. Sizes are
     compressed, so very repetitive words read small. Judge by several turns' requests, not one.
     """
 
@@ -147,8 +149,8 @@ struct ContextTool: Tool {
         lines.append("requests, oldest first, judged by their uploads (inferred, never read):")
         for sent in facts.sent {
             let ago = max(0, Int(facts.now.timeIntervalSince(sent.at).rounded()))
-            let upload = sent.bytes.map { "\(TurnTimeline.size($0)) for \(sent.tokens) tokens" }
-                ?? "upload not told (no read to count it from, or not one connection alone sent) for \(sent.tokens) tokens"
+            let upload = sent.bytes.map { "\(sent.shared ? "at most " : "")\(TurnTimeline.size($0)) for \(sent.tokens) tokens" }
+                ?? "upload not told (no read to count it from, or a connection gone between the reads) for \(sent.tokens) tokens"
             lines.append("  \(ago) s ago  \(Self.kindWords[sent.kind] ?? sent.kind.rawValue)  \(upload)")
         }
         let small = facts.sent.filter { $0.kind == .thread }.count

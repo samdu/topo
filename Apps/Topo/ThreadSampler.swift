@@ -14,10 +14,12 @@ import TopoUserland
 ///
 /// The counters are read at three of a turn's moments, on a queue of its own, so nothing waits on
 /// a read: when each of the turn's own requests begins answering, by which time it has gone, and
-/// when the turn ends, which is the next turn's first baseline. A request's upload is what the one
-/// connection that grew sent between the read before it and the read at its answer. It is not told
-/// — and nothing is guessed — when none grew or more than one did (the event batch Claude Code
-/// sends to the same host, a sub-agent's request alongside), when a connection read before is gone
+/// when the turn ends, which is the next turn's first baseline. A request's upload is what the
+/// connections sent between the read before it and the read at its answer, all of them summed. When
+/// one connection alone grew that is the request's; when more did (the event batch Claude Code
+/// sends to the same host, a second connection open between turns), the sum is an upper bound on
+/// it, which can say a thread (small even summed) and never the whole conversation. It is not told
+/// — and nothing is guessed — when none grew, when a connection read before is gone
 /// at the answer (what it sent last is not known), when the read before it finished after the
 /// request could have begun (after the turn's words were written, for its first; after the app
 /// read the end of the answer before, for the rest), when a sub-agent's answer began since that
@@ -42,10 +44,19 @@ final class ThreadSampler: Sendable {
 
     struct Note: Sendable, Equatable {
         let at: Date
-        /// What the request's connection sent, nil when it could not be told which one that was.
+        /// What the request's connection sent, or the sum of what more than one did (`shared`), nil
+        /// when it could not be told.
         let bytes: Int?
         let tokens: Int
         let kind: Kind
+        /// Whether `bytes` is more than one connection's, an upper bound on the request's.
+        var shared = false
+    }
+
+    /// What the connections sent between two reads: the sum, and whether one connection alone sent it.
+    struct Upload: Sendable, Equatable {
+        let bytes: Int
+        let alone: Bool
     }
 
     /// A socket as the counters are kept by: its descriptor and its local port, so a descriptor
@@ -69,25 +80,25 @@ final class ThreadSampler: Sendable {
     /// The host whose connections are read.
     static let host = "api.anthropic.com"
 
-    /// What a request of `tokens` that sent `bytes` was.
-    static func kind(bytes: Int?, tokens: Int) -> Kind {
+    /// What a request of `tokens` that sent `bytes` was; `shared` bytes are an upper bound, which can
+    /// say a thread and never the whole conversation.
+    static func kind(bytes: Int?, tokens: Int, shared: Bool = false) -> Kind {
         guard let bytes, bytes > 0, tokens > 0 else { return .unknown }
         let ratio = Double(bytes) / Double(tokens)
         if ratio <= threadAtMost { return .thread }
-        if ratio >= wholeAtLeast { return .whole }
+        if ratio >= wholeAtLeast, !shared { return .whole }
         return .unknown
     }
 
-    /// What the one connection that sent anything between `before` and `after` sent; nil when none
-    /// did, more than one did, or one in `before` is gone from `after`. A socket not in `before` was
-    /// opened since, and all it sent counts.
-    static func upload(from before: [Socket: UInt64], to after: [Socket: UInt64]) -> Int? {
+    /// What the connections sent between `before` and `after`, summed; nil when none did or one in
+    /// `before` is gone from `after`. A socket not in `before` was opened since, and all it sent counts.
+    static func upload(from before: [Socket: UInt64], to after: [Socket: UInt64]) -> Upload? {
         guard before.keys.allSatisfy({ after[$0] != nil }) else { return nil }
         let grew = after.compactMap { socket, sent -> UInt64? in
             let was = before[socket] ?? 0
             return sent > was ? sent - was : nil
         }
-        return grew.count == 1 ? Int(grew[0]) : nil
+        return grew.isEmpty ? nil : Upload(bytes: Int(grew.reduce(0, +)), alone: grew.count == 1)
     }
 
     /// The counters as one moment read them, and when that read finished.
@@ -112,7 +123,7 @@ final class ThreadSampler: Sendable {
         let turn: Int
         let request: Int
         let tokens: Int
-        let bytes: Int?
+        let bytes: Upload?
         let read: UInt64
         let at: Date
     }
@@ -213,15 +224,17 @@ final class ThreadSampler: Sendable {
     /// Keeps a request's note, its bytes only when `told`, and marks it for `topo perf` by its turn's
     /// number and its own.
     private func keep(_ open: Open, told: Bool, _ generation: Int) {
-        let bytes = told ? open.bytes : nil
-        let note = Note(at: open.at, bytes: bytes, tokens: open.tokens, kind: Self.kind(bytes: bytes, tokens: open.tokens))
+        let upload = told ? open.bytes : nil
+        let bytes = upload?.bytes, shared = upload.map { !$0.alone } ?? false
+        let note = Note(at: open.at, bytes: bytes, tokens: open.tokens,
+                        kind: Self.kind(bytes: bytes, tokens: open.tokens, shared: shared), shared: shared)
         let kept = update(generation) { state -> Bool in
             state.notes.append(note)
             if state.notes.count > Self.kept { state.notes.removeFirst(state.notes.count - Self.kept) }
             return true
         } ?? false
         if kept {
-            Perf.mark("turn.guest.upload guest=\(open.turn) request=\(open.request) kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")")
+            Perf.mark("turn.guest.upload guest=\(open.turn) request=\(open.request) kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown") connections=\(shared ? "several" : "one")")
         }
     }
 

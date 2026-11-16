@@ -356,6 +356,21 @@ final class PerfToolTests: XCTestCase {
         XCTAssertTrue(turn.record.contains(" thread=unknown bytes=0 requests=1 "), turn.record)
     }
 
+    /// An upload summed over several connections is said as at most, and kept out of the record's bytes.
+    func testASharedUploadIsSaidAsAtMostAndLeftOutOfTheBytes() throws {
+        let tag = "turn=5ab1e5ab"
+        let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(50, "turn.saved"), line(60, "turn.guest.write", "guest=3"),
+                     line(400, "turn.guest.message", "own guest=3 request=1 tokens=60400"),
+                     line(401, "turn.guest.upload", "guest=3 request=1 kind=thread bytes=11000 connections=several"),
+                     line(700, "turn.guest.message.done", "own"), line(800, "turn.reply.shown", tag),
+                     line(800, "turn.attempt.end", "\(tag) answered")]
+        let turn = try XCTUnwrap(timelines(lines).first)
+        XCTAssertEqual(turn.events.first { $0.key == .model }?.title,
+                       "Request 1 sent and the model began answering (at most 11 KB, a small upload: on a thread)")
+        XCTAssertEqual(turn.requestBytes, [])
+        XCTAssertTrue(turn.record.contains(" thread=thread bytes=0 "), turn.record)
+    }
+
     /// Each request's upload is its own by its turn's number and its own, however late the sampler's
     /// queue marks it: after the next request has begun, after the turn has ended, after the next
     /// turn's words were written and its own request's upload; and a request whose answer ends in the
