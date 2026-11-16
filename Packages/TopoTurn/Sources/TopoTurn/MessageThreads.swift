@@ -16,7 +16,7 @@ public enum MessageThreads {
     /// Settings switch's footer and `topo context threads` say it in these words.
     public static let alsoSent = "Claude Code also sends Anthropic its usage telemetry, and Datadog a log of the same kind: events saying which features ran, how long requests took and how much memory it used. Each event carries the person's Anthropic account and organisation ids, the session's id and an id Claude Code keeps for this install, and no words of the conversation were found in the events checked. It also asks Anthropic for its feature flags, naming the account, the organisation and the plan, and for the account's start-up settings, and it reads the public MCP registry's list."
     /// What off means, in the same words.
-    public static let whenOff = "Off, none of that is sent: Claude Code asks Anthropic only for the account's profile and its claude.ai connectors, and every request carries the whole conversation."
+    public static let whenOff = "Off, none of that is sent. Claude Code still asks Anthropic about the account (its profile and its claude.ai connectors among what was checked), and every request carries the whole conversation."
 
     public struct Setting: Sendable, Equatable {
         public var on: Bool

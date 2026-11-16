@@ -218,7 +218,8 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// they have it, and one of the launcher's own (`ownNames`) is not set for threads at all;
     /// either way the launch goes without threads. A launch that sets it also leaves
     /// `nonessentialVariable` out, which threads want (below); one that sets none keeps it, so
-    /// off sends Anthropic nothing beside the turns but the account's profile and connectors.
+    /// off lets none of that out (a full-scope login still asks about its account: its profile and
+    /// connectors among what was checked).
     public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, threads: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
