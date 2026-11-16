@@ -59,7 +59,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: earEngine ?? ScriptedEngine(bare: heard, boosted: heard))
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle("the ear to load") { ear.ready }
         self.center = center
         let input = VoiceInput(audio: audio, ear: ear, center: center,
@@ -643,7 +643,7 @@ final class DecodeOnCue: SpeechEngine, @unchecked Sendable {
         resume?.resume()
     }
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {}
     func rebuild(terms: [String], version: Int) async throws {}
 
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {

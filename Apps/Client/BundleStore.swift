@@ -6,14 +6,15 @@ import TopoCore
 
 private let log = TopoLog(.models)
 
-/// The voice's bundle on this phone: Phonon 40m English exported to Core ML with its one voice,
-/// as `PhononVoiceEngine` loads it. One reader for every source a build has — the Apple-hosted
-/// asset pack in a TestFlight or App Store build, the app's own resources in a build from the
-/// install page (`TOPO_EMBED_VOICES`), a folder a debug launch names — and one copy, in
-/// `Application Support/Voice/phonon-40m-en`, because Core ML compiles a `.mlpackage` beside
-/// itself and neither the pack nor the app is writable.
+/// A model's bundle on this phone, as its engine loads it: the voice's (Phonon 40m English with
+/// its one voice, `PhononVoiceEngine`) and the ear's (Parakeet Ultra, `EarEngine`). One reader for
+/// every source a build has — the Apple-hosted asset pack in a TestFlight or App Store build, the
+/// app's own resources in a build from the install page (`TOPO_EMBED_VOICES`), a folder a debug
+/// launch names — and one copy, in `Application Support/<folder>/<name>`, because Core ML compiles
+/// the voice's `.mlpackage` beside itself and neither the pack nor the app is writable, and because
+/// a pack is let go once its copy is checked, so the phone keeps the weights once.
 ///
-/// A copy is made into `phonon-40m-en.partial`, every file checked against the size and SHA-256
+/// A copy is made into `<name>.partial`, every file checked against the size and SHA-256
 /// the source's own `bundle.json` names, `bundle.json` and the `.installed` record written last,
 /// and only then renamed into place: a copy that fails takes its partial folder with it, and one cut short by
 /// the process ending is a partial folder the next copy removes, never a store folder with a file missing. The record names the bundle's `built`
@@ -21,19 +22,26 @@ private let log = TopoLog(.models)
 /// those match the source's and every file is there at its size. A store folder of an older
 /// bundle is replaced through the same path; a source that cannot be read leaves a good store
 /// folder in use.
-struct PhononStore: Sendable {
-    /// The bundle's folder name, in the pack, in the app's resources and in the store.
-    static let name = "phonon-40m-en"
-    /// The voice the bundle carries, and the one the engine speaks.
-    static let voice = "Friendly Octopus"
+struct BundleStore: Sendable {
+    /// The voice's bundle, by its folder's name in the pack, in the app's resources and in the store.
+    static let voiceName = "phonon-40m-en"
+    /// The ear's: Parakeet Ultra as FluidInference's Core ML build.
+    static let earName = "parakeet-ultra-coreml"
 
+    /// The bundle's folder name, in the pack, in the app's resources and in the store.
+    let name: String
+    /// What the bundle is to the person, for the log ("voice", "ear").
+    let noun: String
     let home: URL
     /// The one step from the old copy to the new; a seam for the tests, which fail it.
     let swap: @Sendable (_ home: URL, _ staging: URL) throws -> Void
-    var staging: URL { home.deletingLastPathComponent().appendingPathComponent(Self.name + ".partial", isDirectory: true) }
+    var staging: URL { home.deletingLastPathComponent().appendingPathComponent(name + ".partial", isDirectory: true) }
     var record: URL { home.appendingPathComponent(".installed") }
 
-    init(home: URL, swap: @escaping @Sendable (_ home: URL, _ staging: URL) throws -> Void = PhononStore.swapIn) {
+    /// A store at `home`, whose last component is the bundle's name.
+    init(home: URL, noun: String = "voice", swap: @escaping @Sendable (_ home: URL, _ staging: URL) throws -> Void = BundleStore.swapIn) {
+        self.name = home.lastPathComponent
+        self.noun = noun
         self.home = home
         self.swap = swap
     }
@@ -49,10 +57,15 @@ struct PhononStore: Sendable {
         }
     }
 
-    static func standard() -> PhononStore {
+    /// The voice's store, `Application Support/Voice/phonon-40m-en`.
+    static func voice() -> BundleStore { standard(folder: "Voice", name: voiceName, noun: "voice") }
+    /// The ear's store, `Application Support/Ear/parakeet-ultra-coreml`.
+    static func ear() -> BundleStore { standard(folder: "Ear", name: earName, noun: "ear") }
+
+    private static func standard(folder: String, name: String, noun: String) -> BundleStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return PhononStore(home: support.appendingPathComponent("Voice", isDirectory: true)
-            .appendingPathComponent(name, isDirectory: true))
+        return BundleStore(home: support.appendingPathComponent(folder, isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true), noun: noun)
     }
 
     /// `bundle.json` as far as the store reads it.
@@ -79,7 +92,7 @@ struct PhononStore: Sendable {
     /// The store folder, made from `source` if it is not already that source's bundle. `progress`
     /// hears a pack's download, as a fraction when the system gives one; `copying`, that a copy
     /// has begun. A launch that finds the store whole hears neither.
-    func install(from source: any PhononSource, progress: @escaping @Sendable (Double?) -> Void = { _ in },
+    func install(from source: any BundleSource, progress: @escaping @Sendable (Double?) -> Void = { _ in },
                  copying: @Sendable () -> Void = {}) async throws -> URL {
         let kept = installed()
         // A partial folder standing now is one an earlier process left mid-copy: one install runs
@@ -91,7 +104,7 @@ struct PhononStore: Sendable {
         if let kept, source.versioned, isWhole() {
             let version = await source.version()
             if version == nil || version == kept.version {
-                if version == nil { log.notice("voice: the pack's version could not be read; the copy here stands") }
+                if version == nil { log.notice("\(noun): the pack's version could not be read; the copy here stands") }
                 await release(kept, from: source)
                 return home
             }
@@ -116,7 +129,7 @@ struct PhononStore: Sendable {
             try? FileManager.default.removeItem(at: staging)
             // A good copy of an older bundle still speaks.
             if kept != nil, isWhole() {
-                log.error("voice: no new copy was made, keeping the one here: \(String(describing: error))")
+                log.error("\(noun): no new copy was made, keeping the one here: \(String(describing: error))")
                 return home
             }
             throw error
@@ -126,7 +139,7 @@ struct PhononStore: Sendable {
     /// Lets a pack go once its copy is the store's, and records that it has: a removal that fails,
     /// or a process that ends before it, is tried again at the next launch that finds the store
     /// whole, so the phone does not keep the weights twice.
-    private func release(_ record: Installed, from source: any PhononSource) async {
+    private func release(_ record: Installed, from source: any BundleSource) async {
         guard source.versioned, record.released != true else { return }
         guard await source.copied() else { return }
         var released = record
@@ -134,7 +147,7 @@ struct PhononStore: Sendable {
         do {
             try JSONEncoder().encode(released).write(to: self.record, options: .atomic)
         } catch {
-            log.error("voice: the pack was let go and its record not written: \(String(describing: error))")
+            log.error("\(noun): the pack was let go and its record not written: \(String(describing: error))")
         }
     }
 
@@ -152,9 +165,9 @@ struct PhononStore: Sendable {
     }
 
     /// The copy: every file into the partial folder, checked, then the manifest and the record,
-    /// then the swap into place. Throws `PhononStoreError` naming the file that did not match; a
+    /// then the swap into place. Throws `BundleStoreError` naming the file that did not match; a
     /// failure at any step, the swap's included, takes the partial folder with it.
-    func copy(_ manifest: Manifest, version: Int?, from source: any PhononSource) throws {
+    func copy(_ manifest: Manifest, version: Int?, from source: any BundleSource) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: staging)
         do {
@@ -166,20 +179,20 @@ struct PhononStore: Sendable {
             try? fm.removeItem(at: staging)
             throw error
         }
-        log.notice("voice: bundle \(manifest.built) copied into the store")
+        log.notice("\(noun): bundle \(manifest.built) copied into the store")
     }
 
-    private func fill(_ staging: URL, with manifest: Manifest, version: Int?, from source: any PhononSource) throws {
+    private func fill(_ staging: URL, with manifest: Manifest, version: Int?, from source: any BundleSource) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
         try Self.excludeFromBackup(staging)
         for file in manifest.files {
-            guard Self.safe(file.path) else { throw PhononStoreError.badPath(file.path) }
+            guard Self.safe(file.path) else { throw BundleStoreError.badPath(file.path) }
             let target = staging.appendingPathComponent(file.path)
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.copyItem(at: try source.url(of: file.path), to: target)
-            guard Self.size(of: target) == file.size else { throw PhononStoreError.wrongSize(file.path) }
-            guard try ModelStore.sha256(of: target) == file.sha256 else { throw PhononStoreError.wrongDigest(file.path) }
+            guard Self.size(of: target) == file.size else { throw BundleStoreError.wrongSize(file.path) }
+            guard try ModelStore.sha256(of: target) == file.sha256 else { throw BundleStoreError.wrongDigest(file.path) }
         }
         try fm.copyItem(at: try source.url(of: "bundle.json"), to: staging.appendingPathComponent("bundle.json"))
         try JSONEncoder().encode(Installed(built: manifest.built, version: version, released: version == nil ? nil : false))
@@ -195,7 +208,7 @@ struct PhononStore: Sendable {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
     }
 
-    /// The weights come back from their source; a backup of them is 200 MB of nothing.
+    /// The weights come back from their source; a backup of them is hundreds of MB of nothing.
     static func excludeFromBackup(_ url: URL) throws {
         var url = url
         var values = URLResourceValues()
@@ -204,7 +217,7 @@ struct PhononStore: Sendable {
     }
 }
 
-enum PhononStoreError: LocalizedError, Equatable {
+enum BundleStoreError: LocalizedError, Equatable {
     case badPath(String)
     case wrongSize(String)
     case wrongDigest(String)
@@ -213,17 +226,17 @@ enum PhononStoreError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .badPath(let path): "the voice's bundle names a path outside itself: \(path)"
-        case .wrongSize(let path): "the voice's \(path) is not the size its bundle names"
-        case .wrongDigest(let path): "the voice's \(path) does not match its digest"
-        case .missing(let path): "the voice's \(path) is not in its source"
-        case .notLatest(let version): "the voice's pack is not yet at version \(version) on this phone"
+        case .badPath(let path): "the bundle names a path outside itself: \(path)"
+        case .wrongSize(let path): "the bundle's \(path) is not the size its bundle.json names"
+        case .wrongDigest(let path): "the bundle's \(path) does not match its digest"
+        case .missing(let path): "the bundle's \(path) is not in its source"
+        case .notLatest(let version): "the bundle's pack is not yet at version \(version) on this phone"
         }
     }
 }
 
-/// Where a build has the voice's bundle.
-protocol PhononSource: Sendable {
+/// Where a build has a bundle.
+protocol BundleSource: Sendable {
     /// Brings the bundle onto the phone where it is not: a pack's download, which `progress`
     /// hears, of its latest version. Answers the version whose files `url(of:)` now reads (nil for
     /// a source with none), and throws when it cannot bring that version in.
@@ -241,18 +254,18 @@ protocol PhononSource: Sendable {
 
 /// The bundle as a folder: the app's own resources in a build from the install page, or the
 /// folder a debug launch names (`TOPO_DEBUG_VOICE`).
-struct FolderSource: PhononSource {
+struct FolderSource: BundleSource {
     let folder: URL
 
-    /// The app's own copy, when the build carries one.
-    static func embedded(in bundle: Bundle = .main) -> FolderSource? {
-        bundle.url(forResource: PhononStore.name, withExtension: nil).map(FolderSource.init(folder:))
+    /// The app's own copy of the bundle named `name`, when the build carries one.
+    static func embedded(_ name: String, in bundle: Bundle = .main) -> FolderSource? {
+        bundle.url(forResource: name, withExtension: nil).map(FolderSource.init(folder:))
     }
 
     func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int? { nil }
     func url(of path: String) throws -> URL {
         let url = folder.appendingPathComponent(path)
-        guard FileManager.default.fileExists(atPath: url.path) else { throw PhononStoreError.missing(path) }
+        guard FileManager.default.fileExists(atPath: url.path) else { throw BundleStoreError.missing(path) }
         return url
     }
     var versioned: Bool { false }
@@ -260,11 +273,18 @@ struct FolderSource: PhononSource {
     func copied() async -> Bool { true }
 }
 
-/// The Apple-hosted pack (`phonon-40m-en`, essential), which TopoAssets downloads with the app.
-struct AssetPackSource: PhononSource {
+/// An Apple-hosted pack (`phonon-40m-en`, `parakeet-ultra-coreml`, each essential at first
+/// installation), which TopoAssets downloads with the app. A pack's one folder is named as its id,
+/// so a file's path in the pack is its path in the bundle under that folder.
+struct AssetPackSource: BundleSource {
     let id: String
+    /// What the pack is to the person, for the log.
+    let noun: String
 
-    init(id: String = PhononStore.name) { self.id = id }
+    init(id: String, noun: String) {
+        self.id = id
+        self.noun = noun
+    }
 
     func makeLocal(progress: @escaping @Sendable (Double?) -> Void) async throws -> Int? {
         let manager = AssetPackManager.shared
@@ -289,14 +309,14 @@ struct AssetPackSource: PhononSource {
             // whether the local one is the latest; one that is not is no version to record.
             try await manager.ensureLocalAvailability(of: pack)
             guard try await manager.status(ofAssetPackWithID: id).contains(.upToDate) else {
-                throw PhononStoreError.notLatest(pack.version)
+                throw BundleStoreError.notLatest(pack.version)
             }
         }
         return pack.version
     }
 
     func url(of path: String) throws -> URL {
-        try AssetPackManager.shared.url(for: FilePath("\(PhononStore.name)/\(path)"))
+        try AssetPackManager.shared.url(for: FilePath("\(id)/\(path)"))
     }
 
     var versioned: Bool { true }
@@ -312,7 +332,7 @@ struct AssetPackSource: PhononSource {
             try await AssetPackManager.shared.remove(assetPackWithID: id)
             return true
         } catch {
-            log.error("voice: the asset pack could not be removed after its copy, tried again at the next launch: \(String(describing: error))")
+            log.error("\(noun): the asset pack could not be removed after its copy, tried again at the next launch: \(String(describing: error))")
             return false
         }
     }

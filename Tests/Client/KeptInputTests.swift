@@ -14,7 +14,7 @@ final class CountingEar: SpeechEngine, @unchecked Sendable {
 
     var decodes: Int { lock.withLock { count } }
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {}
     func rebuild(terms: [String], version: Int) async throws {}
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {
         lock.withLock { count += 1 }
@@ -114,7 +114,7 @@ final class KeptInputTests: XCTestCase {
         let engine = CountingEar(hears: hears)
         let ear = Ear(vocabulary: Vocabulary(defaults: defaults()), engine: engine)
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle("the ear to load") { ear.ready }
         let voice = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },

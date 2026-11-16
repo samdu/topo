@@ -136,7 +136,7 @@ enum Setup {
         func fetch(_ ids: [String]) -> Fetch { Fetch(fraction: downloads.fraction(ids), words: downloads.describe(ids)) }
         return lines(phase: userland.phase, claude: userland.claude,
                      workspace: fetch([ModelManifest.rootfs, ModelManifest.shell, ModelManifest.claudeCode]),
-                     ear: stage(ear.state, trouble: ear.trouble), earFetch: fetch(Ear.models),
+                     ear: stage(ear.state, trouble: ear.trouble), earFetch: Fetch(fraction: ear.fraction, words: ear.fetchWords),
                      earLoading: ear.progress.isEmpty ? Ear.preparing : "\(Ear.preparing): \(ear.progress)",
                      voice: stage(voice.state, trouble: voice.trouble),
                      voiceFetch: Fetch(fraction: voice.waitsForEar ? nil : voice.fraction, words: voice.fetchWords),

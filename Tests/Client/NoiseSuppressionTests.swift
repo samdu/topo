@@ -27,7 +27,7 @@ final class NoiseSuppressionTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: defaults), engine: ScriptedEngine())
         if ready {
             let nowhere = URL(fileURLWithPath: "/dev/null")
-            ear.load(parakeet: nowhere, ctc: nowhere)
+            ear.load(acoustic: nowhere)
             await settle("the ear is resident") { ear.ready }
         }
         let center = NotificationCenter()

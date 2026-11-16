@@ -67,7 +67,7 @@ final class PressGestureTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: ScriptedEngine(bare: "purple elephants", boosted: "purple elephants"))
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle("the ear") { ear.ready }
         let latch = OpenLatch()
         EngineWatch.reset()

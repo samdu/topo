@@ -20,7 +20,7 @@ final class ModelDownloadsTests: XCTestCase {
     }
 
     /// The voice is not a download: its bundle comes from the asset pack or the app's own
-    /// resources (`PhononStore`), so the manifest names no voice and no `.safetensors` at all.
+    /// resources (`BundleStore`), so the manifest names no voice and no `.safetensors` at all.
     func testTheBundledManifestFetchesNoVoice() throws {
         let manifest = try ModelManifest.bundled()
         XCTAssertNil(manifest.model("pocket-tts-coreml"))

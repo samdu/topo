@@ -6,31 +6,38 @@ import Observation
 import FluidAudio
 #endif
 
-/// Speech to text on this phone: Parakeet-tdt-0.6b-v2 through FluidAudio, rescored against the
-/// person's own `Vocabulary`, the words the recogniser breaks on. The microphone's audio never
-/// leaves the device. The measured reason (Daphne's stt-tune sweep over Sam's own recordings):
-/// WER 0.058 against 0.186 for the server recogniser, eighteen of twenty vocabulary words
-/// recognised against two, no invented jargon in ordinary speech, and the transcript in about
-/// 0.3s with no network in the loop.
+private let log = TopoLog(.models)
+
+/// Speech to text on this phone: Parakeet Ultra (moondream's post-training of parakeet-tdt-0.6b-v3)
+/// through FluidAudio, rescored against the person's own `Vocabulary`, the words the recogniser
+/// breaks on. The microphone's audio never leaves the device. Daphne chose it on Sam's own
+/// recordings, through the same path, booster and gates (samdu/daphne-assistant#205): boosted WER
+/// 0.027 against v2's 0.059, seventeen of twenty vocabulary words against eighteen, and no invented
+/// jargon from either — measured on FluidAudio 0.17.7's decode path, which 0.18.2's long-form
+/// path has changed since.
 ///
-/// The models are not in the bundle. `ModelDownloads` fetches them through the app's background
-/// session (about 540 MB of CoreML: 442 MB for Parakeet, 98 MB for the CTC spotter, listed
-/// file by file in the manifest) into the app's Application Support, and FluidAudio loads them
-/// from there, told to touch no network of its own. Until they are resident, or if they fail to
-/// load, `VoiceInput` refuses a press with `summary`: this is the phone's one ear.
+/// The model is a bundle (`BundleStore`, `parakeet-ultra-coreml`, 632 MB of CoreML), copied and
+/// checked into `Application Support/Ear` from whichever source the build has: the Apple-hosted
+/// pack, the app's own resources (an install-page build) or a folder a debug launch names. The
+/// CTC spotter the vocabulary is rescored with (98 MB) is a download of `ModelDownloads`'s, into
+/// FluidAudio's own cache, where its boosting session reads the tokenizer; it is not a condition of
+/// the ear. Ultra recognising bare is still the ear, so the ear is ready once Ultra is resident,
+/// and the boost joins it when the spotter has arrived and compiled, without a press waiting on it.
+/// Until Ultra is resident, or if it fails to load, `VoiceInput` refuses a press with `summary`:
+/// this is the phone's one ear.
 ///
-/// The vocabulary is a layer over that, not a condition of it. Parakeet recognising bare is
-/// still the ear, so a boosting session that cannot be built (and none is built for an empty
-/// list) leaves the ear ready and says so in `summary`.
+/// A phone whose earlier build downloaded Parakeet v2 hears with v2 while Ultra's copy is not yet
+/// in its store (an update's first launch fetches a TestFlight build's pack), and the copy is made
+/// beside it; the launch after, the ear is Ultra and v2's folder is removed. Nothing downloads v2.
 ///
 /// Published state lives on the main actor; recognition itself runs in `EarEngine`, an actor,
 /// because a CoreML decode on the main thread is a visible freeze.
 @MainActor
 @Observable
 final class Ear {
-    /// `fetching` is the wait for `ModelDownloads` to have every file; `loading` is the CoreML
-    /// compile from disk, which after an install is the Neural Engine compiling the models for
-    /// this phone, and takes its time.
+    /// `fetching` is the store making Ultra's copy — a pack's download first where the system has
+    /// not finished it; `loading` is the CoreML compile from disk, which after an install is the
+    /// Neural Engine compiling the model for this phone, and takes its time.
     enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
@@ -39,12 +46,25 @@ final class Ear {
     private(set) var trouble: String?
     /// Where the load has got to: a state that says only that it is preparing for a minute reads as hung.
     private(set) var progress = ""
+    /// The acoustic model resident or compiling, nil before a load.
+    private(set) var model: EarModel?
+    /// How far a pack's download has come, while the store waits on one.
+    private(set) var fraction: Double?
+    /// Whether the store has begun a copy, rather than still finding its copy whole.
+    private(set) var copyingNow = false
+    /// Whether the spotter is resident, and with it the boost the vocabulary rides.
+    private(set) var spotterResident = false
 
-    /// The manifest entries the ear needs on disk.
-    static let models = [ModelManifest.parakeet, ModelManifest.ctc]
+    /// The manifest entries the ear downloads: the spotter alone. Parakeet v2's entry stays in the
+    /// manifest so a phone's earlier download of it is kept until Ultra replaces it, and is never
+    /// asked for.
+    static let models = [ModelManifest.ctc]
 
     /// What `loading` reads as: the step a first load after an install spends its time in.
     static let preparing = "preparing the models for this phone"
+    static let checking = "checking Topo's ear"
+    static let downloading = "downloading Topo's ear"
+    static let copying = "copying Topo's ear"
 
     /// Parakeet eats 16 kHz mono, so the microphone is converted to that and nothing else.
     nonisolated static let rate = 16000
@@ -64,19 +84,33 @@ final class Ear {
     /// similar, so fewer replacements happen. It is off here (`VocabularyRescorer.Config` at
     /// the session), because the sweep measured the rescorer without it and nothing has
     /// measured it since. A term shorter than `minTermLength` is ignored by the rescorer, so
-    /// the store refuses one.
+    /// the store refuses one. The booster rescores on the spotter's own tokenizer, so it is the
+    /// same over Ultra as over v2.
     nonisolated static let minSimilarity: Float = 0.65
     nonisolated static let minTermLength = 3
 
     private let engine: any SpeechEngine
+    private let downloads: ModelDownloads
+    private let store: BundleStore
+    private let source: any BundleSource
+    /// Whether this launch's copy of Ultra beside a resident v2 is under way, so a foreground
+    /// asks for one only.
+    private var copyingBeside = false
+    /// Whether the spotter's compile has been asked for, so it is asked for once.
+    private var spotterAsked = false
 
     /// Counts the lists handed to the engine, so of two edits in flight the later one is the
     /// session that stands whichever finishes first.
     private var vocabularyVersion = 0
 
-    init(vocabulary: Vocabulary = Vocabulary(), engine: any SpeechEngine = Ear.defaultEngine()) {
+    init(vocabulary: Vocabulary = Vocabulary(), engine: any SpeechEngine = Ear.defaultEngine(),
+         store: BundleStore = .ear(), source: (any BundleSource)? = nil, downloads: ModelDownloads = .shared) {
         self.vocabulary = vocabulary
         self.engine = engine
+        self.downloads = downloads
+        self.store = store
+        self.source = source ?? FolderSource.embedded(BundleStore.earName)
+            ?? AssetPackSource(id: BundleStore.earName, noun: "ear")
         vocabulary.changed = { [weak self] in self?.rebuild() }
     }
 
@@ -90,76 +124,189 @@ final class Ear {
 
     var ready: Bool { state == .ready }
 
+    /// What the line says while the state is `fetching`.
+    var fetchWords: String {
+        if let fraction { return "\(Self.downloading) (\(Int((fraction * 100).rounded()))%)" }
+        return copyingNow ? Self.copying : Self.checking
+    }
+
     /// One line for the diagnostics screen.
     var summary: String {
         switch state {
         case .cold: return "not loaded"
-        case .fetching: return ModelDownloads.shared.describe(Self.models)
+        case .fetching: return fetchWords
         case .loading: return progress.isEmpty ? Self.preparing : "\(Self.preparing): \(progress)"
-        case .ready: return trouble.map { "Parakeet resident; vocabulary boost unavailable: \($0)" } ?? "Parakeet resident"
+        case .ready:
+            let name = model?.name ?? "Parakeet"
+            if let trouble { return "\(name) resident; vocabulary boost unavailable: \(trouble)" }
+            if !spotterResident { return "\(name) resident; vocabulary boost waiting for its spotter (\(downloads.describe(Self.models)))" }
+            return "\(name) resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
 
-    /// Asks for the models, downloading whatever this phone lacks, and loads them once every
-    /// file is on disk. Idempotent, and called on every foreground so that they are resident by
-    /// the first press and a download that failed is tried again; a press that beats the load
-    /// is refused with `summary`. An ear that is loading or resident has its files and asks for
-    /// nothing.
+    /// Makes the ear resident: Ultra from its store, made from this build's source where the store
+    /// does not hold it whole, or, on a phone with Parakeet v2 on disk and no whole copy of Ultra
+    /// yet, v2 at once while Ultra's copy is made beside it for the next launch. Asks for the
+    /// spotter too, whose arrival joins the boost to a resident ear. Idempotent, and called on every
+    /// foreground so that the ear is resident by the first press and a copy, a download or a load
+    /// that failed is tried again; a press that beats the load is refused with `summary`.
     func prepare() {
-        guard state != .loading, state != .ready else { return }
-        let downloads = ModelDownloads.shared
-        downloads.start(Self.models)
-        guard state != .fetching else { return }
-        state = .fetching
+        askForSpotter()
+        guard state == .cold || state == .failed else { return }
         trouble = nil
-        downloads.whenPresent(Self.models) { [weak self] in
+        if !(store.installed() != nil && store.isWhole()), downloads.present.contains(ModelManifest.parakeet),
+           let v2 = try? downloads.directory(for: ModelManifest.parakeet) {
+            load(acoustic: v2, model: .v2)
+            copyBeside()
+            return
+        }
+        state = .fetching
+        fraction = nil
+        copyingNow = false
+        install { [weak self] result in
             guard let self, self.state == .fetching else { return }
-            do {
-                self.load(parakeet: try downloads.directory(for: ModelManifest.parakeet),
-                          ctc: try downloads.directory(for: ModelManifest.ctc))
-            } catch {
+            switch result {
+            case .success(let home):
+                self.load(acoustic: home, model: .ultra)
+            case .failure(let error):
                 self.state = .failed
                 self.trouble = error.localizedDescription
+                self.settled?()
             }
         }
     }
 
-    /// The CoreML compile from the store's directories, then the vocabulary over it. The ear is
-    /// ready once the models are; the session is built after, through `rebuild`, whose failure
-    /// is `summary`'s to report and not the ear's to fall on.
-    /// Called when a compile ends, resident or failed: the voice's compile waits on it.
+    /// The store's copy from this build's source, its progress drawn while the ear is fetching.
+    private func install(_ done: @escaping @MainActor (Result<URL, Error>) -> Void) {
+        let store = store, source = source
+        Task {
+            do {
+                let home = try await store.install(from: source, progress: { fraction in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.state == .fetching, !self.copyingNow else { return }
+                        self.fraction = fraction
+                    }
+                }, copying: {
+                    Task { @MainActor [weak self] in
+                        guard let self, self.state == .fetching else { return }
+                        self.fraction = nil
+                        self.copyingNow = true
+                    }
+                })
+                done(.success(home))
+            } catch {
+                done(.failure(error))
+            }
+        }
+    }
+
+    /// Ultra's copy made while v2 is the ear, for the next launch to take; never loaded beside v2.
+    private func copyBeside() {
+        guard !copyingBeside else { return }
+        copyingBeside = true
+        install { [weak self] result in
+            if case .failure(let error) = result {
+                log.error("ear: Ultra's copy beside v2 was not made, tried again at the next foreground: \(String(describing: error))")
+                self?.copyingBeside = false
+            } else {
+                log.notice("ear: Ultra's copy is in, and the ear is Ultra from the next launch")
+            }
+        }
+    }
+
+    /// The spotter: asked for once, and compiled once its files are on disk and the acoustic model
+    /// is resident, so the two compiles are never shared.
+    private func askForSpotter() {
+        downloads.start(Self.models)
+        guard !spotterAsked else { return }
+        spotterAsked = true
+        downloads.whenPresent(Self.models) { [weak self] in
+            guard let self, let ctc = try? self.downloads.directory(for: ModelManifest.ctc) else { return }
+            self.spotterDirectory = ctc
+            self.loadSpotterIfDue()
+        }
+    }
+
+    /// The spotter's directory once its files are on disk.
+    private var spotterDirectory: URL?
+    /// Whether the spotter's compile has begun.
+    private var spotterLoading = false
+
+    private func loadSpotterIfDue() {
+        guard state == .ready, let ctc = spotterDirectory, !spotterLoading, !spotterResident else { return }
+        spotterLoading = true
+        Task {
+            do {
+                try await engine.loadSpotter(ctc) { [weak self] line in
+                    Task { @MainActor in self?.note(line) }
+                }
+                spotterResident = true
+                rebuild()
+            } catch {
+                trouble = error.localizedDescription
+                log.error("ear: the spotter did not load, so the vocabulary is not applied: \(String(describing: error))")
+            }
+            spotterLoading = false
+        }
+    }
+
+    private func note(_ line: String) { log.info("ear: \(line)") }
+
+    /// Removes v2's download once Ultra is the resident ear, so the phone keeps one acoustic model.
+    private func retireV2() {
+        guard model == .ultra, let v2 = try? downloads.directory(for: ModelManifest.parakeet),
+              FileManager.default.fileExists(atPath: v2.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: v2)
+            log.notice("ear: Parakeet v2 removed, Ultra is resident")
+        } catch {
+            log.error("ear: Parakeet v2 was not removed, tried again at the next launch: \(String(describing: error))")
+        }
+    }
+
+    /// Called when a compile of the acoustic model ends, resident or failed, and when Ultra's
+    /// copy fails: the voice's compile waits on it.
     var settled: (@MainActor () -> Void)?
 
-    func load(parakeet: URL, ctc: URL) {
+    /// The CoreML compile of the acoustic model from `acoustic`, then the spotter's where `spotter`
+    /// names one (a debug launch's folder) or the download has brought it. The ear is ready once the
+    /// acoustic model is; the session is built after, through `rebuild`, whose failure is
+    /// `summary`'s to report and not the ear's to fall on.
+    func load(acoustic: URL, model: EarModel = .ultra, spotter: URL? = nil) {
         state = .loading
+        self.model = model
+        if let spotter { spotterDirectory = spotter }
         Perf.mark("ear.load.begin")
         Task {
             do {
-                try await engine.load(parakeet: parakeet, ctc: ctc) { [weak self] line in
+                try await engine.load(acoustic: acoustic, model: model) { [weak self] line in
                     Task { @MainActor in self?.progress = line }
                 }
                 Perf.mark("ear.load.end")
+                log.notice("ear: \(model.name) resident")
                 state = .ready
                 progress = ""
-                rebuild()
+                retireV2()
+                settled?()
+                loadSpotterIfDue()
             } catch {
                 state = .failed
                 trouble = error.localizedDescription
                 progress = ""
+                settled?()
             }
-            settled?()
         }
     }
 
-    /// The spotter's session around the list as it is now: an edit landing, or the load
-    /// finishing. Nothing until the models are resident; an edit during the load is read by the
-    /// rebuild that follows it. A rebuild that fails leaves the session that was standing and
+    /// The spotter's session around the list as it is now: an edit landing, or the spotter's
+    /// load finishing. Nothing until the acoustic model and the spotter are both resident; an edit
+    /// before then is read by the rebuild the spotter's load ends in. A rebuild that fails leaves the session that was standing and
     /// says so in `summary`; one that works clears that.
     private func rebuild() {
         vocabularyVersion += 1
         let version = vocabularyVersion
-        guard state == .ready else { return }
+        guard state == .ready, spotterResident else { return }
         let terms = vocabulary.terms
         Task {
             do {
@@ -184,21 +331,42 @@ final class Ear {
     }
 }
 
+/// The acoustic models the ear runs: Ultra, and v2 on a phone that downloaded it before Ultra's
+/// copy was in.
+enum EarModel: Sendable, Equatable {
+    case ultra, v2
+
+    var name: String {
+        switch self {
+        case .ultra: "Parakeet Ultra"
+        case .v2: "Parakeet v2"
+        }
+    }
+}
+
 /// The engine as the ear drives it: `EarEngine` in the app, a double in the tests.
 protocol SpeechEngine: Sendable {
-    /// The models from disk. Throws when they cannot be loaded, which fails the ear.
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws
+    /// The acoustic model from disk. Throws when it cannot be loaded, which fails the ear.
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws
+    /// The spotter from disk. Throws when it cannot be loaded, which leaves the ear ready
+    /// without the vocabulary.
+    func loadSpotter(_ ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws
     /// The boosting session around `terms`, or none for an empty list. Throws when the session
     /// cannot be built, which leaves the ear ready without it.
     func rebuild(terms: [String], version: Int) async throws
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String
 }
 
+extension SpeechEngine {
+    /// A double with no spotter loads one by doing nothing.
+    func loadSpotter(_ ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+}
+
 /// Stands in where FluidAudio is not linked: every call fails, so the ear never becomes ready
 /// and `VoiceInput` refuses every press.
 struct NoEngine: SpeechEngine {
     private static let why = "FluidAudio is not linked in this build"
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         throw EarError.unavailable(Self.why)
     }
     func rebuild(terms: [String], version: Int) async throws { throw EarError.unavailable(Self.why) }
@@ -313,15 +481,20 @@ extension VocabularyBoostingSession: Boost {
     }
 }
 
-/// Everything FluidAudio, one instance for the process. Parakeet and the CTC spotter are about
-/// 120 MB resident together, and an actor because `transcribe` is a synchronous CoreML forward
-/// pass.
+/// Everything FluidAudio, one instance for the process — Parakeet v2 and the CTC spotter measured
+/// about 120 MB resident together; Ultra's footprint on the phone is the dev build's to measure —
+/// and an actor because `transcribe` is a synchronous CoreML forward pass.
 actor EarEngine: SpeechEngine {
     static let shared = EarEngine()
 
-    /// v2 explicitly: `AsrModels` defaults to v3, and the multilingual model is a different
-    /// recogniser from the one every number was measured on.
-    static let version: AsrModelVersion = .v2
+    /// The FluidAudio version each acoustic model loads as, named because `AsrModels` defaults
+    /// to v3.
+    static func version(_ model: EarModel) -> AsrModelVersion {
+        switch model {
+        case .ultra: .ultra
+        case .v2: .v2
+        }
+    }
 
     /// The session around a list: FluidAudio's, over the resident spotter, or nil for a list
     /// with nothing in it the spotter could look for.
@@ -343,24 +516,28 @@ actor EarEngine: SpeechEngine {
     /// Whether a session stands: a rescored `transcribe` differs from a bare one only then.
     var boosted: Bool { boost != nil }
 
-    /// Load from disk, the acoustic model then the spotter. `parakeet` is the directory the
-    /// manifest's Parakeet entry fills (named as FluidAudio's loader expects, since it appends
-    /// that name to the parent it is given) and `ctc` the spotter's, which is also where
-    /// FluidAudio's boosting session will read the tokenizer from (`ModelStore.homes`). The
-    /// list is `rebuild`'s.
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
-        if asr != nil && builder != nil { return }
-        // Every file is the manifest's and verified; a load that fails is reported, and never
-        // answered by FluidAudio deleting the directory and fetching afresh over a session of
-        // its own.
+    /// The acoustic model from disk. `acoustic` is the model's folder, named as FluidAudio's
+    /// loader expects (`parakeet-ultra-coreml`, the store's; `parakeet-tdt-0.6b-v2`, the
+    /// manifest's), since it appends that name to the parent it is given.
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
+        if asr != nil { return }
+        // Every file is the store's or the manifest's and verified; a load that fails is
+        // reported, and never answered by FluidAudio deleting the directory and fetching afresh
+        // over a session of its own.
         ModelHub.offlineMode = true
-        let models = try await AsrModels.load(from: parakeet, version: Self.version) { p in
-            if case .compiling(let name) = p.phase { onProgress("Parakeet: compiling \(name)") }
+        let models = try await AsrModels.load(from: acoustic, version: Self.version(model)) { p in
+            if case .compiling(let name) = p.phase { onProgress("\(model.name): compiling \(name)") }
         }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         asr = manager
+    }
 
+    /// The spotter from disk: `ctc` is its directory, which is also where FluidAudio's boosting
+    /// session reads the tokenizer from (`ModelStore.homes`). The list is `rebuild`'s.
+    func loadSpotter(_ ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+        if builder != nil { return }
+        ModelHub.offlineMode = true
         onProgress("compiling the CTC spotter")
         let ctcModels = try await CtcModels.loadDirect(from: ctc, variant: .ctc110m)
         let tokenizer = try await CtcTokenizer.load(from: ctc)

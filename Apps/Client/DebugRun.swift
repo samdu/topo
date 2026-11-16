@@ -667,9 +667,10 @@ extension DebugRun {
     /// how a test has something heard without a recogniser. `TOPO_DEBUG_EAR=loading` is one
     /// whose load never finishes, so every press is refused with the ear's reason, however fast
     /// the real models would have downloaded. `TOPO_DEBUG_EAR=` an
-    /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
-    /// real ear, loaded from there instead of the app's own download, which is how the UI test
-    /// gets Parakeet resident in a simulator without the background download. Any other launch
+    /// absolute directory holding `parakeet-ultra-coreml` (scripts/ear-bundle.sh's) and
+    /// `parakeet-ctc-110m-coreml` is the real ear, Ultra and its spotter loaded from there in place
+    /// of the store and the app's own download, which is how the UI test gets Parakeet resident in
+    /// a simulator with no asset pack and without the background download. Any other launch
     /// gets the real ear, prepared as usual.
     @MainActor
     static func ear(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Ear {
@@ -677,22 +678,22 @@ extension DebugRun {
         if choice == "loading" {
             let ear = Ear(engine: StubEngine(loads: false))
             let nowhere = URL(fileURLWithPath: "/dev/null")
-            ear.load(parakeet: nowhere, ctc: nowhere)
+            ear.load(acoustic: nowhere)
             say("ear: loading, and never resident, so every press is refused")
             return ear
         }
         if choice == "stub" || choice.hasPrefix("stub:") {
             let ear = Ear(engine: StubEngine(hears: String(choice.dropFirst("stub:".count))))
             let nowhere = URL(fileURLWithPath: "/dev/null")
-            ear.load(parakeet: nowhere, ctc: nowhere)
+            ear.load(acoustic: nowhere)
             say("ear: a stub, resident without a model")
             return ear
         }
         let root = URL(fileURLWithPath: choice, isDirectory: true)
         let ear = Ear()
-        ear.load(parakeet: root.appendingPathComponent(ModelManifest.parakeet, isDirectory: true),
-                 ctc: root.appendingPathComponent(ModelManifest.ctc, isDirectory: true))
-        say("ear: Parakeet from \(root.path)")
+        ear.load(acoustic: root.appendingPathComponent(BundleStore.earName, isDirectory: true), model: .ultra,
+                 spotter: root.appendingPathComponent(ModelManifest.ctc, isDirectory: true))
+        say("ear: Parakeet Ultra from \(root.path)")
         return ear
     }
 
@@ -823,7 +824,7 @@ extension DebugRun {
         var loads = true
         /// What it hears in any audio at all; nothing by default.
         var hears = ""
-        func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+        func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
             guard !loads else { return }
             while true { try await Task.sleep(for: .seconds(3600)) }
         }

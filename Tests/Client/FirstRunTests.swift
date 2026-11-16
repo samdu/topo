@@ -77,18 +77,17 @@ final class FirstRunTests: XCTestCase {
     /// Listening first: once the ear is resident on an install and the voice is still coming,
     /// the line says Topo can hear, and that replies are written meanwhile. Not on a launch, not
     /// before the ear, and not once the voice is resident or has failed.
-    /// The voice compiles only once the ear is neither still to be fetched nor compiling; an ear
-    /// whose download failed lets it go, and no ear beside it (a stand-in) holds nothing back.
+    /// The voice compiles only once the ear is neither still to be copied nor compiling; an ear
+    /// whose copy failed is `failed` and lets it go, and no ear beside it (a stand-in) holds
+    /// nothing back.
     @MainActor
     func testTheVoiceCompilesOnlyOnceTheEarIsNotToComeOrCompiling() {
-        XCTAssertTrue(Voice.mayLoad(ear: nil, earDownloadFailed: false))
+        XCTAssertTrue(Voice.mayLoad(ear: nil))
         for settled in [Ear.State.cold, .ready, .failed] {
-            XCTAssertTrue(Voice.mayLoad(ear: settled, earDownloadFailed: false), "\(settled)")
+            XCTAssertTrue(Voice.mayLoad(ear: settled), "\(settled)")
         }
-        XCTAssertFalse(Voice.mayLoad(ear: .loading, earDownloadFailed: false))
-        XCTAssertFalse(Voice.mayLoad(ear: .loading, earDownloadFailed: true), "a compile under way is waited for")
-        XCTAssertFalse(Voice.mayLoad(ear: .fetching, earDownloadFailed: false), "an ear still to come is waited for")
-        XCTAssertTrue(Voice.mayLoad(ear: .fetching, earDownloadFailed: true), "a broken ear never costs the voice")
+        XCTAssertFalse(Voice.mayLoad(ear: .loading), "a compile under way is waited for")
+        XCTAssertFalse(Voice.mayLoad(ear: .fetching), "an ear still to come is waited for")
     }
 
     @MainActor

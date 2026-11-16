@@ -27,6 +27,11 @@ cat > "$tree/scripts/phonon-bundles.sh" <<'FAKE'
 echo "phonon-bundles.sh $*" >> "$CALLS"
 FAKE
 chmod +x "$tree/scripts/phonon-bundles.sh"
+cat > "$tree/scripts/ear-bundle.sh" <<'FAKE'
+#!/bin/sh
+echo "ear-bundle.sh $*" >> "$CALLS"
+FAKE
+chmod +x "$tree/scripts/ear-bundle.sh"
 for fake in build-ish.sh fetch-phonon.sh; do
   printf '#!/bin/sh\nexit 0\n' > "$tree/scripts/$fake"
   chmod +x "$tree/scripts/$fake"
@@ -275,6 +280,19 @@ order="$(grep -oE '^(phonon-bundles.sh package|xcrun \[[^]]*\] altool --upload-a
 grep -q -- '--upload-asset-pack .*/phonon/phonon-40m-en.aar --apple-id 6826966978 --wait --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/voice" \
     || fail "the pack was not uploaded to Topo's record with the key: $(cat "$work/voice")"
 
+# The ear: no pack unless asked; asked, it is packaged and uploaded before the build.
+grep -q 'ear-bundle.sh' "$work/with" "$work/voice" && fail "an upload not asked for the ear touched its pack"
+ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear" --upload --ear \
+    || fail "an upload with the ear failed: $(cat "$work/out")"
+order="$(grep -oE '^(ear-bundle.sh package|phonon-bundles.sh package|xcrun \[[^]]*\] altool --upload-asset-pack|xcrun \[[^]]*\] altool --upload-app)' "$work/ear" | sed 's/\[[^]]*\] //')"
+[ "$order" = "$(printf 'ear-bundle.sh package\nxcrun altool --upload-asset-pack\nxcrun altool --upload-app')" ] \
+    || fail "the ear's pack was not packaged, then uploaded, then the build: $(cat "$work/ear")"
+grep -q -- '--upload-asset-pack .*/ear/parakeet-ultra-coreml.aar --apple-id 6826966978 --wait --apiKey KEYID12345 --apiIssuer an-issuer$' "$work/ear" \
+    || fail "the ear's pack was not uploaded to Topo's record with the key: $(cat "$work/ear")"
+ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-local" --ear \
+    || fail "packaging the ear failed: $(cat "$work/out")"
+grep -q 'altool' "$work/ear-local" && fail "--ear without --upload reached altool: $(cat "$work/ear-local")"
+
 # An archive carrying the voice's bundle is refused before anything is uploaded.
 if STRAY_VOICE=1 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/stray" --upload; then
     fail "an archive carrying the voice's bundle was uploaded"
@@ -283,4 +301,4 @@ grep -q -- 'altool' "$work/stray" && fail "an archive carrying the voice's bundl
 grep -q "carries a model or weights" "$work/out" || fail "the refusal does not say the archive carries the bundle: $(cat "$work/out")"
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed" >&2; exit 1; }
-echo "archive-upload.sh: an archive carrying the voice's bundle is refused; --voice packages the voice's pack and uploads it before the build; with a key kept as hex, in the environment or the keychain, or in 1Password where the keychain answers empty, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"
+echo "archive-upload.sh: an archive carrying the voice's bundle is refused; --voice packages the voice's pack and uploads it before the build, and --ear the ear's; with a key kept as hex, in the environment or the keychain, or in 1Password where the keychain answers empty, the archive, the export and altool each get it as a .p8 that is a key, and it is gone after; what is not a key builds nothing; with none the archive runs plain and an upload or a validation is refused before anything is built; the packages resolve into build/packages, kept for the pins they were resolved from"

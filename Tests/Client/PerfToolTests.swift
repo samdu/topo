@@ -474,7 +474,7 @@ final class HearingMarksTests: XCTestCase {
         let defaults = UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!
         let ear = Ear(vocabulary: Vocabulary(defaults: defaults), engine: ScriptedEngine())
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         for _ in 0..<400 where !ear.ready { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(ear.ready)
         let center = NotificationCenter()

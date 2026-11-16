@@ -34,6 +34,7 @@ done <<< "$voice_paths"
 # Every entry selects full, and the workflow's VOICE_PATHS has to equal this list both ways.
 expected=(
   Apps/Client/AudioSession.swift
+  Apps/Client/BundleStore.swift
   Apps/Client/ChatView.swift
   Apps/Client/Composer.swift
   Apps/Client/DebugRun.swift
@@ -52,6 +53,8 @@ expected=(
   scripts/ci-audio-meter.swift
   scripts/ci-require-tests.sh
   scripts/ci-select-lane.sh
+  scripts/ear-bundle.json
+  scripts/ear-bundle.sh
   scripts/fetch-ear-models.sh
   scripts/mac-suite.sh
   scripts/validate-and-push.sh

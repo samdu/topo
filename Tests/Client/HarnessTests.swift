@@ -2516,7 +2516,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let speaker = try await makeSpeaker(seams, audio, center)
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()),
                       engine: ScriptedEngine(bare: "and of Italy", boosted: "and of Italy"))
-        ear.load(parakeet: URL(fileURLWithPath: "/dev/null"), ctc: URL(fileURLWithPath: "/dev/null"))
+        ear.load(acoustic: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the ear to load") { ear.ready }
         let voice = VoiceInput(audio: audio, ear: ear, center: center, makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) }, permission: { true },

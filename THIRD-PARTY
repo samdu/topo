@@ -53,10 +53,15 @@ Licence: BSD-2-Clause (text at the end of this file), © 2024–2026 Daily; its 
 Where: `_whisper_features.py` of https://github.com/pipecat-ai/pipecat, as Daphne vendors it (samdu/daphne-assistant, `server/_whisper_features.py`), here unchanged at `scripts/vendor/whisper_features.py`
 Use: The source of Smart Turn's filterbank, which `scripts/smartturn-mel.py` writes from it as `Apps/Topo/Resources/smartturn-mel.bin` (80 Slaney mel filters, 64 KB, in the iOS app's bundle), and the reference `Mel` in `Apps/Client/SmartTurn.swift` is checked against (`Tests/Client/SmartTurnTests.swift`). The script itself is a build tool and does not ship.
 
+## Parakeet Ultra
+Licence: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/), © moondream, from NVIDIA's parakeet-tdt-0.6b-v3 (CC-BY-4.0, © NVIDIA); converted to Core ML by FluidInference, and used here as converted
+Where: https://huggingface.co/FluidInference/parakeet-ultra-coreml at 95eaa59a39d4394f047a4dc5cce480388a60d1b6 (the files `scripts/ear-bundle.json` pins), from moondream's https://huggingface.co/moondream/parakeet-ultra, a post-training of https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+Use: The speech-to-text model the ear runs (632 MB). Conveyed by Topo: as the Apple-hosted asset pack `parakeet-ultra-coreml` in a TestFlight or App Store build, and in the app's resources in a build from the install page; copied into the app's Application Support and loaded from there. The model is provided as-is and without warranties, as the licence says.
+
 ## Parakeet
 Licence: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/), © NVIDIA; converted to CoreML by FluidInference, and used here as converted
-Where: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml at ee09c569f73759e6d44c9bd16766f477b2b36d39, from NVIDIA's https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2, and https://huggingface.co/FluidInference/parakeet-ctc-110m-coreml at accdafd8cf8a2ff1cabe3c11e54416b405d409aa, from NVIDIA's https://huggingface.co/nvidia/parakeet-tdt_ctc-110m
-Use: The speech-to-text model the ear runs (parakeet-tdt-0.6b-v2, 442 MB) and the CTC model that spots the vocabulary in the audio (parakeet-ctc-110m, 98 MB). Not in the bundle: Topo downloads them from FluidInference's repositories at the pinned revisions into the app's Application Support on the first run and keeps them there. The models are provided as-is and without warranties, as the licence says.
+Where: https://huggingface.co/FluidInference/parakeet-ctc-110m-coreml at accdafd8cf8a2ff1cabe3c11e54416b405d409aa, from NVIDIA's https://huggingface.co/nvidia/parakeet-tdt_ctc-110m, and https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml at ee09c569f73759e6d44c9bd16766f477b2b36d39, from NVIDIA's https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+Use: The CTC model that spots the vocabulary in the audio (parakeet-ctc-110m, 98 MB), and parakeet-tdt-0.6b-v2 (442 MB), the ear of a phone that downloaded it before Ultra until Ultra's copy is in. Not in the bundle: Topo downloads the spotter from FluidInference's repository at the pinned revision into the app's Application Support and keeps it there, and downloads v2 no more. The models are provided as-is and without warranties, as the licence says.
 
 ## ptts (PhononTTS)
 Licence: MIT or Apache-2.0, at the user's choice (the texts at the end of this file; both are in `Packages/PhononTTS/` as the release has them), © Gradium

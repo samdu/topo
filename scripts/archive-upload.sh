@@ -5,6 +5,7 @@
 #   scripts/archive-upload.sh --upload        # ... and upload to App Store Connect
 #   scripts/archive-upload.sh --validate      # ... and ask App Store Connect whether it would take it
 #   scripts/archive-upload.sh --upload --voice  # ... and the voice's asset pack before the build
+#   scripts/archive-upload.sh --upload --ear    # ... and the ear's asset pack before the build
 #   BUILD=42 scripts/archive-upload.sh        # a build number of your choosing
 #
 # The archive needs a Distribution certificate and an App Store provisioning
@@ -17,7 +18,9 @@
 # pack `phonon-40m-en`, which App Store Connect keeps apart from the builds.
 # `--voice` packages it (scripts/phonon-bundles.sh) and, with `--upload`, sends
 # it as a new version of the pack before the build; it is wanted only when the
-# bundle has changed, since a build uses the pack's current version.
+# bundle has changed, since a build uses the pack's current version. The ear's
+# weights are the pack `parakeet-ultra-coreml` the same way, and `--ear`
+# packages it (scripts/ear-bundle.sh) and, with `--upload`, sends it.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,13 +38,15 @@ export_options="$root/Distribution/ExportOptions.plist"
 upload=no
 validate=no
 voice=no
+ear=no
 apple_id=6826966978
 for argument in "$@"; do
   case "$argument" in
     --upload) upload=yes ;;
     --validate) validate=yes ;;
     --voice) voice=yes ;;
-    -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ear) ear=yes ;;
+    -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $argument" >&2; exit 2 ;;
   esac
 done
@@ -166,6 +171,10 @@ if [ "$voice" = yes ]; then
   echo "==> packaging the voice's asset pack"
   scripts/phonon-bundles.sh package "$out/phonon"
 fi
+if [ "$ear" = yes ]; then
+  echo "==> packaging the ear's asset pack"
+  scripts/ear-bundle.sh package "$out/ear"
+fi
 
 [ "$upload" = yes ] || [ "$validate" = yes ] || exit 0
 
@@ -177,6 +186,12 @@ fi
 if [ "$upload" = yes ] && [ "$voice" = yes ]; then
   echo "==> uploading the voice's asset pack"
   xcrun altool --upload-asset-pack "$out/phonon/phonon-40m-en.aar" --apple-id "$apple_id" --wait \
+    --apiKey "$key_id" --apiIssuer "$issuer"
+fi
+
+if [ "$upload" = yes ] && [ "$ear" = yes ]; then
+  echo "==> uploading the ear's asset pack"
+  xcrun altool --upload-asset-pack "$out/ear/parakeet-ultra-coreml.aar" --apple-id "$apple_id" --wait \
     --apiKey "$key_id" --apiIssuer "$issuer"
 fi
 
