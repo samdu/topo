@@ -9,9 +9,14 @@ private actor LoadingEngine: SpeechEngine {
     var loads: [Load] = []
     var spotters: [URL] = []
     var rebuilds: [[String]] = []
+    /// A model whose load throws, as a compile that fails does.
+    var refusing: EarModel?
+
+    func refuse(_ model: EarModel) { refusing = model }
 
     func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         loads.append(Load(acoustic: acoustic, model: model))
+        if model == refusing { throw CocoaError(.fileReadCorruptFile) }
     }
     func loadSpotter(_ ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
         spotters.append(ctc)
@@ -93,9 +98,14 @@ final class EarStoreTests: XCTestCase {
         return ModelDownloads(store: models, manifest: .success(manifest), configuration: configuration, defaults: defaults)
     }
 
-    private func ear(_ engine: LoadingEngine, source: FolderSource) -> Ear {
+    private func ear(_ engine: LoadingEngine, source: FolderSource, downloads: ModelDownloads? = nil) -> Ear {
         Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
-            engine: engine, store: store, source: source, downloads: downloads())
+            engine: engine, store: store, source: source, downloads: downloads ?? self.downloads())
+    }
+
+    /// The models `downloads` has a task for, by id.
+    private func asked(_ downloads: ModelDownloads) -> Set<String> {
+        Set(downloads.live.compactMap { $0.split(separator: "|").first.map(String.init) })
     }
 
     private func settle(_ what: String, until condition: @escaping @MainActor () async -> Bool) async {
@@ -151,11 +161,45 @@ final class EarStoreTests: XCTestCase {
 
     func testAPhoneWithoutV2DownloadsNoV2() async throws {
         let engine = LoadingEngine()
-        let ear = ear(engine, source: try source())
+        let downloads = downloads()
+        let ear = ear(engine, source: try source(), downloads: downloads)
         ear.prepare()
         await settle("Ultra is resident") { ear.state == .ready }
-        XCTAssertEqual(Ear.models, [ModelManifest.ctc], "the ear asks for the spotter alone")
-        XCTAssertFalse(fm.fileExists(atPath: models.directory(for: try XCTUnwrap(manifest.model(ModelManifest.parakeet))).path))
+        await settle("the spotter's download is asked for") { self.asked(downloads).contains(ModelManifest.ctc) }
+        ear.prepare()
+        XCTAssertEqual(asked(downloads), [ModelManifest.ctc], "the ear asks for the spotter and nothing else")
+        XCTAssertEqual(downloads.status(for: ModelManifest.parakeet), .absent)
+    }
+
+    func testAnEarADebugLaunchLoadedAsksForNoSpotter() async throws {
+        let engine = LoadingEngine()
+        let downloads = downloads()
+        let ear = ear(engine, source: try source(), downloads: downloads)
+        ear.load(acoustic: URL(fileURLWithPath: "/stub"))
+        ear.prepare()
+        await settle("the debug ear is resident") { ear.state == .ready }
+        ear.prepare()
+        XCTAssertEqual(asked(downloads), [], "a foreground over a debug ear started a download")
+        XCTAssertEqual(downloads.status(for: ModelManifest.ctc), .absent)
+    }
+
+    func testUltraThatWillNotLoadOnAPhoneWithV2HearsWithV2AndKeepsIt() async throws {
+        try present(ModelManifest.parakeet)
+        let v2 = models.directory(for: try XCTUnwrap(manifest.model(ModelManifest.parakeet)))
+        let source = try source()
+        _ = try await store.install(from: source, progress: { _ in }, copying: {})
+        let engine = LoadingEngine()
+        await engine.refuse(.ultra)
+        let ear = ear(engine, source: source)
+        var settled = 0
+        ear.settled = { settled += 1 }
+        ear.prepare()
+        await settle("v2 is resident") { ear.state == .ready }
+        let loads = await engine.loads
+        XCTAssertEqual(loads, [.init(acoustic: store.home, model: .ultra), .init(acoustic: v2, model: .v2)])
+        XCTAssertEqual(ear.summary.hasPrefix("Parakeet v2 resident"), true, ear.summary)
+        XCTAssertTrue(fm.fileExists(atPath: v2.path), "v2 is kept while Ultra will not load")
+        XCTAssertEqual(settled, 1, "the voice is let go once, when v2 is resident")
     }
 
     func testTheSpotterOnDiskJoinsTheEarOnceItIsResident() async throws {

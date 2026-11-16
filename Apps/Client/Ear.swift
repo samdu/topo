@@ -62,9 +62,11 @@ final class Ear {
 
     /// What `loading` reads as: the step a first load after an install spends its time in.
     static let preparing = "preparing the models for this phone"
-    static let checking = "checking Topo's ear"
-    static let downloading = "downloading Topo's ear"
-    static let copying = "copying Topo's ear"
+    /// What the line says while the store finds its copy whole, which every launch does and draws
+    /// no meter for (`Setup.launchWords`).
+    nonisolated static let checking = "checking Topo's ear"
+    nonisolated static let downloading = "downloading Topo's ear"
+    nonisolated static let copying = "copying Topo's ear"
 
     /// Parakeet eats 16 kHz mono, so the microphone is converted to that and nothing else.
     nonisolated static let rate = 16000
@@ -98,6 +100,8 @@ final class Ear {
     private var copyingBeside = false
     /// Whether the spotter's compile has been asked for, so it is asked for once.
     private var spotterAsked = false
+    /// Whether `prepare` has made this ear, so a foreground carries on its spotter's download.
+    private var prepared = false
 
     /// Counts the lists handed to the engine, so of two edits in flight the later one is the
     /// session that stands whichever finishes first.
@@ -152,8 +156,14 @@ final class Ear {
     /// foreground so that the ear is resident by the first press and a copy, a download or a load
     /// that failed is tried again; a press that beats the load is refused with `summary`.
     func prepare() {
-        askForSpotter()
+        // An ear a debug launch loaded itself (`load`, never `prepare`) asks for no spotter.
+        if prepared {
+            askForSpotter()
+            if state == .ready { loadSpotterIfDue() }
+        }
         guard state == .cold || state == .failed else { return }
+        prepared = true
+        askForSpotter()
         trouble = nil
         if !(store.installed() != nil && store.isWhole()), downloads.present.contains(ModelManifest.parakeet),
            let v2 = try? downloads.directory(for: ModelManifest.parakeet) {
@@ -170,6 +180,7 @@ final class Ear {
             case .success(let home):
                 self.load(acoustic: home, model: .ultra)
             case .failure(let error):
+                log.error("ear: Ultra's copy was not made: \(String(describing: error))")
                 self.state = .failed
                 self.trouble = error.localizedDescription
                 self.settled?()
@@ -207,7 +218,7 @@ final class Ear {
         copyingBeside = true
         install { [weak self] result in
             if case .failure(let error) = result {
-                log.error("ear: Ultra's copy beside v2 was not made, tried again at the next foreground: \(String(describing: error))")
+                log.error("ear: Ultra's copy beside v2 was not made, tried again at the next launch: \(String(describing: error))")
                 self?.copyingBeside = false
             } else {
                 log.notice("ear: Ultra's copy is in, and the ear is Ultra from the next launch")
@@ -291,9 +302,17 @@ final class Ear {
                 settled?()
                 loadSpotterIfDue()
             } catch {
+                progress = ""
+                // Ultra that will not load on a phone that still has v2 hears with v2, which stays
+                // until Ultra is resident; the next launch tries Ultra again.
+                if model == .ultra, downloads.present.contains(ModelManifest.parakeet),
+                   let v2 = try? downloads.directory(for: ModelManifest.parakeet) {
+                    log.error("ear: Ultra did not load, so the ear is v2 for this launch: \(String(describing: error))")
+                    load(acoustic: v2, model: .v2)
+                    return
+                }
                 state = .failed
                 trouble = error.localizedDescription
-                progress = ""
                 settled?()
             }
         }
