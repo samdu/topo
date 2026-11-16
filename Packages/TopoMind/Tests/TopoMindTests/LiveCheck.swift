@@ -30,4 +30,40 @@ import TopoTurn
         print("LIVE shutdown confirmed=\(confirmed) pidAlive=\(pid.map(MindProcess.alive) ?? false)")
         #expect(!reply.text.isEmpty)
     }
+
+    /// Two real turns in the mind's own home and login (`MindHome`, `auto` mode): one that needs the
+    /// Bash tool, then, from a second process over the same ledger, one only the resumed session can
+    /// answer. Run by hand only: `TOPO_MIND_LIVE=mind swift test --filter LiveCheck`. Its ledger is
+    /// a temporary one, so the hub's own is not touched.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOPO_MIND_LIVE"] == "mind"))
+    func aToolTurnThenAResumedOneInTheMindsHome() async throws {
+        try MindHome.prepare()
+        let state = FileManager.default.temporaryDirectory.appending(path: "topo-mind-live-\(UUID().uuidString)")
+        var configuration = MindHome.configuration()
+        configuration.stateDirectory = state
+        var log: [Turn] = []
+        func ask(_ sequence: Int64, _ text: String) async throws -> String {
+            let brain = NativeBrain(configuration)
+            let person = Turn(ref: TurnRef(device: DeviceID("live"), sequence: sequence), parents: log.last.map { [$0.ref] } ?? [],
+                              role: .person, text: text, at: Date())
+            let began = ContinuousClock.now
+            let nonce = TurnRunner.replyNonce(for: [person.ref])
+            let reply = try await brain.answer(BrainRequest(context: log, answering: [person], parents: [person.ref],
+                                                            nonce: nonce, model: .sonnet))
+            let written = Turn(ref: TurnRef(device: DeviceID("live-mac"), sequence: sequence), parents: [person.ref],
+                               role: .assistant, text: reply.text, at: Date())
+            await brain.landed(written, nonce: nonce)
+            log += [person, written]
+            print("LIVE mind turn=\(sequence) reply=\(reply.text.debugDescription) model=\(reply.model) took=\(ContinuousClock.now - began)")
+            print("LIVE mind describe=\(await brain.describe())")
+            let pid = await brain.pid
+            let confirmed = await brain.shutdown()
+            print("LIVE mind shutdown confirmed=\(confirmed) pidAlive=\(pid.map(MindProcess.alive) ?? false)")
+            return reply.text
+        }
+        let first = try await ask(1, "Run `echo topo-$((6*7))` with the Bash tool and reply with exactly what it printed, nothing else.")
+        #expect(first.contains("topo-42"))
+        let second = try await ask(2, "What did that command print? Reply with exactly that, nothing else, and run nothing.")
+        #expect(second.contains("topo-42"))
+    }
 }
