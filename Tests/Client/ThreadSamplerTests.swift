@@ -130,6 +130,7 @@ final class ThreadSamplerTests: XCTestCase {
         let sampler = sampler(reader)
         reader.now = [messages: 500]
         sampler.heard(.ended)
+        sampler.settled()
         sampler.heard(.written)
         reader.now = [messages: 21_500]
         sampler.heard(.answered(own: 1, tokens: 12_800))
@@ -173,6 +174,7 @@ final class ThreadSamplerTests: XCTestCase {
         let sampler = sampler(reader)
         reader.now = [messages: 500]
         sampler.heard(.ended)
+        sampler.settled()
         sampler.heard(.written)
         sampler.settled()
         reader.now = [messages: 21_500]
@@ -198,6 +200,7 @@ final class ThreadSamplerTests: XCTestCase {
         let sampler = sampler(reader)
         reader.now = [messages: 500]
         sampler.heard(.ended)
+        sampler.settled()
         sampler.heard(.written)
         sampler.settled()
         reader.hold()
@@ -229,6 +232,7 @@ final class ThreadSamplerTests: XCTestCase {
         let sampler = sampler(reader)
         reader.now = nil
         sampler.heard(.ended)
+        sampler.settled()
         sampler.heard(.written)
         reader.now = [messages: 90_000]
         request(sampler, 1, tokens: 30_000)
@@ -311,8 +315,8 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(found.first?.value, 1_234)
     }
 
-    /// A descriptor closed and taken again by the next connection is another socket: what the new
-    /// connection sent is the whole of its upload, not the difference from the old one's count.
+    /// A descriptor closed and taken again by the next connection is another socket, never the
+    /// difference from the old one's count: the old one is gone between the reads, so nothing is told.
     func testADescriptorTakenAgainByANewConnectionIsAnotherSocket() throws {
         let (listener, address, port) = try listening()
         defer { close(listener) }
@@ -362,7 +366,12 @@ final class ThreadSamplerTests: XCTestCase {
         send(160_000, on: second)
         XCTAssertEqual(secondIn.wait(timeout: .now() + 5), .success)
         let after = ThreadSampler.sockets(addresses: ["127.0.0.1"], port: port)
-        XCTAssertEqual(ThreadSampler.upload(from: before, to: after), 160_000)
+        XCTAssertEqual(after.count, 1)
+        XCTAssertEqual(after.keys.first?.descriptor, before.keys.first?.descriptor, "the descriptor was not taken again")
+        XCTAssertNotEqual(after.keys.first, before.keys.first, "a new connection on the descriptor read as the old one")
+        XCTAssertEqual(after.values.first, 160_000)
+        XCTAssertNil(ThreadSampler.upload(from: before, to: after),
+                     "the old connection is gone, so what it sent last is not known and nothing is counted")
     }
 
     private func listening() throws -> (Int32, sockaddr_in, Int) {
