@@ -486,7 +486,7 @@ suite_topo_unit() {
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather
     # than on a phone. The host app's ear is held at loading (`TOPO_DEBUG_EAR`): its real ear
-    # fetches Parakeet and compiles it with CoreML on that one thread, about three seconds that
+    # copies Ultra from its source and compiles it with CoreML on that one thread, about three seconds that
     # land in whichever test is running and hold back every timed wait in it. The tests that
     # want a real model load their own (`TEST_RUNNER_TOPO_UNIT_EAR_MODELS`).
     # GuestDNSTests' stub stands on port 53, which a VM's DNS proxy holds while one runs here; a
