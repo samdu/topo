@@ -142,7 +142,8 @@ public actor TurnRunner {
         }
         // With no read of the log to go on, the turn is asked once it is saved, as a turn in the
         // log is, and the brain is told everything the log holds that it has not seen.
-        var hearing: Task<Bool, Never>? = await hearsAhead && known != nil ? hearNow() : nil
+        var hearing: Task<Bool, Never>? = nil
+        if known != nil, await hearsAhead { hearing = hearNow() }
         // A lease fresh by this device's own clocks, with nothing owed to the log, is renewed
         // with the person's save and not taken before it.
         let fresh = await lease.isPrimary() ? await brain.owed() == nil : false
@@ -315,7 +316,8 @@ public actor TurnRunner {
     /// Hearing the same nonce again asks nothing more.
     @discardableResult
     public func hear(_ text: String, model: ClaudeModel, nonce: String, known: [Turn]?) async -> Bool {
-        guard await hearsAhead, let known else { return false }
+        guard let known else { return false }
+        guard await hearsAhead else { return false }
         let heard = await brain.hear(text, nonce: nonce, context: known, model: model)
         if heard { Perf.mark("turn.heard") }
         return heard
@@ -326,10 +328,28 @@ public actor TurnRunner {
     /// it, or has not asked since it launched, asks first: the call is bounded
     /// (`LeaseTiming.patience` a request), and the brain hears as soon as it is answered primary
     /// or fails.
+    ///
+    /// Either is trusted as it stands only while this device holds the lease fresh, whose
+    /// heartbeats would have found a takeover. Otherwise — the app was suspended or killed past
+    /// the lease's duration, and a hub may have taken the lease meanwhile — the lease is looked at
+    /// first (`PrimaryLease.look()`, one read, bounded): another device confirmed answering stands
+    /// this one elsewhere and nothing is heard; nobody else answering hears if this device was
+    /// the one answering; a look that fails is iCloud away, and the brain hears.
     private var hearsAhead: Bool {
         get async {
             noteYield(to: await lease.yielded)
-            return away || standing == .mine
+            guard away || standing == .mine else { return false }
+            if await lease.isPrimary() { return true }
+            do {
+                let answering = try await lease.look()
+                away = false
+                if answering != nil { standing = .elsewhere }
+                return standing == .mine
+            } catch {
+                if error is CancellationError || Task.isCancelled { return false }
+                away = true
+                return true
+            }
         }
     }
 

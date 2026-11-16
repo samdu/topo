@@ -1695,14 +1695,15 @@ extension GuestBridgeTests {
     // MARK: A turn ready the moment the app is launched
 
     /// A cold launch with a turn already on the line, on a phone that was the one answering, and
-    /// iCloud slow to answer anything: the guest has the words while nothing has been saved or
-    /// even read, and the turn lands when iCloud answers, asked once.
+    /// iCloud slow to answer anything but the lease: the look at the lease names nobody else
+    /// answering, so the guest has the words while nothing has been saved or even read, and the
+    /// turn lands when iCloud answers, asked once.
     func testAColdLaunchWithATurnReadyGivesItToTheGuestBeforeICloudAnswers() async throws {
         let db = Outage()
         let defaults = try await aPhoneThatAnswered(db)
         let guest = ScriptedGuest(home: home, script: [.reply("Shared.")])
         let (harness, _) = harness(db, guest, defaults: defaults)
-        await db.stall(true)
+        await db.stall(true, sparingTheLease: true)
         let nonce = harness.willSend("share this link")
         let sending = Task { await harness.retry() }
         try await eventually("the guest's reply, with iCloud still out") { harness.replies[nonce] == "Shared." }
@@ -1713,6 +1714,52 @@ extension GuestBridgeTests {
         XCTAssertEqual(harness.turns.suffix(2).map(\.text), ["share this link", "Shared."])
         XCTAssertEqual(guest.inputs.count, 1)
         XCTAssertTrue(harness.replies.isEmpty)
+    }
+
+    /// The same launch with iCloud slow to answer anything, the lease included: what the launch
+    /// kept from before is not acted on unseen, so the guest has nothing while iCloud has its
+    /// patience and the words once it has run out.
+    func testAColdLaunchThatWasTheOneAnsweringGivesTheGuestTheWordsOnceTheLookHasHadItsPatience() async throws {
+        let db = Outage()
+        let defaults = try await aPhoneThatAnswered(db)
+        let guest = ScriptedGuest(home: home, script: [.reply("Shared.")])
+        let (harness, _) = harness(db, guest, defaults: defaults, patience: .milliseconds(300))
+        await db.stall(true)
+        let nonce = harness.willSend("share this link")
+        let sending = Task { await harness.retry() }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(guest.inputs.isEmpty, "the guest was given the words before the lease was looked at")
+        try await eventually("the guest's reply, once the patience ran out") { harness.replies[nonce] == "Shared." }
+        await db.stall(false)
+        await sending.value
+        XCTAssertEqual(harness.turns.suffix(2).map(\.text), ["share this link", "Shared."])
+        XCTAssertEqual(guest.inputs.count, 1)
+    }
+
+    /// A phone that was the one answering, killed, and launched again while a hub holds a fresh
+    /// lease it took meanwhile: the launch still says `.mine`, the look finds the hub, and the
+    /// words go into the log for the hub with this phone's guest never asked.
+    func testAColdLaunchThatKeptMineAndFindsAHubSendsTheTurnToTheHub() async throws {
+        let db = Outage()
+        let defaults = try await aPhoneThatAnswered(db)
+        XCTAssertEqual(defaults.string(forKey: "topo.harness.standing"), "mine")
+        let hub = PrimaryLease(database: db, device: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil,
+                               probe: NoSocketProbe(), sleep: parked)
+        let took = try await hub.takeOver()
+        guard case .primary = took else { return XCTFail("the hub did not take the lease") }
+        let guest = ScriptedGuest(home: home, script: [.reply("never")])
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        // Read as the chat reads on appearing, so both the launch's look and the runner's would
+        // give the guest the words if either let them through.
+        await harness.refresh()
+        XCTAssertTrue(harness.hasRead)
+        await harness.send("share this link")
+        XCTAssertTrue(guest.inputs.isEmpty, "a turn the hub answers ran this phone's guest")
+        XCTAssertEqual(harness.turns.last?.text, "share this link")
+        XCTAssertEqual(harness.turns.last?.ref.device, phone)
+        XCTAssertEqual(harness.info, "Saved. Your Mac will answer here.")
+        XCTAssertTrue(harness.replies.isEmpty)
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
     }
 
     /// The same launch with iCloud failing every call: the guest answers, the notice says iCloud
@@ -2743,15 +2790,18 @@ private actor Outage: ForwardingDatabase {
     func refuseReplies(_ on: Bool) { noReplies = on }
 
     /// While stalled every call waits, answered by nothing: iCloud slow rather than failing.
-    func stall(_ on: Bool) {
+    /// `sparingTheLease`, a fetch of the lease record alone is answered all the same.
+    func stall(_ on: Bool, sparingTheLease: Bool = false) {
         stalled = on
+        spared = on && sparingTheLease
         guard !on else { return }
         held.forEach { $0.resume() }
         held = []
     }
+    private var spared = false
 
-    private func reach() async throws {
-        if stalled { await withCheckedContinuation { held.append($0) } }
+    private func reach(_ ids: [RecordID] = []) async throws {
+        if stalled, !(spared && ids == [Lease.recordID]) { await withCheckedContinuation { held.append($0) } }
         if gone { throw RecordDatabaseError.unavailable(underlying: Refused()) }
     }
 
@@ -2762,7 +2812,7 @@ private actor Outage: ForwardingDatabase {
         }
         return try await base.save(records)
     }
-    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] { try await reach(); return try await base.fetch(ids) }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] { try await reach(ids); return try await base.fetch(ids) }
     func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] { try await reach(); return try await base.query(query) }
     func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] { try await reach(); return try await base.records(ofType: type) }
 }

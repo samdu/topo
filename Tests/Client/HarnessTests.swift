@@ -1046,6 +1046,87 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "topo.harness.standing"), "elsewhere")
     }
 
+    /// A phone that was the one answering is suspended past its lease's duration, and the hub
+    /// wakes and takes the lease meanwhile: nothing yielded, so the harness still stands `.mine`.
+    /// The next words go into the log for the hub and the phone's guest is never asked them,
+    /// since the runner looks at the lease before it hears ahead of it.
+    func testAPhoneSuspendedPastItsLeaseWhileAHubTookItDoesNotAskItsGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = TestClock()
+        let defaults = makeDefaults()
+        let transport = ScriptedTransport((200, reply("one back")), (200, reply("never")))
+        let phone = harness(db, defaults: defaults, transport: transport)
+        phone.adopt(PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: HubLeaseProbe(),
+                                 now: { clock.wall }, monotonic: clock.now, sleep: parked))
+        await phone.send("first")
+        let logged1 = try await log(db).map(\.text)
+        XCTAssertEqual(logged1, ["first", "one back"])
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+
+        clock.advance(11)
+        let hub = PrimaryLease(database: db, device: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil,
+                               probe: NoSocketProbe(), now: { clock.wall }, monotonic: clock.now, sleep: parked)
+        guard case .primary = try await hub.takeOver() else { return XCTFail("the hub did not take the lease") }
+        // The answering loop's read, as the chat makes every few seconds: the guest is heard only
+        // with a read of the log to be told of.
+        await phone.refresh()
+        XCTAssertTrue(phone.hasRead)
+
+        await phone.send("second")
+        let logged2 = try await log(db).map(\.text)
+        XCTAssertEqual(logged2, ["first", "one back", "second"])
+        XCTAssertEqual(phone.info, "Saved. Your Mac will answer here.")
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(transport.sent.count, 1, "the phone's guest was asked a turn the hub answers")
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+    }
+
+    /// A heartbeat that finds a hub's claim while nothing is said is kept for the next launch by the
+    /// answering loop's pass that has nothing to answer, not only by a turn or a pass that ran.
+    func testAnIdlePassKeepsTheHubsClaimAHeartbeatFound() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let phone = harness(db, defaults: defaults, transport: ScriptedTransport((200, reply("one back"))))
+        let lease = PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: HubLeaseProbe(), sleep: parked)
+        phone.adopt(lease)
+        await phone.send("first")
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil,
+                               probe: NoSocketProbe(), sleep: parked)
+        guard case .primary = try await hub.takeOver() else { return XCTFail("the hub did not take the lease") }
+        let renewed = try await lease.heartbeat()
+        XCTAssertFalse(renewed)
+
+        await phone.answering(every: .seconds(5))
+        try await eventually("the hub's claim kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+    }
+
+    /// What a turn keeps is where the runner stands with the lease's own findings folded in: a
+    /// heartbeat that yields to a hub while the guest answers, with the answer then failing, leaves
+    /// the runner's last answer from the lease saying `.mine`, and the hub's claim is what is kept.
+    func testATurnKeepsTheHubsClaimAHeartbeatFoundWhileItRan() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let transport = ScriptedTransport((200, reply("one back")), (500, "{}"))
+        let phone = harness(db, defaults: defaults, transport: transport)
+        let lease = PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: HubLeaseProbe(), sleep: parked)
+        phone.adopt(lease)
+        await phone.send("first")
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil,
+                               probe: NoSocketProbe(), sleep: parked)
+        transport.duringRequest = {
+            _ = try? await hub.takeOver()
+            _ = try? await lease.heartbeat()
+        }
+
+        await phone.send("second")
+        let logged3 = try await log(db).map(\.text)
+        XCTAssertEqual(logged3, ["first", "one back", "second"])
+        XCTAssertEqual(transport.sent.count, 2)
+        try await eventually("the hub's claim kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+    }
+
     func testNotPrimaryWritesTheTurnAsALimbAndThePrimaryAnswersIt() async throws {
         let db = InMemoryRecordDatabase()
         let phoneTransport = ScriptedTransport((200, reply("one back")))

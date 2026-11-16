@@ -878,9 +878,16 @@ final class Harness {
         if let runner { return runner }
         let login = self.login
         // iCloud's patience, cut short when it fails outright.
-        let waiting = Task { [patience, mine = standing == .mine] in
-            if !mine { try? await Task.sleep(for: patience) }
-        }
+        let waiting = Task { [patience] in try? await Task.sleep(for: patience) }
+        // A launch that was the one answering kept that from before it could know whether the
+        // lease moved: it looks at the lease (`PrimaryLease.look()`, bounded), and the guest
+        // hears as soon as the look names nobody else answering, or fails.
+        let looking = standing == .mine ? Task { [lease = leaseOfThisDevice()] in
+            let clear: Bool
+            do { clear = try await lease.look() == nil } catch { clear = !(error is CancellationError) }
+            if clear, !Task.isCancelled { waiting.cancel() }
+        } : nil
+        defer { looking?.cancel() }
         let hearing = Task { [weak self] () -> Bool in
             await waiting.value
             guard let self, self.runner == nil, self.login == login else { return false }
@@ -1470,10 +1477,17 @@ final class Harness {
     private func makeRunner() async throws -> TurnRunner {
         let writer = try await log.writer(for: device)
         self.writer = writer
-        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: HubLeaseProbe(),
-                                               sleep: leaseSleep)
+        return TurnRunner(log: log, writer: writer, lease: leaseOfThisDevice(), brain: brain, standing: standing)
+    }
+
+    /// The one lease of this device's the harness holds, made the first time it is asked for: the
+    /// look a launch makes before it has a runner and the runner it then makes share it.
+    private func leaseOfThisDevice() -> PrimaryLease {
+        if let lease { return lease }
+        let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: HubLeaseProbe(),
+                                 sleep: leaseSleep)
         self.lease = lease
-        return TurnRunner(log: log, writer: writer, lease: lease, brain: brain, standing: standing)
+        return lease
     }
 
     /// What the diagnostics screen shows: everything a failed or silent turn could be blamed on.

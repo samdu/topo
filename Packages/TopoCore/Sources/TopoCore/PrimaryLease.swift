@@ -136,8 +136,9 @@ public enum LeaseOutcome: Hashable, Sendable {
 ///
 /// One operation at a time. Every call that reads or writes the record for
 /// this device (`acquire()`, `takeOver()`, both claims, both
-/// heartbeats) waits its turn at one gate and runs alone from its first read
-/// to its last answer, in the order called, so no answer comes back to a
+/// heartbeats, and the read-only `look()`) waits its turn at one gate and
+/// runs alone from its first read to its last answer, in the order called,
+/// so no answer comes back to a
 /// lease another call of this device has moved since it was sent. The one
 /// thing that does not wait is `abandon()`, which has to take effect at
 /// once: it moves `generation`, and an operation takes an answer as the
@@ -202,6 +203,9 @@ public actor PrimaryLease {
     /// True while an operation is running; the rest wait in `waiting`, in order.
     private var busy = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// What the last `look()` answered, and when on the monotonic clock, until a write of the
+    /// lease lands or the lease is forgotten.
+    private var looked: (at: TimeInterval, answer: Result<Lease?, any Error>)?
 
     /// - Parameters:
     ///   - now: the wall clock the record's expiry is written and read in;
@@ -256,6 +260,82 @@ public actor PrimaryLease {
 
     private func hasLapsed(_ lease: Lease) -> Bool {
         lease.isExpired(at: now()) || monotonic() >= heldUntil
+    }
+
+    /// Who answers instead of this device, as `acquire()` would find it, asked without claiming:
+    /// the record read at the gate, and another device's lease that has not expired put to the
+    /// probe. The lease the probe confirms, or nil: this device holds the lease fresh, or there is
+    /// no record, or it is expired, this device's own, or not confirmed. Writes nothing and
+    /// changes nothing held. For a device that does not hold the lease fresh and was the one
+    /// answering when it last asked, so it learns whether that still stands before it acts on it.
+    ///
+    /// The whole call is bounded by `timing.patience`, the wait at the gate included, since an
+    /// operation ahead of it can take several requests; one that runs out throws `unavailable`, and
+    /// asks nothing once it reaches the gate. An answer, a failure included, is given again to a
+    /// look within one heartbeat interval on the monotonic clock, the window a held lease's
+    /// heartbeats leave before they find a takeover, until a write of the lease lands or the lease
+    /// is forgotten; so the several hears of one send ask once. A cancelled look keeps nothing.
+    public func look() async throws -> Lease? {
+        if let kept = keptLook() { return try kept.get() }
+        let began = generation
+        let looking = Task { try await self.lookAtGate() }
+        let answer = await Self.result(of: looking, within: timing.patience)
+        if Task.isCancelled { throw CancellationError() }
+        if case .failure(let error) = answer, error is CancellationError { throw error }
+        if generation == began, keptLook() == nil { looked = (monotonic(), answer) }
+        return try answer.get()
+    }
+
+    private func keptLook() -> Result<Lease?, any Error>? {
+        guard let looked, monotonic() - looked.at < timing.heartbeat else { return nil }
+        return looked.answer
+    }
+
+    private func lookAtGate() async throws -> Lease? {
+        await enter()
+        defer { leave() }
+        // The look was given up while it waited its turn: it asks nothing.
+        try Task.checkCancellation()
+        if let kept = keptLook() { return try kept.get() }
+        if isPrimary() { return nil }
+        let record = try await database.fetch(Lease.recordID)
+        guard let lease = record.flatMap(Lease.init(record:)), lease.holder != device,
+              !lease.isExpired(at: now()) else { return nil }
+        return await probe.confirms(lease) ? lease : nil
+    }
+
+    private struct LookRanOut: Error {}
+
+    /// True to the first of two racers to ask, and false to the other.
+    private final class FirstAnswer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
+    }
+
+    /// `task`'s result, or `unavailable` once `seconds` pass first, when `task` is cancelled and
+    /// left to end on its own; a caller cancelled meanwhile is answered at once, the same way.
+    private nonisolated static func result<T: Sendable>(of task: Task<T, any Error>,
+                                                        within seconds: TimeInterval) async -> Result<T, any Error> {
+        let once = FirstAnswer()
+        let timer = Task { try? await Task.sleep(for: .seconds(seconds)) }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Result<T, any Error>, Never>) in
+                Task {
+                    let result = await task.result
+                    if once.first() { timer.cancel(); continuation.resume(returning: result) }
+                }
+                Task {
+                    await timer.value
+                    if once.first() {
+                        task.cancel()
+                        continuation.resume(returning: .failure(RecordDatabaseError.unavailable(underlying: LookRanOut())))
+                    }
+                }
+            }
+        } onCancel: {
+            timer.cancel()
+        }
     }
 
     /// The turn-time path. Returns `.primary` when this device holds the
@@ -580,6 +660,7 @@ public actor PrimaryLease {
         lapsedRecord = nil
         yieldedTo = nil
         disownedAt = nil
+        looked = nil
         startHeartbeats()
         return true
     }
@@ -595,6 +676,7 @@ public actor PrimaryLease {
     private func forget() {
         heldRecord = nil
         lapsedRecord = nil
+        looked = nil
     }
 
     /// Another lease stands where this device's was: it is given up, and
