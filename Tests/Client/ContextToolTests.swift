@@ -50,6 +50,10 @@ final class ContextToolTests: XCTestCase {
         for named in ["Anthropic", "Datadog", "feature flags", "public MCP registry", "account and organisation ids", "session's id", "plan"] {
             XCTAssertTrue(MessageThreads.alsoSent.contains(named), named)
         }
+        XCTAssertTrue(MessageThreads.alsoSent.contains("start-up settings"), "on's start-up fetch is unsaid")
+        for named in ["profile", "claude.ai connectors", "whole conversation"] {
+            XCTAssertTrue(MessageThreads.whenOff.contains(named), named)
+        }
         XCTAssertTrue(shown.text.contains("  400 s ago  create  600123 bytes  200\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  3 s ago  continue  39975 bytes  404 (the thread had gone"), shown.text)
         XCTAssertTrue(shown.text.contains("  2 s ago  create  600500 bytes  waiting\n"), shown.text)
@@ -132,6 +136,10 @@ final class ContextToolTests: XCTestCase {
         XCTAssertEqual(bare.status, ToolReply.usage)
         let unknown = await tool(phone).run(["shrink"])
         XCTAssertEqual(unknown.status, ToolReply.usage)
+        // The help says threads send telemetry naming the account, and sends the mind to the whole of it.
+        for named in ["Anthropic and Datadog its telemetry", "naming the person's account", "topo context threads says whole", "with what off still sends"] {
+            XCTAssertTrue(unknown.text.contains(named), named)
+        }
         XCTAssertTrue(phone.set.isEmpty)
     }
 

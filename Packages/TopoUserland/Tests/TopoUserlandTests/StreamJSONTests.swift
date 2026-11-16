@@ -242,15 +242,17 @@ final class StreamJSONTests: XCTestCase {
             // A name that is taken asks for no threads, so the launch keeps today's posture.
             XCTAssertEqual(environment[ClaudeLauncher.nonessentialVariable], "1", "\(taken) let the nonessential traffic out")
         }
-        // The launcher's own keys are set after it, and keep their values.
-        for own in ["HOME", ClaudeLauncher.compactWindowVariable, ClaudeLauncher.launchVariable] {
+        // The launcher's own keys keep their values, and asking for threads under one asks for none.
+        for own in ["HOME", "IS_SANDBOX", ClaudeLauncher.compactWindowVariable, ClaudeLauncher.launchVariable] {
             let environment = try await launcher.launchEnvironment(threads: own)
             XCTAssertNotNil(environment[own], own)
-            XCTAssertNotEqual(environment[own], "1", "\(own), the launcher's own, was set to 1")
+            if own != "IS_SANDBOX" { XCTAssertNotEqual(environment[own], "1", "\(own), the launcher's own, was set to 1") }
+            XCTAssertEqual(environment[ClaudeLauncher.nonessentialVariable], "1", "\(own) let the nonessential traffic out")
         }
-        for cleared in [ClaudeLauncher.compactAtVariable, ClaudeLauncher.timingVariable, ClaudeLauncher.noteVariable] {
+        for cleared in [ClaudeLauncher.compactAtVariable, ClaudeLauncher.timingVariable, ClaudeLauncher.noteVariable, ClaudeLauncher.noteMarkVariable] {
             let environment = try await launcher.launchEnvironment(threads: cleared)
             XCTAssertNil(environment[cleared], "\(cleared), which the launcher leaves out here, was set")
+            XCTAssertEqual(environment[ClaudeLauncher.nonessentialVariable], "1", "\(cleared) let the nonessential traffic out")
         }
     }
 
