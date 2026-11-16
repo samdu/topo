@@ -188,6 +188,14 @@ final class DraftRowTests: XCTestCase {
         shot(app, "row-most-lines-raised-again")
     }
 
+    /// What the margin beside a turn on its way holds, in any of its states: the spinner while
+    /// an attempt runs, the cancel while the turn waits, the resend once the line stopped on it.
+    /// Which it is at a moment depends on how far the line has got, which no suite controls.
+    private func onItsWay(_ app: TopoApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label IN %@", ["Sending", "Cancel sending", "Send again"])).firstMatch
+    }
+
     /// Sending from the glass puts the turn on its way: the words are drawn once, in the row at
     /// the end of the transcript beside a spinner, the field is closed and the keyboard falls
     /// with the pane back at rest.
@@ -205,7 +213,7 @@ final class DraftRowTests: XCTestCase {
 
         app.buttons["Send"].tap()
 
-        XCTAssertTrue(app.descendants(matching: .any)["Sending"].waitForExistence(timeout: 10), "the turn went with nothing saying so")
+        XCTAssertTrue(onItsWay(app).waitForExistence(timeout: 10), "the turn went with nothing saying so")
         let row = app.descendants(matching: .any)[Self.row]
         XCTAssertTrue(row.waitForExistence(timeout: 5), "the words left the screen when the turn went")
         XCTAssertEqual(row.label, Self.words, "the row is not holding the words that went")
@@ -238,7 +246,7 @@ final class DraftRowTests: XCTestCase {
         let row = app.descendants(matching: .any)[Self.row]
         XCTAssertTrue(row.waitForExistence(timeout: 30), "the relaunch drew no row at all")
         XCTAssertEqual(row.label, Self.owed, "the row came back without the words on the line")
-        XCTAssertTrue(app.descendants(matching: .any)["Sending"].waitForExistence(timeout: 10),
+        XCTAssertTrue(onItsWay(app).waitForExistence(timeout: 10),
                       "the words came back with nothing saying they are on their way")
         XCTAssertFalse(ChatReading.fieldShown(app), "the words on their way can be typed over")
         XCTAssertFalse(ChatReading.field(app).isEnabled, "the field takes typing over words on their way")

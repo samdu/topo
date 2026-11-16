@@ -138,6 +138,12 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         }
     }
 
+    /// More words of the message each hanging turn is writing, as the guest goes on writing.
+    func writeMore(_ words: String) {
+        let turns = lock.withLock { hanging }
+        for turn in turns { turn.continuation.yield(.event(.writing(words))) }
+    }
+
     /// Adds answers to the script.
     func then(_ answers: Answer...) { lock.withLock { script += answers } }
 

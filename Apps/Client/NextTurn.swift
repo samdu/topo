@@ -114,7 +114,8 @@ final class NextTurn {
     func queued(in harness: Harness) -> (before: [QueuedTurn], after: [QueuedTurn]) {
         let replies = harness.replies
         let unlanded = harness.unlanded.enumerated().map { place, turn in
-            QueuedTurn(text: turn.text, nonce: turn.nonce,
+            QueuedTurn(text: turn.text, nonce: turn.nonce, margin: harness.margin(turn.nonce),
+                       withdrawable: harness.canCancel(turn.nonce),
                        reply: replies[turn.nonce].map { UnsavedReply.turn($0, place: place) })
         }
         guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {
@@ -159,14 +160,39 @@ final class NextTurn {
         return harness.canWithdraw(sent)
     }
 
+    /// What the slot beside the row's turn on its way holds (`Harness.margin`).
+    func margin(in harness: Harness) -> TurnMargin {
+        guard let sent else { return .sending }
+        return harness.margin(sent)
+    }
+
+    /// The margin's cancel: the turn the row is holding comes off the line, its words with it, so
+    /// it is never sent. Answers the nonce taken back, or nothing when the log refused it — the
+    /// row is then left holding the turn, as it was.
+    func cancel(via harness: Harness) async -> String? {
+        guard let nonce = sent, harness.canCancel(nonce) else { return nil }
+        // Only while the row still holds these words: one that moved on to others while the log
+        // was read — a spoken turn sent over them — keeps them on the line.
+        guard await harness.withdraw(nonce, unsent: true, while: { self.sent == nonce }) else { return nil }
+        // Nothing waits between the words coming off the line and this, but the row is only
+        // cleared of the words it was cancelling.
+        if sent == nonce {
+            sent = nil
+            text = ""
+        }
+        return nonce
+    }
+
     /// The way back from a turn that never reached the log: the words come off the line and stay
     /// in the row to be changed, so what is said again is one turn under one nonce. Answers the
     /// nonce taken back — a turn nothing is coming for — or nothing when the log refused it.
     func withdraw(via harness: Harness) async -> String? {
         guard let nonce = sent, harness.canWithdraw(nonce) else { return nil }
-        guard await harness.withdraw(nonce) else { return nil }
-        sent = nil
-        typing = true
+        guard await harness.withdraw(nonce, while: { self.sent == nonce }) else { return nil }
+        if sent == nonce {
+            sent = nil
+            typing = true
+        }
         return nonce
     }
 }
