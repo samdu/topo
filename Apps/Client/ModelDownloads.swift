@@ -67,6 +67,10 @@ struct ModelManifest: Codable, Sendable {
     /// the parent of the directory it is given.
     static let parakeet = "parakeet-tdt-0.6b-v2"
     static let ctc = "parakeet-ctc-110m-coreml"
+    /// The models the manifest lists only so a phone's earlier download of them is present, which
+    /// nothing fetches: v2, until the ear's move to Ultra removes it. A task of one an earlier
+    /// build left in the session is never made again, at any launch, a background one included.
+    static let fetchedByNobody: Set<String> = [parakeet]
     /// Silero's voice activity detector, which ends an utterance behind the lock (`Endpoint`).
     static let vad = "silero-vad-coreml"
     /// Smart Turn, which judges whether the speaker of an open microphone has finished
@@ -542,12 +546,12 @@ final class ModelDownloads {
 
     /// The replacement for a cancelled task, from the resume data its cancel wrote, under the same
     /// key, with the bytes it was at when cancelled. Nothing for a file since verified or
-    /// forgotten, or of a model this launch has not asked for (a task an earlier build left in
-    /// the session, v2's after the ear moved to Ultra), which is let go rather than made again.
+    /// forgotten, or of a model nothing fetches (`ModelManifest.fetchedByNobody`: a v2 task an
+    /// earlier build left in the session), which is let go rather than made again.
     private func restart(_ key: String) {
         guard let (model, file) = parse(key), inFlight[key] != nil, !verifying.contains(key),
               !present.contains(model.id) else { return }
-        guard wanted.contains(model.id) else { inFlight[key] = nil; return }
+        guard !ModelManifest.fetchedByNobody.contains(model.id) else { inFlight[key] = nil; return }
         let (task, fromResume) = makeTask(model, file)
         Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: fromResume))
         watchdog.restarted(key, resumed: fromResume)
@@ -709,7 +713,7 @@ final class ModelDownloads {
             live.remove(key)
             watchdog.forget(key)
             guard let (model, file) = parse(key), !present.contains(model.id) else { break }
-            guard wanted.contains(model.id) else { inFlight[key] = nil; break }
+            guard !ModelManifest.fetchedByNobody.contains(model.id) else { inFlight[key] = nil; break }
             let (task, fromResume) = makeTask(model, file)
             Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: 0, resumed: fromResume))
             watchdog.restarted(key, resumed: fromResume)
