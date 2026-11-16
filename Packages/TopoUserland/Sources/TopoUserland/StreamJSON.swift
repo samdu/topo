@@ -22,7 +22,7 @@ public enum StreamEvent: Sendable, Equatable {
     case writingBegan
     /// A model request answered: its `message_start`, the turn's own or a sub-agent's, with the
     /// context it was sent, `tokens` (input, cache read and cache written, from the start's usage).
-    /// What marks a request's time now that nothing of the app's sits between Claude Code and
+    /// What marks a request's time, since nothing of the app's sits between Claude Code and
     /// Anthropic: the request went before it, and the model's answer begins with it.
     case requestBegan(subagent: Bool, tokens: Int)
     /// A model request's answer ended (`message_stop`).

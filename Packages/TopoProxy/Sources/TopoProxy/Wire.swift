@@ -72,16 +72,14 @@ package struct InboundRequest: Sendable {
 }
 
 /// The inbound side of one connection: every byte the client sends, read continuously into a
-/// buffer the request reader takes from, so a client that goes away is seen while a response is
-/// still streaming to it (`whenEnded`), and a request pipelined behind another waits in the buffer.
+/// buffer the request reader takes from, so a request pipelined behind another waits in the buffer.
 /// Receiving pauses while more than `limit` bytes wait unread.
 ///
 /// The end of what the client sends and the client being gone are two things. A FIN is only the
 /// first: a client may shut down its write side after a whole request and still read the whole
 /// response, so it ends the reads (`readsEnded`) and nothing else. The client is gone when the
 /// connection fails or is cancelled — a reset, or the RST a closed socket answers the next write
-/// with — and only that fires `whenEnded`. A client that closed outright is therefore seen at the
-/// first write after its close, which on a streamed reply is the next event or ping.
+/// with.
 package final class Inbound: @unchecked Sendable {
     package let connection: NWConnection
     private let limit: Int
@@ -93,7 +91,6 @@ package final class Inbound: @unchecked Sendable {
     private var readsEnded = false
     private var paused = false
     private var waiter: CheckedContinuation<Void, Never>?
-    private var onEnd: (@Sendable () -> Void)?
 
     package init(_ connection: NWConnection, limit: Int) {
         self.connection = connection
@@ -126,15 +123,14 @@ package final class Inbound: @unchecked Sendable {
     }
 
     private func end() {
-        let (handler, waiting): ((@Sendable () -> Void)?, CheckedContinuation<Void, Never>?) = lock.withLock {
-            guard !ended else { return (nil, nil) }
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            guard !ended else { return nil }
             ended = true
             readsEnded = true
-            defer { onEnd = nil; waiter = nil }
-            return (onEnd, waiter)
+            defer { waiter = nil }
+            return waiter
         }
         waiting?.resume()
-        handler?()
     }
 
     private func wake() {
@@ -143,17 +139,6 @@ package final class Inbound: @unchecked Sendable {
             return waiter
         }
         waiting?.resume()
-    }
-
-    /// Calls `handler` once, when the client goes away or the connection fails — now, if it
-    /// already has. Replaces any handler set before.
-    package func whenEnded(_ handler: (@Sendable () -> Void)?) {
-        let now: Bool = lock.withLock {
-            if ended { return true }
-            onEnd = handler
-            return false
-        }
-        if now { handler?() }
     }
 
     /// Waits until the buffer holds more than `count` bytes or the stream has ended.
@@ -335,20 +320,5 @@ package enum ResponseWriter {
         for field in headers { text += "\(field.name): \(field.value)\r\n" }
         text += "\r\n"
         return Data(text.utf8)
-    }
-
-    static func chunk(_ data: Data) -> Data {
-        var framed = Data(String(data.count, radix: 16).utf8)
-        framed.append(RequestReader.crlf)
-        framed.append(data)
-        framed.append(RequestReader.crlf)
-        return framed
-    }
-
-    static let lastChunk = Data("0\r\n\r\n".utf8)
-
-    /// Whether a response to `method` with `status` has a body at all.
-    static func hasBody(status: Int, method: String) -> Bool {
-        !(method == "HEAD" || (100..<200).contains(status) || status == 204 || status == 304)
     }
 }

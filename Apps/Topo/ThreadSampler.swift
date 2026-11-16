@@ -37,11 +37,12 @@ final class ThreadSampler: Sendable {
         let kind: Kind
     }
 
-    /// A socket as the counters are kept by: its descriptor and its inode, so a descriptor closed
-    /// and opened again on another connection is another socket.
+    /// A socket as the counters are kept by: its descriptor and its local port, so a descriptor
+    /// closed and opened again on another connection, which takes another port, is another socket
+    /// (Darwin gives every socket an inode of 0, so the inode cannot tell them apart).
     struct Socket: Hashable, Sendable {
         let descriptor: Int32
-        let inode: UInt64
+        let port: Int
     }
 
     static let shared = ThreadSampler()
@@ -80,6 +81,8 @@ final class ThreadSampler: Sendable {
         var notes: [Note] = []
         /// The counters at the last moment of the turn in flight; nil with none in flight.
         var mark: [Socket: UInt64]?
+        /// Moved by every clear, so a moment whose read began before one keeps nothing after it.
+        var generation = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -103,23 +106,28 @@ final class ThreadSampler: Sendable {
     func take(_ moment: GuestSession.RequestMoment) {
         switch moment {
         case .written:
+            let generation = state.withLock { $0.generation }
             let counters = read()
-            state.withLock { $0.mark = counters }
+            state.withLock { state in
+                guard state.generation == generation else { return }
+                state.mark = counters
+            }
         case .answered(let subagent, let tokens):
-            guard let before = state.withLock({ $0.mark }) else { return }
+            guard case let (before, generation)? = state.withLock({ state in state.mark.map { ($0, state.generation) } }) else { return }
             let after = read()
             let bytes = Self.upload(from: before, to: after)
             let note = Note(at: now(), bytes: bytes, tokens: tokens, kind: Self.kind(bytes: bytes, tokens: tokens))
-            state.withLock { state in
-                guard state.mark != nil else { return }
+            let kept = state.withLock { state -> Bool in
+                guard state.generation == generation, state.mark != nil else { return false }
                 state.mark = after
                 // A sub-agent's request is told by its own answer's start, but its upload ran beside
                 // the turn's own: only the turn's requests are kept.
-                guard !subagent else { return }
+                guard !subagent else { return false }
                 state.notes.append(note)
                 if state.notes.count > Self.kept { state.notes.removeFirst(state.notes.count - Self.kept) }
+                return true
             }
-            if !subagent { Perf.mark("turn.guest.upload kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")") }
+            if kept { Perf.mark("turn.guest.upload kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")") }
         case .ended:
             state.withLock { $0.mark = nil }
         }
@@ -128,8 +136,9 @@ final class ThreadSampler: Sendable {
     /// The requests kept, oldest first.
     func recent() -> [Note] { state.withLock { $0.notes } }
 
-    /// Forgets every request: a login has ended.
-    func clear() { state.withLock { $0 = State() } }
+    /// Forgets every request: a login has ended. A moment still reading when it lands keeps
+    /// nothing, since the generation it read under has moved.
+    func clear() { state.withLock { $0 = State(generation: $0.generation + 1) } }
 
     // MARK: The counters
 
@@ -151,7 +160,8 @@ final class ThreadSampler: Sendable {
             var info = tcp_connection_info()
             var length = socklen_t(MemoryLayout<tcp_connection_info>.size)
             guard getsockopt(descriptor, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &length) == 0 else { continue }
-            found[Socket(descriptor: descriptor, inode: UInt64(status.st_ino))] = info.tcpi_txbytes
+            guard let local = local(of: descriptor) else { continue }
+            found[Socket(descriptor: descriptor, port: local)] = info.tcpi_txbytes
         }
         return found
     }
@@ -174,11 +184,21 @@ final class ThreadSampler: Sendable {
         return found
     }
 
+    private static func local(of descriptor: Int32) -> Int? {
+        name(of: descriptor, by: getsockname)?.port
+    }
+
     private static func peer(of descriptor: Int32) -> (address: String, port: Int)? {
+        name(of: descriptor, by: getpeername)
+    }
+
+    private static func name(of descriptor: Int32,
+                             by call: (Int32, UnsafeMutablePointer<sockaddr>, UnsafeMutablePointer<socklen_t>) -> Int32)
+        -> (address: String, port: Int)? {
         var storage = sockaddr_storage()
         var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
         let got = withUnsafeMutablePointer(to: &storage) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getpeername(descriptor, $0, &length) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { call(descriptor, $0, &length) }
         }
         guard got == 0 else { return nil }
         let size = socklen_t(storage.ss_len)
@@ -192,8 +212,8 @@ final class ThreadSampler: Sendable {
         var service = [CChar](repeating: 0, count: Int(NI_MAXSERV))
         guard getnameinfo(address, length, &host, socklen_t(host.count), &service, socklen_t(service.count),
                           NI_NUMERICHOST | NI_NUMERICSERV) == 0 else { return nil }
-        var name = String(cString: host)
+        var name = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         if name.hasPrefix("::ffff:"), !name.dropFirst(7).contains(":") { name = String(name.dropFirst(7)) }
-        return (name, Int(String(cString: service)) ?? 0)
+        return (name, Int(String(decoding: service.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)) ?? 0)
     }
 }

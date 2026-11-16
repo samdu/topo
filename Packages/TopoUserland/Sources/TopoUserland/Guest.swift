@@ -51,7 +51,7 @@ public final class Guest: Sendable {
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
             case .temporary(let said): "/tmp could not be emptied: \(said)"
-            case .managedSettings(let said): "\(Guest.managedSettings) could not be written: \(said)"
+            case .managedSettings(let said): "\(Guest.managedSettings) could not be put in place or removed: \(said)"
             case .timeZone(let why): "/etc/localtime could not be written: \(why)"
             case .hung(let bound, let running):
                 "the program had not finished after \(bound), and was killed"
@@ -155,19 +155,28 @@ public final class Guest: Sendable {
     }
 
     /// Where Claude Code reads the machine's managed settings on Linux: a policy no setting, flag or
-    /// `/model` of a session's can widen, read by every claude the guest starts.
+    /// `/model` of a session's can widen, read by every claude the guest starts. Only the login's
+    /// remote managed settings rank above it.
     public static let managedSettings = "/etc/claude-code/managed-settings.json"
 
     /// Makes Claude Code's managed settings `json`, or takes them away for nil, through the guest so
-    /// the fakefs records it. The file is written beside and moved into place; whatever stands at the
-    /// name is removed first, since a move onto a link to a directory would land inside it, and a
-    /// directory there is refused. Run once per process, after the boot and before any claude
-    /// starts, since nothing may read the name between the removal and the move. Requires a
-    /// booted kernel.
+    /// the fakefs records it. No link the guest made is written through: one standing for the folder
+    /// is replaced by a folder, the file is written beside under a name nothing stands at (a link
+    /// there is removed, and the write refuses one made since), and whatever stands at the name is
+    /// removed before the move, since a move onto a link to a directory would land inside it. A
+    /// directory at the name is refused before anything is written. Run once per process, after the
+    /// boot and before any claude starts, since nothing may read the name between the removal and
+    /// the move. Requires a booted kernel.
     public func writeManagedSettings(_ json: String?) async throws {
         let script = json == nil
-            ? #"rm -f "$1""#
-            : #"mkdir -p "${1%/*}" && printf '%s' "$2" > "$1.topo" && rm -f "$1" && mv -f "$1.topo" "$1""#
+            ? #"d="${1%/*}"; if [ -L "$d" ]; then rm -f "$d"; else rm -f "$1" "$1.topo"; fi"#
+            : #"""
+            set -C
+            d="${1%/*}"
+            if [ -L "$d" ]; then rm -f "$d" || exit 1; fi
+            if [ -d "$1" ] && [ ! -L "$1" ]; then echo "$1 is a folder" >&2; exit 1; fi
+            mkdir -p "$d" && rm -f "$1.topo" && printf '%s' "$2" > "$1.topo" && rm -f "$1" && mv -f "$1.topo" "$1"
+            """#
         let exit = try await run("/bin/sh", ["-c", script, "policy", Self.managedSettings] + (json.map { [$0] } ?? []))
         if exit.status != 0 { throw Failure.managedSettings(exit.errors) }
     }

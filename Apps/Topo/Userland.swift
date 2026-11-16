@@ -357,8 +357,9 @@ final class Userland {
             try await GuestPolicy.apply(GuestPolicy.forBuild, write: { try await Guest.shared.writeManagedSettings($0) },
                                         log: { TopoLog(.resident).error($0) })
             Perf.mark("guest.policy.done")
-            // The same for the zone: the phone's zoneinfo mounted, then the link kept to its zone. With
-            // the mount refused the guest is on UTC; with a write refused, on whatever link stood.
+            // The zone is not the boot's failure either: the phone's zoneinfo mounted, then the link kept
+            // to its zone. With the mount refused the guest is on UTC; with a write refused, on whatever
+            // link stood.
             try? Guest.shared.mountZoneinfo()
             await self.clock.start()
             Perf.mark("guest.tmp.zone.done")

@@ -6,7 +6,7 @@ import TopoCore
 /// on stdin and writing its events as stream-json on stdout, in its home — the app's
 /// `Library/Application Support/home`, bind-mounted at `home` — which is also its working directory, so every
 /// process finds the transcripts the one before it wrote. The environment is `Guest.environment`
-/// with whatever `environment` answers at each launch on top (the proxy's base URL and the guest's
+/// with whatever `environment` answers at each launch on top (the tool service's port and the guest's
 /// token, read fresh each time), and then the launcher's own keys, which nothing supplied
 /// overrides: `HOME` at the mount and `IS_SANDBOX=1`.
 public struct ClaudeLauncher: ResidentLauncher {

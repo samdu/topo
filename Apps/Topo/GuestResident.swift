@@ -2,7 +2,6 @@ import Foundation
 import OSLog
 import TopoAuth
 import TopoCore
-import TopoProxy
 import TopoTools
 import TopoTurn
 import TopoUserland

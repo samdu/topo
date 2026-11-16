@@ -411,19 +411,19 @@ final class LogToolTests: XCTestCase {
         return nil
     }
 
-    /// The resident's own lines, the proxy's and the tool service's among them, are in the unified
+    /// The resident's own lines, the tool service's among them, are in the unified
     /// log under `resident` in every build, with a credential in one hidden: a trip to the
     /// background that went wrong is what `topo log` is for.
     func testTheResidentsLinesAreReadableAndHoldNoCredential() async throws {
         let mark = "log-resident-\(UUID().uuidString)"
         GuestResident.log("background: \(mark) ended; Claude Code exited: CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-SENTINEL Bearer abc.def ops_SENTINEL")
-        GuestResident.log("proxy: \(mark) POST /v1/messages 200 in 1.2 s")
+        GuestResident.log("tools: \(mark) the listener was lost")
         let reply = await LogTool(reader: UnifiedLogReader()).run(["--since", "1", "--category", "resident", "--grep", mark])
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
         let lines = reply.text.split(separator: "\n").map(String.init).filter { !$0.hasPrefix("cursor: ") }
         XCTAssertEqual(lines.count, 2, reply.text)
         XCTAssertTrue(lines[0].hasSuffix("| info | resident | background: \(mark) ended; Claude Code exited: CLAUDE_CODE_OAUTH_TOKEN=[redacted] Bearer [redacted] ops_[redacted]"), lines[0])
-        XCTAssertTrue(lines[1].hasSuffix("| info | resident | proxy: \(mark) POST /v1/messages 200 in 1.2 s"), lines[1])
+        XCTAssertTrue(lines[1].hasSuffix("| info | resident | tools: \(mark) the listener was lost"), lines[1])
         XCTAssertFalse(reply.text.contains("SENTINEL"))
     }
 

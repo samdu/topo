@@ -3,7 +3,7 @@ import XCTest
 
 @testable import Topo
 
-/// What `topo context threads` reads now that nothing of the app's is between Claude Code and
+/// What `topo context threads` reads with nothing of the app's between Claude Code and
 /// Anthropic: each request's upload from the connection's counters, against its context.
 final class ThreadSamplerTests: XCTestCase {
     private typealias Socket = ThreadSampler.Socket
@@ -17,8 +17,8 @@ final class ThreadSamplerTests: XCTestCase {
         }
     }
 
-    private let messages = Socket(descriptor: 21, inode: 900)
-    private let telemetry = Socket(descriptor: 22, inode: 901)
+    private let messages = Socket(descriptor: 21, port: 52_100)
+    private let telemetry = Socket(descriptor: 22, port: 52_101)
 
     /// The spike's measured requests (Claude Code 2.1.316, simulator): a create, a continue and a
     /// whole re-send with threads off, each by its compressed upload against its context.
@@ -38,7 +38,7 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertNil(ThreadSampler.upload(from: [messages: 100, telemetry: 50], to: [messages: 2_700, telemetry: 900]))
         XCTAssertNil(ThreadSampler.upload(from: [messages: 100], to: [messages: 100]))
         XCTAssertEqual(ThreadSampler.upload(from: [:], to: [messages: 21_000]), 21_000)
-        let again = Socket(descriptor: 21, inode: 950)
+        let again = Socket(descriptor: 21, port: 52_140)
         XCTAssertEqual(ThreadSampler.upload(from: [messages: 30_000], to: [again: 1_200]), 1_200)
     }
 
@@ -65,6 +65,44 @@ final class ThreadSamplerTests: XCTestCase {
             .init(at: at, bytes: 2_600, tokens: 13_300, kind: .thread),
         ])
         sampler.clear()
+        XCTAssertEqual(sampler.recent(), [])
+    }
+
+    /// A clear that lands while a moment is still reading the counters (a lookup that stalled, say)
+    /// leaves nothing behind it: the read lands under a login that has ended and is dropped.
+    func testAReadUnderWayWhenALoginEndsKeepsNothing() {
+        let counters = Counters()
+        let reading = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let stall = Counters()
+        stall.now = [messages: 1]
+        let messages = messages
+        let sampler = ThreadSampler(read: {
+            if stall.now[messages] == 1 { reading.signal(); release.wait() }
+            return counters.now
+        })
+        counters.now = [messages: 500]
+        let written = expectation(description: "written")
+        DispatchQueue.global().async { sampler.take(.written); written.fulfill() }
+        reading.wait()
+        sampler.clear()
+        stall.now = [:]
+        release.signal()
+        wait(for: [written], timeout: 5)
+        counters.now = [messages: 21_500]
+        sampler.take(.answered(subagent: false, tokens: 12_800))
+        XCTAssertEqual(sampler.recent(), [])
+
+        counters.now = [messages: 30_000]
+        sampler.take(.written)
+        stall.now = [messages: 1]
+        let answered = expectation(description: "answered")
+        DispatchQueue.global().async { sampler.take(.answered(subagent: false, tokens: 13_000)); answered.fulfill() }
+        reading.wait()
+        sampler.clear()
+        stall.now = [:]
+        counters.now = [messages: 32_600]
+        release.signal()
+        wait(for: [answered], timeout: 5)
         XCTAssertEqual(sampler.recent(), [])
     }
 
@@ -118,5 +156,74 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(found.count, 1, "\(found)")
         XCTAssertEqual(found.first?.key.descriptor, client)
         XCTAssertEqual(found.first?.value, 1_234)
+    }
+
+    /// A descriptor closed and taken again by the next connection is another socket: what the new
+    /// connection sent is the whole of its upload, not the difference from the old one's count.
+    func testADescriptorTakenAgainByANewConnectionIsAnotherSocket() throws {
+        let (listener, address, port) = try listening()
+        defer { close(listener) }
+        func connected() -> (Int32, Int32) {
+            var to = address
+            let client = socket(AF_INET, SOCK_STREAM, 0)
+            let done = withUnsafePointer(to: &to) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            XCTAssertEqual(done, 0)
+            return (client, accept(listener, nil, nil))
+        }
+        func send(_ count: Int, on client: Int32) {
+            let bytes = [UInt8](repeating: 7, count: count)
+            var sent = 0
+            while sent < count {
+                let wrote = bytes.withUnsafeBytes { write(client, $0.baseAddress! + sent, count - sent) }
+                guard wrote > 0 else { return XCTFail("write \(errno)") }
+                sent += wrote
+            }
+        }
+        /// Signals once `count` bytes have arrived at `peer`, so its sender's count is settled.
+        func received(_ count: Int, at peer: Int32) -> DispatchSemaphore {
+            let done = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                var buffer = [UInt8](repeating: 0, count: 65_536), total = 0
+                while total < count { let got = read(peer, &buffer, buffer.count); guard got > 0 else { break }; total += got }
+                done.signal()
+            }
+            return done
+        }
+        let (first, firstPeer) = connected()
+        defer { close(firstPeer) }
+        let firstIn = received(150_000, at: firstPeer)
+        send(150_000, on: first)
+        XCTAssertEqual(firstIn.wait(timeout: .now() + 5), .success)
+        let before = ThreadSampler.sockets(addresses: ["127.0.0.1"], port: port)
+        XCTAssertEqual(before.values.first, 150_000)
+        close(first)
+        let (second, secondPeer) = connected()
+        defer { close(second); close(secondPeer) }
+        XCTAssertEqual(second, first, "the lowest free descriptor is taken again")
+        let secondIn = received(160_000, at: secondPeer)
+        send(160_000, on: second)
+        XCTAssertEqual(secondIn.wait(timeout: .now() + 5), .success)
+        let after = ThreadSampler.sockets(addresses: ["127.0.0.1"], port: port)
+        XCTAssertEqual(ThreadSampler.upload(from: before, to: after), 160_000)
+    }
+
+    private func listening() throws -> (Int32, sockaddr_in, Int) {
+        let listener = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = in_addr_t(INADDR_LOOPBACK).bigEndian
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        try withUnsafeMutablePointer(to: &address) { pointer in
+            try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                guard bind(listener, $0, length) == 0, listen(listener, 2) == 0, getsockname(listener, $0, &length) == 0 else {
+                    close(listener)
+                    throw POSIXError(.EADDRINUSE)
+                }
+            }
+        }
+        return (listener, address, Int(UInt16(bigEndian: address.sin_port)))
     }
 }

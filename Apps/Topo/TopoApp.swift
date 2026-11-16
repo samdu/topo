@@ -3,7 +3,6 @@ import CallKit
 import SwiftUI
 import TopoAuth
 import TopoCore
-import TopoProxy
 import TopoTools
 
 @main

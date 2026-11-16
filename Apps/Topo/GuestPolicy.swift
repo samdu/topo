@@ -23,14 +23,14 @@ enum GuestPolicy {
 
     /// Puts `settings` in place through `write`, at the boot and before any claude starts. A pin that
     /// cannot be written is the boot's failure, so no claude starts unpinned; a release build's
-    /// removal that fails is said at error and the guest goes on, since what it leaves is a guest
-    /// held to Haiku, not one let past a pin.
+    /// removal that fails is said at error and the guest goes on, since what it leaves is at most a
+    /// guest held to Haiku, not one let past a pin.
     static func apply(_ settings: String?, write: @Sendable (String?) async throws -> Void,
                       log: @Sendable (String) -> Void) async throws {
         do {
             try await write(settings)
         } catch where settings == nil {
-            log("guest policy: the managed settings a debug build left could not be removed, so this build is held to Haiku: \(error)")
+            log("guest policy: the managed settings a debug build left could not be removed, so this build may be held to Haiku: \(error)")
         }
     }
 }

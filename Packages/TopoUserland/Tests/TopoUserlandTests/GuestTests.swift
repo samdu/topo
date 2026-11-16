@@ -41,8 +41,9 @@ final class GuestTests: XCTestCase {
     }
 
     /// Claude Code's managed policy is written as a file at its path, over a file, and over a link
-    /// the guest made there without writing through it; a folder at the path is refused, not
-    /// written into; and none asked for removes what stands.
+    /// the guest made there, at the name it is written under or for its folder, without writing
+    /// through it; a folder at the path is refused, not written into; and none asked for removes
+    /// what stands.
     func testTheManagedPolicyIsWrittenAtItsPathAndNowhereElse() async throws {
         _ = try SharedGuest.booted()
         let path = Guest.managedSettings
@@ -62,13 +63,30 @@ final class GuestTests: XCTestCase {
             XCTAssertEqual(after.output, "{\"b\":2}\nkept\nfile\n", target)
         }
 
+        // A link at the name the file is written under, and a link standing for the folder: neither is
+        // written through, and the policy stands in a folder of its own.
+        let beside = try await Guest.shared.run("/bin/sh", ["-c", "rm -rf /tmp/policy-aside && mkdir -p /tmp/policy-aside && echo kept > /tmp/policy-aside/file && ln -s /tmp/policy-aside/file \"$1.topo\"", "sh", path])
+        XCTAssertEqual(beside.status, 0, beside.errors)
+        try await Guest.shared.writeManagedSettings(#"{"d":4}"#)
+        let unfollowed = try await Guest.shared.run("/bin/sh", ["-c", "[ ! -L \"$1\" ] && [ ! -e \"$1.topo\" ] && cat \"$1\" && echo && cat /tmp/policy-aside/file", "sh", path])
+        XCTAssertEqual(unfollowed.status, 0, unfollowed.errors)
+        XCTAssertEqual(unfollowed.output, "{\"d\":4}\nkept\n")
+        let folder = (path as NSString).deletingLastPathComponent
+        let linked = try await Guest.shared.run("/bin/sh", ["-c", "rm -rf \"$1\" && ln -s /tmp/policy-aside \"$1\"", "sh", folder])
+        XCTAssertEqual(linked.status, 0, linked.errors)
+        try await Guest.shared.writeManagedSettings(#"{"e":5}"#)
+        let own = try await Guest.shared.run("/bin/sh", ["-c", "[ -d \"$2\" ] && [ ! -L \"$2\" ] && cat \"$1\" && echo && ls /tmp/policy-aside", "sh", path, folder])
+        XCTAssertEqual(own.status, 0, own.errors)
+        XCTAssertEqual(own.output, "{\"e\":5}\nfile\n")
+
         _ = try await Guest.shared.run("/bin/sh", ["-c", "rm -f \"$1\" && mkdir \"$1\"", "sh", path])
         do {
             try await Guest.shared.writeManagedSettings(#"{"c":3}"#)
             XCTFail("a folder at the policy's path was written into")
         } catch Guest.Failure.managedSettings {}
-        let folder = try await Guest.shared.run("/bin/sh", ["-c", "[ -d \"$1\" ] && ls -A \"$1\"", "sh", path])
-        XCTAssertEqual(folder.output, "", "the policy was written inside the folder")
+        let inside = try await Guest.shared.run("/bin/sh", ["-c", "[ -d \"$1\" ] && ls -A \"$1\" && [ ! -e \"$1.topo\" ]", "sh", path])
+        XCTAssertEqual(inside.status, 0, "a refused write left its file beside")
+        XCTAssertEqual(inside.output, "", "the policy was written inside the folder")
 
         _ = try await Guest.shared.run("/bin/sh", ["-c", "rmdir \"$1\"", "sh", path])
         try await Guest.shared.writeManagedSettings(#"{"a":1}"#)
