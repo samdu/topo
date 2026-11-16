@@ -106,6 +106,8 @@ expected=(
   'scripts/tests/perf-run-test.sh scripts'
   'scripts/phonon-bundles.sh scripts'
   'scripts/tests/phonon-bundles-test.sh scripts'
+  'scripts/ear-bundle.sh scripts'
+  'scripts/tests/ear-bundle-test.sh scripts'
   'scripts/smartturn-mel.py scripts'
   'scripts/vendor/whisper_features.py scripts'
   'scripts/tests/smartturn-mel-test.sh scripts'
@@ -207,7 +209,7 @@ done
 # added with neither falls to no rule and fails here.
 kept_at_three=(
   build-ish.sh ci-audio-feeder.swift ci-audio-lane.sh ci-audio-meter.swift ci-require-tests.sh
-  embed-voice.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh secret-env.sh
+  ear-bundle.json embed-bundles.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh secret-env.sh
 )
 scripts_in_dir=0
 while IFS= read -r relative; do

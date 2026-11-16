@@ -3,9 +3,9 @@ import XCTest
 
 @testable import Topo
 
-/// The voice's store: one path for every source, a checked copy or none, and a good copy kept
+/// The bundles' store: one path for every source, a checked copy or none, and a good copy kept
 /// when its source fails.
-final class PhononStoreTests: XCTestCase {
+final class BundleStoreTests: XCTestCase {
     private let fm = FileManager.default
     private var base: URL!
 
@@ -18,8 +18,8 @@ final class PhononStoreTests: XCTestCase {
         try? fm.removeItem(at: base)
     }
 
-    private var store: PhononStore {
-        PhononStore(home: base.appendingPathComponent("Voice/\(PhononStore.name)", isDirectory: true))
+    private var store: BundleStore {
+        BundleStore(home: base.appendingPathComponent("Voice/\(BundleStore.voiceName)", isDirectory: true))
     }
 
     /// A bundle folder: `files` by path, and a `bundle.json` naming each at its size and digest,
@@ -55,7 +55,7 @@ final class PhononStoreTests: XCTestCase {
             XCTAssertEqual(try String(contentsOf: home.appendingPathComponent(path), encoding: .utf8), text, path)
         }
         XCTAssertTrue(fm.fileExists(atPath: home.appendingPathComponent("bundle.json").path))
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: nil))
+        XCTAssertEqual(store.installed(), BundleStore.Installed(built: 100, version: nil))
         XCTAssertTrue(store.isWhole())
         XCTAssertFalse(fm.fileExists(atPath: store.staging.path), "no partial folder is left")
         let parent = try home.deletingLastPathComponent().resourceValues(forKeys: [.isExcludedFromBackupKey])
@@ -66,7 +66,7 @@ final class PhononStoreTests: XCTestCase {
     func testAPackSourceTakesTheSamePathAndIsLetGoAfterItsCopy() async throws {
         let pack = FakePack(folder: try bundle(built: 100, files: weights), version: 3)
         _ = try await store.install(from: pack)
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 3, released: true))
+        XCTAssertEqual(store.installed(), BundleStore.Installed(built: 100, version: 3, released: true))
         XCTAssertTrue(store.isWhole())
         XCTAssertEqual(pack.counts, .init(madeLocal: 1, copied: 1))
         XCTAssertFalse(pack.isLocal, "the pack is kept beside its copy")
@@ -95,7 +95,7 @@ final class PhononStoreTests: XCTestCase {
         let next = FakePack(folder: folder, version: 4)
         _ = try await store.install(from: next)
         XCTAssertEqual(next.counts, .init(madeLocal: 1, copied: 1))
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 4, released: true))
+        XCTAssertEqual(store.installed(), BundleStore.Installed(built: 100, version: 4, released: true))
         _ = try await store.install(from: next)
         XCTAssertEqual(next.counts, .init(madeLocal: 1, copied: 1), "a store at the pack's version fetched it again")
     }
@@ -140,7 +140,7 @@ final class PhononStoreTests: XCTestCase {
         XCTAssertEqual(store.installed()?.released, false)
         _ = try await store.install(from: pack)
         XCTAssertFalse(pack.isLocal, "the next launch left the pack beside the store")
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: 3, released: true))
+        XCTAssertEqual(store.installed(), BundleStore.Installed(built: 100, version: 3, released: true))
         XCTAssertEqual(pack.counts, .init(madeLocal: 1, copied: 2))
         _ = try await store.install(from: pack)
         XCTAssertEqual(pack.counts, .init(madeLocal: 1, copied: 2), "a pack let go is not let go again")
@@ -161,7 +161,7 @@ final class PhononStoreTests: XCTestCase {
         do {
             _ = try await store.install(from: source)
             XCTFail("a copy with a bad digest was taken")
-        } catch let error as PhononStoreError {
+        } catch let error as BundleStoreError {
             XCTAssertEqual(error, .wrongDigest("flow.mlpackage/Manifest.json"))
         }
         XCTAssertFalse(fm.fileExists(atPath: store.home.path))
@@ -196,7 +196,7 @@ final class PhononStoreTests: XCTestCase {
         let failing = FakePack(folder: base.appendingPathComponent("nowhere"), version: 4, fails: true)
         let home = try await store.install(from: failing)
         XCTAssertEqual(home, store.home)
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 100, version: nil))
+        XCTAssertEqual(store.installed(), BundleStore.Installed(built: 100, version: nil))
         XCTAssertTrue(store.isWhole())
         // With no copy here, the failure is the answer.
         try fm.removeItem(at: store.home)
@@ -222,7 +222,7 @@ final class PhononStoreTests: XCTestCase {
         let latest = FakePack(folder: try bundle(built: 200, files: newer), version: 4)
         _ = try await store.install(from: latest)
         XCTAssertEqual(latest.counts.madeLocal, 1, "the newer version was never fetched")
-        XCTAssertEqual(store.installed(), PhononStore.Installed(built: 200, version: 4, released: true))
+        XCTAssertEqual(store.installed(), BundleStore.Installed(built: 200, version: 4, released: true))
         XCTAssertEqual(try String(contentsOf: store.home.appendingPathComponent("voices/Friendly Octopus.safetensors"), encoding: .utf8),
                        "the octopus, version 4")
     }
@@ -232,7 +232,7 @@ final class PhononStoreTests: XCTestCase {
     func testAFailureAfterTheFilesAreInTakesThePartialFolder() async throws {
         _ = try await store.install(from: FolderSource(folder: try bundle(built: 100, files: weights)))
         struct Refused: Error {}
-        let failing = PhononStore(home: store.home, swap: { _, staging in
+        let failing = BundleStore(home: store.home, swap: { _, staging in
             XCTAssertTrue(FileManager.default.fileExists(atPath: staging.appendingPathComponent(".installed").path),
                           "the swap was reached before the copy was whole")
             throw Refused()
@@ -288,18 +288,18 @@ final class PhononStoreTests: XCTestCase {
         do {
             _ = try await store.install(from: FolderSource(folder: folder))
             XCTFail("a path outside the bundle was taken")
-        } catch let error as PhononStoreError {
+        } catch let error as BundleStoreError {
             XCTAssertEqual(error, .badPath("../escape"))
         }
-        for path in ["", "/abs", "a/../b", "./a", "a/./b"] { XCTAssertFalse(PhononStore.safe(path), path) }
-        XCTAssertTrue(PhononStore.safe("voices/Friendly Octopus.safetensors"))
+        for path in ["", "/abs", "a/../b", "./a", "a/./b"] { XCTAssertFalse(BundleStore.safe(path), path) }
+        XCTAssertTrue(BundleStore.safe("voices/Friendly Octopus.safetensors"))
     }
 }
 
 /// A pack: a folder that counts its downloads and its letting go. Letting it go takes its files
 /// away, as removing a pack does, and a download brings them back; a removal can be made to fail,
 /// and the version to be unreadable, a number of times.
-final class FakePack: PhononSource, @unchecked Sendable {
+final class FakePack: BundleSource, @unchecked Sendable {
     struct Counts: Equatable { var madeLocal = 0; var copied = 0 }
     let folder: URL
     let packVersion: Int
@@ -356,7 +356,7 @@ final class FakePack: PhononSource, @unchecked Sendable {
 }
 
 /// A pack whose download stands at half until the test lets it finish.
-final class GatedPack: PhononSource, @unchecked Sendable {
+final class GatedPack: BundleSource, @unchecked Sendable {
     let folder: URL
     let packVersion: Int
     private let lock = NSLock()

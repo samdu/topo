@@ -20,7 +20,7 @@ final class ModelDownloadsTests: XCTestCase {
     }
 
     /// The voice is not a download: its bundle comes from the asset pack or the app's own
-    /// resources (`PhononStore`), so the manifest names no voice and no `.safetensors` at all.
+    /// resources (`BundleStore`), so the manifest names no voice and no `.safetensors` at all.
     func testTheBundledManifestFetchesNoVoice() throws {
         let manifest = try ModelManifest.bundled()
         XCTAssertNil(manifest.model("pocket-tts-coreml"))
@@ -511,6 +511,46 @@ final class ModelDownloadsGlueTests: XCTestCase {
         XCTAssertTrue(downloads.live.contains(key), "and live under the key")
         XCTAssertFalse(FileManager.default.fileExists(atPath: resume.path), "from the cancel's resume data, consumed")
         XCTAssertTrue(downloads.relay.madeFromResume(key))
+    }
+
+    /// A task of a model nothing fetches, carried in the session from an earlier build (v2's,
+    /// once the ear is Ultra): the watchdog's cancel of it, or the server's refusal of its resume
+    /// data, makes no replacement, and the key leaves flight. A model this launch has simply not
+    /// asked for yet (a background relaunch's `start()` names none) is still made again.
+    func testATaskOfAModelNothingFetchesIsNotMadeAgain() throws {
+        let revision = String(repeating: "0", count: 40)
+        let digest = SHA256.hash(data: Data("abc".utf8)).map { String(format: "%02x", $0) }.joined()
+        let v2 = ModelManifest.parakeet
+        let manifest = ModelManifest(models: [
+            .init(id: v2, repo: "example/v2", revision: revision, files: [.init(path: "encoder.bin", size: 3, sha256: digest)]),
+            .init(id: "ear", repo: "example/ear", revision: revision, files: [.init(path: "encoder.bin", size: 3, sha256: digest)]),
+        ])
+        let store = ModelStore(root: scratch())
+        let downloads = downloads(manifest, store: store)
+        downloads.start()
+        for id in [v2, "ear"] {
+            let key = "\(id)|encoder.bin"
+            let model = try XCTUnwrap(manifest.model(id))
+            downloads.handle(.progress(key, 36 * 1024))
+            crawl(downloads, key)
+            let resume = store.resumeData(for: model.files[0], in: model)
+            try FileManager.default.createDirectory(at: resume.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: [String: Any](), format: .binary, options: 0).write(to: resume)
+            downloads.handle(.restarting(key))
+        }
+
+        downloads.tick()
+
+        let v2Key = "\(v2)|encoder.bin"
+        XCTAssertFalse(downloads.watchdog.restarting(v2Key))
+        XCTAssertFalse(downloads.live.contains(v2Key), "no replacement for v2")
+        XCTAssertEqual(downloads.status(for: v2), .absent)
+        XCTAssertTrue(downloads.live.contains("ear|encoder.bin"), "a model not yet asked for is made again")
+
+        downloads.handle(.progress(v2Key, 1))
+        downloads.handle(.staleResume(v2Key))
+        XCTAssertFalse(downloads.live.contains(v2Key), "no fresh fetch from the URL either")
+        XCTAssertEqual(downloads.status(for: v2), .absent)
     }
 
     /// A resumed task the server answered from the start (offset 0) is never cancelled again,

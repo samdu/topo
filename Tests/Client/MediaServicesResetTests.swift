@@ -516,7 +516,7 @@ final class MediaServicesResetTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: ScriptedEngine())
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle { ear.ready }
         return VoiceInput(audio: audio, ear: ear, center: center,
                           makeEngine: { seams.makeEngine() },

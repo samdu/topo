@@ -10,7 +10,7 @@ private actor FakeEngine: SpeechEngine {
 
     func refuse() { refuseSessions = true }
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         onProgress("loaded")
     }
 
@@ -85,13 +85,13 @@ final class EarTests: XCTestCase {
     func testTheEarIsReadyWithoutAVocabularyAndTheSpotterIsToldSo() async {
         let engine = FakeEngine()
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()), engine: engine)
-        ear.load(parakeet: URL(fileURLWithPath: "/parakeet"), ctc: URL(fileURLWithPath: "/ctc"))
+        ear.load(acoustic: URL(fileURLWithPath: "/parakeet"), spotter: URL(fileURLWithPath: "/ctc"))
         await settle { ear.state == .ready }
         // `.ready` lands before the rebuild it starts has reached the engine, and `trouble` is nil
         // before either, so the wait is for the rebuild itself.
         await settle { await !engine.rebuilds.isEmpty }
         XCTAssertNil(ear.trouble)
-        XCTAssertEqual(ear.summary, "Parakeet resident")
+        XCTAssertEqual(ear.summary, "Parakeet Ultra resident")
         let rebuilds = await engine.rebuilds
         XCTAssertEqual(rebuilds, [[]], "the load ends in one rebuild over the list as it is")
     }
@@ -101,8 +101,9 @@ final class EarTests: XCTestCase {
         let vocabulary = Vocabulary(defaults: makeDefaults())
         let ear = Ear(vocabulary: vocabulary, engine: engine)
         vocabulary.add("early")
-        ear.load(parakeet: URL(fileURLWithPath: "/parakeet"), ctc: URL(fileURLWithPath: "/ctc"))
-        await settle { ear.state == .ready }
+        ear.load(acoustic: URL(fileURLWithPath: "/parakeet"), spotter: URL(fileURLWithPath: "/ctc"))
+        await settle { ear.state == .ready && ear.spotterResident }
+        await settle { await engine.rebuilds.count == 1 }
         vocabulary.add("Daphne")
         await settle { await engine.rebuilds.count == 2 }
         let rebuilds = await engine.rebuilds
@@ -115,10 +116,10 @@ final class EarTests: XCTestCase {
         let vocabulary = Vocabulary(defaults: makeDefaults())
         vocabulary.add("Daphne")
         let ear = Ear(vocabulary: vocabulary, engine: engine)
-        ear.load(parakeet: URL(fileURLWithPath: "/parakeet"), ctc: URL(fileURLWithPath: "/ctc"))
+        ear.load(acoustic: URL(fileURLWithPath: "/parakeet"), spotter: URL(fileURLWithPath: "/ctc"))
         await settle { ear.state == .ready && ear.trouble != nil }
         XCTAssertTrue(ear.ready)
-        XCTAssertEqual(ear.summary, "Parakeet resident; vocabulary boost unavailable: tokenizer.json not found")
+        XCTAssertEqual(ear.summary, "Parakeet Ultra resident; vocabulary boost unavailable: tokenizer.json not found")
         let heard = try await ear.hear([0, 0, 0])
         XCTAssertEqual(heard, "heard")
     }

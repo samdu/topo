@@ -8,7 +8,7 @@ import PhononTTS
 
 /// Text to speech on this phone: Gradium's Phonon 40m English through Gradium's own Swift
 /// runtime (`PhononTTS`), speaking Friendly Octopus, the one voice its bundle carries
-/// (`PhononStore`). On the device because the first sound is what a listener waits for: a few
+/// (`BundleStore`). On the device because the first sound is what a listener waits for: a few
 /// milliseconds to the first 80 ms frame on the Neural Engine, against a round trip and a download
 /// for a server's audio. Phonon makes audio about thirty times faster than it plays.
 ///
@@ -18,7 +18,7 @@ import PhononTTS
 /// its samples reach the speaker through `Speaker`'s play queue alone, which is why ptts's own
 /// player is not in the vendored package.
 ///
-/// The bundle is not compiled into the app. `PhononStore` copies it, checked, from this build's
+/// The bundle is not compiled into the app. `BundleStore` copies it, checked, from this build's
 /// source (the Apple-hosted asset pack, the app's own resources in a build from the install page,
 /// or a debug launch's folder) into Application Support, and the engine loads it from there.
 /// Until it is resident, or if it fails to load, a reply is not read aloud; the diagnostics
@@ -47,13 +47,12 @@ final class Voice {
     private(set) var copyingNow = false
     /// The ear beside the voice, which comes first: the first thing a person does is talk, and a
     /// reply can be text until the voice is in. The voice's compile waits while the ear is still
-    /// to be fetched or is compiling (`mayLoad`), so the ear's compile is not shared with the
-    /// voice's. An ear whose download failed lets the voice go, since a broken ear never costs
-    /// the voice. Nothing holds the ear back for the voice. Unset (a debug stand-in ear) waits
-    /// for nothing. Whoever sets it has the ear call `earSettled` when its compile ends.
+    /// to be copied or is compiling (`mayLoad`), so the ear's compile is not shared with the
+    /// voice's. An ear whose copy failed lets the voice go, since a broken ear never costs
+    /// the voice. Nothing holds the ear back for the voice, and the spotter's own compile, when its
+    /// download lands after the ear is resident, is not held back for it. Unset (a debug stand-in
+    /// ear) waits for nothing. Whoever sets it has the ear call `earSettled` when it settles.
     weak var ear: Ear?
-    /// Whether a wait on the ear's download is registered, so a refusal registers one only.
-    private var awaitingEarFiles = false
     /// The store's folder once the copy is made, while the state is still `fetching`: the
     /// compile is waiting on the ear.
     private var folder: URL?
@@ -74,12 +73,11 @@ final class Voice {
     static let renewingWords = "downloading Topo's new voice, replies written until it's in"
 
     /// Whether the voice may compile, given the ear: none beside it, or one neither still to be
-    /// fetched nor compiling. An ear being fetched lets the voice go once its download failed.
-    static func mayLoad(ear: Ear.State?, earDownloadFailed: Bool) -> Bool {
+    /// copied nor compiling. An ear whose copy or compile failed is `failed`, and lets the voice go.
+    static func mayLoad(ear: Ear.State?) -> Bool {
         switch ear {
         case nil, .cold, .ready, .failed: true
-        case .loading: false
-        case .fetching: earDownloadFailed
+        case .loading, .fetching: false
         }
     }
 
@@ -89,19 +87,23 @@ final class Voice {
     /// Phonon's rate, which is every frame's rate: 80 ms of audio in 1920 samples.
     nonisolated static let rate = 24_000
 
+    /// The voice the bundle carries, and the one the engine speaks.
+    nonisolated static let speaker = "Friendly Octopus"
+
     var ready: Bool { state == .ready }
 
     private let engine: any VoiceEngine
-    private let store: PhononStore
-    private let source: any PhononSource
+    private let store: BundleStore
+    private let source: any BundleSource
     /// Where `VoiceTemperature` is kept, read as each sentence is asked for.
     private let defaults: UserDefaults
 
-    init(engine: any VoiceEngine = Voice.defaultEngine(), store: PhononStore = .standard(),
-         source: (any PhononSource)? = nil, defaults: UserDefaults = .standard) {
+    init(engine: any VoiceEngine = Voice.defaultEngine(), store: BundleStore = .voice(),
+         source: (any BundleSource)? = nil, defaults: UserDefaults = .standard) {
         self.engine = engine
         self.store = store
-        self.source = source ?? FolderSource.embedded() ?? AssetPackSource()
+        self.source = source ?? FolderSource.embedded(BundleStore.voiceName)
+            ?? AssetPackSource(id: BundleStore.voiceName, noun: "voice")
         self.defaults = defaults
     }
 
@@ -198,25 +200,11 @@ final class Voice {
     }
 
     /// The compile, once the copy is made and the ear allows it. Refused for an ear still being
-    /// fetched, it waits for the ear's download to settle: a failure lets the voice go, and an
-    /// arrival puts the ear into its compile, whose end calls `earSettled`.
+    /// copied or compiled, it waits for the ear's `settled`, which a copy that fails and a compile's
+    /// end, resident or failed, both call (`earSettled`).
     private func loadIfDue() {
         guard state == .fetching, let folder else { return }
-        let downloads = ModelDownloads.shared
-        guard Self.mayLoad(ear: ear?.state, earDownloadFailed: downloads.failed(Ear.models)) else {
-            if ear?.state == .fetching, !awaitingEarFiles {
-                awaitingEarFiles = true
-                downloads.whenSettled(Ear.models) { [weak self] _ in
-                    // A turn later, so the ear's own wait on the same arrival has put it into
-                    // its compile first.
-                    Task { @MainActor in
-                        self?.awaitingEarFiles = false
-                        self?.earSettled()
-                    }
-                }
-            }
-            return
-        }
+        guard Self.mayLoad(ear: ear?.state) else { return }
         load(folder: folder)
     }
 
@@ -321,7 +309,7 @@ actor PhononVoiceEngine: VoiceEngine {
     #if canImport(PhononTTS)
     static let shared = PhononVoiceEngine(open: { folder in
         let phonon = try await Phonon.load(models: folder, language: .english, computeUnit: .neuralEngine)
-        try await phonon.setVoice(PhononStore.voice)
+        try await phonon.setVoice(Voice.speaker)
         return phonon
     })
     #endif

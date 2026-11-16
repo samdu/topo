@@ -682,9 +682,9 @@ final class Conversation {
         // that opens after it.
         if speaker.speaking || speaker.waitingForMicrophone { goAheadOwed = true }
         if voice.listening, !voice.suspended, speaker.waitingForMicrophone, !policy.speaking, caughtUp {
-            // A reply landed over an utterance with nothing said in it: the microphone closes
-            // unsent, and the reply is read.
-            AudioLog.say("conversation: a reply landed over silence; the microphone's gate shuts for it")
+            // A reply, or a part the guest wrote of one, waits over an utterance with nothing said
+            // in it: the microphone closes unsent, and it is read.
+            AudioLog.say("conversation: a reply or a part of one waits over silence; the microphone's gate shuts for it")
             feeder?.cancel()
             feeder = nil
             voice.cancel(.chat, keepingInput: true)

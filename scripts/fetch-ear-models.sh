@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Fetches the ear's models (Parakeet and the CTC spotter), or the ones named of those and of
-# Silero's voice detector and Smart Turn (the open microphone's judge of a finished turn), into a
-# directory, file by file from the pinned revisions in Apps/Topo/Resources/models.json, and
-# admits each only when its size and sha256 match the manifest. A file already there and
+# Fetches the ear's models (Parakeet Ultra's bundle and the CTC spotter), or the ones named of those
+# and of Silero's voice detector and Smart Turn (the open microphone's judge of a finished turn),
+# into a directory, file by file from the pinned revisions — Ultra's in scripts/ear-bundle.json,
+# through scripts/ear-bundle.sh, the rest in Apps/Topo/Resources/models.json — and admits each only
+# when its size and sha256 match its pin. A file already there and
 # matching is kept, so a restored cache costs only the hashing. The directory is what
 # `TOPO_DEBUG_EAR` and the UI test's `TOPO_UITEST_EAR_MODELS` take, and, with the detector and
 # Smart Turn named, the unit suite's `TOPO_UNIT_EAR_MODELS`, which `SileroLoadTests` and
@@ -18,7 +19,7 @@ manifest="$root/Apps/Topo/Resources/models.json"
 dest="${1:?usage: scripts/fetch-ear-models.sh <directory> [<id>...]}"
 shift
 mkdir -p "$dest"
-ear='["parakeet-tdt-0.6b-v2", "parakeet-ctc-110m-coreml"]'
+ear='["parakeet-ultra", "parakeet-ctc-110m-coreml"]'
 if [ "$#" -gt 0 ]; then
   wanted="$(jq -cn '$ARGS.positional' --args "$@")"
   bad="$(jq -rn --argjson w "$wanted" --argjson e "$ear" '$w - $e - ["silero-vad-coreml", "smart-turn-v3"] | join(" ")')"
@@ -27,6 +28,9 @@ else
   wanted="$ear"
 fi
 
+if jq -e --argjson w "$wanted" '$w | index("parakeet-ultra")' -n >/dev/null; then
+  "$root/scripts/ear-bundle.sh" "$dest" >/dev/null
+fi
 jq -r --argjson wanted "$wanted" '.models[] | select(.id as $id | $wanted | index($id))
        | . as $m | .files[] | [$m.id, $m.repo, $m.revision, .path, (.size|tostring), .sha256] | @tsv' "$manifest" |
 while IFS=$'\t' read -r id repo revision path size sha; do

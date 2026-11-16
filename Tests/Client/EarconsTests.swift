@@ -134,7 +134,7 @@ final class EarconsTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()),
                       engine: ScriptedEngine(bare: hears, boosted: hears))
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle("the ear to load") { ear.ready }
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },

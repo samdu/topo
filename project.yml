@@ -4,7 +4,7 @@ options:
   bundleIdPrefix: zone.hexagon.topo
   deploymentTarget:
     # 26: the voice's model arrives as an Apple-hosted asset pack (Background Assets'
-    # `AssetPackManager`, Apps/Client/PhononStore.swift), which is iOS 26 and later.
+    # `AssetPackManager`, Apps/Client/BundleStore.swift), which is iOS 26 and later.
     iOS: "26.0"
     watchOS: "10.0"
     tvOS: "17.0"
@@ -132,19 +132,19 @@ targets:
         copyFiles:
           destination: productsDirectory
           subpath: $(CONTENTS_FOLDER_PATH)/Watch
-    # The embed writes the voice's bundle into the product's resources folder, a folder's files and
+    # The embed writes the voice's and the ear's bundles into the product's resources folder, a folder's files and
     # not a declared output's own path, which the user-script sandbox cannot grant, so this target
     # runs its scripts unsandboxed (ENABLE_USER_SCRIPT_SANDBOXING below); this is its only one.
     postBuildScripts:
-      # The voice's bundle in the app itself, for the builds the install page serves
+      # The voice's and the ear's bundles in the app itself, for the builds the install page serves
       # (`TOPO_EMBED_VOICES=YES`, which publish-topo.sh alone passes). Every other build removes
       # any copy an earlier build left in the product, so an archive for the App Store never
       # carries one; `scripts/check-built-assets.sh` reads the product either way.
-      - name: Embed the voice's bundle (install-page builds)
+      - name: Embed the voice's and the ear's bundles (install-page builds)
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          "$SRCROOT/scripts/embed-voice.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" "${TOPO_EMBED_VOICES:-NO}"
+          "$SRCROOT/scripts/embed-bundles.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" "${TOPO_EMBED_VOICES:-NO}"
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -216,11 +216,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
-        # The voice's embed writes into the product's resources folder (postBuildScripts above).
+        # The bundles' embed writes into the product's resources folder (postBuildScripts above).
         ENABLE_USER_SCRIPT_SANDBOXING: false
         TOPO_SOURCE_COMMIT: ""
         TOPO_CHANNEL: ""
-        # YES copies the voice's bundle (build/phonon, scripts/phonon-bundles.sh) into the app.
+        # YES copies the voice's bundle (build/phonon, scripts/phonon-bundles.sh) and the ear's
+        # (build/ear, scripts/ear-bundle.sh) into the app.
         TOPO_EMBED_VOICES: NO
         # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
