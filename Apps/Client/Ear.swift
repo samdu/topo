@@ -264,13 +264,17 @@ final class Ear {
 
     private func note(_ line: String) { log.info("ear: \(line)") }
 
-    /// Removes v2's download once Ultra is the resident ear, so the phone keeps one acoustic model.
+    /// Removes v2's download once Ultra is the resident ear, so the phone keeps one acoustic model,
+    /// through the store's own removal, which leaves a folder reached through a link alone.
     private func retireV2() {
         guard model == .ultra, let v2 = try? downloads.directory(for: ModelManifest.parakeet),
               FileManager.default.fileExists(atPath: v2.path) else { return }
         do {
-            try FileManager.default.removeItem(at: v2)
-            log.notice("ear: Parakeet v2 removed, Ultra is resident")
+            if try downloads.remove(ModelManifest.parakeet) {
+                log.notice("ear: Parakeet v2 removed, Ultra is resident")
+            } else {
+                log.error("ear: Parakeet v2's folder is reached through a link, so it is left where it is")
+            }
         } catch {
             log.error("ear: Parakeet v2 was not removed, tried again at the next launch: \(String(describing: error))")
         }

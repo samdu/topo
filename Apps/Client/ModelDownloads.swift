@@ -369,6 +369,18 @@ final class ModelDownloads {
     }
 
     /// Where a model's files are, for its loader. Throws for a name the manifest lacks.
+    /// Removes a model's folder from the store, and says whether it did: one whose home, or a
+    /// folder on the way to it, is a link (`ModelStore.reachedThroughLink`) is somewhere else's
+    /// folder, and is left where it is, as the sweep leaves it.
+    func remove(_ id: String) throws -> Bool {
+        guard let model = manifest?.model(id) else { throw ModelStoreError.unknownModel(id) }
+        guard !store.reachedThroughLink(model) else { return false }
+        let home = store.directory(for: model)
+        if FileManager.default.fileExists(atPath: home.path) { try FileManager.default.removeItem(at: home) }
+        present.remove(id)
+        return true
+    }
+
     func directory(for id: String) throws -> URL {
         guard let model = manifest?.model(id) else { throw ModelStoreError.unknownModel(id) }
         return store.directory(for: model)

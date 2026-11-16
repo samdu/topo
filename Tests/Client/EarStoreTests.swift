@@ -165,6 +165,32 @@ final class EarStoreTests: XCTestCase {
         loads = await second.loads
         XCTAssertEqual(loads, [.init(acoustic: store.home, model: .ultra)])
         XCTAssertFalse(fm.fileExists(atPath: v2.path), "v2 is removed once Ultra is the ear")
+
+        // A v2 task from before the update lands its file after the removal: the next launch
+        // where Ultra is resident removes it again.
+        try present(ModelManifest.parakeet)
+        let third = LoadingEngine()
+        let later = ear(third, source: source)
+        later.prepare()
+        await settle("Ultra is resident again") { later.state == .ready }
+        XCTAssertFalse(fm.fileExists(atPath: v2.path), "a late v2 download is removed at the next Ultra launch")
+    }
+
+    func testAV2FolderReachedThroughALinkIsLeftWhereItIs() async throws {
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        try fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let theirs = elsewhere.appendingPathComponent("theirs.txt")
+        try Data("not Topo's".utf8).write(to: theirs)
+        let v2 = models.directory(for: try XCTUnwrap(manifest.model(ModelManifest.parakeet)))
+        try fm.createDirectory(at: v2.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: v2, withDestinationURL: elsewhere)
+        let source = try source()
+        _ = try await store.install(from: source, progress: { _ in }, copying: {})
+        let ear = ear(LoadingEngine(), source: source)
+        ear.prepare()
+        await settle("Ultra is resident") { ear.state == .ready }
+        XCTAssertTrue(fm.fileExists(atPath: theirs.path), "the folder behind the link is untouched")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: v2.path), elsewhere.path, "the link is left in place")
     }
 
     func testAPhoneWithoutV2DownloadsNoV2() async throws {
@@ -208,6 +234,15 @@ final class EarStoreTests: XCTestCase {
         XCTAssertEqual(ear.summary.hasPrefix("Parakeet v2 resident"), true, ear.summary)
         XCTAssertTrue(fm.fileExists(atPath: v2.path), "v2 is kept while Ultra will not load")
         XCTAssertEqual(settled, 1, "the voice is let go once, when v2 is resident")
+
+        // The next launch tries Ultra again, and with Ultra resident v2 goes.
+        let next = LoadingEngine()
+        let after = self.ear(next, source: source)
+        after.prepare()
+        await settle("Ultra is resident the launch after") { after.state == .ready }
+        let nextLoads = await next.loads
+        XCTAssertEqual(nextLoads, [.init(acoustic: store.home, model: .ultra)])
+        XCTAssertFalse(fm.fileExists(atPath: v2.path), "v2 is removed once Ultra loads")
     }
 
     func testTheSpotterOnDiskJoinsTheEarOnceItIsResident() async throws {

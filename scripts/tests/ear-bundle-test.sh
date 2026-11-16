@@ -59,6 +59,15 @@ committed="$root/scripts/ear-bundle.json"
 [ "$(jq -r '[.files[].path | split("/")[0]] | unique | join(" ")' "$committed")" = \
   "Decoder.mlmodelc Encoder.mlmodelc JointDecisionv3.mlmodelc Preprocessor.mlmodelc parakeet_vocab.json" ] \
   || fail "the pin names other than Ultra's four models and its vocabulary"
+# Every file of the 18 FluidAudio loads, by its whole path: a model missing its weights is a
+# bundle that cannot load, whatever its other entries.
+inventory="$(printf '%s\n' \
+  Decoder.mlmodelc/analytics/coremldata.bin Decoder.mlmodelc/coremldata.bin Decoder.mlmodelc/model.mil Decoder.mlmodelc/weights/weight.bin \
+  Encoder.mlmodelc/analytics/coremldata.bin Encoder.mlmodelc/coremldata.bin Encoder.mlmodelc/model.mil Encoder.mlmodelc/weights/weight.bin \
+  JointDecisionv3.mlmodelc/analytics/coremldata.bin JointDecisionv3.mlmodelc/coremldata.bin JointDecisionv3.mlmodelc/model.mil JointDecisionv3.mlmodelc/weights/weight.bin \
+  Preprocessor.mlmodelc/analytics/coremldata.bin Preprocessor.mlmodelc/coremldata.bin Preprocessor.mlmodelc/metadata.json Preprocessor.mlmodelc/model.mil Preprocessor.mlmodelc/weights/weight.bin \
+  parakeet_vocab.json)"
+[ "$(jq -r '.files[].path' "$committed" | sort)" = "$inventory" ] || fail "the pin is not the 18 files Ultra loads, path for path"
 [ "$(jq '[.files[] | select((.sha256 | test("^[0-9a-f]{64}$")) and .size > 0)] | length' "$committed")" = \
   "$(jq '.files | length' "$committed")" ] || fail "a pinned file has no whole digest or no size"
 
