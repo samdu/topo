@@ -1074,7 +1074,6 @@ final class MicPress {
     @discardableResult
     func gesture(_ down: Bool, held: Bool? = nil, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  dictating: Bool = false, speaks: Bool = false,
-                 calls: @MainActor () -> Bool = { SpokenCallSetting.enabled() },
                  pressed: @MainActor () -> Void = {},
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
@@ -1091,15 +1090,13 @@ final class MicPress {
             // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
             // a send that took none returns.
             let release = speaks ? speaker.releasing() : nil
-            // A held release keeps its input running for the call's placing (`VoiceInput.inputKept`).
-            let keeps = release != nil && calls() && speaker.callIdle
             // The gesture's verdict, taken here in the callback: whatever the task waits on, the
             // release is the hold or the tap the thumb made.
             let held = held ?? heldDown
             heldDown = false
             return Task {
                 defer { release.map { speaker.released($0, "its send took no wait") } }
-                let heard = await voice.pressUp(as: .chat, held: held, keepingInput: keeps)
+                let heard = await voice.pressUp(as: .chat, held: held)
                 speaker.microphoneClosed()
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
@@ -1126,13 +1123,12 @@ final class MicPress {
         // A press on the open microphone closes it and sends what it heard, so it is that send's
         // release and is held the same way.
         let release = speaks && drawn.open ? speaker.releasing() : nil
-        let keeps = release != nil && calls() && speaker.callIdle
         return Task {
             defer { release.map { speaker.released($0, "its send took no wait") } }
             #if DEBUG
             DebugRun.stallPress()
             #endif
-            let heard = await voice.pressDown(as: .chat, keepingInput: keeps)
+            let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened(counted: opens)
             guard let heard else {
                 // Nil is a session begun or a press refused, and only the chat holding the

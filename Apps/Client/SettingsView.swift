@@ -20,7 +20,6 @@ struct SettingsView: View {
     @AppStorage(NoiseSuppression.key) private var noiseSuppression = true
     @AppStorage(WorkingSounds.key) private var workingSounds = WorkingSounds.standard.rawValue
     @AppStorage(EarconsSetting.key) private var earcons = true
-    @AppStorage(SpokenCallSetting.key) private var spokenCall = true
     @AppStorage(VoiceTemperature.key) private var voiceTemperature = VoiceTemperature.standard
     @AppStorage(VoiceSpeed.key) private var voiceSpeed = VoiceSpeed.standard
     @AppStorage(QuietWait.key) private var quietWait = QuietWait.standard
@@ -30,7 +29,6 @@ struct SettingsView: View {
     static let noiseSuppression = "settings-noise-suppression"
     static let workingSounds = "settings-working-sounds"
     static let earcons = "settings-earcons"
-    static let spokenCall = "settings-spoken-call"
     /// The slider's identifier, for the UI suite.
     static let voiceTemperature = "settings-voice-temperature"
     static let voiceSpeed = "settings-voice-speed"
@@ -68,19 +66,13 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier(SettingsView.workingSounds)
                 } footer: {
-                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed whenever Topo is not speaking, until the reply has been read. Only while a spoken turn is waited for. Kept on this device.")
+                    Text("What a spoken turn sounds like while Topo works on it: a short tone as Topo searches, runs a command or writes, and under Sounds a soft bed whenever Topo is not speaking, until the reply has been read. Only while a spoken turn is waited for. With the phone locked or Topo behind another app, Sounds keeps the phone awake for as long as Topo is working on the answer (fifteen minutes at most); under Receipts or Off an answer to a held press is waited for two minutes at most, and one slower than that is read when you come back. An open-mic conversation keeps the phone awake as long as it lasts. Kept on this device.")
                 }
                 Section {
                     Toggle("Earcons", isOn: $earcons)
                         .accessibilityIdentifier(SettingsView.earcons)
                 } footer: {
                     Text("A short tone as the microphone opens, as your words go, as a reply read aloud ends, and when a spoken turn fails. Kept on this device.")
-                }
-                Section {
-                    Toggle("Call for spoken replies", isOn: $spokenCall)
-                        .accessibilityIdentifier(SettingsView.spokenCall)
-                } footer: {
-                    Text("When you lock the phone or leave Topo with a spoken answer on its way, the wait and the answer are a call: a card on the Lock Screen, or the green pill in another app, until Topo has finished speaking, and hanging up stops it. Off, Topo keeps the phone awake for two minutes at most; an answer slower than that is read when you come back. Kept on this device.")
                 }
                 Section {
                     // The value as the voice reads it, so one kept out of range shows as the

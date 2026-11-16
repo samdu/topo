@@ -478,7 +478,7 @@ final class HearingMarksTests: XCTestCase {
         for _ in 0..<400 where !ear.ready { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(ear.ready)
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
+        let audio = AudioSession(center: center, configure: seams.configure,
                                  deactivate: seams.deactivate, isActive: { true })
         let voice = VoiceInput(audio: audio, ear: ear, center: center, makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) }, voiceProcessing: { try seams.process($0, $1) },

@@ -2044,7 +2044,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         // Wired as the chat wires them, and muted after the release.
@@ -2088,7 +2088,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         var readsAloud = false
@@ -2116,7 +2116,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("One sentence. Two of them. Three."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         var readsAloud = true
@@ -2159,7 +2159,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(harness, speaker, said)
@@ -2196,7 +2196,7 @@ final class HarnessIntegrationTests: XCTestCase {
         await after.refresh()
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(after, speaker, said)
@@ -2218,7 +2218,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(db, defaults: defaults, transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()),
                       engine: ScriptedEngine(bare: "and of Italy", boosted: "and of Italy"))
@@ -2292,7 +2292,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(harness, speaker, said)
@@ -2323,7 +2323,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Rome."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         let said = Said()
         install(harness, speaker, said)
@@ -2346,7 +2346,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: ScriptedVoice())
         voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
@@ -2393,7 +2393,7 @@ final class HarnessIntegrationTests: XCTestCase {
                               transport: ScriptedTransport((200, reply("Paris."))))
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
         let voice = Voice(engine: ScriptedVoice())
         voice.load(folder: URL(fileURLWithPath: "/dev/null"))
         try await eventually("the voice to load") { voice.state == .ready }
@@ -2432,7 +2432,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
         let said = Said()
