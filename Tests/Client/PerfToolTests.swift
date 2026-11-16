@@ -385,6 +385,21 @@ final class PerfToolTests: XCTestCase {
         XCTAssertEqual(turns[0].events.filter { $0.key == .stream }.map(\.title), ["The model finished request 1", "The model finished request 2"])
     }
 
+    /// An answer of the guest's begun before the turn's words were written (one of a turn the guest
+    /// ran of its own, inside this turn's time) is read without trapping, and its tool is no stage.
+    func testAnAnswerBeforeTheTurnsWriteIsReadWithoutTrapping() throws {
+        let tag = "turn=7e57ab1e"
+        let lines = [line(0, "turn.line", tag), line(1, "turn.attempt", tag), line(10, "turn.guest.toolResult"),
+                     line(20, "turn.guest.message", "own guest=2 request=1 tokens=9000"), line(50, "turn.saved"),
+                     line(60, "turn.guest.write", "guest=3"), line(70, "turn.guest.toolResult"),
+                     line(400, "turn.guest.message", "own guest=3 request=1 tokens=13000"),
+                     line(900, "turn.guest.message.done", "own"), line(1000, "turn.reply.shown", tag),
+                     line(1000, "turn.attempt.end", "\(tag) answered")]
+        let turn = try XCTUnwrap(timelines(lines).first)
+        XCTAssertEqual(turn.requests, 2)
+        XCTAssertEqual(turn.events.filter { $0.key == .tool }.map(\.at), [70], "a tool before the turn's write was taken as its stage")
+    }
+
     /// The simulator's proof run (dc522572), its second turn, with its requests marked as the
     /// stream marks them: words heard ahead, saved while the guest worked, three model requests with
     /// two tools between them.

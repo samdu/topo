@@ -249,7 +249,7 @@ struct TurnTimeline: Sendable {
             let message = clean[i]
             let number = message.value("request").flatMap(Int.init) ?? n + 1
             let next = n + 1 < messages.count ? messages[n + 1] : clean.endIndex
-            if let result = clean[previous..<i].last(where: { $0.name == "turn.guest.toolResult" }) {
+            if let result = clean[min(previous, i)..<i].last(where: { $0.name == "turn.guest.toolResult" }) {
                 raw.append((result.ms, place(result), .tool, "A tool ran"))
             }
             let guest = message.value("guest")
