@@ -32,6 +32,9 @@ packages:
     path: Packages/TopoAuth
   TopoTurn:
     path: Packages/TopoTurn
+  # The mind on a Mac: the hub's native Claude Code and its answering loop (HubMind). The hub only.
+  TopoMind:
+    path: Packages/TopoMind
   # The guest: the iSH kernel and emulator of OpenMinis/ish-arm64 and the Swift over them. Its
   # framework is built by scripts/build-ish.sh, which has to have run before this project
   # resolves; the iOS app only.
@@ -640,6 +643,8 @@ targets:
       - package: TopoCore
         product: TopoCoreTesting
       - package: TopoLink
+      - package: TopoTurn
+      - package: TopoMind
     # XcodeGen writes this file from these properties on every generate.
     entitlements:
       path: Apps/TopoHub/TopoHub.entitlements

@@ -1,15 +1,20 @@
+import AppKit
 import OSLog
 import SwiftUI
 import TopoAuth
 import TopoCore
 import TopoLink
+import TopoMind
+import TopoTurn
 
-/// The menu-bar hub: the only target that runs resident code. It holds the
-/// primary lease, answers probes for it, shows a pairing code and the
-/// devices on the Apple ID. The Claude CLI and channel servers it will bundle
-/// are not here yet, and with them its sign-in, which is Claude Code's own.
+/// The menu-bar hub: the only target that runs resident code. It answers
+/// probes for the lease, shows a pairing code and the devices on the Apple
+/// ID, and serves the house's screens; with its switch on it runs the mind
+/// (`HubMind`), a native Claude Code on this Mac whose login is made by hand
+/// in the mind's own config directory.
 @main
 struct TopoHubApp: App {
+    @NSApplicationDelegateAdaptor(HubAppDelegate.self) private var delegate
     @State private var hub: HubModel
 
     /// The hub runs from launch, not from the first time the menu opens. The Claude.ai tokens an
@@ -20,6 +25,7 @@ struct TopoHubApp: App {
                 .error("login migration: the keychain kept \(item.account, privacy: .public) (\(String(describing: error), privacy: .public)); tried again next launch")
         }
         let model = HubModel()
+        HubAppDelegate.hub = model
         model.start()
         _hub = State(initialValue: model)
     }
@@ -47,6 +53,8 @@ struct HubMenu: View {
                 }
             }
             StatusLine()
+            Divider()
+            MindSection()
             Divider()
             DevicesList()
             Divider()
@@ -77,20 +85,97 @@ struct StatusLine: View {
         switch hub.status {
         case .starting:
             Label("Starting…", systemImage: "circle.dotted")
-        case .primary(let epoch):
-            HStack(spacing: 6) {
-                Label("Primary on this Mac", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.teal)
-                Text("lease \(epoch)").font(.caption).foregroundStyle(.secondary)
-            }
-        case .held(let by):
-            Label("Primary is \(hub.displayName(by))", systemImage: "iphone")
-        case .unreachable(let by):
-            Label("\(hub.displayName(by)) is primary and can't be reached from here", systemImage: "wifi.exclamationmark")
-                .foregroundStyle(.secondary)
-        case .contended:
-            Label("The lease is moving; trying again", systemImage: "arrow.triangle.2.circlepath")
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+        case .up:
+            if hub.mind?.holds == true {
+                Label("Primary on this Mac", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.teal)
+            } else if let holder = hub.leaseHolder {
+                Label("Primary is \(hub.displayName(holder))", systemImage: "iphone")
+            } else {
+                Label("No device is primary right now", systemImage: "circle.dotted").foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// The mind on this Mac: the switch, the model it answers with, and one or two lines on where it
+/// stands — signed in or not, its process, and the last pass.
+struct MindSection: View {
+    @Environment(HubModel.self) private var hub
+
+    var body: some View {
+        @Bindable var hub = hub
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Run the mind on this Mac", isOn: Binding(get: { hub.mindOn }, set: { hub.setMind($0) }))
+                .toggleStyle(.switch)
+                .help("This Mac answers your turns while it is awake. Off, the phone answers.")
+            if hub.mindOn {
+                Picker("Model", selection: $hub.model) {
+                    ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let pinned = ClaudeModel.pinned {
+                    Text("Debug build: every turn goes to \(pinned.displayName)").font(.caption2).foregroundStyle(.secondary)
+                }
+                phaseLine
+                if let mind = hub.mind {
+                    Text(mind.mind).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    if let pass = mind.lastPass {
+                        Text("Last pass \(Self.words(pass.outcome)), \(pass.at.formatted(date: .omitted, time: .standard)), by \(pass.trigger.rawValue)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var phaseLine: some View {
+        switch hub.mind?.phase {
+        case nil, .off?:
+            Label("Starting…", systemImage: "circle.dotted")
+        case .starting?:
+            Label("Starting the mind…", systemImage: "circle.dotted")
+        case .answering?:
+            Label(hub.mind?.holds == true ? "Answering on this Mac" : "Waiting for the lease; the phone answers",
+                  systemImage: hub.mind?.holds == true ? "brain" : "hourglass")
+            if let login = hub.mind?.login, case .signedIn(let summary) = login {
+                Text("Signed in: \(summary)").font(.caption2).foregroundStyle(.secondary)
+            }
+        case .asleep?:
+            Label("Asleep; the phone answers", systemImage: "moon")
+        case .stopped(let stop)?:
+            VStack(alignment: .leading, spacing: 2) {
+                Label(Self.words(stop), systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                if stop == .signedOut {
+                    Text(hub.signInCommand)
+                        .font(.caption2.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                }
+                Button("Try again") { hub.tryMindAgain() }
+            }
+        }
+    }
+
+    static func words(_ stop: HubMind.Stop) -> String {
+        switch stop {
+        case .signedOut: "Not signed in, so the phone answers. Sign the mind in in Terminal:"
+        case .loginUnknown(let why): "Could not ask Claude Code whether it is signed in: \(why)"
+        case .notStarted(let why): "Claude Code could not be started: \(why)"
+        case .ledgerUnreadable(let why): "The mind's record could not be read: \(why)"
+        case .home(let why): "The mind's home could not be made: \(why)"
+        }
+    }
+
+    static func words(_ outcome: HubMind.Pass.Outcome) -> String {
+        switch outcome {
+        case .nothing: "found nothing to answer"
+        case .answered: "answered"
+        case .elsewhere: "found another device answering"
+        case .displaced: "lost the lease as it answered"
+        case .failed(let kind): "failed (\(kind))"
         }
     }
 }
@@ -266,6 +351,42 @@ struct PairingPane: View {
             }
         }
         .padding(.top, 4)
+    }
+}
+
+/// What the system tells the hub: the push that a turn was created, and quit.
+final class HubAppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor static var hub: HubModel?
+    private static let log = Logger(subsystem: "zone.hexagon.topo.hub", category: "push")
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Silent pushes need no permission. Registering touches no record; the subscription the
+        // pushes come from is saved only against the real store, with the mind on.
+        NSApplication.shared.registerForRemoteNotifications()
+    }
+
+    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Self.log.notice("registered for remote notifications")
+    }
+
+    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        Self.log.error("remote notifications: \(String(describing: error), privacy: .public)")
+    }
+
+    @MainActor
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        guard HubPush.isOurs(userInfo) else { return }
+        Self.hub?.pushed()
+    }
+
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let hub = Self.hub else { return .terminateNow }
+        Task {
+            await hub.quit()
+            NSApplication.shared.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 

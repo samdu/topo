@@ -4,6 +4,7 @@
 # trimmed). What it was started with and every input it took are written under FAKE_LOG.
 #
 # FAKE_SIGNED_OUT=1  every turn fails as Claude Code's does with no login
+# FAKE_LOGIN_SIGNED_OUT=1  `auth status` says signed out
 # FAKE_STRAY=1       a turn of its own (a background task's notice) ends before each input's echo
 # FAKE_CHILD=1       starts two children at launch: one in its group, one in a session of its own
 # FAKE_IGNORE_TERM=1 ignores SIGTERM, and stays after its stdin closes
@@ -23,6 +24,14 @@ def emit(obj):
     sys.stdout.flush()
 
 args = sys.argv[1:]
+if args[:2] == ["auth", "status"]:
+    # `claude auth status --json`, as 2.1.325 prints it; FAKE_LOGIN_SIGNED_OUT=1 is signed out.
+    record("auth.jsonl", {"args": args, "config": config})
+    signed_in = os.environ.get("FAKE_LOGIN_SIGNED_OUT") != "1"
+    print(json.dumps({"loggedIn": signed_in, "authMethod": "claude.ai" if signed_in else "none",
+                      "apiProvider": "firstParty", "subscriptionType": "max" if signed_in else None,
+                      "configDirectory": config}, indent=2))
+    sys.exit(0 if signed_in else 1)
 record("launches.jsonl", {"pid": os.getpid(), "args": args, "cwd": os.getcwd(), "env": dict(os.environ)})
 if os.environ.get("FAKE_IGNORE_TERM") == "1":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)

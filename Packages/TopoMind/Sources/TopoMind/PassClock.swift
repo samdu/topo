@@ -1,0 +1,137 @@
+import Foundation
+import TopoCore
+import TopoTurn
+
+/// The stages of one answering pass, as `Perf` marks: `hub.pass.trigger <source>` when the pass
+/// begins, then each stage once, with the milliseconds since the trigger — `hub.pass.read` (the
+/// runner's read of the log answered), `hub.pass.lease` (the lease's write before the brain is
+/// asked), `hub.pass.asked` (the brain asked, with `turn=` the milliseconds since the newest turn
+/// it answers was said), `hub.pass.answered`, `hub.pass.saved` (the reply's batch answered) — and
+/// `hub.pass.end <outcome>`. A pass with nothing to answer marks the trigger, the read and its end.
+///
+/// The runner's stages are not its own marks, so they are read off the calls it makes: the log's
+/// read and the writes through the database it is given (`TimedDatabase`), and the brain's calls
+/// (`TimedBrain`). One pass runs at a time, so one clock serves them. A mark carries a stage's name,
+/// a trigger's source, an outcome's kind and times, never a word of a turn.
+final class PassClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var began: ContinuousClock.Instant?
+    private var marked: Set<String> = []
+    /// The lease's last write in this pass before the brain was asked, kept until it is: a
+    /// heartbeat landing in a pass that asks nothing is no stage of it.
+    private var leaseAt: Int?
+
+    func begin(_ source: String) {
+        lock.withLock {
+            began = .now
+            marked = []
+            leaseAt = nil
+        }
+        Perf.mark("hub.pass.trigger \(source)")
+    }
+
+    func end(_ outcome: String) {
+        let ms = lock.withLock { () -> Int? in
+            defer { began = nil }
+            return began.map(Self.ms)
+        }
+        guard let ms else { return }
+        Perf.mark("hub.pass.end \(outcome) ms=\(ms)")
+    }
+
+    /// The stage's mark, the first time it is reached in the pass. Nothing outside a pass.
+    func reached(_ stage: String, detail: String = "") {
+        let ms = lock.withLock { () -> Int? in
+            guard let began, !marked.contains(stage) else { return nil }
+            marked.insert(stage)
+            return Self.ms(since: began)
+        }
+        guard let ms else { return }
+        Perf.mark("hub.pass.\(stage) ms=\(ms)\(detail)")
+    }
+
+    /// A write of the lease alone, answered: kept as the pass's lease stage if the brain is asked
+    /// after it.
+    func leaseWritten() {
+        lock.withLock {
+            guard let began, marked.contains("read"), !marked.contains("asked") else { return }
+            leaseAt = Self.ms(since: began)
+        }
+    }
+
+    /// The brain is asked: the lease's stage is marked first, then the ask.
+    func asked(turnAge: Int?) {
+        let lease = lock.withLock { () -> Int? in
+            guard began != nil, !marked.contains("lease") else { return nil }
+            marked.insert("lease")
+            return leaseAt
+        }
+        if let lease { Perf.mark("hub.pass.lease ms=\(lease)") }
+        reached("asked", detail: turnAge.map { " turn=\($0)" } ?? "")
+    }
+
+    private static func ms(since began: ContinuousClock.Instant) -> Int {
+        let elapsed = ContinuousClock.now - began
+        return Int(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+    }
+}
+
+/// The hub's database as the runner sees it: every call forwarded, the bound of
+/// `answering(within:)` included, with the pass's stages read off what comes back.
+struct TimedDatabase: RecordDatabase {
+    let base: any RecordDatabase
+    let clock: PassClock
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        let saved = try await base.save(records)
+        if records.contains(where: { $0.type == Turn.recordType }) {
+            clock.reached("saved")
+        } else if records.count == 1, records[0].id == Lease.recordID {
+            clock.leaseWritten()
+        }
+        return saved
+    }
+
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await base.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await base.query(query) }
+
+    func records(ofType type: String) async throws -> [Record] {
+        let records = try await base.records(ofType: type)
+        if type == Turn.recordType { clock.reached("read") }
+        return records
+    }
+
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        TimedDatabase(base: base.answering(within: seconds), clock: clock)
+    }
+}
+
+/// The mind as the runner sees it: every call forwarded to the `NativeBrain`, with the ask and
+/// the answer marked.
+struct TimedBrain: Brain {
+    let inner: NativeBrain
+    let clock: PassClock
+
+    func answer(_ request: BrainRequest) async throws -> Reply {
+        let newest = request.answering.map(\.at).max()
+        clock.asked(turnAge: newest.map { Int(Date().timeIntervalSince($0) * 1000) })
+        let reply = try await inner.answer(request)
+        clock.reached("answered")
+        return reply
+    }
+
+    func hear(_ words: String, nonce: String, context: [Turn]?, model: ClaudeModel) async -> Bool {
+        await inner.hear(words, nonce: nonce, context: context, model: model)
+    }
+    func bind(nonce: String, person: Turn, reply: String) async { await inner.bind(nonce: nonce, person: person, reply: reply) }
+    func withdrawn(nonce: String) async { await inner.withdrawn(nonce: nonce) }
+    func stopHearing(nonce: String) async { await inner.stopHearing(nonce: nonce) }
+    func landed(_ reply: Turn, nonce: String) async { await inner.landed(reply, nonce: nonce) }
+    func unresolved() async -> Set<TurnRef> { await inner.unresolved() }
+    func owed() async -> OwedReply? { await inner.owed() }
+    func use(model: ClaudeModel) async { await inner.use(model: model) }
+    func use(compaction: Compaction.Setting) async { await inner.use(compaction: compaction) }
+    func use(threads: MessageThreads.Setting) async { await inner.use(threads: threads) }
+    func forget() async { await inner.forget() }
+    func describe() async -> String { await inner.describe() }
+}

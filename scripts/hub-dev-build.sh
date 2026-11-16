@@ -8,7 +8,7 @@
 # is the hub that runs the mind on a Mac (topo-mac): signed by the team's Apple Development
 # identity with automatic signing, reaching the CloudKit container's development environment,
 # which is the one a development-signed phone uses. Release, because Debug pins the model to
-# Haiku. It is built, never launched: a signed hub claims the primary lease in the real records.
+# Haiku. It is built, never launched: with its switch on, a signed hub takes the primary lease in the real records.
 #
 # Its entitlements are made here, in build/hub, from Apps/TopoHub/TopoHub.entitlements (so the
 # containers are the project's own): without the app sandbox, since the mind's `claude` process
