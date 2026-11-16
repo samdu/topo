@@ -856,10 +856,11 @@ final class Harness {
     }
 
     /// Keeps where the runner stands with the lease for the next launch, unless a sign-out or a
-    /// demotion has cleared it meanwhile.
+    /// demotion has cleared it meanwhile: what a turn or a pass found, and a hub's claim the
+    /// lease's own heartbeat found (`TurnRunner.currentStanding()`).
     private func keepStanding(of runner: TurnRunner, under login: Int) {
         Task { [weak self] in
-            let standing = await runner.standing
+            let standing = await runner.currentStanding()
             guard let self, self.login == login else { return }
             self.standing = standing
         }
@@ -1333,6 +1334,9 @@ final class Harness {
                 // have found: a pass's failure is no longer true.
                 guard self.login == login else { return }
                 clearPassFailure()
+                // A hub's claim a heartbeat found while nothing was said is kept for the next
+                // launch, which would otherwise give the guest its first words ahead of the hub.
+                if let runner { keepStanding(of: runner, under: login) }
                 await refreshUnfinished()
             }
             served.forEach { $0.resume() }
@@ -1466,7 +1470,7 @@ final class Harness {
     private func makeRunner() async throws -> TurnRunner {
         let writer = try await log.writer(for: device)
         self.writer = writer
-        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(),
+        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: HubLeaseProbe(),
                                                sleep: leaseSleep)
         self.lease = lease
         return TurnRunner(log: log, writer: writer, lease: lease, brain: brain, standing: standing)
@@ -1524,9 +1528,14 @@ final class Harness {
     /// What the chat says when a turn went into the log for another device's primary to answer:
     /// the words are saved, who answers them, and that the reply comes here. It is a notice in the
     /// navigation bar, so it is short enough for two lines beside the badge on the narrowest phone.
+    /// A hub's lease is never out of reach: the phone has no socket to it, and the lease answers
+    /// a hub's only while it is fresh (`HubLeaseProbe`), which is the Mac answering.
     static func limbInfo(_ outcome: LeaseOutcome) -> String {
         switch outcome {
         case .primary: "Saved. The reply will appear here."
+        case .held(let lease) where HubLeaseProbe.isHub(lease.holder),
+             .unreachable(let lease) where HubLeaseProbe.isHub(lease.holder):
+            "Saved. Your Mac will answer here."
         case .held(let by): "Saved. \(by.holder.rawValue) will answer here."
         case .unreachable(let lease): "Saved. \(lease.holder.rawValue) will answer; it's out of reach now."
         case .contended: "Saved. Another device will answer here."

@@ -63,7 +63,9 @@ final class ChatNoticesRenderTests: XCTestCase {
     /// shorten, and past two lines it is cut with an ellipsis.
     func testEveryNoticeTheHarnessWritesFitsTwoLinesOfTheBar() {
         let hub = Lease(holder: DeviceID("phone-1A2B3C4D"), endpoint: nil, epoch: 2, expiresAt: Date())
-        let outcomes: [LeaseOutcome] = [.primary(hub), .held(by: hub), .unreachable(hub), .contended]
+        let mac = Lease(holder: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil, epoch: 2, expiresAt: Date())
+        let outcomes: [LeaseOutcome] = [.primary(hub), .held(by: hub), .unreachable(hub), .contended,
+                                        .held(by: mac), .unreachable(mac)]
         let lines = outcomes.map(Harness.limbInfo) + [
             Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission))),
             Harness.describe(RecordDatabaseError.unavailable(underlying: CocoaError(.fileReadNoPermission))),

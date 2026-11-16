@@ -142,8 +142,8 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// thing that does not wait is `abandon()`, which has to take effect at
 /// once: it moves `generation`, and an operation takes an answer as the
 /// lease held (`hold`) only while the generation is the one it was called
-/// under, and writes nothing more once it has moved. `isPrimary()` and
-/// `held` only read, and do not wait: a probe is answered while a write is
+/// under, and writes nothing more once it has moved. `isPrimary()`, `held`
+/// and `yielded` only read, and do not wait: a probe is answered while a write is
 /// out. A request that stalls would hold every call behind it, so each is
 /// asked of the database bounded by `timing.patience`
 /// (`RecordDatabase.answering(within:)`), and one that runs out is a
@@ -238,6 +238,11 @@ public actor PrimaryLease {
 
     /// The lease this device holds, or nil.
     public var held: Lease? { heldRecord.flatMap(Lease.init(record:)) }
+
+    /// The lease that took this device's, from the moment a heartbeat, a batch or a write found
+    /// it in place of its own until this device holds a lease again; nil when it has yielded to
+    /// none since. How a caller that was not asking learns that another device answers.
+    public var yielded: Lease? { yieldedTo }
 
     /// True while this device holds an unexpired lease. Needs no network:
     /// a holder that has not managed a heartbeat inside the duration is not

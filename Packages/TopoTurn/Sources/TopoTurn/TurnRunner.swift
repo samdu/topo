@@ -30,6 +30,28 @@ public struct NoSocketProbe: LeaseProbe {
     public func confirms(_ lease: Lease) async -> Bool { false }
 }
 
+/// The phone's probe: a hub's lease is confirmed without asking the hub, every other holder looks
+/// unreachable as to `NoSocketProbe`. A hub is primary for as long as it is awake and renews its
+/// lease while it is, so a lease of a hub's that has not expired is a hub answering; and the phone
+/// has no socket to ask it by, on the house's network or off it. `PrimaryLease.acquire()` asks a
+/// probe only of a lease that has not expired, by its own clock, and claims an expired one without
+/// asking, so a phone takes over one lease duration after a hub's last renewal.
+public struct HubLeaseProbe: LeaseProbe {
+    public init() {}
+    public func confirms(_ lease: Lease) async -> Bool { Self.isHub(lease.holder) }
+
+    /// Whether `device` is a hub: the one place this is decided. A hub names itself `mac-` and a
+    /// whole UUID (`HubIdentity` in `Apps/TopoHub`), which no phone, pad, watch or TV mints: those
+    /// are their platform and eight characters (`DeviceIdentity`). The hub's `Device` record says
+    /// `kind: mac` too, but reading it is a request inside the lease's gate, and its failure would
+    /// have to mean claim or defer; the name is in the lease record itself.
+    public static func isHub(_ device: DeviceID) -> Bool {
+        let name = device.rawValue
+        guard name.hasPrefix("mac-") else { return false }
+        return UUID(uuidString: String(name.dropFirst(4))) != nil
+    }
+}
+
 /// The phone harness: one turn from the person's words to the assistant's reply, both in the log.
 ///
 /// The brain is started on the person's words first (`hear`), so its answer waits on nothing
@@ -120,7 +142,7 @@ public actor TurnRunner {
         }
         // With no read of the log to go on, the turn is asked once it is saved, as a turn in the
         // log is, and the brain is told everything the log holds that it has not seen.
-        var hearing: Task<Bool, Never>? = hearsAhead && known != nil ? hearNow() : nil
+        var hearing: Task<Bool, Never>? = await hearsAhead && known != nil ? hearNow() : nil
         // A lease fresh by this device's own clocks, with nothing owed to the log, is renewed
         // with the person's save and not taken before it.
         let fresh = await lease.isPrimary() ? await brain.owed() == nil : false
@@ -293,7 +315,7 @@ public actor TurnRunner {
     /// Hearing the same nonce again asks nothing more.
     @discardableResult
     public func hear(_ text: String, model: ClaudeModel, nonce: String, known: [Turn]?) async -> Bool {
-        guard hearsAhead, let known else { return false }
+        guard await hearsAhead, let known else { return false }
         let heard = await brain.hear(text, nonce: nonce, context: known, model: model)
         if heard { Perf.mark("turn.heard") }
         return heard
@@ -304,7 +326,27 @@ public actor TurnRunner {
     /// it, or has not asked since it launched, asks first: the call is bounded
     /// (`LeaseTiming.patience` a request), and the brain hears as soon as it is answered primary
     /// or fails.
-    private var hearsAhead: Bool { away || standing == .mine }
+    private var hearsAhead: Bool {
+        get async {
+            noteYield(to: await lease.yielded)
+            return away || standing == .mine
+        }
+    }
+
+    /// Where this device stands, with what the lease learned without the runner asking folded in
+    /// (`noteYield`): what a caller keeps for the next launch.
+    public func currentStanding() async -> Standing {
+        noteYield(to: await lease.yielded)
+        return standing
+    }
+
+    /// A heartbeat that found a hub's claim where this device's lease was yielded to it, with no
+    /// turn asking: the hub answers from here, so nothing is heard ahead of it. A yield to any other
+    /// device is left for the next call to the lease to find.
+    private func noteYield(to lease: Lease?) {
+        guard standing == .mine, let lease, HubLeaseProbe.isHub(lease.holder) else { return }
+        standing = .elsewhere
+    }
 
     /// The lease's `acquire()`, with what it found of another holder kept for `hear`.
     private func acquire() async throws -> LeaseOutcome {

@@ -17,6 +17,8 @@ final class HarnessTests: XCTestCase {
         .held(by: Lease(holder: DeviceID("hub"), endpoint: nil, epoch: 2, expiresAt: Date())),
         .unreachable(Lease(holder: DeviceID("hub"), endpoint: nil, epoch: 2, expiresAt: Date())),
         .contended,
+        .held(by: Lease(holder: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil, epoch: 2, expiresAt: Date())),
+        .unreachable(Lease(holder: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil, epoch: 2, expiresAt: Date())),
     ]
 
     func testNoLeaseOutcomeAsksThePersonToSayItAgain() {
@@ -25,6 +27,21 @@ final class HarnessTests: XCTestCase {
             XCTAssertFalse(line.lowercased().contains("try again"), "\(outcome): \(line)")
             XCTAssertTrue(line.hasSuffix("."), "\(outcome): \(line)")
         }
+    }
+
+    /// A hub's lease is the Mac answering, never a device out of reach, and the bar says so in
+    /// words rather than by the hub's device ID.
+    func testAHubsLeaseSaysTheMacAnswers() {
+        let hub = Lease(holder: DeviceID("mac-" + UUID().uuidString.lowercased()), endpoint: nil, epoch: 2, expiresAt: Date())
+        for outcome in [LeaseOutcome.held(by: hub), .unreachable(hub)] {
+            let line = Harness.limbInfo(outcome)
+            XCTAssertEqual(line, "Saved. Your Mac will answer here.", "\(outcome)")
+            XCTAssertFalse(line.contains(hub.holder.rawValue), line)
+            XCTAssertFalse(line.contains("out of reach"), line)
+        }
+        let phone = Lease(holder: DeviceID("ios-1A2B3C4D"), endpoint: nil, epoch: 2, expiresAt: Date())
+        XCTAssertEqual(Harness.limbInfo(.held(by: phone)), "Saved. ios-1A2B3C4D will answer here.")
+        XCTAssertEqual(Harness.limbInfo(.unreachable(phone)), "Saved. ios-1A2B3C4D will answer; it's out of reach now.")
     }
 
     func testDisplacementSaysTheWordsAreInTheLog() {
@@ -1000,6 +1017,34 @@ final class HarnessIntegrationTests: XCTestCase {
     }
 
     // MARK: Not primary
+
+    /// A phone launched while the hub holds a fresh lease has yielded to nothing and has no socket
+    /// to ask it by: its lease takes the hub's word from the lease record (`HubLeaseProbe`), so the
+    /// words go in the log as a limb's, the guest is not asked, the hub keeps the lease, the bar
+    /// says the Mac answers, and the next launch knows where it stands.
+    func testAPhoneDefersToAHubsFreshLeaseWithoutClaimingOverIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let hubID = "mac-" + UUID().uuidString.lowercased()
+        let hubLease = try await claim(db, as: hubID)
+        let defaults = makeDefaults()
+        let phoneTransport = ScriptedTransport((200, reply("from the phone")))
+        let phone = harness(db, defaults: defaults, transport: phoneTransport)
+
+        await phone.send("bins?")
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["bins?"], "the words are in the log for the hub to answer")
+        XCTAssertEqual(turns.first?.ref.device, self.phone)
+        XCTAssertTrue(phoneTransport.sent.isEmpty, "the phone's guest was asked a turn the hub answers")
+        XCTAssertNil(phone.error)
+        XCTAssertEqual(phone.info, "Saved. Your Mac will answer here.")
+        let hubHolds = await hubLease.isPrimary()
+        XCTAssertTrue(hubHolds)
+        let record = try await db.fetch(Lease.recordID)
+        XCTAssertEqual(record.flatMap(Lease.init(record:))?.holder, DeviceID(hubID))
+        for _ in 0..<1000 where defaults.string(forKey: "topo.harness.standing") != "elsewhere" { await Task.yield() }
+        XCTAssertEqual(defaults.string(forKey: "topo.harness.standing"), "elsewhere")
+    }
 
     func testNotPrimaryWritesTheTurnAsALimbAndThePrimaryAnswersIt() async throws {
         let db = InMemoryRecordDatabase()
