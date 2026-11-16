@@ -2440,3 +2440,99 @@ extension ConversationTests {
         await settle("the carried conversation to reopen the microphone") { voice.listening }
     }
 }
+
+// MARK: - A part written before a tool
+
+extension ConversationTests {
+    /// The guest writes a part, runs a tool, and writes the rest: the part is read as it is
+    /// written, before the reply lands, with the microphone's gate shut for it, and the reply as it lands reads only what is left, so the part is heard once.
+    private func readsThePartBeforeTheTool(_ conversation: Conversation, _ voice: VoiceInput, _ speaker: Speaker,
+                                           file: StaticString = #filePath, line: UInt = #line) async {
+        utterance(into: voice.sink)
+        await settle("the turn sent", file: file, line: line) { self.sent.count == 1 }
+        await settle("the microphone open again after the send", file: file, line: line) { voice.listening }
+        await drain()
+        CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
+        spoken.releaseTheHeldFrame()
+        let part = "Let me look at the lights.\n\n"
+        speaker.speak(writing: part, answering: "spoken-1")
+        await settle("the part read before the tool runs", file: file, line: line) {
+            !voice.listening && !CapturingPlayerNode.scheduled.isEmpty
+        }
+        XCTAssertEqual(spoken.streams, 1, "the part was asked of the voice other than once", file: file, line: line)
+        // The tool runs: the microphone stays shut under the part's reading until the reply.
+        await drain()
+        XCTAssertFalse(voice.listening, "the microphone opened under the tool after the part", file: file, line: line)
+        XCTAssertTrue(speaker.speak(part + "They are off.", answering: "spoken-1"))
+        await settle("the rest of the reply read", file: file, line: line) { self.spoken.streams == 2 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the part was read again when the reply landed", file: file, line: line)
+        XCTAssertEqual(sent.count, 1, "the part was heard as a turn", file: file, line: line)
+    }
+
+    func testBehindTheLockAPartWrittenBeforeAToolIsReadBeforeTheReplyLands() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await readsThePartBeforeTheTool(conversation, voice, speaker)
+    }
+
+    /// Words begun as the part is written are the person's: the part waits for their end, the
+    /// words are sent as the next turn, and the part is read after them.
+    func testWordsSaidAsAPartIsWrittenAreSentAndThePartReadAfterThem() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again after the send") { voice.listening }
+        await drain()
+        CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
+        spoken.releaseTheHeldFrame()
+        detector.script([0: .start(0), 4: .end(16_000)])
+        utterance(into: voice.sink)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "spoken-1")
+        XCTAssertTrue(speaker.waitingForMicrophone, "the part was not kept for the microphone's close")
+        await settle("the words sent") { self.sent.count == 2 }
+        await settle("the part read after the words") { !CapturingPlayerNode.scheduled.isEmpty }
+        XCTAssertEqual(spoken.streams, 1, "the part was asked of the voice other than once")
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        speaker.stop()
+    }
+
+    /// A part still waiting when its turn ends with no reply is forgotten, so nothing is left
+    /// holding the microphone shut.
+    func testAPartWaitingWhenItsTurnEndsHoldsNothing() async {
+        let detector = ScriptedDetector()
+        detector.hold(at: 0)
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        utterance(into: voice.sink)
+        await settle("the verdict pending") { detector.holding }
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "spoken-1")
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        XCTAssertTrue(voice.listening, "the part closed the microphone over a chunk the detector was judging")
+        speaker.writingEnded("spoken-1")
+        XCTAssertFalse(speaker.waitingForMicrophone, "the part outlived its turn")
+        detector.release()
+        await drain()
+        XCTAssertTrue(voice.listening, "the microphone closed for a part whose turn had ended")
+        XCTAssertEqual(spoken.streams, 0)
+    }
+
+    func testInFrontAPartWrittenBeforeAToolIsReadBeforeTheReplyLands() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        await drain()
+        await readsThePartBeforeTheTool(conversation, voice, speaker)
+    }
+}

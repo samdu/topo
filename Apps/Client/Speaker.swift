@@ -123,6 +123,10 @@ final class Speaker {
     /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
     /// each reply cuts off the one before it anyway.
     private var deferred: (text: String, nonce: String?, reply: TurnRef?)?
+    /// What the guest had written of a spoken turn's reply when it found a microphone open, to be
+    /// read as it was written once the microphone closes (`speak(writing:answering:)`): the
+    /// latest text, since each call's extends the last's. A reply landing takes its place.
+    private var writingWaited: (text: String, nonce: String)?
     /// The spoken turns whose failure has been cued, so one the harness tells of twice — at the
     /// guest's end and at the turn's — sounds once. Cleared as the wait ends.
     private var failedCued: Set<String> = []
@@ -426,6 +430,7 @@ final class Speaker {
         refusals[nonce] = nil
         failedCued.remove(nonce)
         waitTaken[nonce] = nil
+        if writingWaited?.nonce == nonce { writingWaited = nil }
         guard let counting = waits.removeValue(forKey: nonce) else { return }
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
@@ -516,12 +521,19 @@ final class Speaker {
     /// log; `speak` is still called with the reply when it lands, and reads what is left. The
     /// guest's next message of the turn is more of the same text after a paragraph break, so
     /// its sentences are read behind the last message's, each once. Nothing begins while a microphone
-    /// is open or the voice is not resident: the reply is offered whole when it lands, as ever.
+    /// is open: what is written waits for it to close, as a reply that lands does
+    /// (`waitingForMicrophone`), so a conversation shuts its gate for it over silence and a part
+    /// written before a tool is heard before the tool. Nothing begins while the voice is not
+    /// resident: the reply is offered whole when it lands, as ever.
     func speak(writing text: String, answering nonce: String) {
         let settled = Self.settled(text)
         if written?.nonce != nonce {
             guard !settled.isEmpty else { return }
-            if microphoneBusy { return }
+            if microphoneBusy {
+                if writingWaited?.nonce != nonce { AudioLog.say("what the guest has written waits for the microphone to close") }
+                writingWaited = (text, nonce)
+                return
+            }
             guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else { return }
             written = (nonce, "", 0, true)
         }
@@ -539,6 +551,7 @@ final class Speaker {
     /// The turn `nonce` is being answered no longer and no reply landed: what is queued is read
     /// out, and nothing more is waited for.
     func writingEnded(_ nonce: String) {
+        if writingWaited?.nonce == nonce { writingWaited = nil }
         guard let reading = written, reading.nonce == nonce else { return }
         written = nil
         if reading.live, making == 0, queue.isIdle { finished() }
@@ -702,8 +715,8 @@ final class Speaker {
     /// held back), so a reply the session refused at the release is still owed.
     var settled: (@MainActor (String) -> Void)?
 
-    /// A reply is waiting for the microphone to close.
-    var waitingForMicrophone: Bool { deferred != nil }
+    /// A reply, or what the guest has written of one, is waiting for the microphone to close.
+    var waitingForMicrophone: Bool { deferred != nil || writingWaited != nil }
 
     /// Whether any spoken turn's wait stands.
     var awaitingAny: Bool { !waits.isEmpty }
@@ -761,6 +774,11 @@ final class Speaker {
     /// session refuses here keeps waiting, its turn still marked.
     private func readWhatWaited() {
         guard !microphoneBusy else { return }
+        if deferred == nil, let writing = writingWaited {
+            writingWaited = nil
+            AudioLog.say("reading what the guest wrote while the microphone was open")
+            return speak(writing: writing.text, answering: writing.nonce)
+        }
         guard let waiting = deferred else { return }
         deferred = nil
         AudioLog.say("reading the reply that waited")
@@ -781,6 +799,7 @@ final class Speaker {
             endAwaiting(dropped, "its reply will not be read")
         }
         deferred = nil
+        writingWaited = nil
         written?.live = false
         generation += 1
         reply = nil
