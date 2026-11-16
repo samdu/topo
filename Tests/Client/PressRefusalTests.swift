@@ -10,7 +10,7 @@ struct ScriptedEngine: SpeechEngine {
     var bare: String? = ""
     var boosted: String? = ""
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {}
     func rebuild(terms: [String], version: Int) async throws {}
 
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {
@@ -23,7 +23,7 @@ struct ScriptedEngine: SpeechEngine {
 
 /// An engine whose load never returns, which holds the ear at `loading`.
 struct StallingEngine: SpeechEngine {
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         while true { try await Task.sleep(for: .seconds(3600)) }
     }
     func rebuild(terms: [String], version: Int) async throws {}
@@ -36,7 +36,7 @@ final class LoadOnCue: SpeechEngine, @unchecked Sendable {
 
     func finish() { done.signal() }
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         let done = done
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
@@ -52,7 +52,7 @@ final class LoadOnCue: SpeechEngine, @unchecked Sendable {
 /// An engine whose load fails, which is the ear at `failed`.
 struct BrokenEngine: SpeechEngine {
     static let why = "the models did not compile"
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         throw EarError.unavailable(Self.why)
     }
     func rebuild(terms: [String], version: Int) async throws {}
@@ -78,7 +78,7 @@ final class PressRefusalTests: XCTestCase {
     private func loaded(_ engine: any SpeechEngine) -> Ear {
         let ear = ear(engine)
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         return ear
     }
 

@@ -148,6 +148,17 @@ final class SetupTests: XCTestCase {
                                    earLoading: Ear.preparing, voice: .fetching,
                                    voiceFetch: Setup.Fetch(fraction: nil, words: Voice.checking), voiceLoading: Voice.preparing)
         XCTAssertFalse(Setup.standing(checking, stood: false), "the store's check drew the meter")
+        // The ear's store finding its copy whole, which every launch does too.
+        let earChecking = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .fetching,
+                                      earFetch: Setup.Fetch(fraction: nil, words: Ear.checking), earLoading: Ear.preparing,
+                                      voice: .fetching, voiceFetch: Setup.Fetch(fraction: nil, words: Voice.afterEar),
+                                      voiceLoading: Voice.preparing)
+        XCTAssertFalse(Setup.installing(earChecking))
+        XCTAssertFalse(Setup.standing(earChecking, stood: false), "the ear's store's check drew the meter")
+        let earCopying = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .fetching,
+                                     earFetch: Setup.Fetch(fraction: nil, words: Ear.copying), earLoading: Ear.preparing,
+                                     voice: .cold, voiceFetch: present, voiceLoading: Voice.preparing)
+        XCTAssertTrue(Setup.installing(earCopying), "the ear's copy is an install")
         for words in [Voice.copying, Voice.renewingWords] {
             let copy = Setup.lines(phase: .ready(.reused), claude: .fetched(pin), workspace: present, ear: .ready, earFetch: present,
                                    earLoading: Ear.preparing, voice: .fetching,
