@@ -492,8 +492,15 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.failure(Refused()), .success("second time"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
-        _ = try await watch.append(.person, "hello", parents: [])
-        await #expect(throws: Refused.self) { try await runner.answerPending(model: .sonnet) }
+        let person = try await watch.append(.person, "hello", parents: [])
+        do {
+            _ = try await runner.answerPending(model: .sonnet)
+            Issue.record("expected the reply to fail")
+        } catch TurnRunnerError.answerFailed(let answering, let underlying) {
+            // The failure names the turns the pass asked about, so the caller marks those.
+            #expect(answering.map(\.ref) == [person.ref])
+            #expect(underlying is Refused)
+        }
         let answer = try #require(try await runner.answerPending(model: .sonnet))
         #expect(answer.text == "second time")
 

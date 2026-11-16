@@ -787,9 +787,10 @@ struct Look: Equatable, Sendable {
     /// drawn at the size the landed turn will be, because it is that turn before it is said: what
     /// is here is only what the field and the row have of their own.
     ///
-    /// It is not a turn yet, and its two enclosures say so. A turn a process puts into the
+    /// It is not a turn yet, and its three enclosures say so. A turn a process puts into the
     /// transcript is `secondary`, and so is the person's own turn while it is still being
-    /// written; a turn on its way is `signal`, which is the palette's measured liveness. The
+    /// written; a turn on its way is `signal`, which is the palette's measured liveness, and one
+    /// the line stopped on with something failed is red. The
     /// draft becomes a turn of the person's, in `bubble`'s primary, by landing in the log.
     struct Draft: Equatable, Sendable {
         /// What the words are drawn on while they are being written, and while the turn is on
@@ -798,6 +799,9 @@ struct Look: Equatable, Sendable {
         /// draft leaves the bubble — and the row keeps its shape as the turn lands.
         var written: Enclosure
         var sending: Enclosure
+        /// What the words of a turn the line stopped on are drawn on: something failed for the
+        /// person, and nothing goes until the line goes again. The same shape again, in red.
+        var failed: Enclosure
         /// The least width the field keeps in the glass, so the caret has somewhere to sit: the
         /// pane's own spacing yields before the field goes under it (`ComposerPlan.Columns`).
         var minimumWidth: CGFloat = 160
@@ -819,10 +823,25 @@ struct Look: Equatable, Sendable {
         /// What the send fades to with nothing to send, so an empty field's control says it is
         /// not to be pressed rather than being pressed and doing nothing.
         var sendRestingOpacity = 0.35
+        /// The margin beside a turn on its way, in the slot: the resend that stands in for the
+        /// spinner once the line stopped on the turn, and the cancel beside a turn that waits and
+        /// can be taken back. Each an SF Symbol's name and its ink; one type for both.
+        var resendSymbol = "arrow.clockwise.circle.fill"
+        var resendInk = Color.red
+        var cancelSymbol = "xmark.circle"
+        var cancelInk = Theme.textMuted
+        var marginFont: Font = .title2
 
         init(_ screen: Screen = .current) {
             written = .draft(screen, accent: Theme.secondary)
             sending = .draft(screen, accent: Theme.signal)
+            failed = .draft(screen, accent: .red)
+        }
+
+        /// What a turn on its way is drawn on: `failed` once the line stopped on it with
+        /// something failed, `sending` otherwise.
+        func onItsWay(stopped: Bool) -> Enclosure {
+            stopped ? failed : sending
         }
     }
 }

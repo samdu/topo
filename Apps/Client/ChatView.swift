@@ -575,8 +575,8 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draft, queued: queued, answer: row.answer(in: harness),
-                                  cue: speaker.cue)
+                                  draft: draft, queued: queued, line: lineActions, stopped: harness.repliesStopped,
+                                  answer: row.answer(in: harness), cue: speaker.cue)
             // Until the first read of the log returns, the empty page says it is being read. A
             // read that failed says so in the bar, and the loop's next pass reads again.
             .overlay {
@@ -759,7 +759,39 @@ struct ChatView: View {
     private func draft(row form: Bool) -> Draft {
         let bindable = Bindable(row)
         return Draft(text: bindable.text, typing: bindable.typing,
-                     sending: row.sending(in: harness), row: form, send: send, edit: editSending)
+                     sending: row.sending(in: harness), row: form, send: send, edit: editSending,
+                     margin: row.margin(in: harness), cancel: cancelSending, resend: resend)
+    }
+
+    /// The margin's resend: the stopped line goes again from its head under the nonces it
+    /// already carries, as the button under the transcript sends it.
+    private func resend() {
+        Task { await harness.retry() }
+    }
+
+    /// The margin beside a queued turn: its cancel, by the turn's nonce, and the line's resend.
+    private var lineActions: LineActions {
+        LineActions(cancel: { nonce in
+            Task {
+                // Not words the row has taken up meanwhile (`NextTurn.resume`): those are the
+                // row's to take back, and a row holding words on no line is stuck on them.
+                guard await harness.withdraw(nonce, unsent: true, while: { row.sent != nonce }) else { return }
+                // Nothing is coming for a turn that was never said, so nothing waits for it.
+                speaker.endAwaiting(nonce, "the turn was cancelled")
+            }
+        }, resend: resend, askAgain: { ref in Task { await harness.answerAgain(ref) } })
+    }
+
+    /// The margin's cancel beside the row's own turn: it comes off the line and its words go
+    /// with it, so it is never sent. Nil where the row offers no way back.
+    private var cancelSending: (@MainActor () -> Void)? {
+        guard row.canWithdraw(in: harness) else { return nil }
+        return {
+            Task {
+                guard let taken = await row.cancel(via: harness) else { return }
+                speaker.endAwaiting(taken, "the turn was cancelled")
+            }
+        }
     }
 
     /// The turn the row is holding is in the log — answered, or answered by nothing, which are

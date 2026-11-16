@@ -267,6 +267,7 @@ enum LookDocument {
     private static func draft(_ value: inout Look.Draft, _ r: Reader) {
         r.object("written") { enclosure(&value.written, $0) }
         r.object("sending") { enclosure(&value.sending, $0) }
+        r.object("failed") { enclosure(&value.failed, $0) }
         r.reach("minimumWidth", &value.minimumWidth)
         r.length("spacing", &value.spacing)
         r.reach("slot", &value.slot)
@@ -275,6 +276,11 @@ enum LookDocument {
         r.font("sendFont", &value.sendFont)
         r.colour("sendInk", &value.sendInk)
         r.alpha("sendRestingOpacity", &value.sendRestingOpacity)
+        r.symbol("resendSymbol", &value.resendSymbol)
+        r.colour("resendInk", &value.resendInk)
+        r.symbol("cancelSymbol", &value.cancelSymbol)
+        r.colour("cancelInk", &value.cancelInk)
+        r.font("marginFont", &value.marginFont)
     }
 
     private static func badge(_ value: inout Look.Badge, _ r: Reader) {

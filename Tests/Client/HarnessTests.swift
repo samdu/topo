@@ -966,6 +966,300 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(answered, ["bins?", "Tonight."])
     }
 
+    // MARK: The margin beside a turn on its way
+
+    /// A turn that stopped the line is drawn as failed, with a resend in its margin and no
+    /// spinner; what waits behind it offers a cancel. The resend sends the same words under the
+    /// same nonce, and they land as one turn.
+    func testATurnThatStoppedTheLineOffersAResendAndTheTurnsBehindItACancel() async throws {
+        let db = InMemoryRecordDatabase()
+        let zone = Switch()
+        await zone.set(false)
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Done.")), (200, reply("And done."))),
+                              ensureZone: { guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) } })
+
+        let first = harness.willSend("water the plants")
+        let second = harness.willSend("and the ferns")
+        XCTAssertEqual(harness.margin(first), .cancel, "words not yet attempted cannot be taken back")
+        await harness.retry()
+
+        XCTAssertEqual(harness.margin(first), .resend, "the turn that stopped the line is not drawn as failed")
+        XCTAssertTrue(harness.stoppedOnFailure(first))
+        XCTAssertEqual(harness.margin(second), .cancel, "the turn waiting behind it offers no cancel")
+        XCTAssertFalse(harness.stoppedOnFailure(second), "a turn never attempted is drawn as failed")
+
+        await zone.set(true)
+        await harness.retry()
+        let turns = try await log(db)
+        XCTAssertEqual(turns.filter { $0.role == .person }.map(\.text), ["water the plants", "and the ferns"], "the resend made other turns than the two said")
+        XCTAssertTrue(harness.said(first) && harness.said(second), "the resend went under other nonces")
+        XCTAssertFalse(harness.stoppedOnFailure(first))
+    }
+
+    /// A turn queued behind one whose attempt is running can be cancelled: nothing is writing
+    /// it, so it comes off the line and is never sent, while the attempt on the head goes on. The
+    /// head itself is the spinner's, and cannot be taken back while its attempt runs.
+    func testATurnQueuedBehindAnAttemptInFlightIsCancelledAndNeverSent() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("Tonight.")), (200, reply("EXTRA")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let head = harness.willSend("bins?")
+        let queued = harness.willSend("and the recycling")
+
+        let seen = Margins()
+        transport.duringRequest = {
+            guard await seen.first() else { return }
+            await seen.note(head: await MainActor.run { harness.margin(head) },
+                            queued: await MainActor.run { harness.margin(queued) },
+                            headWithdrawable: await MainActor.run { harness.canWithdraw(head) })
+            await seen.took(await harness.withdraw(queued, unsent: true))
+        }
+        await harness.retry()
+
+        let margins = await seen.value
+        XCTAssertEqual(margins?.head, .sending, "the turn being attempted is not the spinner's")
+        XCTAssertEqual(margins?.queued, .cancel, "the turn waiting behind the attempt offers no cancel")
+        let took = await seen.taken
+        XCTAssertEqual(took, true, "the queued turn was not taken back")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["bins?", "Tonight."], "the cancelled turn was sent")
+        XCTAssertTrue(harness.waiting.isEmpty, "the cancelled turn is still on the line")
+        XCTAssertFalse(transport.sent.contains { $0.contains("and the recycling") }, "the model heard the cancelled words")
+    }
+
+    /// An attempt that begins while a withdrawal reads the log refuses the withdrawal, whatever
+    /// the log said: the read predates the attempt's write. Here the attempt writes the turn and
+    /// loses its acknowledgement with the log gone dark, so nothing after the held read can see
+    /// the turn either, and only the count of attempts keeps the words owed.
+    func testAnAttemptBegunWhileAWithdrawalReadsRefusesIt() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let transport = ScriptedTransport((200, reply("Calling.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let nonce = harness.willSend("call Helen")
+        XCTAssertTrue(harness.canWithdraw(nonce))
+
+        await db.holdNextRead()
+        let withdrawal = Task { await harness.withdraw(nonce) }
+        try await eventually("the withdrawal's read is held") { await db.readHeld }
+        await db.goDarkAfterTheNextTurn()
+        await harness.retry()
+        XCTAssertEqual(harness.waiting, ["call Helen"], "the attempt did not stop the line")
+        XCTAssertFalse(harness.said(nonce), "nothing this device could read said the turn had landed")
+
+        await db.releaseRead()
+        let taken = await withdrawal.value
+        XCTAssertFalse(taken, "words were taken back on a read made before their attempt began")
+        XCTAssertEqual(harness.waiting, ["call Helen"], "the entry left the line, so its retry would be a second turn")
+
+        await db.refuseReads(false)
+        await harness.retry()
+        let turns = try await log(db.wrapped)
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1, "one person's turn: \(turns.map(\.text))")
+    }
+
+    /// A withdrawal whose caller has moved on to other words while the log was read refuses:
+    /// the row that took up a spoken turn over the one it held does not lose that turn's words,
+    /// and the words it held stay on the line.
+    func testAWithdrawalRefusesOnceItsCallerHoldsOtherWords() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let row = NextTurn()
+        row.text = "water the plans"
+        let first = try XCTUnwrap(row.send(via: harness))
+
+        await db.holdNextRead()
+        let edit = Task { await row.withdraw(via: harness) }
+        try await eventually("the withdrawal's read is held") { await db.readHeld }
+        let spoken = try XCTUnwrap(row.send(heard: "and the ferns", via: harness))
+        await db.releaseRead()
+        let taken = await edit.value
+
+        XCTAssertNil(taken, "the row's way back took words it no longer held")
+        XCTAssertEqual(harness.owed.map(\.nonce), [first, spoken], "words came off the line under a row holding others")
+        XCTAssertEqual(row.sent, spoken, "the row let go of the turn it took up")
+        XCTAssertEqual(row.text, "and the ferns")
+    }
+
+    /// A queued turn's cancel with its own `while` answering false is refused at the last check,
+    /// whatever the log said: the words stay owed under their nonce.
+    func testACancelWhoseCallerSaysNoAtTheLastCheckIsRefused() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nonce = harness.willSend("call Helen")
+        let row = NextTurn()
+
+        await db.holdNextRead()
+        let cancel = Task { await harness.withdraw(nonce, unsent: true, while: { row.sent != nonce }) }
+        try await eventually("the withdrawal's read is held") { await db.readHeld }
+        XCTAssertTrue(row.resume(from: harness), "the row did not take the words up")
+        await db.releaseRead()
+        let taken = await cancel.value
+
+        XCTAssertFalse(taken, "the words came off the line under a row that holds them")
+        XCTAssertEqual(harness.waiting, ["call Helen"])
+    }
+
+    /// While a later attempt on a turn that stopped the line runs, the margin is the spinner, and
+    /// the resend is back once it fails the same way.
+    func testAFailedTurnStaysFailedThroughTheAttemptsAfter() async throws {
+        let db = InMemoryRecordDatabase()
+        let zone = Switch()
+        await zone.set(false)
+        let probe = Probe()
+        let answer = Answers()
+        let watching = Switch()
+        await watching.set(false)
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                              ensureZone: {
+            // The first time the zone is asked for once the test is watching: the attempt's.
+            if await watching.isOn, await answer.value == nil { await answer.set(await MainActor.run { probe.ask() }) }
+            guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
+        })
+        let nonce = harness.willSend("water the plants")
+        await harness.retry()
+        XCTAssertEqual(harness.margin(nonce), .resend)
+
+        probe.set { harness.margin(nonce) == .sending }
+        await watching.set(true)
+        await harness.retry()
+        let spinning = await answer.value
+        XCTAssertEqual(spinning, true, "the margin was not the spinner while the attempt ran")
+        XCTAssertEqual(harness.margin(nonce), .resend, "the second failure left the turn drawn as waiting")
+    }
+
+    /// The reply failed after the person's turn was saved, and the read after it fails too — the
+    /// network gone mid-turn, as in Airplane Mode: the save said the turn is in the log, so the
+    /// row clears on it rather than drawing a settled turn as on its way with nothing on the line.
+    func testAFailedReplyWithTheLogUnreadableAfterItStillClearsTheRow() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
+        transport.duringRequest = { await db.refuseReads(true) }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+
+        let row = NextTurn()
+        row.text = "bins?"
+        let nonce = try XCTUnwrap(row.send(via: harness))
+        await harness.retry()
+
+        XCTAssertTrue(harness.waiting.isEmpty, "the settled turn is still on the line")
+        XCTAssertTrue(harness.said(nonce), "the saved turn is not known to be in the log")
+        XCTAssertFalse(row.sending(in: harness), "the row draws a settled turn as on its way")
+        XCTAssertTrue(row.clearIfLanded(in: harness))
+        XCTAssertEqual(harness.repliesStopped.count, 1, "the landed turn whose reply failed is not drawn as stopped")
+        let turns = try await log(db.wrapped)
+        XCTAssertEqual(turns.map(\.text), ["bins?"])
+    }
+
+    /// A turn whose reply failed is drawn as stopped until a reply is on its way: asking again
+    /// through its margin runs the answering pass now, under no new nonce and with no second
+    /// person's turn, and the reply landing takes the mark down.
+    func testATurnWhoseReplyFailedIsStoppedUntilAskingAgainBringsIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            (200, reply("Tonight.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let nonce = harness.willSend("bins?")
+        await harness.retry()
+
+        let person = try XCTUnwrap(harness.turns.first { $0.nonce == nonce })
+        XCTAssertEqual(harness.repliesStopped, [person.ref], "the turn whose reply failed is not drawn as stopped")
+        await harness.answerAgain(person.ref)
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["bins?", "Tonight."], "asking again did not bring one reply to the one turn")
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
+    }
+
+    /// A person's turn another device wrote, answered by the pass here, whose reply fails: the
+    /// pass's own failure, which no send wraps, still draws the turn as stopped, and asking
+    /// again brings its one reply.
+    func testATurnWhoseReplyFailedInThePassIsStoppedUntilAskingAgainBringsIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            (200, reply("Tonight.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let person = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.refresh()
+        await harness.answerPending()
+
+        let failed = try await log(db).map(\.text)
+        XCTAssertEqual(failed, ["bins?"], "the reply did not fail")
+        XCTAssertEqual(harness.repliesStopped, [person.ref], "the turn whose reply failed in the pass is not drawn as stopped")
+        await harness.answerAgain(person.ref)
+        let answered = try await log(db).map(\.text)
+        XCTAssertEqual(answered, ["bins?", "Tonight."], "asking again did not bring one reply")
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "the turn is still drawn as stopped under its reply")
+    }
+
+    /// The turns marked stopped are the ones the pass asked about, as it read them, and not the
+    /// screen's last read: a turn a limb wrote after that read is the one whose reply failed.
+    func testATurnWhoseReplyFailedInAPassReadingPastTheScreenIsStopped() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        await harness.refresh()
+        let person = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.answerPending()
+
+        let failed = try await log(db).map(\.text)
+        XCTAssertEqual(failed, ["bins?"], "the reply did not fail")
+        await harness.refresh()
+        XCTAssertEqual(harness.repliesStopped, [person.ref], "a turn the screen had not read when its reply failed is not drawn as stopped")
+    }
+
+    /// A pass the bridge refused because a reply it finished is still owed the log stops no turn:
+    /// the next pass writes that reply, then answers.
+    func testAPassRefusedForAnOwedReplyStopsNoTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = Harness(database: db, ensureZone: {}, defaults: makeDefaults(),
+                              brain: AnswerFails(error: GuestBridgeError.failed(GuestBridge.owedFirst)))
+        _ = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.refresh()
+        await harness.answerPending()
+
+        XCTAssertNotNil(harness.error, "control: the pass did not fail")
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "a pass refused for an owed reply drew its turn as stopped")
+    }
+
+    /// A pass that was stopped fails no turn, whatever the brain threw as it stopped.
+    func testAStoppedPassStopsNoTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = FailsOnceStopped()
+        let harness = Harness(database: db, ensureZone: {}, defaults: makeDefaults(), brain: brain)
+        _ = try await TurnLog(database: db).writer(for: DeviceID("pad")).append(.person, "bins?", parents: [], nonce: "p1")
+        await harness.refresh()
+        let pass = Task { await harness.answerPending() }
+        try await eventually("the brain asked") { brain.asked }
+        pass.cancel()
+        await pass.value
+
+        XCTAssertTrue(brain.threw, "control: the brain did not throw as the pass stopped")
+        XCTAssertTrue(harness.repliesStopped.isEmpty, "a stopped pass drew its turn as stopped")
+    }
+
+    /// A cancel clears the row of the words it cancelled and of nothing else: a row that takes
+    /// other words while the brain hears of the withdrawal keeps them.
+    func testACancelLeavesWordsTheRowTookWhileTheBrainHeardOfIt() async throws {
+        let row = NextTurn()
+        let taker = RowTaker()
+        let harness = Harness(database: InMemoryRecordDatabase(), ensureZone: {}, defaults: makeDefaults(),
+                              brain: TakesTheRowOnWithdrawal(taker: taker))
+        taker.act = { _ = row.send(heard: "second", via: harness) }
+        row.text = "first"
+        let first = try XCTUnwrap(row.send(via: harness))
+        let cancelled = await row.cancel(via: harness)
+        XCTAssertEqual(cancelled, first)
+        try await eventually("the brain heard of the withdrawal") { row.sent != nil }
+        XCTAssertNotEqual(row.sent, first)
+        XCTAssertEqual(row.text, "second", "the cancel cleared words the row took after it")
+        XCTAssertEqual(harness.owed.map(\.text), ["second"])
+    }
+
     /// The reply failed and the person's turn is in the log: the words are said, so the row
     /// clears and the bubble that lands is the one that was being written in. Nothing is owed on
     /// this device, and the answering pass is what brings the reply.
@@ -2652,7 +2946,24 @@ private actor FailingDatabase: ForwardingDatabase {
     /// What a refused read is under `unavailable`.
     private var readRefusal: any Error = Unexpected()
 
+    /// The next read is made and then held, its answer the log as it stood when it was made,
+    /// until `releaseRead`: a read that predates whatever happens while it is held.
+    private var holdingNextRead = false
+    private var held: CheckedContinuation<Void, Never>?
+    var readHeld: Bool { held != nil }
+
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+
+    func holdNextRead() { holdingNextRead = true }
+    func releaseRead() {
+        held?.resume()
+        held = nil
+    }
+    private func holdIfAsked() async {
+        guard holdingNextRead else { return }
+        holdingNextRead = false
+        await withCheckedContinuation { held = $0 }
+    }
 
     func loseAcknowledgementOfNextTurn() { loseNextTurnAcknowledgement = true }
     func refuseReads(_ on: Bool, with underlying: any Error = Unexpected()) {
@@ -2684,11 +2995,15 @@ private actor FailingDatabase: ForwardingDatabase {
     }
     func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
         try refuse()
-        return try await base.query(query)
+        let found = try await base.query(query)
+        await holdIfAsked()
+        return found
     }
     func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         try refuse()
-        return try await base.records(ofType: type)
+        let found = try await base.records(ofType: type)
+        await holdIfAsked()
+        return found
     }
 
     private func refuse() throws {
@@ -2710,6 +3025,23 @@ private actor FailingDatabase: ForwardingDatabase {
 private actor Answers {
     private(set) var value: Bool?
     func set(_ answer: Bool) { value = answer }
+}
+
+/// What the margin held while an attempt ran, and whether the withdrawal made then was taken.
+private actor Margins {
+    struct Seen { var head: TurnMargin; var queued: TurnMargin; var headWithdrawable: Bool }
+    private(set) var value: Seen?
+    private(set) var taken: Bool?
+    private var asked = false
+    /// True the first time it is asked, and never again.
+    func first() -> Bool {
+        defer { asked = true }
+        return !asked
+    }
+    func note(head: TurnMargin, queued: TurnMargin, headWithdrawable: Bool) {
+        value = Seen(head: head, queued: queued, headWithdrawable: headWithdrawable)
+    }
+    func took(_ answer: Bool) { taken = answer }
 }
 
 private actor Switch {
@@ -2809,4 +3141,43 @@ private func lapsing(_ db: InMemoryRecordDatabase) -> @Sendable (TimeInterval) a
             _ = try await db.save(record)
         }
     }
+}
+
+/// What the row does when the brain hears of a withdrawal.
+@MainActor
+private final class RowTaker {
+    var act: () -> Void = {}
+}
+
+/// A brain whose every answer fails with `error`.
+private struct AnswerFails: Brain {
+    let error: any Error & Sendable
+    func answer(_ request: BrainRequest) async throws -> Reply { throw error }
+    func describe() async -> String { "answer fails" }
+}
+
+/// A brain whose answer waits until its task is cancelled, then fails with an error that is not
+/// a cancellation, as a request torn down mid-flight does.
+private final class FailsOnceStopped: Brain, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _asked = false
+    private var _threw = false
+    var asked: Bool { lock.withLock { _asked } }
+    var threw: Bool { lock.withLock { _threw } }
+    func answer(_ request: BrainRequest) async throws -> Reply {
+        lock.withLock { _asked = true }
+        while !Task.isCancelled { await Task.yield() }
+        lock.withLock { _threw = true }
+        throw URLError(.cancelled)
+    }
+    func describe() async -> String { "fails once stopped" }
+}
+
+/// A brain whose hearing of a withdrawal has the row take other words, as a spoken release can
+/// while it is told.
+private struct TakesTheRowOnWithdrawal: Brain, @unchecked Sendable {
+    let taker: RowTaker
+    func answer(_ request: BrainRequest) async throws -> Reply { throw CancellationError() }
+    func withdrawn(nonce: String) async { await MainActor.run { taker.act() } }
+    func describe() async -> String { "takes the row on withdrawal" }
 }

@@ -455,7 +455,7 @@ final class GuestBridgeTests: XCTestCase {
         do {
             _ = try await second.answerPending(model: .sonnet)
             XCTFail("a turn was answered over a transcript that could not be read")
-        } catch let error as GuestBridgeError {
+        } catch TurnRunnerError.answerFailed(_, let error as GuestBridgeError) {
             XCTAssertEqual(error, .failed(GuestBridge.unknown))
         }
         XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over an unreadable transcript")
@@ -491,7 +491,7 @@ final class GuestBridgeTests: XCTestCase {
         do {
             _ = try await second.answerPending(model: .sonnet)
             XCTFail("a turn was answered over a folder of transcripts that could not be listed")
-        } catch let error as GuestBridgeError {
+        } catch TurnRunnerError.answerFailed(_, let error as GuestBridgeError) {
             XCTAssertEqual(error, .failed(GuestBridge.unknown))
         }
         XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over an unlisted folder")
@@ -566,7 +566,7 @@ final class GuestBridgeTests: XCTestCase {
             do {
                 _ = try await runner.answerPending(model: .sonnet)
                 XCTFail("a turn was answered over a ledger that could not be read")
-            } catch let error as GuestBridgeError {
+            } catch TurnRunnerError.answerFailed(_, let error as GuestBridgeError) {
                 XCTAssertEqual(error, .failed(GuestBridge.ledgerUnreadable))
             }
         }
@@ -872,7 +872,7 @@ final class GuestBridgeTests: XCTestCase {
         do {
             _ = try await runner.answerPending(model: .sonnet)
             XCTFail("a turn was answered while its process was not confirmed gone")
-        } catch let error as GuestBridgeError {
+        } catch TurnRunnerError.answerFailed(_, let error as GuestBridgeError) {
             XCTAssertEqual(error, .failed(GuestBridge.unknown))
         }
         XCTAssertEqual(guest.inputs, ["where?"])
@@ -3101,6 +3101,97 @@ extension GuestBridgeTests {
         XCTAssertFalse((ledger.early ?? []).contains { $0.person == n2 }, "the ledger keeps an input for words no turn will carry")
     }
 
+    /// The guest has begun on the first of two words on the line, ahead of its turn, and is
+    /// writing; iCloud refuses the save.
+    private func givenAheadWhileWriting() async throws -> (Harness, GuestBridge, ScriptedGuest, first: String, second: String) {
+        let db = SavesRefused()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangWriting("Half of"), .reply("EXTRA")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.refuse(true)
+        let first = harness.willSend("first")
+        let second = harness.willSend("second")
+        await harness.retry()
+        try await eventually("the guest writing the first") { harness.writing == "Half of" }
+        return (harness, bridge, guest, first, second)
+    }
+
+    // A cancel is a promise that the words are never sent: words the guest has begun on are
+    // not cancelled, and the words behind them, which it has not, are.
+    func testWordsTheGuestHasAreNotCancelledAndWordsItHasNotAre() async throws {
+        let (harness, bridge, guest, first, second) = try await givenAheadWhileWriting()
+        XCTAssertTrue(harness.canWithdraw(first), "the words cannot be edited either")
+        XCTAssertFalse(harness.canCancel(first), "a cancel is offered for words the guest has")
+        XCTAssertNotEqual(harness.margin(first), .cancel)
+        let cancelled = await harness.withdraw(first, unsent: true)
+        XCTAssertFalse(cancelled, "words the guest has were cancelled")
+        XCTAssertEqual(harness.owed.map(\.text), ["first", "second"])
+        let recorded = await bridge.claim(nonce: first)
+        XCTAssertFalse(recorded, "the bridge gave up words it has an input recorded for")
+
+        XCTAssertTrue(harness.canCancel(second))
+        let took = await harness.withdraw(second, unsent: true)
+        XCTAssertTrue(took, "words the guest never had were not cancelled")
+        guest.finishHanging(with: "first's answer")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(guest.inputs, ["hello", "first"], "cancelled words were given to the guest")
+    }
+
+    // A claim stands between the words and the guest: once the bridge has said they are taken
+    // back, a hear of them sends nothing, and a claim handed back lets them go again.
+    func testAClaimedInputIsNeverGivenAndAnUnclaimedOneIs() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .reply("one"), .reply("two"))
+        let claimed = await bridge.claim(nonce: "n1")
+        XCTAssertTrue(claimed)
+        let twice = await bridge.claim(nonce: "n1")
+        XCTAssertFalse(twice, "words already claimed were claimed again, so the second's hand-back would free them")
+        let heard = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertFalse(heard, "claimed words were given to the guest")
+        let again = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertFalse(again, "claimed words were given at the hear after a refused one")
+        let other = await bridge.claim(nonce: "n2")
+        XCTAssertTrue(other)
+        await bridge.unclaim(nonce: "n2")
+        let given = await bridge.hear("second", nonce: "n2", context: [], model: .sonnet)
+        XCTAssertTrue(given, "words whose claim was handed back were not given")
+        XCTAssertEqual(guest.inputs, ["second"])
+        let late = await bridge.claim(nonce: "n2")
+        XCTAssertFalse(late, "words the guest was given were claimed")
+    }
+
+    // A claim's hand-back frees only its own claim: words a withdrawal took stay taken, whatever
+    // a cancel that claimed them alongside it and came to nothing hands back.
+    func testAHandBackLeavesWordsAWithdrawalTookTaken() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .reply("one"))
+        let claimed = await bridge.claim(nonce: "n1")
+        XCTAssertTrue(claimed)
+        await bridge.withdrawn(nonce: "n1")
+        await bridge.unclaim(nonce: "n1")
+        let heard = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet)
+        XCTAssertFalse(heard, "words a withdrawal took were given after a claim's hand-back")
+        XCTAssertTrue(guest.inputs.isEmpty)
+    }
+
+    // What the guest goes on writing for words taken back while it writes is not drawn.
+    func testWhatTheGuestWritesForWordsTakenBackIsNotDrawn() async throws {
+        let (harness, _, guest, first, _) = try await givenAheadWhileWriting()
+        let took = await harness.withdraw(first)
+        XCTAssertTrue(took, "the edit was refused")
+        XCTAssertNil(harness.writing, "the words taken back are still drawn being answered")
+        guest.writeMore(" a reply")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(harness.writing, "what the guest wrote after the words were taken back is drawn")
+        guest.finishHanging(with: "first's answer")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(harness.replies[first], "the reply to words taken back is drawn")
+        XCTAssertNil(harness.writing, "the end of the guest's turn on words taken back is drawn")
+    }
+
     // Coverage: the phone's guest answered ahead, the hub answered the turn under the same nonce.
     private func hubReplyCoverage(heardAhead: Bool) async throws -> (told: String, counted: Bool) {
         let db = InMemoryRecordDatabase()
@@ -4394,7 +4485,7 @@ private final class PIDGatedGuest: GuestConversation, @unchecked Sendable {
 private enum BindMoment { case never, beforeThePass, duringTheWait }
 
 extension GuestBridgeTests {
-    private static let owedFirst = GuestBridgeError.failed("a reply the guest finished is still to be written")
+    private static let owedFirst = GuestBridgeError.failed(GuestBridge.owedFirst)
 
     // MARK: the loop ends; bar 1 — nothing given twice, nothing lost
 
@@ -4423,7 +4514,7 @@ extension GuestBridgeTests {
         XCTAssertEqual(during.early?.compactMap { $0.bound?.person } ?? [], ["n2"], "control: the second waits bound")
         guest.releaseReady()
         let first = await passing.result
-        if case .failure(let error) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
+        if case .failure(TurnRunnerError.answerFailed(_, let error)) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
         XCTAssertEqual(guest.models.count - uses, 1, "the request went round the guest's wait again")
         let kept = await bridge.current
         XCTAssertEqual(kept.pending?.person, "n1", "the first bound record was lost: \(kept)")
@@ -4622,7 +4713,7 @@ extension GuestBridgeTests {
         await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
         guest.releaseReady()
         let first = await passing.result
-        if case .failure(let error) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
+        if case .failure(TurnRunnerError.answerFailed(_, let error)) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
         XCTAssertEqual(guest.models.count - uses, 2, "the request went round more often than there were binds")
         let kept = await bridge.current
         XCTAssertEqual(kept.pending?.person, "n1", "the bound reply was lost: \(kept)")
@@ -4954,4 +5045,101 @@ private final class Lines: @unchecked Sendable {
     private var lines: [String] = []
     func add(_ line: String) { lock.withLock { lines.append(line) } }
     var all: [String] { lock.withLock { lines } }
+}
+
+// MARK: - The margin beside a turn iCloud is behind on
+
+extension GuestBridgeTests {
+    /// The phone was the one answering, iCloud is away and the guest takes the words: the line
+    /// stops as iCloud behind. What the margin holds follows the guest's turn on them.
+    private func behindTurn(_ answer: ScriptedGuest.Answer) async throws -> (Harness, String, ScriptedGuest) {
+        let (harness, nonce, guest, _, _) = try await behindTurnKept(answer)
+        return (harness, nonce, guest)
+    }
+
+    private func behindTurnKept(_ answer: ScriptedGuest.Answer) async throws
+        -> (Harness, String, ScriptedGuest, SavesRefused, UserDefaults) {
+        let db = SavesRefused()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), answer])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.refuse(true)
+        let nonce = harness.willSend("bins?")
+        await harness.retry()
+        try await eventually("the guest has the words") { guest.inputs == ["hello", "bins?"] }
+        return (harness, nonce, guest, db, defaults)
+    }
+
+    /// The guest's turn on the words ends with no reply — the model out of reach, as in Airplane
+    /// Mode — with iCloud behind: nothing is coming for them until the line goes again, which is
+    /// a failure the person sees, red with a resend.
+    func testATurnICloudIsBehindOnWhoseGuestTurnFailedIsDrawnFailed() async throws {
+        let (harness, nonce, _) = try await behindTurn(.errorResult("the model is out of reach"))
+        try await eventually("the turn drawn failed") { await MainActor.run { harness.margin(nonce) == .resend } }
+        XCTAssertEqual(harness.waiting, ["bins?"], "the words left the line")
+    }
+
+    /// The guest holds the words as cut off, so the attempts after send it nothing and no end of
+    /// its turn comes again: the turn stays drawn failed through them, and a relaunch reads it off
+    /// the ledger.
+    func testATurnTheGuestHoldsCutOffStaysFailedThroughARetryAndARelaunch() async throws {
+        let (harness, nonce, guest, db, defaults) = try await behindTurnKept(.errorResult("the model is out of reach"))
+        try await eventually("the turn drawn failed") { await MainActor.run { harness.margin(nonce) == .resend } }
+        await harness.retry()
+        XCTAssertEqual(harness.margin(nonce), .resend, "the next attempt left the turn drawn as waiting")
+        XCTAssertEqual(guest.inputs, ["hello", "bins?"], "the guest was given cut-off words again")
+
+        let relaunched = self.harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await relaunched.refresh()
+        XCTAssertEqual(relaunched.margin(nonce), .resend, "a relaunch drew the cut-off turn as waiting")
+    }
+
+    /// Words the guest answered ahead of their turn are offered no cancel after a relaunch either:
+    /// the ledger says the guest has them, though no `.began` is heard this launch.
+    func testWordsTheGuestAnsweredAreOfferedNoCancelAfterARelaunch() async throws {
+        let (harness, nonce, _, db, defaults) = try await behindTurnKept(.reply("Tonight."))
+        try await eventually("the reply drawn") { await MainActor.run { harness.replies[nonce] == "Tonight." } }
+        XCTAssertNotEqual(harness.margin(nonce), .cancel, "answered words were offered a cancel")
+
+        let relaunched = self.harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await relaunched.refresh()
+        XCTAssertEqual(relaunched.waiting, ["bins?"], "the relaunch lost the words on the line")
+        XCTAssertEqual(relaunched.replies[nonce], "Tonight.", "the relaunch lost the guest's reply")
+        XCTAssertEqual(relaunched.margin(nonce), .sending, "a relaunch offered a cancel for words the guest has")
+    }
+
+    /// Over a ledger that cannot be read nothing says what the guest has, so words on the line
+    /// are offered no cancel after a relaunch; over one that reads, words it never had are.
+    func testWordsOnTheLineAreOfferedNoCancelOverALedgerThatCannotBeRead() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let nonce = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0.willSend("bins?")
+
+        let readable = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await readable.refresh()
+        XCTAssertEqual(readable.waiting, ["bins?"], "control: the relaunch lost the words on the line")
+        XCTAssertEqual(readable.margin(nonce), .cancel, "control: words the guest never had were offered no cancel")
+
+        try FileManager.default.createDirectory(at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a ledger".utf8).write(to: ledgerFile)
+        let unread = harness(db, ScriptedGuest(home: home, script: []), defaults: defaults).0
+        await unread.refresh()
+        XCTAssertEqual(unread.waiting, ["bins?"], "the relaunch lost the words on the line")
+        XCTAssertFalse(unread.canCancel(nonce), "words were offered a cancel over a ledger that could not be read")
+        XCTAssertEqual(unread.margin(nonce), .sending)
+    }
+
+    /// iCloud behind a turn the guest is still answering is no failure: it is drawn as on its
+    /// way, never red. The guest has the words, so it offers no cancel.
+    func testATurnICloudIsBehindOnWhileTheGuestAnswersIsNotDrawnFailed() async throws {
+        let (harness, nonce, guest) = try await behindTurn(.hangUnwritten)
+        XCTAssertFalse(harness.stoppedOnFailure(nonce), "a turn the guest is answering is drawn failed")
+        XCTAssertEqual(harness.margin(nonce), .sending, "words the guest has were offered a cancel")
+        guest.finishHanging(with: "Tonight.")
+        try await eventually("the reply drawn") { await MainActor.run { harness.replies[nonce] == "Tonight." } }
+        XCTAssertFalse(harness.stoppedOnFailure(nonce), "a turn the guest answered is drawn failed because iCloud is behind")
+    }
 }
