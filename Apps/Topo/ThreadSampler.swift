@@ -12,13 +12,24 @@ import TopoUserland
 /// (its tokens, from the stream), that tells the two apart: a continue measured some 0.2 bytes a
 /// token at Claude Code 2.1.316, a thread begun or a whole re-send 1.5 to 1.8 (compressed).
 ///
-/// A request is the one connection to Anthropic that sent anything between the line before it and
-/// its answer's start; when none did, or more than one (the event batch Claude Code sends to the
-/// same host, a sub-agent's request alongside), the request is not told, and nothing is guessed.
-/// Read only while a turn is in flight, on a queue of its own, and at the turn's moments alone: the
-/// request has gone by the time it is read, so nothing waits on it. A note is a time, a count of
-/// bytes, a count of tokens and a kind: no word, header value or id. In memory only, and the app
-/// clears it when a login ends.
+/// The counters are read at three of a turn's moments, on a queue of its own, so nothing waits on
+/// a read: when each of the turn's own requests begins answering, by which time it has gone, and
+/// when the turn ends, which is the next turn's first baseline. A request's upload is what the one
+/// connection that grew sent between the read before it and the read at its answer. It is not told
+/// — and nothing is guessed — when none grew or more than one did (the event batch Claude Code
+/// sends to the same host, a sub-agent's request alongside), when a connection read before is gone
+/// at the answer (what it sent last is not known), when the read before it finished after the
+/// request could have begun (after the turn's words were written, for its first; after the app
+/// read the end of the answer before, for the rest), when a sub-agent's answer began since that
+/// read, or when its own read finished after the app read its answer's end. Those times are when
+/// the app read Claude Code's lines, so a request sent faster than the app reads them can be counted
+/// short. Other than that, what is counted is never less than the request sent, only more (another
+/// request on the same connection between the reads): a request said to be on a thread sent no more
+/// than that, and one said to carry the whole conversation may be one that shared its connection.
+///
+/// A note is a time, a count of bytes, a count of tokens and a kind: no word, header value or id. In
+/// memory only, and the app clears it when a login ends: a moment heard before the clear keeps
+/// nothing, whenever its read runs.
 final class ThreadSampler: Sendable {
     enum Kind: String, Sendable, Equatable {
         /// A small upload for the context: only what was new went.
@@ -68,8 +79,10 @@ final class ThreadSampler: Sendable {
     }
 
     /// What the one connection that sent anything between `before` and `after` sent; nil when none
-    /// did or more than one did. A socket not in `before` was opened since, and all it sent counts.
+    /// did, more than one did, or one in `before` is gone from `after`. A socket not in `before` was
+    /// opened since, and all it sent counts.
     static func upload(from before: [Socket: UInt64], to after: [Socket: UInt64]) -> Int? {
+        guard before.keys.allSatisfy({ after[$0] != nil }) else { return nil }
         let grew = after.compactMap { socket, sent -> UInt64? in
             let was = before[socket] ?? 0
             return sent > was ? sent - was : nil
@@ -77,14 +90,40 @@ final class ThreadSampler: Sendable {
         return grew.count == 1 ? Int(grew[0]) : nil
     }
 
+    /// The counters as one moment read them, and when that read finished.
+    private struct Reading {
+        let counters: [Socket: UInt64]
+        let at: UInt64
+        /// Whether the request after it can be counted from it: the read finished before that
+        /// request could have begun.
+        var usable = false
+    }
+
+    /// `mark` made usable when its read finished before `moment`, after which the next request
+    /// can begin; nil when it finished after, since that request may have been under way.
+    private static func usable(_ mark: Reading?, before moment: UInt64) -> Reading? {
+        guard var mark, mark.at < moment else { return nil }
+        mark.usable = true
+        return mark
+    }
+
+    /// A request of the turn's own whose answer has begun and not yet ended.
+    private struct Open {
+        let request: Int
+        let tokens: Int
+        let bytes: Int?
+        let read: UInt64
+        let at: Date
+    }
+
     private struct State {
         var notes: [Note] = []
         /// Whether a turn is in flight.
         var inFlight = false
-        /// The counters at the last moment of the turn in flight; nil with none in flight or when
-        /// that moment's read failed, which leaves the next request not told.
-        var mark: [Socket: UInt64]?
-        /// Moved by every clear, so a moment whose read began before one keeps nothing after it.
+        /// The read the next request is counted from; nil when there is none it can be.
+        var mark: Reading?
+        var open: Open?
+        /// Moved by every clear: a moment heard before one keeps nothing.
         var generation = 0
     }
 
@@ -92,57 +131,111 @@ final class ThreadSampler: Sendable {
     private let queue = DispatchQueue(label: "zone.hexagon.topo.thread-sampler", qos: .utility)
     private let read: @Sendable () -> [Socket: UInt64]?
     private let now: @Sendable () -> Date
+    private let ticks: @Sendable () -> UInt64
 
     init(read: @escaping @Sendable () -> [Socket: UInt64]? = { ThreadSampler.sockets(to: ThreadSampler.host) },
-         now: @escaping @Sendable () -> Date = Date.init) {
+         now: @escaping @Sendable () -> Date = Date.init,
+         ticks: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.read = read
         self.now = now
+        self.ticks = ticks
     }
 
-    /// A turn's moment, as the session tells it: read on the sampler's queue, so the session's
-    /// actor never waits on a socket or a lookup.
+    /// A turn's moment, as the session tells it: stamped with when it was heard and under which
+    /// login, then read on the sampler's queue, so the session's actor never waits on a socket or a
+    /// lookup.
     func heard(_ moment: GuestSession.RequestMoment) {
-        queue.async { self.take(moment) }
+        let generation = state.withLock { $0.generation }
+        let at = ticks()
+        queue.async { self.take(moment, heard: at, generation: generation) }
     }
 
-    /// Takes `moment` where it is called.
-    func take(_ moment: GuestSession.RequestMoment) {
+    /// Waits for every moment heard so far to be taken (the suites').
+    func settled() { queue.sync {} }
+
+    private func take(_ moment: GuestSession.RequestMoment, heard: UInt64, generation: Int) {
         switch moment {
         case .written:
-            let generation = state.withLock { $0.generation }
-            let counters = read()
-            state.withLock { state in
-                guard state.generation == generation else { return }
+            update(generation) { state in
                 state.inFlight = true
-                state.mark = counters
+                state.open = nil
+                state.mark = Self.usable(state.mark, before: heard)
             }
-        case .answered(let subagent, let tokens):
-            guard case let (before, generation)? = state.withLock({ state in state.inFlight ? (state.mark, state.generation) : nil })
-            else { return }
+        case .answered(own: nil, _):
+            update(generation) { state in if state.inFlight { state.mark = nil } }
+        case .answered(own: let request?, let tokens):
+            guard let before = current(generation, { $0.inFlight ? .some($0.mark) : nil }) else { return }
             let after = read()
-            let bytes = before.flatMap { before in after.flatMap { Self.upload(from: before, to: $0) } }
-            let note = Note(at: now(), bytes: bytes, tokens: tokens, kind: Self.kind(bytes: bytes, tokens: tokens))
-            let kept = state.withLock { state -> Bool in
-                guard state.generation == generation, state.inFlight else { return false }
-                state.mark = after
-                // A sub-agent's request is told by its own answer's start, but its upload ran beside
-                // the turn's own: only the turn's requests are kept.
-                guard !subagent else { return false }
-                state.notes.append(note)
-                if state.notes.count > Self.kept { state.notes.removeFirst(state.notes.count - Self.kept) }
-                return true
+            let at = ticks()
+            let bytes = before.flatMap { before in
+                before.usable ? after.flatMap { Self.upload(from: before.counters, to: $0) } : nil
             }
-            if kept { Perf.mark("turn.guest.upload kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")") }
+            let opened = Open(request: request, tokens: tokens, bytes: bytes, read: at, at: now())
+            let unended = update(generation) { state -> Open? in
+                guard state.inFlight else { return nil }
+                let unended = state.open
+                state.open = opened
+                state.mark = after.map { Reading(counters: $0, at: at) }
+                return unended
+            } ?? nil
+            if let unended { keep(unended, told: false, generation) }
+        case .finished(own: false):
+            break
+        case .finished(own: true):
+            let ended = update(generation) { state -> Open? in
+                let open = state.open
+                state.open = nil
+                state.mark = Self.usable(state.mark, before: heard)
+                return open
+            } ?? nil
+            if let ended { keep(ended, told: ended.read < heard, generation) }
         case .ended:
-            state.withLock { $0.inFlight = false; $0.mark = nil }
+            let unended = update(generation) { state -> Open? in
+                let open = state.open
+                state.inFlight = false
+                state.open = nil
+                state.mark = nil
+                return open
+            } ?? nil
+            if let unended { keep(unended, told: false, generation) }
+            let after = read()
+            let at = ticks()
+            update(generation) { state in
+                guard !state.inFlight else { return }
+                state.mark = after.map { Reading(counters: $0, at: at) }
+            }
         }
+    }
+
+    /// Keeps a request's note, its bytes only when `told`, and marks it for `topo perf` by its number.
+    private func keep(_ open: Open, told: Bool, _ generation: Int) {
+        let bytes = told ? open.bytes : nil
+        let note = Note(at: open.at, bytes: bytes, tokens: open.tokens, kind: Self.kind(bytes: bytes, tokens: open.tokens))
+        let kept = update(generation) { state -> Bool in
+            state.notes.append(note)
+            if state.notes.count > Self.kept { state.notes.removeFirst(state.notes.count - Self.kept) }
+            return true
+        } ?? false
+        if kept {
+            Perf.mark("turn.guest.upload request=\(open.request) kind=\(note.kind.rawValue) bytes=\(bytes.map(String.init) ?? "unknown")")
+        }
+    }
+
+    /// Runs `body` on the state if no clear has landed since `generation`; nil when one has.
+    @discardableResult
+    private func update<T>(_ generation: Int, _ body: (inout State) -> T) -> T? {
+        state.withLockUnchecked { state in state.generation == generation ? body(&state) : nil }
+    }
+
+    private func current<T>(_ generation: Int, _ body: (State) -> T?) -> T? {
+        state.withLockUnchecked { state in state.generation == generation ? body(state) : nil }
     }
 
     /// The requests kept, oldest first.
     func recent() -> [Note] { state.withLock { $0.notes } }
 
-    /// Forgets every request: a login has ended. A moment still reading when it lands keeps
-    /// nothing, since the generation it read under has moved.
+    /// Forgets every request: a login has ended. A moment heard before it keeps nothing, whether it
+    /// is still queued or still reading.
     func clear() { state.withLock { $0 = State(generation: $0.generation + 1) } }
 
     // MARK: The counters

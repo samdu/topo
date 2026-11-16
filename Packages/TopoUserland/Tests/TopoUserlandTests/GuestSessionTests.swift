@@ -343,8 +343,8 @@ final class GuestSessionTests: XCTestCase {
     /// The same order in miniature, and a result before any echo: the turn is not ended by it, and
     /// one whose echo never comes is ended at the bound, as any turn that hears nothing is.
     /// A turn's request moments reach the app as they happen: the words written, each model
-    /// request's answer starting, the turn's own and a sub-agent's told apart with their context,
-    /// and the turn's end.
+    /// request's answer starting and ending, the turn's own numbered and a sub-agent's told apart,
+    /// with their context, and the turn's end.
     func testATurnsRequestMomentsAreToldAsTheyHappen() async throws {
         final class Moments: @unchecked Sendable {
             private let lock = NSLock()
@@ -364,10 +364,14 @@ final class GuestSessionTests: XCTestCase {
         process.emit(Lines.`init`("S1"))
         process.emit(#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":3,"cache_creation_input_tokens":400,"cache_read_input_tokens":12000}}},"parent_tool_use_id":null}"#)
         process.emit(#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}},"parent_tool_use_id":"toolu_1"}"#)
+        process.emit(#"{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":"toolu_1"}"#)
+        process.emit(#"{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}"#)
+        process.emit(#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":12500}}},"parent_tool_use_id":null}"#)
         process.emit(Lines.text("ok"))
         process.emit(Lines.result("ok", session: "S1"))
         await done.value
-        XCTAssertEqual(moments.all, [.written, .answered(subagent: false, tokens: 12_403), .answered(subagent: true, tokens: 50), .ended])
+        XCTAssertEqual(moments.all, [.written, .answered(own: 1, tokens: 12_403), .answered(own: nil, tokens: 50),
+                                     .finished(own: false), .finished(own: true), .answered(own: 2, tokens: 12_501), .ended])
     }
 
     func testAResultBeforeTheTurnsEchoDoesNotEndIt() async throws {

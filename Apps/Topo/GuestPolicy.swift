@@ -15,11 +15,14 @@ enum GuestPolicy {
     /// This build's settings: the pin in a debug build, none in a release one.
     static var forBuild: String? {
         #if DEBUG
-        haikuOnly
+        settings(debug: true)
         #else
-        nil
+        settings(debug: false)
         #endif
     }
+
+    /// The settings a debug build or a release one writes.
+    static func settings(debug: Bool) -> String? { debug ? haikuOnly : nil }
 
     /// Puts `settings` in place through `write`, at the boot and before any claude starts. A pin that
     /// cannot be written is the boot's failure, so no claude starts unpinned; a release build's

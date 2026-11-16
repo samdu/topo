@@ -81,7 +81,8 @@ struct TurnTimeline: Sendable {
     var requestBytes: [Int]
     /// How many model requests the turn made of its own.
     var requests: Int
-    /// Each model request's kind as its upload read (`ThreadSampler.Kind`), in order.
+    /// Each model request's kind as its upload read (`ThreadSampler.Kind`), one a request in order,
+    /// `unknown` for one with no upload read.
     var requestThreads: [String]
     var tools: Int
     /// How many times its words were sent: more than one is a retry.
@@ -235,34 +236,44 @@ struct TurnTimeline: Sendable {
             save(saved, "Your words saved to iCloud")
         }
         if let unsaved = clean.first(where: { $0.name == "turn.unsaved" }) { save(unsaved, "iCloud had not taken your words yet") }
-        self.beside = beside
         // The model's requests, from the stream: each answer's start and end. A request's going is
-        // not seen apart from the model's wait for it, so the stage before an answer is both.
-        var bytes: [Int] = [], threads: [String] = [], previous = write?.ms ?? origin
-        let messages = clean.filter { $0.name == "turn.guest.message" && $0.isOwn }
-        for (n, message) in messages.enumerated() {
-            let number = n + 1
-            let next = n + 1 < messages.count ? messages[n + 1].ms : Int64.max
-            if let result = clean.last(where: { $0.name == "turn.guest.toolResult" && $0.ms >= previous && $0.ms <= message.ms }) {
+        // not seen apart from the model's wait for it, so the stage before an answer is both. Marks
+        // are matched by their place in the marks' order, since two can share a millisecond.
+        var bytes: [Int] = [], threads: [String] = []
+        let messages = clean.indices.filter { clean[$0].name == "turn.guest.message" && clean[$0].isOwn }
+        // What a request uploaded is marked by its number once its answer has ended, read on the
+        // sampler's own queue, so it can come after the turn's other marks, up to the next turn's.
+        let nextWrite = marks.first { $0.name == "turn.guest.write" && $0.ms > (write?.ms ?? origin) }?.ms ?? .max
+        var previous = write.flatMap { mark in clean.firstIndex { $0.name == mark.name && $0.ms == mark.ms } } ?? clean.startIndex
+        for (n, i) in messages.enumerated() {
+            let message = clean[i]
+            let number = message.value("request").flatMap(Int.init) ?? n + 1
+            let next = n + 1 < messages.count ? messages[n + 1] : clean.endIndex
+            if let result = clean[previous..<i].last(where: { $0.name == "turn.guest.toolResult" }) {
                 raw.append((result.ms, place(result), .tool, "A tool ran"))
             }
-            // What the request uploaded is read just after its answer began, before the next's.
-            let upload = clean.first { $0.name == "turn.guest.upload" && $0.ms >= message.ms && $0.ms < next }
+            let upload = marks.last { $0.name == "turn.guest.upload" && $0.value("request") == String(number)
+                && $0.ms >= message.ms && $0.ms < nextWrite }
             let size = upload?.value("bytes").flatMap(Int.init)
             if let size { bytes.append(size) }
-            if let kind = upload?.value("kind") { threads.append(kind) }
+            threads.append(upload?.value("kind") ?? "unknown")
             let about = [size.map(Self.size), upload?.value("kind").flatMap { Self.threadWords[$0] }].compactMap { $0 }
             raw.append((message.ms, place(message), .model,
                         "Request \(number) sent and the model began answering" + (about.isEmpty ? "" : " (\(about.joined(separator: ", ")))")))
-            if let done = clean.first(where: { $0.name == "turn.guest.message.done" && $0.isOwn && $0.ms >= message.ms && $0.ms <= next }) {
-                raw.append((done.ms, place(done), .stream, "The model finished request \(number)"))
-                previous = done.ms
+            if let done = clean[(i + 1)..<next].firstIndex(where: { $0.name == "turn.guest.message.done" && $0.isOwn }) {
+                raw.append((clean[done].ms, place(clean[done]), .stream, "The model finished request \(number)"))
+                previous = done
             }
         }
+        // A retry names no request (Claude Code's `api_retry` carries no sub-agent's mark), so it is
+        // said beside the stages, from where it was heard, and splits none of them: a request the
+        // turn's own retried still has its wait in the stage before its answer.
         for retry in clean where retry.name == "turn.guest.retry" {
             let status = retry.value("status").flatMap { $0 == "none" ? nil : $0 }
-            raw.append((retry.ms, place(retry), .wait, "A request failed and Claude Code tried again" + (status.map { " (\($0))" } ?? "")))
+            beside.append(Event(key: .wait, title: "A request failed and Claude Code tried again" + (status.map { " (\($0))" } ?? ""),
+                                at: retry.ms - origin, took: 0))
         }
+        self.beside = beside
         requests = messages.count
         requestBytes = bytes
         requestThreads = threads

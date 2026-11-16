@@ -17,6 +17,8 @@ final class GuestPolicyTests: XCTestCase {
     /// Haiku alone with every other family refused.
     func testADebugBuildsPolicyIsHaikuAlone() throws {
         XCTAssertEqual(GuestPolicy.forBuild, GuestPolicy.haikuOnly)
+        XCTAssertEqual(GuestPolicy.settings(debug: true), GuestPolicy.haikuOnly)
+        XCTAssertNil(GuestPolicy.settings(debug: false), "a release build would keep the guest held to Haiku")
         let policy = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(GuestPolicy.haikuOnly.utf8)) as? [String: Any])
         XCTAssertEqual(policy["availableModels"] as? [String], ["haiku"])
         XCTAssertEqual(policy["enforceAvailableModels"] as? Bool, true)

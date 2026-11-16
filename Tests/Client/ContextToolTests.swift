@@ -55,7 +55,7 @@ final class ContextToolTests: XCTestCase {
         XCTAssertTrue(shown.text.contains("judged by their uploads (inferred, never read)"), shown.text)
         XCTAssertTrue(shown.text.contains("  400 s ago  whole conversation  21 KB for 14000 tokens\n"), shown.text)
         XCTAssertTrue(shown.text.contains("  380 s ago  small upload: on a thread  3 KB for 14600 tokens\n"), shown.text)
-        XCTAssertTrue(shown.text.contains("  2 s ago  can't tell  upload not told apart"), shown.text)
+        XCTAssertTrue(shown.text.contains("  2 s ago  can't tell  upload not told (no read to count it from"), shown.text)
         XCTAssertTrue(shown.text.hasSuffix("small uploads: 2 of 4; the newest: small upload: on a thread\n"), shown.text)
 
         phone.facts.threads = MessageThreads.Setting(on: true, variable: "CLAUDE_CODE_THREADS_WRONG_NAME")

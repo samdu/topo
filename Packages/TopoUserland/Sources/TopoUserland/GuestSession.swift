@@ -116,11 +116,14 @@ public typealias Sleep = @Sendable (Duration) async throws -> Void
 /// sign-out — ends it at once, abandoning a turn in flight.
 public actor GuestSession {
     /// The moments of a turn's model requests that the app reads beside the connection (the thread
-    /// sampler): its words written, each request's answer begun with the context it was sent, and
-    /// the turn's end. Nothing of what the turn said.
+    /// sampler): its words written, each request's answer begun with the context it was sent and
+    /// its answer ended, and the turn's end. A request of the turn's own carries its number in the
+    /// turn, counted from 1 (`own`), which its perf mark carries too; a sub-agent's carries none.
+    /// Nothing of what the turn said.
     public enum RequestMoment: Sendable, Equatable {
         case written
-        case answered(subagent: Bool, tokens: Int)
+        case answered(own: Int?, tokens: Int)
+        case finished(own: Bool)
         case ended
     }
 
@@ -414,6 +417,8 @@ public actor GuestSession {
         var held: [StreamEvent] = []
         /// Counts every line while the turn is in flight, so the watchdog can tell silence.
         var ticks = 0
+        /// The turn's own model requests begun so far.
+        var requests = 0
         var watchdog: Task<Void, Never>?
         /// Callers of `settle()` waiting for the turn to end, whoever is listening to it.
         var settling: [CheckedContinuation<Void, Never>] = []
@@ -940,9 +945,17 @@ public actor GuestSession {
             case .toolResult where own: Perf.mark("turn.guest.toolResult")
             // Each model request, from the stream: what topo perf reads a request's time from.
             case .requestBegan(let subagent, let tokens) where own:
-                Perf.mark("turn.guest.message \(subagent ? "agent" : "own") tokens=\(tokens)")
-                requests?(.answered(subagent: subagent, tokens: tokens))
-            case .requestEnded(let subagent) where own: Perf.mark("turn.guest.message.done \(subagent ? "agent" : "own")")
+                if subagent {
+                    Perf.mark("turn.guest.message agent tokens=\(tokens)")
+                    requests?(.answered(own: nil, tokens: tokens))
+                } else if let turn = resident.turn {
+                    turn.requests += 1
+                    Perf.mark("turn.guest.message own request=\(turn.requests) tokens=\(tokens)")
+                    requests?(.answered(own: turn.requests, tokens: tokens))
+                }
+            case .requestEnded(let subagent) where own:
+                Perf.mark("turn.guest.message.done \(subagent ? "agent" : "own")")
+                requests?(.finished(own: !subagent))
             case .retry(let attempt, let status) where own:
                 Perf.mark("turn.guest.retry attempt=\(attempt.map(String.init) ?? "?") status=\(status.map(String.init) ?? "none")")
             case .result(let result) where own:
