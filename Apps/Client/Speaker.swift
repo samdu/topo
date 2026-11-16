@@ -520,21 +520,24 @@ final class Speaker {
     /// so the voice starts at the first sentence rather than once the reply is whole and in the
     /// log; `speak` is still called with the reply when it lands, and reads what is left. The
     /// guest's next message of the turn is more of the same text after a paragraph break, so
-    /// its sentences are read behind the last message's, each once. Nothing begins while a microphone
-    /// is open: what is written waits for it to close, as a reply that lands does
-    /// (`waitingForMicrophone`), so a conversation shuts its gate for it over silence and a part
-    /// written before a tool is heard before the tool. Nothing begins while the voice is not
-    /// resident: the reply is offered whole when it lands, as ever.
+    /// its sentences are read behind the last message's, each once. Nothing begins while another
+    /// turn's reading stands, stopped or not, until its reply lands or its turn ends: the turn
+    /// after it is read when it lands, or as more is written once the earlier one is done, so
+    /// neither is read twice and a stopped one is not read again. Nothing begins while the voice
+    /// is not resident: the reply is offered whole when it lands, as ever. And nothing begins
+    /// while a microphone is open: what is written waits for it to close, as a reply that lands
+    /// does (`waitingForMicrophone`), so a conversation shuts its gate for it over silence and a
+    /// part written before a tool is heard while the tool runs rather than after the reply.
     func speak(writing text: String, answering nonce: String) {
         let settled = Self.settled(text)
         if written?.nonce != nonce {
-            guard !settled.isEmpty else { return }
+            guard !settled.isEmpty, written == nil, voice.ready else { return }
             if microphoneBusy {
                 if writingWaited?.nonce != nonce { AudioLog.say("what the guest has written waits for the microphone to close") }
                 writingWaited = (text, nonce)
                 return
             }
-            guard voice.ready, begin(settled, answering: nonce, reply: nil, reading: false) else { return }
+            guard begin(settled, answering: nonce, reply: nil, reading: false) else { return }
             written = (nonce, "", 0, true)
         }
         guard var reading = written, reading.live else { return }
@@ -717,6 +720,11 @@ final class Speaker {
 
     /// A reply, or what the guest has written of one, is waiting for the microphone to close.
     var waitingForMicrophone: Bool { deferred != nil || writingWaited != nil }
+
+    /// The reply to the spoken turn `nonce` landed while a microphone was open and waits for it to
+    /// close, so its turn stays marked until it is read (`settled`). Another turn's waiting part
+    /// is no part of the answer.
+    func replyWaitsForMicrophone(_ nonce: String) -> Bool { deferred?.nonce == nonce }
 
     /// Whether any spoken turn's wait stands.
     var awaitingAny: Bool { !waits.isEmpty }
