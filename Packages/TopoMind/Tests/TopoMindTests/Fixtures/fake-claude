@@ -1,0 +1,105 @@
+#!/usr/bin/python3
+# A stand-in for `claude -p --input-format stream-json --output-format stream-json --verbose
+# --replay-user-messages`, speaking the lines Claude Code 2.1.325 writes (captured signed out, and
+# trimmed). What it was started with and every input it took are written under FAKE_LOG.
+#
+# FAKE_SIGNED_OUT=1  every turn fails as Claude Code's does with no login
+# FAKE_STRAY=1       a turn of its own (a background task's notice) ends before each input's echo
+# FAKE_CHILD=1       starts two children at launch: one in its group, one in a session of its own
+# FAKE_IGNORE_TERM=1 ignores SIGTERM, and stays after its stdin closes
+# An input containing FAIL ends with an error result; one containing SLOW waits 1.5 s to answer.
+import json, os, signal, subprocess, sys, time, uuid
+
+log = os.environ["FAKE_LOG"]
+config = os.environ.get("CLAUDE_CONFIG_DIR", "")
+os.makedirs(log, exist_ok=True)
+
+def record(name, obj):
+    with open(os.path.join(log, name), "a") as f:
+        f.write(json.dumps(obj) + "\n")
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+args = sys.argv[1:]
+record("launches.jsonl", {"pid": os.getpid(), "args": args, "cwd": os.getcwd(), "env": dict(os.environ)})
+if os.environ.get("FAKE_IGNORE_TERM") == "1":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+def flag(name):
+    return args[args.index(name) + 1] if name in args else None
+
+sessions = os.path.join(config or log, "fake-sessions")
+os.makedirs(sessions, exist_ok=True)
+resume = flag("--resume")
+model = flag("--model") or "claude-sonnet"
+if resume is not None:
+    if not os.path.exists(os.path.join(sessions, resume)):
+        message = "No conversation found with session ID: " + resume
+        sys.stderr.write(message + "\n")
+        emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "num_turns": 0,
+              "session_id": resume, "errors": [message]})
+        sys.exit(1)
+    session = resume
+else:
+    session = str(uuid.uuid4())
+open(os.path.join(sessions, session), "a").close()
+
+if os.environ.get("FAKE_CHILD") == "1":
+    near = subprocess.Popen(["/bin/sleep", "1000"])
+    far = subprocess.Popen(["/bin/sleep", "1001"], start_new_session=True)
+    record("children.jsonl", {"pids": [near.pid, far.pid]})
+
+def turn(line):
+    content = line["message"]["content"]
+    input_id = line.get("uuid")
+    record("inputs.jsonl", {"session": session, "content": content, "uuid": input_id, "pid": os.getpid()})
+    if os.environ.get("FAKE_STRAY") == "1":
+        emit({"type": "system", "subtype": "init", "session_id": session, "model": model})
+        emit({"type": "assistant", "message": {"id": "stray", "model": model, "role": "assistant",
+              "content": [{"type": "text", "text": "a background notice, not the reply"}]},
+              "session_id": session, "parent_tool_use_id": None})
+        emit({"type": "result", "subtype": "success", "is_error": False, "result": "stray",
+              "session_id": session})
+    emit({"type": "command_lifecycle", "command_uuid": input_id, "state": "started", "session_id": session})
+    emit({"type": "system", "subtype": "init", "session_id": session, "model": model, "cwd": os.getcwd()})
+    emit({"type": "user", "message": {"role": "user", "content": content}, "session_id": session,
+          "parent_tool_use_id": None, "uuid": input_id, "isReplay": True})
+    if os.environ.get("FAKE_SIGNED_OUT") == "1":
+        emit({"type": "assistant", "message": {"id": str(uuid.uuid4()), "model": "<synthetic>", "role": "assistant",
+              "content": [{"type": "text", "text": "Not logged in · Please run /login"}]},
+              "session_id": session, "parent_tool_use_id": None, "error": "authentication_failed"})
+        emit({"type": "result", "subtype": "success", "is_error": True, "result": "Not logged in · Please run /login",
+              "session_id": session, "user_message_uuid": input_id, "terminal_reason": "api_error"})
+        return
+    if "SLOW" in content:
+        time.sleep(1.5)
+    if "FAIL" in content:
+        emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": session,
+              "user_message_uuid": input_id, "errors": ["boom"]})
+        return
+    words = content.split("\n\n")[-1]
+    message = str(uuid.uuid4())
+    emit({"type": "assistant", "message": {"id": message, "model": model, "role": "assistant",
+          "content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": "echo: " + words}],
+          "usage": {"input_tokens": 10, "cache_creation_input_tokens": 5, "cache_read_input_tokens": 100,
+                    "output_tokens": 7}},
+          "session_id": session, "parent_tool_use_id": None})
+    emit({"type": "result", "subtype": "success", "is_error": False, "result": "echo: " + words,
+          "session_id": session, "user_message_uuid": input_id})
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    line = json.loads(raw)
+    if line.get("type") == "control_request":
+        emit({"type": "control_response", "response": {"subtype": "success", "request_id": line["request_id"],
+              "response": {"commands": []}}})
+    elif line.get("type") == "user":
+        turn(line)
+
+if os.environ.get("FAKE_IGNORE_TERM") == "1":
+    while True:
+        time.sleep(60)
