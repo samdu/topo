@@ -6,11 +6,18 @@ import Foundation
 /// name is a value here, so the mind can follow a rename without an app update.
 ///
 /// On, the conversation is kept on Anthropic's servers, encrypted in memory, for up to an hour
-/// after its last request, with no way to delete it sooner, and outside zero data retention. It
-/// is on unless the person or the mind turns it off. A name Claude Code no longer reads costs
-/// nothing but the saving: the resident sends every request whole, as with it off, and only
+/// after its last request, with no way to delete it sooner, and outside zero data retention, and
+/// Claude Code's traffic beside the turns is let out, which its threads need (`alsoSent`). It
+/// is on unless the person or the mind turns it off. A name Claude Code no longer reads loses
+/// the saving and still lets that traffic out: the resident sends every request whole, and only
 /// `topo context threads`, from what the proxy saw, tells the two apart.
 public enum MessageThreads {
+    /// What else leaves the phone while threads are on, as measured at Claude Code 2.1.316: the
+    /// Settings switch's footer and `topo context threads` say it in these words.
+    public static let alsoSent = "Claude Code also sends Anthropic its usage telemetry, and Datadog a log of the same kind: events saying which features ran, how long requests took and how much memory it used. Each event carries the person's Anthropic account and organisation ids, the session's id and an id Claude Code keeps for this install, and no words of the conversation were found in the events checked. It also asks Anthropic for its feature flags, naming the account, the organisation and the plan, and for the account's start-up settings, and it reads the public MCP registry's list."
+    /// What off means, in the same words.
+    public static let whenOff = "Off, none of that is sent. Claude Code still asks Anthropic about the account (its profile and its claude.ai connectors among what was checked), and every request carries the whole conversation."
+
     public struct Setting: Sendable, Equatable {
         public var on: Bool
         /// The variable the launch sets to `value` while on: always one `variable(_:)` takes.

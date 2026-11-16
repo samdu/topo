@@ -225,7 +225,7 @@ struct MessageThreadsSection: View {
                     .accessibilityIdentifier("context-threads-reset")
             }
         } footer: {
-            Text("On, each request sends only what is new, which is quicker on a slow connection. The conversation is then held on Anthropic's servers, encrypted in memory, for up to an hour after its last request; it cannot be deleted sooner, and it is outside zero data retention. Off asks for nothing, whatever name Topo set.")
+            Text("On, each request sends only what is new, which is quicker on a slow connection. The conversation is then held on Anthropic's servers, encrypted in memory, for up to an hour after its last request; it cannot be deleted sooner, and it is outside zero data retention. \(MessageThreads.alsoSent) \(MessageThreads.whenOff) Off asks for no threads, whatever name Topo set.")
         }
     }
 }
