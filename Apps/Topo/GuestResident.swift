@@ -205,7 +205,7 @@ final class GuestResident {
             ClaudeLoginStatus(initialize: $0.subscriptionType, tokenSource: $0.tokenSource, apiProvider: $0.apiProvider)
         }
         if let status, confirms?(status) == true {
-            Perf.mark("guest.login.confirmed")
+            Perf.mark("guest.login.confirmed \(status.authMethod ?? "-")")
             return
         }
         Perf.mark("guest.login.unconfirmed")
@@ -213,9 +213,18 @@ final class GuestResident {
         // was named; the account's email and organisation are never read.
         let said = account.map { "tokenSource=\($0.tokenSource ?? "-") apiProvider=\($0.apiProvider ?? "-") subscription=\($0.subscriptionType == nil ? "none" : "named")" } ?? "no account"
         Self.log("login: the resident's initialize did not confirm the login (\(said)); asking auth status")
-        await booted?()
+        // Held across the whole of `refresh`, not only its `auth status`: the status's own hold
+        // lets go as the status returns, and a turn waiting would start a process before `refresh`
+        // has cleared the cache of a login that has gone.
+        if let session {
+            _ = await session.withoutResident { await GuestResident.shared.askBooted() }
+        } else {
+            await askBooted()
+        }
         Self.log("login: auth status asked after the initialize; signed in: \(LoginCache.standard.isSignedIn)")
     }
+
+    private func askBooted() async { await booted?() }
 
     /// The home mounted, the tool service listening, `topo`, its skill and the GitHub shims written
     /// into the home and the commands linked onto the guest's path; the answer is what the guest's environment gains to
