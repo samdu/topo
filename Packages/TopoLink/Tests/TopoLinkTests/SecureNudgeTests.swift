@@ -246,6 +246,25 @@ import TopoCoreTesting
         // Mutant: a bound that runs out said as `connectTimeout` whether or not TCP connected.
         #expect(await HubNudge.send(for: endpointLease, mark: "ab12cd34", key: key, connectBound: 0.5) == .unreached("handshakeTimeout"))
         #expect(!HubNudge.Unreached.shared.recently("127.0.0.1:\(silent.port)"))
+        // The phone's path drops its copy, in case the port is another listener's now.
+        let db = InMemoryRecordDatabase()
+        try await key.save(to: db)
+        let keys = NudgeKeys()
+        #expect(await HubNudge.send(for: endpointLease, mark: "ab12cd34", keys: keys, in: db) == .unreached("handshakeTimeout"))
+        // Mutant: the copy kept after a slow handshake.
+        #expect(await keys.key(for: endpointLease, in: db) == .key(key, read: true))
+    }
+
+    /// A bound that ran out is a slow handshake once TCP connected beneath it, and a connect that
+    /// was not made otherwise.
+    @Test func aBoundRunOutIsSaidByWhetherTCPConnected() {
+        let connection = NWConnection(host: "127.0.0.1", port: 1, using: .tcp)
+        let stage = HubNudge.Stage()
+        // Mutant: every bound that runs out said as a slow handshake.
+        #expect(HubNudge.kind(CancellationError(), connection, stage) == "connectTimeout")
+        stage.reachedTCP()
+        // Mutant: every bound that runs out said as a connect that was not made.
+        #expect(HubNudge.kind(CancellationError(), connection, stage) == "handshakeTimeout")
     }
 
     /// A host that never answers runs out as a connect that was not made, and is muted.

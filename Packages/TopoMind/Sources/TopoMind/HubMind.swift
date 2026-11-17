@@ -252,6 +252,8 @@ public actor HubMind {
         asleep = true
         guard on else { return }
         await stop()
+        // A wake that came while the stop waited has started the mind again.
+        guard asleep else { return }
         phase = .asleep
         await publish()
     }

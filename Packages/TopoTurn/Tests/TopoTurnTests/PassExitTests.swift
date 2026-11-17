@@ -204,6 +204,115 @@ private func waitFor(_ condition: @Sendable () async -> Bool) async -> Bool {
     }
 }
 
+/// More of a pass's ways through the log, beside a renewal that has landed.
+@Suite(.serialized) struct PassReadTests {
+    private func limbSays(_ words: String, in store: InMemoryRecordDatabase, nonce: String) async throws {
+        let log = TurnLog(database: store)
+        _ = try await log.writer(for: DeviceID("watch")).append(.person, words, continuing: try await log.read(), nonce: nonce)
+    }
+
+    /// A reply comes to be owed while the log is fetched by ID, under a lease held fresh that a
+    /// pad claimed since: the owed write is refused, and the brain is asked nothing.
+    @Test func aReplyOwedMidPassUnderALeaseTakenAsksTheBrainNothing() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = AfterRenewal(store)
+        let brain = ScriptedBrain(.success("never"))
+        let (runner, lease) = try await makeRunner(database: db, device: "mac-hub", brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        try await limbSays("hi", in: store, nonce: "w1")
+        let first = try #require(try await TurnLog(database: store).read().heads.first)
+        let pad = PrimaryLease(database: store, device: DeviceID("pad"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        _ = try await pad.takeOver()
+        db.then = { brain.owes = OwedReply(parents: [first], nonce: "owed-nonce", text: "owed") }
+        db.arm()
+        do {
+            _ = try await runner.answerPending(model: .sonnet)
+            Issue.record("the pass answered")
+        } catch TurnRunnerError.notPrimary {
+        } catch TurnRunnerError.displaced {
+        }
+        #expect(brain.requests.isEmpty)
+        #expect(try await TurnLog(database: store).read().ordered.map(\.text) == ["hi"])
+        await lease.abandon(); await pad.abandon()
+    }
+
+    /// The same on a lease nobody took: the owed reply is written, then the turn answered once,
+    /// over the log as read after it.
+    @Test func aReplyOwedMidPassIsWrittenThenTheTurnAnswered() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = AfterRenewal(store)
+        let brain = ScriptedBrain(.success("answer"))
+        let (runner, lease) = try await makeRunner(database: db, device: "mac-hub", brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        let log = TurnLog(database: store)
+        let p0 = try await log.writer(for: DeviceID("watch")).append(.person, "zero", parents: [])
+        let a0 = try await log.writer(for: DeviceID("pad")).append(.assistant, "a0", parents: [p0.ref])
+        _ = try await log.writer(for: DeviceID("watch")).append(.person, "hi", parents: [a0.ref])
+        db.then = { brain.owes = OwedReply(parents: [a0.ref], nonce: "owed-nonce", text: "owed") }
+        db.arm()
+        _ = try await runner.answerPending(model: .sonnet)
+        #expect(brain.requests.count == 1)
+        let texts = try await log.read().ordered.map(\.text)
+        #expect(texts.contains("owed") && texts.contains("answer"))
+        #expect(try await log.read().heads.count == 1)
+        await lease.abandon()
+    }
+
+    /// The feed is behind on this device's own newest turn, which continues the waiting turn's
+    /// parent beside it: nothing is answered this pass.
+    @Test func aFeedBehindOnThisDevicesOwnNewestTurnIsNotAnswered() async throws {
+        let store = InMemoryRecordDatabase()
+        let log = TurnLog(database: store)
+        let watch = try await log.writer(for: DeviceID("watch"))
+        let hub = try await log.writer(for: DeviceID("mac-hub"))
+        let p1 = try await watch.append(.person, "q1", parents: [])
+        let a1 = try await hub.append(.assistant, "a1", parents: [p1.ref], nonce: TurnRunner.replyNonce(for: [p1.ref]))
+        _ = try await watch.append(.person, "q2", parents: [a1.ref])
+        _ = try await hub.append(.assistant, "x", parents: [a1.ref], nonce: "x")
+        let db = FeedHidesNewest(base: store, device: "mac-hub")
+        let brain = ScriptedBrain(.success("r"))
+        let (runner, lease) = try await makeRunner(database: db, device: "mac-hub", brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
+        #expect(brain.requests.isEmpty)
+        #expect(try await log.read().ordered.map(\.text) == ["q1", "a1", "q2", "x"])
+        await lease.abandon()
+    }
+}
+
+/// Once armed: the next fetch by ID naming a turn waits (2 s at most) for a save of the lease
+/// alone to land, then runs `then` (which may throw) before answering.
+final class AfterRenewal: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
+    private let lock = NSLock()
+    private var armed = false, renewed = false
+    private var _then: (@Sendable () async throws -> Void)?
+    var then: (@Sendable () async throws -> Void)? {
+        get { lock.withLock { _then } }
+        set { lock.withLock { _then = newValue } }
+    }
+    init(_ base: any RecordDatabase) { self.base = base }
+    func arm() { lock.withLock { armed = true; renewed = false } }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        let saved = try await base.save(records)
+        if records.count == 1, records[0].id == Lease.recordID { lock.withLock { renewed = true } }
+        return saved
+    }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
+        let hit = lock.withLock { () -> Bool in
+            guard armed, ids.contains(where: { Turn.ref(ofRecordNamed: $0.name) != nil }) else { return false }
+            armed = false
+            return true
+        }
+        if hit {
+            for _ in 0..<200 where !lock.withLock({ renewed }) { try await Task.sleep(for: .milliseconds(10)) }
+            try await then?()
+        }
+        return try await base.fetch(ids)
+    }
+}
+
 /// The feed has not caught up with `device`'s newest turn alone.
 struct FeedHidesNewest: ForwardingDatabase {
     let base: any RecordDatabase

@@ -47,10 +47,10 @@ public enum HubNudge {
     /// gate; false sends nothing). A hub with no key record is sent nothing (`noKey`), and a
     /// record that cannot be read likewise (`keyUnread`), with a mark that says why; a handshake
     /// the hub refused drops the phone's copy of the key, so the next nudge reads the record
-    /// again (a hub that launched since minted another), and so does a connect that failed or ran
-    /// out (a hub that launched since listens on another port): the endpoint is then not tried for
-    /// `Unreached.forgetAfter`, so a hub off the network costs a read of its record at most once
-    /// in that while.
+    /// again (a hub that launched since minted another), and so does a handshake still under way at
+    /// the bound, and a connect that failed or ran out (a hub that launched since listens on another
+    /// port): after a connect the endpoint is not tried for `Unreached.forgetAfter`, so a hub off
+    /// the network costs a read of its record at most once in that while.
     public static func send(for lease: Lease, mark: String, keys: NudgeKeys, in database: any RecordDatabase,
                             reachable: @Sendable (_ host: String, _ port: UInt16) async -> Bool = { _, _ in true },
                             stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
@@ -71,7 +71,8 @@ public enum HubNudge {
         guard await reachable(host, key.port) else { return .unreached("gated") }
         let answer = await send(for: lease, mark: mark, key: key, stream: stream)
         switch answer {
-        case .unreached("handshake"), .unreached("agreement"), .unreached("connect"), .unreached("connectTimeout"):
+        case .unreached("handshake"), .unreached("agreement"), .unreached("handshakeTimeout"),
+             .unreached("connect"), .unreached("connectTimeout"):
             await keys.failed(key)
         default: break
         }
@@ -219,7 +220,7 @@ public enum HubNudge {
 
     /// Why a connection was not made, by kind: denied local network access says so, since it is
     /// the one a person can change, and a handshake the hub refused, since that is the key.
-    private static func kind(_ error: any Error, _ connection: NWConnection, _ stage: Stage) -> String {
+    static func kind(_ error: any Error, _ connection: NWConnection, _ stage: Stage) -> String {
         if connection.currentPath?.unsatisfiedReason == .localNetworkDenied { return "localNetworkDenied" }
         if error is CancellationError { return stage.tcpReached ? "handshakeTimeout" : "connectTimeout" }
         if case .tls? = error as? NWError { return "handshake" }

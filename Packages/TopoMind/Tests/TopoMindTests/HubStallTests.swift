@@ -223,6 +223,12 @@ func defaults(_ arguments: String...) throws -> Int32 {
         #expect(status["login"] as? String == "signed in (claude.ai, max)")
         #expect(status["holds"] as? Bool == true)
         #expect((status["lastPass"] as? String)?.hasPrefix("answered by ") == true)
+        // The channel's key by its state and the failed handshakes by their count, never the key.
+        try HubStatus(pid: getpid(), store: .memory, on: true, snapshot: await hub.snapshot(),
+                      leaseHolder: nil, nudgeKey: "not saved (unavailable)", handshakesFailed: 2).write(in: root)
+        let channel = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: root.appending(path: HubStatus.fileName))) as? [String: Any])
+        #expect(channel["nudgeKey"] as? String == "not saved (unavailable)")
+        #expect(channel["handshakesFailed"] as? Int == 2)
         await hub.turnOff()
     }
 
