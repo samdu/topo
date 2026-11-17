@@ -84,11 +84,11 @@ final class Harness {
     /// What a hub's mind has written of the reply to a limb's turn of this device's, as streamed
     /// over the nudge (`followHub`): the words of the first reply streamed whose turn the log
     /// holds no reply to yet. Provisional: the log's reply replaces it in the same moment it is
-    /// shown, and it gives way once a reply in the log goes on from the turn some other way.
+    /// shown, and it gives way once the log has gone on from the turn in any other way.
     private(set) var streamedWriting: String?
     /// The replies hubs are streaming for this device's limb turns, oldest first, by the person's
-    /// turn (`Streamed`); the first one with words whose turn no reply in the log answers or goes
-    /// on from is what `streamedWriting` draws (`rowStream`).
+    /// turn (`Streamed`); the first one with words whose turn the log holds no reply to and has not
+    /// gone on from is what `streamedWriting` draws (`rowStream`).
     @ObservationIgnored private var streamed: [Streamed] = []
     /// Streams that gave way to this device's own answering and were read as they came: off the
     /// row already, their readers are told they ended once the next read of the log has offered
@@ -264,40 +264,8 @@ final class Harness {
     /// streams for the turn is handed to `frames` as it arrives, in order. Nil: no nudge, and the
     /// hub finds the turn by its poll or push as it always can.
     var nudge: (@Sendable (_ lease: Lease, _ mark: String, _ frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool)?
-    /// The nudges waiting for their hub's answer, and the hand-overs (`handOver`) waiting for
-    /// theirs, which a sign-out or a demotion cancels.
+    /// The nudges waiting for their hub's answer, which a sign-out or a demotion cancels.
     private var nudges: [UUID: Task<Void, Never>] = [:]
-    /// What became of words handed to a hub ahead of their turn's save.
-    enum HandOver: Equatable, Sendable {
-        /// The hub's mind has them.
-        case heard
-        /// The hub did not take them, and nothing of them reached its mind.
-        case refused
-        /// Not known: `sent` when the words may have reached the hub.
-        case unknown(sent: Bool)
-    }
-    /// Hands the person's words, said under a nonce with a model chosen, to the hub that holds
-    /// `lease`, over the nudge's channel, before their turn is saved (`HubNudge.hear`), so the
-    /// hub's mind is asked a save and a pass's read sooner. The app sets it, and it says
-    /// `unknown(sent: false)` without trying when it has no key in hand or local network access
-    /// was never allowed: nothing it does reads CloudKit or asks the person anything. Nil: no
-    /// hand-over, and the hub hears the turn from the log.
-    var handOver: (@Sendable (_ lease: Lease, _ words: String, _ nonce: String, _ model: ClaudeModel) async -> HandOver)?
-    /// The hub's lease this device last wrote a limb's turn under (`nudgeHub`), which a hand-over
-    /// goes to. Cleared by a sign-out, a demotion, and any turn that does not find a hub holding it.
-    private var hubLease: Lease?
-    /// Words handed to a hub that may have them (`handOver`): they are not offered a cancel, since
-    /// the hub's mind cannot be called back, and this device's guest is not given them, nor
-    /// anything said behind them, ahead of their turn's save. Lifted from words the hub refused or
-    /// never got, and from a turn once it is in the log. On disk beside the line, so a relaunch
-    /// between the hand-over and the save knows it too.
-    private var handedOver: Set<String> = [] {
-        didSet {
-            if handedOver.isEmpty { defaults.removeObject(forKey: Self.handedOverKey) }
-            else { defaults.set(Array(handedOver), forKey: Self.handedOverKey) }
-        }
-    }
-    private static let handedOverKey = "topo.harness.handedOver"
     /// A limb's turns this device wrote for a hub to answer, by ref, with each turn's mark, until a
     /// read finds their reply: the reply's arrival is a mark of its own (`turn.limb.reply.shown`).
     private var limbTurns: [TurnRef: String] = [:]
@@ -444,9 +412,6 @@ final class Harness {
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
             pending = saved
         }
-        // What was handed to a hub, for words still on the line.
-        let line = Set(pending.map(\.nonce))
-        handedOver = Set(defaults.stringArray(forKey: Self.handedOverKey) ?? []).intersection(line)
     }
 
     /// The app's harness: the shared CloudKit log and Claude Code in the guest as the brain, on
@@ -606,8 +571,6 @@ final class Harness {
         nudges = [:]
         dropStreamed()
         limbTurns = [:]
-        hubLease = nil
-        handedOver = []
         login += 1
         reads += 1
         inFlight?.cancel()
@@ -800,45 +763,9 @@ final class Harness {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
-        let first = pending.isEmpty && !busy
         pending.append(outgoing)
         Perf.mark("turn.line \(Self.turnMark(outgoing.nonce))")
-        if first { handToHub(outgoing) }
         return outgoing.nonce
-    }
-
-    /// Hands the words just put on an empty line to the hub that answered this device's last
-    /// limb's turn (`handOver`), without waiting for it: the turn goes on as ever, and a hub that
-    /// has them answers it the moment its pass finds it. Only when this device last found a hub
-    /// answering and expects to again — a runner made, iCloud reached, the hub's lease in hand —
-    /// and no limb's turn of this device is still waiting for the hub's reply, whose turn the
-    /// hub's mind would otherwise be told after these words. Not while a failure stands (iCloud
-    /// behind, a read or a pass that failed): words a hub may have are given to no guest ahead of
-    /// their save, and with iCloud away this device's guest is the one that can answer them.
-    private func handToHub(_ outgoing: Outgoing) {
-        guard let handOver, let lease = hubLease, runner != nil, !unreached, standing == .elsewhere,
-              limbTurns.isEmpty, failure == nil else { return }
-        let nonce = outgoing.nonce, login = self.login, id = UUID(), model = self.model
-        handedOver.insert(nonce)
-        nudges[id] = Task { [weak self] in
-            let answer = await handOver(lease, outgoing.text, nonce, model)
-            guard let self else { return }
-            self.nudges[id] = nil
-            guard self.login == login else { return }
-            Perf.mark("turn.heard.answer \(Self.turnMark(nonce)) \(Self.name(of: answer))")
-            switch answer {
-            case .heard, .unknown(sent: true): break
-            case .refused, .unknown(sent: false): self.handedOver.remove(nonce)
-            }
-        }
-    }
-
-    private nonisolated static func name(of answer: HandOver) -> String {
-        switch answer {
-        case .heard: "heard"
-        case .refused: "no"
-        case .unknown(let sent): sent ? "unknown" : "unsent"
-        }
     }
 
     /// Puts the words on the line under a nonce minted elsewhere — a widget's cue, recorded in the
@@ -945,7 +872,7 @@ final class Harness {
     /// Whether the words said under `nonce` can be cancelled, so they are never sent: they can
     /// be taken back, and the guest has not begun on them ahead of their turn.
     func canCancel(_ nonce: String) -> Bool {
-        canWithdraw(nonce) && !givenAheadUnread && !givenAhead.contains(nonce) && !handedOver.contains(nonce)
+        canWithdraw(nonce) && !givenAheadUnread && !givenAhead.contains(nonce)
     }
 
     /// What the margin beside a turn on its way holds: a resend when the line stopped on it with
@@ -988,7 +915,6 @@ final class Harness {
             return false
         }
         pending.removeAll { $0.nonce == nonce }
-        handedOver.remove(nonce)
         takenBack.insert(nonce)
         failedNonces.remove(nonce)
         cutOffAhead.remove(nonce)
@@ -1033,7 +959,6 @@ final class Harness {
             attempting = nil
             guard settled else { break }
             failedNonces.remove(next.nonce)
-            handedOver.remove(next.nonce)
             if pending.first == next { pending.removeFirst() }
         }
         attempting = nil
@@ -1049,8 +974,7 @@ final class Harness {
     /// lease and the save: the device the person is typing on is the one that answers, so what
     /// was said is answered while iCloud is slow or away, a second message behind the first. Each
     /// call follows the one before, so the order is the line's. Nothing is given before the log
-    /// has been read, since the read is what a fresh guest is told of the conversation, and
-    /// nothing from words handed to a hub (`handedOver`) on, until their turn is in the log.
+    /// has been read, since the read is what a fresh guest is told of the conversation.
     private func hearLine() {
         guard runner != nil || unreached, !pending.isEmpty else { return }
         let line = pending, login = self.login
@@ -1061,9 +985,6 @@ final class Harness {
             for entry in line {
                 guard !Task.isCancelled, let self, self.login == login, self.giving == giving,
                       self.pending.contains(entry), !self.said(entry.nonce) else { continue }
-                // Words a hub may have, not yet in the log: neither they nor anything said behind
-                // them goes to the guest ahead of their save, so nothing is answered before them.
-                if self.handedOver.contains(entry.nonce) { break }
                 if let runner = self.runner {
                     await runner.hear(entry.text, model: self.model, nonce: entry.nonce, known: self.known)
                 } else if self.unreached {
@@ -1115,8 +1036,7 @@ final class Harness {
         defer { looking?.cancel() }
         let hearing = Task { [weak self] () -> Bool in
             await waiting.value
-            guard let self, self.runner == nil, self.login == login,
-                  !self.handedOver.contains(attempt.nonce) else { return false }
+            guard let self, self.runner == nil, self.login == login else { return false }
             self.unreached = true
             return await self.brain.hear(attempt.text, nonce: attempt.nonce, context: self.known, model: self.model)
         }
@@ -1203,17 +1123,12 @@ final class Harness {
             // for it: the person's choice of model is said beside the lease and the read rather
             // than after them (`sayChoice`).
             choiceSaid = standing == .elsewhere ? sayChoice() : nil
-            // Words a hub may have are not given to this device's guest ahead of their save: should
-            // this device answer them after all, its guest is asked once the turn is in the log.
-            let known = handedOver.contains(attempt.nonce) ? nil : self.known
             let result = try await runner.run(text, model: model, nonce: attempt.nonce, known: known) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
             handedBack = false
-            // This device answered: no hub is handed the next words.
-            hubLease = nil
             // The reply is offered before any stream it replaces hears it ended, so what was read
             // of a hub's stream of the same reply is not read again.
             show(result.person)
@@ -1400,16 +1315,9 @@ final class Harness {
         switch outcome {
         case .held(let held): lease = held
         case .unreachable(let held): lease = held
-        case .primary, .contended:
-            hubLease = nil
-            return
+        case .primary, .contended: return
         }
-        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil else {
-            hubLease = nil
-            return
-        }
-        hubLease = lease
-        guard let nudge else { return }
+        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil, let nudge else { return }
         let mark = Self.turnMark(person.nonce)
         let wire = String(mark.dropFirst("turn=".count))
         guard !wire.isEmpty else { return }
@@ -1448,8 +1356,7 @@ final class Harness {
     /// streams it (`ReplyFrame`). What it has written is kept as the guest's writing is
     /// (`ReplyWords`) and drawn in the same row; a spoken turn's is read as it comes through the
     /// same reader (`onWriting`), each telling extending the last. Provisional: the log's reply
-    /// replaces it (`takeLanded`), and nothing is kept of it once a reply in the log goes on from
-    /// the turn (`repliedTo`).
+    /// replaces it (`takeLanded`), and nothing is kept of it once the log has gone on from the turn.
     private struct Streamed {
         let nonce: String
         let ref: TurnRef
@@ -1474,10 +1381,8 @@ final class Harness {
     /// once this device answers again itself (`handedBack` false, or the stream dropped).
     private func followHub(_ frame: ReplyFrame, for ref: TurnRef, under login: Int) {
         guard self.login == login, handedBack, let i = streamed.firstIndex(where: { $0.ref == ref }) else { return }
-        // The log has the turn's reply, or a reply that goes on from it: the stream is late, and
-        // draws nothing. A person's turn after it is not that: a hub answers words it heard ahead
-        // of their turn before what was said after them (`docs/hub.md`).
-        guard !repliedTo.contains(ref) else { return }
+        // The log has the turn's reply or has gone on from it: the stream is late, and draws nothing.
+        guard !turns.contains(where: { $0.parents.contains(ref) }) else { return }
         var entry = streamed[i]
         switch frame {
         case .turn(let refs):
@@ -1487,19 +1392,6 @@ final class Harness {
                 return
             }
             entry.answering = refs
-            entry.words = ReplyWords()
-            entry.settled = false
-            entry.handed = nil
-            entry.spoken = spokenNonces.contains(entry.nonce)
-        case .heard(let nonce):
-            // The reply to words this device handed over ahead of the turn, named by the nonce
-            // they were said under: this turn's alone, or none of it is this stream's.
-            guard nonce == entry.nonce else {
-                entry.answering = nil
-                streamed[i] = entry
-                return
-            }
-            entry.answering = [ref]
             entry.words = ReplyWords()
             entry.settled = false
             entry.handed = nil
@@ -1532,39 +1424,12 @@ final class Harness {
         drawStreamed()
     }
 
-    /// The stream the row draws: the first with words whose turn the log has not gone on from at
-    /// all, so a stream left behind by its turn hides none after it; failing that, the first whose
-    /// turn no reply in the log answers or goes on from, since a hub answers words heard ahead
-    /// before what was said after them.
+    /// The stream the row draws: the first with words whose turn the log holds no reply to and
+    /// has not gone on from, so a stream left behind by its turn hides none after it.
     private var rowStream: Int? {
-        let replied = repliedTo
         let continued = Set(turns.flatMap(\.parents))
-        let live = { (entry: Streamed) in entry.answering != nil && !entry.text.isEmpty && !replied.contains(entry.ref) }
-        return streamed.firstIndex { live($0) && !continued.contains($0.ref) } ?? streamed.firstIndex(where: live)
+        return streamed.firstIndex { $0.answering != nil && !$0.text.isEmpty && !continued.contains($0.ref) }
     }
-
-    /// The turns a reply in the log answers or goes on from: every turn behind an assistant's.
-    private var repliedTo: Set<TurnRef> {
-        let key = (turns.count, turns.last?.ref)
-        if let cached = repliedCache, cached.count == key.0, cached.last == key.1 { return cached.refs }
-        let covered = Self.behindReplies(turns)
-        repliedCache = (key.0, key.1, covered)
-        return covered
-    }
-
-    /// Every turn behind an assistant's in `turns`, one walk of the graph.
-    private static func behindReplies(_ turns: [Turn]) -> Set<TurnRef> {
-        var parents: [TurnRef: [TurnRef]] = [:]
-        for turn in turns { parents[turn.ref] = turn.parents }
-        var covered: Set<TurnRef> = []
-        var stack = turns.filter { $0.role == .assistant }.flatMap(\.parents)
-        while let next = stack.popLast() {
-            guard covered.insert(next).inserted else { continue }
-            stack.append(contentsOf: parents[next] ?? [])
-        }
-        return covered
-    }
-    @ObservationIgnored private var repliedCache: (count: Int, last: TurnRef?, refs: Set<TurnRef>)?
 
     /// The row's stream (`rowStream`) is drawn, and its reader is handed what extends what it
     /// was last handed. A stream drawn behind another is drawn and read once the one before it
@@ -1592,12 +1457,11 @@ final class Harness {
         streamed[i] = entry
     }
 
-    /// The streams whose turn the log now has a reply to, or a reply that goes on from it, taken
-    /// off the row at once: the caller tells their readers (`endStreamed`) after the reply has
-    /// been offered.
+    /// The streams whose turn the log now has a reply to or has gone on from, taken off the row
+    /// at once: the caller tells their readers (`endStreamed`) after the reply has been offered.
     private func takeLanded() -> [Streamed] {
         guard !streamed.isEmpty else { return [] }
-        let continued = repliedTo
+        let continued = Set(turns.flatMap(\.parents))
         let gone = streamed.filter { continued.contains($0.ref) }
         guard !gone.isEmpty else { return [] }
         streamed.removeAll { continued.contains($0.ref) }
@@ -1639,10 +1503,7 @@ final class Harness {
         return taken
     }
 
-    /// A read that brought the reply to a limb's turn this device wrote marks it, once. A limb's
-    /// turn a reply has gone on from without answering it (one the hub's mind was cut off on,
-    /// which a reply to what the person said after it continues) waits for nothing more, and goes
-    /// unmarked.
+    /// A read that brought the reply to a limb's turn this device wrote marks it, once.
     private func markLimbReplies(in transcript: Transcript) {
         guard !limbTurns.isEmpty else { return }
         for turn in transcript.turns.values where turn.role == .assistant {
@@ -1650,9 +1511,6 @@ final class Harness {
                 if let mark = limbTurns.removeValue(forKey: parent) { Perf.mark("turn.limb.reply.shown \(mark)") }
             }
         }
-        guard !limbTurns.isEmpty else { return }
-        let behind = Self.behindReplies(Array(transcript.turns.values))
-        for ref in limbTurns.keys where behind.contains(ref) { limbTurns[ref] = nil }
     }
 
     /// A step of the turn in flight, as words on the screen. The person's turn shows the moment

@@ -80,9 +80,9 @@ struct HubRig {
     let brain: NativeBrain
 
     init(_ environment: [String: String] = [:], silence: Duration = NativeBrain.standardSilence,
-         turn: Duration = NativeBrain.standardTurn, earlyBound: TimeInterval = NativeBrain.earlyBound) throws {
+         turn: Duration = NativeBrain.standardTurn) throws {
         rig = try Rig(environment)
-        brain = rig.brain(silence: silence, turn: turn, earlyBound: earlyBound)
+        brain = rig.brain(silence: silence, turn: turn)
     }
 
     var configuration: NativeBrain.Configuration {

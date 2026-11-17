@@ -56,12 +56,6 @@ public protocol Brain: Sendable {
     /// The words heard under `nonce` are in the log as `person`, and their reply goes under the
     /// nonce `reply`. Nothing for a nonce the brain did not hear.
     func bind(nonce: String, person: Turn, reply: String) async
-    /// Whether the brain heard `person`'s words ahead of their turn, under its nonce and as saved,
-    /// and can bind them to it now: their reply is the one it made of them, and a request that
-    /// answers `person` alone (`answering: [person]`, `parents: [person.ref]`) is answered with it
-    /// and tells the words nothing a second time. `answerPending` asks it of a turn that is not
-    /// the log's one head, and answers such a turn first, alone (`TurnRunner.answerPending`).
-    func heardAhead(of person: Turn) async -> Bool
     /// The words heard under `nonce` were taken back: no turn of them will be saved.
     func withdrawn(nonce: String) async
     /// The words said under `nonce` are to be taken back unsent: true when the brain has not been
@@ -96,7 +90,6 @@ public protocol Brain: Sendable {
 extension Brain {
     public func hear(_ words: String, nonce: String, context: [Turn]?, model: ClaudeModel) async -> Bool { false }
     public func bind(nonce: String, person: Turn, reply: String) async {}
-    public func heardAhead(of person: Turn) async -> Bool { false }
     public func withdrawn(nonce: String) async {}
     public func claim(nonce: String) async -> Bool { true }
     public func unclaim(nonce: String) async {}

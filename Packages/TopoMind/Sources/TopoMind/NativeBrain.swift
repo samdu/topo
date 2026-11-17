@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import TopoCore
 import TopoTurn
@@ -86,8 +85,6 @@ public actor NativeBrain: Brain {
         public var silenceBound: Duration
         /// How long one turn may run, however much it writes, before it is given up on.
         public var turnBound: Duration
-        /// How long words heard ahead wait unbound for their turn (`NativeBrain.earlyBound`).
-        public var earlyBound: TimeInterval = NativeBrain.earlyBound
 
         public static let defaultClaude = URL(fileURLWithPath: NSHomeDirectory()).appending(path: ".local/bin/claude")
 
@@ -156,86 +153,6 @@ public actor NativeBrain: Brain {
     /// Told where a turn asked of this brain stands with Claude Code: its input written to stdin,
     /// and its input's echo. For the hub's pass marks; nothing of the turn.
     private var stages: (@Sendable (Stage) -> Void)?
-    /// The turn on words heard ahead (`hearAhead`), followed to its end by the brain itself, holding
-    /// the one slot until it ends; nil when there is none.
-    private var flight: Task<Void, Never>?
-    /// Told what becomes of words heard ahead: their input written, each piece of their reply as
-    /// Claude Code writes it (as `writes` is for a request's), and how their turn ended.
-    private var hearings: (@Sendable (Hearing) -> Void)?
-
-    /// What becomes of words heard ahead (`hearings(to:)`), by the person's nonce.
-    public enum Hearing: Sendable, Equatable {
-        /// Their input is about to be written to Claude Code's stdin.
-        case began(String)
-        /// A piece of their reply, once the turn is Claude Code's own.
-        case frame(ReplyFrame)
-        /// Their turn ended.
-        case ended(String, HeardEnd)
-    }
-
-    /// How a turn on words heard ahead ended.
-    public enum HeardEnd: Sendable, Equatable {
-        /// Answered: the reply waits for its turn, and is written by the pass that binds it.
-        case answered
-        /// Taken up and ended with no answer, or cut off: it is not asked again by itself.
-        case unanswered
-        /// Never taken up (the process exited first): the turn is asked afresh once it is saved.
-        case notReceived
-        /// No longer listened to (a stop, a sleep, a sign-out): the record stays, and the next
-        /// request listens to the process again or concludes it.
-        case cancelled
-        /// Given up on at a bound (`NativeBrainError.stalled`): the mind stops, as for any turn.
-        case stalled(NativeBrainError.Stall)
-        /// Claude Code is signed out: the mind stops.
-        case signedOut
-
-        /// The end's name, for a mark.
-        public var name: String {
-            switch self {
-            case .answered: "answered"
-            case .unanswered: "unanswered"
-            case .notReceived: "notReceived"
-            case .cancelled: "cancelled"
-            case .stalled(.silent): "stalled silent"
-            case .stalled(.tooLong): "stalled tooLong"
-            case .signedOut: "signedOut"
-            }
-        }
-
-        /// Whether what was streamed of the reply goes: no reply is to come of this turn.
-        var cuts: Bool {
-            switch self {
-            case .answered, .notReceived: false
-            default: true
-            }
-        }
-    }
-
-    /// Why words handed over were not heard (`hearAhead`): a name, nothing of the words.
-    public enum HearRefusal: String, Sendable, Equatable {
-        /// A turn is with the process, or a reply is owed or cut off: one input at a time.
-        case busy
-        /// The ledger could not be read.
-        case unreadable
-        /// Words heard ahead already wait for their turn.
-        case early
-        /// The conversation has nothing of the log in it: the words wait for a read to tell it.
-        case fresh
-        /// The turn under the nonce is answered, being answered, or was moved past.
-        case settled
-        /// No resident process up on the words' model: starting one is the pass's to do.
-        case process
-        /// The caller stopped.
-        case cancelled
-        /// The record could not be written.
-        case failed
-    }
-
-    /// Five minutes: how long words heard ahead wait unbound for their turn before the next words
-    /// handed over, or the next request, moves past them. A phone saves its turn within a second
-    /// or two on the LAN; a turn that never comes (taken back and said again changed) would
-    /// otherwise keep every later hand-over out.
-    public static let earlyBound: TimeInterval = 300
 
     /// Where a turn asked of the brain stands with the process (`stages(to:)`).
     public enum Stage: Sendable, Equatable {
@@ -262,20 +179,14 @@ public actor NativeBrain: Brain {
 
     public func answer(_ request: BrainRequest) async throws -> Reply {
         let epoch = self.epoch
-        // While the mind is on words heard ahead their flight holds the slot, so this waits for
-        // their turn to end, whether or not it is this request's.
         await take()
         defer { release() }
         try current(epoch)
         guard readLedger() else { throw NativeBrainError.ledgerUnreadable(unread ?? "unknown") }
         let model = ClaudeModel.effective(request.model).rawValue
 
-        // The input outstanding is reconciled first, with words heard ahead whose turn this
-        // request answers bound to it: a hand-over that landed between the pass's bind and its
-        // ask is this request's input, never a second one.
-        reconciling: while true {
-            bindEarly(to: request)
-            guard let pending = ledger.pending else { break }
+        // The input outstanding is reconciled first.
+        if let pending = ledger.pending {
             if pending.nonce == request.nonce {
                 switch pending.state {
                 case .answered:
@@ -298,7 +209,6 @@ public actor NativeBrain: Brain {
                     ledger.pending = nil
                     try save()
                 }
-                break reconciling
             } else {
                 switch pending.state {
                 case .answered:
@@ -308,7 +218,6 @@ public actor NativeBrain: Brain {
                 case .received, .unresolved:
                     // The log has moved past an input the conversation took up: what it told is seen.
                     count(pending)
-                    ledger.settle(pending.said ?? [])
                     ledger.pending = nil
                     try save()
                 case .sent:
@@ -319,24 +228,18 @@ public actor NativeBrain: Brain {
             }
         }
 
-        // Words heard ahead that this request does not answer: concluded, and moved past if the
-        // log has gone on from their turn, before anything else is written to the process. Their
-        // turn among those this request answers is not told again (`heardHere`).
-        let heardHere = try await settleEarly(for: request, epoch: epoch)
-
         let process = try await running(model: model, epoch: epoch)
         let fresh = ledger.session == nil
         let unseen = request.context.filter { !ledger.seen.contains($0.ref) }
         let told = fresh ? Array(unseen.suffix(Self.contextLimit)) : unseen
-        let input = Self.render(unseen: told, answering: request.answering.filter { !heardHere.contains($0.ref) }, fresh: fresh)
+        let input = Self.render(unseen: told, answering: request.answering, fresh: fresh)
         var covers = MindCoverage(told.map(\.ref) + request.answering.map(\.ref))
         if fresh { covers.insert(request.context.map(\.ref)) }
         let id = UUID().uuidString.lowercased()
         // Recorded before it is written: after a crash this is what says the input may have gone.
         ledger.pending = .init(input: id, nonce: request.nonce, parents: request.parents,
                                answering: request.answering.map(\.ref), covers: covers,
-                               session: ledger.session, sentAt: Date(), state: .sent,
-                               said: request.answering.map(\.nonce))
+                               session: ledger.session, sentAt: Date(), state: .sent)
         try save()
         do {
             try await process.write(MindStream.userTurn(input, id: id))
@@ -350,48 +253,11 @@ public actor NativeBrain: Brain {
         return try await listen(id, begun: false, to: process, epoch: epoch, model: model)
     }
 
-    /// The runner found `person`, the log's one head, about to be answered under `reply`: words
-    /// heard ahead under its nonce are bound to it (`bindEarly`). A turn whose words were heard
-    /// and dropped unbound at the bound (`passed`) is held cut off instead, as a turn cut off is:
-    /// the mind has its words and may have run tools on them, so only the person asks again.
-    public func bind(nonce: String, person: Turn, reply: String) async {
-        guard readLedger(), person.nonce == nonce, ledger.pending == nil else { return }
-        if ledger.passed?.contains(nonce) == true {
-            ledger.passed?.removeAll { $0 == nonce }
-            ledger.pending = .init(input: "passed-" + UUID().uuidString.lowercased(), nonce: reply, parents: [person.ref],
-                                   answering: [person.ref], covers: MindCoverage([person.ref]), session: ledger.session,
-                                   sentAt: Date(), state: .unresolved, said: [nonce])
-            try? save()
-            Perf.mark("hub.hear.dropped heldCutOff")
-            return
-        }
-        bindEarly(person: person, reply: reply, parents: [person.ref])
-    }
-
-    /// Words heard ahead under `person`'s nonce, the saved words by their digest, wait for their
-    /// turn (`early`, or `kept` past the bound) and can be bound to it now: nothing else is
-    /// outstanding in the ledger's one record of an input. A request answering `person` alone is
-    /// then answered with their reply (`TurnRunner.answerPending` asks it so first, when the turn
-    /// is not the log's one head).
-    public func heardAhead(of person: Turn) async -> Bool {
-        guard readLedger(), ledger.pending == nil else { return false }
-        return heardRecord(for: person) != nil
-    }
-
-    /// The record of words heard ahead under `person`'s nonce with `person`'s words, unbound.
-    private func heardRecord(for person: Turn) -> MindLedger.Pending? {
-        let digest = Self.digest(person.text)
-        if let early = ledger.early, early.unbound, early.heard == person.nonce, early.digest == digest { return early }
-        return ledger.kept?.first { $0.heard == person.nonce && $0.digest == digest }
-    }
-
     public func landed(_ reply: Turn, nonce: String) async {
         guard readLedger(), let pending = ledger.pending, pending.nonce == nonce else { return }
         // Another device's reply under the nonce, for an input never known taken up, counts nothing.
         if pending.state != .sent { count(pending) }
         if pending.state == .answered, pending.text == reply.text { ledger.seen.insert([reply.ref]) }
-        // Words handed over under these nonces are not heard again: their reply is in the log.
-        ledger.settle(pending.said ?? [])
         ledger.pending = nil
         try? save()
     }
@@ -416,257 +282,6 @@ public actor NativeBrain: Brain {
         stages = hand
     }
 
-    /// Where what becomes of words heard ahead goes (`Hearing`); nil for nowhere.
-    public func hearings(to hand: (@Sendable (Hearing) -> Void)?) {
-        hearings = hand
-    }
-
-    // MARK: - Words heard ahead of their turn
-
-    /// The person's words, said under `nonce` with `model` chosen, handed over by the phone before
-    /// their turn is saved: recorded (`MindLedger.early`), written to the resident process as they
-    /// are, and their turn followed to its end by a flight of the brain's own, which holds the one
-    /// slot meanwhile and makes the write. Nil once they are recorded and the flight has them: the
-    /// mind has them, or, should the write fail, their record goes and their turn is asked afresh
-    /// once saved. Otherwise why not, with nothing recorded or written.
-    ///
-    /// Taken only when it can be clean: nothing with the process or outstanding in the ledger, no
-    /// words already heard ahead (bar those past `earlyBound`, moved past here), a conversation
-    /// that has been told the log, a resident up on the model, and a nonce whose turn is not
-    /// answered, being answered or moved past. Words already heard under the nonce, waiting or
-    /// kept, are heard once. Nothing is awaited before the record, which is the call's last step,
-    /// so a caller's cancellation is honoured up to it and the call returns at once.
-    public func hearAhead(_ words: String, nonce: String, model requested: ClaudeModel) async -> HearRefusal? {
-        guard readLedger() else { return .unreadable }
-        if let early = ledger.early, early.heard == nonce { return nil }
-        if ledger.kept?.contains(where: { $0.heard == nonce }) == true { return nil }
-        if ledger.settled?.contains(nonce) == true || ledger.passed?.contains(nonce) == true
-            || ledger.pending?.said?.contains(nonce) == true || ledger.pending?.heard == nonce { return .settled }
-        guard !busy else { return .busy }
-        if let early = ledger.early {
-            // Words heard ahead wait for their turn until the bound, and are moved past only once
-            // their end is known.
-            guard early.state != .sent, early.state != .received,
-                  Date().timeIntervalSince(early.sentAt) >= configuration.earlyBound else { return .early }
-            moveEarlyPast(early, why: "bound")
-        }
-        guard ledger.pending == nil else { return .busy }
-        guard ledger.session != nil else { return .fresh }
-        let model = ClaudeModel.effective(requested).rawValue
-        guard let resident, !resident.stalled, !resident.process.hasExited, resident.model == model else { return .process }
-        guard !Task.isCancelled else { return .cancelled }
-        let process = resident.process, epoch = self.epoch
-        let id = UUID().uuidString.lowercased()
-        // Recorded before it is written: after a crash this is what says the words may have gone.
-        ledger.early = .init(input: id, nonce: "", parents: [], answering: [], covers: MindCoverage(),
-                             session: ledger.session, sentAt: Date(), state: .sent, heard: nonce,
-                             digest: Self.digest(words), said: [nonce])
-        do { try save() } catch {
-            ledger.early = nil
-            return .failed
-        }
-        busy = true
-        hearings?(.began(nonce))
-        flight = Task { await self.fly(words, id, nonce: nonce, process: process, epoch: epoch, model: model) }
-        return nil
-    }
-
-    /// Stops listening to the words heard ahead, if the mind is on them: their record stays as it
-    /// stands, the process keeps the turn, and the next request listens to it again or concludes
-    /// it. Returns once the flight has given the slot back. What a stop or a sleep of the hub does.
-    public func stopFlight() async {
-        guard let flight else { return }
-        flight.cancel()
-        await flight.value
-    }
-
-    /// The turn on words heard ahead: written to the process, then followed to its end and
-    /// concluded onto whichever record holds the input by then: `early`, or `pending` once bound.
-    /// Holds the slot until it ends. A write that fails leaves nothing of the words with the mind,
-    /// and their record goes: their turn is asked afresh once it is saved.
-    private func fly(_ words: String, _ id: String, nonce: String, process: MindProcess, epoch: Int, model: String) async {
-        let end: HeardEnd
-        do {
-            try await process.write(MindStream.userTurn(words, id: id))
-        } catch {
-            if self.epoch == epoch, holds(id) { clear(id); try? save() }
-            Perf.mark("hub.hear.end notReceived")
-            flight = nil
-            hearings?(.ended(nonce, .notReceived))
-            release()
-            return
-        }
-        Perf.mark("hub.hear.asked hear=\(HubMind.mark(of: nonce))")
-        if resident?.process === process { resident?.sent.insert(id) }
-        do {
-            _ = try await listen(id, begun: false, to: process, epoch: epoch, model: model, heard: true)
-            end = .answered
-        } catch NativeBrainError.stalled(let stall) {
-            end = .stalled(stall)
-        } catch NativeBrainError.notSignedIn {
-            end = .signedOut
-        } catch NativeBrainError.unresolved {
-            end = .unanswered
-        } catch NativeBrainError.failed {
-            // Cleared as never taken up, or concluded onto a record a landed reply took away.
-            end = .notReceived
-        } catch {
-            end = .cancelled
-        }
-        Perf.mark("hub.hear.end \(end.name)")
-        flight = nil
-        hearings?(.ended(nonce, end))
-        release()
-    }
-
-    /// The words heard ahead under the nonce of the one person turn `request` answers are bound to
-    /// it, when nothing else is outstanding: `pending` from then on, under the request's reply
-    /// nonce and parents. The parents may be more than the turn: the heads a skipped one (held
-    /// unresolved) stands beside, which the reply continues too.
-    @discardableResult
-    private func bindEarly(to request: BrainRequest) -> Bool {
-        guard request.answering.count == 1, let person = request.answering.first,
-              request.parents.contains(person.ref) else { return false }
-        return bindEarly(person: person, reply: request.nonce, parents: request.parents)
-    }
-
-    /// The words heard under `person`'s nonce are in the log as `person`, and their reply goes
-    /// under `reply` with `parents`. Words that are not the saved turn's, by their digest, are not
-    /// its input: the saved turn wins, and they are moved past. Words answered and kept past the
-    /// bound (`kept`) bind as words still waiting do.
-    @discardableResult
-    private func bindEarly(person: Turn, reply: String, parents: [TurnRef]) -> Bool {
-        guard ledger.pending == nil else { return false }
-        var record: MindLedger.Pending
-        if let early = ledger.early, early.unbound, early.heard == person.nonce {
-            guard early.digest == Self.digest(person.text) else {
-                moveEarlyPast(early, why: "differs")
-                return false
-            }
-            ledger.early = nil
-            record = early
-        } else if let at = ledger.kept?.firstIndex(where: { $0.heard == person.nonce }), let kept = ledger.kept?[at] {
-            ledger.kept?.remove(at: at)
-            guard kept.digest == Self.digest(person.text) else {
-                // The mind answered other words: the saved turn is asked as any turn is.
-                count(kept)
-                try? save()
-                Perf.mark("hub.hear.dropped differs")
-                return false
-            }
-            record = kept
-        } else {
-            return false
-        }
-        record.nonce = reply
-        record.parents = parents
-        record.answering = [person.ref]
-        record.covers.insert([person.ref])
-        ledger.pending = record
-        try? save()
-        Perf.mark("hub.hear.bound hear=\(HubMind.mark(of: person.nonce))")
-        return true
-    }
-
-    /// Words heard ahead are no turn's input: what the mind took up of them is counted seen (they
-    /// told it nothing of the log), and they leave the ledger. `turn`, their saved turn the log
-    /// went on from with the very words, is counted seen too, so it is not told again. At the
-    /// bound, words the mind answered are kept with their reply for their turn (`kept`), and any
-    /// others leave their nonce behind (`passed`), so a turn saved under it later is held cut off.
-    private func moveEarlyPast(_ early: MindLedger.Pending, why: String, turn: TurnRef? = nil) {
-        if early.state != .sent { count(early) }
-        if let turn, early.state != .sent { ledger.seen.insert([turn]) }
-        if why == "bound", let heard = early.heard {
-            if early.state == .answered {
-                var kept = (ledger.kept ?? []) + [early]
-                // The oldest kept past the limit leaves its nonce, as words dropped at the bound do.
-                while kept.count > MindLedger.keptLimit, let old = kept.first?.heard {
-                    kept.removeFirst()
-                    ledger.passed = Array(((ledger.passed ?? []) + [old]).suffix(MindLedger.settledLimit))
-                }
-                ledger.kept = kept
-            } else {
-                ledger.passed = Array(((ledger.passed ?? []) + [heard]).suffix(MindLedger.settledLimit))
-            }
-        }
-        if turn != nil { ledger.settle(early.said ?? []) }
-        ledger.early = nil
-        try? save()
-        Perf.mark("hub.hear.dropped \(why == "bound" && early.state == .answered ? "kept" : why)")
-    }
-
-    /// Before a request's own input is written, with the slot held: words heard ahead that it does
-    /// not answer are concluded — listened to on the process that has them, or judged as a gone
-    /// process's input is — and moved past when the request shows their turn (the log went on from
-    /// it, answered elsewhere, or it is one of several the request answers) or they have waited
-    /// `earlyBound`; otherwise they wait for their turn. A turn of words the mind took up is counted
-    /// seen as they go, so the request does not tell it again; the reply the mind made of them is
-    /// in no turn, and is not. Words kept past the bound whose turn the request shows go the same
-    /// way. Returns the turns among those the request answers whose words the mind has so, which
-    /// the input leaves out: only a turn saved with the very words heard, by their digest.
-    private func settleEarly(for request: BrainRequest, epoch: Int) async throws -> Set<TurnRef> {
-        let turns = request.context + request.answering
-        let answering = Set(request.answering.map(\.ref))
-        var heardHere: Set<TurnRef> = []
-        // Kept words whose turn the log holds, and which this request does not bind: told already.
-        for kept in ledger.kept ?? [] {
-            guard let turn = turns.first(where: { $0.role == .person && $0.nonce == kept.heard }) else { continue }
-            ledger.kept?.removeAll { $0.input == kept.input }
-            count(kept)
-            if kept.digest == Self.digest(turn.text) {
-                ledger.seen.insert([turn.ref])
-                ledger.settle(kept.said ?? [])
-                if answering.contains(turn.ref) { heardHere.insert(turn.ref) }
-            }
-            try? save()
-            Perf.mark("hub.hear.dropped movedPast")
-        }
-        guard var early = ledger.early else { return heardHere }
-        if early.state == .sent || early.state == .received {
-            if let resident, !resident.stalled, !resident.process.hasExited, resident.sent.contains(early.input) {
-                hearings?(.began(early.heard ?? ""))
-                var end = HeardEnd.answered
-                do {
-                    _ = try await listen(early.input, begun: early.state == .received, to: resident.process, epoch: epoch,
-                                         model: resident.model, heard: true)
-                } catch NativeBrainError.unresolved {
-                    end = .unanswered
-                } catch NativeBrainError.failed {
-                    end = .notReceived
-                } catch {
-                    hearings?(.ended(early.heard ?? "", .cancelled))
-                    throw error
-                }
-                hearings?(.ended(early.heard ?? "", end))
-            } else if early.state == .received {
-                ledger.early?.state = .unresolved
-                try? save()
-            } else {
-                ledger.early = nil
-                try? save()
-            }
-            guard let concluded = ledger.early else { return heardHere }
-            early = concluded
-        }
-        if let turn = turns.first(where: { $0.role == .person && $0.nonce == early.heard }) {
-            if early.digest == Self.digest(turn.text) {
-                moveEarlyPast(early, why: "movedPast", turn: turn.ref)
-                if answering.contains(turn.ref), early.state != .sent { heardHere.insert(turn.ref) }
-            } else {
-                // The saved turn says otherwise: it is told as said.
-                moveEarlyPast(early, why: "differs")
-            }
-        } else if Date().timeIntervalSince(early.sentAt) >= configuration.earlyBound {
-            moveEarlyPast(early, why: "bound")
-        }
-        return heardHere
-    }
-
-    /// The words' digest, which the ledger keeps in their place.
-    static func digest(_ words: String) -> String {
-        SHA256.hash(data: Data(words.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
     /// Recorded for `start()`; every request carries its own model, and a process asked with a
     /// model other than its own is replaced before the turn is written.
     public func use(model: ClaudeModel) async {
@@ -675,7 +290,6 @@ public actor NativeBrain: Brain {
 
     public func forget() async {
         epoch += 1
-        flight?.cancel()
         let gone = resident
         resident = nil
         ledger = MindLedger()
@@ -711,7 +325,6 @@ public actor NativeBrain: Brain {
         case .unresolved?: parts.append("a turn cut off, waiting for the person to ask again")
         case nil: break
         }
-        if ledger.early != nil { parts.append("words heard ahead of their turn, waiting for it") }
         return parts.joined(separator: "; ")
     }
 
@@ -908,12 +521,7 @@ public actor NativeBrain: Brain {
     /// Bounded twice, from when this listen began: no line at all for `silenceBound`, or no
     /// result within `turnBound`, and the turn is given up on (`stall`). Every line resets the
     /// silence, whatever it is, the turn's own or not, since any line is the process at work.
-    ///
-    /// The input's record is `pending`, or for words heard ahead (`heard`) `early` until it is
-    /// bound: whichever holds the input is the one concluded. Words heard ahead hand their pieces
-    /// to `hearings` and tell `stages` nothing, which are a pass's.
-    private func listen(_ id: String, begun: Bool, to process: MindProcess, epoch: Int, model: String,
-                        heard: Bool = false) async throws -> Reply {
+    private func listen(_ id: String, begun: Bool, to process: MindProcess, epoch: Int, model: String) async throws -> Reply {
         var begun = begun
         var words = MindWords()
         var answeredWith: String?
@@ -921,8 +529,6 @@ public actor NativeBrain: Brain {
         var signedOut = false
         let deadline = ContinuousClock.now + configuration.turnBound
         while true {
-            // A listener that stopped reads no further: the lines after stay for the next.
-            if Task.isCancelled { throw CancellationError() }
             let left = deadline - ContinuousClock.now
             guard left > .zero else { throw stall(id, .tooLong(configuration.turnBound), begun: begun, process: process, epoch: epoch) }
             switch await process.stdout.next(within: min(configuration.silenceBound, left)) {
@@ -937,26 +543,23 @@ public actor NativeBrain: Brain {
                 _ = await process.exited()
                 if resident?.process === process { resident = nil }
                 try current(epoch)
-                guard holds(id) else { throw NativeBrainError.failed("the record moved while the turn ran") }
+                guard ledger.pending?.input == id else { throw NativeBrainError.failed("the record moved while the turn ran") }
                 if begun {
-                    change(id) { $0.state = .unresolved }
+                    ledger.pending?.state = .unresolved
                     try? save()
                     throw NativeBrainError.unresolved("the process exited mid-turn")
                 }
-                clear(id)
+                ledger.pending = nil
                 try? save()
                 throw NativeBrainError.failed("Claude Code exited before it took the turn up")
             case .line(let line):
-                let hand: (ReplyFrame) -> Void = { [writes, hearings] frame in
-                    if heard { hearings?(.frame(frame)) } else { writes?(frame) }
-                }
                 for event in MindStream.events(in: line) {
                     guard begun else {
                         if case .received(id) = event {
                             begun = true
-                            if !heard { stages?(.received) }
-                            if self.epoch == epoch, holds(id) {
-                                change(id) { $0.state = .received }
+                            stages?(.received)
+                            if self.epoch == epoch, ledger.pending?.input == id {
+                                ledger.pending?.state = .received
                                 try? save()
                             }
                         }
@@ -968,11 +571,11 @@ public actor NativeBrain: Brain {
                     case .text(let text, let message):
                         words.append(text, of: message)
                     case .writingBegan:
-                        hand(.message)
+                        writes?(.message)
                     case .writing(let more):
-                        hand(.text(more))
+                        writes?(.text(more))
                     case .toolCallBegan:
-                        hand(.tool)
+                        writes?(.tool)
                     case .signedOut:
                         signedOut = true
                     case .usage(let context, let output):
@@ -1002,31 +605,11 @@ public actor NativeBrain: Brain {
                        epoch: Int) -> any Error {
         if resident?.process === process { resident?.stalled = true }
         guard self.epoch == epoch else { return CancellationError() }
-        if holds(id) {
-            if begun { change(id) { $0.state = .unresolved } } else { clear(id) }
+        if ledger.pending?.input == id {
+            if begun { ledger.pending?.state = .unresolved } else { ledger.pending = nil }
             try? save()
         }
         return NativeBrainError.stalled(stall)
-    }
-
-    /// Whether the input `id` is the ledger's: `pending`'s, or the words heard ahead's.
-    private func holds(_ id: String) -> Bool { ledger.pending?.input == id || ledger.early?.input == id }
-
-    /// Changes whichever record holds the input `id`.
-    private func change(_ id: String, _ body: (inout MindLedger.Pending) -> Void) {
-        if ledger.pending?.input == id, var record = ledger.pending {
-            body(&record)
-            ledger.pending = record
-        } else if ledger.early?.input == id, var record = ledger.early {
-            body(&record)
-            ledger.early = record
-        }
-    }
-
-    /// The record of the input `id` goes: it was never taken up.
-    private func clear(_ id: String) {
-        if ledger.pending?.input == id { ledger.pending = nil }
-        if ledger.early?.input == id { ledger.early = nil }
     }
 
     // MARK: - A resident left behind
@@ -1067,27 +650,23 @@ public actor NativeBrain: Brain {
     private func finish(_ id: String, _ result: MindEvent.Result, words: MindWords, signedOut: Bool, epoch: Int,
                         model: String, usage: (context: Int, output: Int)?) throws -> Reply {
         try current(epoch)
-        guard holds(id) else { throw NativeBrainError.failed("the record moved while the turn ran") }
+        guard ledger.pending?.input == id else { throw NativeBrainError.failed("the record moved while the turn ran") }
         if signedOut {
             // Not counted: once signed in, the turn and what it carried are told again.
-            clear(id)
+            ledger.pending = nil
             try? save()
             throw NativeBrainError.notSignedIn(result.text ?? "Claude Code's login failed")
         }
         if result.isError {
-            change(id) {
-                $0.state = .unresolved
-                $0.session = result.session ?? $0.session
-            }
+            ledger.pending?.state = .unresolved
+            ledger.pending?.session = result.session ?? ledger.pending?.session
             try? save()
             throw NativeBrainError.unresolved("Claude Code ended the turn with an error (\(result.subtype))")
         }
         let text = words.text.isEmpty ? result.text ?? "" : words.text
-        change(id) {
-            $0.state = .answered
-            $0.text = text
-            $0.session = result.session ?? $0.session
-        }
+        ledger.pending?.state = .answered
+        ledger.pending?.text = text
+        ledger.pending?.session = result.session ?? ledger.pending?.session
         try save()
         return Reply(text: text, model: model, context: usage?.context ?? 0, outputTokens: usage?.output ?? 0)
     }

@@ -37,30 +37,11 @@ struct MindCoverage: Codable, Equatable, Sendable {
 }
 
 /// The mind's record on disk: the session its conversation is, what of the log that conversation
-/// has been told, the one input outstanding, recorded before it is sent, and the one input given
-/// ahead of its turn (`early`).
+/// has been told, and the one input outstanding, recorded before it is sent.
 struct MindLedger: Codable, Equatable, Sendable {
     var session: String?
     var seen = MindCoverage()
     var pending: Pending?
-    /// The person's words a phone handed over before their turn was saved (`NativeBrain.hearAhead`),
-    /// recorded before they were written: waiting here, under the person's nonce (`heard`), until a
-    /// pass finds the turn and binds the input to it (`pending` from then on), the log moves past
-    /// it, or `NativeBrain.earlyBound` passes. Never owed and never unresolved while here: a reply
-    /// with no turn to continue has nowhere to be written.
-    var early: Pending?
-    /// The nonces of the person's turns whose replies were last known in the log, newest last:
-    /// words handed over under one are not heard again.
-    var settled: [String]?
-    /// The nonces of words heard ahead that were dropped unbound at the bound: a turn saved under
-    /// one later is held cut off, since the mind has its words and may have run tools on them.
-    var passed: [String]?
-    /// Words heard ahead that the mind answered and whose turn had not come by the bound, newest
-    /// last, at most `keptLimit`: their reply waits here for the turn, and is written bound to it
-    /// when it comes, however late. One pushed out by a newer one leaves its nonce in `passed`.
-    var kept: [Pending]?
-    static let settledLimit = 32
-    static let keptLimit = 8
 
     struct Pending: Codable, Equatable, Sendable {
         enum State: String, Codable, Sendable {
@@ -84,21 +65,6 @@ struct MindLedger: Codable, Equatable, Sendable {
         var sentAt: Date
         var state: State
         var text: String?
-        /// The person's nonce, for an input given ahead of its turn: its turn is saved under it.
-        var heard: String?
-        /// The SHA-256 of the words given ahead, which the saved turn's are checked against.
-        var digest: String?
-        /// The nonces the person's turns it answers were said under.
-        var said: [String]?
-
-        /// Words given ahead whose turn has not been found: no reply nonce, no parents yet.
-        var unbound: Bool { heard != nil && answering.isEmpty }
-    }
-
-    /// Remembers that the replies to the turns said under `nonces` are in the log.
-    mutating func settle(_ nonces: [String]) {
-        guard !nonces.isEmpty else { return }
-        settled = Array(((settled ?? []).filter { !nonces.contains($0) } + nonces).suffix(Self.settledLimit))
     }
 
     /// No file is an empty ledger. A file that cannot be read or decoded throws and is never taken

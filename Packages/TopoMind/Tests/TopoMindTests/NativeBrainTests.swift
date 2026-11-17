@@ -30,12 +30,9 @@ struct Rig {
     }
 
     func brain(grace: Duration = .seconds(20), silence: Duration = NativeBrain.standardSilence,
-               turn: Duration = NativeBrain.standardTurn, earlyBound: TimeInterval = NativeBrain.earlyBound) -> NativeBrain {
-        var configuration = NativeBrain.Configuration(workingDirectory: work, configDirectory: config, claude: claude,
-                                                      environment: environment, startBound: grace, silenceBound: silence,
-                                                      turnBound: turn)
-        configuration.earlyBound = earlyBound
-        return NativeBrain(configuration)
+               turn: Duration = NativeBrain.standardTurn) -> NativeBrain {
+        NativeBrain(.init(workingDirectory: work, configDirectory: config, claude: claude,
+                          environment: environment, startBound: grace, silenceBound: silence, turnBound: turn))
     }
 
     func lines(_ name: String) -> [[String: Any]] {

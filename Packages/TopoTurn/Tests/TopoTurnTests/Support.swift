@@ -25,12 +25,6 @@ final class ScriptedBrain: Brain, @unchecked Sendable {
         lock.withLock { _requests.append(request) }
         await duringAnswer?()
         let next = lock.withLock { answers.isEmpty ? .failure(Refused()) : answers.removeFirst() }
-        lock.withLock {
-            for person in request.answering where _heardAhead.contains(person.nonce) {
-                _heardAhead.remove(person.nonce)
-                if cutsOffHeard, case .failure = next { _cutOff.insert(person.ref) }
-            }
-        }
         return Reply(text: try next.get(), model: request.model.rawValue, context: 0, outputTokens: 0)
     }
 
@@ -52,20 +46,6 @@ final class ScriptedBrain: Brain, @unchecked Sendable {
     func bind(nonce: String, person: Turn, reply: String) async {
         lock.withLock { _bound.append((nonce, person, reply)) }
     }
-
-    private var _heardAhead: Set<String> = []
-    private var _cutOff: Set<TurnRef> = []
-    /// The nonces of turns this brain says it heard ahead and can bind now (`heardAhead(of:)`),
-    /// until a request answers that turn.
-    var heardAheadNonces: Set<String> {
-        get { lock.withLock { _heardAhead } }
-        set { lock.withLock { _heardAhead = newValue } }
-    }
-    /// A request that fails for a turn heard ahead leaves it held as unresolved.
-    var cutsOffHeard = false
-
-    func heardAhead(of person: Turn) async -> Bool { lock.withLock { _heardAhead.contains(person.nonce) } }
-    func unresolved() async -> Set<TurnRef> { lock.withLock { _cutOff } }
 
     func landed(_ reply: Turn, nonce: String) async {
         lock.withLock {

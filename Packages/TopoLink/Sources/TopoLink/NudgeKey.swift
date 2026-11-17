@@ -188,13 +188,6 @@ public actor NudgeKeys {
         }
     }
 
-    /// The key kept for `lease`'s holder at its epoch, with nothing read: what a hand-over of the
-    /// person's words uses (`HubNudge.hear`), since nothing may be awaited before the turn's save.
-    public func kept(for lease: Lease) -> NudgeKey? {
-        guard let kept = kept[lease.holder], kept.epoch == lease.epoch else { return nil }
-        return kept.key
-    }
-
     /// The copy of `key` is dropped, if it is still the one kept.
     public func failed(_ key: NudgeKey) {
         if kept[key.hub]?.key.identity == key.identity { kept[key.hub] = nil }

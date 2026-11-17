@@ -569,69 +569,9 @@ public actor TurnRunner {
                 await brain.landed(answered, nonce: nonce)
                 return answered
             }
-            return try await answerHeardFirst(answering, in: transcript, nonce: nonce, model: await chosen) ?? settled
+            return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
         }
-        return try await answerHeardFirst(answering, in: transcript, nonce: nonce, model: await chosen) ?? settled
-    }
-
-    /// Answers `answering`, continuing `transcript` under `nonce`, after the turns the brain heard
-    /// ahead of their save (`Brain.heardAhead(of:)`) that are not the log's one head: one of
-    /// several heads (another device's turn landed beside it, or the log forked under it), or
-    /// behind the head with no reply of its own (the person said more before the reply came).
-    /// Each is answered first and alone, its reply written as its own child under its own reply
-    /// nonce in the lease's batch, so the reply the brain made of the words reaches the log bound
-    /// to their turn, and before anything said after them is asked; the rest are then asked
-    /// continuing the log with those replies in it, and the words are told nothing again. One
-    /// whose answer is cut off (the brain then holds it unresolved) is skipped as any unresolved
-    /// head is. The reply this pass brought last, or nil when it brought none.
-    private func answerHeardFirst(_ answering: [Turn], in transcript: Transcript, nonce: String,
-                                  model: ClaudeModel) async throws -> Turn? {
-        var transcript = transcript, answering = answering, nonce = nonce, brought: Turn?
-        let lone = transcript.heads.count == 1 ? transcript.heads.first : nil
-        for heard in Self.unanswered(transcript) where heard.ref != lone {
-            guard await brain.heardAhead(of: heard) else { continue }
-            let own = Self.replyNonce(for: [heard.ref])
-            let reply: Turn
-            if let there = try await log.turn(appendedUnder: own) {
-                // Written already, its acknowledgement lost.
-                await brain.landed(there, nonce: own)
-                reply = there
-            } else {
-                do {
-                    reply = try await answer([heard], in: transcript, parents: [heard.ref], nonce: own, model: model)
-                } catch TurnRunnerError.answerFailed(let turns, let underlying) {
-                    // Cut off: skipped, as any head the brain holds as unresolved.
-                    guard await brain.unresolved().contains(heard.ref) else {
-                        throw TurnRunnerError.answerFailed(answering: turns, underlying: underlying)
-                    }
-                    answering.removeAll { $0.ref == heard.ref }
-                    continue
-                }
-            }
-            brought = reply
-            answering.removeAll { $0.ref == heard.ref }
-            // The log as read, with the reply in it: the rest continue it.
-            transcript = Transcript(turns: Array(transcript.turns.values) + [reply])
-            nonce = Self.replyNonce(for: transcript.heads)
-            if !answering.isEmpty, let answered = try await log.turn(appendedUnder: nonce) {
-                await brain.landed(answered, nonce: nonce)
-                return answered
-            }
-        }
-        guard !answering.isEmpty else { return brought }
-        return try await answer(answering, in: transcript, nonce: nonce, model: model)
-    }
-
-    /// The person's turns no reply continues, in order: those still waiting for an answer, at
-    /// the heads or behind them.
-    static func unanswered(_ transcript: Transcript) -> [Turn] {
-        var covered: Set<TurnRef> = []
-        var stack = transcript.turns.values.filter { $0.role == .assistant }.map(\.ref)
-        while let next = stack.popLast() {
-            guard let turn = transcript[next], covered.insert(next).inserted else { continue }
-            stack.append(contentsOf: turn.parents)
-        }
-        return transcript.ordered.filter { $0.role == .person && !covered.contains($0.ref) }
+        return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
     }
 
     /// The renewal of a lease this device holds fresh, answered by the server: true while it is
@@ -648,11 +588,10 @@ public actor TurnRunner {
     }
 
     /// Asks the brain for the reply to `answering` and writes it continuing `transcript`, under
-    /// `nonce`, in one batch with a heartbeat of the lease; with `parents`, as their child instead.
-    private func answer(_ answering: [Turn], in transcript: Transcript, parents: [TurnRef]? = nil, nonce: String,
-                        model: ClaudeModel) async throws -> Turn {
+    /// `nonce`, in one batch with a heartbeat of the lease.
+    private func answer(_ answering: [Turn], in transcript: Transcript, nonce: String, model: ClaudeModel) async throws -> Turn {
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
-                                   answering: answering, parents: parents ?? transcript.heads, nonce: nonce, model: model)
+                                   answering: answering, parents: transcript.heads, nonce: nonce, model: model)
         let reply: Reply
         // A pass that was stopped while it read the log or renewed the lease asks nothing.
         try Task.checkCancellation()
@@ -663,18 +602,11 @@ public actor TurnRunner {
         }
         // A pass that was stopped — a sign-out cancels the one in flight — writes nothing.
         try Task.checkCancellation()
-        // The transcript the reply continues is a read the pass made, and the writer is not asked
-        // again for its next record when the read already asked (`Transcript.free`): one this
-        // device wrote since is the save's to find, which takes that number or writes nothing
-        // (`TurnWriter.append`, `justRead`). A read with a reply of this pass's added to it
-        // (`answerHeardFirst`) has asked nothing, and the writer asks.
-        let written = if let parents {
-            try await writer.append(.assistant, reply.text, parents: parents, nonce: nonce, renewing: lease)
-        } else {
-            try await writer.append(.assistant, reply.text, continuing: transcript, nonce: nonce, justRead: true,
-                                    renewing: lease)
-        }
-        guard let assistant = written else {
+        // The read the pass made is the transcript the reply continues, and the writer is not
+        // asked again for its next record: one this device wrote since the read is the save's
+        // to find, which takes that number or writes nothing (`TurnWriter.append`, `justRead`).
+        guard let assistant = try await writer.append(.assistant, reply.text, continuing: transcript,
+                                                      nonce: nonce, justRead: true, renewing: lease) else {
             // Another device took the lease: it answers from here, and nothing is heard ahead of it.
             standing = .elsewhere
             throw TurnRunnerError.displaced

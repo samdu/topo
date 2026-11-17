@@ -122,8 +122,6 @@ public actor HubMind {
     /// Internal for the suites, which read what it holds after a stop.
     let lease: PrimaryLease
     private let log: TurnLog
-    /// The log read straight from the store, outside any pass's marks: what a hand-over reads.
-    private let gate: TurnLog
     private let login: @Sendable () async -> MindLogin
     private let prepare: @Sendable () throws -> Void
     private let model: @Sendable () -> ClaudeModel
@@ -153,17 +151,6 @@ public actor HubMind {
     private var nudged: [(mark: String, answer: CheckedContinuation<Bool, Never>)] = []
     /// Passes run again after a nudged one found nothing, since the last that found something.
     private var againAfterNudge = 0
-    /// Whether words handed over ahead of their turn are heard (`hear`): once a pass of this
-    /// session has answered, until the next start or a pass that had to ask for the lease and did
-    /// not answer. While this Mac holds the lease every turn of the log is its
-    /// mind's to answer, so a mind that answered since it last took the lease has been told the
-    /// log, and words given it with no read are given after all of it.
-    private var hearReady = false
-    /// The hand-overs being heard, which a stop cancels and waits for before it waits for the session.
-    private var hearing: [UUID: Task<NativeBrain.HearRefusal?, Never>] = [:]
-    /// A pass is running: one may be reading a turn the mind has not been told, which words heard
-    /// now would go ahead of.
-    private var passing = false
 
     /// - Parameters:
     ///   - database: the log's store; the lease, the log and the writer all go through it.
@@ -193,7 +180,6 @@ public actor HubMind {
         self.lease = PrimaryLease(database: timedDatabase, device: device, endpoint: endpoint, probe: probe,
                                   timing: timing, sleep: leaseSleep)
         self.log = TurnLog(database: timedDatabase)
-        self.gate = TurnLog(database: database)
         self.login = login
         self.prepare = prepare
         self.model = model
@@ -316,111 +302,6 @@ public actor HubMind {
         return await withCheckedContinuation { nudged.append((mark.lowercased(), $0)) }
     }
 
-    /// A phone's hand-over of the person's words, said under `nonce` with `model` chosen, before
-    /// their turn is saved (`HubNudge.hear`): the mind hears them now (`NativeBrain.hearAhead`) and
-    /// the pass that finds the turn binds its reply to it, so the mind is asked a pass's whole read
-    /// sooner. True once the mind has them. False, with nothing written, unless this Mac holds the
-    /// lease `holder` at `epoch` fresh, the loop is answering (not off, asleep, stopped, starting
-    /// or holding off) and ready to hear (`hearReady`), the model is one of the person's choices,
-    /// the zone's change feed shows nothing of the log waiting for the mind (`toldWhole`, one
-    /// request, within `hearReadBound`; a turn waiting asks for a pass), and the mind can take
-    /// them cleanly (`NativeBrain.HearRefusal`). The turn comes in the log as ever, and the reply
-    /// is written only by a pass, under the reply nonce of the turn saved, in the lease's batch.
-    /// Cancelled, it answers whether the words were recorded before the cancellation landed.
-    public func hear(holder: DeviceID, epoch: Int64, nonce: String, model: String, words: String) async -> Bool {
-        let mark = Self.mark(of: nonce)
-        Perf.mark("hub.hear.received hear=\(mark)")
-        guard let chosen = ClaudeModel(rawValue: model) ?? ClaudeModel(setting: model) else {
-            Perf.mark("hub.hear.dropped model")
-            return false
-        }
-        let g = generation
-        guard answers(g), await holds(holder, epoch: epoch), answers(g) else {
-            Perf.mark("hub.hear.dropped notAnswering")
-            return false
-        }
-        // The mind has been told the whole log only if nothing in it waits: a turn another device
-        // saved since the last pass, whose push or poll has not come yet, would be told after
-        // these words. The zone's change feed says so in one request; a pass is asked for at once.
-        let told = await toldWhole()
-        guard answers(g), !Task.isCancelled else {
-            Perf.mark("hub.hear.dropped notAnswering")
-            return false
-        }
-        guard told else {
-            Perf.mark("hub.hear.dropped waiting")
-            if requested == nil { requested = .poll }
-            waiting?.cancel()
-            return false
-        }
-        let id = UUID()
-        let task = Task { [brain] in await brain.hearAhead(words, nonce: nonce, model: chosen) }
-        hearing[id] = task
-        // A caller that gives up (the probe server at its bound) cancels the hear: the words are
-        // then recorded or not, and the answer says which.
-        let refusal = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
-        hearing[id] = nil
-        if let refusal {
-            Perf.mark("hub.hear.dropped \(refusal.rawValue)")
-            return false
-        }
-        return true
-    }
-
-    /// Two seconds: how long a hand-over waits for the zone's change feed before it is refused.
-    static let hearReadBound: Duration = .seconds(2)
-
-    /// Whether the zone's change feed, read now within `hearReadBound`, holds the whole log with
-    /// nothing in it waiting for the mind: no person's turn at a head but those the mind holds cut
-    /// off. A read that fails, runs out or is cancelled is not.
-    private func toldWhole() async -> Bool {
-        let gate = self.gate
-        // The read is left to end on its own once the bound or a cancellation has answered.
-        let answer = FirstAnswer<Transcript?>()
-        let reading = Task { answer.give(try? await gate.feed()) }
-        let timer = Task {
-            try? await Task.sleep(for: Self.hearReadBound)
-            answer.give(nil)
-        }
-        let read = await withTaskCancellationHandler { await answer.value } onCancel: { answer.give(nil) }
-        timer.cancel()
-        _ = reading
-        guard let read, read.isComplete else { return false }
-        return !TurnRunner.awaitsReply(read, skipping: await brain.unresolved())
-    }
-
-    /// Whether the session `g` is answering and ready to hear words ahead of their turn: every
-    /// start, stop, halt and pass that asked for the lease takes `hearReady` away. Not while a pass
-    /// runs, is asked for or is owed a nudge: the log has, or may have, a turn the mind has not
-    /// been told, and words heard now would be told ahead of it.
-    private func answers(_ g: Int) -> Bool {
-        g == generation && hearReady && !passing && requested == nil && nudged.isEmpty
-    }
-
-    /// How a turn on words heard ahead ended, told by the brain: one given up on or signed out
-    /// stops the mind, as a pass's does.
-    private func heardEnded(_ end: NativeBrain.HeardEnd, _ g: Int) async {
-        let why: Stop
-        switch end {
-        case .stalled(let stall): why = .stalled(stall)
-        case .signedOut: why = .signedOut
-        default: return
-        }
-        // The session is not this task's, as a pass's halt is: it is stopped as the switch stops
-        // it, and then the mind is left stopped, saying why.
-        guard g == generation, on, !asleep, session != nil else { return }
-        await stop()
-        // A sleep and a wake while the stop waited for the lease to settle have started the mind
-        // again, on a process of its own: that one is not shut down.
-        guard on, !asleep, session == nil else { return }
-        _ = await brain.shutdown()
-        guard on, !asleep, session == nil else { return }
-        if why == .signedOut { loginState = .signedOut }
-        phase = .stopped(why)
-        Perf.mark("hub.mind.stopped \(Self.name(of: why))")
-        await publish()
-    }
-
     /// Whether a turn a nudge named is not in the log as read now: a pass that found nothing may
     /// have read the zone's change feed before it had the phone's save. A mark is the first eight
     /// letters or digits of the turn's nonce (`Harness.turnMark`). A read that fails is unseen.
@@ -473,7 +354,6 @@ public actor HubMind {
         let g = generation
         session?.cancel()
         requested = nil
-        hearReady = false
         session = Task { await self.run(g) }
     }
 
@@ -489,22 +369,9 @@ public actor HubMind {
         running?.cancel()
         waiting?.cancel()
         await lease.abandon()
-        await stopHearing()
         await running?.value
         await lease.settled()
         releaseNudges()
-    }
-
-    /// Words on their way to the mind ahead of their turn stop, and the mind stops listening to
-    /// any it has, before a stop waits for its session: a pass waiting for the one slot behind
-    /// them would otherwise hold the stop for the whole of their turn. What the mind has of them
-    /// it keeps, as for a turn a sleep cut off.
-    private func stopHearing() async {
-        hearReady = false
-        let handing = Array(hearing.values)
-        handing.forEach { $0.cancel() }
-        for task in handing { _ = await task.value }
-        await brain.stopFlight()
     }
 
     private func current(_ g: Int) -> Bool { g == generation && !Task.isCancelled }
@@ -537,18 +404,6 @@ public actor HubMind {
             // and to the pass's marks, with where the process has the turn.
             await brain.writes(to: { [cast, clock] in clock.wrote($0); cast.write($0) })
             await brain.stages(to: { [clock] in clock.brain($0) })
-            // What the mind writes of words heard ahead goes to the phones that follow their turn,
-            // on a lane of its own, and none of it to a pass's marks.
-            await brain.hearings(to: { [cast, weak self] hearing in
-                switch hearing {
-                case .began(let nonce): cast.beginHeard(nonce)
-                case .frame(let frame): cast.writeHeard(frame)
-                case .ended(_, let end):
-                    if end.cuts { cast.cutHeard() }
-                    cast.endHeard()
-                    Task { await self?.heardEnded(end, g) }
-                }
-            })
             // The process starts with the model the next turn most likely asks for.
             await brain.use(model: await startingModel())
             try await brain.start()
@@ -716,14 +571,9 @@ public actor HubMind {
     /// Every claim of it is made since the session's `mark`, so none is made after a stop's
     /// abandon. A reason to stop the mind, or nil.
     private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int, since mark: Int) async -> (Stop?, Pass.Outcome?) {
-        passing = true
-        defer { passing = false }
         passes += 1
         clock.begin(source.rawValue)
         if !(await lease.isPrimary()) {
-            // A lease asked for may have been another device's meanwhile, with turns answered
-            // there: words are not heard ahead until a pass has told the mind the log again.
-            hearReady = false
             // Lapsed, or taken: asked for, never taken from a holder this Mac yielded to.
             do {
                 let outcome = try await lease.acquire(since: mark)
@@ -760,12 +610,6 @@ public actor HubMind {
             return (nil, nil)
         }
         clock.end(Self.name(of: outcome))
-        switch outcome {
-        // A pass that answered told the mind the log as it read it, and wrote under the lease.
-        case .answered: hearReady = true
-        case .nothing: break
-        case .elsewhere, .displaced, .failed: hearReady = false
-        }
         lastPass = Pass(outcome: outcome, trigger: source, at: Date())
         await publish()
         return (nil, outcome)
@@ -793,7 +637,6 @@ public actor HubMind {
     /// here, and nothing more is done until it is started again.
     private func halt(_ stop: Stop, _ g: Int) async {
         guard current(g) else { return }
-        hearReady = false
         await lease.abandon()
         await lease.settled()
         _ = await brain.shutdown()
@@ -887,35 +730,6 @@ extension HubMind.Phase {
         case .answering: "answering"
         case .asleep: "asleep"
         case .stopped(let stop): "stopped " + HubMind.name(of: stop)
-        }
-    }
-}
-
-/// The first value given, to the one waiting for it; every later one is dropped.
-final class FirstAnswer<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var given: [T] = []
-    private var waiting: CheckedContinuation<T, Never>?
-
-    func give(_ value: T) {
-        let resume: CheckedContinuation<T, Never>? = lock.withLock {
-            guard given.isEmpty else { return nil }
-            given = [value]
-            defer { waiting = nil }
-            return waiting
-        }
-        resume?.resume(returning: value)
-    }
-
-    var value: T {
-        get async {
-            await withCheckedContinuation { continuation in
-                let now: T? = lock.withLock {
-                    if given.isEmpty { waiting = continuation }
-                    return given.first
-                }
-                if let now { continuation.resume(returning: now) }
-            }
         }
     }
 }

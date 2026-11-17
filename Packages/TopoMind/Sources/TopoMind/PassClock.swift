@@ -166,7 +166,6 @@ struct TimedBrain: Brain {
         await inner.hear(words, nonce: nonce, context: context, model: model)
     }
     func bind(nonce: String, person: Turn, reply: String) async { await inner.bind(nonce: nonce, person: person, reply: reply) }
-    func heardAhead(of person: Turn) async -> Bool { await inner.heardAhead(of: person) }
     func withdrawn(nonce: String) async { await inner.withdrawn(nonce: nonce) }
     func stopHearing(nonce: String) async { await inner.stopHearing(nonce: nonce) }
     func landed(_ reply: Turn, nonce: String) async { await inner.landed(reply, nonce: nonce) }

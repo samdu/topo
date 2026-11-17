@@ -9,10 +9,6 @@ public enum ReplyFrame: Sendable, Equatable {
     /// The mind is answering these person turns, in one reply continuing them all: every frame
     /// after this one, until the next, is that reply's.
     case turn([TurnRef])
-    /// The mind is answering the person's words said under this nonce, which the phone handed it
-    /// before their turn was saved (`HubNudge.hear`): every frame after this one, until the next, is
-    /// that reply's. The turn saved under the nonce is the one it answers.
-    case heard(String)
     /// A message of the reply begun (`StreamEvent.writingBegan`).
     case message
     /// The next characters of the message's words (`StreamEvent.writing`).
@@ -30,7 +26,6 @@ public enum ReplyFrame: Sendable, Equatable {
     public var line: Data {
         let object: [String: Any] = switch self {
         case .turn(let refs): ["k": "turn", "refs": refs.map(\.description)]
-        case .heard(let nonce): ["k": "heard", "n": nonce]
         case .message: ["k": "message"]
         case .text(let text): ["k": "text", "t": text]
         case .tool: ["k": "tool"]
@@ -61,9 +56,6 @@ public enum ReplyFrame: Sendable, Equatable {
         case "turn":
             guard let refs = (object["refs"] as? [String])?.compactMap(TurnRef.init(parsing:)), !refs.isEmpty else { return nil }
             self = .turn(refs)
-        case "heard":
-            guard let nonce = object["n"] as? String, !nonce.isEmpty else { return nil }
-            self = .heard(nonce)
         case "message": self = .message
         case "text":
             guard let text = object["t"] as? String else { return nil }
