@@ -42,6 +42,8 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     private var timer: DispatchSourceTimer?
     private var counters: (cpu: Double, idle: UInt64, interrupts: UInt64, at: ContinuousClock.Instant)?
     private var started = false
+    /// Whether a pulse has been written in this process: the first one's interval holds the launch.
+    private var pulsed = false
     private var file: FileHandle?
     private var written = 0
 
@@ -75,8 +77,11 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         guard let now = Self.read(), let last = counters else { return }
         let at = ContinuousClock.now
         let threads = Self.threads(main: mainThread)
+        let memory = Self.footprint()
         let dt = Self.interval(at - last.at)
         guard dt > 0 else { return }
+        let first = !pulsed
+        pulsed = true
         counters = (now.cpu, now.idle, now.interrupts, at)
         let cpu = now.cpu - last.cpu
         let split = Self.advance(process: cpu, before: threadLast, sample: threads)
@@ -103,12 +108,13 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         let app = UIApplication.shared.applicationState
         let line = String(
             format: "energy cpu %.1f%% of a core (%.2fs in %.0fs), wakeups %.0f/s idle %.0f/s interrupt, "
-                + "battery %.0f%% %@, thermal %@, lpm %@, %@, %@",
+                + "%@, battery %.0f%% %@, thermal %@, lpm %@, %@, %@%@",
             cpu / dt * 100, cpu, dt, Double(idle) / dt, Double(ints) / dt,
+            Self.said(footprint: memory),
             dev.batteryLevel * 100, charging, thermal,
             p.isLowPowerModeEnabled ? "on" : "off",
             app == .active ? "fg" : app == .background ? "bg" : "inactive",
-            await state())
+            await state(), first ? ", first since launch" : "")
         self.last = line
         write(line)
         if let line = split.line {
@@ -281,6 +287,35 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
         guard kr == KERN_SUCCESS else { return nil }
         return (Double(info.total_user + info.total_system) * tick,
                 info.task_platform_idle_wakeups, info.task_interrupt_wakeups)
+    }
+
+    /// This task's memory footprint now and its peak since launch, in bytes (`TASK_VM_INFO`'s
+    /// `phys_footprint`, the figure jetsam judges, and `ledger_phys_footprint_peak`); nil when the
+    /// kernel will not say, and a peak of nil when its answer is too short to carry one.
+    private static func footprint() -> (now: UInt64, peak: UInt64?)? {
+        var info = task_vm_info_data_t()
+        let full = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        var count = full
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return nil }
+        let peakEnd = MemoryLayout<task_vm_info_data_t>.offset(of: \.ledger_phys_footprint_peak)!
+            + MemoryLayout<Int64>.size
+        let peak = Int(count) * MemoryLayout<natural_t>.size >= peakEnd && info.ledger_phys_footprint_peak > 0
+            ? UInt64(info.ledger_phys_footprint_peak) : nil
+        return (info.phys_footprint, peak)
+    }
+
+    /// The pulse's footprint field, in MB: `footprint 412 MB peak 690 MB`, without the peak when
+    /// the kernel gave none, and `footprint unread` when it gave nothing.
+    static func said(footprint: (now: UInt64, peak: UInt64?)?) -> String {
+        guard let footprint else { return "footprint unread" }
+        let mb = { (b: UInt64) in String(format: "%.0f MB", Double(b) / 1_048_576) }
+        guard let peak = footprint.peak else { return "footprint " + mb(footprint.now) }
+        return "footprint \(mb(footprint.now)) peak \(mb(peak))"
     }
 
     static func interval(_ d: Duration) -> Double {
