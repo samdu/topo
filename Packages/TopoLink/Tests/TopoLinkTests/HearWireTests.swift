@@ -1,0 +1,152 @@
+import Foundation
+import Network
+import Testing
+import TopoCore
+@testable import TopoLink
+
+/// A hand-over of the person's words (`HubNudge.hear`, `ProbeWire.hear`): taken on the nudge's
+/// channel alone, length-prefixed and bounded, and nothing of it on the plain port or the wire.
+@Suite(.serialized) struct HearWireTests {
+    let hub = DeviceID("mac-hub")
+    let nonce = "7D3F2A10-4B5C-4D6E-8F90-A1B2C3D4E5F6"
+
+    private func lease(_ port: UInt16, epoch: Int64 = 3) -> Lease {
+        Lease(holder: hub, endpoint: "127.0.0.1:\(port)", epoch: epoch, expiresAt: Date().addingTimeInterval(60))
+    }
+
+    final class Heard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var got: [(Int64, String, String, String)] = []
+        var all: [(epoch: Int64, nonce: String, model: String, words: String)] { lock.withLock { got.map { ($0.0, $0.1, $0.2, $0.3) } } }
+        func add(_ e: Int64, _ n: String, _ m: String, _ w: String) { lock.withLock { got.append((e, n, m, w)) } }
+    }
+
+    /// A hub whose mind takes words at epoch 3.
+    private func hubServer(_ key: NudgeKey?, takes: Bool = true) async throws -> (LeaseProbeServer, UInt16, NudgeKey?, Heard) {
+        let heard = Heard()
+        let server = try LeaseProbeServer(advertising: nil, key: key, holds: { _, epoch in epoch == 3 },
+                                          nudged: { _, _, _, _ in true },
+                                          heard: { _, epoch, nonce, model, words in
+            heard.add(epoch, nonce, model, words)
+            return takes && epoch == 3
+        })
+        let port = try await server.start()
+        let bound = await server.securePort
+        return (server, port, bound.flatMap { key?.on(port: $0) }, heard)
+    }
+
+    @Test func wordsHandedOverOnTheChannelReachTheMindWhole() async throws {
+        let (server, port, key, heard) = try await hubServer(.mint(hub: hub))
+        defer { Task { await server.stop() } }
+        let words = "Turn the hall lights off.\nAnd then — ünïcode, a\u{0} null, and \"quotes\"."
+        #expect(await HubNudge.hear(words, nonce: nonce, model: "sonnet", for: lease(port), key: try #require(key)) == .heard)
+        let got = try #require(heard.all.first)
+        #expect(heard.all.count == 1)
+        #expect(got.words == words)
+        #expect(got.nonce == nonce)
+        #expect(got.model == "sonnet")
+        #expect(got.epoch == 3)
+    }
+
+    @Test func aMindThatDoesNotTakeThemIsAnsweredNo() async throws {
+        let (server, port, key, heard) = try await hubServer(.mint(hub: hub), takes: false)
+        defer { Task { await server.stop() } }
+        #expect(await HubNudge.hear("words", nonce: nonce, model: "sonnet", for: lease(port), key: try #require(key)) == .no)
+        #expect(heard.all.count == 1)
+    }
+
+    /// Mutant: the plain port taking a hand-over.
+    @Test func aHandOverOnThePlainPortIsAnsweredNoAndReachesNothing() async throws {
+        let (server, port, _, heard) = try await hubServer(.mint(hub: hub))
+        defer { Task { await server.stop() } }
+        let wire = ProbeWire.hear(lease(port), nonce: nonce, model: "sonnet", words: "words")
+        let answer = try await RawBytes.exchange(port, wire)
+        #expect(answer == "no")
+        #expect(heard.all.isEmpty)
+        // A hub with no key takes none on any port.
+        let (keyless, keylessPort, none, keylessHeard) = try await hubServer(nil)
+        defer { Task { await keyless.stop() } }
+        #expect(none == nil)
+        #expect(try await RawBytes.exchange(keylessPort, wire) == "no")
+        #expect(keylessHeard.all.isEmpty)
+    }
+
+    /// The header is judged before any of the body is read: a nonce that is not a UUID, a model
+    /// that is not a name, a length of nothing or past the bound, is no request.
+    @Test func aHeaderOutOfBoundsIsNoRequest() {
+        let base = "hear mac-hub 3"
+        for bad in ["\(base) not-a-uuid sonnet 5", "\(base) \(nonce) son/net 5", "\(base) \(nonce) sonnet 0",
+                    "\(base) \(nonce) sonnet \(HubNudge.hearMaximum + 1)", "\(base) \(nonce) sonnet -1",
+                    "\(base) \(nonce) sonnet", "\(base) \(nonce) \(String(repeating: "a", count: 41)) 5"] {
+            // Mutant: a length past the bound accepted.
+            #expect(ProbeWire.parse(bad) == nil, "\(bad)")
+        }
+        guard case .hear(let device, 3, let n, "opus", 12)? = ProbeWire.parse("\(base) \(nonce) opus 12") else {
+            Issue.record("a whole header not parsed"); return
+        }
+        #expect(device == hub && n == nonce)
+        #expect(!HubNudge.canHear("", nonce: nonce, model: "sonnet"))
+        #expect(!HubNudge.canHear(String(repeating: "x", count: HubNudge.hearMaximum + 1), nonce: nonce, model: "sonnet"))
+        #expect(HubNudge.canHear(String(repeating: "x", count: HubNudge.hearMaximum), nonce: nonce, model: "sonnet"))
+    }
+
+    /// A body shorter than its length is never a hand-over: the hub waits its bound and answers
+    /// no, and the mind is never handed part of the words.
+    @Test func aBodyCutShortReachesNothing() async throws {
+        let (server, _, key, heard) = try await hubServer(.mint(hub: hub))
+        defer { Task { await server.stop() } }
+        let channel = try #require(key)
+        let header = "hear mac-hub 3 \(nonce) sonnet 20\nonly ten b"
+        let answer = try await RawLine.exchange(channel.port, header, using: NudgeTLS.parameters(channel), wait: LeaseProbeServer.requestBound + 1)
+        #expect(answer != "heard")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(heard.all.isEmpty)
+    }
+
+    @Test func noWordOfAHandOverIsOnTheWire() async throws {
+        let words = "The secret word is marmalade."
+        let (server, port, key, heard) = try await hubServer(.mint(hub: hub))
+        defer { Task { await server.stop() } }
+        let real = try #require(key)
+        let relay = try await Relay(to: real.port)
+        defer { relay.stop() }
+        #expect(await HubNudge.hear(words, nonce: nonce, model: "sonnet", for: lease(port), key: real.on(port: relay.port)) == .heard)
+        #expect(heard.all.count == 1)
+        let wire = relay.upstream + relay.downstream
+        for plain in ["marmalade", nonce, "hear", "heard", "sonnet"] {
+            #expect(wire.range(of: Data(plain.utf8)) == nil, "\(plain) on the wire")
+        }
+    }
+
+    /// A hub that knows no `hear` (an older build) answers the line `no` and reads none of the
+    /// body as a request: the phone takes that as words not handed over.
+    @Test func anOlderHubAnswersNoAndThePhoneGoesByTheLog() async throws {
+        let key = NudgeKey.mint(hub: hub)
+        let server = try LeaseProbeServer(advertising: nil, key: key, holds: { _, _ in true }, nudged: { _, _, _, _ in true })
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        let bound = key.on(port: try #require(await server.securePort))
+        #expect(await HubNudge.hear("words", nonce: nonce, model: "sonnet", for: lease(port), key: bound) == .no)
+        // The channel still nudges as ever.
+        #expect(await HubNudge.send(for: lease(port), mark: "ab12cd34", key: bound) == .read)
+    }
+
+    @Test func aHubOffTheNetworkIsUnknownAndNotSent() async throws {
+        let key = NudgeKey.mint(hub: hub).on(port: 1)
+        let answer = await HubNudge.hear("words", nonce: nonce, model: "sonnet", for: lease(1), key: key, connectBound: 1)
+        guard case .unknown(_, sent: false) = answer else { Issue.record("\(answer)"); return }
+    }
+}
+
+extension RawBytes {
+    /// `bytes` written to a local port, and the first line back.
+    static func exchange(_ port: UInt16, _ bytes: Data) async throws -> String? {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        defer { connection.cancel() }
+        connection.start(queue: DispatchQueue(label: "test.bytes"))
+        try await connection.waitUntilReady()
+        try await connection.send(bytes)
+        let line = try await RawLine.within(3) { try await connection.readLine(maximum: 256) }
+        return line.flatMap { $0 }.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+}

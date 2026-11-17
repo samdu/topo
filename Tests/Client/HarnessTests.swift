@@ -1699,6 +1699,173 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNil(phone.writing)
     }
 
+    /// What the app's hand-over was asked, and what it answers.
+    private final class HandOvers: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [(lease: Lease, words: String, nonce: String, model: ClaudeModel)] = []
+        private var reply: Harness.HandOver = .heard
+        var calls: [(lease: Lease, words: String, nonce: String, model: ClaudeModel)] { lock.withLock { asked } }
+        var answer: Harness.HandOver {
+            get { lock.withLock { reply } }
+            set { lock.withLock { reply = newValue } }
+        }
+        func record(_ lease: Lease, _ words: String, _ nonce: String, _ model: ClaudeModel) -> Harness.HandOver {
+            lock.withLock { asked.append((lease, words, nonce, model)); return reply }
+        }
+    }
+
+    /// A phone whose last limb's turn a hub answered, its nudges each answered by a reply in the
+    /// log as the hub's pass would write it, and its hand-overs recorded.
+    private func phoneAfterAHubAnswered(_ db: InMemoryRecordDatabase,
+                                        transport: ScriptedTransport = ScriptedTransport()) async throws -> (Harness, DeviceID, HandOvers) {
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let defaults = makeDefaults()
+        let phone = harness(db, defaults: defaults, transport: transport)
+        let handOvers = HandOvers()
+        phone.handOver = { lease, words, nonce, model in handOvers.record(lease, words, nonce, model) }
+        phone.nudge = { _, _, _ in
+            try? await hubReplies(db, as: hubID, "from the Mac")
+            return true
+        }
+        await phone.send("first?")
+        try await eventually("the first reply read") { phone.turns.map(\.text) == ["first?", "from the Mac"] }
+        try await eventually("the phone stands elsewhere") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+        // Mutant: words handed over with no hub's lease known to this launch.
+        XCTAssertTrue(handOvers.calls.isEmpty, "the first turn, with no hub found yet, was handed over")
+        return (phone, hubID, handOvers)
+    }
+
+    /// Words said once a hub answered here go to it the moment they are on the line, with the
+    /// lease it answered under, the nonce the turn is saved under and the model chosen, and the turn
+    /// goes as ever: saved as a limb's, the hub nudged, its reply read.
+    func testWordsAreHandedToTheHubThatAnsweredHereAndTheTurnGoesAsEver() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport()
+        let (phone, hubID, handOvers) = try await phoneAfterAHubAnswered(db, transport: transport)
+        phone.model = .opus
+        let nonce = phone.willSend("second?")
+        // Marked at once, with no await between the line and the mark.
+        // Mutant: a cancel offered for words a hub's mind may have.
+        XCTAssertFalse(phone.canCancel(nonce))
+        // Mutant: the hand-over left for the attempt, after the lease and the read.
+        try await eventually("the hand-over") { handOvers.calls.count == 1 }
+        XCTAssertEqual(handOvers.calls.first?.lease.holder, hubID)
+        XCTAssertEqual(handOvers.calls.first?.words, "second?")
+        XCTAssertEqual(handOvers.calls.first?.nonce, nonce)
+        XCTAssertEqual(handOvers.calls.first?.model, .opus)
+        XCTAssertFalse(phone.canCancel(nonce))
+        await phone.retry()
+        try await eventually("the reply read") { phone.turns.map(\.text) == ["first?", "from the Mac", "second?", "from the Mac"] }
+        XCTAssertEqual(phone.turns.first { $0.text == "second?" }?.nonce, nonce)
+        XCTAssertTrue(transport.sent.isEmpty, "the phone's guest was asked a turn the hub answers")
+    }
+
+    /// A hub whose lease names no endpoint is handed nothing, though it answers this phone's
+    /// turns: only a hub's lease with an endpoint, which a limb's turn found, is handed words.
+    func testNothingIsHandedToAHubWithNoEndpoint() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: nil)
+        let defaults = makeDefaults()
+        let phone = harness(db, defaults: defaults, transport: ScriptedTransport())
+        let handOvers = HandOvers()
+        phone.handOver = { lease, words, nonce, model in handOvers.record(lease, words, nonce, model) }
+        await phone.send("first?")
+        try await eventually("the phone stands elsewhere") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+        let nonce = phone.willSend("second?")
+        for _ in 0..<300 { await Task.yield() }
+        // Mutant: words handed over with no hub's lease found.
+        XCTAssertTrue(handOvers.calls.isEmpty)
+        _ = nonce
+    }
+
+    /// Words the hub refused, or never got, are this device's as any words are: a cancel is
+    /// offered again.
+    func testWordsTheHubRefusedCanBeCancelledAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let (phone, _, handOvers) = try await phoneAfterAHubAnswered(db)
+        for (i, answer) in [Harness.HandOver.refused, .unknown(sent: false)].enumerated() {
+            handOvers.answer = answer
+            let nonce = phone.willSend("maybe?")
+            XCTAssertFalse(phone.canCancel(nonce))
+            try await eventually("the hand-over") { handOvers.calls.count == i + 1 }
+            // Mutant: a refusal that leaves the words marked as the hub's.
+            try await eventually("the cancel offered again") { phone.canCancel(nonce) }
+            let withdrawn = await phone.withdraw(nonce, unsent: true)
+            XCTAssertTrue(withdrawn)
+        }
+        // Words that may have reached the hub stay marked.
+        handOvers.answer = .unknown(sent: true)
+        let nonce = phone.willSend("maybe?")
+        try await eventually("the hand-over") { handOvers.calls.count == 3 }
+        for _ in 0..<500 { await Task.yield() }
+        XCTAssertFalse(phone.canCancel(nonce))
+    }
+
+    /// Only the head of an empty line is handed over, and never while a limb's turn of this device
+    /// waits for the hub's reply: the hub's mind would be told the words ahead of that turn.
+    func testNothingIsHandedOverBehindAnotherTurnOrALimbsTurnAwaitingItsReply() async throws {
+        let db = InMemoryRecordDatabase()
+        let (phone, _, handOvers) = try await phoneAfterAHubAnswered(db)
+        let nudges = Nudges()
+        phone.nudge = { lease, mark, _ in
+            nudges.record(lease, mark)
+            await nudges.hold()
+            return false
+        }
+        let first = phone.willSend("one")
+        // Mutant: words behind another on the line handed over.
+        phone.willSend("two")
+        try await eventually("the hand-over") { !handOvers.calls.isEmpty }
+        for _ in 0..<300 { await Task.yield() }
+        XCTAssertEqual(handOvers.calls.map(\.nonce), [first])
+        await phone.retry()
+        try await eventually("both nudged") { nudges.calls.count == 2 }
+        // Mutant: words handed over while this device's limb's turns wait for the hub's reply.
+        phone.willSend("three")
+        for _ in 0..<300 { await Task.yield() }
+        XCTAssertEqual(handOvers.calls.map(\.nonce), [first])
+        nudges.release()
+    }
+
+    /// The stream for a turn whose words were handed over is named by their nonce (`.heard`):
+    /// drawn for that turn, and nothing for a nonce that is not its.
+    func testAHeardStreamIsDrawnForItsTurnAndNoOther() async throws {
+        let db = InMemoryRecordDatabase()
+        let (phone, hubID, _) = try await phoneAfterAHubAnswered(db)
+        let nudges = Nudges()
+        let other = Nudges()
+        phone.nudge = { lease, mark, frames in
+            nudges.record(lease, mark)
+            guard let person = try? await newestPerson(db) ?? nil else { return false }
+            if person.text == "other?" {
+                await frames(.heard(UUID().uuidString))
+                await frames(.text("not yours"))
+                await other.hold()
+                return false
+            }
+            await frames(.heard(person.nonce))
+            await frames(.message)
+            await frames(.text("Heard "))
+            await frames(.text("ahead."))
+            await nudges.hold()
+            try? await hubReplies(db, as: hubID, "Heard ahead.")
+            return true
+        }
+        await phone.send("other?")
+        try await eventually("nudged") { nudges.calls.count == 1 }
+        for _ in 0..<300 { await Task.yield() }
+        // Mutant: a heard stream drawn without its nonce checked.
+        XCTAssertNil(phone.writing)
+        other.release()
+        try await hubReplies(db, as: hubID, "for other")
+        await phone.refresh()
+        await phone.send("heard?")
+        try await eventually("the stream drawn") { phone.writing == "Heard ahead." }
+        nudges.release()
+        try await eventually("the reply read") { phone.turns.last?.text == "Heard ahead." }
+        XCTAssertNil(phone.writing)
+    }
+
     /// A phone that was the one answering is suspended past its lease's duration, and the hub
     /// wakes and takes the lease meanwhile: nothing yielded, so the harness still stands `.mine`.
     /// The next words go into the log for the hub and the phone's guest is never asked them,

@@ -176,7 +176,8 @@ import TopoCore
     }
 
     @Test func framesSurviveTheWire() {
-        let frames: [ReplyFrame] = [.turn([TurnRef(device: DeviceID("a/b"), sequence: 9)]), .message, .text("x\ny\u{2028}"), .tool]
+        let frames: [ReplyFrame] = [.turn([TurnRef(device: DeviceID("a/b"), sequence: 9)]), .heard("7D3F2A10-4B5C-4D6E-8F90-A1B2C3D4E5F6"),
+                                    .message, .text("x\ny\u{2028}"), .tool]
         for frame in frames {
             let line = String(decoding: frame.line, as: UTF8.self)
             #expect(line.filter { $0 == "\n" }.count == 1 && line.hasSuffix("\n"))
@@ -184,6 +185,7 @@ import TopoCore
         }
         #expect(ReplyFrame(line: "read") == nil)
         #expect(ReplyFrame(line: "{\"k\":\"turn\",\"refs\":[]}") == nil)
+        #expect(ReplyFrame(line: "{\"k\":\"heard\",\"n\":\"\"}") == nil)
     }
 
     @Test func aFailedConnectIsRememberedUntilTheNetworkChanges() async throws {

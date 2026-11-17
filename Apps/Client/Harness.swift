@@ -264,8 +264,32 @@ final class Harness {
     /// streams for the turn is handed to `frames` as it arrives, in order. Nil: no nudge, and the
     /// hub finds the turn by its poll or push as it always can.
     var nudge: (@Sendable (_ lease: Lease, _ mark: String, _ frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool)?
-    /// The nudges waiting for their hub's answer, which a sign-out or a demotion cancels.
+    /// The nudges waiting for their hub's answer, and the hand-overs (`handOver`) waiting for
+    /// theirs, which a sign-out or a demotion cancels.
     private var nudges: [UUID: Task<Void, Never>] = [:]
+    /// What became of words handed to a hub ahead of their turn's save.
+    enum HandOver: Equatable, Sendable {
+        /// The hub's mind has them.
+        case heard
+        /// The hub did not take them, and nothing of them reached its mind.
+        case refused
+        /// Not known: `sent` when the words may have reached the hub.
+        case unknown(sent: Bool)
+    }
+    /// Hands the person's words, said under a nonce with a model chosen, to the hub that holds
+    /// `lease`, over the nudge's channel, before their turn is saved (`HubNudge.hear`), so the
+    /// hub's mind is asked a save and a pass's read sooner. The app sets it, and it says
+    /// `unknown(sent: false)` without trying when it has no key in hand or local network access
+    /// was never allowed: nothing it does reads CloudKit or asks the person anything. Nil: no
+    /// hand-over, and the hub hears the turn from the log.
+    var handOver: (@Sendable (_ lease: Lease, _ words: String, _ nonce: String, _ model: ClaudeModel) async -> HandOver)?
+    /// The hub's lease this device last wrote a limb's turn under (`nudgeHub`), which a hand-over
+    /// goes to. Cleared by a sign-out, a demotion, and any turn that does not find a hub holding it.
+    private var hubLease: Lease?
+    /// Words handed to a hub that may have them (`handOver`): they are not offered a cancel, since
+    /// the hub's mind cannot be called back, and this device's guest is not given them ahead of
+    /// their turn's save. Lifted from words the hub refused or never got.
+    private var handedOver: Set<String> = []
     /// A limb's turns this device wrote for a hub to answer, by ref, with each turn's mark, until a
     /// read finds their reply: the reply's arrival is a mark of its own (`turn.limb.reply.shown`).
     private var limbTurns: [TurnRef: String] = [:]
@@ -571,6 +595,8 @@ final class Harness {
         nudges = [:]
         dropStreamed()
         limbTurns = [:]
+        hubLease = nil
+        handedOver = []
         login += 1
         reads += 1
         inFlight?.cancel()
@@ -763,9 +789,43 @@ final class Harness {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
+        let first = pending.isEmpty && !busy
         pending.append(outgoing)
         Perf.mark("turn.line \(Self.turnMark(outgoing.nonce))")
+        if first { handToHub(outgoing) }
         return outgoing.nonce
+    }
+
+    /// Hands the words just put on an empty line to the hub that answered this device's last
+    /// limb's turn (`handOver`), without waiting for it: the turn goes on as ever, and a hub that
+    /// has them answers it the moment its pass finds it. Only when this device last found a hub
+    /// answering and expects to again — a runner made, iCloud reached, the hub's lease in hand —
+    /// and no limb's turn of this device is still waiting for the hub's reply, whose turn the
+    /// hub's mind would otherwise be told after these words.
+    private func handToHub(_ outgoing: Outgoing) {
+        guard let handOver, let lease = hubLease, runner != nil, !unreached, standing == .elsewhere,
+              limbTurns.isEmpty else { return }
+        let nonce = outgoing.nonce, login = self.login, id = UUID(), model = self.model
+        handedOver.insert(nonce)
+        nudges[id] = Task { [weak self] in
+            let answer = await handOver(lease, outgoing.text, nonce, model)
+            guard let self else { return }
+            self.nudges[id] = nil
+            guard self.login == login else { return }
+            Perf.mark("turn.heard.answer \(Self.turnMark(nonce)) \(Self.name(of: answer))")
+            switch answer {
+            case .heard, .unknown(sent: true): break
+            case .refused, .unknown(sent: false): self.handedOver.remove(nonce)
+            }
+        }
+    }
+
+    private nonisolated static func name(of answer: HandOver) -> String {
+        switch answer {
+        case .heard: "heard"
+        case .refused: "no"
+        case .unknown(let sent): sent ? "unknown" : "unsent"
+        }
     }
 
     /// Puts the words on the line under a nonce minted elsewhere — a widget's cue, recorded in the
@@ -872,7 +932,7 @@ final class Harness {
     /// Whether the words said under `nonce` can be cancelled, so they are never sent: they can
     /// be taken back, and the guest has not begun on them ahead of their turn.
     func canCancel(_ nonce: String) -> Bool {
-        canWithdraw(nonce) && !givenAheadUnread && !givenAhead.contains(nonce)
+        canWithdraw(nonce) && !givenAheadUnread && !givenAhead.contains(nonce) && !handedOver.contains(nonce)
     }
 
     /// What the margin beside a turn on its way holds: a resend when the line stopped on it with
@@ -959,6 +1019,7 @@ final class Harness {
             attempting = nil
             guard settled else { break }
             failedNonces.remove(next.nonce)
+            handedOver.remove(next.nonce)
             if pending.first == next { pending.removeFirst() }
         }
         attempting = nil
@@ -984,7 +1045,8 @@ final class Harness {
             await before?.value
             for entry in line {
                 guard !Task.isCancelled, let self, self.login == login, self.giving == giving,
-                      self.pending.contains(entry), !self.said(entry.nonce) else { continue }
+                      self.pending.contains(entry), !self.said(entry.nonce),
+                      !self.handedOver.contains(entry.nonce) else { continue }
                 if let runner = self.runner {
                     await runner.hear(entry.text, model: self.model, nonce: entry.nonce, known: self.known)
                 } else if self.unreached {
@@ -1123,12 +1185,17 @@ final class Harness {
             // for it: the person's choice of model is said beside the lease and the read rather
             // than after them (`sayChoice`).
             choiceSaid = standing == .elsewhere ? sayChoice() : nil
+            // Words a hub may have are not given to this device's guest ahead of their save: should
+            // this device answer them after all, its guest is asked once the turn is in the log.
+            let known = handedOver.contains(attempt.nonce) ? nil : self.known
             let result = try await runner.run(text, model: model, nonce: attempt.nonce, known: known) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
             handedBack = false
+            // This device answered: no hub is handed the next words.
+            hubLease = nil
             // The reply is offered before any stream it replaces hears it ended, so what was read
             // of a hub's stream of the same reply is not read again.
             show(result.person)
@@ -1315,9 +1382,16 @@ final class Harness {
         switch outcome {
         case .held(let held): lease = held
         case .unreachable(let held): lease = held
-        case .primary, .contended: return
+        case .primary, .contended:
+            hubLease = nil
+            return
         }
-        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil, let nudge else { return }
+        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil else {
+            hubLease = nil
+            return
+        }
+        hubLease = lease
+        guard let nudge else { return }
         let mark = Self.turnMark(person.nonce)
         let wire = String(mark.dropFirst("turn=".count))
         guard !wire.isEmpty else { return }
@@ -1392,6 +1466,19 @@ final class Harness {
                 return
             }
             entry.answering = refs
+            entry.words = ReplyWords()
+            entry.settled = false
+            entry.handed = nil
+            entry.spoken = spokenNonces.contains(entry.nonce)
+        case .heard(let nonce):
+            // The reply to words this device handed over ahead of the turn, named by the nonce
+            // they were said under: this turn's alone, or none of it is this stream's.
+            guard nonce == entry.nonce else {
+                entry.answering = nil
+                streamed[i] = entry
+                return
+            }
+            entry.answering = [ref]
             entry.words = ReplyWords()
             entry.settled = false
             entry.handed = nil

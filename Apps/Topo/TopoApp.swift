@@ -147,6 +147,22 @@ struct TopoApp: App {
             if case .unreached(let why) = answer, why != "gated" { Perf.mark("nudge.unreached \(why)") }
             return answer == .read
         }
+        // The words of a turn about to be saved for that hub go to it on the same channel, ahead
+        // of the save (`HubNudge.hear`), only with the key the last nudge kept for that lease and
+        // local network access already allowed: nothing here reads the zone or asks the person,
+        // so nothing the turn does waits on it.
+        harness.handOver = { lease, words, nonce, model in
+            guard await LocalNetworkAccess.shared.state == .allowed, let key = await NudgeKeys.shared.kept(for: lease) else {
+                return .unknown(sent: false)
+            }
+            switch await HubNudge.hear(words, nonce: nonce, model: model.rawValue, for: lease, key: key) {
+            case .heard: return .heard
+            case .no: return .refused
+            case .unknown(let why, let sent):
+                Perf.mark("turn.heard.unknown \(why)")
+                return .unknown(sent: sent)
+            }
+        }
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
         let widgetTable = WidgetActions.table(GuestResident.shared.toolTable)

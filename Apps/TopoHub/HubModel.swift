@@ -380,6 +380,9 @@ final class HubModel {
             }, nudged: { [weak self] holder, epoch, mark, stream in
                 guard let self else { return false }
                 return await self.nudged(holder, epoch: epoch, mark: mark, stream: stream)
+            }, heard: { [weak self] holder, epoch, nonce, model, words in
+                guard let self, let mind = await self.hubMind else { return false }
+                return await mind.hear(holder: holder, epoch: epoch, nonce: nonce, model: model, words: words)
             })
             port = try await server.start()
             nudgeKey = key.on(port: await server.securePort ?? 0)

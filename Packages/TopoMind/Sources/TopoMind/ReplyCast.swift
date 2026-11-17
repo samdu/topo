@@ -13,6 +13,12 @@ import TopoCore
 /// words per message, so it draws the same text. Everything is handed under one lock, in the order
 /// it was written, and synchronously: a follower's hand sends and does not wait, so nothing here
 /// waits on a phone.
+///
+/// Words a phone handed over before their turn was saved (`NativeBrain.hearAhead`) are answered
+/// outside any request, so their reply has a lane of its own (`beginHeard`): named by `.heard` with
+/// the person's nonce, which the turn will be saved under, and handed to the followers of that
+/// nonce's mark. While it stands the request lane hands those followers nothing, so a follower is
+/// handed the heard reply's catch-up or its continuation, and never a second beginning of it.
 public final class ReplyCast: @unchecked Sendable {
     public typealias Hand = @Sendable (ReplyFrame) -> Void
 
@@ -20,9 +26,17 @@ public final class ReplyCast: @unchecked Sendable {
     /// The reply being written: the marks of the turns it answers, the frame that names them, and
     /// its frames so far, words of one message run together.
     private var current: (marks: Set<String>, turn: ReplyFrame, frames: [ReplyFrame], handedWords: Bool)?
+    /// The reply to words heard ahead, while the mind is on them.
+    private var heard: (mark: String, turn: ReplyFrame, frames: [ReplyFrame], handedWords: Bool)?
     private var followers: [UUID: (mark: String, hand: Hand)] = [:]
 
     public init() {}
+
+    /// Whether the request lane hands a follower of `mark` anything: not while the heard lane is
+    /// that follower's.
+    private func requestLane(_ mark: String, _ marks: Set<String>) -> Bool {
+        marks.contains(mark) && heard?.mark != mark
+    }
 
     /// The mind is asked to answer `answering`: what is written from here is that reply's.
     func begin(_ answering: [Turn]) {
@@ -30,7 +44,7 @@ public final class ReplyCast: @unchecked Sendable {
             let marks = Set(answering.map { HubMind.mark(of: $0.nonce) })
             let turn = ReplyFrame.turn(answering.map(\.ref))
             current = (marks, turn, [], false)
-            for follower in followers.values where marks.contains(follower.mark) { follower.hand(turn) }
+            for follower in followers.values where requestLane(follower.mark, marks) { follower.hand(turn) }
         }
     }
 
@@ -38,12 +52,8 @@ public final class ReplyCast: @unchecked Sendable {
     func write(_ frame: ReplyFrame) {
         lock.withLock {
             guard var reply = current else { return }
-            if case .text(let more) = frame, case .text(let had)? = reply.frames.last {
-                reply.frames[reply.frames.count - 1] = .text(had + more)
-            } else {
-                reply.frames.append(frame)
-            }
-            let following = followers.values.filter { reply.marks.contains($0.mark) }
+            reply.frames = Self.appending(frame, to: reply.frames)
+            let following = followers.values.filter { requestLane($0.mark, reply.marks) }
             if case .text = frame, !reply.handedWords, !following.isEmpty {
                 reply.handedWords = true
                 Perf.mark("hub.stream.first followers=\(following.count)")
@@ -58,7 +68,7 @@ public final class ReplyCast: @unchecked Sendable {
     func cut() {
         lock.withLock {
             guard let reply = current else { return }
-            for follower in followers.values where reply.marks.contains(follower.mark) { follower.hand(.cut) }
+            for follower in followers.values where requestLane(follower.mark, reply.marks) { follower.hand(.cut) }
         }
     }
 
@@ -67,13 +77,65 @@ public final class ReplyCast: @unchecked Sendable {
         lock.withLock { current = nil }
     }
 
+    /// The mind has the person's words said under `nonce`, ahead of their turn: what is written
+    /// on the heard lane from here is their reply's.
+    func beginHeard(_ nonce: String) {
+        lock.withLock {
+            let mark = HubMind.mark(of: nonce)
+            let turn = ReplyFrame.heard(nonce)
+            heard = (mark, turn, [], false)
+            for follower in followers.values where follower.mark == mark { follower.hand(turn) }
+        }
+    }
+
+    /// A piece of the reply to words heard ahead. Nothing outside a `beginHeard` and its `endHeard`.
+    func writeHeard(_ frame: ReplyFrame) {
+        lock.withLock {
+            guard var reply = heard else { return }
+            reply.frames = Self.appending(frame, to: reply.frames)
+            let following = followers.values.filter { $0.mark == reply.mark }
+            if case .text = frame, !reply.handedWords, !following.isEmpty {
+                reply.handedWords = true
+                Perf.mark("hub.stream.first followers=\(following.count) heard")
+            }
+            heard = reply
+            for follower in following { follower.hand(frame) }
+        }
+    }
+
+    /// The mind's turn on words heard ahead ended with no reply to come from it: `.cut`.
+    func cutHeard() {
+        lock.withLock {
+            guard let reply = heard else { return }
+            for follower in followers.values where follower.mark == reply.mark { follower.hand(.cut) }
+        }
+    }
+
+    /// The mind's turn on words heard ahead is over.
+    func endHeard() {
+        lock.withLock { heard = nil }
+    }
+
+    private static func appending(_ frame: ReplyFrame, to frames: [ReplyFrame]) -> [ReplyFrame] {
+        var frames = frames
+        if case .text(let more) = frame, case .text(let had)? = frames.last {
+            frames[frames.count - 1] = .text(had + more)
+        } else {
+            frames.append(frame)
+        }
+        return frames
+    }
+
     /// Hands `hand` the reply to the turn `mark` names, from what has been written of it already
     /// if it is being written now, until `stop` with the id returned.
     func follow(_ mark: String, _ hand: @escaping Hand) -> UUID {
         let id = UUID()
         let mark = mark.lowercased()
         lock.withLock {
-            if let reply = current, reply.marks.contains(mark) {
+            if let reply = heard, reply.mark == mark {
+                hand(reply.turn)
+                reply.frames.forEach(hand)
+            } else if let reply = current, reply.marks.contains(mark) {
                 hand(reply.turn)
                 reply.frames.forEach(hand)
             }
