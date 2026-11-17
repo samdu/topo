@@ -96,30 +96,168 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response"}"#), [.other("control_response")])
     }
 
-    /// The `initialize` answer's `account` is the login the process started with: its kind is
-    /// read, and the answer reaches the session's hook once a process, at its first answer.
-    func testTheReadyAnswerHandsTheProcesssLoginToTheHookOnce() async throws {
-        let answer = #"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{"account":{"email":"someone@example.com","subscriptionType":"Claude Max","apiProvider":"firstParty"}}}}"#
-        XCTAssertEqual(StreamJSON.events(in: answer),
-                       [.controlResponse(id: "topo-ready", account: .init(subscriptionType: "Claude Max", apiProvider: "firstParty"))])
-        let signedOut = #"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{"account":{"tokenSource":"none","apiProvider":"firstParty"}}}}"#
-        XCTAssertEqual(StreamJSON.events(in: signedOut),
-                       [.controlResponse(id: "topo-ready", account: .init(tokenSource: "none", apiProvider: "firstParty"))])
+    private static func ready(_ account: String) -> String {
+        #"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{"account":"# + account + "}}}"
+    }
+    private static let subscriber = ready(#"{"email":"someone@example.com","subscriptionType":"Claude Max","apiProvider":"firstParty"}"#)
+    private static let signedOut = ready(#"{"tokenSource":"none","apiProvider":"firstParty"}"#)
 
-        let heard = Heard()
-        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
-                                   answered: { heard.add($0) })
+    /// A session owing a login check (`checksLogin`), whose hook records what it heard and waits
+    /// for `gate` before it returns; `body` runs inside the hook, given the session.
+    private func checking(_ heard: Heard, gate: Gate, body: @escaping @Sendable (GuestSession) async -> Void = { _ in }) -> GuestSession {
+        let box = SessionBox()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep, checksLogin: true,
+                                   answered: { account in
+                                       heard.add(account)
+                                       await gate.wait()
+                                       if let session = box.session { await body(session) }
+                                   })
+        box.session = session
+        return session
+    }
+
+    /// The `initialize` answer's `account` is the login the process started with, and its kind
+    /// is read; the email and organisation are not.
+    func testTheReadyAnswerReadsTheLoginsKind() {
+        XCTAssertEqual(StreamJSON.events(in: Self.subscriber),
+                       [.controlResponse(id: "topo-ready", account: .init(subscriptionType: "Claude Max", apiProvider: "firstParty"))])
+        XCTAssertEqual(StreamJSON.events(in: Self.signedOut),
+                       [.controlResponse(id: "topo-ready", account: .init(tokenSource: "none", apiProvider: "firstParty"))])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response","response":{"request_id":"topo-ready","response":{}}}"#),
+                       [.controlResponse(id: "topo-ready")])
+    }
+
+    /// While a login check is owed no process takes an input: a turn sent before the answer, and
+    /// while the check runs, is written only once the check has returned, and the hook hears the
+    /// first answer alone.
+    func testATurnWaitsForTheLoginCheckBeforeItsInputIsWritten() async throws {
+        let heard = Heard(), gate = Gate()
+        let session = checking(heard, gate: gate)
         await session.foreground()
         try await session.ready()
         let process = try XCTUnwrap(launcher.last)
-        process.emit(answer)
-        process.emit(answer)
-        // A line after the second answer: once it is read, the second answer has been too.
-        process.emit(Lines.`init`("S1"))
-        await eventually("heard") { heard.all.count >= 1 }
-        try? await Task.sleep(for: .milliseconds(300))
+        let sending = Task { try await session.send("hello") }
+        await settle()
+        XCTAssertEqual(process.turns.count, 0, "an input was written before the login was checked")
+        process.emit(Self.subscriber)
+        process.emit(Self.subscriber)
+        await eventually("heard") { heard.all.count == 1 }
+        await settle()
+        XCTAssertEqual(process.turns.count, 0, "an input was written while the login check ran")
+        gate.open()
+        let (turn, done) = collect(try await sending.value)
+        await eventually("written") { process.turns.count == 1 }
+        answer(process, "hi")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        // The trailing `init` was read (its session id is kept), so the second answer was too.
+        XCTAssertEqual(store.load(), "S1")
         XCTAssertEqual(heard.all, [.init(subscriptionType: "Claude Max", apiProvider: "firstParty")],
-                       "the hook heard a process's answer more than once")
+                       "the hook heard more than the first answer")
+    }
+
+    /// A check that ends the resident (the fallback's hold) ends a process with no turn: the turn
+    /// waiting for it goes to the process started after the check, whole.
+    func testAFallbackThatEndsTheResidentLosesNoTurn() async throws {
+        let heard = Heard(), gate = Gate()
+        gate.open()
+        let session = checking(heard, gate: gate) { session in await session.withoutResident {} }
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let sending = Task { try await session.send("hello") }
+        await settle()
+        first.emit(Self.signedOut)
+        let (turn, done) = collect(try await sending.value)
+        XCTAssertEqual(launcher.processes.count, 2, "the turn did not wait for the process after the check")
+        let second = try XCTUnwrap(launcher.last)
+        XCTAssertTrue(first.terminated)
+        XCTAssertEqual(first.turns.count, 0, "the process the check ended had been given the input")
+        await eventually("written") { second.turns.count == 1 }
+        answer(second, "hi")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        guard case .answered = turn.ends.first else { return XCTFail("the turn did not end answered: \(turn.ends)") }
+        XCTAssertEqual(heard.all, [.init(tokenSource: "none", apiProvider: "firstParty")])
+    }
+
+    /// The check belongs to the process that answers: one ended before it answered is heard by
+    /// nobody, its replacement's answer is the check, signed-out shape and all, and once the
+    /// check has returned a later process takes its input at once and tells the hook nothing.
+    func testTheCheckIsTheAnsweringProcesssAndRunsOnce() async throws {
+        let heard = Heard(), gate = Gate()
+        gate.open()
+        let session = checking(heard, gate: gate)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        await session.withoutResident {}
+        try await session.ready()
+        let second = try XCTUnwrap(launcher.last)
+        first.emit(Self.subscriber)
+        await settle()
+        XCTAssertTrue(heard.all.isEmpty, "an ended process's answer was heard")
+        second.emit(Self.signedOut)
+        await eventually("heard") { heard.all.count == 1 }
+        XCTAssertEqual(heard.all, [.init(tokenSource: "none", apiProvider: "firstParty")])
+
+        await session.withoutResident {}
+        try await session.ready()
+        let third = try XCTUnwrap(launcher.last)
+        let (_, _) = collect(try await session.send("hello"))
+        await eventually("written without an answer") { third.turns.count == 1 }
+        third.emit(Self.subscriber)
+        await settle()
+        XCTAssertEqual(heard.all.count, 1, "the check ran again for a later process")
+    }
+
+    /// A gated process that never answers `initialize` holds its turn only until the bound: the
+    /// check then runs with no account, and a turn waiting on the gate when the app leaves the
+    /// front is refused rather than left waiting.
+    func testAGatedTurnIsNeverLeftWaiting() async throws {
+        let heard = Heard(), gate = Gate()
+        gate.open()
+        let session = checking(heard, gate: gate)
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        let sending = Task { try await session.send("hello") }
+        await settle()
+        await clock.advance(by: GuestSession.loginCheckBound)
+        await eventually("checked with no answer") { heard.all.count == 1 }
+        XCTAssertEqual(heard.all, [nil])
+        _ = try await sending.value
+        await eventually("written") { process.turns.count == 1 }
+
+        let other = Heard()
+        let gated = checking(other, gate: Gate())
+        await gated.foreground()
+        try await gated.ready()
+        let waiting = Task { try await gated.send("hello") }
+        await settle()
+        _ = await gated.background(budget: .seconds(5))
+        do {
+            _ = try await waiting.value
+            XCTFail("a turn waiting on the login check was sent in the background")
+        } catch {
+            XCTAssertEqual(error as? GuestSession.Refusal, .notResident)
+        }
+    }
+
+    private final class SessionBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: GuestSession?
+        var session: GuestSession? {
+            get { lock.withLock { held } }
+            set { lock.withLock { held = newValue } }
+        }
+    }
+
+    private final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var opened = false
+        func open() { lock.withLock { opened = true } }
+        func wait() async { while !lock.withLock({ opened }) { await Task.yield() } }
     }
 
     private final class Heard: @unchecked Sendable {

@@ -328,11 +328,20 @@ public actor GuestSession {
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
-    /// Told the login each process's `initialize` answer names, once a process, as it answers.
-    private let answered: (@Sendable (StreamEvent.Account?) -> Void)?
+    /// The login check owed by a boot that asked nothing (`checksLogin`): told the login the first
+    /// `initialize` answer names, it returns once the login is confirmed or checked by other means.
+    /// Until it has, no process takes an input (`Resident.gated`), so whatever the check ends —
+    /// the process that answered, or one started after it — has no turn to lose.
+    private let answered: (@Sendable (StreamEvent.Account?) async -> Void)?
+    /// Whether that check is still owed, and whether it is running.
+    private var loginCheckOwed: Bool
+    private var checkingLogin = false
     /// The id of the `initialize` request each launch writes first, whose answer marks the process
     /// ready.
     static let readyRequest = "topo-ready"
+    /// How long a gated process is given to answer `initialize` before the check runs as if it had
+    /// answered with no account, so a process that never answers holds no input for ever.
+    static let loginCheckBound: Duration = .seconds(60)
     /// How the line a kept cut is logged with begins; the app keeps that line on disk (`GuestResident.log`).
     public static let cutLine = "the way out cut short"
 
@@ -395,6 +404,8 @@ public actor GuestSession {
         var told: Cut?
         /// Whether it has answered the launch's `initialize`.
         var ready = false
+        /// Whether it waits on the session's login check before it takes an input.
+        var gated = false
 
         init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, threads: String?,
              conversation: Int) {
@@ -446,10 +457,12 @@ public actor GuestSession {
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 signedIn: @escaping @Sendable () -> Bool = { true },
                 requests: (@Sendable (RequestMoment) -> Void)? = nil,
-                answered: (@Sendable (StreamEvent.Account?) -> Void)? = nil,
+                checksLogin: Bool = false,
+                answered: (@Sendable (StreamEvent.Account?) async -> Void)? = nil,
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.requests = requests
         self.answered = answered
+        self.loginCheckOwed = checksLogin && answered != nil
         self.launcher = launcher
         self.freezer = freezer
         self.signedIn = signedIn
@@ -672,6 +685,9 @@ public actor GuestSession {
         guard admit(given) else { return .kept }
         let mine = generation
         inForeground = false
+        // A turn waiting on the login check is refused, as one waiting on a start would be: the
+        // gated process takes no input in the background.
+        if case .resident(let resident) = phase, resident.gated { settleReadiness(.failure(Refusal.notResident)) }
         // A start still pending ends what it made as it lands; a teardown already under way (a
         // restart, a process that died) is waited out, so nothing is resident when this answers.
         if let startTask { await startTask.value }
@@ -806,6 +822,9 @@ public actor GuestSession {
     private func current() async throws -> Resident {
         while true {
             switch phase {
+            case .resident(let resident) where resident.gated:
+                // No input before the login check has answered; the check ungates it.
+                guard inForeground else { throw Refusal.notResident }
             case .resident(let resident):
                 guard resident.turn == nil, inForeground, isStale(resident) else { return resident }
                 renewIfStale()
@@ -904,6 +923,7 @@ public actor GuestSession {
             let resident = Resident(process: process, resumed: resume, model: model, memory: memory,
                                     compactAt: compactAt, threads: threads, conversation: conversation)
             resident.told = told
+            resident.gated = loginCheckOwed
             guard inForeground else {
                 // The app left while the start was pending: nothing may stay resident.
                 settleReadiness(.failure(Refusal.notResident))
@@ -911,6 +931,13 @@ public actor GuestSession {
                 return
             }
             phase = .resident(resident)
+            if resident.gated {
+                let sleep = sleep
+                Task { [weak self] in
+                    do { try await sleep(GuestSession.loginCheckBound) } catch { return }
+                    await self?.unanswered(resident)
+                }
+            }
             resident.reader = Task { [weak self] in
                 for await line in process.lines {
                     await self?.received(line, from: resident)
@@ -924,6 +951,34 @@ public actor GuestSession {
                 return
             }
             settleReadiness(.success(()))
+        }
+    }
+
+    /// A gated process still resident that has not answered `initialize` within the bound: the
+    /// check runs as for an answer with no account.
+    private func unanswered(_ resident: Resident) {
+        guard owns(resident), resident.gated, !resident.ready, loginCheckOwed, !checkingLogin, let answered else { return }
+        log("no initialize answer within \(GuestSession.loginCheckBound); checking the login without one")
+        checkingLogin = true
+        Task { await self.checkLogin(nil, with: answered) }
+    }
+
+    /// Runs the owed login check on the first answer, then lets whatever process is resident take
+    /// input. The check may end the resident (the fallback's `withoutResident`); a process started
+    /// while it ran was gated too, so it only now takes input, once the check has kept or cleared
+    /// the login it was started under.
+    private func checkLogin(_ account: StreamEvent.Account?, with answered: @Sendable (StreamEvent.Account?) async -> Void) async {
+        await answered(account)
+        checkingLogin = false
+        loginCheckOwed = false
+        switch phase {
+        case .resident(let resident) where resident.gated:
+            resident.gated = false
+            settleReadiness(.success(()))
+        case .frozen(let resident):
+            resident.gated = false
+        default:
+            break
         }
     }
 
@@ -981,7 +1036,10 @@ public actor GuestSession {
                 if id == Self.readyRequest, !resident.ready {
                     resident.ready = true
                     Perf.mark("resident.ready \(resident.resumed == nil ? "fresh" : "resume") cpu=\(Perf.cpu())")
-                    answered?(account)
+                    if resident.gated, loginCheckOwed, !checkingLogin, let answered {
+                        checkingLogin = true
+                        Task { await self.checkLogin(account, with: answered) }
+                    }
                 }
                 continue
             }

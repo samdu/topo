@@ -360,6 +360,34 @@ final class GuestLoginTests: XCTestCase {
         }
     }
 
+    /// The fallback asks `auth status` inside the hold, and the hold lets go only after it has
+    /// answered; a check whose login has ended since the boot deferred it asks nothing and holds
+    /// nothing (`LoginLife`'s epoch).
+    func testTheFallbackAsksInsideTheHoldAndNotAfterTheLoginEnded() async {
+        var order: [String] = []
+        let resident = GuestResident()
+        resident.booted = { order.append("auth status") }
+        resident.confirms = { $0.isClaudeAI }
+        resident.holdingResident = { body in
+            order.append("hold")
+            await body()
+            order.append("let go")
+        }
+        await resident.residentAnswered(StreamEvent.Account(tokenSource: "none", apiProvider: "firstParty"))
+        XCTAssertEqual(order, ["hold", "auth status", "let go"])
+
+        order = []
+        let life = LoginLife()
+        let ended = GuestResident()
+        ended.booted = { order.append("auth status") }
+        ended.confirms = { $0.isClaudeAI }
+        ended.holdingResident = { body in order.append("hold"); await body() }
+        ended.deferredUnder = life.epoch
+        life.end()
+        await ended.residentAnswered(StreamEvent.Account(tokenSource: "none", apiProvider: "firstParty"))
+        XCTAssertEqual(order, [], "a check after its login ended held or asked")
+    }
+
     private final class Heard: @unchecked Sendable {
         private let lock = NSLock()
         private var all: [URL] = []

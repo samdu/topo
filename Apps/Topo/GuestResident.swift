@@ -60,6 +60,12 @@ final class GuestResident {
     /// confirms does not end the resident again and again; a process ended before it answers
     /// leaves the check to the next.
     private var loginChecked = false
+    /// The login the boot deferred its check under; a check that lands after that login has
+    /// ended does nothing, since its sign-out has already ended the resident and cleared the cache.
+    var deferredUnder: LoginLife.Epoch?
+    /// How the fallback holds the resident off across `refresh`: the session's `withoutResident`,
+    /// unless a suite gives its own.
+    var holdingResident: (@MainActor (_ body: @escaping @MainActor @Sendable () async -> Void) async -> Void)?
     /// Whether a conversation behind the lock holds the resident up (`GuestLifecycle.conversing`):
     /// the app's `Conversation`, set before the first start (`TopoApp`).
     var conversing: @MainActor (_ beginning: Bool) -> Bool = { _ in false }
@@ -157,7 +163,9 @@ final class GuestResident {
             Perf.mark("guest.tools.ready")
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(tools: tools)
-            if LoginCache.standard.isSignedIn, self.confirms != nil {
+            let deferred = LoginCache.standard.isSignedIn && self.confirms != nil
+            if deferred {
+                self.deferredUnder = LoginLife.shared.epoch
                 Perf.mark("guest.login.deferred")
             } else {
                 await self.booted?()
@@ -177,9 +185,9 @@ final class GuestResident {
                                        threads: MessageThreads.Setting(defaults: .standard).launched,
                                        signedIn: { LoginCache.standard.isSignedIn },
                                        requests: { ThreadSampler.shared.heard($0) },
-                                       answered: { account in
-                                           Task { @MainActor in await GuestResident.shared.residentAnswered(account) }
-                                       }, log: log)
+                                       checksLogin: deferred,
+                                       answered: { account in await GuestResident.shared.residentAnswered(account) },
+                                       log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
@@ -198,9 +206,15 @@ final class GuestResident {
     /// which ends the resident while it runs and, finding the login gone, clears the cache, after
     /// which the launcher refuses every process. `initialize` and `auth status` read the same thing in Claude Code
     /// 2.1.316: whether a credential is stored, with nothing asked of the network.
+    /// The session holds every input until this returns (`GuestSession`, `checksLogin`), so what
+    /// the fallback ends has received no turn.
     func residentAnswered(_ account: StreamEvent.Account?) async {
         guard !loginChecked else { return }
         loginChecked = true
+        if let deferredUnder, !deferredUnder.isCurrent {
+            Self.log("login: the initialize answered after the login it was deferred under ended; nothing asked")
+            return
+        }
         let status = account.map {
             ClaudeLoginStatus(initialize: $0.subscriptionType, tokenSource: $0.tokenSource, apiProvider: $0.apiProvider)
         }
@@ -216,8 +230,10 @@ final class GuestResident {
         // Held across the whole of `refresh`, not only its `auth status`: the status's own hold
         // lets go as the status returns, and a turn waiting would start a process before `refresh`
         // has cleared the cache of a login that has gone.
-        if let session {
-            _ = await session.withoutResident { await GuestResident.shared.askBooted() }
+        if let holdingResident {
+            await holdingResident { [self] in await self.askBooted() }
+        } else if let session {
+            _ = await session.withoutResident { [self] in await self.askBooted() }
         } else {
             await askBooted()
         }
