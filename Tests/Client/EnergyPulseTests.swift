@@ -72,12 +72,12 @@ final class EnergyPulseTests: XCTestCase {
                        "main 3.00s, worker 0.50s")
     }
 
-    /// The footprint is said in MB, its peak beside it when the kernel gave one, and a reading
+    /// The footprint is said in MiB, its peak beside it when the kernel gave one, and a reading
     /// the kernel refused is said as unread rather than as nothing.
-    func testTheFootprintIsSaidInMegabytes() {
+    func testTheFootprintIsSaidInMebibytes() {
         XCTAssertEqual(EnergyPulse.said(footprint: (now: 412 * 1_048_576, peak: 690 * 1_048_576)),
-                       "footprint 412 MB peak 690 MB")
-        XCTAssertEqual(EnergyPulse.said(footprint: (now: 1_572_864, peak: nil)), "footprint 2 MB")
+                       "footprint 412 MiB peak 690 MiB")
+        XCTAssertEqual(EnergyPulse.said(footprint: (now: 1_572_864, peak: nil)), "footprint 2 MiB")
         XCTAssertEqual(EnergyPulse.said(footprint: nil), "footprint unread")
     }
 

@@ -10,7 +10,7 @@ import os
 /// app's state, nothing of the person's.
 ///
 /// The pulse is the kernel's counters for this task (`TASK_POWER_INFO`): CPU time and idle
-/// wakeups since the last pulse, over the time between the two reads by the continuous clock (which
+/// wakeups since the last pulse, with its memory footprint now and at its peak (`TASK_VM_INFO`), over the time between the two reads by the continuous clock (which
 /// counts the time the phone sleeps and takes no change to the wall clock), against the battery,
 /// the charger, the thermal state and Low Power Mode, with what the app was doing (`state`), and the
 /// threads the minute went to by name, with what threads that ended inside it spent as
@@ -42,7 +42,7 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
     private var timer: DispatchSourceTimer?
     private var counters: (cpu: Double, idle: UInt64, interrupts: UInt64, at: ContinuousClock.Instant)?
     private var started = false
-    /// Whether a pulse has been written in this process: the first one's interval holds the launch.
+    /// Whether a pulse has been taken in this process: the first one's interval runs from `start()`.
     private var pulsed = false
     private var file: FileHandle?
     private var written = 0
@@ -291,7 +291,8 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
 
     /// This task's memory footprint now and its peak since launch, in bytes (`TASK_VM_INFO`'s
     /// `phys_footprint`, the figure jetsam judges, and `ledger_phys_footprint_peak`); nil when the
-    /// kernel will not say, and a peak of nil when its answer is too short to carry one.
+    /// kernel will not say or its answer is too short to carry the footprint, and a peak of nil
+    /// when the answer is too short to carry one or carries none.
     private static func footprint() -> (now: UInt64, peak: UInt64?)? {
         var info = task_vm_info_data_t()
         let full = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
@@ -301,19 +302,21 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        guard kr == KERN_SUCCESS else { return nil }
+        let answered = Int(count) * MemoryLayout<natural_t>.size
+        let nowEnd = MemoryLayout<task_vm_info_data_t>.offset(of: \.phys_footprint)! + MemoryLayout<UInt64>.size
+        guard kr == KERN_SUCCESS, answered >= nowEnd else { return nil }
         let peakEnd = MemoryLayout<task_vm_info_data_t>.offset(of: \.ledger_phys_footprint_peak)!
             + MemoryLayout<Int64>.size
-        let peak = Int(count) * MemoryLayout<natural_t>.size >= peakEnd && info.ledger_phys_footprint_peak > 0
+        let peak = answered >= peakEnd && info.ledger_phys_footprint_peak > 0
             ? UInt64(info.ledger_phys_footprint_peak) : nil
         return (info.phys_footprint, peak)
     }
 
-    /// The pulse's footprint field, in MB: `footprint 412 MB peak 690 MB`, without the peak when
-    /// the kernel gave none, and `footprint unread` when it gave nothing.
+    /// The pulse's footprint field, in MiB: `footprint 412 MiB peak 690 MiB`, without the peak
+    /// when the kernel gave none, and `footprint unread` when it gave nothing.
     static func said(footprint: (now: UInt64, peak: UInt64?)?) -> String {
         guard let footprint else { return "footprint unread" }
-        let mb = { (b: UInt64) in String(format: "%.0f MB", Double(b) / 1_048_576) }
+        let mb = { (b: UInt64) in String(format: "%.0f MiB", Double(b) / 1_048_576) }
         guard let peak = footprint.peak else { return "footprint " + mb(footprint.now) }
         return "footprint \(mb(footprint.now)) peak \(mb(peak))"
     }
