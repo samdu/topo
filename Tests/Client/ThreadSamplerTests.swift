@@ -304,10 +304,11 @@ final class ThreadSamplerTests: XCTestCase {
         XCTAssertEqual(sampler.recent(), [])
     }
 
-    /// A note is its time, bytes, tokens and kind, and nothing else: no word, header or id.
+    /// A note is its time, bytes, tokens, kind and whether more than one connection sent, and nothing
+    /// else: no word, header or id.
     func testANoteHoldsNothingButTimeBytesTokensAndKind() {
         let note = ThreadSampler.Note(at: Date(), bytes: 1, tokens: 2, kind: .thread)
-        XCTAssertEqual(Mirror(reflecting: note).children.compactMap(\.label), ["at", "bytes", "tokens", "kind"])
+        XCTAssertEqual(Mirror(reflecting: note).children.compactMap(\.label), ["at", "bytes", "tokens", "kind", "shared"])
     }
 
     func testOnlyTheLastTwentyAreKept() {

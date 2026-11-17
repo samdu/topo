@@ -29,9 +29,9 @@ import TopoUserland
 /// request on the same connection between the reads): a request said to be on a thread sent no more
 /// than that, and one said to carry the whole conversation may be one that shared its connection.
 ///
-/// A note is a time, a count of bytes, a count of tokens and a kind: no word, header value or id. In
-/// memory only, and the app clears it when a login ends: a moment heard before the clear keeps
-/// nothing, whenever its read runs.
+/// A note is a time, a count of bytes, a count of tokens, a kind and whether more than one
+/// connection sent: no word, header value or id. In memory only, and the app clears it when a login
+/// ends: a moment heard before the clear keeps nothing, whenever its read runs.
 final class ThreadSampler: Sendable {
     enum Kind: String, Sendable, Equatable {
         /// A small upload for the context: only what was new went.
