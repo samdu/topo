@@ -277,18 +277,37 @@ public struct TurnLog: Sendable {
     /// number fetched by ID and one that exists reported missing, and `also` fetched in the same
     /// request: records the reader wants as of the same moment, one round trip instead of two.
     /// Those of `also` that exist are in `fetched`; nothing is fetched when there is nothing to.
-    public func probed(_ seen: Transcript, also: [RecordID] = []) async throws -> (transcript: Transcript, fetched: [RecordID: Record]) {
+    ///
+    /// `through` is a turn the reader was told was just saved (a phone's word after its save): it
+    /// and the turn after it on its device are fetched in the same request, and the turn, found and
+    /// well formed, is read into the transcript, since a fetch by ID is read-your-writes and a turn
+    /// is never changed once written. The one after it is probed as every device's next is, so a
+    /// later turn of that device leaves the read incomplete; and the turn found missing, or not a
+    /// turn, is a ref the log must hold and this read did not.
+    public func probed(_ seen: Transcript, also: [RecordID] = [], through: TurnRef? = nil) async throws -> (transcript: Transcript, fetched: [RecordID: Record]) {
         var last: [DeviceID: Int64] = [:]
         for ref in seen.turns.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }
         for ref in seen.missing { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }
-        let probes = last.map { TurnRef(device: $0.key, sequence: $0.value + 1) }
-        let ids = probes.map(Turn.recordID(for:))
+        var probes = last.map { TurnRef(device: $0.key, sequence: $0.value + 1) }
+        if let through, seen[through] == nil {
+            let after = TurnRef(device: through.device, sequence: through.sequence + 1)
+            probes = probes.filter { $0 != through } + (probes.contains(after) ? [] : [after])
+        }
+        let named = through.flatMap { seen[$0] == nil ? $0 : nil }
+        let ids = probes.map(Turn.recordID(for:)) + (named.map { [Turn.recordID(for: $0)] } ?? [])
         let asked = ids + also.filter { !ids.contains($0) }
         guard !asked.isEmpty else { return (seen, [:]) }
         let present = try await database.fetch(asked)
         let hidden = probes.filter { present[Turn.recordID(for: $0)] != nil }
-        var read = hidden.isEmpty ? seen
-            : Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
+        var read = seen
+        if let named {
+            let told = present[Turn.recordID(for: named)].flatMap(Turn.init(record:))
+            read = Transcript(turns: Array(seen.turns.values) + (told.map { [$0] } ?? []),
+                              missing: seen.missing.union(hidden).union(told == nil ? [named] : []),
+                              unreadable: seen.unreadable)
+        } else if !hidden.isEmpty {
+            read = Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
+        }
         read.free = Set(probes).subtracting(hidden)
         return (read, present.filter { also.contains($0.key) })
     }

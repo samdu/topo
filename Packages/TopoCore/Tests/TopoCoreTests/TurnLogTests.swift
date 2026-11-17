@@ -677,4 +677,77 @@ import TopoCoreTesting
         #expect(read.missing == [.ref("phone", 2)])
         #expect(fetched[marker] != nil)
     }
+
+    /// A phone's word that its turn is saved: the turn the feed is behind on, fetched by ID in the
+    /// probe's one request, is read into the transcript, and the read is complete.
+    @Test func aTurnToldSavedIsReadInByIDWithTheProbe() async throws {
+        let inner = InMemoryRecordDatabase()
+        let db = CountingFetchDatabase(inner: StaleTailDatabase(inner: inner))
+        let log = TurnLog(database: db)
+        let w = try await TurnLog(database: inner).writer(for: phone)
+        let one = try await w.append(.person, "one", parents: [], at: tA)
+        let two = try await w.append(.assistant, "two", parents: [one.ref], at: tA + 1)
+        let three = try await w.append(.person, "three", parents: [two.ref], at: tA + 2, nonce: "n3")
+        let seen = try await log.feed()
+        #expect(seen[three.ref] == nil)
+        let marker = TurnLog.markerID(appendedUnder: "n3")
+        let before = db.fetches
+        let (read, fetched) = try await log.probed(seen, also: [marker], through: three.ref)
+        #expect(db.fetches == before + 1)
+        // Mutant: the turn told saved reported missing as any hidden turn is.
+        #expect(read.isComplete)
+        #expect(read.heads == [three.ref])
+        #expect(read[three.ref]?.text == "three")
+        #expect(read.free == [.ref("phone", 4)])
+        #expect(fetched[marker] != nil)
+    }
+
+    /// Word of a save never makes a read complete that is not: the device's turn after the one
+    /// told, a turn told that is not there or not a turn, or another device's hidden turn.
+    @Test func aTurnToldSavedLeavesTheReadIncompleteWhereItIs() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: StaleTailDatabase(inner: inner))
+        let w = try await TurnLog(database: inner).writer(for: phone)
+        let one = try await w.append(.person, "one", parents: [], at: tA)
+        // The feed is behind on the phone's newest, which is not the turn told.
+        let two = try await w.append(.person, "two", parents: [one.ref], at: tA + 1)
+        let seen = try await log.feed()
+        let (behind, _) = try await log.probed(seen, through: one.ref)
+        #expect(!behind.isComplete)
+        // The feed behind on the turn told and one after it: the one told is read in, and the
+        // one after leaves the read incomplete.
+        let three = try await w.append(.person, "three", parents: [two.ref], at: tA + 2)
+        let behindBoth = TurnLog(database: Hiding(inner, [two.ref, three.ref]))
+        let (after, _) = try await behindBoth.probed(try await behindBoth.feed(), through: two.ref)
+        #expect(after[two.ref]?.text == "two")
+        // Mutant: the turn after the one told not probed.
+        #expect(!after.isComplete)
+        #expect(after.missing.contains(three.ref))
+        // A turn told that is not in the log.
+        let (absent, _) = try await log.probed(try await log.feed(), through: .ref("phone", 9))
+        #expect(!absent.isComplete)
+        #expect(absent.missing.contains(.ref("phone", 9)))
+        #expect(absent[.ref("phone", 9)] == nil)
+        // A record under a turn's name that does not parse is no turn.
+        _ = try await inner.save(Record(type: Turn.recordType, id: Turn.recordID(for: .ref("tablet", 1)), fields: [:]))
+        let (broken, _) = try await log.probed(try await log.feed(), through: .ref("tablet", 1))
+        #expect(!broken.isComplete)
+        #expect(broken[.ref("tablet", 1)] == nil)
+    }
+}
+
+/// A store whose feed and queries leave out the turns named, which a fetch by ID still finds.
+private struct Hiding: ForwardingDatabase {
+    let base: any RecordDatabase
+    let hidden: Set<RecordID>
+    init(_ base: any RecordDatabase, _ refs: [TurnRef]) {
+        self.base = base
+        hidden = Set(refs.map(Turn.recordID(for:)))
+    }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.records(ofType: type).filter { !hidden.contains($0.id) }
+    }
+    func query(_ query: RecordQuery, through base: any RecordDatabase) async throws -> [Record] {
+        try await base.query(query).filter { !hidden.contains($0.id) }
+    }
 }

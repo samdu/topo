@@ -386,6 +386,9 @@ final class HubModel {
             }, nudged: { [weak self] holder, epoch, mark, stream in
                 guard let self else { return false }
                 return await self.nudged(holder, epoch: epoch, mark: mark, stream: stream)
+            }, coming: { [weak self] holder, epoch, mark in
+                guard let self else { return nil }
+                return await self.headsUp(holder, epoch: epoch, mark: mark)
             })
             port = try await server.start()
             nudgeKey = key.on(port: await server.securePort ?? 0)
@@ -499,6 +502,13 @@ final class HubModel {
         guard let mind = await hubMind else { return false }
         let gated = Self.streamsNow ? stream.map { ReplyCast.gated($0, while: { Self.streamsNow }) } : nil
         return await mind.nudge(holder: holder, epoch: epoch, mark: mark, stream: gated)
+    }
+
+    /// A phone's heads-up that its turn is being saved (`HubNudge.Coming`): the mind's pass gets
+    /// ready for it now, and the listener tells it the turn's ref or that none is coming.
+    private nonisolated func headsUp(_ holder: DeviceID, epoch: Int64, mark: String) async -> LeaseProbeServer.ComingTicket? {
+        guard let mind = await hubMind, let ticket = await mind.headsUp(holder: holder, epoch: epoch, mark: mark) else { return nil }
+        return LeaseProbeServer.ComingTicket(saved: { ticket.saved($0) }, ended: { ticket.end() })
     }
 
     private nonisolated func holds(_ holder: DeviceID, epoch: Int64) async -> Bool {

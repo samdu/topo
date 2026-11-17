@@ -6,14 +6,17 @@ import TopoTurn
 /// begins, then each stage once, with the milliseconds since the trigger — `hub.pass.read` (the
 /// zone's change feed answered), `hub.pass.probed` (the fetch by ID of the log's newest turns
 /// answered, which a pass makes only when the feed shows something to do), `hub.pass.lease` (the
-/// lease's last write answered before the brain is asked), `hub.pass.asked` (the brain asked, with
+/// lease's word this pass heard before the brain is asked: `age=` how long before the ask, and
+/// `ms=` when it came), `hub.pass.asked` (the brain asked, with
 /// `turn=` the milliseconds since the newest turn it answers was said), `hub.pass.written` (the
 /// input on Claude Code's stdin), `hub.pass.received` (its echo, which Claude Code writes as the API's first event for the
 /// turn arrives, so not the moment it sent the request),
 /// `hub.pass.begun` (the reply's first message begun, the API's first event), `hub.pass.words`
 /// (the reply's first words), `hub.pass.answered`, `hub.pass.saved` (the reply's batch answered)
 /// — and `hub.pass.end <outcome>`. A pass with nothing to answer marks the trigger, the read and
-/// its end.
+/// its end. A pass a heads-up began marks each wait for its turn, `hub.pass.waited` with `ms=` as
+/// it ended, `waited=` how long it took and what ended it, so the stages after it are read from
+/// that mark's `ms=`.
 ///
 /// The runner's stages are not its own marks, so they are read off the calls it makes: the log's
 /// read and the writes through the database it is given (`TimedDatabase`), the brain's calls
@@ -24,15 +27,11 @@ final class PassClock: @unchecked Sendable {
     private let lock = NSLock()
     private var began: ContinuousClock.Instant?
     private var marked: Set<String> = []
-    /// The lease's last write in this pass before the brain was asked, kept until it is: a
-    /// heartbeat landing in a pass that asks nothing is no stage of it.
-    private var leaseAt: Int?
 
     func begin(_ source: String) {
         lock.withLock {
             began = .now
             marked = []
-            leaseAt = nil
         }
         Perf.mark("hub.pass.trigger \(source)")
     }
@@ -57,13 +56,16 @@ final class PassClock: @unchecked Sendable {
         Perf.mark("hub.pass.\(stage) ms=\(ms)\(detail)")
     }
 
-    /// A write of the lease alone, answered: kept as the pass's lease stage if the brain is asked
-    /// after it.
-    func leaseWritten() {
-        lock.withLock {
-            guard let began, marked.contains("read"), !marked.contains("asked") else { return }
-            leaseAt = Self.ms(since: began)
+    /// A wait for a heads-up's turn ended, with what ended it; `since` is when it began.
+    func waited(_ heard: TurnRunner.Coming, since: ContinuousClock.Instant) {
+        let ms = lock.withLock { began.map(Self.ms) }
+        guard let ms else { return }
+        let how = switch heard {
+        case .saved: "saved"
+        case .other: "other"
+        case .gone: "gone"
         }
+        Perf.mark("hub.pass.waited ms=\(ms) waited=\(Self.ms(since: since)) \(how)")
     }
 
     /// A fetch by ID naming a turn answered: in a pass, the first is the log read's second half.
@@ -86,14 +88,16 @@ final class PassClock: @unchecked Sendable {
         }
     }
 
-    /// The brain is asked: the lease's stage is marked first, then the ask.
-    func asked(turnAge: Int?) {
-        let lease = lock.withLock { () -> Int? in
-            guard began != nil, !marked.contains("lease") else { return nil }
+    /// The brain is asked, `leaseAge` seconds after the lease's word this pass heard: the lease's
+    /// stage is marked first, then the ask.
+    func asked(turnAge: Int?, leaseAge: TimeInterval?) {
+        let lease = lock.withLock { () -> (ms: Int, age: Int)? in
+            guard let began, let leaseAge, !marked.contains("lease") else { return nil }
             marked.insert("lease")
-            return leaseAt
+            let age = Int(leaseAge * 1000)
+            return (Self.ms(since: began) - age, age)
         }
-        if let lease { Perf.mark("hub.pass.lease ms=\(lease)") }
+        if let lease { Perf.mark("hub.pass.lease ms=\(lease.ms) age=\(lease.age)") }
         reached("asked", detail: turnAge.map { " turn=\($0)" } ?? "")
     }
 
@@ -111,11 +115,7 @@ struct TimedDatabase: RecordDatabase {
 
     func save(_ records: [Record]) async throws -> [Record] {
         let saved = try await base.save(records)
-        if records.contains(where: { $0.type == Turn.recordType }) {
-            clock.reached("saved")
-        } else if records.count == 1, records[0].id == Lease.recordID {
-            clock.leaseWritten()
-        }
+        if records.contains(where: { $0.type == Turn.recordType }) { clock.reached("saved") }
         return saved
     }
 
@@ -147,7 +147,7 @@ struct TimedBrain: Brain {
 
     func answer(_ request: BrainRequest) async throws -> Reply {
         let newest = request.answering.map(\.at).max()
-        clock.asked(turnAge: newest.map { Int(Date().timeIntervalSince($0) * 1000) })
+        clock.asked(turnAge: newest.map { Int(Date().timeIntervalSince($0) * 1000) }, leaseAge: request.leaseAge)
         cast.begin(request.answering)
         defer { cast.end() }
         let reply: Reply

@@ -266,6 +266,20 @@ final class Harness {
     var nudge: (@Sendable (_ lease: Lease, _ mark: String, _ frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool)?
     /// The nudges waiting for their hub's answer, which a sign-out or a demotion cancels.
     private var nudges: [UUID: Task<Void, Never>] = [:]
+    /// Tells the hub that holds `lease` that the turn under `mark` is being saved now
+    /// (`HubNudge.Coming`, on the nudge's channel), so the hub's pass gets ready while the save is
+    /// out; the app sets it. It returns at once, having awaited nothing: nil when nothing can be
+    /// sent without asking anything first (local network access not allowed), and otherwise a
+    /// heads-up whose connection is made in a task of its own, with the key kept for the lease's
+    /// epoch and no record read. It carries the lease and the turn's mark, never a word. Nil: no
+    /// heads-up, and the nudge after the save is the hub's first word of the turn.
+    var headsUp: (@MainActor (_ lease: Lease, _ mark: String) -> (any HubHeadsUp)?)?
+    /// The heads-up sent for words on the line, by their nonce, until the turn's save says what
+    /// becomes of it (`nudgeHub`): its connection carries the nudge, or it is closed.
+    private var comings: [String: any HubHeadsUp] = [:]
+    /// The hub's lease this device last wrote a limb's turn under (`nudgeHub`), which a heads-up
+    /// goes to. Cleared by a sign-out, a demotion, and any turn that does not find a hub holding it.
+    private var hubLease: Lease?
     /// A limb's turns this device wrote for a hub to answer, by ref, with each turn's mark, until a
     /// read finds their reply: the reply's arrival is a mark of its own (`turn.limb.reply.shown`).
     private var limbTurns: [TurnRef: String] = [:]
@@ -569,6 +583,8 @@ final class Harness {
     private func stopAnswering() {
         nudges.values.forEach { $0.cancel() }
         nudges = [:]
+        closeComings()
+        hubLease = nil
         dropStreamed()
         limbTurns = [:]
         login += 1
@@ -763,8 +779,10 @@ final class Harness {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
+        let first = pending.isEmpty && !busy
         pending.append(outgoing)
         Perf.mark("turn.line \(Self.turnMark(outgoing.nonce))")
+        tellHubComing(outgoing.nonce, first: first)
         return outgoing.nonce
     }
 
@@ -779,9 +797,35 @@ final class Harness {
         if holds(nonce) { return true }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
+        let first = pending.isEmpty && !busy
         pending.append(Outgoing(text: whole ? text : trimmed, nonce: nonce))
         Perf.mark("turn.line \(Self.turnMark(nonce))")
+        tellHubComing(nonce, first: first)
         return true
+    }
+
+    /// Tells the hub that answered this device's last limb's turn that the words just put on the
+    /// line are being saved (`headsUp`), so its pass is ready when the save lands. Only for words
+    /// put on an empty line with nothing being sent, whose save begins now, and only when this
+    /// device last found that hub answering and expects to again: a runner made, iCloud reached,
+    /// the hub's lease in hand. At most once for a nonce; nothing here waits on it, and a turn
+    /// whose heads-up failed goes exactly as one with none.
+    private func tellHubComing(_ nonce: String, first: Bool) {
+        guard let headsUp, standing == .elsewhere, comings[nonce] == nil else { return }
+        let mark = Self.turnMark(nonce)
+        let why: String? = !first ? "behind" : hubLease == nil ? "noLease" : runner == nil || unreached ? "unreached" : nil
+        if let why {
+            Perf.mark("turn.coming.skipped \(mark) \(why)")
+            return
+        }
+        guard let lease = hubLease, let coming = headsUp(lease, String(mark.dropFirst("turn=".count))) else { return }
+        comings[nonce] = coming
+    }
+
+    /// Every heads-up is closed: the hubs' waits for their turns end now.
+    private func closeComings() {
+        comings.values.forEach { $0.cancel() }
+        comings = [:]
     }
 
     /// What names a turn in its marks: `turn=` and the first eight letters or digits of its nonce,
@@ -915,6 +959,7 @@ final class Harness {
             return false
         }
         pending.removeAll { $0.nonce == nonce }
+        comings.removeValue(forKey: nonce)?.cancel()
         takenBack.insert(nonce)
         failedNonces.remove(nonce)
         cutOffAhead.remove(nonce)
@@ -1098,6 +1143,9 @@ final class Harness {
         Perf.mark("turn.attempt \(turnMark)")
         var ended = "ended"
         defer { Perf.mark("turn.attempt.end \(turnMark) \(ended)") }
+        // A heads-up the turn's save did not take up (`nudgeHub`) is closed as the attempt ends:
+        // the turn was answered here, failed, or went to another holder.
+        defer { comings.removeValue(forKey: attempt.nonce)?.cancel() }
         do {
             Perf.mark("turn.send")
             if runner == nil { status = "Reaching iCloud…" }
@@ -1129,6 +1177,8 @@ final class Harness {
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
             handedBack = false
+            // This device answered: no hub is told of the next words.
+            hubLease = nil
             // The reply is offered before any stream it replaces hears it ended, so what was read
             // of a hub's stream of the same reply is not read again.
             show(result.person)
@@ -1310,24 +1360,46 @@ final class Harness {
     /// lease that names an endpoint is nudged, and nothing waits on it: what it carries is the
     /// lease and the turn's mark, and a nudge that never arrives leaves the hub's poll and push and
     /// this device's loop to bring the same reply.
+    ///
+    /// A heads-up sent for the turn to that same lease (`tellHubComing`) carries the nudge on its
+    /// connection, already open, naming the saved turn's ref; one the hub did not take, or whose
+    /// connection went, leaves the nudge to go as ever.
     private func nudgeHub(_ outcome: LeaseOutcome, for person: Turn) {
+        var coming = comings.removeValue(forKey: person.nonce)
+        defer { coming?.cancel() }
         let lease: Lease
         switch outcome {
         case .held(let held): lease = held
         case .unreachable(let held): lease = held
-        case .primary, .contended: return
+        case .primary, .contended:
+            hubLease = nil
+            return
         }
-        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil, let nudge else { return }
+        guard HubLeaseProbe.isHub(lease.holder), lease.endpoint != nil else {
+            hubLease = nil
+            return
+        }
+        hubLease = lease
+        guard let nudge else { return }
         let mark = Self.turnMark(person.nonce)
         let wire = String(mark.dropFirst("turn=".count))
         guard !wire.isEmpty else { return }
+        // Taken up only by the lease it was sent to; any other is closed as this returns.
+        let ahead = coming.flatMap { $0.lease.holder == lease.holder && $0.lease.epoch == lease.epoch ? $0 : nil }
+        if ahead != nil { coming = nil }
         limbTurns[person.ref] = mark
         let login = self.login, id = UUID(), ref = person.ref
         streamed.append(Streamed(nonce: person.nonce, ref: ref, mark: mark, login: login))
         Perf.mark("turn.nudge.begin \(mark)")
         nudges[id] = Task { [weak self] in
-            let read = await nudge(lease, wire) { [weak self] frame in
+            let frames: @Sendable (ReplyFrame) async -> Void = { [weak self] frame in
                 await self?.followHub(frame, for: ref, under: login)
+            }
+            let read: Bool
+            if let ahead, let answered = await ahead.saved(ref, frames: frames) {
+                read = answered
+            } else {
+                read = await nudge(lease, wire, frames)
             }
             guard let self else { return }
             self.nudges[id] = nil
@@ -1940,6 +2012,8 @@ final class Harness {
         // it ended after the next read, which offers a reply the hub saved meanwhile first.
         nudges.values.forEach { $0.cancel() }
         nudges = [:]
+        closeComings()
+        hubLease = nil
         dropStreamed(endingAfterRead: true)
         // What was read before this device was last primary says nothing of the log now: another
         // device answered meanwhile. The transcript stays drawn; whether the log is empty is not
@@ -2138,5 +2212,19 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
         default: "\(error)"
         }
     }
+}
+
+/// A heads-up to a hub (`Harness.headsUp`): its connection is the one the turn's nudge goes down
+/// once the turn is saved.
+protocol HubHeadsUp: AnyObject, Sendable {
+    /// The lease the heads-up was sent to.
+    var lease: Lease { get }
+    /// The turn is saved as `ref`: the nudge down the heads-up's connection, with the reply's
+    /// frames handed to `frames` as the hub streams them, answering true once the hub's pass has
+    /// ended. Nil when the hub did not take the heads-up or its connection went: nothing was said,
+    /// and the nudge goes the usual way.
+    func saved(_ ref: TurnRef, frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool?
+    /// Closes the heads-up: the hub's wait for its turn ends.
+    func cancel()
 }
 #endif

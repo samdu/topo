@@ -1455,6 +1455,130 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(phone.turns.isEmpty, "a read for the last login reached the screen")
     }
 
+    /// A heads-up the test's hub was sent, and what its connection carried.
+    private final class FakeHeadsUp: HubHeadsUp, @unchecked Sendable {
+        let lease: Lease
+        let mark: String
+        /// What `saved` answers: nil, the hub did not take the heads-up.
+        let answers: Bool?
+        /// Runs as the saved turn's nudge goes down the connection: the hub's pass.
+        let pass: @Sendable () async -> Void
+        private let lock = NSLock()
+        private var _saved: [TurnRef] = []
+        private var _cancelled = false
+        var savedRefs: [TurnRef] { lock.withLock { _saved } }
+        var cancelled: Bool { lock.withLock { _cancelled } }
+        init(lease: Lease, mark: String, answers: Bool?, pass: @escaping @Sendable () async -> Void) {
+            self.lease = lease; self.mark = mark; self.answers = answers; self.pass = pass
+        }
+        func saved(_ ref: TurnRef, frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool? {
+            lock.withLock { _saved.append(ref) }
+            guard answers != nil else { return nil }
+            await pass()
+            return answers
+        }
+        func cancel() { lock.withLock { _cancelled = true } }
+    }
+
+    /// A phone that has written one limb's turn for a hub holding a lease with an endpoint, which
+    /// the hub answered, and whose app sends heads-ups through `answers`.
+    private func phoneAfterOneLimbTurn(answers: Bool?) async throws
+        -> (InMemoryRecordDatabase, DeviceID, Harness, Nudges, LockedBox<[FakeHeadsUp]>) {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let defaults = makeDefaults()
+        let phone = harness(db, defaults: defaults, transport: ScriptedTransport())
+        let nudges = Nudges()
+        let hubAnswers: @Sendable () async -> Void = {
+            let log = TurnLog(database: db)
+            guard let transcript = try? await log.read(), let writer = try? await log.writer(for: hubID) else { return }
+            _ = try? await writer.append(.assistant, "from the Mac", continuing: transcript)
+        }
+        phone.nudge = { lease, mark, _ in
+            nudges.record(lease, mark)
+            await hubAnswers()
+            return true
+        }
+        let sent = LockedBox<[FakeHeadsUp]>([])
+        phone.headsUp = { lease, mark in
+            let coming = FakeHeadsUp(lease: lease, mark: mark, answers: answers, pass: hubAnswers)
+            sent.with { $0.append(coming) }
+            return coming
+        }
+        await phone.send("bins?")
+        try await eventually("the first reply read") { phone.turns.map(\.text) == ["bins?", "from the Mac"] }
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+        // The first turn found the hub: no heads-up went before it was known.
+        XCTAssertTrue(sent.with { $0 }.isEmpty)
+        XCTAssertEqual(nudges.calls.count, 1)
+        return (db, hubID, phone, nudges, sent)
+    }
+
+    /// Words for a hub that answered the last limb's turn: the heads-up goes as they reach the
+    /// line, with the hub's lease and the turn's mark, before the save; the saved turn's nudge goes
+    /// down its connection naming the turn, and no second nudge is sent.
+    func testAHeadsUpGoesAsTheWordsReachTheLineAndCarriesTheNudge() async throws {
+        let (_, hubID, phone, nudges, sent) = try await phoneAfterOneLimbTurn(answers: true)
+        let nonce = phone.willSend("and the recycling?")
+        XCTAssertEqual(sent.with { $0 }.count, 1, "the heads-up waited on something")
+        let coming = try XCTUnwrap(sent.with { $0 }.first)
+        XCTAssertEqual(coming.lease.holder, hubID)
+        XCTAssertEqual(coming.mark, String(Harness.turnMark(nonce).dropFirst("turn=".count)))
+        await phone.retry()
+        try await eventually("the second reply read") { phone.turns.count == 4 }
+        XCTAssertEqual(coming.savedRefs.map(\.device), [self.phone])
+        // Mutant: the nudge sent beside the heads-up's.
+        XCTAssertEqual(nudges.calls.count, 1, "the nudge went twice")
+    }
+
+    /// A heads-up the hub did not take leaves the nudge to go the usual way, once.
+    func testAHeadsUpTheHubDidNotTakeLeavesTheNudgeAsEver() async throws {
+        let (_, _, phone, nudges, sent) = try await phoneAfterOneLimbTurn(answers: nil)
+        _ = phone.willSend("and the recycling?")
+        await phone.retry()
+        try await eventually("the second reply read") { phone.turns.count == 4 }
+        XCTAssertEqual(sent.with { $0 }.count, 1)
+        // Mutant: a heads-up's nil answer taken as the nudge sent.
+        XCTAssertEqual(nudges.calls.count, 2)
+    }
+
+    /// At most one heads-up for a turn, and none for words put behind others on the line, whose
+    /// save does not begin now.
+    func testAHeadsUpGoesOnceAndOnlyForWordsSavedNow() async throws {
+        let (_, _, phone, _, sent) = try await phoneAfterOneLimbTurn(answers: true)
+        let nonce = UUID().uuidString
+        XCTAssertTrue(phone.willSend("again", nonce: nonce))
+        XCTAssertTrue(phone.willSend("again", nonce: nonce))
+        _ = phone.willSend("and behind it")
+        // Mutant: a heads-up for every entry the line takes.
+        XCTAssertEqual(sent.with { $0 }.count, 1)
+        await phone.retry()
+        try await eventually("both replies read") { phone.turns.count == 6 }
+        XCTAssertEqual(sent.with { $0 }.count, 1)
+    }
+
+    /// A sign-out closes the heads-up still out, so the hub's wait ends; a heads-up that was not
+    /// taken up by its turn's save is closed as the attempt ends.
+    func testASignOutClosesTheHeadsUpStillOut() async throws {
+        let (_, _, phone, _, sent) = try await phoneAfterOneLimbTurn(answers: true)
+        _ = phone.willSend("and the recycling?")
+        let coming = try XCTUnwrap(sent.with { $0 }.first)
+        await phone.forget()
+        XCTAssertTrue(coming.cancelled)
+        XCTAssertTrue(coming.savedRefs.isEmpty)
+    }
+
+    /// A phone that answers for itself sends no heads-up.
+    func testAPhoneThatAnswersItselfSendsNoHeadsUp() async throws {
+        let db = InMemoryRecordDatabase()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("one")), (200, reply("two"))))
+        let sent = LockedBox<Int>(0)
+        phone.headsUp = { _, _ in sent.with { $0 += 1 }; return nil }
+        await phone.send("bins?")
+        await phone.send("and?")
+        XCTAssertEqual(sent.with { $0 }, 0)
+    }
+
     /// What reached the reader and the reply handler, in order, as the speaker would hear it.
     @MainActor private final class Heard {
         var events: [String] = []

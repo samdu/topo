@@ -147,6 +147,18 @@ struct TopoApp: App {
             if case .unreached(let why) = answer, why != "gated" { Perf.mark("nudge.unreached \(why)") }
             return answer == .read
         }
+        // As the words of a turn for that hub go on the line, the hub is told the turn is being
+        // saved (`HubNudge.Coming`), on the same channel and with the key kept for the lease's
+        // epoch, only once local network access is allowed: nothing here reads the zone or asks
+        // the person, so the save waits on none of it, and the nudge after the save goes down
+        // the heads-up's connection when the hub took it.
+        harness.headsUp = { lease, mark in
+            guard LocalNetworkAccess.shared.state == .allowed else {
+                Perf.mark("turn.coming.skipped turn=\(mark) localNetwork")
+                return nil
+            }
+            return HubNudge.Coming.begin(for: lease, mark: mark, keys: .shared)
+        }
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
         let widgetTable = WidgetActions.table(GuestResident.shared.toolTable)
@@ -406,5 +418,14 @@ struct TopoApp: App {
             .task { await debugUserland() }
             .task { await debugGuestTurn() }
             .task { await debugConnections() }
+    }
+}
+
+/// The heads-up the harness holds for a turn on the line is the channel's (`HubNudge.Coming`).
+extension HubNudge.Coming: HubHeadsUp {
+    func saved(_ ref: TurnRef, frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool? {
+        guard let answer = await saved(ref, stream: frames) else { return nil }
+        if case .unreached(let why) = answer { Perf.mark("nudge.unreached \(why)") }
+        return answer == .read
     }
 }

@@ -13,13 +13,20 @@ public struct BrainRequest: Sendable, Equatable {
     /// The reply's nonce (`TurnRunner.replyNonce(for:)`), the same on every device.
     public var nonce: String
     public var model: ClaudeModel
+    /// How long before the ask the lease last answered this pass that it is this device's, in
+    /// seconds (`TurnRunner.answerPending`): never more than `TurnRunner.askWithin` of the lease's
+    /// timing. Nil for a request no pass made, or one asked after the person's turn was saved
+    /// under the lease in the same batch (`run`).
+    public var leaseAge: TimeInterval?
 
-    public init(context: [Turn], answering: [Turn], parents: [TurnRef], nonce: String, model: ClaudeModel) {
+    public init(context: [Turn], answering: [Turn], parents: [TurnRef], nonce: String, model: ClaudeModel,
+                leaseAge: TimeInterval? = nil) {
         self.context = context
         self.answering = answering
         self.parents = parents
         self.nonce = nonce
         self.model = model
+        self.leaseAge = leaseAge
     }
 }
 

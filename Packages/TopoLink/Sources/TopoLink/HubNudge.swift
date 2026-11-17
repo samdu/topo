@@ -70,13 +70,16 @@ public enum HubNudge {
         }
         guard await reachable(host, key.port) else { return .unreached("gated") }
         let answer = await send(for: lease, mark: mark, key: key, stream: stream)
-        switch answer {
-        case .unreached("handshake"), .unreached("agreement"), .unreached("handshakeTimeout"),
-             .unreached("connect"), .unreached("connectTimeout"):
-            await keys.failed(key)
-        default: break
-        }
+        if case .unreached(let kind) = answer, dropsKey(kind) { await keys.failed(key) }
         return answer
+    }
+
+    /// Whether a connection that failed this way drops the phone's copy of the key: a handshake
+    /// the hub refused or that did not agree (a hub launched since minted another), one still under
+    /// way at the bound, and a connect that failed or ran out (a hub launched since listens on
+    /// another port). A nudge and a heads-up drop it alike.
+    static func dropsKey(_ kind: String) -> Bool {
+        ["handshake", "agreement", "handshakeTimeout", "connect", "connectTimeout"].contains(kind)
     }
 
     /// Says the log moved to the holder of `lease` over the channel `key` opens, and waits for its
@@ -141,26 +144,194 @@ public enum HubNudge {
                 try? await Task.sleep(for: .seconds(answerBound))
                 connection.cancel()
             }
-            let lines = NWConnection.Lines(connection)
-            while true {
-                guard let next = try? await lines.next(maximum: stream == nil ? 16 : frameMaximum),
-                      let line = Optional(next.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                    return .unreached("answer")
-                }
-                switch line {
-                case "read": return .read
-                case "no": return .no
-                default:
-                    guard let stream, let frame = ReplyFrame(line: line) else {
-                        if stream == nil { return .unreached("answer") }
-                        continue
-                    }
-                    if Task.isCancelled { return .unreached("cancelled") }
-                    await stream(frame)
-                }
-            }
+            return await answer(NWConnection.Lines(connection), stream: stream)
         } onCancel: {
             connection.cancel()
+        }
+    }
+
+    /// The hub's answer to a nudge on `lines`, with the frames of a streamed reply handed to
+    /// `stream` ahead of it; a line that is no frame is passed over while streaming.
+    static func answer(_ lines: NWConnection.Lines, stream: (@Sendable (ReplyFrame) async -> Void)?) async -> Answer {
+        while true {
+            guard let next = try? await lines.next(maximum: stream == nil ? 16 : frameMaximum),
+                  let line = Optional(next.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                return .unreached("answer")
+            }
+            switch line {
+            case "read": return .read
+            case "no": return .no
+            default:
+                guard let stream, let frame = ReplyFrame(line: line) else {
+                    if stream == nil { return .unreached("answer") }
+                    continue
+                }
+                if Task.isCancelled { return .unreached("cancelled") }
+                await stream(frame)
+            }
+        }
+    }
+
+    /// A heads-up to the hub that holds `lease`: the person's turn under `mark` is being saved now
+    /// (`ProbeWire`'s `coming`), so the hub's pass gets ready for it while the phone's save is out.
+    /// Begun with nothing awaited by its caller, it reads no record and asks for nothing: the key
+    /// is the one already kept for the lease's epoch (`NudgeKeys.kept(for:)`), and a phone with
+    /// none sends nothing. It carries the lease and the mark, never a word. Once the turn is saved,
+    /// `saved` says its ref down the same connection, which the hub then answers as a nudge; a
+    /// heads-up the hub did not take, or one whose connection went, is nil there, and the nudge
+    /// goes the usual way. `cancel` closes it, which ends the hub's wait for the turn at once.
+    public final class Coming: @unchecked Sendable {
+        public let lease: Lease
+        public let mark: String
+        private let lock = NSLock()
+        private var connection: NWConnection?
+        private var cancelled = false
+        private var lines: NWConnection.Lines?
+        private var opening: Task<Bool, Never>?
+
+        /// How long the hub is given to answer the heads-up once the line is sent: it answers at once.
+        public static let answerBound: TimeInterval = 2
+
+        init(lease: Lease, mark: String) {
+            self.lease = lease
+            self.mark = mark
+        }
+
+        /// Opens the heads-up for the turn `mark` names to the holder of `lease`, with the key
+        /// `keys` already keeps for it. Returns at once; the connection is made in a task of its own.
+        public static func begin(for lease: Lease, mark: String, keys: NudgeKeys,
+                                 connectBound: TimeInterval = HubNudge.connectBound,
+                                 answerBound: TimeInterval = Coming.answerBound) -> Coming {
+            let coming = Coming(lease: lease, mark: mark)
+            let opening = Task { await coming.open(keys: keys, connectBound: connectBound, answerBound: answerBound) }
+            coming.lock.withLock { coming.opening = opening }
+            return coming
+        }
+
+        private func open(keys: NudgeKeys, connectBound: TimeInterval, answerBound: TimeInterval) async -> Bool {
+            guard let key = await keys.kept(for: lease) else {
+                Perf.mark("turn.coming.skipped turn=\(mark) noKey")
+                return false
+            }
+            let answer = await opening(key, connectBound: connectBound, answerBound: answerBound)
+            switch answer {
+            case .read:
+                Perf.mark("turn.coming.answer turn=\(mark) ready")
+                return true
+            case .no:
+                Perf.mark("turn.coming.answer turn=\(mark) no")
+            case .unreached(let kind):
+                if Self.skips(kind) {
+                    Perf.mark("turn.coming.skipped turn=\(mark) \(kind)")
+                } else {
+                    Perf.mark("turn.coming.answer turn=\(mark) unreached \(kind)")
+                    if dropsKey(kind) { await keys.failed(key) }
+                }
+            }
+            close()
+            return false
+        }
+
+        /// Kinds that mean nothing was sent for a reason known before the connection was made.
+        private static func skips(_ kind: String) -> Bool { ["noEndpoint", "noKey", "badMark", "recently", "cancelled"].contains(kind) }
+
+        /// Connects, sends `coming` and reads the hub's answer: `read` stands for `ready`.
+        private func opening(_ key: NudgeKey, connectBound: TimeInterval, answerBound: TimeInterval) async -> Answer {
+            guard let endpoint = lease.endpoint, let (host, _) = SocketLeaseProbe.parse(endpoint) else {
+                return .unreached("noEndpoint")
+            }
+            guard key.hub == lease.holder, let port = NWEndpoint.Port(rawValue: key.port), key.port != 0 else {
+                return .unreached("noKey")
+            }
+            guard ProbeWire.isMark(Substring(mark)) else { return .unreached("badMark") }
+            if Unreached.shared.recently(endpoint) { return .unreached("recently") }
+            let stage = Stage()
+            let parameters = NudgeTLS.parameters(key)
+            parameters.defaultProtocolStack.applicationProtocols.append(TCPReached.options(telling: stage))
+            let connection = NWConnection(host: host, port: port, using: parameters)
+            guard lock.withLock({ () -> Bool in
+                guard !cancelled else { return false }
+                self.connection = connection
+                return true
+            }) else { return .unreached("cancelled") }
+            // Each bound cancels the connection, which fails whichever step is pending.
+            let connecting = Task {
+                try? await Task.sleep(for: .seconds(connectBound))
+                if stage.isConnecting { connection.cancel() }
+            }
+            defer { connecting.cancel() }
+            connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.coming"))
+            do {
+                try await connection.waitUntilReady()
+            } catch {
+                let kind = HubNudge.kind(error, connection, stage)
+                if lock.withLock({ cancelled }) { return .unreached("cancelled") }
+                if kind == "connect" || kind == "connectTimeout" { Unreached.shared.failed(endpoint) }
+                return .unreached(kind)
+            }
+            guard NudgeTLS.agreed(connection) else { return .unreached("agreement") }
+            stage.connected()
+            Unreached.shared.reached(endpoint)
+            guard (try? await connection.send(ProbeWire.coming(lease, mark: mark))) != nil else { return .unreached("send") }
+            Perf.mark("turn.coming.sent turn=\(mark)")
+            let answering = Task {
+                try? await Task.sleep(for: .seconds(answerBound))
+                if !self.lock.withLock({ self.answered }) { connection.cancel() }
+            }
+            defer { answering.cancel() }
+            let lines = NWConnection.Lines(connection)
+            guard let line = try? await lines.next(maximum: 16) else { return .unreached("answer") }
+            lock.withLock { answered = true; self.lines = lines }
+            switch line.trimmingCharacters(in: .whitespacesAndNewlines) {
+            case "ready": return .read
+            case "no": return .no
+            default: return .unreached("answer")
+            }
+        }
+        private var answered = false
+
+        /// The turn is saved as `ref`: said down the heads-up's connection, and the hub's answer
+        /// to it as a nudge's, the reply's frames handed to `stream` ahead of it. Nil when the hub
+        /// did not take the heads-up or the line could not be sent: the nudge goes the usual way.
+        public func saved(_ ref: TurnRef, answerBound: TimeInterval = HubNudge.answerBound,
+                          stream: (@Sendable (ReplyFrame) async -> Void)?) async -> Answer? {
+            guard let opening = lock.withLock({ self.opening }), await opening.value,
+                  let (connection, lines) = lock.withLock({ () -> (NWConnection, NWConnection.Lines)? in
+                      guard !cancelled, let connection, let lines else { return nil }
+                      return (connection, lines)
+                  }) else { return nil }
+            guard (try? await connection.send(ProbeWire.saved(ref, stream: stream != nil))) != nil else {
+                close()
+                return nil
+            }
+            Perf.mark("nudge.sent")
+            let answering = Task {
+                try? await Task.sleep(for: .seconds(answerBound))
+                connection.cancel()
+            }
+            defer {
+                answering.cancel()
+                close()
+            }
+            return await withTaskCancellationHandler {
+                await HubNudge.answer(lines, stream: stream)
+            } onCancel: {
+                connection.cancel()
+            }
+        }
+
+        /// Closes the heads-up: the hub's wait for its turn ends, and `saved` is nil from now.
+        public func cancel() {
+            let opening = lock.withLock { () -> Task<Bool, Never>? in
+                cancelled = true
+                return self.opening
+            }
+            opening?.cancel()
+            close()
+        }
+
+        private func close() {
+            lock.withLock { connection }?.cancel()
         }
     }
 

@@ -115,13 +115,43 @@ public actor TurnRunner {
         case unknown, mine, elsewhere
     }
 
-    /// `standing` is what the device knew when it last ran, for a launch that kept it.
-    public init(log: TurnLog, writer: TurnWriter, lease: PrimaryLease, brain: any Brain, standing: Standing = .unknown) {
+    /// Seconds on a clock that only goes forward, for how long ago the lease answered a pass.
+    private let now: @Sendable () -> TimeInterval
+    /// How long before the brain is asked a pass's word from the lease may be (`askWithin`).
+    private let askWithin: TimeInterval
+
+    /// `standing` is what the device knew when it last ran, for a launch that kept it. `now` is
+    /// the clock a pass's renewal is aged on (`askWithin`); tests move it by hand.
+    public init(log: TurnLog, writer: TurnWriter, lease: PrimaryLease, brain: any Brain, standing: Standing = .unknown,
+                now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) {
         self.standing = standing
         self.log = log
         self.writer = writer
         self.lease = lease
         self.brain = brain
+        self.now = now
+        self.askWithin = Self.askWithin(lease.timing)
+    }
+
+    /// How long before the ask a pass's word from the lease may be: two fifths of the heartbeat
+    /// interval, 2 s at the standard timing. A pass asks the brain only after a write of the lease
+    /// this pass sent has answered that the lease is this device's, no longer ago than this; one
+    /// older is renewed again first. Between two heartbeats a held lease goes a whole interval
+    /// unconfirmed, so this is the tighter of the two, and it is what a pass that renews while it
+    /// waits for a turn on its way (`Coming`) is allowed between its renewal and the ask.
+    public static func askWithin(_ timing: LeaseTiming) -> TimeInterval { timing.heartbeat * 0.4 }
+
+    /// What a pass told that a turn is on its way hears from its wait
+    /// (`answerPending(since:choosingFrom:coming:)`).
+    public enum Coming: Sendable, Equatable {
+        /// The turn is saved as this ref: it is fetched by ID with the log's newest turns, which is
+        /// read-your-writes, rather than waited for in the zone's change feed.
+        case saved(TurnRef)
+        /// Something else asked for a pass meanwhile: the log's change feed is read again, and
+        /// what waits there is answered; with nothing there, the wait goes on.
+        case other
+        /// No turn is coming: the wait's bound passed, the phone went, or the pass was stopped.
+        case gone
     }
 
     /// Where a turn is, told to the caller as it goes, so a screen never shows nothing while
@@ -450,9 +480,19 @@ public actor TurnRunner {
     /// `answerPending(since:choosing:)`, with `choosingFrom` handed what the person's choice of
     /// model in the zone says (`ModelChoice`, nil where no device has said), read by ID in the
     /// request that reads the log's newest turns, so knowing it costs the pass no round trip.
-    public func answerPending(since mark: Int?, choosingFrom: @Sendable (_ said: ClaudeModel?) async -> ClaudeModel) async throws -> Turn? {
+    ///
+    /// With `coming`, the pass was told a turn is on its way (a phone's heads-up as its save
+    /// begins): a lease held fresh with nothing owed is renewed at once, beside the read of the
+    /// log's change feed, and when the feed shows nothing to answer the pass waits on `coming`
+    /// rather than ending. A turn told saved is fetched by ID with the log's newest turns
+    /// (`TurnLog.probed(_:also:through:)`), and answered as any pass answers; the wait ending with
+    /// no turn ends the pass with nothing written but that renewal. The brain is asked only after
+    /// a renewal this pass sent has answered within `askWithin`, as on every pass, so one that
+    /// answered too long before the turn came is sent again beside the fetch.
+    public func answerPending(since mark: Int?, choosingFrom: @Sendable (_ said: ClaudeModel?) async -> ClaudeModel,
+                              coming: (@Sendable () async -> Coming)? = nil) async throws -> Turn? {
         let mark = if let mark { mark } else { await lease.abandons }
-        return try await answering(since: mark, choosing: choosingFrom)
+        return try await answering(since: mark, choosing: choosingFrom, coming: coming)
     }
 
     /// `answerPending(model:)`, with the model asked for only once there is a turn to answer:
@@ -465,58 +505,134 @@ public actor TurnRunner {
 
     /// The log read in two halves, as a pass needs it: the zone's change feed, which alone says
     /// whether anything waits, then the fetch by ID that finds a newest turn the feed has not
-    /// caught up with (`TurnLog.probed`). When the feed shows a person's turn to answer, that one
-    /// request also fetches the marker of the reply to the heads it shows and the person's choice
-    /// of model, so neither is a round trip of its own. `asked` is what it fetched beside the log.
-    /// A pass that then asks for the lease the long way fetches the marker again after its claim.
-    private func probe(_ seen: Transcript) async throws -> (transcript: Transcript, fetched: [RecordID: Record], asked: [RecordID]) {
+    /// caught up with (`TurnLog.probed`). When the feed shows a person's turn to answer, or a turn
+    /// was told saved (`through`), that one request also fetches the marker of the reply to the
+    /// heads it shows (to that turn alone, for one told saved) and the person's choice of model,
+    /// so neither is a round trip of its own. `asked` is what it fetched beside the log. A pass
+    /// that then asks for the lease the long way fetches the marker again after its claim.
+    private func probe(_ seen: Transcript, through: TurnRef? = nil) async throws -> (transcript: Transcript, fetched: [RecordID: Record], asked: [RecordID]) {
         let unresolved = await brain.unresolved()
-        let waits = seen.isComplete && Self.awaitsReply(seen, skipping: unresolved)
-        let also = waits ? [TurnLog.markerID(appendedUnder: Self.replyNonce(for: seen.heads)), ModelChoice.recordID] : []
-        let (transcript, fetched) = try await log.probed(seen, also: also)
+        let waits = through != nil || (seen.isComplete && Self.awaitsReply(seen, skipping: unresolved))
+        let heads = through.map { seen[$0] == nil ? [$0] : seen.heads } ?? seen.heads
+        let also = waits ? [TurnLog.markerID(appendedUnder: Self.replyNonce(for: heads)), ModelChoice.recordID] : []
+        let (transcript, fetched) = try await log.probed(seen, also: also, through: through)
         return (transcript, fetched, also)
     }
 
-    private func answering(since mark: Int, choosing: @Sendable (ClaudeModel?) async -> ClaudeModel) async throws -> Turn? {
-        // The feed alone says whether anything waits: what the fetch by ID adds is only turns the
-        // feed is behind on, which leave the read incomplete and the pass with nothing to do, so a
-        // pass that finds nothing waiting in the feed asks CloudKit nothing more.
-        let seen = try await log.feed()
-        guard seen.isComplete else { return nil }
-        // An owed reply is written whatever the head is: another device may have answered past
-        // the turn it belongs to, and nothing else would ever write it.
-        let waiting = Self.awaitsReply(seen, skipping: await brain.unresolved())
-        let owes = await brain.owed() != nil
-        guard waiting || owes else { return nil }
-        // A lease held fresh with nothing owed is renewed while the rest of the log is read,
-        // rather than after it: one compare-and-set the server answers, sent once the feed shows a
-        // turn to answer, which a claim by another device since this one last wrote refuses, and
-        // then `acquire()` the long way. The brain is asked only once one of the two said primary.
-        let fresh = await lease.isPrimary()
-        let acquired = owes || !fresh
-        let renewal: Task<Bool, Never>? = acquired ? nil : Task { await self.renewFresh() }
-        // Every way out of the pass, a throw and a cancelled pass's included, waits for the renewal
-        // it sent, so no write of the lease this pass made lands after it returns. The renewal is
-        // not cancelled with the pass: its answer, bounded by the lease's patience, is waited for.
+    /// The renewals of the lease one pass sent. Every one is waited for on every way out of the
+    /// pass, a throw and a cancelled pass's included, so no write of the lease the pass made lands
+    /// after it returns; none is cancelled with the pass, since its answer is bounded by the
+    /// lease's patience. The newest says when it answered.
+    private final class Renewals: @unchecked Sendable {
+        enum Answer: Equatable { case none, out, held(TimeInterval), refused }
+        private let lock = NSLock()
+        private var tasks: [Task<TimeInterval?, Never>] = []
+        private var answers: [Int: TimeInterval?] = [:]
+
+        /// `renew` answers when the lease said it is held, nil when it did not or could not be asked.
+        func send(_ renew: @escaping @Sendable () async -> TimeInterval?) {
+            lock.withLock {
+                let index = tasks.count
+                tasks.append(Task {
+                    let at = await renew()
+                    self.lock.withLock { self.answers[index] = .some(at) }
+                    return at
+                })
+            }
+        }
+
+        var newestAnswer: Answer {
+            lock.withLock {
+                guard !tasks.isEmpty else { return .none }
+                guard let answer = answers[tasks.count - 1] else { return .out }
+                return answer.map { .held($0) } ?? .refused
+            }
+        }
+
+        /// The newest renewal's answer, waited for: when it said held, or nil.
+        func newest() async -> TimeInterval? {
+            guard let task = lock.withLock({ tasks.last }) else { return nil }
+            return await task.value
+        }
+
+        func settled() async {
+            for task in lock.withLock({ tasks }) { _ = await task.value }
+        }
+    }
+
+    private func answering(since mark: Int, choosing: @Sendable (ClaudeModel?) async -> ClaudeModel,
+                           coming: (@Sendable () async -> Coming)?) async throws -> Turn? {
+        let renewals = Renewals()
+        // A pass told a turn is on its way renews a lease held fresh with nothing owed at once,
+        // beside its read of the feed, so the renewal has answered by the time the turn is saved.
+        if coming != nil, await lease.isPrimary(), await brain.owed() == nil {
+            renewals.send { await self.renewFresh() }
+        }
         do {
-            let answered = try await answering(seen, since: mark, renewal: renewal, acquired: acquired, choosing: choosing)
-            _ = await renewal?.value
+            let answered = try await answering(since: mark, renewals: renewals, choosing: choosing, coming: coming)
+            await renewals.settled()
             return answered
         } catch {
-            _ = await renewal?.value
+            await renewals.settled()
             throw error
         }
     }
 
+    private func answering(since mark: Int, renewals: Renewals, choosing: @Sendable (ClaudeModel?) async -> ClaudeModel,
+                           coming: (@Sendable () async -> Coming)?) async throws -> Turn? {
+        // The feed alone says whether anything waits: what the fetch by ID adds is only turns the
+        // feed is behind on, which leave the read incomplete and the pass with nothing to do, so a
+        // pass that finds nothing waiting in the feed asks CloudKit nothing more, unless it was
+        // told a turn is on its way, when it waits for word of the save.
+        var seen = try await log.feed()
+        var through: TurnRef?
+        waiting: while true {
+            guard seen.isComplete else { return nil }
+            // An owed reply is written whatever the head is: another device may have answered past
+            // the turn it belongs to, and nothing else would ever write it.
+            let unresolved = await brain.unresolved(), owes = await brain.owed() != nil
+            if Self.awaitsReply(seen, skipping: unresolved) || owes { break }
+            guard let coming else { return nil }
+            switch await coming() {
+            case .saved(let ref):
+                through = ref
+                break waiting
+            case .other:
+                seen = try await log.feed()
+            case .gone:
+                return nil
+            }
+        }
+        // A lease held fresh with nothing owed is renewed while the rest of the log is read,
+        // rather than after it: one compare-and-set the server answers, sent once the feed shows a
+        // turn to answer, which a claim by another device since this one last wrote refuses, and
+        // then `acquire()` the long way. A pass that renewed as it began sends another only when
+        // that one answered half `askWithin` ago or more, so the ask does not wait on a third.
+        let fresh = await lease.isPrimary()
+        let owes = await brain.owed() != nil
+        let acquired = owes || !fresh
+        if !acquired {
+            switch renewals.newestAnswer {
+            case .none, .refused: renewals.send { await self.renewFresh() }
+            case .held(let at) where now() - at >= askWithin / 2: renewals.send { await self.renewFresh() }
+            case .held, .out: break
+            }
+        }
+        return try await answering(seen, through: through, since: mark, renewals: acquired ? nil : renewals, choosing: choosing)
+    }
+
     /// The rest of a pass, from the probe beside the renewal it was handed (nil when the lease is
-    /// asked for the long way, `acquired`).
-    private func answering(_ seen: Transcript, since mark: Int, renewal: Task<Bool, Never>?, acquired: Bool,
+    /// asked for the long way).
+    private func answering(_ seen: Transcript, through: TurnRef?, since mark: Int, renewals: Renewals?,
                            choosing: @Sendable (ClaudeModel?) async -> ClaudeModel) async throws -> Turn? {
-        var (transcript, fetched, asked) = try await probe(seen)
+        var (transcript, fetched, asked) = try await probe(seen, through: through)
         guard transcript.isComplete else { return nil }
-        if acquired {
+        // When this pass last heard the lease answer that it is this device's, by a claim.
+        var claimed: TimeInterval?
+        if renewals == nil {
             let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            claimed = now()
             // A reply another device wrote while the lease was asked for is found by a marker
             // fetched after the claim: the one fetched with the log is from before it.
             asked.removeAll { $0 != ModelChoice.recordID }
@@ -524,7 +640,7 @@ public actor TurnRunner {
         let settled = try await settleOwed()
         if settled != nil {
             // The owed reply moved the log; what waits is read again.
-            (transcript, fetched, asked) = try await probe(try await log.feed())
+            (transcript, fetched, asked) = try await probe(try await log.feed(), through: through)
         }
         let unresolved = await brain.unresolved()
         guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return settled }
@@ -561,37 +677,58 @@ public actor TurnRunner {
             ? ModelChoice.said(by: fetched[ModelChoice.recordID])
             : ModelChoice.said(by: try await log.records([ModelChoice.recordID])[ModelChoice.recordID])
         async let chosen = choosing(said)
-        guard await renewal?.value ?? true else {
+        // The brain is asked only once this pass has heard the lease answer that it is this
+        // device's, within `askWithin` of the ask, with nothing since having found it lost (a
+        // heartbeat that met another device's claim: `isPrimary`, which asks nothing). A word
+        // older than that is renewed once more; a renewal refused, or a lease found lost, is
+        // asked for the long way, and the marker asked again once the lease is this device's.
+        var confirmed = if let renewals { await renewals.newest() } else { claimed }
+        if let renewals, confirmed != nil, !(await stillHeld(since: confirmed)) {
+            try Task.checkCancellation()
+            renewals.send { await self.renewFresh() }
+            confirmed = await renewals.newest()
+        }
+        if !(await stillHeld(since: confirmed)) {
             let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
-            // As above: the marker is asked again once the lease is this device's.
+            confirmed = now()
             if let answered = try await log.turn(appendedUnder: nonce) {
                 await brain.landed(answered, nonce: nonce)
                 return answered
             }
-            return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
         }
-        return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
+        let age = confirmed.map { now() - $0 } ?? 0
+        return try await answer(answering, in: transcript, nonce: nonce, model: await chosen, leaseAge: age)
     }
 
-    /// The renewal of a lease this device holds fresh, answered by the server: true while it is
-    /// still held. A failure to send it is not an answer, and is asked the long way too.
-    private func renewFresh() async -> Bool {
+    /// Whether the lease's word `at` (nil: none) is one the brain may be asked on: no older than
+    /// `askWithin`, with the lease still held by what this device knows, which asks nothing.
+    private func stillHeld(since at: TimeInterval?) async -> Bool {
+        guard let at, now() - at <= askWithin else { return false }
+        return await lease.isPrimary()
+    }
+
+    /// The renewal of a lease this device holds fresh, answered by the server: when it answered,
+    /// on `now`, while the lease is still held, and nil otherwise. A failure to send it is not an
+    /// answer, and is asked the long way too.
+    private func renewFresh() async -> TimeInterval? {
         do {
-            guard try await lease.heartbeat() else { return false }
+            guard try await lease.heartbeat() else { return nil }
             away = false
             standing = .mine
-            return true
+            return now()
         } catch {
-            return false
+            return nil
         }
     }
 
     /// Asks the brain for the reply to `answering` and writes it continuing `transcript`, under
     /// `nonce`, in one batch with a heartbeat of the lease.
-    private func answer(_ answering: [Turn], in transcript: Transcript, nonce: String, model: ClaudeModel) async throws -> Turn {
+    private func answer(_ answering: [Turn], in transcript: Transcript, nonce: String, model: ClaudeModel,
+                        leaseAge: TimeInterval) async throws -> Turn {
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
-                                   answering: answering, parents: transcript.heads, nonce: nonce, model: model)
+                                   answering: answering, parents: transcript.heads, nonce: nonce, model: model,
+                                   leaseAge: leaseAge)
         let reply: Reply
         // A pass that was stopped while it read the log or renewed the lease asks nothing.
         try Task.checkCancellation()

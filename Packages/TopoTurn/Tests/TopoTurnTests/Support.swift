@@ -114,7 +114,37 @@ func makeRunner(database: any RecordDatabase, device: String = "phone", brain: S
     } else {
         PrimaryLease(database: database, device: id, endpoint: nil, probe: probe, sleep: sleep)
     }
-    return (TurnRunner(log: log, writer: writer, lease: lease, brain: brain, standing: standing), lease)
+    return (TurnRunner(log: log, writer: writer, lease: lease, brain: brain, standing: standing,
+                       now: clock?.uptime ?? PrimaryLease.continuousUptime), lease)
+}
+
+/// A store whose change feed is behind on the turns a test names, as the zone's feed is just
+/// after a save; a fetch by ID finds them.
+final class FeedBehind: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
+    private let lock = NSLock()
+    private var hidden: Set<RecordID> = []
+    /// Runs before each fetch by ID.
+    var beforeFetch: (@Sendable () async -> Void)?
+    init(_ inner: any RecordDatabase) { base = inner }
+    func hide(_ ref: TurnRef) { _ = lock.withLock { hidden.insert(Turn.recordID(for: ref)) } }
+    func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
+        let all = try await base.records(ofType: type)
+        let hidden = lock.withLock { self.hidden }
+        return all.filter { !hidden.contains($0.id) }
+    }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
+        await beforeFetch?()
+        return try await base.fetch(ids)
+    }
+    private var _leaseWrites = 0
+    /// Writes of the lease alone that the store answered: the renewals and claims of the lease.
+    var leaseWrites: Int { lock.withLock { _leaseWrites } }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        let saved = try await base.save(records)
+        if records.map(\.id) == [Lease.recordID] { lock.withLock { _leaseWrites += 1 } }
+        return saved
+    }
 }
 
 /// A database that can be taken away: while `away`, every call fails `unavailable` and nothing

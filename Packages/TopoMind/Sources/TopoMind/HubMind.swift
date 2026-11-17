@@ -45,6 +45,9 @@ public actor HubMind {
         /// A phone on the LAN saying the log moved (`nudge`), or a pass after one that found
         /// nothing, in case the log's change feed was behind the phone's save.
         case nudge
+        /// A phone's heads-up that its turn is being saved (`headsUp`): a pass that gets ready
+        /// while the save is out and waits for word of it.
+        case coming
     }
 
     public enum Phase: Sendable, Equatable {
@@ -151,6 +154,14 @@ public actor HubMind {
     private var nudged: [(mark: String, answer: CheckedContinuation<Bool, Never>)] = []
     /// Passes run again after a nudged one found nothing, since the last that found something.
     private var againAfterNudge = 0
+    /// The heads-up the pass asked for or running now waits on (`headsUp`), until that pass ends.
+    private var coming: ComingTurn?
+    /// Nudges that came down the heads-up's connection once its turn was saved: the pass waiting
+    /// on it reads after them, and answers them as it ends.
+    private var comingServed: [(mark: String, answer: CheckedContinuation<Bool, Never>)] = []
+    /// True while a pass runs.
+    private var passing = false
+    private let comingBound: Duration
 
     /// - Parameters:
     ///   - database: the log's store; the lease, the log and the writer all go through it.
@@ -169,6 +180,7 @@ public actor HubMind {
                 model: @escaping @Sendable () -> ClaudeModel, timing: LeaseTiming = .standard,
                 poll: Duration = HubMind.standardPoll, answeringPoll: Duration? = nil,
                 holdBound: Duration = HubMind.standardHoldBound, holdCheck: Duration = HubMind.standardHoldCheck,
+                comingBound: Duration = HubMind.standardComingBound,
                 leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
                 pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
                 observe: @escaping @Sendable (Snapshot) -> Void = { _ in }) {
@@ -187,6 +199,7 @@ public actor HubMind {
         self.answeringPoll = answeringPoll ?? min(poll, HubMind.standardAnsweringPoll)
         self.holdBound = TimeInterval(holdBound.components.seconds) + TimeInterval(holdBound.components.attoseconds) / 1e18
         self.holdCheck = holdCheck
+        self.comingBound = comingBound
         self.pause = pause
         self.observe = observe
     }
@@ -222,6 +235,12 @@ public actor HubMind {
     /// How often the hold reads the lease and the log: one fetch by ID, and while the lease is a
     /// phone's and fresh, one read of the log.
     public static let standardHoldCheck: Duration = .seconds(2)
+
+    /// Five seconds: how long a pass a heads-up began waits for word that its turn is saved, from
+    /// the heads-up. The phone's save is one batch under the lease's patience (4 s), and its word
+    /// comes down the connection already open; past the answering poll's interval, which is this
+    /// too, a heads-up beats nothing the poll would not have found.
+    public static let standardComingBound: Duration = .seconds(5)
 
     // MARK: - The switch, sleep and wake
 
@@ -273,11 +292,34 @@ public actor HubMind {
         begin()
     }
 
-    /// Asks for a pass. Nothing while the loop is not running.
+    /// Asks for a pass. Nothing while the loop is not running. A pass waiting on a heads-up reads
+    /// the log again at once rather than wait out the heads-up first.
     public func trigger(_ source: Trigger) {
         guard on, !asleep, session != nil else { return }
         if requested == nil { requested = source }
+        if passing { coming?.interrupt() }
         waiting?.cancel()
+    }
+
+    /// A phone's heads-up that the person's turn under `mark` is being saved now, for the lease
+    /// `holder` at `epoch` (`HubNudge.Coming`): a pass begins at once, renews the lease and reads
+    /// the log while the save is out, and waits for word of the save (`ComingTurn.saved`), the
+    /// turn's ref, to fetch that turn by ID and answer it; it waits at most `comingBound`, and
+    /// ends with nothing written but its renewal when no word comes. The ticket, or nil at once,
+    /// running nothing: this Mac does not hold that lease fresh, the loop is not answering, or a
+    /// pass is running or asked for already (the phone's nudge after its save brings it then).
+    /// The heads-up carries no word of the turn, so a forged one costs a read and a renewal.
+    public func headsUp(holder: DeviceID, epoch: Int64, mark: String) async -> ComingTurn? {
+        func free() -> Bool {
+            on && !asleep && session != nil && phase == .answering && !passing && requested == nil && coming == nil
+        }
+        guard free(), await holds(holder, epoch: epoch), free() else { return nil }
+        let ticket = ComingTurn(mark: mark.lowercased(), bound: comingBound)
+        coming = ticket
+        requested = .coming
+        Perf.mark("hub.coming.received nudge=\(mark)")
+        waiting?.cancel()
+        return ticket
     }
 
     /// A phone's word that the log moved, for the lease `holder` at `epoch` (`HubNudge`): a pass
@@ -297,7 +339,13 @@ public actor HubMind {
         Perf.mark("hub.nudge.received nudge=\(mark)\(stream == nil ? "" : " stream")")
         let following = stream.map { cast.follow(mark, $0) }
         defer { if let following { cast.stop(following) } }
+        // The nudge a heads-up's connection becomes once its turn is saved: the pass waiting on
+        // it reads after the save, and it is that pass's to answer.
+        if let coming, coming.mark == mark.lowercased(), coming.isSaved {
+            return await withCheckedContinuation { comingServed.append((mark.lowercased(), $0)) }
+        }
         if requested == nil { requested = .nudge }
+        if passing { coming?.interrupt() }
         waiting?.cancel()
         return await withCheckedContinuation { nudged.append((mark.lowercased(), $0)) }
     }
@@ -318,10 +366,13 @@ public actor HubMind {
         String(nonce.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(8)).lowercased()
     }
 
-    /// Every nudge waiting is answered: the loop has stopped.
+    /// Every nudge waiting is answered, and a heads-up's wait ended: the loop has stopped.
     private func releaseNudges() {
-        let waiting = nudged
+        let waiting = nudged + comingServed
         nudged = []
+        comingServed = []
+        coming?.end()
+        coming = nil
         againAfterNudge = 0
         waiting.forEach { $0.answer.resume(returning: false) }
     }
@@ -368,6 +419,8 @@ public actor HubMind {
         requested = nil
         running?.cancel()
         waiting?.cancel()
+        // A pass waiting on a heads-up stops waiting now, whatever its task's cancellation reaches.
+        coming?.end()
         await lease.abandon()
         await running?.value
         await lease.settled()
@@ -423,9 +476,17 @@ public actor HubMind {
             let source = requested ?? (againAfterNudge > 0 ? .nudge : .poll)
             requested = nil
             // The nudges this pass serves: those that came before it read the log.
-            let served = nudged
+            let early = nudged
             nudged = []
-            let (stop, outcome) = await pass(runner, source, g, since: mark)
+            let ticket = source == .coming ? coming : nil
+            passing = true
+            let (stop, outcome) = await pass(runner, source, g, since: mark, coming: ticket)
+            passing = false
+            // And those that came down its heads-up's connection, after the save it waited for.
+            let served = early + (ticket == nil ? [] : comingServed)
+            if ticket != nil { comingServed = [] }
+            ticket?.end()
+            if coming === ticket { coming = nil }
             if let stop {
                 served.forEach { $0.answer.resume(returning: false) }
                 await halt(stop, g)
@@ -435,7 +496,7 @@ public actor HubMind {
                 served.forEach { $0.answer.resume(returning: false) }
                 return
             }
-            if source == .nudge, outcome == .nothing, againAfterNudge < Self.againAfterNudgeLimit,
+            if source == .nudge || source == .coming, outcome == .nothing, againAfterNudge < Self.againAfterNudgeLimit,
                await unseen(served.map(\.mark)), current(g) {
                 againAfterNudge += 1
                 Perf.mark("hub.nudge.again n=\(againAfterNudge)")
@@ -570,7 +631,8 @@ public actor HubMind {
     /// One pass: the lease asked for if this Mac does not hold it, then whatever waits answered.
     /// Every claim of it is made since the session's `mark`, so none is made after a stop's
     /// abandon. A reason to stop the mind, or nil.
-    private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int, since mark: Int) async -> (Stop?, Pass.Outcome?) {
+    private func pass(_ runner: TurnRunner, _ source: Trigger, _ g: Int, since mark: Int,
+                      coming: ComingTurn?) async -> (Stop?, Pass.Outcome?) {
         passes += 1
         clock.begin(source.rawValue)
         if !(await lease.isPrimary()) {
@@ -585,7 +647,19 @@ public actor HubMind {
         let outcome: Pass.Outcome
         do {
             let picker = model
-            outcome = try await runner.answerPending(since: mark, choosingFrom: { Self.chosen(said: $0, picker: picker) }) == nil
+            // A heads-up's pass waits on its ticket, each wait marked with how long it took.
+            var waiting: (@Sendable () async -> TurnRunner.Coming)?
+            if let coming {
+                let clock = self.clock
+                waiting = { @Sendable () async -> TurnRunner.Coming in
+                    let began = ContinuousClock.now
+                    let heard = await coming.wait()
+                    clock.waited(heard, since: began)
+                    return heard
+                }
+            }
+            outcome = try await runner.answerPending(since: mark, choosingFrom: { Self.chosen(said: $0, picker: picker) },
+                                                     coming: waiting) == nil
                 ? .nothing : .answered
         } catch TurnRunnerError.notPrimary {
             outcome = .elsewhere

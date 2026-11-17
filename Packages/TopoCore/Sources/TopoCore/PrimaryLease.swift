@@ -168,7 +168,8 @@ public actor PrimaryLease {
     private let device: DeviceID
     private let endpoint: String?
     private let probe: any LeaseProbe
-    private let timing: LeaseTiming
+    /// The lease's durations, for a caller that bounds its own work by them.
+    public nonisolated let timing: LeaseTiming
     private let now: @Sendable () -> Date
     private let monotonic: @Sendable () -> TimeInterval
     private let sleep: @Sendable (TimeInterval) async throws -> Void

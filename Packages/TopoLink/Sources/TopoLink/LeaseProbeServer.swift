@@ -19,6 +19,14 @@ public enum TopoService {
 /// both sides to be paired by, and nothing else. `moved <device> <epoch> <mark> stream` asks the
 /// same and for the reply to the turn the mark names as the mind writes it: before `read`, a line
 /// of JSON per `ReplyFrame`. Anything else, or silence, is no.
+///
+/// `coming <device> <epoch> <mark>` is a heads-up, also taken on the channel alone: a turn under
+/// that mark is being saved now, for the holder of that lease. `ready` answers it when the
+/// listener has a pass getting ready for the turn, `no` otherwise. On a connection answered
+/// `ready` the phone's next line, once its save is answered, is `saved <device>/<sequence>` or
+/// `saved <device>/<sequence> stream`, the turn's ref: from there it is the `moved` nudge of the
+/// same lease and mark, answered as one. No line carries a word of the turn. On the plain port, and
+/// as a connection's first line, `coming` and `saved` are answered `no` and run nothing.
 enum ProbeWire {
     static func request(_ lease: Lease) -> Data {
         Data("hold \(lease.holder.rawValue) \(lease.epoch)\n".utf8)
@@ -28,9 +36,19 @@ enum ProbeWire {
         Data("moved \(lease.holder.rawValue) \(lease.epoch) \(mark)\(stream ? " stream" : "")\n".utf8)
     }
 
+    static func coming(_ lease: Lease, mark: String) -> Data {
+        Data("coming \(lease.holder.rawValue) \(lease.epoch) \(mark)\n".utf8)
+    }
+
+    static func saved(_ ref: TurnRef, stream: Bool) -> Data {
+        Data("saved \(ref.device.rawValue)/\(ref.sequence)\(stream ? " stream" : "")\n".utf8)
+    }
+
     enum Request: Equatable {
         case hold(DeviceID, Int64)
         case moved(DeviceID, Int64, mark: String, stream: Bool)
+        case coming(DeviceID, Int64, mark: String)
+        case saved(TurnRef, stream: Bool)
     }
 
     static func parse(_ line: String) -> Request? {
@@ -42,7 +60,22 @@ enum ProbeWire {
            let epoch = Int64(parts[2]), isMark(parts[3]) {
             return .moved(DeviceID(String(parts[1])), epoch, mark: String(parts[3]), stream: parts.count == 5)
         }
+        if parts.count == 4, parts[0] == "coming", let epoch = Int64(parts[2]), isMark(parts[3]) {
+            return .coming(DeviceID(String(parts[1])), epoch, mark: String(parts[3]))
+        }
+        if (parts.count == 2 || (parts.count == 3 && parts[2] == "stream")), parts[0] == "saved", let ref = ref(parts[1]) {
+            return .saved(ref, stream: parts.count == 3)
+        }
         return nil
+    }
+
+    /// A turn's ref as a phone sends it: a device's name of one to 64 letters, digits and dashes,
+    /// a slash, and a sequence number of 1 or more.
+    static func ref(_ part: Substring) -> TurnRef? {
+        guard let ref = TurnRef(parsing: String(part)), ref.sequence >= 1,
+              (1...64).contains(ref.device.rawValue.count),
+              ref.device.rawValue.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else { return nil }
+        return ref
     }
 
     static func parseRequest(_ line: String) -> (DeviceID, Int64)? {
@@ -57,6 +90,7 @@ enum ProbeWire {
     static let yes = Data("yes\n".utf8)
     static let no = Data("no\n".utf8)
     static let read = Data("read\n".utf8)
+    static let ready = Data("ready\n".utf8)
 
     struct LineTooLong: Error {}
 }
@@ -80,6 +114,21 @@ public actor LeaseProbeServer {
     /// on the phone, so a slow or gone one holds up nothing of the mind's. Only a nudge that came
     /// over the channel is handed here.
     public typealias Nudged = @Sendable (DeviceID, Int64, String, _ stream: (@Sendable (ReplyFrame) -> Void)?) async -> Bool
+    /// A heads-up for the lease `device` at `epoch`, with the turn's mark: a ticket when the owner
+    /// has a pass getting ready for the turn, nil at once when it has not. The listener tells the
+    /// ticket the turn's ref when the phone's `saved` line comes, and that the heads-up has ended
+    /// on every other way out: the bound passed, the connection closed, a line that is not one.
+    public typealias Coming = @Sendable (DeviceID, Int64, String) async -> ComingTicket?
+
+    /// What the listener tells the pass getting ready for a heads-up's turn: one of the two, once.
+    public struct ComingTicket: Sendable {
+        public var saved: @Sendable (TurnRef) -> Void
+        public var ended: @Sendable () -> Void
+        public init(saved: @escaping @Sendable (TurnRef) -> Void, ended: @escaping @Sendable () -> Void) {
+            self.saved = saved
+            self.ended = ended
+        }
+    }
 
     /// The most nudges answered at once. One more is answered `no` with no pass asked: as many as
     /// this already wait for a pass that will read after them, and a pass's end answers them all.
@@ -98,6 +147,9 @@ public actor LeaseProbeServer {
     private let channel: NWListener?
     private let holds: Holds
     private let nudged: Nudged?
+    private let coming: Coming?
+    /// Nudges waiting for their pass, heads-ups waiting for their `saved` line among them: one
+    /// place each, from the first line to the answer.
     private var nudging = 0
     public private(set) var port: UInt16?
     /// The channel's port once bound, or nil with no key.
@@ -114,14 +166,15 @@ public actor LeaseProbeServer {
     ///   - key: the hub's key, for the channel's listener on a free port of its own; nil, no
     ///     channel, and so no nudge is taken.
     public init(advertising device: DeviceID?, port: UInt16 = 0, key: NudgeKey? = nil,
-                holds: @escaping Holds, nudged: Nudged? = nil) throws {
-        try self.init(advertising: device, port: port, key: key, suites: [NudgeTLS.suite], holds: holds, nudged: nudged)
+                holds: @escaping Holds, nudged: Nudged? = nil, coming: Coming? = nil) throws {
+        try self.init(advertising: device, port: port, key: key, suites: [NudgeTLS.suite], holds: holds, nudged: nudged,
+                      coming: coming)
     }
 
     /// `suites` is what the channel's listener offers: the one suite but in the suites, which see
     /// a listener that agrees to another refused.
     init(advertising device: DeviceID?, port: UInt16 = 0, key: NudgeKey?, suites: [UInt16],
-         holds: @escaping Holds, nudged: Nudged? = nil) throws {
+         holds: @escaping Holds, nudged: Nudged? = nil, coming: Coming? = nil) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
@@ -132,6 +185,7 @@ public actor LeaseProbeServer {
         self.channel = try key.map { try NWListener(using: NudgeTLS.parameters($0, suites: suites), on: .any) }
         self.holds = holds
         self.nudged = nudged
+        self.coming = coming
     }
 
     /// Starts listening, the channel too. Returns the probe's port once both are bound.
@@ -189,9 +243,11 @@ public actor LeaseProbeServer {
             }
         }
         // A connection that says nothing is closed at the bound, so nothing on the network holds
-        // a serving task open by connecting.
-        let request = await Self.within(Self.requestBound) { try await connection.readLine(maximum: 256) }
-        guard let line = request, let parsed = ProbeWire.parse(line) else {
+        // a serving task open by connecting. Its lines are read as lines, so a second one sent
+        // close behind the first is not lost with the first one's read.
+        let lines = NWConnection.Lines(connection)
+        let request = await Self.within(Self.requestBound) { try await lines.next(maximum: 256) }
+        guard let line = request ?? nil, let parsed = ProbeWire.parse(line) else {
             try? await connection.send(ProbeWire.no)
             return
         }
@@ -201,24 +257,59 @@ public actor LeaseProbeServer {
             try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
         case .moved(let device, let epoch, let mark, let stream):
             // A nudge in the clear is nobody's: answered no, and nothing runs.
-            guard secure, let nudged, nudging < Self.nudgesAtOnce else {
+            guard secure, nudged != nil, nudging < Self.nudgesAtOnce else {
                 try? await connection.send(ProbeWire.no)
                 return
             }
             nudging += 1
-            // Sent as handed: NWConnection sends in the order its sends are called, and the
-            // answer below is sent after the last frame, once the pass has ended.
-            var frames: (@Sendable (ReplyFrame) -> Void)?
-            if stream {
-                frames = { @Sendable frame in
-                    for line in frame.lines(within: Self.frameLine) { connection.send(content: line, completion: .idempotent) }
-                }
-            }
-            let handed = frames
-            let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark, handed) }
+            await nudge(connection, device, epoch, mark, stream: stream)
             nudging -= 1
-            try? await connection.send(read == true ? ProbeWire.read : ProbeWire.no)
+        case .coming(let device, let epoch, let mark):
+            // A heads-up in the clear is nobody's too. One that is taken holds its place from here
+            // to the nudge's answer, so heads-ups count against the nudges' places.
+            guard secure, nudged != nil, let coming, nudging < Self.nudgesAtOnce else {
+                try? await connection.send(ProbeWire.no)
+                return
+            }
+            nudging += 1
+            defer { nudging -= 1 }
+            guard let ticket = await coming(device, epoch, mark) else {
+                try? await connection.send(ProbeWire.no)
+                return
+            }
+            guard (try? await connection.send(ProbeWire.ready)) != nil else {
+                ticket.ended()
+                return
+            }
+            // The phone's next line comes once its save is answered, within the request's bound.
+            let next = await Self.within(Self.requestBound) { try await lines.next(maximum: 256) }
+            guard let next = next ?? nil, case .saved(let ref, let stream)? = ProbeWire.parse(next) else {
+                ticket.ended()
+                try? await connection.send(ProbeWire.no)
+                return
+            }
+            ticket.saved(ref)
+            await nudge(connection, device, epoch, mark, stream: stream)
+        case .saved:
+            try? await connection.send(ProbeWire.no)
         }
+    }
+
+    /// The nudge `moved` and a heads-up's `saved` line both are: handed to the owner, with the
+    /// reply's frames sent down the connection when it asked for them, then answered.
+    private func nudge(_ connection: NWConnection, _ device: DeviceID, _ epoch: Int64, _ mark: String, stream: Bool) async {
+        guard let nudged else { return }
+        // Sent as handed: NWConnection sends in the order its sends are called, and the
+        // answer below is sent after the last frame, once the pass has ended.
+        var frames: (@Sendable (ReplyFrame) -> Void)?
+        if stream {
+            frames = { @Sendable frame in
+                for line in frame.lines(within: Self.frameLine) { connection.send(content: line, completion: .idempotent) }
+            }
+        }
+        let handed = frames
+        let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark, handed) }
+        try? await connection.send(read == true ? ProbeWire.read : ProbeWire.no)
     }
 
     /// `work`'s answer, or nil once `seconds` pass first (or it throws); `work` is left to end on
