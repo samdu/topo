@@ -54,9 +54,11 @@ final class GuestResident {
     var booted: (@MainActor () async -> Void)?
     /// Whether a login counts as signed in, by the sign-in's own rule (`SignIn.accepts`).
     var confirms: (@MainActor (ClaudeLoginStatus) -> Bool)?
-    /// Whether this process has had its login checked: by `auth status` at the boot, or by the
-    /// first `initialize` answer and, when that did not confirm it, `auth status` after it. Once a
-    /// process, so an answer that never confirms does not end the resident again and again.
+    /// Whether the app's process has had the login checked since the guest's boot: by `auth status`
+    /// at the boot, or by the first `initialize` answer of any Claude Code process and, when that
+    /// did not confirm it, `auth status` after it. Once an app process, so an answer that never
+    /// confirms does not end the resident again and again; a process ended before it answers
+    /// leaves the check to the next.
     private var loginChecked = false
     /// Whether a conversation behind the lock holds the resident up (`GuestLifecycle.conversing`):
     /// the app's `Conversation`, set before the first start (`TopoApp`).
@@ -193,8 +195,8 @@ final class GuestResident {
     /// The login a process's `initialize` answer names, at the first answer since the boot when
     /// the boot asked nothing: a login the sign-in's rule takes is confirmed and nothing is asked;
     /// any other answer, or none, is checked by `auth status` as the boot would have (`booted`),
-    /// which ends the resident while it runs and, finding the login gone, clears the cache so no
-    /// process starts again. `initialize` and `auth status` read the same thing in Claude Code
+    /// which ends the resident while it runs and, finding the login gone, clears the cache, after
+    /// which the launcher refuses every process. `initialize` and `auth status` read the same thing in Claude Code
     /// 2.1.316: whether a credential is stored, with nothing asked of the network.
     func residentAnswered(_ account: StreamEvent.Account?) async {
         guard !loginChecked else { return }
@@ -207,11 +209,12 @@ final class GuestResident {
             return
         }
         Perf.mark("guest.login.unconfirmed")
-        // What the answer said of the login's kind: a plan's name, a token's source, a provider;
-        // the account's email and organisation are never read.
+        // What the answer said of the login's kind: a token's source, a provider, and whether a plan
+        // was named; the account's email and organisation are never read.
         let said = account.map { "tokenSource=\($0.tokenSource ?? "-") apiProvider=\($0.apiProvider ?? "-") subscription=\($0.subscriptionType == nil ? "none" : "named")" } ?? "no account"
         Self.log("login: the resident's initialize did not confirm the login (\(said)); asking auth status")
         await booted?()
+        Self.log("login: auth status asked after the initialize; signed in: \(LoginCache.standard.isSignedIn)")
     }
 
     /// The home mounted, the tool service listening, `topo`, its skill and the GitHub shims written

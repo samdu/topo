@@ -643,6 +643,9 @@ func settle() async {
         #expect(!ClaudeLoginStatus(initialize: "Claude Max", tokenSource: nil, apiProvider: "bedrock").loggedIn)
         #expect(!ClaudeLoginStatus(initialize: nil, tokenSource: "ANTHROPIC_API_KEY", apiProvider: "firstParty").loggedIn)
         #expect(!ClaudeLoginStatus(initialize: "", tokenSource: nil, apiProvider: nil).loggedIn)
+        #expect(!ClaudeLoginStatus(initialize: "Claude Max", tokenSource: "ANTHROPIC_API_KEY", apiProvider: "firstParty").isClaudeAI,
+                "a plan named beside a token source is not a subscriber's login")
+        #expect(!ClaudeLoginStatus(initialize: "Claude Max", tokenSource: "none", apiProvider: "firstParty").loggedIn)
         #expect(!ClaudeLoginStatus(initialize: nil, tokenSource: nil, apiProvider: nil).loggedIn)
     }
 

@@ -1,6 +1,7 @@
 import Foundation
 import TopoAuth
 import TopoTools
+import TopoUserland
 import XCTest
 
 @testable import Topo
@@ -328,6 +329,35 @@ final class GuestLoginTests: XCTestCase {
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
         XCTAssertNoThrow(try GuestResident.launchCredential(cache: cache))
         XCTAssertNil(try GuestResident.launchCredential(cache: cache)["ANTHROPIC_BASE_URL"], "a launch was told a base URL")
+    }
+
+    /// The boot's check when the cache said signed in: the first process's answer confirms a
+    /// login the sign-in takes and asks nothing; a signed-out answer, a login the rule refuses or
+    /// no account at all asks `auth status` (`booted`); and only the first answer since the boot
+    /// counts, so one that never confirms does not end the resident again and again.
+    func testTheFirstInitializeAnswerConfirmsTheLoginOrAsksAuthStatus() async {
+        func resident() -> (GuestResident, () -> Int) {
+            let resident = GuestResident()
+            var asked = 0
+            resident.booted = { asked += 1 }
+            resident.confirms = { $0.isClaudeAI }
+            return (resident, { asked })
+        }
+        let subscriber = StreamEvent.Account(subscriptionType: "Claude Max", apiProvider: "firstParty")
+        let (confirmed, confirmedAsks) = resident()
+        await confirmed.residentAnswered(subscriber)
+        XCTAssertEqual(confirmedAsks(), 0, "a confirmed login asked auth status")
+
+        for answer: StreamEvent.Account? in [StreamEvent.Account(tokenSource: "none", apiProvider: "firstParty"),
+                                              StreamEvent.Account(tokenSource: "CLAUDE_CODE_OAUTH_TOKEN", apiProvider: "firstParty"),
+                                              nil] {
+            let (unconfirmed, asks) = resident()
+            await unconfirmed.residentAnswered(answer)
+            XCTAssertEqual(asks(), 1, "\(String(describing: answer)) was not checked by auth status")
+            await unconfirmed.residentAnswered(answer)
+            await unconfirmed.residentAnswered(subscriber)
+            XCTAssertEqual(asks(), 1, "a later answer was checked again")
+        }
     }
 
     private final class Heard: @unchecked Sendable {

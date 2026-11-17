@@ -114,8 +114,10 @@ final class GuestSessionTests: XCTestCase {
         let process = try XCTUnwrap(launcher.last)
         process.emit(answer)
         process.emit(answer)
-        await eventually("heard") { heard.all.count == 1 }
-        try? await Task.sleep(for: .milliseconds(100))
+        // A line after the second answer: once it is read, the second answer has been too.
+        process.emit(Lines.`init`("S1"))
+        await eventually("heard") { heard.all.count >= 1 }
+        try? await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(heard.all, [.init(subscriptionType: "Claude Max", apiProvider: "firstParty")],
                        "the hook heard a process's answer more than once")
     }
