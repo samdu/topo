@@ -285,8 +285,9 @@ extension HubRig {
     }
 
     /// Words whose turn never comes wait unbound, and are not the next turn's: that turn is
-    /// answered as ever. Past the bound they are moved past, and a turn saved under their nonce
-    /// after that is held cut off rather than asked again.
+    /// answered as ever. Past the bound they no longer keep other hand-overs out; the mind's reply
+    /// to them is kept, and a turn saved under their nonce after that is answered with it, its
+    /// words not told again.
     @Test func wordsWhoseTurnNeverComesAreBoundedAndAccounted() async throws {
         let h = try HubRig(earlyBound: 1.5)
         let (hub, lease) = try await ready(h)
@@ -301,14 +302,153 @@ extension HubRig {
         // Mutant: the next turn's input re-tells or repeats the words heard.
         #expect(h.rig.inputs == ["hello", "lost words", "next"])
         #expect(try await h.replies().last?.text == "echo: next")
-        // The turn arrives late: the mind has its words, so it is held cut off and not asked.
+        // The kept words handed again: heard, with nothing sent.
+        // Mutant: a kept nonce not known to the hand-over, its words told a second time.
+        #expect(await hear(hub, lease, "lost words", nonce: lost))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(h.rig.inputs == ["hello", "lost words", "next"])
+        // Past the bound another hand-over is heard.
+        let other = UUID().uuidString
+        #expect(await hear(hub, lease, "other", nonce: other))
+        #expect(await eventually { h.rig.inputs.count == 4 })
+        try await says(hub, h, "other", nonce: other)
+        #expect(try await eventually { try await h.replies().count == 3 })
+        // The turn arrives late: the mind's reply to its words is written, bound to it.
         let late = try await says(hub, h, "lost words", nonce: lost)
+        #expect(try await eventually { try await h.replies().count == 4 })
+        try await Task.sleep(for: .milliseconds(500))
+        // Mutant: a kept reply forgotten, and the late turn held cut off with nothing for the person.
+        let reply = try #require(try await h.replies().last)
+        #expect(reply.parents == [late.ref])
+        #expect(reply.text == "echo: lost words")
+        // Mutant: the late turn asked a second time.
+        #expect(h.rig.inputs == ["hello", "lost words", "next", "other"])
+        #expect(await h.brain.unresolved().isEmpty)
+        await hub.turnOff()
+    }
+
+    /// Words the mind was cut off on, whose turn never came by the bound: a turn saved under their
+    /// nonce later is held cut off, as any turn the mind was cut off on is, and not asked again.
+    @Test func wordsCutOffWhoseTurnComesPastTheBoundAreHeldCutOff() async throws {
+        let h = try HubRig(earlyBound: 1.5)
+        let (hub, lease) = try await ready(h)
+        let lost = UUID().uuidString
+        #expect(await hear(hub, lease, "FAIL lost words", nonce: lost))
+        #expect(await eventually { h.rig.inputs.count == 2 })
+        try await Task.sleep(for: .seconds(1.6))
+        try await says(hub, h, "next")
+        #expect(try await eventually { try await h.replies().count == 2 })
+        let late = try await says(hub, h, "FAIL lost words", nonce: lost)
         try await Task.sleep(for: .seconds(1))
         // Mutant: a dropped nonce forgotten, and the late turn asked a second time.
-        #expect(h.rig.inputs == ["hello", "lost words", "next"])
+        #expect(h.rig.inputs == ["hello", "FAIL lost words", "next"])
         #expect(try await h.replies().count == 2)
         #expect(await h.brain.unresolved() == [late.ref])
         await hub.turnOff()
+    }
+
+    /// Words heard ahead whose turn a request answers beside another person's, when the ledger's
+    /// one record of an input could not take them first: the mind is not told them again, and
+    /// the request is told the other turn alone. Their own reply is not written: the request's
+    /// reply answers both.
+    @Test func heardWordsAnsweredBesideAnotherTurnAreNotToldAgain() async throws {
+        let rig = try Rig()
+        let brain = rig.brain()
+        let hello = turn("phone", 1, .person, "hello")
+        let first = request(hello)
+        _ = try await brain.answer(first)
+        let rHello = turn("mac", 1, .assistant, "echo: hello", parents: [hello.ref])
+        await brain.landed(rHello, nonce: first.nonce)
+        let nonce = UUID().uuidString
+        #expect(await brain.hearAhead("pee words", nonce: nonce, model: .sonnet) == nil)
+        #expect(await eventually { rig.inputs.count == 2 })
+        let p = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 2), parents: [rHello.ref], role: .person,
+                     text: "pee words", at: Date(), nonce: nonce)
+        let q = Turn(ref: TurnRef(device: DeviceID("ipad"), sequence: 1), parents: [rHello.ref], role: .person,
+                     text: "queue words", at: Date())
+        #expect(await brain.heardAhead(of: p))
+        let heads = [p.ref, q.ref]
+        _ = try await brain.answer(BrainRequest(context: [hello, rHello], answering: [p, q], parents: heads,
+                                                nonce: TurnRunner.replyNonce(for: heads), model: .sonnet))
+        // Mutant: the heard turn rendered with the rest.
+        #expect(rig.inputs == ["hello", "pee words", "queue words"])
+        await brain.shutdown()
+    }
+
+    /// A turn saved under the nonce of words heard ahead, with other words, beside another: the
+    /// saved words are told as said.
+    @Test func aSavedTurnBesideAnotherWhoseWordsDifferIsToldAsSaved() async throws {
+        let rig = try Rig()
+        let brain = rig.brain()
+        let hello = turn("phone", 1, .person, "hello")
+        let first = request(hello)
+        _ = try await brain.answer(first)
+        let rHello = turn("mac", 1, .assistant, "echo: hello", parents: [hello.ref])
+        await brain.landed(rHello, nonce: first.nonce)
+        let nonce = UUID().uuidString
+        #expect(await brain.hearAhead("pee words", nonce: nonce, model: .sonnet) == nil)
+        #expect(await eventually { rig.inputs.count == 2 })
+        let p = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 2), parents: [rHello.ref], role: .person,
+                     text: "pee words, edited", at: Date(), nonce: nonce)
+        let q = Turn(ref: TurnRef(device: DeviceID("ipad"), sequence: 1), parents: [rHello.ref], role: .person,
+                     text: "queue words", at: Date())
+        #expect(!(await brain.heardAhead(of: p)))
+        let heads = [p.ref, q.ref]
+        _ = try await brain.answer(BrainRequest(context: [hello, rHello], answering: [p, q], parents: heads,
+                                                nonce: TurnRunner.replyNonce(for: heads), model: .sonnet))
+        // Mutant: a match by nonce alone, the edited words dropped.
+        #expect(rig.inputs.last == "pee words, edited\n\nqueue words")
+        await brain.shutdown()
+    }
+
+    /// Words heard ahead while the ledger's one record of an input holds a turn the mind was cut
+    /// off on: the brain does not say it heard them alone, since binding them would take that
+    /// record's place, and a request answers them beside the rest, not told again.
+    @Test func heardWordsBesideAHeldCutOffTurnAreNotAnsweredAlone() async throws {
+        let rig = try Rig()
+        let brain = rig.brain()
+        let hello = turn("phone", 1, .person, "hello")
+        let first = request(hello)
+        _ = try await brain.answer(first)
+        let rHello = turn("mac", 1, .assistant, "echo: hello", parents: [hello.ref])
+        await brain.landed(rHello, nonce: first.nonce)
+        let nonce = UUID().uuidString
+        #expect(await brain.hearAhead("pee words", nonce: nonce, model: .sonnet) == nil)
+        #expect(await eventually { rig.inputs.count == 2 })
+        // Another device's turn, asked while the words wait for theirs, and cut off.
+        let cut = turn("pad", 1, .person, "FAIL cut off", parents: [rHello.ref])
+        await #expect(throws: (any Error).self) { try await brain.answer(request(cut, context: [hello, rHello])) }
+        try #require(await brain.unresolved() == [cut.ref])
+        let p = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 2), parents: [rHello.ref], role: .person,
+                     text: "pee words", at: Date(), nonce: nonce)
+        // Mutant: the record's slot not asked, and the heard turn answered alone over the cut-off one.
+        #expect(!(await brain.heardAhead(of: p)))
+        await brain.shutdown()
+    }
+
+    /// Words heard ahead whose turn is the one turn a request answers, beside a head the reply
+    /// continues too (one held cut off): the reply is the heard one, and nothing is told again.
+    @Test func heardWordsAnsweredAloneBesideAnotherHeadAreBound() async throws {
+        let rig = try Rig()
+        let brain = rig.brain()
+        let hello = turn("phone", 1, .person, "hello")
+        let first = request(hello)
+        _ = try await brain.answer(first)
+        let rHello = turn("mac", 1, .assistant, "echo: hello", parents: [hello.ref])
+        await brain.landed(rHello, nonce: first.nonce)
+        let x = turn("ipad", 1, .person, "from the pad", parents: [rHello.ref])
+        let nonce = UUID().uuidString
+        #expect(await brain.hearAhead("fork words", nonce: nonce, model: .sonnet) == nil)
+        #expect(await eventually { rig.inputs.count == 2 })
+        let p = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 2), parents: [rHello.ref], role: .person,
+                     text: "fork words", at: Date(), nonce: nonce)
+        let heads = [p.ref, x.ref]
+        let reply = try await brain.answer(BrainRequest(context: [hello, rHello, x], answering: [p], parents: heads,
+                                                        nonce: TurnRunner.replyNonce(for: heads), model: .sonnet))
+        // Mutant: a bind only under the turn's own parents, and the words asked again.
+        #expect(reply.text == "echo: fork words")
+        #expect(rig.inputs == ["hello", "fork words"])
+        await brain.shutdown()
     }
 
     /// The lease goes (here the switch, the phone then answering the turn itself) after the mind

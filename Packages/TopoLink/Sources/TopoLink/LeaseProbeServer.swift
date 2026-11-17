@@ -111,8 +111,9 @@ public actor LeaseProbeServer {
     /// The person's words handed over for the lease `device` at `epoch` before their turn is saved,
     /// under the turn's nonce, with the model they chose: true once the mind has them, false when
     /// it does not take them (no such lease held, the mind not answering or busy). Only words that
-    /// came over the channel, whole, are handed here, and the answer is waited for within
-    /// `requestBound`.
+    /// came over the channel, whole, are handed here. Cancelled once `requestBound` has passed, it
+    /// still answers, promptly, whether the mind took them before the cancellation landed, and
+    /// that answer is the one sent: `no` only when nothing reached the mind.
     public typealias Heard = @Sendable (DeviceID, Int64, _ nonce: String, _ model: String, _ words: String) async -> Bool
 
     /// The most nudges answered at once. One more is answered `no` with no pass asked: as many as
@@ -272,9 +273,25 @@ public actor LeaseProbeServer {
                 try? await connection.send(ProbeWire.no)
                 return
             }
-            let taken = await Self.within(Self.requestBound) { await heard(device, epoch, nonce, model, words) }
-            try? await connection.send(taken == true ? ProbeWire.heard : ProbeWire.no)
+            // Cancelled at the bound, and its own answer then waited for: a mind that took the
+            // words is never answered `no`.
+            let taken = await Self.verdict(within: Self.requestBound) { await heard(device, epoch, nonce, model, words) }
+            try? await connection.send(taken ? ProbeWire.heard : ProbeWire.no)
         }
+    }
+
+    /// `work`'s own answer, `work` cancelled once `seconds` pass first: for work whose answer
+    /// says what it did, which honours a cancellation up to the step that commits it and returns
+    /// promptly after one (`Heard`).
+    static func verdict<T: Sendable>(within seconds: TimeInterval, _ work: @escaping @Sendable () async -> T) async -> T {
+        let running = Task { await work() }
+        let timer = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            running.cancel()
+        }
+        let answer = await running.value
+        timer.cancel()
+        return answer
     }
 
     /// `work`'s answer, or nil once `seconds` pass first (or it throws); `work` is left to end on

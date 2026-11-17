@@ -1782,6 +1782,132 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(transport.sent.isEmpty)
     }
 
+    /// Words said behind words handed over are not given to this phone's guest ahead of the handed
+    /// words' save, when the lease cannot be asked: the guest would answer them before the turn
+    /// the hub's mind has.
+    func testWordsBehindWordsHandedOverAreNotGivenToTheGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let flaky = ReadFailingDatabase(db)
+        let transport = ScriptedTransport()
+        let (phone, _, handOvers) = try await phoneAfterAHubAnswered(db, through: flaky, transport: transport)
+        await flaky.setFailing(true)
+        let first = phone.willSend("second?")
+        try await eventually("the hand-over") { handOvers.calls.count == 1 }
+        // The attempt fails on the read, and the line is this device's to give ahead again.
+        await phone.retry()
+        try await eventually("the line stopped") { phone.stoppedOnFailure(first) }
+        phone.willSend("third?")
+        // The line goes again, past the lease's patience.
+        await phone.retry()
+        try await Task.sleep(for: .seconds(5))
+        XCTAssertTrue(transport.sent.isEmpty, "the phone's guest was given words said behind the hub's")
+        await flaky.setFailing(false)
+        await phone.retry()
+        try await eventually("the turn saved") { phone.said(first) }
+    }
+
+    /// Nothing is handed over while a failure stands (a read of the log that failed): with iCloud
+    /// away this phone's guest is what can answer the words, and words a hub may have it is not given.
+    func testNothingIsHandedOverWhileAFailureStands() async throws {
+        let db = InMemoryRecordDatabase()
+        let flaky = ReadFailingDatabase(db)
+        let (phone, _, handOvers) = try await phoneAfterAHubAnswered(db, through: flaky)
+        await flaky.setFailing(true)
+        await phone.refresh()
+        XCTAssertNotNil(phone.failure)
+        phone.willSend("second?")
+        for _ in 0..<300 { await Task.yield() }
+        // Mutant: words handed over with a failure standing.
+        XCTAssertTrue(handOvers.calls.isEmpty)
+    }
+
+    /// A relaunch between the hand-over and the save still knows the words are the hub's: no
+    /// cancel is offered, and with iCloud failing the guest is not given them.
+    func testARelaunchKnowsTheWordsHandedOver() async throws {
+        let db = InMemoryRecordDatabase()
+        let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let defaults = makeDefaults()
+        let phone = harness(db, defaults: defaults, transport: ScriptedTransport())
+        let handOvers = HandOvers()
+        phone.handOver = { lease, words, nonce, model in handOvers.record(lease, words, nonce, model) }
+        phone.nudge = { _, _, _ in
+            try? await hubReplies(db, as: hubID, "from the Mac")
+            return true
+        }
+        await phone.send("first?")
+        try await eventually("the first reply read") { phone.turns.map(\.text) == ["first?", "from the Mac"] }
+        try await eventually("the phone stands elsewhere") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+        let nonce = phone.willSend("second?")
+        try await eventually("the hand-over") { handOvers.calls.count == 1 }
+        // The app is killed with the words on the line, and comes back with iCloud failing.
+        let transport = ScriptedTransport()
+        let relaunched = harness(db, defaults: defaults, transport: transport,
+                                 ensureZone: { throw RecordDatabaseError.unavailable(underlying: Unexpected()) })
+        XCTAssertTrue(relaunched.canWithdraw(nonce))
+        // Mutant: the hand-over kept in memory alone.
+        XCTAssertFalse(relaunched.canCancel(nonce))
+        // The log read, so the guest would have something to be told with the words.
+        await relaunched.refresh()
+        XCTAssertTrue(relaunched.hasRead)
+        await relaunched.retry()
+        for _ in 0..<300 { await Task.yield() }
+        // Mutant: the guest given words a hub has when iCloud fails before a runner is made.
+        XCTAssertTrue(transport.sent.isEmpty, "the relaunched phone's guest was given words the hub has")
+        XCTAssertTrue(relaunched.stoppedOnFailure(nonce))
+    }
+
+    /// A limb's turn of this device's that a reply goes on from without answering (the hub's mind
+    /// cut off on it, and a later turn answered) waits for nothing more: words are handed over again.
+    func testALimbsTurnAReplyWentOnFromKeepsNothingOut() async throws {
+        let db = InMemoryRecordDatabase()
+        let (phone, hubID, handOvers) = try await phoneAfterAHubAnswered(db)
+        let nudges = Nudges()
+        phone.nudge = { lease, mark, _ in
+            nudges.record(lease, mark)
+            await nudges.hold()
+            return false
+        }
+        phone.willSend("cut off?")
+        try await eventually("the hand-over") { handOvers.calls.count == 1 }
+        handOvers.answer = .refused
+        await phone.retry()
+        try await eventually("nudged") { nudges.calls.count == 1 }
+        // Another device says something after it, and the hub answers that.
+        try await limb(db, "meanwhile")
+        try await hubReplies(db, as: hubID, "to meanwhile")
+        await phone.refresh()
+        nudges.release()
+        try await eventually("the reply read") { phone.turns.last?.text == "to meanwhile" }
+        phone.willSend("after?")
+        // Mutant: a limb's turn cleared only by a reply to it, and nothing handed over again.
+        try await eventually("handed over again") { handOvers.calls.count == 2 }
+    }
+
+    /// A hub's stream for a limb's turn of this device's is drawn though the person has said more
+    /// since: a hub answers words heard ahead before what was said after them.
+    func testAStreamIsDrawnForATurnWithAPersonsTurnAfterIt() async throws {
+        let db = InMemoryRecordDatabase()
+        _ = try await hubClaim(db, endpoint: "192.168.1.20:50123")
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let nudges = Nudges()
+        phone.nudge = { _, _, frames in
+            guard let person = try? await TurnLog(database: db).read().ordered.first(where: { $0.text == "first?" })
+            else { return false }
+            await nudges.hold()
+            await frames(.heard(person.nonce))
+            await frames(.text("for the first"))
+            await nudges.hold()
+            return false
+        }
+        await phone.send("first?")
+        try await limb(db, "and another thing")
+        await phone.refresh()
+        XCTAssertEqual(phone.turns.last?.text, "and another thing")
+        nudges.release()
+        // Mutant: a stream given up for any turn after its own.
+        try await eventually("the stream drawn") { phone.writing == "for the first" }
+    }
+
     /// A hub whose lease names no endpoint is handed nothing, though it answers this phone's
     /// turns: only a hub's lease with an endpoint, which a limb's turn found, is handed words.
     func testNothingIsHandedToAHubWithNoEndpoint() async throws {

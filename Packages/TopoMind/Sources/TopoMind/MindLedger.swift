@@ -55,7 +55,12 @@ struct MindLedger: Codable, Equatable, Sendable {
     /// The nonces of words heard ahead that were dropped unbound at the bound: a turn saved under
     /// one later is held cut off, since the mind has its words and may have run tools on them.
     var passed: [String]?
+    /// Words heard ahead that the mind answered and whose turn had not come by the bound, newest
+    /// last, at most `keptLimit`: their reply waits here for the turn, and is written bound to it
+    /// when it comes, however late. One pushed out by a newer one leaves its nonce in `passed`.
+    var kept: [Pending]?
     static let settledLimit = 32
+    static let keptLimit = 8
 
     struct Pending: Codable, Equatable, Sendable {
         enum State: String, Codable, Sendable {

@@ -57,6 +57,62 @@ import TopoCoreTesting
     }
 
     /// Mutant: the plain port taking a hand-over.
+    final class Took: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        var taken: Bool { lock.withLock { done } }
+        func take() { lock.withLock { done = true } }
+    }
+
+    /// A mind slower to answer than the hub's bound: the hear is cancelled there, and the answer
+    /// sent is the mind's own, so a phone is never told `no` for words the mind took. A phone whose
+    /// own bound runs out first knows only that they went.
+    @Test(arguments: [5.0, 10.0])
+    func aSlowMindIsNeverAnsweredNoForWordsItTook(phoneBound: Double) async throws {
+        let took = Took()
+        let key = NudgeKey.mint(hub: hub)
+        let server = try LeaseProbeServer(advertising: nil, key: key, holds: { _, _ in true },
+                                          nudged: { _, _, _, _ in true },
+                                          heard: { _, _, _, _, _ in
+            // A mind past its point of no return when the bound lands: it takes them all the same.
+            try? await Task.sleep(for: .seconds(5.5))
+            took.take()
+            return true
+        })
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        let secure = try #require(await server.securePort)
+        let answer = await HubNudge.hear("words", nonce: nonce, model: "sonnet", for: lease(port),
+                                         key: key.on(port: secure), answerBound: phoneBound)
+        try await Task.sleep(for: .seconds(1))
+        #expect(took.taken)
+        // Mutant: the answer given up at the bound, `no` while the mind took the words.
+        #expect(answer != .no)
+        if phoneBound > 6 { #expect(answer == .heard) }
+    }
+
+    /// A mind that honours the cancellation at the bound, taking nothing: answered `no`, at once.
+    @Test func aSlowMindThatTakesNothingAtTheBoundIsAnsweredNo() async throws {
+        let took = Took()
+        let key = NudgeKey.mint(hub: hub)
+        let server = try LeaseProbeServer(advertising: nil, key: key, holds: { _, _ in true },
+                                          nudged: { _, _, _, _ in true },
+                                          heard: { _, _, _, _, _ in
+            do { try await Task.sleep(for: .seconds(30)) } catch { return false }
+            took.take()
+            return true
+        })
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        let secure = try #require(await server.securePort)
+        let began = ContinuousClock.now
+        let answer = await HubNudge.hear("words", nonce: nonce, model: "sonnet", for: lease(port),
+                                         key: key.on(port: secure), answerBound: 10)
+        #expect(answer == .no)
+        #expect(ContinuousClock.now - began < .seconds(8))
+        #expect(!took.taken)
+    }
+
     @Test func aHandOverOnThePlainPortIsAnsweredNoAndReachesNothing() async throws {
         let (server, port, _, heard) = try await hubServer(.mint(hub: hub))
         defer { Task { await server.stop() } }
