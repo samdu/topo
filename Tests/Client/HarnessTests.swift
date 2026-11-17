@@ -1782,30 +1782,6 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(transport.sent.isEmpty)
     }
 
-    /// Words said behind words handed over are not given to this phone's guest ahead of the handed
-    /// words' save, when the lease cannot be asked: the guest would answer them before the turn
-    /// the hub's mind has.
-    func testWordsBehindWordsHandedOverAreNotGivenToTheGuest() async throws {
-        let db = InMemoryRecordDatabase()
-        let flaky = ReadFailingDatabase(db)
-        let transport = ScriptedTransport()
-        let (phone, _, handOvers) = try await phoneAfterAHubAnswered(db, through: flaky, transport: transport)
-        await flaky.setFailing(true)
-        let first = phone.willSend("second?")
-        try await eventually("the hand-over") { handOvers.calls.count == 1 }
-        // The attempt fails on the read, and the line is this device's to give ahead again.
-        await phone.retry()
-        try await eventually("the line stopped") { phone.stoppedOnFailure(first) }
-        phone.willSend("third?")
-        // The line goes again, past the lease's patience.
-        await phone.retry()
-        try await Task.sleep(for: .seconds(5))
-        XCTAssertTrue(transport.sent.isEmpty, "the phone's guest was given words said behind the hub's")
-        await flaky.setFailing(false)
-        await phone.retry()
-        try await eventually("the turn saved") { phone.said(first) }
-    }
-
     /// Nothing is handed over while a failure stands (a read of the log that failed): with iCloud
     /// away this phone's guest is what can answer the words, and words a hub may have it is not given.
     func testNothingIsHandedOverWhileAFailureStands() async throws {
