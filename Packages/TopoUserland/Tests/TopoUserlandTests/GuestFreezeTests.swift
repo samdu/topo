@@ -159,6 +159,36 @@ final class GuestFreezeTests: XCTestCase {
 
     /// A turn sent on the way back, before the continue has landed, waits for it rather than being
     /// refused or written to a stopped process.
+    /// A gated process frozen before it answered `initialize` keeps its bound for the time it is
+    /// resident in front: a deadline that passes while the app is away ends nothing and asks
+    /// nothing, the thaw continues the same process, and its answer is then the check.
+    func testTheLoginChecksBoundDoesNotCountTimeFrozen() async throws {
+        let heard = Accounts()
+        let session = GuestSession(launcher: launcher, store: store, freezer: freezer, sleep: clock.sleep,
+                                   checksLogin: true, answered: { heard.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        let outcome = await session.background(budget: .seconds(15))
+        XCTAssertEqual(outcome, .frozen)
+        await clock.advance(by: GuestSession.loginCheckBound + .seconds(1))
+        await session.foreground()
+        try await session.ready()
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(heard.all.isEmpty, "the bound ran out while the process was frozen")
+        XCTAssertFalse(process.terminated, "the way back ended the process")
+        XCTAssertEqual(launcher.processes.count, 1)
+        process.emit(#"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{"account":{"subscriptionType":"Claude Max","apiProvider":"firstParty"}}}}"#)
+        await eventually("heard") { heard.all.count == 1 }
+    }
+
+    private final class Accounts: @unchecked Sendable {
+        private let lock = NSLock()
+        private var accounts: [StreamEvent.Account?] = []
+        var all: [StreamEvent.Account?] { lock.withLock { accounts } }
+        func add(_ account: StreamEvent.Account?) { lock.withLock { accounts.append(account) } }
+    }
+
     func testATurnSentAsTheAppComesBackWaitsForTheContinue() async throws {
         let (session, process) = try await resident()
         let frozen = await session.background(budget: .seconds(15))

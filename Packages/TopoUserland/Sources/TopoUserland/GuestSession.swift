@@ -406,6 +406,9 @@ public actor GuestSession {
         var ready = false
         /// Whether it waits on the session's login check before it takes an input.
         var gated = false
+        /// The bound on its `initialize` answer now standing: moved at a freeze, so a deadline
+        /// that passed while the app was suspended ends nothing, and armed again at the thaw.
+        var gateArm = 0
 
         init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, threads: String?,
              conversation: Int) {
@@ -931,13 +934,7 @@ public actor GuestSession {
                 return
             }
             phase = .resident(resident)
-            if resident.gated {
-                let sleep = sleep
-                Task { [weak self] in
-                    do { try await sleep(GuestSession.loginCheckBound) } catch { return }
-                    await self?.unanswered(resident)
-                }
-            }
+            armGate(resident)
             resident.reader = Task { [weak self] in
                 for await line in process.lines {
                     await self?.received(line, from: resident)
@@ -954,10 +951,23 @@ public actor GuestSession {
         }
     }
 
-    /// A gated process still resident that has not answered `initialize` within the bound: the
-    /// check runs as for an answer with no account.
-    private func unanswered(_ resident: Resident) {
-        guard owns(resident), resident.gated, !resident.ready, loginCheckOwed, !checkingLogin, let answered else { return }
+    /// Starts the bound on a gated process's `initialize` answer, counted only while it is
+    /// resident in front.
+    private func armGate(_ resident: Resident) {
+        guard resident.gated, !resident.ready else { return }
+        resident.gateArm += 1
+        let arm = resident.gateArm, sleep = sleep
+        Task { [weak self] in
+            do { try await sleep(GuestSession.loginCheckBound) } catch { return }
+            await self?.unanswered(resident, arm: arm)
+        }
+    }
+
+    /// A gated process resident in front that has not answered `initialize` within the bound
+    /// armed last: the check runs as for an answer with no account.
+    private func unanswered(_ resident: Resident, arm: Int) {
+        guard case .resident(let current) = phase, current === resident, arm == resident.gateArm, inForeground,
+              resident.gated, !resident.ready, loginCheckOwed, !checkingLogin, let answered else { return }
         log("no initialize answer within \(GuestSession.loginCheckBound); checking the login without one")
         checkingLogin = true
         Task { await self.checkLogin(nil, with: answered) }
@@ -1149,6 +1159,7 @@ public actor GuestSession {
             frozenCut = cut
         }
         phase = .frozen(resident)
+        resident.gateArm += 1
         Perf.mark("resident.freeze.begin")
         let stopping = Task { await freezer.stop() }
         freezing = stopping
@@ -1223,6 +1234,7 @@ public actor GuestSession {
             return
         }
         phase = .resident(resident)
+        armGate(resident)
         Perf.mark("resident.thaw.continued")
         if let cut = frozenCut, cuts.load() == cut { cuts.clear() }
         frozenCut = nil
