@@ -336,6 +336,9 @@ public actor GuestSession {
     /// Whether that check is still owed, and whether it is running.
     private var loginCheckOwed: Bool
     private var checkingLogin = false
+    /// A monotonic reading the bound on an `initialize` answer is measured by, on the same clock
+    /// as `sleep`.
+    private let uptime: @Sendable () -> Duration
     /// The id of the `initialize` request each launch writes first, whose answer marks the process
     /// ready.
     static let readyRequest = "topo-ready"
@@ -407,8 +410,12 @@ public actor GuestSession {
         /// Whether it waits on the session's login check before it takes an input.
         var gated = false
         /// The bound on its `initialize` answer now standing: moved at a freeze, so a deadline
-        /// that passed while the app was suspended ends nothing, and armed again at the thaw.
+        /// that passed while the app was suspended ends nothing, and armed again at the thaw with
+        /// what is left of it. `gateSpent` is the time it has been resident in front before the
+        /// arm standing, which began at `gateSince`.
         var gateArm = 0
+        var gateSpent: Duration = .zero
+        var gateSince: Duration?
 
         init(process: any ResidentProcess, resumed: String?, model: String?, memory: Bool?, compactAt: Int?, threads: String?,
              conversation: Int) {
@@ -461,11 +468,14 @@ public actor GuestSession {
                 signedIn: @escaping @Sendable () -> Bool = { true },
                 requests: (@Sendable (RequestMoment) -> Void)? = nil,
                 checksLogin: Bool = false,
+                uptime: (@Sendable () -> Duration)? = nil,
                 answered: (@Sendable (StreamEvent.Account?) async -> Void)? = nil,
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.requests = requests
         self.answered = answered
         self.loginCheckOwed = checksLogin && answered != nil
+        let start = ContinuousClock.now
+        self.uptime = uptime ?? { ContinuousClock.now - start }
         self.launcher = launcher
         self.freezer = freezer
         self.signedIn = signedIn
@@ -688,9 +698,10 @@ public actor GuestSession {
         guard admit(given) else { return .kept }
         let mine = generation
         inForeground = false
-        // A turn waiting on the login check is refused, as one waiting on a start would be: the
-        // gated process takes no input in the background.
-        if case .resident(let resident) = phase, resident.gated { settleReadiness(.failure(Refusal.notResident)) }
+        // While the login check is owed every waiting turn waits on it, whatever the phase (a
+        // fallback's `refresh` may hold it idle), and nothing takes input in the background: each
+        // is refused, as one waiting on a start would be.
+        if loginCheckOwed { settleReadiness(.failure(Refusal.notResident)) }
         // A start still pending ends what it made as it lands; a teardown already under way (a
         // restart, a process that died) is waited out, so nothing is resident when this answers.
         if let startTask { await startTask.value }
@@ -951,14 +962,16 @@ public actor GuestSession {
         }
     }
 
-    /// Starts the bound on a gated process's `initialize` answer, counted only while it is
-    /// resident in front.
+    /// Starts what is left of the bound on a gated process's `initialize` answer, counted only
+    /// while it is resident in front.
     private func armGate(_ resident: Resident) {
         guard resident.gated, !resident.ready else { return }
         resident.gateArm += 1
+        resident.gateSince = uptime()
         let arm = resident.gateArm, sleep = sleep
+        let left = max(GuestSession.loginCheckBound - resident.gateSpent, .zero)
         Task { [weak self] in
-            do { try await sleep(GuestSession.loginCheckBound) } catch { return }
+            do { try await sleep(left) } catch { return }
             await self?.unanswered(resident, arm: arm)
         }
     }
@@ -1141,6 +1154,12 @@ public actor GuestSession {
             return
         }
         log("Claude Code exited\(errors.isEmpty ? "" : ": \(errors.suffix(300))")")
+        // A gated process gone before it answered is checked as one that never answers would be:
+        // with no account. The process after it is gated until that check returns, then not.
+        if resident.gated, !resident.ready, loginCheckOwed, !checkingLogin, let answered {
+            checkingLogin = true
+            Task { await self.checkLogin(nil, with: answered) }
+        }
         // One that died under a turn is replaced, resuming what it began, so the next turn has a
         // process to go to; one that died idle is not started again unless something is waiting
         // for it, so a process that dies at every start does not loop — the next `ready` starts it.
@@ -1160,6 +1179,10 @@ public actor GuestSession {
         }
         phase = .frozen(resident)
         resident.gateArm += 1
+        if let since = resident.gateSince {
+            resident.gateSpent += uptime() - since
+            resident.gateSince = nil
+        }
         Perf.mark("resident.freeze.begin")
         let stopping = Task { await freezer.stop() }
         freezing = stopping

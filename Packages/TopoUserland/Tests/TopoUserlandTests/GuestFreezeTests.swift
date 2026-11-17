@@ -157,15 +157,13 @@ final class GuestFreezeTests: XCTestCase {
         XCTAssertEqual(process.turns, ["hello again"])
     }
 
-    /// A turn sent on the way back, before the continue has landed, waits for it rather than being
-    /// refused or written to a stopped process.
     /// A gated process frozen before it answered `initialize` keeps its bound for the time it is
     /// resident in front: a deadline that passes while the app is away ends nothing and asks
     /// nothing, the thaw continues the same process, and its answer is then the check.
     func testTheLoginChecksBoundDoesNotCountTimeFrozen() async throws {
         let heard = Accounts()
         let session = GuestSession(launcher: launcher, store: store, freezer: freezer, sleep: clock.sleep,
-                                   checksLogin: true, answered: { heard.add($0) })
+                                   checksLogin: true, uptime: clock.uptime, answered: { heard.add($0) })
         await session.foreground()
         try await session.ready()
         let process = try XCTUnwrap(launcher.last)
@@ -182,13 +180,31 @@ final class GuestFreezeTests: XCTestCase {
         await eventually("heard") { heard.all.count == 1 }
     }
 
-    private final class Accounts: @unchecked Sendable {
-        private let lock = NSLock()
-        private var accounts: [StreamEvent.Account?] = []
-        var all: [StreamEvent.Account?] { lock.withLock { accounts } }
-        func add(_ account: StreamEvent.Account?) { lock.withLock { accounts.append(account) } }
+    /// The bound is the time resident in front, kept across freezes: 59 s in front, a freeze, and
+    /// 59 s in front again run the check (with no account, since none came) once the 60th second
+    /// in front has passed, not a fresh 60 s after the thaw; and a silent process after a thaw is
+    /// still checked.
+    func testTheLoginChecksBoundKeepsWhatWasSpentInFront() async throws {
+        let heard = Accounts()
+        let session = GuestSession(launcher: launcher, store: store, freezer: freezer, sleep: clock.sleep,
+                                   checksLogin: true, uptime: clock.uptime, answered: { heard.add($0) })
+        await session.foreground()
+        try await session.ready()
+        await clock.advance(by: .seconds(59))
+        let outcome = await session.background(budget: .seconds(15))
+        XCTAssertEqual(outcome, .frozen)
+        await clock.advance(by: .seconds(300))
+        await session.foreground()
+        try await session.ready()
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(heard.all.isEmpty, "the check ran before 60 s in front")
+        await clock.advance(by: .seconds(2))
+        await eventually("checked at the 60th second in front") { heard.all.count == 1 }
+        XCTAssertEqual(heard.all, [nil])
     }
 
+    /// A turn sent on the way back, before the continue has landed, waits for it rather than being
+    /// refused or written to a stopped process.
     func testATurnSentAsTheAppComesBackWaitsForTheContinue() async throws {
         let (session, process) = try await resident()
         let frozen = await session.background(budget: .seconds(15))

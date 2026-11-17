@@ -104,7 +104,7 @@ final class GuestSessionTests: XCTestCase {
 
     /// A session owing a login check (`checksLogin`), whose hook records what it heard and waits
     /// for `gate` before it returns; `body` runs inside the hook, given the session.
-    private func checking(_ heard: Heard, gate: Gate, body: @escaping @Sendable (GuestSession) async -> Void = { _ in }) -> GuestSession {
+    private func checking(_ heard: Accounts, gate: Gate, body: @escaping @Sendable (GuestSession) async -> Void = { _ in }) -> GuestSession {
         let box = SessionBox()
         let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep, checksLogin: true,
                                    answered: { account in
@@ -131,7 +131,7 @@ final class GuestSessionTests: XCTestCase {
     /// while the check runs, is written only once the check has returned, and the hook hears the
     /// first answer alone.
     func testATurnWaitsForTheLoginCheckBeforeItsInputIsWritten() async throws {
-        let heard = Heard(), gate = Gate()
+        let heard = Accounts(), gate = Gate()
         let session = checking(heard, gate: gate)
         await session.foreground()
         try await session.ready()
@@ -159,7 +159,7 @@ final class GuestSessionTests: XCTestCase {
     /// A check that ends the resident (the fallback's hold) ends a process with no turn: the turn
     /// waiting for it goes to the process started after the check, whole.
     func testAFallbackThatEndsTheResidentLosesNoTurn() async throws {
-        let heard = Heard(), gate = Gate()
+        let heard = Accounts(), gate = Gate()
         gate.open()
         let session = checking(heard, gate: gate) { session in await session.withoutResident {} }
         await session.foreground()
@@ -185,7 +185,7 @@ final class GuestSessionTests: XCTestCase {
     /// nobody, its replacement's answer is the check, signed-out shape and all, and once the
     /// check has returned a later process takes its input at once and tells the hook nothing.
     func testTheCheckIsTheAnsweringProcesssAndRunsOnce() async throws {
-        let heard = Heard(), gate = Gate()
+        let heard = Accounts(), gate = Gate()
         gate.open()
         let session = checking(heard, gate: gate)
         await session.foreground()
@@ -215,7 +215,7 @@ final class GuestSessionTests: XCTestCase {
     /// check then runs with no account, and a turn waiting on the gate when the app leaves the
     /// front is refused rather than left waiting.
     func testAGatedTurnIsNeverLeftWaiting() async throws {
-        let heard = Heard(), gate = Gate()
+        let heard = Accounts(), gate = Gate()
         gate.open()
         let session = checking(heard, gate: gate)
         await session.foreground()
@@ -229,7 +229,7 @@ final class GuestSessionTests: XCTestCase {
         _ = try await sending.value
         await eventually("written") { process.turns.count == 1 }
 
-        let other = Heard()
+        let other = Accounts()
         let gated = checking(other, gate: Gate())
         await gated.foreground()
         try await gated.ready()
@@ -244,28 +244,63 @@ final class GuestSessionTests: XCTestCase {
         }
     }
 
+    /// A turn waiting on the gate when the app leaves the front while the fallback's `refresh`
+    /// holds the session idle is refused, not left until a later foreground.
+    func testATurnWaitingThroughAFallbackIsRefusedInTheBackground() async throws {
+        let heard = Accounts(), gate = Gate(), refresh = Gate()
+        gate.open()
+        let session = checking(heard, gate: gate) { session in await session.withoutResident { await refresh.wait() } }
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        let sending = Task { try await session.send("hello") }
+        await settle()
+        process.emit(Self.signedOut)
+        await eventually("the fallback ended the process") { process.terminated }
+        _ = await session.background(budget: .seconds(5))
+        do {
+            _ = try await sending.value
+            XCTFail("a turn waiting through the fallback was sent")
+        } catch {
+            XCTAssertEqual(error as? GuestSession.Refusal, .notResident)
+        }
+        refresh.open()
+        await settle()
+        XCTAssertEqual(launcher.processes.count, 1, "the fallback started a process in the background")
+    }
+
+    /// A gated process that exits before it answers is checked as a silent one is, with no
+    /// account, once; the turn waiting goes to the process after, once.
+    func testAGatedProcessGoneBeforeItAnswersIsCheckedOnce() async throws {
+        let heard = Accounts(), gate = Gate()
+        gate.open()
+        let session = checking(heard, gate: gate)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let sending = Task { try await session.send("hello") }
+        await settle()
+        first.close()
+        await eventually("checked") { heard.all.count == 1 }
+        XCTAssertEqual(heard.all, [nil])
+        _ = try await sending.value
+        let second = try XCTUnwrap(launcher.last)
+        XCTAssertFalse(first === second, "the turn went to the process that exited")
+        await eventually("written") { second.turns.count == 1 }
+        XCTAssertEqual(first.turns.count + second.turns.count, 1, "the input was written more than once")
+    }
+
+    /// Holds the session weakly, so the hook it is given does not keep it alive.
     private final class SessionBox: @unchecked Sendable {
         private let lock = NSLock()
-        private var held: GuestSession?
+        private weak var held: GuestSession?
         var session: GuestSession? {
             get { lock.withLock { held } }
             set { lock.withLock { held = newValue } }
         }
     }
 
-    private final class Gate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var opened = false
-        func open() { lock.withLock { opened = true } }
-        func wait() async { while !lock.withLock({ opened }) { await Task.yield() } }
-    }
 
-    private final class Heard: @unchecked Sendable {
-        private let lock = NSLock()
-        private var accounts: [StreamEvent.Account?] = []
-        var all: [StreamEvent.Account?] { lock.withLock { accounts } }
-        func add(_ account: StreamEvent.Account?) { lock.withLock { accounts.append(account) } }
-    }
 
     /// On a cold start the turn waits while Claude Code starts, and the answer to `initialize` is
     /// the first line it writes: that answer takes neither the turn's first-line mark nor its count
