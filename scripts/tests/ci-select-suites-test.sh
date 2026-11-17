@@ -99,12 +99,15 @@ expected=(
   'scripts/tests/fetch-phonon-test.sh scripts'
   'scripts/tests/mac-suite-test.sh scripts'
   'scripts/tests/maps-opens-nothing-test.sh scripts'
+  'scripts/tests/places-no-call-test.sh scripts'
   'scripts/model-manifest.sh others'
   'scripts/tests/model-manifest-test.sh scripts'
   'scripts/perf-run.sh scripts'
   'scripts/tests/perf-run-test.sh scripts'
   'scripts/phonon-bundles.sh scripts'
   'scripts/tests/phonon-bundles-test.sh scripts'
+  'scripts/ear-bundle.sh scripts'
+  'scripts/tests/ear-bundle-test.sh scripts'
   'scripts/smartturn-mel.py scripts'
   'scripts/vendor/whisper_features.py scripts'
   'scripts/tests/smartturn-mel-test.sh scripts'
@@ -206,7 +209,7 @@ done
 # added with neither falls to no rule and fails here.
 kept_at_three=(
   build-ish.sh ci-audio-feeder.swift ci-audio-lane.sh ci-audio-meter.swift ci-require-tests.sh
-  embed-voice.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh secret-env.sh
+  ear-bundle.json embed-bundles.sh fetch-ear-models.sh fetch-phonon.sh fetch-pinned.sh mac-suite.sh secret-env.sh
 )
 scripts_in_dir=0
 while IFS= read -r relative; do
@@ -259,7 +262,7 @@ selects true false false "the guest's tests, which the Topo scheme runs" $'Packa
 selects true true true "TopoCore's test double, which is source" $'Packages/TopoCore/Sources/TopoCoreTesting/HoldingDatabase.swift\n'
 selects true true true "a package's manifest" $'Packages/TopoCore/Package.swift\n'
 selects true true false "the unit and UI tests together" $'Tests/Client/LookToolTests.swift\nTests/ClientUI/MicrophonePressTests.swift\n' true
-selects true false true "the unit tests beside a package's" $'Tests/Client/LookToolTests.swift\nPackages/TopoProxy/Tests/TopoProxyTests/ProxyTests.swift\n'
+selects true false true "the unit tests beside a package's" $'Tests/Client/LookToolTests.swift\nPackages/TopoProxy/Tests/TopoProxyTests/DNSForwarderTests.swift\n'
 selects true true true "a test beside the app" $'Tests/Client/LookToolTests.swift\nApps/Client/Ear.swift\n'
 
 # A union: each path's suites.

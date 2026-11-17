@@ -582,6 +582,9 @@ public actor HubMind {
         } catch TurnRunnerError.displaced {
             outcome = .displaced
         } catch {
+            // The runner wraps what the brain threw; the stop is judged on that.
+            var error = error
+            if case TurnRunnerError.answerFailed(_, let underlying) = error { error = underlying }
             if !current(g) || error is CancellationError {
                 clock.end("cancelled")
                 return (nil, nil)

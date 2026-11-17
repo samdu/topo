@@ -115,6 +115,19 @@ public typealias Sleep = @Sendable (Duration) async throws -> Void
 /// otherwise once the turn has ended, never in the middle of one. A forgotten conversation — a
 /// sign-out — ends it at once, abandoning a turn in flight.
 public actor GuestSession {
+    /// The moments of a turn's model requests that the app reads beside the connection (the thread
+    /// sampler): its words written, with the turn's number in this session (counted from 1), each
+    /// request's answer begun with the context it was sent and its answer ended, and the turn's end.
+    /// A request of the turn's own carries its number in the turn, counted from 1 (`own`); a
+    /// sub-agent's carries none. The perf marks carry both numbers (`guest=`, `request=`), so a
+    /// request's upload marked later is matched to it by them. Nothing of what the turn said.
+    public enum RequestMoment: Sendable, Equatable {
+        case written(turn: Int)
+        case answered(own: Int?, tokens: Int)
+        case finished(own: Bool)
+        case ended
+    }
+
     public enum Refusal: Error, Equatable, CustomStringConvertible {
         /// A turn is in flight; turns are never interleaved.
         case turnInFlight
@@ -287,6 +300,8 @@ public actor GuestSession {
     private var continuedThaw: Resident?
     /// Whether Claude Code's login is still there: a frozen process is continued only while it is.
     private let signedIn: @Sendable () -> Bool
+    /// Told each of a turn's request moments (`RequestMoment`), on the actor and at once.
+    private let requests: (@Sendable (RequestMoment) -> Void)?
     private let store: SessionFile
     private let cuts: CutFile
     /// The session's clock, which the lifecycle reads for the moment the app left.
@@ -303,6 +318,8 @@ public actor GuestSession {
     /// Counts `forgetSession(then:)`: a process started under an older count holds a conversation
     /// that has been forgotten.
     private var conversation = 0
+    /// The turns written to a process of this session so far, which numbers each (`RequestMoment`).
+    private var turnsWritten = 0
     /// The next process starts a fresh session rather than resuming the kept one.
     private var freshNext = false
     /// Sign-outs and logins under way: while any is, no process starts (`forgetSession(then:)`,
@@ -403,13 +420,19 @@ public actor GuestSession {
         var held: [StreamEvent] = []
         /// Counts every line while the turn is in flight, so the watchdog can tell silence.
         var ticks = 0
+        /// The turn's own model requests begun so far.
+        var requests = 0
         var watchdog: Task<Void, Never>?
         /// Callers of `settle()` waiting for the turn to end, whoever is listening to it.
         var settling: [CheckedContinuation<Void, Never>] = []
 
-        init(continuation: AsyncStream<TurnUpdate>.Continuation, id: String) {
+        /// Its number among the session's turns.
+        let number: Int
+
+        init(continuation: AsyncStream<TurnUpdate>.Continuation, id: String, number: Int) {
             self.continuation = continuation
             self.id = id
+            self.number = number
         }
     }
 
@@ -420,7 +443,9 @@ public actor GuestSession {
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 signedIn: @escaping @Sendable () -> Bool = { true },
+                requests: (@Sendable (RequestMoment) -> Void)? = nil,
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.requests = requests
         self.launcher = launcher
         self.freezer = freezer
         self.signedIn = signedIn
@@ -751,11 +776,13 @@ public actor GuestSession {
         guard resident.turn == nil else { throw Refusal.turnInFlight }
         let id = id ?? UUID().uuidString.lowercased()
         let (stream, continuation) = AsyncStream<TurnUpdate>.makeStream()
-        let turn = Turn(continuation: continuation, id: id)
+        turnsWritten += 1
+        let turn = Turn(continuation: continuation, id: id, number: turnsWritten)
         resident.turn = turn
         turn.watchdog = watch(turn, of: resident)
         do {
-            Perf.mark("turn.guest.write")
+            Perf.mark("turn.guest.write guest=\(turn.number)")
+            requests?(.written(turn: turn.number))
             try await resident.process.write(StreamJSON.userTurn(text, id: id))
         } catch {
             if resident.turn === turn {
@@ -923,6 +950,22 @@ public actor GuestSession {
             switch event {
             case .text where own: Perf.mark("turn.guest.text")
             case .toolUse where own: Perf.mark("turn.guest.toolUse")
+            case .toolResult where own: Perf.mark("turn.guest.toolResult")
+            // Each model request, from the stream: what topo perf reads a request's time from.
+            case .requestBegan(let subagent, let tokens) where own:
+                if subagent {
+                    Perf.mark("turn.guest.message agent tokens=\(tokens)")
+                    requests?(.answered(own: nil, tokens: tokens))
+                } else if let turn = resident.turn {
+                    turn.requests += 1
+                    Perf.mark("turn.guest.message own guest=\(turn.number) request=\(turn.requests) tokens=\(tokens)")
+                    requests?(.answered(own: turn.requests, tokens: tokens))
+                }
+            case .requestEnded(let subagent) where own:
+                Perf.mark("turn.guest.message.done \(subagent ? "agent" : "own")")
+                requests?(.finished(own: !subagent))
+            case .retry(let attempt, let status) where own:
+                Perf.mark("turn.guest.retry attempt=\(attempt.map(String.init) ?? "?") status=\(status.map(String.init) ?? "none")")
             case .result(let result) where own:
                 Perf.mark("turn.guest.result")
                 if Perf.recording, let timing = result.timing { Perf.mark("turn.guest.timing \(timing.words)") }
@@ -1166,6 +1209,7 @@ public actor GuestSession {
     private func finish(_ turn: Turn, of resident: Resident, with end: TurnEnd) {
         guard resident.turn === turn else { return }
         resident.turn = nil
+        requests?(.ended)
         turn.watchdog?.cancel()
         turn.continuation.yield(.ended(end))
         turn.continuation.finish()

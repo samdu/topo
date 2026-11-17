@@ -6,7 +6,7 @@ import TopoCore
 /// on stdin and writing its events as stream-json on stdout, in its home — the app's
 /// `Library/Application Support/home`, bind-mounted at `home` — which is also its working directory, so every
 /// process finds the transcripts the one before it wrote. The environment is `Guest.environment`
-/// with whatever `environment` answers at each launch on top (the proxy's base URL and the guest's
+/// with whatever `environment` answers at each launch on top (the tool service's port and the guest's
 /// token, read fresh each time), and then the launcher's own keys, which nothing supplied
 /// overrides: `HOME` at the mount and `IS_SANDBOX=1`.
 public struct ClaudeLauncher: ResidentLauncher {
@@ -71,7 +71,9 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// requires), a message's text as it is written (`--include-partial-messages`), each input
     /// echoed as its turn begins (`--replay-user-messages`, `StreamEvent.received`), permissions bypassed, the model when one is given, and the session to resume
     /// when there is one. Bypassed because the guest is the sandbox: what the mind can reach is
-    /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
+    /// decided by the holes poked in it (the mounts, the tool service), and nothing inside it
+    /// prompts. The tools Claude Code adds that reach the person's claude.ai account rather than
+    /// the guest (`disallowed`) are taken away, since nothing would ask before one ran.
     ///
     /// What the conversation is told of its time (`timePrompt`), of its memory when `memory` is
     /// said, and of what became of the process before it when that was cut short (the note,
@@ -82,12 +84,17 @@ public struct ClaudeLauncher: ResidentLauncher {
     public static func arguments(model: String?, resume: String?, memory: Bool? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--include-partial-messages", "--replay-user-messages",
-                         "--dangerously-skip-permissions"]
+                         "--dangerously-skip-permissions", "--disallowedTools", disallowed.joined(separator: ",")]
         if let model { arguments += ["--model", model] }
         arguments += ["--settings", settings(memory: memory)]
         if let resume { arguments += ["--resume", resume] }
         return arguments
     }
+
+    /// The tools the resident is launched without: Claude Code's sending of the session's work to a
+    /// Claude Project in the person's claude.ai account, which it offers a session that talks to
+    /// Anthropic directly. An argument, so a claude the resident starts is not launched without them.
+    public static let disallowed = ["SendToProject", "SendToProjectContext"]
 
     /// The variables a launch's note and its mark are in (`launchEnvironment(note:)`), for the
     /// hook to print.
@@ -215,13 +222,22 @@ public struct ClaudeLauncher: ResidentLauncher {
     /// `threads` is the name of the variable that turns on Claude Code's message threads
     /// (`MessageThreads`), set to `1`, or nil to set none. It is the mind's to rename, so it is set
     /// only where nothing else is: a name the guest's environment or the callback sets is left as
-    /// they have it, and the launcher's own keys are set after it, so one of those keeps its own
-    /// value; either way the launch goes without threads.
+    /// they have it, and one of the launcher's own (`ownNames`) is not set for threads at all;
+    /// either way the launch goes without threads. A launch that sets it also leaves
+    /// `nonessentialVariable` out, which threads want (below); one that sets none keeps it, so
+    /// off lets none of that out (a full-scope login still asks about its account: its profile and
+    /// connectors among what was checked).
     public func launchEnvironment(compactAt: Int? = nil, note: String? = nil, threads: String? = nil) async throws -> [String: String] {
         var environment = Guest.environment
         environment.merge(try await self.environment()) { _, new in new }
-        if let threads, environment[threads] == nil {
+        if let threads, environment[threads] == nil, !Self.ownNames.contains(threads) {
             environment[threads] = Self.threadsValue
+            // With its nonessential traffic off, Claude Code 2.1.316 sent a phone's full-scope
+            // login's turns on no thread at all (samdu/topo#782), and any login's continues with
+            // system and tools again, since what leaves them to the thread is a feature flag it
+            // fetches. So asking for threads lets that traffic out: the flags, the usage
+            // telemetry to Anthropic and Datadog, the public MCP registry's listing.
+            environment[Self.nonessentialVariable] = nil
         }
         environment["HOME"] = home
         environment["IS_SANDBOX"] = "1"
@@ -242,6 +258,15 @@ public struct ClaudeLauncher: ResidentLauncher {
         environment[Self.timingVariable] = Perf.recording ? "1" : nil
         return environment
     }
+
+    /// The guest's switch for Claude Code's traffic beside its turns, which a launch with threads
+    /// takes away (`Guest.environment` sets it for every other program the app starts in the guest;
+    /// what the resident starts inherits the resident's).
+    public static let nonessentialVariable = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+
+    /// The names the launcher sets or clears below whatever came before, so none of them can be
+    /// the threads variable's.
+    static let ownNames: Set<String> = ["HOME", "IS_SANDBOX", compactWindowVariable, compactAtVariable, noteVariable, noteMarkVariable, launchVariable, timingVariable]
 
     /// What the threads variable is set to: the one value, whatever its name.
     public static let threadsValue = "1"

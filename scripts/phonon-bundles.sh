@@ -8,9 +8,12 @@
 #   scripts/phonon-bundles.sh [directory]
 #   scripts/phonon-bundles.sh package [directory]   # ... and the asset pack for App Store Connect
 #
+# With no directory and not `package` — publish-topo.sh's call, for the install page's builds,
+# which embed both bundles — it also fetches the ear's bundle into build/ear (scripts/ear-bundle.sh).
+#
 # The repository is Sam's and private (the weights are CC BY-NC 4.0 and the voice is his), read
 # with his token: HF_TOKEN, or 1Password's `op` when it is not set. What this makes is what the
-# install page's builds embed (scripts/embed-voice.sh), what the talk lane's simulator loads
+# install page's builds embed (scripts/embed-bundles.sh), what the talk lane's simulator loads
 # (TOPO_DEBUG_VOICE) and what `package` turns into the Apple-hosted pack with `xcrun ba-package`.
 set -euo pipefail
 
@@ -25,6 +28,8 @@ base="${PHONON_REPO_URL:-https://huggingface.co/$repo/resolve/$revision/$name}"
 
 package=no
 if [ "${1-}" = package ]; then package=yes; shift; fi
+ear=no
+[ "$package" = no ] && [ "$#" = 0 ] && ear=yes
 out="${1:-$root/build/phonon}"
 dest="$out/$name"
 mkdir -p "$dest"
@@ -60,6 +65,7 @@ fetch bundle.json "$manifest_size" "$manifest_sha"
 jq -r '.files[] | [.path, (.size|tostring), .sha256] | @tsv' "$dest/bundle.json" |
 while IFS=$'\t' read -r path size sha; do fetch "$path" "$size" "$sha"; done
 echo "phonon-bundles: $name verified in $dest"
+[ "$ear" = no ] || "$root/scripts/ear-bundle.sh"
 
 [ "$package" = yes ] || exit 0
 # The pack: its id, the essential policy at first installation alone (an update's new version is

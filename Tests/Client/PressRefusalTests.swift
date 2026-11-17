@@ -10,7 +10,7 @@ struct ScriptedEngine: SpeechEngine {
     var bare: String? = ""
     var boosted: String? = ""
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {}
     func rebuild(terms: [String], version: Int) async throws {}
 
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {
@@ -23,7 +23,7 @@ struct ScriptedEngine: SpeechEngine {
 
 /// An engine whose load never returns, which holds the ear at `loading`.
 struct StallingEngine: SpeechEngine {
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         while true { try await Task.sleep(for: .seconds(3600)) }
     }
     func rebuild(terms: [String], version: Int) async throws {}
@@ -36,7 +36,7 @@ final class LoadOnCue: SpeechEngine, @unchecked Sendable {
 
     func finish() { done.signal() }
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         let done = done
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
@@ -52,7 +52,7 @@ final class LoadOnCue: SpeechEngine, @unchecked Sendable {
 /// An engine whose load fails, which is the ear at `failed`.
 struct BrokenEngine: SpeechEngine {
     static let why = "the models did not compile"
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {
         throw EarError.unavailable(Self.why)
     }
     func rebuild(terms: [String], version: Int) async throws {}
@@ -78,7 +78,7 @@ final class PressRefusalTests: XCTestCase {
     private func loaded(_ engine: any SpeechEngine) -> Ear {
         let ear = ear(engine)
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         return ear
     }
 
@@ -121,7 +121,7 @@ final class PressRefusalTests: XCTestCase {
         for (name, ear) in [("cold", cold), ("loading", loading), ("failed", failed)] {
             let seams = Seams()
             let center = NotificationCenter()
-            let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+            let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
             let voice = voiceInput(seams, audio, center, ear: ear)
             await voice.press(as: .chat, mine: 1)
             XCTAssertEqual(voice.refusal, ear.summary, "\(name): the refusal is the ear's own words")
@@ -141,7 +141,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         await voice.press(as: .chat, mine: 1)
         XCTAssertNil(voice.refusal)
@@ -160,7 +160,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is loading") { ear.state == .loading }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         XCTAssertFalse(voice.canListen, "a loading ear dims the microphone before any press")
         XCTAssertNil(voice.refusal, "nothing has been pressed")
@@ -174,7 +174,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         XCTAssertTrue(voice.canListen)
         voice.microphoneDenied()
@@ -188,7 +188,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         await voice.press(as: .chat, mine: voice.generation)
         utterance(into: voice.sink)
@@ -204,7 +204,7 @@ final class PressRefusalTests: XCTestCase {
         await settle("the ear is resident") { ear.ready }
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate)
         let voice = voiceInput(seams, audio, center, ear: ear)
         await voice.press(as: .chat, mine: voice.generation)
         utterance(into: voice.sink)

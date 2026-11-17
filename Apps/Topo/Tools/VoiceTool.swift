@@ -1,13 +1,12 @@
 import Foundation
 import TopoTools
 
-/// `topo voice`: the mind's hand on how this phone hears and speaks. Seven settings, each read and
+/// `topo voice`: the mind's hand on how this phone hears and speaks. Six settings, each read and
 /// written in the defaults its reader reads, so the settings sheet shows a change at once:
 /// Settings' Noise suppression (`NoiseSuppression`), which the microphone reads at each press,
 /// Voice temperature (`VoiceTemperature`), which the voice reads as each sentence is asked for, so a change is the next reply's,
 /// Voice speed (`VoiceSpeed`), which the play queue reads as it queues each frame, so a change is heard from the next frame queued,
 /// While Topo works (`WorkingSounds`), which the keeper's sounds read at each sound,
-/// Call for spoken replies (`SpokenCallSetting`), which the call's driver reads as the phone locks,
 /// Open mic waits (`QuietWait`), which the conversation's rule reads at each verdict,
 /// and Earcons (`EarconsSetting`), which each cue reads as it sounds.
 struct VoiceTool: Tool {
@@ -21,7 +20,7 @@ struct VoiceTool: Tool {
     private struct Defaults: @unchecked Sendable { let store: UserDefaults }
 
     let name = "voice"
-    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature and speed, the sounds while Topo works, the call behind the lock, the open microphone's wait, the earcons"
+    let summary = "how this phone hears the person and speaks: the microphone's noise suppression, the voice's temperature and speed, the sounds while Topo works, the open microphone's wait, the earcons"
     let usage = """
     topo voice noise-suppression [status]   whether the microphone is cleaned up before it is heard
     topo voice noise-suppression on         clean it up: Apple's voice processing (noise suppression, echo
@@ -50,14 +49,9 @@ struct VoiceTool: Tool {
 
     Sounds unless changed. The sounds are the spoken turn's: nothing sounds unless one is being
     waited for aloud. A change applies from the next sound, on this phone only, and they can
-    change it back in Settings.
-
-    topo voice call [status]                whether a spoken reply behind the lock is a call
-    topo voice call on                      it is: a card on the Lock Screen while you answer, hang up stops you
-    topo voice call off                     no call: the wait behind the lock is capped at two minutes
-
-    On unless turned off. A change applies from the next spoken reply, on this phone only, and
-    they can change it back in Settings.
+    change it back in Settings. With the phone locked or Topo behind another app, a pushed-to-talk
+    turn is waited for under sounds for as long as you are working on it (fifteen minutes at most),
+    and under receipts or off for two minutes at most; a slower answer is read when they come back.
 
     topo voice wait [status]                how long a pause runs before Topo may decide you have finished
     topo voice wait VALUE                   set it: seconds from \(QuietWait.said(QuietWait.range.lowerBound)) to \(QuietWait.said(QuietWait.range.upperBound)), in an open-mic conversation
@@ -81,7 +75,6 @@ struct VoiceTool: Tool {
         case "temperature": return temperature(arguments)
         case "speed": return speed(arguments)
         case "working": return working(arguments)
-        case "call": return call(arguments)
         case "wait": return wait(arguments)
         case "earcons": return earcons(arguments)
         default: return .usage(usage + "\n")
@@ -114,19 +107,6 @@ struct VoiceTool: Tool {
         guard let mode = WorkingSounds.Mode(rawValue: arguments[1]) else { return .usage(usage + "\n") }
         defaults.store.set(mode.rawValue, forKey: WorkingSounds.key)
         return .ok("working sounds \(mode.rawValue), from the next sound\n")
-    }
-
-    private func call(_ arguments: [String]) -> ToolReply {
-        switch arguments.count == 2 ? arguments[1] : "status" {
-        case "status":
-            return .ok("call for spoken replies \(SpokenCallSetting.enabled(defaults.store) ? "on" : "off")\n")
-        case "on", "off":
-            let on = arguments[1] == "on"
-            defaults.store.set(on, forKey: SpokenCallSetting.key)
-            return .ok("call for spoken replies \(on ? "on" : "off"), from the next spoken reply\n")
-        default:
-            return .usage(usage + "\n")
-        }
     }
 
     private func wait(_ arguments: [String]) -> ToolReply {

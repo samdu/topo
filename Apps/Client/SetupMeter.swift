@@ -97,9 +97,9 @@ enum Setup {
 
     static let notStarted = "not started"
     /// What a part waiting says on a launch with nothing to fetch: not begun, its files all on
-    /// the phone and its own state a moment behind them, the voice's store finding its copy whole,
-    /// or the voice's compile waiting for the ear's, which every launch has.
-    static let launchWords: Set<String> = [notStarted, ModelDownloads.downloaded, Voice.checking, Voice.afterEar]
+    /// the phone and its own state a moment behind them, the voice's or the ear's store finding its
+    /// copy whole, or the voice's compile waiting for the ear's, which every launch has.
+    static let launchWords: Set<String> = [notStarted, ModelDownloads.downloaded, Voice.checking, Ear.checking, Voice.afterEar]
 
     static func state(phase: Userland.Phase, claude: Userland.ClaudePhase, fetch: Fetch) -> State {
         // Every pair is named, so a phase added later is a line this has to be taught.
@@ -136,7 +136,7 @@ enum Setup {
         func fetch(_ ids: [String]) -> Fetch { Fetch(fraction: downloads.fraction(ids), words: downloads.describe(ids)) }
         return lines(phase: userland.phase, claude: userland.claude,
                      workspace: fetch([ModelManifest.rootfs, ModelManifest.shell, ModelManifest.claudeCode]),
-                     ear: stage(ear.state, trouble: ear.trouble), earFetch: fetch(Ear.models),
+                     ear: stage(ear.state, trouble: ear.trouble), earFetch: Fetch(fraction: ear.fraction, words: ear.fetchWords),
                      earLoading: ear.progress.isEmpty ? Ear.preparing : "\(Ear.preparing): \(ear.progress)",
                      voice: stage(voice.state, trouble: voice.trouble),
                      voiceFetch: Fetch(fraction: voice.waitsForEar ? nil : voice.fraction, words: voice.fetchWords),

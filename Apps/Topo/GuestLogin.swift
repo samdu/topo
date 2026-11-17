@@ -183,8 +183,8 @@ struct GuestLogin: ClaudeLogin {
     }
 
     /// The login's environment: the guest's, the tool service's (for `topo open-url`), the home,
-    /// and `BROWSER` for the login itself. No `ANTHROPIC_BASE_URL`: the login's exchange is
-    /// Claude Code's own, to Claude's hosts.
+    /// and `BROWSER` for the login itself. The login's exchange is Claude Code's own, to Claude's
+    /// hosts, as every request of the resident's is.
     @MainActor
     static func environment(browser: Bool) async throws -> [String: String] {
         var environment = Guest.environment

@@ -57,7 +57,7 @@ final class PressGestureTests: XCTestCase {
                      permission: (@MainActor () async -> Bool)? = nil) async -> Rig {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
+        let audio = AudioSession(center: center, configure: seams.configure,
                                  deactivate: seams.deactivate, isActive: { true })
         let voice = Voice(engine: HeldVoice())
         voice.load(folder: URL(fileURLWithPath: "/dev/null"))
@@ -67,7 +67,7 @@ final class PressGestureTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: ScriptedEngine(bare: "purple elephants", boosted: "purple elephants"))
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle("the ear") { ear.ready }
         let latch = OpenLatch()
         EngineWatch.reset()
@@ -408,65 +408,6 @@ final class PressGestureTests: XCTestCase {
         XCTAssertFalse(rig.speaker.speaking)
         rig.voice.cancel()
         await settle("the reply to be read once the microphone closed") { rig.speaker.report.started }
-    }
-
-    /// The call's placing while the open is in flight ends the press: the session is the
-    /// system's from here, and an engine started on it is the call's defect. The cancel returns
-    /// only once what the open started has stopped.
-    func testACallPlacedWhileTheMicrophoneOpensEndsThePress() async {
-        let rig = await rig()
-        let down = await opening(rig)
-        let latch = rig.latch
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
-        rig.voice.call(.placing)
-        XCTAssertEqual(EngineWatch.starts, 1, "the placing returned before the open it tore down had run")
-        XCTAssertEqual(EngineWatch.running, 0, "the placing returned with the engine still running")
-        XCTAssertFalse(rig.voice.opening)
-        _ = await down.value
-        XCTAssertFalse(rig.voice.listening, "the microphone opened under the call's placing")
-        XCTAssertEqual(rig.voice.sessions, 0)
-        XCTAssertFalse(rig.voice.inputRunning)
-    }
-
-    /// The call ending while a reopen is in flight, with a hold standing: the speaker activates
-    /// the session afresh for the hold, and the open is cancelled before it does, so nothing
-    /// reconfigures the session between the open's format read and its tap. Driven through the
-    /// call's own callbacks, as `Speaker.attach` orders them.
-    func testTheCallEndingWhileTheMicrophoneOpensCancelsTheOpenBeforeTheSessionIsActivated() async {
-        let rig = await rig()
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        rig.speaker.attach(call)
-        let voice = rig.voice
-        rig.speaker.onCall = { voice.call($0) }
-        rig.speaker.awaitReply("n", readAloud: true)
-        call.start()
-        call.provider(system.provider, perform: system.starts.last!)
-        call.provider(system.provider, didActivate: AVAudioSession.sharedInstance())
-        XCTAssertEqual(rig.audio.call, .active)
-        // A conversation's reopen after its turn was sent, the reply's wait standing.
-        rig.latch.arm()
-        let down = Task { await voice.reopen(as: .chat) }
-        await settle("the reopen's open held on the queue") { rig.latch.waiting && voice.opening }
-        XCTAssertTrue(rig.audio.holding, "the reply's wait went with the reopen, so the call's end resumes nothing")
-        var openingAtActivation: [Bool] = []
-        rig.seams.onConfigure = { openingAtActivation.append(voice.opening) }
-        let latch = rig.latch
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { latch.open() }
-        call.end()
-        call.provider(system.provider, didDeactivate: AVAudioSession.sharedInstance())
-        rig.seams.onConfigure = nil
-        XCTAssertEqual(rig.audio.call, .none)
-        XCTAssertFalse(openingAtActivation.isEmpty, "the hold's resume activated nothing, so the test saw no activation")
-        XCTAssertEqual(openingAtActivation.filter { $0 }.count, 0,
-                       "the session was activated with the open still in flight: \(openingAtActivation)")
-        XCTAssertFalse(voice.opening)
-        XCTAssertEqual(EngineWatch.running, 0, "the call's end returned with the open's engine running")
-        let reopened = await down.value
-        XCTAssertFalse(reopened, "the reopen answered open across the call's end")
-        XCTAssertFalse(voice.listening, "the microphone opened across the call's end")
-        XCTAssertEqual(voice.sessions, 0)
-        rig.speaker.stop()
     }
 
     /// A media services reset while the open is in flight: no handle is made on the dead server

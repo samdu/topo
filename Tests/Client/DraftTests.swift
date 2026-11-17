@@ -146,8 +146,9 @@ final class DraftRowRenderTests: XCTestCase {
     }
 
     /// A turn on its way that the row is not holding.
-    private func renderQueued(_ text: String, look: Look = Look()) throws -> Raster {
-        let view = QueuedTurnRow(turn: QueuedTurn(text: text, nonce: "n"))
+    private func renderQueued(_ text: String, look: Look = Look(), margin: TurnMargin = .sending,
+                              line: LineActions = LineActions()) throws -> Raster {
+        let view = QueuedTurnRow(turn: QueuedTurn(text: text, nonce: "n", margin: margin), line: line)
             .environment(\.look, look)
             .frame(width: width)
             .background(Color.white)
@@ -156,8 +157,9 @@ final class DraftRowRenderTests: XCTestCase {
         return try Raster(try XCTUnwrap(renderer.uiImage, "the queued turn rendered to nothing"))
     }
 
-    private func draft(_ text: String, typing: Bool = false, sending: Bool = false) -> Draft {
-        Draft(text: .constant(text), typing: .constant(typing), sending: sending)
+    private func draft(_ text: String, typing: Bool = false, sending: Bool = false, margin: TurnMargin = .sending) -> Draft {
+        Draft(text: .constant(text), typing: .constant(typing), sending: sending, margin: margin,
+              cancel: {}, resend: {})
     }
 
     /// A rendered row as bytes, and where in it a colour lands.
@@ -313,15 +315,17 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertTrue(outline(landed, Theme.signal).isEmpty, "the landed turn is still drawn as on its way")
     }
 
-    /// It is the landed bubble in another colour, where the landed bubble will be: nothing moves
-    /// when it lands. And its colour is the look's, so a look that changes the sending colour
-    /// changes it.
-    func testATurnOnItsWayOutsideTheRowIsWhereAndWhatSizeItWillLand() throws {
+    /// It is drawn as the row draws a turn on its way — the same bubble in the same place, the
+    /// slot beside it — so the two turns on their way read as one kind of thing, and it is the
+    /// landed turn's size. And its colour is the look's, so a look that changes the sending
+    /// colour changes it.
+    func testATurnOnItsWayOutsideTheRowIsDrawnAsTheRowDrawsOne() throws {
         let words = "Remind me to water"
         let queued = try box(try renderQueued(words), Look().draft.sending.accent)
+        let row = try box(try render(draft(words, sending: true), look: Look()), Look().draft.sending.accent)
         let landed = try box(try renderTurn(words), Look().bubble.accent)
-        XCTAssertEqual(queued.left, landed.left, accuracy: 6, "the bubble moves as it lands")
-        XCTAssertEqual(queued.right, landed.right, accuracy: 6, "the bubble moves as it lands")
+        XCTAssertEqual(queued.left, row.left, accuracy: 6, "a queued turn is not where the row draws one")
+        XCTAssertEqual(queued.right, row.right, accuracy: 6, "a queued turn is not where the row draws one")
         XCTAssertEqual(queued.bottom - queued.top, landed.bottom - landed.top, accuracy: 6,
                        "the bubble changes height as it lands")
 
@@ -387,6 +391,100 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertGreaterThan(sent.inkInTrailing(slot), 0, "nothing at all is drawn in the slot while the turn is on its way")
         XCTAssertEqual(try box(sent, Look().draft.sending.accent).right, try box(writing).right,
                        "the bubble moved when the turn went, so the slot did not keep its space")
+    }
+
+    // MARK: A turn that stopped the line, and one that waits
+
+    /// A turn the line stopped on is drawn in the look's failed enclosure, red, and in neither
+    /// the sending colour nor the landed one; on the row and outside it.
+    func testATurnThatStoppedTheLineIsDrawnRed() throws {
+        // The resend is drawn in an ink of its own, so the red found is the enclosure's alone.
+        var look = Look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        let row = try render(draft("bins?", sending: true, margin: .resend), look: look)
+        XCTAssertFalse(outline(row, .red).isEmpty, "the row the line stopped on is not drawn red")
+        XCTAssertTrue(outline(row, Theme.signal).isEmpty, "the row the line stopped on is still drawn as sending")
+        let queued = try renderQueued("bins?", look: look, margin: .resend, line: LineActions(cancel: { _ in }, resend: {}))
+        XCTAssertFalse(outline(queued, .red).isEmpty, "a queued turn the line stopped on is not drawn red")
+        XCTAssertFalse(queued.pixels(matching: .green).isEmpty, "a queued turn the line stopped on has no resend in its margin")
+        XCTAssertTrue(outline(queued, Theme.signal).isEmpty, "a queued turn the line stopped on is still drawn as sending")
+        XCTAssertFalse(outline(try renderQueued("bins?", margin: .cancel), Theme.signal).isEmpty,
+                       "a turn that waits is not drawn as sending")
+    }
+
+    /// A landed turn of the person's whose reply has stopped is drawn in the same failed
+    /// enclosure, red, with the ask-again in the margin; every other landed turn as it was.
+    func testALandedTurnWhoseReplyStoppedIsDrawnRed() throws {
+        let turn = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 1), parents: [],
+                        role: .person, text: "bins?", at: Date(timeIntervalSince1970: 1_700_000_000))
+        var look = Look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        let stopped = try raster(TurnRow(turn: turn, askAgain: {}), look: look)
+        XCTAssertFalse(outline(stopped, .red).isEmpty, "the turn whose reply stopped is not drawn red")
+        XCTAssertTrue(outline(stopped, Theme.primary).isEmpty, "the turn whose reply stopped is drawn as landed")
+        XCTAssertFalse(stopped.pixels(matching: .green).isEmpty, "the margin holds no ask-again")
+        let landed = try raster(TurnRow(turn: turn), look: look)
+        XCTAssertTrue(outline(landed, .red).isEmpty, "a landed turn is drawn red")
+        XCTAssertTrue(landed.pixels(matching: .green).isEmpty, "a landed turn has a margin")
+    }
+
+    private func raster(_ view: some View, look: Look) throws -> Raster {
+        let renderer = ImageRenderer(content: view.environment(\.look, look).frame(width: width).background(Color.white))
+        renderer.scale = 3
+        return try Raster(try XCTUnwrap(renderer.uiImage, "the turn rendered to nothing"))
+    }
+
+    /// The failed enclosure and the margin's controls are the look's: a look that changes them
+    /// changes what is drawn.
+    func testTheFailedColourAndTheMarginsControlsAreTheLooks() throws {
+        var look = Look()
+        look.draft.failed.accent = Color(red: 0, green: 0, blue: 1)
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        let row = try render(draft("bins?", sending: true, margin: .resend), look: look)
+        XCTAssertFalse(row.pixels(matching: .blue).isEmpty, "the look's failed accent does not reach the row")
+        XCTAssertFalse(row.pixels(matching: .green).isEmpty, "the look's resend ink does not reach the margin")
+        look.draft.cancelInk = Color(red: 1, green: 0, blue: 1)
+        let waiting = try render(draft("bins?", sending: true, margin: .cancel), look: look)
+        XCTAssertFalse(waiting.pixels(matching: .magenta).isEmpty, "the look's cancel ink does not reach the margin")
+    }
+
+    /// The margin's symbols and their size are the look's too: a look that names another symbol
+    /// or font for a control draws that one.
+    func testTheMarginsSymbolsAndTheirSizeAreTheLooks() throws {
+        var look = Self.look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        look.draft.cancelInk = Color(red: 0, green: 1, blue: 0)
+        func ink(_ margin: TurnMargin, _ look: Look) throws -> [(x: Int, y: Int)] {
+            try render(draft("bins?", sending: true, margin: margin), look: look).pixels(matching: .green)
+        }
+        let resend = try ink(.resend, look)
+        var other = look
+        other.draft.resendSymbol = "square.fill"
+        XCTAssertNotEqual(try ink(.resend, other).count, resend.count, "the look's resend symbol does not reach the margin")
+        other = look
+        other.draft.marginFont = .caption2
+        XCTAssertLessThan(try ink(.resend, other).count, resend.count, "the look's margin font does not reach the margin")
+        let cancel = try ink(.cancel, look)
+        other = look
+        other.draft.cancelSymbol = "square.fill"
+        XCTAssertNotEqual(try ink(.cancel, other).count, cancel.count, "the look's cancel symbol does not reach the margin")
+    }
+
+    /// The margin's control keeps the slot's space: the bubble is where it is whatever the
+    /// margin holds.
+    func testTheBubbleStaysPutWhateverTheMarginHolds() throws {
+        // The margin's controls are drawn in inks of their own, so the box measured is the
+        // bubble's outline alone and not a symbol beside it that shares its colour.
+        var look = Self.look()
+        look.draft.resendInk = Color(red: 0, green: 1, blue: 0)
+        look.draft.cancelInk = Color(red: 1, green: 0, blue: 1)
+        // Words that wrap, so a margin that took room from the bubble would show in its height.
+        let words = "Is it bins tonight, or is it recycling, and does the garden waste go out too?"
+        let spinning = try box(try render(draft(words, sending: true), look: look), look.draft.sending.accent)
+        let failed = try box(try render(draft(words, sending: true, margin: .resend), look: look), look.draft.failed.accent)
+        let waiting = try box(try render(draft(words, sending: true, margin: .cancel), look: look), look.draft.sending.accent)
+        XCTAssertTrue(failed == spinning, "the bubble moved or changed size when the turn failed: \(failed) against \(spinning)")
+        XCTAssertTrue(waiting == spinning, "the bubble moved or changed size when the margin offered a cancel: \(waiting) against \(spinning)")
     }
 
     /// The room beside the bubble is the look's: the slot and what is between it and the bubble.

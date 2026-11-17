@@ -27,11 +27,11 @@ final class NoiseSuppressionTests: XCTestCase {
         let ear = Ear(vocabulary: Vocabulary(defaults: defaults), engine: ScriptedEngine())
         if ready {
             let nowhere = URL(fileURLWithPath: "/dev/null")
-            ear.load(parakeet: nowhere, ctc: nowhere)
+            ear.load(acoustic: nowhere)
             await settle("the ear is resident") { ear.ready }
         }
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory, deactivate: seams.deactivate, isActive: isActive)
+        let audio = AudioSession(center: center, configure: seams.configure, deactivate: seams.deactivate, isActive: isActive)
         let voice = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },

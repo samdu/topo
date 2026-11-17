@@ -575,8 +575,8 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draft, queued: queued, answer: row.answer(in: harness),
-                                  cue: speaker.cue)
+                                  draft: draft, queued: queued, line: lineActions, stopped: harness.repliesStopped,
+                                  answer: row.answer(in: harness), cue: speaker.cue)
             // Until the first read of the log returns, the empty page says it is being read. A
             // read that failed says so in the bar, and the loop's next pass reads again.
             .overlay {
@@ -759,7 +759,39 @@ struct ChatView: View {
     private func draft(row form: Bool) -> Draft {
         let bindable = Bindable(row)
         return Draft(text: bindable.text, typing: bindable.typing,
-                     sending: row.sending(in: harness), row: form, send: send, edit: editSending)
+                     sending: row.sending(in: harness), row: form, send: send, edit: editSending,
+                     margin: row.margin(in: harness), cancel: cancelSending, resend: resend)
+    }
+
+    /// The margin's resend: the stopped line goes again from its head under the nonces it
+    /// already carries, as the button under the transcript sends it.
+    private func resend() {
+        Task { await harness.retry() }
+    }
+
+    /// The margin beside a queued turn: its cancel, by the turn's nonce, and the line's resend.
+    private var lineActions: LineActions {
+        LineActions(cancel: { nonce in
+            Task {
+                // Not words the row has taken up meanwhile (`NextTurn.resume`): those are the
+                // row's to take back, and a row holding words on no line is stuck on them.
+                guard await harness.withdraw(nonce, unsent: true, while: { row.sent != nonce }) else { return }
+                // Nothing is coming for a turn that was never said, so nothing waits for it.
+                speaker.endAwaiting(nonce, "the turn was cancelled")
+            }
+        }, resend: resend, askAgain: { ref in Task { await harness.answerAgain(ref) } })
+    }
+
+    /// The margin's cancel beside the row's own turn: it comes off the line and its words go
+    /// with it, so it is never sent. Nil where the row offers no way back.
+    private var cancelSending: (@MainActor () -> Void)? {
+        guard row.canWithdraw(in: harness) else { return nil }
+        return {
+            Task {
+                guard let taken = await row.cancel(via: harness) else { return }
+                speaker.endAwaiting(taken, "the turn was cancelled")
+            }
+        }
     }
 
     /// The turn the row is holding is in the log — answered, or answered by nothing, which are
@@ -1023,7 +1055,7 @@ enum SpokenReply {
         guard speaker.speak(reply.text, answering: asked, reply: reply.ref) else { return false }
         // A reply waiting for the microphone keeps its turn marked until it is read
         // (`Speaker.settled`), so one the session refuses when the microphone closes is still owed.
-        if !speaker.waitingForMicrophone { harness.answeredAloud(asked) }
+        if !speaker.replyWaitsForMicrophone(asked) { harness.answeredAloud(asked) }
         return true
     }
 }
@@ -1074,7 +1106,6 @@ final class MicPress {
     @discardableResult
     func gesture(_ down: Bool, held: Bool? = nil, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  dictating: Bool = false, speaks: Bool = false,
-                 calls: @MainActor () -> Bool = { SpokenCallSetting.enabled() },
                  pressed: @MainActor () -> Void = {},
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
         guard down else {
@@ -1091,15 +1122,13 @@ final class MicPress {
             // and let go as the send takes its turn's wait (`Speaker.sending(under:)`), or once
             // a send that took none returns.
             let release = speaks ? speaker.releasing() : nil
-            // A held release keeps its input running for the call's placing (`VoiceInput.inputKept`).
-            let keeps = release != nil && calls() && speaker.callIdle
             // The gesture's verdict, taken here in the callback: whatever the task waits on, the
             // release is the hold or the tap the thumb made.
             let held = held ?? heldDown
             heldDown = false
             return Task {
                 defer { release.map { speaker.released($0, "its send took no wait") } }
-                let heard = await voice.pressUp(as: .chat, held: held, keepingInput: keeps)
+                let heard = await voice.pressUp(as: .chat, held: held)
                 speaker.microphoneClosed()
                 // Nil is a tap that left the microphone open, or a release that reached no
                 // session: neither sends, and neither sounds.
@@ -1126,13 +1155,12 @@ final class MicPress {
         // A press on the open microphone closes it and sends what it heard, so it is that send's
         // release and is held the same way.
         let release = speaks && drawn.open ? speaker.releasing() : nil
-        let keeps = release != nil && calls() && speaker.callIdle
         return Task {
             defer { release.map { speaker.released($0, "its send took no wait") } }
             #if DEBUG
             DebugRun.stallPress()
             #endif
-            let heard = await voice.pressDown(as: .chat, keepingInput: keeps)
+            let heard = await voice.pressDown(as: .chat)
             speaker.microphoneOpened(counted: opens)
             guard let heard else {
                 // Nil is a session begun or a press refused, and only the chat holding the

@@ -185,6 +185,7 @@ jobs:
           # PR. One bash glob per line; `*` crosses `/`.
           VOICE_PATHS: |
             Apps/Client/AudioSession.swift
+            Apps/Client/BundleStore.swift
             Apps/Client/ChatView.swift
             Apps/Client/Composer.swift
             Apps/Client/DebugRun.swift
@@ -203,6 +204,8 @@ jobs:
             scripts/ci-audio-meter.swift
             scripts/ci-require-tests.sh
             scripts/ci-select-lane.sh
+            scripts/ear-bundle.json
+            scripts/ear-bundle.sh
             scripts/fetch-ear-models.sh
             scripts/mac-suite.sh
             scripts/validate-and-push.sh
@@ -317,12 +320,15 @@ jobs:
             scripts/tests/fetch-phonon-test.sh scripts
             scripts/tests/mac-suite-test.sh scripts
             scripts/tests/maps-opens-nothing-test.sh scripts
+            scripts/tests/places-no-call-test.sh scripts
             scripts/model-manifest.sh others
             scripts/tests/model-manifest-test.sh scripts
             scripts/perf-run.sh scripts
             scripts/tests/perf-run-test.sh scripts
             scripts/phonon-bundles.sh scripts
             scripts/tests/phonon-bundles-test.sh scripts
+            scripts/ear-bundle.sh scripts
+            scripts/tests/ear-bundle-test.sh scripts
             scripts/smartturn-mel.py scripts
             scripts/vendor/whisper_features.py scripts
             scripts/tests/smartturn-mel-test.sh scripts

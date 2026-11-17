@@ -74,8 +74,8 @@
 # counts, never a dummy.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
-# ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
-# in the guest's proxy.
+# ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and the managed policy a
+# debug build writes into the guest (Apps/Topo/GuestPolicy.swift).
 #
 # --talk runs the TopoTalk scheme's one UI test (Tests/ClientTalk) and nothing else: it fetches
 # and verifies the ear's models into EAR_MODELS (build/ear-models) and the voice's bundle into

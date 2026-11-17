@@ -302,6 +302,18 @@ actor GuestBridge: Brain {
     private var asking = false
     /// Nonces whose words, still on their way to the guest, are to stop there (`stopHearing`).
     private var stopping: Set<String> = []
+    /// Words withdrawn (`withdrawn`): never given, by any hear after. Not cleared by a hear's
+    /// end, as `stopping` is, nor by a claim's hand-back.
+    private var takenBack: Set<String> = []
+
+    /// Whether words under `nonce` are not to be given now: stopped for this hear, withdrawn, or
+    /// claimed by a cancel.
+    /// Words a cancel has claimed and not yet withdrawn or handed back (`claim`, `unclaim`).
+    /// Kept apart from `takenBack`, so a hand-back never frees words a withdrawal took.
+    private var claimed: Set<String> = []
+    private func halted(_ nonce: String) -> Bool {
+        stopping.contains(nonce) || takenBack.contains(nonce) || claimed.contains(nonce)
+    }
     private var queue: [CheckedContinuation<Void, Never>] = []
     private var warming = false
     /// Which session and process wrote each reply this bridge returned, by its nonce.
@@ -460,7 +472,7 @@ actor GuestBridge: Brain {
                         ledger.pending?.covers.formUnion(received)
                         try? save()
                     }
-                    throw failing(.failed("a reply the guest finished is still to be written"), at: "reconciling: a reply owed")
+                    throw failing(.failed(Self.owedFirst), at: "reconciling: a reply owed")
                 case .unresolved:
                     ledger.pending?.state = .unresolved
                     try save()
@@ -635,6 +647,9 @@ actor GuestBridge: Brain {
     static let unknown = "whether the guest received the turn is not known yet (its transcript could not be read, or may still be being written); nothing is sent until it is"
 
     /// Why a turn waits when the bridge's own ledger could not be read.
+    /// A pass refused because a reply the guest finished is owed the log first: the next pass
+    /// writes it and then answers, so no reply has stopped.
+    static let owedFirst = "a reply the guest finished is still to be written"
     static let ledgerUnreadable = "the record of what the guest was sent could not be read, so whether it received the turn is not known; nothing is sent until it can be"
 
     func landed(_ reply: Turn, nonce: String) async {
@@ -803,10 +818,10 @@ actor GuestBridge: Brain {
         asking = true
         var flying = false
         defer { if !flying { release() } }
-        guard self.login == login, !stopping.contains(nonce), readLedger() else { return false }
+        guard self.login == login, !halted(nonce), readLedger() else { return false }
         // An input a killed launch left with its end unknown is read off the transcript first:
         // one the guest never received is sent now, and not held as heard.
-        guard await settleEarly(), self.login == login, !stopping.contains(nonce) else { return false }
+        guard await settleEarly(), self.login == login, !halted(nonce) else { return false }
         if holds(nonce) { return true }
         guard ledger.settled?.contains(nonce) != true else { return false }
         promote()
@@ -833,7 +848,7 @@ actor GuestBridge: Brain {
         guard (try? await conversation.ready()) != nil else { return false }
         Perf.mark("turn.bridge.guestReady")
         let session = await conversation.sessionID()
-        guard self.login == login, !stopping.contains(nonce) else { return false }
+        guard self.login == login, !halted(nonce) else { return false }
         let fresh = session == nil || session != ledger.session
         // A session with nothing of the conversation in it, and no read of the log to tell it:
         // the words wait for the read rather than be answered by a guest that knows none of it.
@@ -864,7 +879,7 @@ actor GuestBridge: Brain {
             return false
         }
         let pid = await conversation.residentPID()
-        guard self.login == login, !stopping.contains(nonce) else {
+        guard self.login == login, !halted(nonce) else {
             if self.login == login { drop(id) }
             return false
         }
@@ -984,11 +999,55 @@ actor GuestBridge: Brain {
     }
 
     func withdrawn(nonce: String) async {
-        await stopHearing(nonce: nonce)
+        // Whether or not a hear is under way: one that reaches the bridge after this, from a
+        // giving of the line that read the line before the words came off it, sends nothing.
+        takenBack.insert(nonce)
         // A bound input's turn is in the log, and what is in the log is said.
         guard readLedger(), ledger.early?.contains(where: { $0.person == nonce && $0.bound == nil }) == true else { return }
         ledger.early?.removeAll { $0.person == nonce && $0.bound == nil }
         try? save()
+    }
+
+    /// Takes the words said under `nonce` back before the guest is given them, or refuses: an
+    /// input recorded for them — written before it goes, and kept until its turn is bound or
+    /// taken back — may already be with the guest. Nothing awaits between the look and the mark,
+    /// and `begin` asks the mark after every wait up to the record, so no input for the words is
+    /// recorded once this has said true. Words already taken back, by a withdrawal or a claim
+    /// still outstanding, are refused too: a second claim's hand-back would take the first's
+    /// mark away.
+    func claim(nonce: String) async -> Bool {
+        guard !takenBack.contains(nonce), !claimed.contains(nonce), readLedger(), !holdsAhead(nonce) else { return false }
+        claimed.insert(nonce)
+        return true
+    }
+
+    func unclaim(nonce: String) async {
+        claimed.remove(nonce)
+    }
+
+    /// The words the guest has been given, or may have, and whose turn the log does not hold:
+    /// an input recorded for them ahead of their turn, or the one being asked. What a cancel is
+    /// not offered for, a relaunch included.
+    /// Nil when the ledger cannot be read: nothing is known of what the guest has.
+    func givenAhead() -> Set<String>? {
+        guard readLedger() else { return nil }
+        var given = Set((ledger.early ?? []).map(\.person))
+        if let person = ledger.pending?.person { given.insert(person) }
+        return given
+    }
+
+    /// Whether the ledger, as read, records an input for the words under `nonce`: what `claim`
+    /// refuses and `givenAhead` names.
+    private func holdsAhead(_ nonce: String) -> Bool {
+        ledger.early?.contains(where: { $0.person == nonce }) == true || ledger.pending?.person == nonce
+    }
+
+    /// The words given ahead, and not bound, whose guest turn was cut off with no answer: the
+    /// guest holds them and is not given them again unless the person asks, so nothing is coming
+    /// for them. What the chat draws as failed.
+    func cutOffAhead() -> Set<String> {
+        guard readLedger() else { return [] }
+        return Set((ledger.early ?? []).filter { $0.state == .unresolved && $0.bound == nil }.map(\.person))
     }
 
     /// The nonces among `unsaved()` whose turns are saved and whose replies this device owes
@@ -1114,6 +1173,8 @@ actor GuestBridge: Brain {
 
     func forget() async {
         login += 1
+        takenBack = []
+        claimed = []
         flown = [:]
         ledger = GuestLedger()
         loaded = true

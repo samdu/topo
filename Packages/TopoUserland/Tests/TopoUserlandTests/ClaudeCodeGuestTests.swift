@@ -125,6 +125,7 @@ final class ClaudeCodeGuestTests: XCTestCase {
     func testTheGuestEnvironmentTurnsTheUpdaterOff() async throws {
         XCTAssertEqual(Guest.environment["DISABLE_AUTOUPDATER"], "1")
         XCTAssertEqual(Guest.environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1")
+        XCTAssertEqual(Guest.environment["DISABLE_ERROR_REPORTING"], "1")
         let data = standIn("2.1.278")
         try deliver(data)
         let name = "claude-env-\(UUID().uuidString.prefix(8))"

@@ -20,6 +20,16 @@ public enum StreamEvent: Sendable, Equatable {
     /// A message of the turn's own begun: what `writing` gives next is its words, not the last
     /// message's.
     case writingBegan
+    /// A model request answered: its `message_start`, the turn's own or a sub-agent's, with the
+    /// context it was sent, `tokens` (input, cache read and cache written, from the start's usage).
+    /// What marks a request's time, since nothing of the app's sits between Claude Code and
+    /// Anthropic: the request went before it, and the model's answer begins with it.
+    case requestBegan(subagent: Bool, tokens: Int)
+    /// A model request's answer ended (`message_stop`).
+    case requestEnded(subagent: Bool)
+    /// `system`/`api_retry`: a request failed and Claude Code is trying it again: which attempt,
+    /// and the HTTP status when there was one.
+    case retry(attempt: Int?, status: Int?)
     /// A tool call begun in a message of the turn's own (`content_block_start` of a `tool_use`
     /// block), before its input streams: the message's words before it are whole. A sub-agent's
     /// makes none, as its words make none.
@@ -190,6 +200,8 @@ public enum StreamJSON {
         case ("system", "background_tasks_changed"):
             guard let tasks = object["tasks"] as? [Any] else { return [.other("system/background_tasks_changed")] }
             return [.backgroundTasks(tasks.count)]
+        case ("system", "api_retry"):
+            return [.retry(attempt: (object["attempt"] as? NSNumber)?.intValue, status: (object["error_status"] as? NSNumber)?.intValue)]
         case ("system", "status") where object["compact_result"] as? String == "failed":
             return [.compactFailed(clip(object["compact_error"] as? String ?? "no reason given"))]
         case ("assistant", _):
@@ -210,11 +222,20 @@ public enum StreamJSON {
             return [.result(result(object, subtype: subtype))]
         case ("stream_event", _):
             // A sub-agent's message is written inside a tool call of the turn's: none of it is
-            // the reply's words.
-            guard !isSubagents(object), let event = object["event"] as? [String: Any] else { return [.other(type)] }
+            // the reply's words, and only its requests' starts and ends are read.
+            guard let event = object["event"] as? [String: Any] else { return [.other(type)] }
+            let subagent = isSubagents(object)
             switch event["type"] as? String {
             case "message_start":
-                return [.writingBegan]
+                let usage = (event["message"] as? [String: Any])?["usage"] as? [String: Any] ?? [:]
+                let tokens = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+                    .compactMap { (usage[$0] as? NSNumber)?.intValue }.reduce(0, +)
+                return subagent ? [.requestBegan(subagent: true, tokens: tokens)]
+                    : [.writingBegan, .requestBegan(subagent: false, tokens: tokens)]
+            case "message_stop":
+                return [.requestEnded(subagent: subagent)]
+            case _ where subagent:
+                return [.other(type)]
             case "content_block_start":
                 guard (event["content_block"] as? [String: Any])?["type"] as? String == "tool_use" else { return [.other(type)] }
                 return [.toolCallBegan]

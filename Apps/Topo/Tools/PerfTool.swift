@@ -26,8 +26,10 @@ struct PerfTool: Tool {
                                         screen, each with the time since the one before, and a record: line
 
     Each event is titled by what happened and keyed by its kind: \(TurnTimeline.Key.allCases.map(\.rawValue).joined(separator: ", ")).
-    An event's time is the wait that ended with it, so the times add up to the turn's: "Request 1 sent"
-    is the upload, "The model began answering" the model's wait, "The model finished" its streaming.
+    An event's time is the wait that ended with it, so the times add up to the turn's: "Request 1 sent
+    and the model began answering" is the request's upload and the model's wait together, read from Claude
+    Code's own stream since nothing sits between it and Anthropic; "The model finished" is its streaming,
+    "A tool ran" the time from the answer before it to the tool's result.
     Words given to Claude Code ahead of their save are saved while it works: that save is listed
     beside the turn, from the send to the save, and is not in the sum.
     Where another message's turn overlapped this one, each stretch they shared is one "Alongside another
@@ -39,7 +41,8 @@ struct PerfTool: Tool {
     The record: line, without "record: ", is one line a turn: perf-turn, when it began (UTC), spoken
     or typed, answered or ended, total=ms, then key=ms summed over each key's events, saved=ms from
     the start to a save beside the turn, sound=ms from the start to the voice's first sound,
-    thread= the first model request's message thread (none, create, continue or unread), bytes= the model requests' bodies summed, requests=, tools=
+    thread= the first model request's upload as read (thread for a small one, whole, or unknown),
+    bytes= the uploads that could be told summed (inferred from the connection's counters), requests=, tools=
     and sends= counts, and mixed where another turn overlapped.
 
     The turns go with the launch; to keep track over time, append that line to a file in your

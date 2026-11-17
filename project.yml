@@ -4,7 +4,7 @@ options:
   bundleIdPrefix: zone.hexagon.topo
   deploymentTarget:
     # 26: the voice's model arrives as an Apple-hosted asset pack (Background Assets'
-    # `AssetPackManager`, Apps/Client/PhononStore.swift), which is iOS 26 and later.
+    # `AssetPackManager`, Apps/Client/BundleStore.swift), which is iOS 26 and later.
     iOS: "26.0"
     watchOS: "10.0"
     tvOS: "17.0"
@@ -40,9 +40,8 @@ packages:
   # resolves; the iOS app only.
   TopoUserland:
     path: Packages/TopoUserland
-  # The guest's two doors on the app's loopback: the relay Claude Code reaches api.anthropic.com
-  # through (plain HTTP in on 127.0.0.1, TLS out), and the tool service the guest's `topo` calls
-  # (TopoTools). The iOS app only.
+  # The guest's two doors on the app's loopback: the DNS forwarder its resolver asks, and the tool
+  # service the guest's `topo` calls (TopoTools). The iOS app only.
   TopoProxy:
     path: Packages/TopoProxy
   # Topo the octopus, drawn in pixels from the agent's state, on the composer's glass. Sam's own
@@ -138,19 +137,19 @@ targets:
         copyFiles:
           destination: productsDirectory
           subpath: $(CONTENTS_FOLDER_PATH)/Watch
-    # The embed writes the voice's bundle into the product's resources folder, a folder's files and
+    # The embed writes the voice's and the ear's bundles into the product's resources folder, a folder's files and
     # not a declared output's own path, which the user-script sandbox cannot grant, so this target
     # runs its scripts unsandboxed (ENABLE_USER_SCRIPT_SANDBOXING below); this is its only one.
     postBuildScripts:
-      # The voice's bundle in the app itself, for the builds the install page serves
+      # The voice's and the ear's bundles in the app itself, for the builds the install page serves
       # (`TOPO_EMBED_VOICES=YES`, which publish-topo.sh alone passes). Every other build removes
       # any copy an earlier build left in the product, so an archive for the App Store never
       # carries one; `scripts/check-built-assets.sh` reads the product either way.
-      - name: Embed the voice's bundle (install-page builds)
+      - name: Embed the voice's and the ear's bundles (install-page builds)
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          "$SRCROOT/scripts/embed-voice.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" "${TOPO_EMBED_VOICES:-NO}"
+          "$SRCROOT/scripts/embed-bundles.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" "${TOPO_EMBED_VOICES:-NO}"
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -158,17 +157,16 @@ targets:
     # is declared here, where it lands in the bundle. A silent push wakes the primary when a limb
     # writes a turn (see TurnPush); `audio` is the reply to a spoken turn, heard behind the lock,
     # the process running while the play queue renders, which its keeper makes true from the
-    # release of the press (Apps/Client/Speaker.swift); `voip` is what lets the app place the
-    # CallKit call a spoken exchange behind the lock is (Apps/Client/SpokenCall.swift): without
-    # it the system refuses `CXStartCallAction` as unentitled. No VoIP push goes with it, since
-    # the call is only ever placed by the app for itself. The three modes and the push entitlement
+    # release of the press (Apps/Client/Speaker.swift). There is no `voip`: Topo places no
+    # CallKit call, and `scripts/check-built-plist.sh` refuses a product that declares it. The two
+    # modes and the push entitlement
     # (`aps-environment`, in this target's own entitlements) are here for the answering loop and the
     # voice: the watch and the TV never answer and never speak. The watch carries `aps-environment`
     # alone for its own `Surface` push (below): watchOS delivers a background push with no mode declared.
     info:
       path: Apps/Topo/Info.plist
       properties:
-        UIBackgroundModes: [remote-notification, audio, voip]
+        UIBackgroundModes: [remote-notification, audio]
         # A turn sent in front asks for a continued-processing task under this prefix, which
         # keeps the app running behind another app until the turn ends (GuestLifecycle,
         # Apps/Topo/ContinuedTurn.swift). Not a key Xcode generates, so it is here, and
@@ -223,11 +221,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
-        # The voice's embed writes into the product's resources folder (postBuildScripts above).
+        # The bundles' embed writes into the product's resources folder (postBuildScripts above).
         ENABLE_USER_SCRIPT_SANDBOXING: false
         TOPO_SOURCE_COMMIT: ""
         TOPO_CHANNEL: ""
-        # YES copies the voice's bundle (build/phonon, scripts/phonon-bundles.sh) into the app.
+        # YES copies the voice's bundle (build/phonon, scripts/phonon-bundles.sh) and the ear's
+        # (build/ear, scripts/ear-bundle.sh) into the app.
         TOPO_EMBED_VOICES: NO
         # The guest's TopoIsh.xcframework (scripts/build-ish.sh) has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.

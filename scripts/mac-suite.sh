@@ -485,7 +485,10 @@ suite_topo_unit() {
 
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather
-    # than on a phone.
+    # than on a phone. The host app's ear is held at loading (`TOPO_DEBUG_EAR`): its real ear
+    # copies Ultra from its source and compiles it with CoreML on that one thread, about three seconds that
+    # land in whichever test is running and hold back every timed wait in it. The tests that
+    # want a real model load their own (`TEST_RUNNER_TOPO_UNIT_EAR_MODELS`).
     # GuestDNSTests' stub stands on port 53, which a VM's DNS proxy holds while one runs here; a
     # Mac that runs VMs keeps the port from its login (dotfiles tools/port53-holder) and lends it.
     # A socket left by a holder that died refuses the connection, and the stub binds the port itself.
@@ -496,7 +499,7 @@ suite_topo_unit() {
     run "$RESULTS/Topo-unit.log" bounded 2400 env ${port53[@]+"${port53[@]}"} \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
       "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" "TEST_RUNNER_TOPO_UNIT_EAR_MODELS=$cache/ear-models" \
-      TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
+      TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 TEST_RUNNER_TOPO_DEBUG_EAR=loading \
       xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo "${PACKAGES[@]}" \
       -destination "platform=iOS Simulator,id=$udid" \
@@ -552,11 +555,13 @@ quiet_launches() {
 }
 # quiet_models <udid> — the proof the quiet part fetched no model: the app's data container on
 # that simulator, read after the part's tests and before the run deletes the simulator, holds no
-# file under the ear's or the voice's homes (in Application Support: the ear's
-# `ModelStore.directory(for:)`, `Models/parakeet-tdt-0.6b-v2`, FluidAudio's own `FluidAudio/Models`
-# where the spotter lives, and `Models/parakeet-ctc-110m-coreml`, where a set made before its home
-# sits until `rehome` moves it; the voice's store, `PhononStore`'s `Voice/phonon-40m-en`, and the
-# `Voice/phonon-40m-en.partial` its copy is made in). The rest of `Models/` is the guest's (its rootfs, bash, Claude Code), which the
+# file under the ear's or the voice's homes (in Application Support: the ear's store,
+# `BundleStore`'s `Ear/parakeet-ultra`, and the `Ear/parakeet-ultra.partial` its copy
+# is made in; the `ModelStore.directory(for:)` of a phone's earlier Parakeet v2,
+# `Models/parakeet-tdt-0.6b-v2`; FluidAudio's own `FluidAudio/Models` where the spotter lives, and
+# `Models/parakeet-ctc-110m-coreml`, where a set made before its home sits until `rehome` moves it;
+# the voice's store, `Voice/phonon-40m-en`, and the `Voice/phonon-40m-en.partial` its copy is made
+# in). The rest of `Models/` is the guest's (its rootfs, bash, Claude Code), which the
 # quiet part fetches. Each file found is named; no folder, or folders with no file in them,
 # is nothing fetched. A container, a folder on the way to a home or a folder in one that cannot
 # be read is a failure, named, since nothing was proved there. The device's own download
@@ -565,7 +570,7 @@ quiet_models() {
   local container home at part parts files found="" unread="" status=0
   container="$(xcrun simctl get_app_container "$1" zone.hexagon.topo data 2>/dev/null)" && [ -d "$container" ] \
     || { err "topo_ui:quiet: the app's data container on $1 could not be read, so nothing shows the part fetched no model."; return 1; }
-  for home in Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Voice/phonon-40m-en Voice/phonon-40m-en.partial FluidAudio/Models; do
+  for home in Ear/parakeet-ultra Ear/parakeet-ultra.partial Models/parakeet-tdt-0.6b-v2 Models/parakeet-ctc-110m-coreml Voice/phonon-40m-en Voice/phonon-40m-en.partial FluidAudio/Models; do
     # Down to the home a folder at a time: a folder that cannot be listed or entered is unread,
     # and only a name missing from one that can be is no home.
     IFS=/ read -ra parts <<<"Library/Application Support/$home"
@@ -765,7 +770,7 @@ suite_scripts() {
     names=()
     started=()
     for test in ci-audio-lane validate-and-push janitor simulator-run perf-run review-verdict ci-select-lane ci-select-suites asc-pem archive-upload hub-dev-build hub-mind \
-                suite-gate ci-require-tests check-built-plist check-built-assets maps-opens-nothing build-ish fetch-phonon phonon-bundles \
+                suite-gate ci-require-tests check-built-plist check-built-assets maps-opens-nothing places-no-call build-ish fetch-phonon phonon-bundles ear-bundle \
                 model-manifest review-prompt review-cap validate-host mac-suite agent-simulator smartturn-mel review-dispatch ledger-recall; do
       if [ ! -x "scripts/tests/$test-test.sh" ]; then
         say "scripts/tests/$test-test.sh"

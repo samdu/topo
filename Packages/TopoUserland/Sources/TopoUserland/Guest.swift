@@ -30,6 +30,8 @@ public final class Guest: Sendable {
         case resolver(String)
         /// `/tmp` could not be emptied, with what the guest said.
         case temporary(String)
+        /// Claude Code's managed settings could not be written or removed, with what the guest said.
+        case managedSettings(String)
         /// `/etc/localtime` could not be pointed at the zone: not a zone name, no zoneinfo for it in
         /// the guest, or the write failed, with why.
         case timeZone(String)
@@ -49,6 +51,7 @@ public final class Guest: Sendable {
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
             case .temporary(let said): "/tmp could not be emptied: \(said)"
+            case .managedSettings(let said): "\(Guest.managedSettings) could not be put in place or removed: \(said)"
             case .timeZone(let why): "/etc/localtime could not be written: \(why)"
             case .hung(let bound, let running):
                 "the program had not finished after \(bound), and was killed"
@@ -77,13 +80,15 @@ public final class Guest: Sendable {
     /// (`RootfsInstaller` lays it in). The binary is a pin the app fetches (`ClaudeCodeInstaller`),
     /// a bump is a new pin, and the updater's own fetch speaks TLS through a library that never
     /// completes a handshake under the emulator. Claude Code's nonessential traffic (telemetry,
-    /// error reports, its start-up fetches) is off as well: none of it serves a turn, and a
-    /// start under the emulator is about a fifth shorter without it (`docs/perf.md`).
+    /// error reports, its start-up fetches) is off as well, and its error reports separately, so
+    /// they stay off where the resident's launch lets the rest out for message threads
+    /// (`ClaudeLauncher.launchEnvironment(threads:)`).
     public static let environment = [
         "HOME": "/root",
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "SHELL": "/bin/bash",
         "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_ERROR_REPORTING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     ]
 
@@ -147,6 +152,33 @@ public final class Guest: Sendable {
         let script = #"printf '%s' "$1" > /etc/resolv.conf.topo && mv -f /etc/resolv.conf.topo /etc/resolv.conf"#
         let exit = try await run("/bin/sh", ["-c", script, "resolver", Self.resolverFile(for: servers)])
         if exit.status != 0 { throw Failure.resolver(exit.errors) }
+    }
+
+    /// Where Claude Code reads the machine's managed settings on Linux: a policy no setting, flag or
+    /// `/model` of a session's can widen, read by every claude the guest starts. Only the login's
+    /// remote managed settings rank above it.
+    public static let managedSettings = "/etc/claude-code/managed-settings.json"
+
+    /// Makes Claude Code's managed settings `json`, or takes them away for nil, through the guest so
+    /// the fakefs records it. No link the guest made is written through: one standing for the folder
+    /// is replaced by a folder, the file is written beside under a name nothing stands at (a link
+    /// there is removed, and the write refuses one made since), and whatever stands at the name is
+    /// removed before the move, since a move onto a link to a directory would land inside it. A
+    /// directory at the name is refused before anything is written. Run once per process, after the
+    /// boot and before any claude starts, since nothing may read the name between the removal and
+    /// the move. Requires a booted kernel.
+    public func writeManagedSettings(_ json: String?) async throws {
+        let script = json == nil
+            ? #"d="${1%/*}"; if [ -L "$d" ]; then rm -f "$d"; else rm -f "$1" "$1.topo"; fi"#
+            : #"""
+            set -C
+            d="${1%/*}"
+            if [ -L "$d" ]; then rm -f "$d" || exit 1; fi
+            if [ -d "$1" ] && [ ! -L "$1" ]; then echo "$1 is a folder" >&2; exit 1; fi
+            mkdir -p "$d" && rm -f "$1.topo" && printf '%s' "$2" > "$1.topo" && rm -f "$1" && mv -f "$1.topo" "$1"
+            """#
+        let exit = try await run("/bin/sh", ["-c", script, "policy", Self.managedSettings] + (json.map { [$0] } ?? []))
+        if exit.status != 0 { throw Failure.managedSettings(exit.errors) }
     }
 
     /// Empties `/tmp`, as a Linux boot with a tmpfs there would: the guest's `/tmp` is on the

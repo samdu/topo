@@ -67,6 +67,10 @@ struct ModelManifest: Codable, Sendable {
     /// the parent of the directory it is given.
     static let parakeet = "parakeet-tdt-0.6b-v2"
     static let ctc = "parakeet-ctc-110m-coreml"
+    /// The models the manifest lists only so a phone's earlier download of them is present, which
+    /// nothing fetches: v2, until the ear's move to Ultra removes it. A task of one an earlier
+    /// build left in the session is never made again, at any launch, a background one included.
+    static let fetchedByNobody: Set<String> = [parakeet]
     /// Silero's voice activity detector, which ends an utterance behind the lock (`Endpoint`).
     static let vad = "silero-vad-coreml"
     /// Smart Turn, which judges whether the speaker of an open microphone has finished
@@ -365,6 +369,18 @@ final class ModelDownloads {
     }
 
     /// Where a model's files are, for its loader. Throws for a name the manifest lacks.
+    /// Removes a model's folder from the store, and says whether it did: one whose home, or a
+    /// folder on the way to it, is a link (`ModelStore.reachedThroughLink`) is somewhere else's
+    /// folder, and is left where it is, as the sweep leaves it.
+    func remove(_ id: String) throws -> Bool {
+        guard let model = manifest?.model(id) else { throw ModelStoreError.unknownModel(id) }
+        guard !store.reachedThroughLink(model) else { return false }
+        let home = store.directory(for: model)
+        if FileManager.default.fileExists(atPath: home.path) { try FileManager.default.removeItem(at: home) }
+        present.remove(id)
+        return true
+    }
+
     func directory(for id: String) throws -> URL {
         guard let model = manifest?.model(id) else { throw ModelStoreError.unknownModel(id) }
         return store.directory(for: model)
@@ -542,10 +558,12 @@ final class ModelDownloads {
 
     /// The replacement for a cancelled task, from the resume data its cancel wrote, under the same
     /// key, with the bytes it was at when cancelled. Nothing for a file since verified or
-    /// forgotten.
+    /// forgotten, or of a model nothing fetches (`ModelManifest.fetchedByNobody`: a v2 task an
+    /// earlier build left in the session), which is let go rather than made again.
     private func restart(_ key: String) {
         guard let (model, file) = parse(key), inFlight[key] != nil, !verifying.contains(key),
               !present.contains(model.id) else { return }
+        guard !ModelManifest.fetchedByNobody.contains(model.id) else { inFlight[key] = nil; return }
         let (task, fromResume) = makeTask(model, file)
         Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: inFlight[key] ?? 0, resumed: fromResume))
         watchdog.restarted(key, resumed: fromResume)
@@ -707,6 +725,7 @@ final class ModelDownloads {
             live.remove(key)
             watchdog.forget(key)
             guard let (model, file) = parse(key), !present.contains(model.id) else { break }
+            guard !ModelManifest.fetchedByNobody.contains(model.id) else { inFlight[key] = nil; break }
             let (task, fromResume) = makeTask(model, file)
             Perf.mark(DownloadWatchdog.restartedMark(id: model.id, path: file.path, at: 0, resumed: fromResume))
             watchdog.restarted(key, resumed: fromResume)

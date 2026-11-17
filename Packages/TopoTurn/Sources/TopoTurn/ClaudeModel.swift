@@ -4,9 +4,10 @@ import Foundation
 /// `opus` and `fable` to the latest of the family it knows, so what is sent carries no version and a
 /// newer model is a newer Claude Code (the guest's pin, `scripts/model-manifest.sh`) and no change
 /// here. Sonnet is the default; the others are a setting. Haiku is not offered — it is what `pinned`
-/// forces a debug build onto, so it is a case without being a choice, named by its model id because
-/// that is what the proxy writes at the wire (`APIProxy.pinnedModel`), and `allCases` (the model slider)
-/// is written out rather than synthesised to keep it that way.
+/// forces a debug build onto, so it is a case without being a choice, named by its model id, and
+/// `allCases` (the model slider) is written out rather than synthesised to keep it that way. What
+/// holds a debug build's sub-agents, `/model` and nested claudes to Haiku is Claude Code's managed
+/// policy, which the app writes into the guest (`GuestPolicy`).
 public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     case sonnet
     case opus

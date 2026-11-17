@@ -19,8 +19,15 @@ struct TranscriptView: View {
     /// drawn.
     var draft: Draft?
     /// Turns on their way that the row is not holding: said before its own, and said after it.
-    /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
+    /// Each is drawn as the row draws a turn on its way, with its margin, until the log has it
+    /// and it is a turn.
     var queued: (before: [QueuedTurn], after: [QueuedTurn]) = ([], [])
+    /// What the margin beside a queued turn does when pressed. The default does nothing, and its
+    /// controls are then not drawn.
+    var line = LineActions()
+    /// The person's turns whose reply has stopped (`Harness.repliesStopped`), drawn failed with
+    /// `line.askAgain` in their margin.
+    var stopped: Set<TurnRef> = []
     /// The guest's reply to the turn the row holds, as far as it is written, while that turn is
     /// not in the log: drawn under the row, as the reply to a queued turn is under its words.
     var answer: Turn?
@@ -59,7 +66,8 @@ struct TranscriptView: View {
                         }
                         ForEach(turns) { turn in
                             TurnRow(turn: turn, replay: replay, actions: actions,
-                                    cue: cue?.reply == turn.ref ? cue : nil).id(turn.ref)
+                                    cue: cue?.reply == turn.ref ? cue : nil,
+                                    askAgain: askAgain(turn)).id(turn.ref)
                                 .onAppear { made.turns.insert(turn.ref) }
                                 .onDisappear { made.turns.remove(turn.ref) }
                         }
@@ -187,23 +195,25 @@ struct TurnRow: View {
     var actions = TurnActions()
     /// The code block of this turn the voice has reached, if any.
     var cue: CodeBlockCue?
+    /// Asks again for the reply to one of the person's turns whose reply has stopped
+    /// (`Harness.repliesStopped`): the turn is drawn in the look's failed enclosure with this in
+    /// its margin, as a turn the line stopped on is. Nil for every other turn.
+    var askAgain: (@MainActor () -> Void)?
     @Environment(\.look) private var look
 
     private var mine: Bool { turn.role == .person }
+    private var stopped: Bool { mine && askAgain != nil }
 
     /// What the words are drawn on. The view chooses the side and the look chooses everything
     /// drawn on it, Topo's side included, which is why there is no number here.
-    private var enclosure: Look.Enclosure { mine ? look.bubble : look.plain }
+    private var enclosure: Look.Enclosure { mine ? (stopped ? look.draft.failed : look.bubble) : look.plain }
 
     /// Nothing is drawn around the words, so what Topo stands clear of is the words themselves.
     private var bare: Bool { enclosure.drawsNothing }
 
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
-            words
-                .padding(.horizontal, enclosure.horizontalPadding)
-                .padding(.vertical, enclosure.verticalPadding)
-                .background { TurnShape.fill(enclosure) }
+            enclosed
             Text(turn.at, format: .dateTime.hour().minute())
                 .font(look.transcript.labelFont)
                 .foregroundStyle(look.transcript.caption)
@@ -236,6 +246,24 @@ struct TurnRow: View {
         #endif
     }
 
+    /// The words on their enclosure, and beside a turn whose reply has stopped, the margin's
+    /// ask-again in the slot a turn on its way keeps.
+    @ViewBuilder
+    private var enclosed: some View {
+        let drawn = words
+            .padding(.horizontal, enclosure.horizontalPadding)
+            .padding(.vertical, enclosure.verticalPadding)
+            .background { TurnShape.fill(enclosure) }
+        if stopped {
+            HStack(alignment: .bottom, spacing: look.draft.spacing) {
+                drawn.accessibilityValue(TurnMargin.resend.said)
+                TurnMarginSlot(margin: .resend, resend: askAgain)
+            }
+        } else {
+            drawn
+        }
+    }
+
     /// Topo's words are markdown, drawn as their blocks. The person's are drawn as they were
     /// typed: the row they are written in is drawn at the size the landed turn will be, which a
     /// turn restyled on landing would not be, and what they typed is theirs to see as typed. The
@@ -254,9 +282,16 @@ struct TurnRow: View {
 }
 
 extension TranscriptView {
+    /// The margin's ask-again for a turn whose reply has stopped, and nil for any other.
+    fileprivate func askAgain(_ turn: Turn) -> (@MainActor () -> Void)? {
+        guard stopped.contains(turn.ref), let ask = line.askAgain else { return nil }
+        let ref = turn.ref
+        return { ask(ref) }
+    }
+
     /// A turn on its way, and under it the guest's reply when it has one the log does not.
     @ViewBuilder fileprivate func queued(_ turn: QueuedTurn) -> some View {
-        QueuedTurnRow(turn: turn).id(turn.id)
+        QueuedTurnRow(turn: turn, line: line).id(turn.id)
         if let reply = turn.reply { TurnRow(turn: reply, replay: replay, actions: actions).id(reply.ref) }
     }
 }
@@ -266,30 +301,130 @@ extension TranscriptView {
 struct QueuedTurn: Identifiable, Equatable {
     let text: String
     let nonce: String
+    /// What the slot beside it holds (`Harness.margin`).
+    var margin: TurnMargin = .sending
+    /// It can be taken back (`Harness.canWithdraw`): holding it offers Cancel, which is the way
+    /// back from a failed turn the row is not holding, whose margin is the resend.
+    var withdrawable = false
     /// The guest's reply to these words, written before iCloud took the turn: no turn of the
     /// log's, drawn under the words until the log has both.
     var reply: Turn?
     var id: String { nonce }
 }
 
-/// A turn on its way that the row is not holding, drawn where the person's turn will land and in
-/// the colour the row draws a turn on its way in (`look.draft.sending`): it is not a turn until the
-/// log has it, and then it is drawn as one, in the person's own bubble.
+/// A turn on its way that the row is not holding, drawn as the row draws a turn on its way: the
+/// person's bubble indented as the landed turn's, in the colour of where it stands
+/// (`look.draft.sending`, or `look.draft.failed` when the line stopped on it), with the slot
+/// beside it holding what the margin offers. It is not a turn until the log has it, and then it
+/// is drawn as one, in the person's own bubble.
 struct QueuedTurnRow: View {
     let turn: QueuedTurn
+    var line = LineActions()
     @Environment(\.look) private var look
 
+    /// The margin's cancel, for this turn's nonce.
+    private var cancel: (@MainActor () -> Void)? {
+        guard let cancel = line.cancel else { return nil }
+        let nonce = turn.nonce
+        return { cancel(nonce) }
+    }
+
     var body: some View {
-        let enclosure = look.draft.sending
-        PersonWords(text: turn.text)
-            .padding(.horizontal, enclosure.horizontalPadding)
-            .padding(.vertical, enclosure.verticalPadding)
-            .background { TurnShape.fill(enclosure) }
+        let enclosure: Look.Enclosure = look.draft.onItsWay(stopped: turn.margin == .resend)
+        return DraftInset(inset: look.transcript.personLeadingInset, keep: DraftRow.kept(look.draft)) {
+            HStack(alignment: .bottom, spacing: look.draft.spacing) {
+                PersonWords(text: turn.text)
+                    .padding(.horizontal, enclosure.horizontalPadding)
+                    .padding(.vertical, enclosure.verticalPadding)
+                    .background { TurnShape.fill(enclosure) }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityValue(turn.margin.said)
+                    #if os(iOS)
+                    .contextMenu {
+                        if turn.withdrawable, let cancel {
+                            Button(role: .destructive) { cancel() } label: {
+                                Label("Cancel", systemImage: look.draft.cancelSymbol)
+                            }
+                        }
+                    }
+                    #endif
+                TurnMarginSlot(margin: turn.margin, cancel: cancel, resend: line.resend)
+            }
             .mascotObstacle()
-            .padding(.leading, look.transcript.personLeadingInset)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .accessibilityElement(children: .combine)
-            .accessibilityValue("Sending")
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+/// What the margin beside a queued turn does: take it back, by its nonce, or send the stopped
+/// line again from its head. Nil where the screen has nothing behind it.
+struct LineActions {
+    var cancel: (@MainActor (String) -> Void)?
+    var resend: (@MainActor () -> Void)?
+    /// Asks again for the reply to a landed turn whose reply has stopped (`Harness.answerAgain`).
+    var askAgain: (@MainActor (TurnRef) -> Void)?
+}
+
+/// What the slot beside a turn on its way holds. Which it is, is the harness's word
+/// (`Harness.margin`): the spinner while an attempt may be writing the turn or nothing can take
+/// it back, a cancel while it waits and can be, and a resend once the line stopped on it with
+/// something failed. Never the spinner on a turn that has stopped.
+enum TurnMargin: String, Equatable, Sendable {
+    case sending
+    case cancel
+    case resend
+
+    /// What the turn's words say they are to whoever reads the screen.
+    var said: String {
+        switch self {
+        case .sending: "Sending"
+        case .cancel: "Waiting to send"
+        case .resend: "Not sent"
+        }
+    }
+}
+
+/// The slot itself, one size in every state so nothing moves as the state changes. A control
+/// with no action behind it is drawn as the spinner, since a button that does nothing is not one.
+struct TurnMarginSlot: View {
+    var margin: TurnMargin
+    var cancel: (@MainActor () -> Void)?
+    var resend: (@MainActor () -> Void)?
+    @Environment(\.look) private var look
+
+    /// What the margin's controls say they are to whoever reads the screen.
+    static let cancelLabel = "Cancel sending"
+    static let resendLabel = "Send again"
+
+    var body: some View {
+        Color.clear
+            .frame(width: look.draft.slot, height: look.draft.slot)
+            .overlay { control }
+    }
+
+    @ViewBuilder private var control: some View {
+        switch margin {
+        case .resend where resend != nil:
+            button(look.draft.resendSymbol, ink: look.draft.resendInk, label: Self.resendLabel) { resend?() }
+        case .cancel where cancel != nil:
+            button(look.draft.cancelSymbol, ink: look.draft.cancelInk, label: Self.cancelLabel) { cancel?() }
+        default:
+            ProgressView()
+                .tint(look.draft.sendInk)
+                .accessibilityLabel("Sending")
+        }
+    }
+
+    private func button(_ symbol: String, ink: Color, label: String, act: @escaping @MainActor () -> Void) -> some View {
+        Button(action: act) {
+            Image(systemName: symbol)
+                .font(look.draft.marginFont)
+                .foregroundStyle(ink)
+                .frame(width: look.draft.slot, height: look.draft.slot)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
@@ -368,6 +503,14 @@ struct Draft {
     /// there is nothing to take back — nothing on its way, an attempt in flight that may be
     /// landing as it is asked, or a turn already known to be in the log.
     var edit: (@MainActor () -> Void)?
+    /// What the slot beside a turn on its way holds (`Harness.margin`).
+    var margin: TurnMargin = .sending
+    /// Takes the turn on its way back and its words with it, so it is never sent: the margin's
+    /// cancel. Nil where `edit` is, and for the same reasons.
+    var cancel: (@MainActor () -> Void)?
+    /// Sends the stopped line again from its head, under the nonces it already carries: the
+    /// margin's resend.
+    var resend: (@MainActor () -> Void)?
 
     /// The three states of the draft.
     enum State: String, Equatable, Sendable {
@@ -421,11 +564,11 @@ struct Draft {
 /// drawn at the size the turn will be — the same type, the same width for the same words, an
 /// enclosure of the same shape — so nothing moves when it lands. What it is not yet is a turn,
 /// and the colour says so: it is drawn in `look.draft.written` while it is being written and in
-/// `look.draft.sending` while it is on its way, and becomes the person's own `look.bubble` by
-/// landing in the log.
+/// `look.draft.sending` while it is on its way (`look.draft.failed` once the line stopped on it),
+/// and becomes the person's own `look.bubble` by landing in the log.
 ///
 /// It is words and no field. A tap on what is being written raises the keyboard, and the words
-/// are then the glass's field's. A spinner beside a turn on its way says so a second way, and
+/// are then the glass's field's. The margin beside a turn on its way says so a second way (`TurnMargin`), and
 /// holding the row is the way back from that: it takes the words out of the outbox and puts them
 /// back to be changed, so what is said again is one turn and not two.
 struct DraftRow: View {
@@ -434,11 +577,11 @@ struct DraftRow: View {
 
     var body: some View {
         // Indented as the person's turn it is about to become, so it wraps where that will, as
-        // far as leaves the bubble its minimum width and the spinner its slot.
+        // far as leaves the bubble its minimum width and the margin its slot.
         DraftInset(inset: look.transcript.personLeadingInset, keep: Self.kept(look.draft)) {
             HStack(alignment: .bottom, spacing: look.draft.spacing) {
                 bubble
-                spinner
+                slot
             }
             .mascotObstacle()
         }
@@ -446,13 +589,13 @@ struct DraftRow: View {
     }
 
     /// What the row keeps of its width whatever the person's inset: the bubble at its minimum,
-    /// the room beside it and the spinner's slot.
+    /// the room beside it and the margin's slot.
     static func kept(_ draft: Look.Draft) -> CGFloat {
         draft.minimumWidth + draft.spacing + draft.slot
     }
 
     /// The person's inset as the row takes it in `width`: all of it where it leaves `kept`, and
-    /// only as much as does where it would not, so the inset yields and the spinner stays in
+    /// only as much as does where it would not, so the inset yields and the margin stays in
     /// the column.
     static func inset(_ inset: CGFloat, keeping kept: CGFloat, in width: CGFloat) -> CGFloat {
         guard inset.isFinite, width.isFinite else { return 0 }
@@ -463,7 +606,7 @@ struct DraftRow: View {
     /// in. The view picks between two values the look names rather than changing one of them, so
     /// a look that wants a draft drawn differently in either state says so there.
     private var enclosure: Look.Enclosure {
-        draft.sending ? look.draft.sending : look.draft.written
+        draft.sending ? look.draft.onItsWay(stopped: draft.margin == .resend) : look.draft.written
     }
 
     /// What the UI suites find the row's words by.
@@ -492,17 +635,14 @@ struct DraftRow: View {
             #endif
     }
 
-    /// One slot beside the bubble at every state, so the row does not move when the turn goes.
-    private var spinner: some View {
-        Color.clear
-            .frame(width: look.draft.slot, height: look.draft.slot)
-            .overlay {
-                if draft.state == .inFlight {
-                    ProgressView()
-                        .tint(look.draft.sendInk)
-                        .accessibilityLabel("Sending")
-                }
-            }
+    /// One slot beside the bubble at every state, so the row does not move when the turn goes:
+    /// empty while the words are written, and what the margin holds while they are on their way.
+    @ViewBuilder private var slot: some View {
+        if draft.state == .inFlight {
+            TurnMarginSlot(margin: draft.margin, cancel: draft.cancel, resend: draft.resend)
+        } else {
+            Color.clear.frame(width: look.draft.slot, height: look.draft.slot)
+        }
     }
 }
 

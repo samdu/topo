@@ -104,7 +104,7 @@ fi
 
 modes="$(plutil -extract UIBackgroundModes json -o - -- "$plist" 2>/dev/null || true)"
 status=0
-for mode in remote-notification audio voip; do
+for mode in remote-notification audio; do
     case "$modes" in
         *"\"$mode\""*) ;;
         *)
@@ -113,6 +113,14 @@ for mode in remote-notification audio voip; do
             ;;
     esac
 done
+# `voip` is the mode a CallKit call is placed under. Topo places none, and a VoIP app is the kind
+# App Review takes it for, so a product declaring it is refused.
+case "$modes" in
+    *'"voip"'*)
+        echo "$app/Info.plist declares the 'voip' background mode, and Topo places no call (UIBackgroundModes: $modes)" >&2
+        status=1
+        ;;
+esac
 
 for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"

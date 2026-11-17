@@ -133,7 +133,7 @@ final class GatedEngine: SpeechEngine, @unchecked Sendable {
     }
     var held: Int { lock.withLock { waiting.count } }
 
-    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+    func load(acoustic: URL, model: EarModel, onProgress: @escaping @Sendable (String) -> Void) async throws {}
     func rebuild(terms: [String], version: Int) async throws {}
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -147,21 +147,64 @@ final class GatedEngine: SpeechEngine, @unchecked Sendable {
     }
 }
 
-/// An open microphone behind the lock is a call (`Conversation`): which sessions are carried, an
-/// utterance the detector ends sent once, the microphone suspended across the call's session
-/// changing hands, and every way the conversation ends telling the resident's lifecycle once.
-/// A real `VoiceInput` and `Speaker` on the audio seams, a scripted detector, a manual idle clock.
+/// A sleep the test fires: each call waits until `fire()`, or throws when its task is cancelled.
+final class ManualSleep: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [(id: UUID, duration: Duration, continuation: CheckedContinuation<Void, Error>)] = []
+    /// Sleeps cancelled before their continuation was in `pending`.
+    private var cancelled: Set<UUID> = []
+    private(set) var asked: [Duration] = []
+
+    var waiting: Int { lock.withLock { pending.count } }
+
+    @Sendable
+    func sleep(_ duration: Duration) async throws {
+        // A task cancelled before it ran asks for nothing.
+        try Task.checkCancellation()
+        let id = UUID()
+        lock.withLock { asked.append(duration) }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let early = lock.withLock {
+                    if cancelled.remove(id) != nil { return true }
+                    pending.append((id, duration, continuation))
+                    return false
+                }
+                if early { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let waiting = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+                guard let index = pending.firstIndex(where: { $0.id == id }) else {
+                    cancelled.insert(id)
+                    return nil
+                }
+                return pending.remove(at: index).continuation
+            }
+            waiting?.resume(throwing: CancellationError())
+        }
+    }
+
+    /// Ends the oldest sleep still waiting.
+    func fire() {
+        let next = lock.withLock { pending.isEmpty ? nil : pending.removeFirst() }
+        next?.continuation.resume()
+    }
+}
+
+/// An open microphone carried behind the lock is a conversation (`Conversation`): which sessions
+/// are carried, an utterance the detector ends sent once, the input kept running through the
+/// readings, the microphone suspended at an interruption's start and resumed at its end, and
+/// every way the conversation ends telling the resident's lifecycle once. A real `VoiceInput` and
+/// `Speaker` on the audio seams, a scripted detector, a manual idle clock.
 @MainActor
 final class ConversationTests: XCTestCase {
     private var active = false
-    private var enabled = true
     private var holding = false
     private var sent: [String] = []
     /// The tones played by the time of each send.
     private var tonesAtSend: [[KeeperSounds.Tone]] = []
     /// Whether the chat's send takes the turn's wait, as `ChatView.sendSpoken` does.
     private var waitOnSend = false
-    private var told: [Bool] = []
     private var ends = 0
     private var idle = ManualSleep()
     private var center = NotificationCenter()
@@ -193,17 +236,18 @@ final class ConversationTests: XCTestCase {
 
     private func drain() async { try? await Task.sleep(for: .milliseconds(300)) }
 
-    /// The app's wiring over the seams: the speaker tells the conversation the call's moments,
-    /// the microphone asks it at an interruption, and the chat's send is installed.
+    /// The app's wiring over the seams: the microphone asks the conversation at an interruption,
+    /// and the chat's send is installed. `isActive` is the session's own read of the app's state,
+    /// which decides whether a microphone closing away from the front hands the session back.
     private func make(detector: ScriptedDetector = ScriptedDetector(), endpoint: Endpoint? = nil, judge: ScriptedJudge? = nil,
                       sends: Bool = true, deafAfter: TimeInterval = 3_600,
-                      sounding: Bool = false,
+                      sounding: Bool = false, isActive: Bool = true,
                       feedSleep: (@Sendable (Duration) async throws -> Void)? = nil) async -> (Conversation, VoiceInput, Speaker) {
         let seams = Seams()
         self.seams = seams
         let permission = permission
-        let audio = AudioSession(center: center, configure: seams.configure, setCategory: seams.setCategory,
-                                 deactivate: seams.deactivate, isActive: { true })
+        let audio = AudioSession(center: center, configure: seams.configure,
+                                 deactivate: seams.deactivate, isActive: { isActive })
         self.audio = audio
         let spoken = HeldVoice()
         self.spoken = spoken
@@ -227,11 +271,11 @@ final class ConversationTests: XCTestCase {
         }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
                               makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
-                              sounds: sounds, earcons: earcons)
+                              heard: .dataRendered, sounds: sounds, earcons: earcons)
         let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
                       engine: gate)
         let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
+        ear.load(acoustic: nowhere)
         await settle("the ear to load") { ear.ready }
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
@@ -240,15 +284,11 @@ final class ConversationTests: XCTestCase {
                                voiceProcessing: { try seams.process($0, $1) })
         MicrophoneWatch.wire(input, speaker)
         let conversation = Conversation(voice: input, speaker: speaker, endpoint: endpoint ?? Endpoint(detector: detector, judge: judge),
-                                        enabled: { [unowned self] in enabled },
                                         appActive: { [unowned self] in active },
                                         holding: { [unowned self] in holding },
                                         otherCall: { [unowned self] in other },
                                         deafAfter: deafAfter, wait: { 1.2 },
                                         center: center, sleep: idle.sleep)
-        // As the app has it: the microphone hears the call's moment before the conversation.
-        speaker.onCall = { input.call($0); conversation.call($0) }
-        conversation.conversingChanged = { [unowned self] in told.append($0) }
         conversation.ended = { [unowned self] in ends += 1 }
         conversation.send = { [unowned self] in
             sent.append($0)
@@ -287,18 +327,38 @@ final class ConversationTests: XCTestCase {
         sink.append(buffer)
     }
 
-    /// The call's placing and activation, as the speaker tells them, with the session's phase
-    /// moved as `Speaker.attach` moves it.
-    private func placeAndActivate(_ conversation: Conversation) {
-        audio.callPlaced()
-        conversation.call(.placing)
-        audio.callActivated()
-        conversation.call(.active)
-    }
-
+    /// An interruption's start, as the lock screen, a phone call or Siri posts it.
     private func beganInterruption() {
         center.post(name: AVAudioSession.interruptionNotification, object: nil,
                     userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+    }
+
+    /// The interruption's end: iOS gives the session back.
+    private func endedInterruption() {
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
+    }
+
+    /// The interruption's end behind the lock: the session may be configured while its handlers
+    /// run — `Conversation`'s on the post, `Speaker`'s on the main actor's next turn, which a task
+    /// queued after it waits out — and is refused again from there.
+    private func endedAway() async {
+        seams.resume(true)
+        endedInterruption()
+        await Task { @MainActor in }.value
+        seams.resume(false)
+        await drain()
+    }
+
+    /// The audio thread handing the installed tap a tenth of a second of tone, in the format the
+    /// tap was installed with: what reaches the sink is what the gate lets through.
+    private func feedTheTap() {
+        guard let tap = CapturingInputNode.tap, let format = CapturingInputNode.installed,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(format.sampleRate / 10)),
+              let channel = buffer.floatChannelData else { return XCTFail("no tap to feed") }
+        buffer.frameLength = buffer.frameCapacity
+        for frame in 0..<Int(buffer.frameLength) { channel[0][frame] = 0.2 * Float(sin(Double(frame) * 0.07)) }
+        tap(buffer, AVAudioTime(sampleTime: 0, atRate: format.sampleRate))
     }
 
     private func leave() {
@@ -317,9 +377,6 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(conversation.carries(), "a session in front was carried")
         active = false
         XCTAssertTrue(conversation.carries())
-        enabled = false
-        XCTAssertFalse(conversation.carries(), "a session was carried with the call setting off")
-        enabled = true
         let send = conversation.send
         conversation.send = nil
         XCTAssertFalse(conversation.carries(), "a session was carried with no chat to send through")
@@ -351,7 +408,6 @@ final class ConversationTests: XCTestCase {
         await tap(voice)
         leave()
         XCTAssertFalse(conversation.on, "dictation into the draft began a conversation")
-        XCTAssertEqual(told, [])
         conversation.scene(.background)
         XCTAssertFalse(voice.listening, "dictation was left open behind the lock")
     }
@@ -367,28 +423,28 @@ final class ConversationTests: XCTestCase {
 
     // MARK: - The conversation
 
-    func testLeavingBeginsItTellsTheCallAndStopsTheGlances() async {
-        let (conversation, voice, _) = await make()
+    func testLeavingBeginsItOnceAndStopsTheGlances() async {
+        let detector = ScriptedDetector()
+        let (conversation, voice, speaker) = await make(detector: detector)
         defer { conversation.stop("test", sending: false) }
         await tap(voice)
         leave()
         XCTAssertTrue(conversation.on)
-        XCTAssertEqual(told, [true])
+        XCTAssertTrue(speaker.conversing)
         XCTAssertFalse(voice.glancing, "the captions glance on behind the lock")
+        await settle("the stream begun") { detector.resets == 1 }
         XCTAssertTrue(conversation.beginIfCarried(), "the lifecycle's ask after the app's did not answer on")
-        XCTAssertEqual(told, [true], "a second ask began a second conversation")
+        await drain()
+        XCTAssertEqual(detector.resets, 1, "a second ask began a second conversation")
     }
 
-    func testAnUtteranceTheDetectorEndsIsSentOnceAndTheMicrophoneOpensAgainOnTheCall() async {
+    func testAnUtteranceTheDetectorEndsIsSentOnceAndTheMicrophoneOpensAgainBehindTheLock() async {
         let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
         let (conversation, voice, _) = await make(detector: detector)
         defer { conversation.stop("test", sending: false) }
         await tap(voice)
         leave()
-        conversation.call(.placing)
-        XCTAssertTrue(voice.suspended, "the placing did not suspend the microphone")
-        conversation.call(.active)
-        XCTAssertTrue(voice.listening && !voice.suspended, "the activation did not resume the microphone")
+        XCTAssertTrue(voice.listening && !voice.suspended, "the lock suspended a microphone it carries")
         utterance(into: voice.sink)
         await settle("the turn sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
@@ -412,26 +468,9 @@ final class ConversationTests: XCTestCase {
         XCTAssertTrue(voice.listening)
     }
 
-    func testTheMicrophoneOpensOnlyOnTheCallsSession() async {
-        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
-        let (conversation, voice, _) = await make(detector: detector)
-        defer { conversation.stop("test", sending: false) }
-        await tap(voice)
-        leave()
-        utterance(into: voice.sink)
-        await settle("the turn sent") { self.sent.count == 1 }
-        await drain()
-        XCTAssertFalse(voice.listening, "the microphone was opened behind the lock with no call")
-        conversation.call(.placing)
-        conversation.call(.active)
-        await settle("the microphone open on the call") { voice.listening }
-        conversation.call(.taken)
-        XCTAssertTrue(voice.suspended, "a phone call taking the session left the microphone on it")
-    }
-
-    /// Either order of the lock's two moments: the interruption's start suspends first, and the
-    /// call's activation resumes what it kept.
-    func testTheInterruptionsStartBeforeTheBackgroundIsCarriedAndResumedAtTheActivation() async {
+    /// Either order of the lock's two moments: the interruption's start suspends first, the
+    /// background carries what it kept, and the interruption's end resumes it.
+    func testTheInterruptionsStartBeforeTheBackgroundIsCarriedAndResumedAtItsEnd() async {
         let (conversation, voice, _) = await make()
         defer { conversation.stop("test", sending: false) }
         await tap(voice)
@@ -442,10 +481,10 @@ final class ConversationTests: XCTestCase {
         XCTAssertTrue(voice.listening, "the interruption dropped a carried session")
         leave()
         XCTAssertTrue(conversation.on)
-        conversation.call(.placing)
-        XCTAssertTrue(voice.suspended)
-        conversation.call(.active)
-        XCTAssertTrue(voice.listening && !voice.suspended, "the activation did not resume the kept session")
+        await drain()
+        XCTAssertTrue(voice.suspended, "the microphone resumed with the interruption standing")
+        endedInterruption()
+        await settle("resumed at the interruption's end") { voice.listening && !voice.suspended }
     }
 
     func testASessionSuspendedInFrontWithNoConversationIsDroppedWhenTheAppIsActive() async {
@@ -461,9 +500,10 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(conversation.on)
     }
 
-    /// The feeder the lock's conversation began is replaced at the call's activation before it
-    /// has run: it asks the detector nothing, so no reset of its lands among the live feeder's
-    /// feeds to begin the stream again mid-utterance and lose the utterance's end.
+    /// The feeder the lock's conversation began is replaced before it has run, by the resume at an
+    /// interruption's end in the same turn: it asks the detector nothing, so no reset of its lands
+    /// among the live feeder's feeds to begin the stream again mid-utterance and lose the
+    /// utterance's end.
     func testAFeederReplacedBeforeItRanResetsNothing() async {
         let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
         detector.deferStaleResets()
@@ -471,12 +511,12 @@ final class ConversationTests: XCTestCase {
         let (conversation, voice, _) = await make(detector: detector)
         defer { conversation.stop("test", sending: false); detector.landStaleResets(); detector.release() }
         await tap(voice)
-        // The leave begins the conversation and its feeder; the placing and the activation, in
-        // the same turn, replace it before it has run.
+        // The leave begins the conversation and its feeder; the suspension and the interruption's
+        // end, in the same turn, replace it before it has run.
         leave()
-        conversation.call(.placing)
-        conversation.call(.active)
-        XCTAssertTrue(voice.listening && !voice.suspended, "the activation did not resume the microphone")
+        voice.suspend("the lock")
+        endedInterruption()
+        XCTAssertTrue(voice.listening && !voice.suspended, "the interruption's end did not resume the microphone")
         utterance(into: voice.sink)
         await settle("the live feeder's second chunk with the detector") { detector.holding }
         // A stale reset asked for lands now, after the live feeder's first chunk: as late as an
@@ -490,15 +530,80 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(detector.staleResets, 0, "a feeder replaced before it ran reset the detector")
     }
 
+    // MARK: - The input kept through the readings
+
+    /// One input engine for the conversation behind the lock: an utterance's end keeps it running
+    /// with its gate shut, and the next utterance opens on it, with no engine made and nothing done
+    /// to the session between the two.
+    func testUtterancesBehindTheLockRunOnOneInputEngine() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, _) = await begun(detector, isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        let engines = seams.inputEngines
+        seams.forget()
+        for turn in 1...2 {
+            gate.close()
+            utterance(into: voice.sink)
+            await settle("utterance \(turn)'s decode under way") { self.gate.held == 1 }
+            XCTAssertTrue(voice.inputKept, "utterance \(turn)'s end stopped the input")
+            XCTAssertTrue(voice.inputRunning)
+            gate.open()
+            await settle("turn \(turn) sent") { self.sent.count == turn }
+            await settle("open again on the kept input") { voice.listening && !voice.inputKept }
+        }
+        XCTAssertEqual(sent, ["turn the lights off", "turn the lights off"])
+        XCTAssertEqual(seams.inputEngines, engines, "an engine was made between utterances")
+        // The reply's play engine is the speaker's; the session itself is touched by nothing.
+        XCTAssertEqual(seams.lines.filter { $0 != "engine made" }, [], "the session was touched between utterances")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back between utterances")
+    }
+
+    /// An utterance's end keeps the input with its gate shut: nothing the input hears from there
+    /// reaches the sink.
+    func testAnUtterancesEndKeepsTheInputWithItsGateShutAndNothingReachesTheSink() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, _) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the decode under way") { self.gate.held == 1 }
+        XCTAssertTrue(voice.inputKept)
+        var passes = false
+        voice.gate.pass { passes = true }
+        XCTAssertFalse(passes, "the kept input's gate was open")
+        for _ in 0..<10 { feedTheTap() }
+        XCTAssertTrue(voice.sink.peek().isEmpty, "what the kept input heard reached the sink")
+        gate.open()
+        await settle("sent") { self.sent.count == 1 }
+    }
+
+    /// The conversation ending away from the front stops the input it kept through a reading,
+    /// and the session is handed back once, when the reading's hold goes and nothing else holds it.
+    func testTheConversationEndingAwayStopsTheKeptInputAndHandsTheSessionBackOnce() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening && voice.inputKept }
+        conversation.stop("test", sending: false)
+        XCTAssertFalse(voice.inputKept)
+        XCTAssertFalse(voice.inputRunning)
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back under the reading")
+        speaker.stop()
+        await settle("handed back") { !self.seams.deactivations.isEmpty }
+        await drain()
+        XCTAssertEqual(seams.deactivations, [true], "the session was handed back other than once")
+        assertEndedOnce(conversation)
+    }
+
     // MARK: - The end, every way
 
+    /// A tapped session carried behind the lock, on the session it was opened on in front.
     private func begun(_ detector: ScriptedDetector = ScriptedDetector(), judge: ScriptedJudge? = nil,
-                       deafAfter: TimeInterval = 3_600, sounding: Bool = false,
+                       deafAfter: TimeInterval = 3_600, sounding: Bool = false, isActive: Bool = true,
                        feedSleep: (@Sendable (Duration) async throws -> Void)? = nil) async -> (Conversation, VoiceInput, Speaker) {
-        let made = await make(detector: detector, judge: judge, deafAfter: deafAfter, sounding: sounding, feedSleep: feedSleep)
+        let made = await make(detector: detector, judge: judge, deafAfter: deafAfter, sounding: sounding,
+                              isActive: isActive, feedSleep: feedSleep)
         await tap(made.1)
         leave()
-        placeAndActivate(made.0)
         XCTAssertTrue(made.0.on)
         return made
     }
@@ -506,30 +611,14 @@ final class ConversationTests: XCTestCase {
     private func assertEndedOnce(_ conversation: Conversation, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertFalse(conversation.on, file: file, line: line)
         XCTAssertEqual(ends, 1, "the lifecycle was told \(ends) times", file: file, line: line)
-        XCTAssertEqual(told.last, false, "the call was not let go", file: file, line: line)
     }
 
-    func testAHangUpEndsItOnceAndDropsWhatIsOpen() async {
-        let (conversation, voice, _) = await begun()
-        conversation.call(.hungUp)
-        assertEndedOnce(conversation)
-        XCTAssertFalse(voice.listening)
-        conversation.call(.over)
-        XCTAssertEqual(ends, 1, "the call's end after a hang-up told the lifecycle again")
-    }
-
-    func testTheCallBeingOverEndsIt() async {
-        let (conversation, _, _) = await begun()
-        conversation.call(.over)
-        assertEndedOnce(conversation)
-    }
-
-    func testComingToTheFrontEndsItAndAHangUpRacingItEndsNothingMore() async {
+    func testComingToTheFrontEndsItOnce() async {
         let (conversation, voice, _) = await begun()
         active = true
         center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
         assertEndedOnce(conversation)
-        conversation.call(.hungUp)
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
         XCTAssertEqual(ends, 1)
         await drain()
         XCTAssertFalse(voice.listening, "what was open with nothing said in it outlived the end")
@@ -578,85 +667,256 @@ final class ConversationTests: XCTestCase {
 
     // MARK: - The review's blockers
 
-    /// The call's session taken by another call while the conversation's reopen is on the
-    /// input's queue: no engine crosses the event. The open is cancelled, and the microphone
-    /// opens again at the call's next activation.
-    func testTheCallsSessionTakenWhileTheReopenOpensLeavesNoEngineOnIt() async {
-        let (conversation, voice, speaker) = await begun()
+    /// An interruption's start while the conversation's reopen is on the input's queue: no engine
+    /// crosses the event. What the open starts is dropped and the session suspended as it
+    /// answers, nothing listens while the interruption stands, and the interruption's end rebuilds
+    /// the microphone; the conversation is not ended.
+    func testAnInterruptionsStartWhileTheReopenOpensLeavesNoEngineAndItsEndRebuilds() async {
+        let (conversation, voice, _) = await begun()
         defer { conversation.stop("test", sending: false) }
         openLatch.arm()
         voice.cancel(.chat)
         // Counted from here: engines a test before this one left are not this test's.
         let base = EngineWatch.running
-        let started = EngineWatch.starts
-        await settle("the reopen's open held on the queue") { self.openLatch.waiting && voice.opening }
-        let latch = openLatch
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { latch.open() }
-        audio.callDeactivated()
-        speaker.onCall?(.taken)
-        XCTAssertEqual(EngineWatch.starts, started + 1, "the taking returned before the open it tore down had run")
-        XCTAssertEqual(EngineWatch.running, base, "the taking returned with the open's engine running")
-        await settle("the reopen answered") { !voice.opening }
-        await drain()
-        XCTAssertFalse(voice.listening && !voice.suspended, "a microphone listened on the session another call took")
-        XCTAssertEqual(EngineWatch.running, base)
-        XCTAssertTrue(conversation.on, "the taking ended the conversation")
-        audio.callActivated()
-        speaker.onCall?(.active)
-        await settle("opened again at the activation") { voice.listening && !voice.suspended }
-        XCTAssertEqual(EngineWatch.running, base + 1)
-    }
-
-    /// The lock's `.began` under the active call while the conversation's reopen is on the
-    /// input's queue: what the open starts is dropped, the session is suspended as it answers,
-    /// and the conversation rebuilds it on the call's live session as for a `.began` over an
-    /// open microphone; it is not ended.
-    func testAnInterruptionsStartWhileTheReopenOpensRebuildsTheMicrophone() async {
-        let (conversation, voice, _) = await begun()
-        defer { conversation.stop("test", sending: false) }
-        openLatch.arm()
-        voice.cancel(.chat)
         await settle("the reopen's open held on the queue") { self.openLatch.waiting && voice.opening }
         let engines = seams.inputEngines
         beganInterruption()
         let latch = openLatch
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { latch.open() }
-        await settle("rebuilt on the call's session") { voice.listening && !voice.suspended && !voice.opening && self.seams.inputEngines > engines }
+        await settle("the reopen answered") { !voice.opening }
+        await drain()
+        XCTAssertFalse(voice.listening && !voice.suspended, "a microphone listened with the interruption standing")
+        XCTAssertEqual(EngineWatch.running, base, "the open's engine ran on across the interruption")
         XCTAssertTrue(conversation.on, "an interruption while the reopen opened ended the conversation")
+        endedInterruption()
+        await settle("rebuilt at the interruption's end") { voice.listening && !voice.suspended && self.seams.inputEngines > engines }
+        XCTAssertEqual(EngineWatch.running, base + 1)
         XCTAssertEqual(ends, 0)
     }
 
-    /// The lock's `.began` under the active call: the session is suspended, never carried across
-    /// it on its engine, and rebuilt at once on the call's live session.
-    func testAnInterruptionsStartUnderTheActiveCallRebuildsTheMicrophone() async {
-        let (conversation, voice, _) = await begun()
+    /// An interruption's start over the carried conversation suspends it, never carrying the
+    /// session across it on its engine, and hands nothing back: the session is the
+    /// interruption's. Its end rebuilds the microphone on the same session of the conversation's.
+    func testAnInterruptionSuspendsTheCarriedConversationAndItsEndResumesIt() async {
+        let (conversation, voice, _) = await begun(isActive: false)
         defer { conversation.stop("test", sending: false) }
         XCTAssertTrue(voice.listening && !voice.suspended)
         let starts = voice.sessions
         let engines = seams.inputEngines
         beganInterruption()
+        await settle("suspended at the interruption's start") { voice.suspended }
+        await drain()
+        XCTAssertTrue(voice.suspended, "the microphone was rebuilt with the interruption standing")
+        XCTAssertEqual(seams.inputEngines, engines, "an engine was made under the interruption")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back under the interruption")
+        XCTAssertTrue(conversation.on)
+        endedInterruption()
         await settle("the engine replaced") { self.seams.inputEngines == engines + 1 }
         await settle("resumed on it") { voice.listening && !voice.suspended }
         XCTAssertTrue(conversation.on)
         XCTAssertEqual(voice.sessions, starts, "a rebuild counted as a new session")
+        XCTAssertEqual(seams.deactivations, [])
     }
 
-    /// A reply that landed while a phone call held the session is read once the call is back
-    /// and nothing has been said: it is judged at the resume, not left waiting for an
+    /// The input kept running through a reading stops at an interruption's start, and nothing is
+    /// handed back for it; the interruption's end leaves the reading to finish before the
+    /// microphone opens again.
+    func testAnInterruptionsStartStopsTheInputKeptThroughAReadingAndHandsNothingBack() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening && voice.inputKept }
+        XCTAssertTrue(voice.inputRunning)
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        XCTAssertFalse(voice.inputRunning)
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back under the interruption")
+        XCTAssertTrue(conversation.on)
+        endedInterruption()
+        speaker.stop()
+        await settle("open again once the reading is over") { voice.listening && !voice.suspended }
+    }
+
+    /// An interruption that comes and goes while the carried conversation waits for its reply, on
+    /// a session that refuses what iOS refuses behind the lock: the microphone open again for the
+    /// next utterance is suspended at its start, the conversation keeps the record configuration
+    /// through the wait, the interruption's end resumes it as that and the microphone opens on it,
+    /// and once the reply is read it opens again, with nothing handed back or activated from the
+    /// background.
+    func testAnInterruptionDuringTheWaitBehindTheLockLeavesTheConversationListening() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector, isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        seams.away = true
+        waitOnSend = true
+        utterance(into: voice.sink)
+        await settle("sent") { self.sent.count == 1 }
+        await settle("open again for the next utterance") { voice.listening && !voice.inputKept }
+        XCTAssertEqual(speaker.awaiting, ["spoken-1"], "the turn's wait does not stand")
+        seams.forget()
+        beganInterruption()
+        await settle("suspended at the interruption's start") { voice.suspended }
+        await endedAway()
+        await settle("resumed at its end") { voice.listening && !voice.suspended }
+        XCTAssertTrue(speaker.speak("The lights are off.", answering: "spoken-1"))
+        await drain()
+        speaker.stop()
+        await settle("open again once the reply is over") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
+        XCTAssertEqual(seams.records, [true], "the interruption's end resumed the session other than for the microphone")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
+    }
+
+    /// An interruption that comes and goes while a reply is read to the carried conversation: the
+    /// input kept under the reading, stopped at the interruption's start, runs again with its gate
+    /// shut at its end, the rest of the reading is played, and its end opens the gate on that input
+    /// with nothing started, activated or handed back from the background.
+    func testAnInterruptionDuringAReadingBehindTheLockLeavesTheConversationListening() async throws {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        seams.away = true
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening && voice.inputKept }
+        seams.forget()
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        await endedAway()
+        XCTAssertTrue(voice.inputKept && voice.inputRunning, "the kept input was not started again at the interruption's end")
+        XCTAssertFalse(voice.listening, "the microphone opened under the reading")
+        let engines = seams.inputEngines, starts = EngineWatch.starts
+        spoken.releaseTheHeldFrame()
+        let rendered = try await renderOffline({ self.seams.playEngine }, "the reading heard out") { !speaker.speaking }
+        XCTAssertTrue(spoken.yieldedTheHeldFrame)
+        // The held frame is 1,920 samples of tone: at least that much sound was rendered after
+        // the interruption, so the reading was heard out rather than stopped.
+        XCTAssertGreaterThanOrEqual(rendered.sounding, 1_800, "the rest of the reading was not rendered after the interruption")
+        await settle("open again once the reading is over") { voice.listening && !voice.suspended }
+        XCTAssertEqual(seams.inputEngines, engines, "an input engine was made once the reading was over")
+        XCTAssertEqual(EngineWatch.starts, starts, "an input was started from the background once the reading was over")
+        XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
+        XCTAssertTrue(seams.records.allSatisfy { $0 }, "the interruption's end resumed the session other than for the microphone")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
+    }
+
+    /// The input restored at an interruption's end holds no record claim of its own: the
+    /// conversation ended before the reading finishes leaves no claim standing, so the next
+    /// playback is not configured for a microphone nobody has.
+    func testTheInputRestoredAtAnInterruptionsEndLeavesNoClaimWhenTheConversationEnds() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        seams.away = true
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening && voice.inputKept }
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        await endedAway()
+        XCTAssertTrue(voice.inputKept, "the kept input was not started again at the interruption's end")
+        conversation.stop("test", sending: false)
+        speaker.stop()
+        await drain()
+        XCTAssertFalse(voice.inputKept)
+        XCTAssertEqual(audio.recordClaims, [], "a record claim outlived the conversation")
+    }
+
+    /// A restore the session refuses leaves no claim either, and ends the conversation.
+    func testARefusedRestoreLeavesNoClaim() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        seams.away = true
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening && voice.inputKept }
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        seams.activationError = Seams.Refused()
+        await endedAway()
+        XCTAssertFalse(conversation.on, "a restore that did not start left the conversation on")
+        XCTAssertFalse(voice.inputKept)
+        speaker.stop()
+        await drain()
+        XCTAssertEqual(audio.recordClaims, [], "the refused restore's record claim stood")
+    }
+
+    /// An interruption that comes and goes while an utterance is being decoded behind the lock:
+    /// the input kept for the decode stops at its start, and once the words are sent the
+    /// microphone opens again on the session the interruption's end resumed, with nothing
+    /// activated or configured from the background. The engine that start makes is the one input
+    /// started away from that end, on the session already active, beside the deaf rebuild's.
+    func testAnInterruptionDuringADecodeBehindTheLockActivatesNothingAfterItsEnd() async {
+        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
+        let (conversation, voice, _) = await begun(detector, isActive: false)
+        defer { conversation.stop("test", sending: false) }
+        seams.away = true
+        gate.close()
+        utterance(into: voice.sink)
+        await settle("the decode under way") { self.gate.held == 1 }
+        XCTAssertTrue(voice.inputKept, "the decode's input was not kept")
+        seams.forget()
+        beganInterruption()
+        await settle("the kept input stopped") { !voice.inputKept }
+        await endedAway()
+        gate.open()
+        await settle("sent") { self.sent.count == 1 }
+        await settle("open again for the next utterance") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on, "the conversation ended across the interruption")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "the session was activated from the background: \(seams.lines)")
+        XCTAssertTrue(seams.records.allSatisfy { $0 }, "the session was configured other than for the microphone")
+        XCTAssertEqual(seams.deactivations, [], "the session was handed back while the conversation lived")
+    }
+
+    /// A conversation begun behind the lock with its microphone already suspended by the lock's
+    /// own interruption: its keeping the session configures nothing from the background.
+    func testAConversationBegunUnderTheLocksInterruptionConfiguresNothing() async {
+        let (conversation, voice, _) = await make(isActive: false)
+        await tap(voice)
+        active = false
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
+        seams.away = true
+        seams.forget()
+        leave()
+        XCTAssertTrue(conversation.on, "no conversation was carried")
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        XCTAssertEqual(seams.records, [], "the session was configured from the background: \(seams.lines)")
+        XCTAssertFalse(seams.lines.contains("activate refused away"), "\(seams.lines)")
+    }
+
+    /// An interruption's start whose end never comes, then the app in front again: the next
+    /// conversation carried behind the lock is not held by it, and once its reply has been read
+    /// the microphone opens again.
+    func testAnInterruptionsStartWithNoEndDoesNotHoldTheNextConversation() async {
+        let (conversation, voice, speaker) = await begun(isActive: false)
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
+        active = true
+        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        await settle("the conversation over in front") { !conversation.on }
+        await drain()
+        await tap(voice)
+        leave()
+        XCTAssertTrue(conversation.on, "no conversation was carried the second time")
+        defer { conversation.stop("test", sending: false) }
+        XCTAssertTrue(speaker.speak("The lights are off."))
+        await settle("the gate shut for the reading") { !voice.listening }
+        speaker.stop()
+        await settle("open again once the reading is over") { voice.listening && !voice.suspended }
+    }
+
+    /// A reply that landed while a phone call held the session is read once the interruption is
+    /// over and nothing has been said: it is judged at the resume, not left waiting for an
     /// utterance.
     func testAReplyThatWaitedThroughAPhoneCallIsReadAtTheResume() async {
         let (conversation, voice, speaker) = await begun()
         defer { conversation.stop("test", sending: false) }
-        audio.callDeactivated()
-        conversation.call(.taken)
-        XCTAssertTrue(voice.suspended)
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
         CapturingPlayerNode.scheduled = []
         CapturingPlayerNode.peaks = []
         XCTAssertTrue(speaker.speak("The lights are off."), "the reply was refused rather than kept")
         XCTAssertTrue(speaker.waitingForMicrophone, "a reply was read into a suspended microphone")
         XCTAssertEqual(CapturingPlayerNode.scheduled, [], "a reply was played into a suspended microphone")
-        audio.callActivated()
-        conversation.call(.active)
+        endedInterruption()
         await settle("the microphone closed for the reply") { !voice.listening }
         await assertReadOnce(speaker)
     }
@@ -682,14 +942,13 @@ final class ConversationTests: XCTestCase {
         let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
         let (conversation, voice, speaker) = await begun(detector)
         defer { conversation.stop("test", sending: false) }
-        audio.callDeactivated()
-        conversation.call(.taken)
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
         CapturingPlayerNode.scheduled = []
         CapturingPlayerNode.peaks = []
         XCTAssertTrue(speaker.speak("The lights are off."))
         utterance(into: voice.sink)
-        audio.callActivated()
-        conversation.call(.active)
+        endedInterruption()
         await settle("the words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"], "words heard before the reply were dropped for it")
         await assertReadOnce(speaker)
@@ -721,21 +980,20 @@ final class ConversationTests: XCTestCase {
         let detector = ScriptedDetector()
         let (conversation, voice, speaker) = await begun(detector)
         defer { conversation.stop("test", sending: false) }
-        audio.callDeactivated()
-        conversation.call(.taken)
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
         CapturingPlayerNode.scheduled = []
         CapturingPlayerNode.peaks = []
         XCTAssertTrue(speaker.speak("The lights are off."))
         utterance(into: voice.sink)
-        audio.callActivated()
-        conversation.call(.active)
+        endedInterruption()
         await settle("the silence judged") { detector.chunks >= 5 }
         await settle("the microphone closed for the reply") { !voice.listening }
         await assertReadOnce(speaker)
         XCTAssertEqual(sent, [])
     }
 
-    /// The engine stops under the call with nothing to say so (a route change): no samples for
+    /// The engine stops behind the lock with nothing to say so (a route change): no samples for
     /// the deaf window rebuilds it once, and deaf again ends the conversation with what was kept.
     func testADeafMicrophoneIsRebuiltOnceThenEndsTheConversationWithItsWords() async {
         let detector = ScriptedDetector([0: .start(0)])
@@ -750,49 +1008,15 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(voice.listening)
     }
 
-    func testAMuteClosesTheMicrophoneAndAReopenWaitingOnItOpensNothing() async {
-        let (conversation, voice, _) = await begun()
-        defer { conversation.stop("test", sending: false) }
-        conversation.call(.muted(true))
-        XCTAssertFalse(voice.listening)
-        // The unmute's reopen held at its permission, and the mute landing while it waits.
-        permission.arm()
-        conversation.call(.muted(false))
-        await settle("the reopen waiting on its permission") { self.permission.waiting }
-        let engines = seams.inputEngines
-        conversation.call(.muted(true))
-        permission.release()
-        await drain()
-        XCTAssertFalse(voice.listening, "the microphone opened under the mute")
-        XCTAssertEqual(seams.inputEngines, engines, "a reopen under the mute made an engine")
-        conversation.call(.muted(false))
-        await settle("open at the unmute") { voice.listening }
-    }
-
     // MARK: - The second round's blockers
 
-    /// A hang-up while the foreground's handoff is decoding: the person ended it, and nothing is
-    /// sent after the call's waits are gone.
-    func testAHangUpDuringTheForegroundsHandoffSendsNothing() async {
-        let detector = ScriptedDetector([0: .start(0)])
-        let (conversation, voice, _) = await begun(detector)
-        utterance(into: voice.sink)
-        await settle("the start judged") { detector.chunks >= 2 }
-        gate.close()
-        active = true
-        center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
-        await settle("the handoff decoding") { self.gate.held == 1 }
-        conversation.call(.hungUp)
-        gate.open()
-        await drain()
-        XCTAssertEqual(sent, [], "a handoff decoded across a hang-up was sent")
-        XCTAssertEqual(ends, 1)
-    }
-
-    /// The same handoff with nothing ending it is sent once: the drop is the hang-up's alone.
+    /// The foreground's handoff with nothing ending it is sent once: the drop is the chat going's
+    /// alone (`testTheChatGoingDuringTheForegroundsHandoffSendsNothing`).
     func testTheForegroundsHandoffIsSentOnce() async {
         let detector = ScriptedDetector([0: .start(0)])
-        let (_, voice, _) = await begun(detector)
+        let (conversation, voice, _) = await begun(detector)
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         utterance(into: voice.sink)
         await settle("the start judged") { detector.chunks >= 2 }
         active = true
@@ -802,8 +1026,8 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(sent, ["turn the lights off"])
     }
 
-    /// The call's session taken and given back while a verdict is with the detector: the
-    /// verdict is kept, whichever it was, and the utterance ends and is sent.
+    /// The session taken by an interruption and given back while a verdict is with the detector:
+    /// the verdict is kept, whichever it was, and the utterance ends and is sent.
     private func assertAVerdictHeldAcrossAHandoffIsKept(holding chunk: Int, file: StaticString = #filePath,
                                                         line: UInt = #line) async {
         let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
@@ -812,23 +1036,21 @@ final class ConversationTests: XCTestCase {
         defer { conversation.stop("test", sending: false) }
         utterance(into: voice.sink)
         await settle("the verdict pending", file: file, line: line) { detector.holding }
-        audio.callDeactivated()
-        conversation.call(.taken)
-        XCTAssertTrue(voice.suspended, file: file, line: line)
-        audio.callActivated()
-        conversation.call(.active)
-        XCTAssertTrue(voice.listening && !voice.suspended, file: file, line: line)
+        beganInterruption()
+        await settle("suspended", file: file, line: line) { voice.suspended }
+        endedInterruption()
+        await settle("resumed", file: file, line: line) { voice.listening && !voice.suspended }
         detector.release()
         await settle("the words sent", file: file, line: line) { self.sent.count == 1 }
         await drain()
         XCTAssertEqual(sent, ["turn the lights off"], file: file, line: line)
     }
 
-    func testASpeechStartHeldAcrossTheCallsSessionChangingHandsIsKept() async {
+    func testASpeechStartHeldAcrossAnInterruptionIsKept() async {
         await assertAVerdictHeldAcrossAHandoffIsKept(holding: 0)
     }
 
-    func testASpeechEndHeldAcrossTheCallsSessionChangingHandsIsKept() async {
+    func testASpeechEndHeldAcrossAnInterruptionIsKept() async {
         await assertAVerdictHeldAcrossAHandoffIsKept(holding: 4)
     }
 
@@ -837,7 +1059,9 @@ final class ConversationTests: XCTestCase {
     func testComingToTheFrontMidVerdictSendsTheWords() async {
         let detector = ScriptedDetector([0: .start(0)])
         detector.hold(at: 0)
-        let (_, voice, _) = await begun(detector)
+        let (conversation, voice, _) = await begun(detector)
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         utterance(into: voice.sink)
         await settle("the verdict pending") { detector.holding }
         active = true
@@ -850,7 +1074,9 @@ final class ConversationTests: XCTestCase {
     /// Coming to the front with speech the detector has not been fed at all: sent, not dropped.
     func testComingToTheFrontBeforeTheDetectorIsFedSendsTheWords() async {
         let detector = ScriptedDetector([0: .start(0)])
-        let (_, voice, _) = await begun(detector)
+        let (conversation, voice, _) = await begun(detector)
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         await drain()
         utterance(into: voice.sink)
         active = true
@@ -863,7 +1089,9 @@ final class ConversationTests: XCTestCase {
     /// A word shorter than one of the detector's chunks, the unlock landing before more arrives:
     /// nothing has been fed, and it is sent rather than taken for silence.
     func testComingToTheFrontWithLessThanAChunkUnfedSendsTheWord() async {
-        let (_, voice, _) = await begun()
+        let (conversation, voice, _) = await begun()
+        // Held to the test's end: nothing else keeps the conversation, and its observers go with it.
+        defer { withExtendedLifetime(conversation) {} }
         await drain()
         utterance(into: voice.sink, seconds: 0.25)
         XCTAssertLessThan(voice.sink.peek(from: 0).end, Endpoint.chunk, "the test meant less than a chunk")
@@ -889,8 +1117,7 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(voice.listening)
     }
 
-    /// Every way the person ends it while the decode of a stop that sends is under way drops the
-    /// words: the hang-up and the mute from the card, and the chat going.
+    /// The chat going while the decode of a stop that sends is under way drops the words.
     private func assertTheForegroundsHandoffIsDropped(by end: (Conversation) -> Void,
                                                       file: StaticString = #filePath, line: UInt = #line) async {
         let detector = ScriptedDetector([0: .start(0)])
@@ -907,16 +1134,12 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(sent, [], "a handoff decoded across the person's end was sent", file: file, line: line)
     }
 
-    func testAMuteDuringTheForegroundsHandoffSendsNothing() async {
-        await assertTheForegroundsHandoffIsDropped { $0.call(.muted(true)) }
-    }
-
     func testTheChatGoingDuringTheForegroundsHandoffSendsNothing() async {
         await assertTheForegroundsHandoffIsDropped { $0.send = nil }
     }
 
-    /// The detector's own end being decoded as Topo comes to the front, then the person ends it:
-    /// the stop that sent left that decode to send, and the hang-up or mute after it drops it.
+    /// The detector's own end being decoded as Topo comes to the front, then the chat goes: the
+    /// stop that sent left that decode to send, and the chat going after it drops it.
     private func assertAnUtterancesDecodeAfterTheUnlockIsDropped(by end: (Conversation) -> Void,
                                                                file: StaticString = #filePath, line: UInt = #line) async {
         let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
@@ -933,16 +1156,12 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(sent, [], "an utterance decoded across the person's end was sent", file: file, line: line)
     }
 
-    func testAHangUpAfterTheUnlockDropsTheUtteranceBeingDecoded() async {
-        await assertAnUtterancesDecodeAfterTheUnlockIsDropped { $0.call(.hungUp) }
+    func testTheChatGoingAfterTheUnlockDropsTheUtteranceBeingDecoded() async {
+        await assertAnUtterancesDecodeAfterTheUnlockIsDropped { $0.send = nil }
     }
 
-    func testAMuteAfterTheUnlockDropsTheUtteranceBeingDecoded() async {
-        await assertAnUtterancesDecodeAfterTheUnlockIsDropped { $0.call(.muted(true)) }
-    }
-
-    /// A verdict still with the detector for a feeder the mute cancelled says nothing of the
-    /// feeders after it: a resume past the unmute's reopen feeds the detector again.
+    /// A verdict still with the detector for a feeder a close cancelled says nothing of the
+    /// feeders after it: a resume past the reopen feeds the detector again.
     func testACancelledFeedersVerdictDoesNotKeepTheNextResumeFromFeeding() async {
         let detector = ScriptedDetector([0: .start(0)])
         detector.hold(at: 0)
@@ -951,51 +1170,48 @@ final class ConversationTests: XCTestCase {
         utterance(into: voice.sink)
         await settle("the first feeder's verdict pending") { detector.holding }
         detector.holdNoMore()
-        conversation.call(.muted(true))
-        conversation.call(.muted(false))
-        await settle("open again at the unmute") { voice.listening && !voice.suspended }
+        voice.cancel(.chat)
+        await settle("open again at the reopen") { voice.listening && !voice.suspended }
         detector.script([0: .start(0), 4: .end(16_000)])
-        audio.callDeactivated()
-        conversation.call(.taken)
-        XCTAssertTrue(voice.suspended)
-        // Long past the unmute's feeder's 100 ms sleep, so it has seen the suspension and gone.
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
+        // Long past the reopen's feeder's 100 ms sleep, so it has seen the suspension and gone.
         try? await Task.sleep(for: .milliseconds(800))
-        audio.callActivated()
-        conversation.call(.active)
-        XCTAssertTrue(voice.listening && !voice.suspended)
+        endedInterruption()
+        await settle("resumed") { voice.listening && !voice.suspended }
         utterance(into: voice.sink)
         await settle("the words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
     }
 
-    /// A reopen whose permission answers after the call's session began changing hands refuses,
-    /// rather than waiting the change out behind the lock.
-    func testAReopenWhosePermissionLandsWhileTheSessionChangesHandsRefuses() async {
+    /// A reopen whose permission answers after an interruption took the session refuses rather
+    /// than opening on it, and the conversation stays on: the interruption's end opens it.
+    func testAReopenWhosePermissionLandsUnderAnInterruptionRefusesAndItsEndOpens() async {
         let (conversation, voice, _) = await begun()
-        voice.callSettle = .seconds(30)
+        defer { conversation.stop("test", sending: false) }
         permission.arm()
-        conversation.call(.muted(true))
-        conversation.call(.muted(false))
+        voice.cancel(.chat)
         await settle("the reopen waiting on its permission") { self.permission.waiting }
         let engines = seams.inputEngines
-        audio.callDeactivated()
+        beganInterruption()
         permission.release()
-        await settle("refused") { voice.refusal == "the call's session is changing hands" }
+        await settle("refused") { voice.refusal == "no live session" }
         await drain()
         XCTAssertFalse(voice.listening)
-        XCTAssertEqual(seams.inputEngines, engines, "the reopen opened on a session changing hands")
-        XCTAssertFalse(conversation.on, "a refused reopen left the conversation on")
+        XCTAssertEqual(seams.inputEngines, engines, "the reopen opened on a session an interruption has")
+        XCTAssertTrue(conversation.on, "a reopen refused for want of a live session ended the conversation")
+        endedInterruption()
+        await settle("open at the interruption's end") { voice.listening && !voice.suspended }
     }
 
     /// A phone call takes the session and never gives it back: the idle clock ends the
-    /// conversation with a wait standing, sending what was kept, so neither the call nor the
+    /// conversation with a wait standing, sending what was kept, so neither the session nor the
     /// resident is held for a dead microphone.
     func testAMicrophoneSuspendedPastTheIdleClockEndsTheConversationWhateverWaits() async {
         let (conversation, voice, _) = await begun()
         await settle("the idle clock running") { self.idle.waiting >= 1 }
-        audio.callDeactivated()
-        conversation.call(.taken)
-        XCTAssertTrue(voice.suspended)
+        beganInterruption()
+        await settle("suspended") { voice.suspended }
         holding = true
         idle.fire()
         await settle("ended") { !conversation.on }
@@ -1004,47 +1220,17 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(voice.listening, "the suspended session outlived the conversation")
     }
 
-    /// The session suspended under a live call by any path is resumed, not left deaf.
-    func testASessionSuspendedWithTheCallLiveIsResumed() async {
+    /// The session suspended by any path with no interruption standing is resumed, not left deaf.
+    func testASessionSuspendedWithNoInterruptionStandingIsResumed() async {
         let (conversation, voice, _) = await begun()
         defer { conversation.stop("test", sending: false) }
         voice.suspend("a test")
-        conversation.call(.active)
         await settle("resumed") { voice.listening && !voice.suspended }
     }
 
-    func testAHangUpMidDecodeSendsNothing() async {
-        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
-        let (conversation, voice, _) = await begun(detector)
-        gate.close()
-        utterance(into: voice.sink)
-        await settle("the decode under way") { self.gate.held == 1 }
-        conversation.call(.hungUp)
-        gate.open()
-        await drain()
-        XCTAssertEqual(sent, [], "a turn the person hung up on was sent")
-        XCTAssertEqual(ends, 1)
-    }
-
-    func testAMuteMidDecodeSendsNothingAndKeepsTheMicrophoneClosedUntilTheUnmute() async {
-        let detector = ScriptedDetector([0: .start(0), 4: .end(16_000)])
-        let (conversation, voice, _) = await begun(detector)
-        defer { conversation.stop("test", sending: false) }
-        gate.close()
-        utterance(into: voice.sink)
-        await settle("the decode under way") { self.gate.held == 1 }
-        conversation.call(.muted(true))
-        gate.open()
-        await drain()
-        XCTAssertEqual(sent, [], "a muted utterance was sent")
-        XCTAssertFalse(voice.listening, "the microphone opened again under the mute")
-        conversation.call(.muted(false))
-        await settle("open again at the unmute") { voice.listening }
-    }
-
-    /// Words said before the lock, the session suspended at the interruption's start, the call
-    /// never activating: what was kept is decoded and sent.
-    func testWordsSaidBeforeTheLockAreSentWhenTheCallNeverActivates() async {
+    /// Words said before the lock, the session suspended at the interruption's start, and the app
+    /// back before the interruption ends: what was kept is decoded and sent.
+    func testWordsSaidBeforeTheLockAreSentWhenTheAppComesBackBeforeTheInterruptionEnds() async {
         let (conversation, voice, _) = await make()
         await tap(voice)
         utterance(into: voice.sink)
@@ -1052,23 +1238,7 @@ final class ConversationTests: XCTestCase {
         beganInterruption()
         await settle("suspended") { voice.suspended }
         leave()
-        audio.callPlaced()
-        conversation.call(.placing)
-        conversation.call(.over)
-        await settle("sent") { self.sent.count == 1 }
-        XCTAssertEqual(ends, 1)
-    }
-
-    func testWordsSaidBeforeTheLockAreSentWhenTheAppComesBackBeforeTheActivation() async {
-        let (conversation, voice, _) = await make()
-        await tap(voice)
-        utterance(into: voice.sink)
-        active = false
-        beganInterruption()
-        await settle("suspended") { voice.suspended }
-        leave()
-        audio.callPlaced()
-        conversation.call(.placing)
+        XCTAssertTrue(conversation.on)
         active = true
         center.post(name: UIApplication.willEnterForegroundNotification, object: nil)
         center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -1088,7 +1258,6 @@ final class ConversationTests: XCTestCase {
         XCTAssertFalse(voice.listening, "the interruption kept a session over a phone call")
         leave()
         XCTAssertFalse(conversation.on)
-        XCTAssertEqual(told, [])
     }
 
     func testTheChatGoingEndsTheConversation() async {
@@ -1444,17 +1613,6 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(judge.asks, 0, "the judge was asked about an utterance with no speech in it")
         XCTAssertEqual(sent, [])
     }
-
-    /// The speaker's wiring: the call's hang-up reaches the conversation through `onCall`.
-    func testTheCardsHangUpReachesTheConversationThroughTheSpeaker() async {
-        let (conversation, _, speaker) = await begun()
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        speaker.attach(call)
-        speaker.onCall = { conversation.call($0) }
-        call.onHangUp()
-        assertEndedOnce(conversation)
-    }
 }
 
 /// The judge, scripted by the call: the nth call answers `verdicts[n]` (the last repeated), or
@@ -1512,8 +1670,7 @@ final class ScriptedJudge: TurnJudge, @unchecked Sendable {
 // MARK: - The conversation's tones
 
 /// The open mic's own tone, on the conversation: no tone at an utterance's onset, the
-/// go-ahead owed at the conversation's start, after a turn sent, after a reply and at an unmute
-/// and paid once the microphone is open with nothing on its way, yielding to a cue that has just
+/// go-ahead owed at the conversation's start, after a turn sent and after a reply, and paid once the microphone is open with nothing on its way, yielding to a cue that has just
 /// said it, and the gate shut under a tone so the ear does not take it for speech.
 extension ConversationTests {
     private var played: [KeeperSounds.Tone] { sounds?.played ?? [] }
@@ -1561,24 +1718,6 @@ extension ConversationTests {
         await settle("the go-ahead after the reply") { self.played == [.speak, .speak, .speak] }
     }
 
-    func testAnUnmuteOwesTheGoAheadAndACueThatHasJustSoundedStandsInForIt() async {
-        let (conversation, voice, speaker) = await begun(sounding: true)
-        defer { conversation.stop("test", sending: false) }
-        await settle("the go-ahead at the start") { self.played == [.speak] }
-        conversation.call(.muted(true))
-        await settle("the microphone closed") { !voice.listening }
-        conversation.call(.muted(false))
-        await settle("the go-ahead at the unmute") { self.played == [.speak, .speak] }
-
-        conversation.call(.muted(true))
-        await settle("the microphone closed") { !voice.listening }
-        XCTAssertTrue(speaker.earcons?.play(.listening) == true)
-        conversation.call(.muted(false))
-        await settle("the microphone open again") { voice.listening }
-        await drain()
-        XCTAssertEqual(played, [.speak, .speak], "the go-ahead sounded over the cue that had just said it")
-    }
-
     /// The go-ahead shuts the gate: the ear hearing its tone, a third of a second (longer than
     /// the minimum), sends nothing, and opens no turn of its own.
     func testTheGoAheadShutsTheGateSoItsToneIsNoUtterance() async {
@@ -1599,8 +1738,8 @@ extension ConversationTests {
         XCTAssertFalse(conversation.heardOnset, "the go-ahead's own onset was given to the person")
     }
 
-    /// Words carried into the conversation from the press, judged only after the call's resume,
-    /// are the person's: the go-ahead waits for the detector to give them, and they are sent.
+    /// Words carried into the conversation from the press, judged only after the resume at the
+    /// interruption's end, are the person's: the go-ahead waits for the detector to give them, and they are sent.
     func testWordsCarriedInAreSentBeforeTheGoAheadSounds() async {
         let detector = ScriptedDetector([0: .start(0), 4: .end(18_000)])
         let (conversation, voice, _) = await make(detector: detector, sounding: true)
@@ -1611,7 +1750,7 @@ extension ConversationTests {
         beganInterruption()
         await settle("suspended") { voice.suspended }
         leave()
-        placeAndActivate(conversation)
+        endedInterruption()
         await settle("the carried words sent") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
         XCTAssertEqual(tonesAtSend, [[]], "the go-ahead sounded over words the detector had yet to give")
@@ -1920,8 +2059,8 @@ extension ConversationTests {
     }
 
     /// The test-coverage lens's pin for startUtterance's freshUtterance(): an ask in flight across
-    /// a mute leaves the next utterance caught up.
-    func testAnAskInFlightAcrossAMuteLeavesTheNextUtteranceCaughtUp() async {
+    /// a reopen leaves the next utterance caught up.
+    func testAnAskInFlightAcrossAReopenLeavesTheNextUtteranceCaughtUp() async {
         let detector = ScriptedDetector([0: .start(0)])
         let judge = ScriptedJudge([0.2]); judge.hold(calls: [0])
         let (conversation, voice, speaker) = await begun(detector, judge: judge)
@@ -1929,12 +2068,10 @@ extension ConversationTests {
         utterance(into: voice.sink)
         await quiet(0.5, into: voice.sink)
         await settle("the ask held") { judge.held == 1 }
-        conversation.call(.muted(true))
-        await settle("closed") { !voice.listening }
+        voice.cancel(.chat)
+        await settle("open again") { voice.listening }
         judge.release(call: 0)
         await drain()
-        conversation.call(.muted(false))
-        await settle("open again") { voice.listening }
         XCTAssertTrue(speaker.speak("The lights are off."))
         await settle("the mic closed for the reply over silence") { !voice.listening }
     }
@@ -1942,16 +2079,15 @@ extension ConversationTests {
 
 // MARK: - In front
 
-/// A tap in front is a conversation on the app's own session, with no call: the judge ends each
+/// A tap in front is a conversation on the app's own session: the judge ends each
 /// utterance and the microphone opens again (#622). Any press but Stop ends it; Stop keeps it
 /// listening (Sam's rulings in plan-open-mic-in-front.md).
 extension ConversationTests {
-    /// A tap with Topo in front, the call setting off: a conversation in front.
+    /// A tap with Topo in front: a conversation in front.
     private func inFront(_ detector: ScriptedDetector, judge: ScriptedJudge? = nil, sounding: Bool = false,
                          sends: Bool = true,
                          wire: (Conversation, VoiceInput, Speaker) -> Void = { _, _, _ in }) async -> (Conversation, VoiceInput, Speaker) {
         active = true
-        enabled = false
         let made = await make(detector: detector, judge: judge, sends: sends, sounding: sounding)
         wire(made.0, made.1, made.2)
         await tap(made.1)
@@ -1967,7 +2103,6 @@ extension ConversationTests {
         let (conversation, voice, _) = await inFront(detector, sounding: true)
         defer { conversation.stop("test", sending: false) }
         await settle("the conversation in front") { conversation.on && conversation.inFront }
-        XCTAssertEqual(told, [true])
         await settle("the go-ahead at the start") { self.played == [.speak] }
         utterance(into: voice.sink)
         await settle("the turn sent with no second tap") { self.sent.count == 1 }
@@ -1975,7 +2110,6 @@ extension ConversationTests {
         await settle("the microphone open again") { voice.listening }
         await settle("the go-ahead after the turn") { self.played == [.speak, .speak] }
         XCTAssertTrue(conversation.inFront)
-        XCTAssertEqual(audio.call, .none, "a call was placed in front")
     }
 
     /// In front the turn ends on Smart Turn as behind the lock: a sentence the judge calls
@@ -2027,34 +2161,6 @@ extension ConversationTests {
         await quiet(0.3, into: voice.sink, paced: false)
         await settle("the turn sent at the cap") { self.sent.count == 1 }
         XCTAssertEqual(sent, ["turn the lights off"])
-    }
-
-    /// With *Call for spoken replies* on and the call driver wired as the app wires it, a front
-    /// conversation, its turn and the reply's wait and reading place no call.
-    func testInFrontWithTheSettingOnNoCallIsPlaced() async {
-        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
-        let system = FakeCallSystem()
-        let call = SpokenCall(system: system, sleep: ManualSleep().sleep)
-        let driver = SpokenCallDriver(call: call, enabled: { true }, center: NotificationCenter(), initial: .active)
-        defer { withExtendedLifetime(driver) {} }
-        let (conversation, voice, speaker) = await inFront(detector) { [unowned self] conversation, _, speaker in
-            enabled = true
-            let audio: AudioSession = self.audio
-            speaker.onHold = { [weak audio] in driver.holdChanged($0, forATurn: audio?.heldForATurn ?? $0) }
-            speaker.onMicrophone = { driver.microphoneChanged($0) }
-            conversation.conversingChanged = { driver.conversingChanged($0) }
-        }
-        defer { conversation.stop("test", sending: false) }
-        await settle("the conversation in front") { conversation.on && conversation.inFront }
-        utterance(into: voice.sink)
-        await settle("sent") { self.sent.count == 1 }
-        XCTAssertTrue(speaker.speak("The lights are off."))
-        await drain()
-        speaker.stop()
-        await settle("open again") { voice.listening }
-        await drain()
-        XCTAssertTrue(conversation.on)
-        XCTAssertEqual(system.starts.count, 0, "a front conversation placed a call")
     }
 
     /// The press's own path in two halves, deterministically: `pressed()` ends the conversation,
@@ -2162,29 +2268,29 @@ extension ConversationTests {
         XCTAssertTrue(voice.listening)
     }
 
-    /// Leaving the front with the setting on carries it into the call, as a tapped session is.
-    func testLeavingTheFrontCarriesItIntoTheCall() async {
+    /// Leaving the front carries it behind the lock, as a tapped session is, on the session it was
+    /// opened on.
+    func testLeavingTheFrontCarriesItBehindTheLock() async {
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, _) = await inFront(detector)
         defer { conversation.stop("test", sending: false) }
         await settle("the conversation in front") { conversation.on }
-        enabled = true
         leave()
         XCTAssertTrue(conversation.on)
         XCTAssertFalse(conversation.inFront)
-        placeAndActivate(conversation)
-        await settle("the microphone resumed on the call") { voice.listening && !voice.suspended }
+        XCTAssertTrue(voice.listening && !voice.suspended, "the lock suspended a microphone it carries")
         utterance(into: voice.sink)
         await settle("the turn sent behind the lock") { self.sent.count == 1 }
     }
 
-    /// Leaving the front with the setting off has nothing to carry it: it ends, and what was open
-    /// is dropped as the scene's drop drops a session.
-    func testLeavingTheFrontWithTheSettingOffEndsIt() async {
+    /// Leaving the front under a phone call has nothing to carry it: it ends, and what was open is
+    /// dropped as the scene's drop drops a session.
+    func testLeavingTheFrontUnderAPhoneCallEndsIt() async {
         let detector = ScriptedDetector([1: .start(8_000)])
         let (conversation, voice, _) = await inFront(detector)
         await settle("the conversation in front") { conversation.on }
         utterance(into: voice.sink)
+        other = true
         active = false
         conversation.scene(.inactive)
         XCTAssertFalse(conversation.on)
@@ -2208,34 +2314,34 @@ extension ConversationTests {
         XCTAssertEqual(sent, [])
     }
 
-    /// the lock's `.began` before `didEnterBackground` (either order is real,
-    /// testTheInterruptionsStartBeforeTheBackgroundIsCarriedAndResumedAtTheActivation),
-    /// the setting on: a front conversation the lock carries stays suspended until the call's activation.
-    func testTheLocksBeganBeforeTheBackgroundKeepsAFrontConversationSuspendedForTheCall() async {
+    /// The lock's `.began` before `didEnterBackground` (either order is real,
+    /// testTheInterruptionsStartBeforeTheBackgroundIsCarriedAndResumedAtItsEnd): a front
+    /// conversation the lock carries stays suspended until the interruption ends.
+    func testTheLocksBeganBeforeTheBackgroundKeepsAFrontConversationSuspendedUntilItEnds() async {
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, _) = await inFront(detector)
         defer { conversation.stop("test", sending: false) }
         await settle("the conversation in front") { conversation.on && conversation.inFront }
-        enabled = true
         let engines = seams.inputEngines
         active = false
         beganInterruption()
         await drain()
         XCTAssertTrue(conversation.on, "the lock's .began ended the front conversation")
         XCTAssertTrue(voice.listening && voice.suspended,
-                      "the microphone was rebuilt on the app's own session at the lock's .began, with no call")
-        XCTAssertEqual(seams.inputEngines, engines, "an engine was made between the lock's .began and the call")
-        XCTAssertEqual(audio.call, .none)
+                      "the microphone was rebuilt at the lock's .began, with the interruption standing")
+        XCTAssertEqual(seams.inputEngines, engines, "an engine was made between the lock's .began and its end")
         leave()
         XCTAssertTrue(conversation.on && !conversation.inFront)
-        placeAndActivate(conversation)
-        await settle("resumed on the call") { voice.listening && !voice.suspended }
+        await drain()
+        XCTAssertTrue(voice.suspended, "the carried microphone resumed with the interruption standing")
+        endedInterruption()
+        await settle("resumed at the interruption's end") { voice.listening && !voice.suspended }
         utterance(into: voice.sink)
         await settle("the turn sent behind the lock") { self.sent.count == 1 }
     }
 
-    /// the same lock with the activation refused, as iOS refuses one from an app that is not
-    /// active with no call: the front conversation is still carried, and nothing is sent at the lock.
+    /// The same lock with the activation refused, as iOS refuses one from an app that is not
+    /// active: the front conversation is still carried, and nothing is sent at the lock.
     func testTheLocksBeganBeforeTheBackgroundWithTheActivationRefusedStillCarries() async {
         let detector = ScriptedDetector([1: .start(8_000)])
         let (conversation, voice, _) = await inFront(detector)
@@ -2243,7 +2349,6 @@ extension ConversationTests {
         await settle("the conversation in front") { conversation.on && conversation.inFront }
         utterance(into: voice.sink)
         await settle("the onset") { conversation.heardOnset }
-        enabled = true
         active = false
         seams.activationError = Seams.Refused()
         beganInterruption()
@@ -2256,8 +2361,8 @@ extension ConversationTests {
         seams.activationError = nil
     }
 
-    /// A lock in front with the setting off: the judge has
-    /// ended the utterance and its decode is under way when the scene goes. The words are sent, as a
+    /// A lock in front: the judge has ended the utterance and its decode is under way when the
+    /// scene goes. The words are sent, as a
     /// released press's are (StopWhileSpeakingTests.testALockDuringTheReleasesDecodeKeepsItsWords).
     func testALockDuringAFrontUtterancesDecodeKeepsItsWords() async {
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
@@ -2292,49 +2397,337 @@ extension ConversationTests {
         XCTAssertEqual(sent, ["turn the lights off"], "the interruption dropped the words the judge had ended")
     }
 
-    /// a reopen waiting on the permission when the phone
-    /// locks: the lock's placing makes the reopen refuse, and the carried conversation ends.
-    func testAReopenSpanningTheLockWaitsForTheActivation() async {
+    /// A reopen waiting on the permission when the phone locks, with no interruption: the
+    /// conversation is carried, and the reopen opens on the session it was carried on.
+    func testAReopenSpanningTheLockOpensOnTheCarriedSession() async {
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, _) = await inFront(detector)
         defer { conversation.stop("test", sending: false) }
-        enabled = true
         await settle("on") { conversation.on }
         permission.arm()
-        utterance(into: voice.sink)
-        await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        // The chat's cancel stops the input the conversation keeps, so its reopen opens afresh.
+        voice.cancel(.chat)
+        await settle("the reopen waiting") { self.permission.waiting }
         leave()
         XCTAssertTrue(conversation.on && !conversation.inFront)
-        audio.callPlaced()
-        conversation.call(.placing)
         permission.release()
-        await drain()
-        XCTAssertTrue(conversation.on, "the lock's placing ended the carried conversation")
-        audio.callActivated()
-        conversation.call(.active)
-        await settle("open on the call") { voice.listening }
+        await settle("open behind the lock") { voice.listening }
+        XCTAssertTrue(conversation.on, "the lock ended the carried conversation")
     }
 
-    /// A reopen whose permission answers after the lock's `.began` (the app no longer active, no
-    /// call yet) opens nothing and reads nothing, and opens on the call once it is live.
+    /// A reopen whose permission answers as the app leaves the front (inactive, not yet in the
+    /// background) opens nothing and reads nothing, and the conversation stays on for the
+    /// background to carry, which opens the microphone on the carried session.
     func testAReopenWhosePermissionLandsAsTheAppLeavesTheFrontOpensNothing() async {
         let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
         let (conversation, voice, _) = await inFront(detector)
         defer { conversation.stop("test", sending: false) }
-        enabled = true
         await settle("on") { conversation.on }
         permission.arm()
-        utterance(into: voice.sink)
-        await settle("the reopen waiting") { self.sent.count == 1 && self.permission.waiting }
+        // The chat's cancel stops the input the conversation keeps, so its reopen opens afresh.
+        voice.cancel(.chat)
+        await settle("the reopen waiting") { self.permission.waiting }
         let reads = seams.formatReads
         active = false
         permission.release()
         await drain()
         XCTAssertTrue(conversation.on)
-        XCTAssertFalse(voice.listening, "the reopen opened the microphone from an inactive app with no call")
-        XCTAssertEqual(seams.formatReads, reads, "the input node was read from an inactive app with no call")
+        XCTAssertFalse(voice.listening, "the reopen opened the microphone from an inactive app")
+        XCTAssertEqual(seams.formatReads, reads, "the input node was read from an inactive app")
+        XCTAssertEqual(voice.refusal, "no live session")
         leave()
-        placeAndActivate(conversation)
-        await settle("open on the call") { voice.listening && !voice.suspended }
+        XCTAssertTrue(conversation.on && !conversation.inFront, "the background did not carry it")
+        await settle("the carried conversation to reopen the microphone") { voice.listening }
+    }
+}
+
+// MARK: - A part written before a tool
+
+extension ConversationTests {
+    /// The guest writes a part, runs a tool, and writes the rest: the part is read as it is
+    /// written, before the reply lands, with the microphone's gate shut for it, and the reply as it lands reads only what is left, so the part is heard once.
+    private func readsThePartBeforeTheTool(_ conversation: Conversation, _ voice: VoiceInput, _ speaker: Speaker,
+                                           file: StaticString = #filePath, line: UInt = #line) async {
+        utterance(into: voice.sink)
+        await settle("the turn sent", file: file, line: line) { self.sent.count == 1 }
+        await settle("the microphone open again after the send", file: file, line: line) { voice.listening }
+        await drain()
+        CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
+        spoken.releaseTheHeldFrame()
+        let part = "Let me look at the lights.\n\n"
+        speaker.speak(writing: part, answering: "spoken-1")
+        await settle("the part read before the tool runs", file: file, line: line) {
+            !voice.listening && !CapturingPlayerNode.scheduled.isEmpty
+        }
+        XCTAssertEqual(spoken.streams, 1, "the part was asked of the voice other than once", file: file, line: line)
+        // The tool runs: the microphone stays shut under the part's reading until the reply.
+        await drain()
+        XCTAssertFalse(voice.listening, "the microphone opened under the tool after the part", file: file, line: line)
+        XCTAssertTrue(speaker.speak(part + "They are off.", answering: "spoken-1"))
+        await settle("the rest of the reply read", file: file, line: line) { self.spoken.streams == 2 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the part was read again when the reply landed", file: file, line: line)
+        XCTAssertEqual(sent.count, 1, "the part was heard as a turn", file: file, line: line)
+    }
+
+    func testBehindTheLockAPartWrittenBeforeAToolIsReadBeforeTheReplyLands() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        await readsThePartBeforeTheTool(conversation, voice, speaker)
+    }
+
+    /// Words begun as the part is written are the person's: the part waits for their end, the
+    /// words are sent as the next turn, and the part is read after them.
+    func testWordsSaidAsAPartIsWrittenAreSentAndThePartReadAfterThem() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again after the send") { voice.listening }
+        await drain()
+        CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
+        spoken.releaseTheHeldFrame()
+        detector.script([0: .start(0), 4: .end(16_000)])
+        utterance(into: voice.sink)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "spoken-1")
+        XCTAssertFalse(speaker.speaking, "the part was begun into the open microphone")
+        XCTAssertTrue(speaker.waitingForMicrophone, "the part was not kept for the microphone's close")
+        await settle("the words sent") { self.sent.count == 2 }
+        await settle("the part read after the words") { !CapturingPlayerNode.scheduled.isEmpty }
+        XCTAssertEqual(spoken.streams, 1, "the part was asked of the voice other than once")
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        speaker.stop()
+    }
+
+    /// A part still waiting when its turn ends with no reply is forgotten, so nothing is left
+    /// holding the microphone shut.
+    func testAPartWaitingWhenItsTurnEndsHoldsNothing() async {
+        let detector = ScriptedDetector()
+        detector.hold(at: 0)
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        utterance(into: voice.sink)
+        await settle("the verdict pending") { detector.holding }
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "spoken-1")
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        XCTAssertTrue(voice.listening, "the part closed the microphone over a chunk the detector was judging")
+        speaker.writingEnded("spoken-1")
+        XCTAssertFalse(speaker.waitingForMicrophone, "the part outlived its turn")
+        detector.release()
+        await drain()
+        XCTAssertTrue(voice.listening, "the microphone closed for a part whose turn had ended")
+        XCTAssertEqual(spoken.streams, 0)
+    }
+
+    /// The first turn's part read, then the second turn's part written before the first reply
+    /// lands: the second waits behind the first, so the first's landing reads only what is left.
+    func testTheNextTurnsPartWaitsBehindAPartReadSoNeitherIsReadTwice() async throws {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await partRead(voice, speaker)
+        _ = speaker.awaitReply("spoken-2", readAloud: true)
+        speaker.speak(writing: "Okay.\n\n", answering: "spoken-2")
+        await drain()
+        XCTAssertEqual(spoken.streams, 1, "the next turn's part cut in over the first turn's reading")
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "spoken-1"))
+        await settle("the rest of the first reply") { self.spoken.streams == 2 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the first turn's part was read again when its reply landed")
+        speaker.speak(writing: "Okay.\n\n", answering: "spoken-2")
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the next turn's part cut off the first reply's reading")
+        _ = try await renderOffline({ self.seams.playEngine }, "the first reply heard out") { !speaker.speaking }
+        speaker.speak(writing: "Okay.\n\nThe lamp is off too.\n\n", answering: "spoken-2")
+        await settle("the next turn read once the first is done") { self.spoken.streams == 4 }
+        speaker.endAwaiting("spoken-2", "the test is done")
+        speaker.stop()
+    }
+
+    /// A part read and stopped, then the next turn's part: the stopped reply is not read when it
+    /// lands, its turn is settled whatever else waits, and the next turn's part is read.
+    func testAStoppedPartsReplyIsNotReadWhenItLandsAfterTheNextTurnsPart() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await partRead(voice, speaker)
+        speaker.stop()
+        await settle("the microphone open again after Stop") { voice.listening }
+        await drain()
+        _ = speaker.awaitReply("spoken-2", readAloud: true)
+        detector.script([:])
+        detector.hold(at: detector.chunks)
+        utterance(into: voice.sink)
+        await settle("the detector judging a chunk") { detector.holding }
+        speaker.speak(writing: "Okay.\n\n", answering: "spoken-2")
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "spoken-1"))
+        XCTAssertFalse(speaker.replyWaitsForMicrophone("spoken-1"), "the stopped turn's mark would stand")
+        detector.release()
+        await settle("the next turn's part read") { self.spoken.streams == 2 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the stopped reply was read when it landed")
+        speaker.endAwaiting("spoken-2", "the test is done")
+        speaker.stop()
+    }
+
+    /// With no conversation, a part read and the next turn's part written before the first reply:
+    /// the first's landing reads only what is left.
+    func testHoldToTalkTheNextTurnsPartWaitsBehindAPartRead() async throws {
+        let (_, _, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await settle("the part read") { self.spoken.streams == 1 }
+        await drain()
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await drain()
+        XCTAssertEqual(spoken.streams, 1, "the next turn's part cut in over the first's reading")
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "a"))
+        await settle("the rest of the first reply") { self.spoken.streams == 2 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the first turn's part was read again when its reply landed")
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the next turn's part cut off the first reply's reading")
+        _ = try await renderOffline({ self.seams.playEngine }, "the first reply heard out") { !speaker.speaking }
+        speaker.speak(writing: "Okay.\n\nThe lamp is off too.\n\n", answering: "b")
+        await settle("the next turn read once the first is done") { self.spoken.streams == 4 }
+        speaker.stop()
+    }
+
+    /// A stopped part, the next turn's part read, then the stopped reply lands: it is taken
+    /// unread, and the next turn's reading keeps its place, so its reply reads only what is left.
+    func testAStoppedReplyLandingLeavesTheNextTurnsReadingStanding() async {
+        let (_, _, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await settle("the first part read") { self.spoken.streams == 1 }
+        speaker.stop()
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await settle("the next turn's part read") { self.spoken.streams == 2 }
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "a"))
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the stopped reply was read when it landed")
+        XCTAssertTrue(speaker.speak("Okay.\n\nThe lamp is off too.", answering: "b"))
+        await settle("the rest of the next reply") { self.spoken.streams == 3 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 3, "the next turn's part was read again from the top")
+        speaker.stop()
+    }
+
+    /// The same, with the stopped turn's writing ended before the next turn's part: the stop is
+    /// still remembered, so the stopped reply is taken unread and the next reading keeps its place.
+    func testAStoppedReadingIsRememberedPastItsWritingsEnd() async {
+        let (_, _, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await settle("the first part read") { self.spoken.streams == 1 }
+        speaker.stop()
+        speaker.writingEnded("a")
+        _ = speaker.awaitReply("b", readAloud: true)
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await settle("the next turn's part read") { self.spoken.streams == 2 }
+        XCTAssertTrue(speaker.speak("Let me look at the lights.\n\nThey are off.", answering: "a"))
+        await drain()
+        XCTAssertEqual(spoken.streams, 2, "the stopped reply was read when it landed after its writing ended")
+        XCTAssertTrue(speaker.speak("Okay.\n\nThe lamp is off too.", answering: "b"))
+        await settle("the rest of the next reply") { self.spoken.streams == 3 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 3, "the next turn's part was read again from the top")
+        speaker.stop()
+    }
+
+    /// A reply that landed and is still being read: the next turn's part waits behind it rather
+    /// than cutting it off.
+    func testTheNextTurnsPartWaitsBehindALandedReplyStillBeingRead() async {
+        let (_, _, speaker) = await make()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = speaker.awaitReply("b", readAloud: true)
+        XCTAssertTrue(speaker.speak("The lights are off.", answering: "a"))
+        await settle("the reply being read") { self.spoken.streams == 1 && speaker.speaking }
+        speaker.speak(writing: "Okay.\n\n", answering: "b")
+        await drain()
+        XCTAssertEqual(spoken.streams, 1, "the next turn's part cut off the reply being read")
+        XCTAssertTrue(speaker.speaking, "the reply being read was stopped")
+        spoken.releaseTheHeldFrame()
+        speaker.stop()
+    }
+
+    /// A part with no word to say (a rule) written over an open conversation microphone waits for
+    /// nothing, so the gate stays open.
+    func testAPartWithNoWordsHoldsNoMicrophoneShut() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await begun(detector)
+        defer { conversation.stop("test", sending: false) }
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again after the send") { voice.listening }
+        await drain()
+        speaker.speak(writing: "---\n\n", answering: "spoken-1")
+        XCTAssertFalse(speaker.waitingForMicrophone, "a part with nothing to say waits for the microphone")
+        await drain()
+        XCTAssertTrue(voice.listening, "a part with nothing to say shut the microphone")
+        XCTAssertEqual(spoken.streams, 0)
+    }
+
+    /// Hold-to-talk: a part written while a press holds the microphone open is not begun into it,
+    /// and is read once the release closes it.
+    func testAPartWrittenUnderAHeldPressIsReadAtTheRelease() async {
+        let (_, voice, speaker) = await make()
+        spoken.releaseTheHeldFrame()
+        _ = speaker.awaitReply("a", readAloud: true)
+        _ = await voice.pressDown(as: .chat)
+        XCTAssertTrue(voice.listening)
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "a")
+        await drain()
+        XCTAssertFalse(speaker.speaking, "the part was begun into the held microphone")
+        XCTAssertEqual(spoken.streams, 0)
+        _ = await voice.pressUp(as: .chat, held: true)
+        await settle("the part read at the release") { self.spoken.streams == 1 }
+        await drain()
+        XCTAssertEqual(spoken.streams, 1)
+        speaker.stop()
+    }
+
+    /// The first turn sent and its part read as it is written, behind the lock.
+    private func partRead(_ voice: VoiceInput, _ speaker: Speaker) async {
+        await drain()
+        utterance(into: voice.sink)
+        await settle("the turn sent") { self.sent.count == 1 }
+        await settle("the microphone open again after the send") { voice.listening }
+        await drain()
+        CapturingPlayerNode.scheduled = []
+        spoken.releaseTheHeldFrame()
+        speaker.speak(writing: "Let me look at the lights.\n\n", answering: "spoken-1")
+        await settle("the part read") { !voice.listening && !CapturingPlayerNode.scheduled.isEmpty }
+        await drain()
+    }
+
+    func testInFrontAPartWrittenBeforeAToolIsReadBeforeTheReplyLands() async {
+        waitOnSend = true
+        let detector = ScriptedDetector([1: .start(8_000), 4: .end(16_000)])
+        let (conversation, voice, speaker) = await inFront(detector)
+        defer { conversation.stop("test", sending: false) }
+        await settle("the conversation in front") { conversation.on && conversation.inFront }
+        await drain()
+        await readsThePartBeforeTheTool(conversation, voice, speaker)
     }
 }

@@ -12,6 +12,9 @@ public enum TurnRunnerError: Error {
     /// The person's turn is in the log and the reply is not; `underlying` says why (an API
     /// error, or `displaced`). The caller keeps `person` and owes nothing for it.
     case replyFailed(person: Turn, underlying: any Error)
+    /// An answering pass asked the brain for the reply to `answering`, the log's newest person's
+    /// turns, and the brain failed; `underlying` says why. Those turns' reply has stopped.
+    case answerFailed(answering: [Turn], underlying: any Error)
     /// The person's turn is not in the log, `underlying` says why, and the brain has the words
     /// all the same (`hear`): it is answering them, and the reply is written by the attempt under
     /// the same nonce that gets the turn into the log.
@@ -533,7 +536,12 @@ public actor TurnRunner {
     private func answer(_ answering: [Turn], in transcript: Transcript, nonce: String, model: ClaudeModel) async throws -> Turn {
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
                                    answering: answering, parents: transcript.heads, nonce: nonce, model: model)
-        let reply = try await brain.answer(request)
+        let reply: Reply
+        do {
+            reply = try await brain.answer(request)
+        } catch let error where !(error is CancellationError) {
+            throw TurnRunnerError.answerFailed(answering: answering, underlying: error)
+        }
         // A pass that was stopped — a sign-out cancels the one in flight — writes nothing.
         try Task.checkCancellation()
         // The read the pass made is the transcript the reply continues, and the writer is not
