@@ -1716,11 +1716,11 @@ final class HarnessIntegrationTests: XCTestCase {
 
     /// A phone whose last limb's turn a hub answered, its nudges each answered by a reply in the
     /// log as the hub's pass would write it, and its hand-overs recorded.
-    private func phoneAfterAHubAnswered(_ db: InMemoryRecordDatabase,
+    private func phoneAfterAHubAnswered(_ db: InMemoryRecordDatabase, through phoneDB: (any RecordDatabase)? = nil,
                                         transport: ScriptedTransport = ScriptedTransport()) async throws -> (Harness, DeviceID, HandOvers) {
         let (hubID, _) = try await hubClaim(db, endpoint: "192.168.1.20:50123")
         let defaults = makeDefaults()
-        let phone = harness(db, defaults: defaults, transport: transport)
+        let phone = harness(phoneDB ?? db, defaults: defaults, transport: transport)
         let handOvers = HandOvers()
         phone.handOver = { lease, words, nonce, model in handOvers.record(lease, words, nonce, model) }
         phone.nudge = { _, _, _ in
@@ -1758,6 +1758,28 @@ final class HarnessIntegrationTests: XCTestCase {
         try await eventually("the reply read") { phone.turns.map(\.text) == ["first?", "from the Mac", "second?", "from the Mac"] }
         XCTAssertEqual(phone.turns.first { $0.text == "second?" }?.nonce, nonce)
         XCTAssertTrue(transport.sent.isEmpty, "the phone's guest was asked a turn the hub answers")
+    }
+
+    /// Words the hub may have are not given to this phone's guest ahead of their save, even when
+    /// the lease then cannot be asked, which gives the guest words that were not handed over: the
+    /// turn fails here and is sent again, and the hub, which has them, answers it once it is saved.
+    func testWordsHandedOverAreNotGivenToTheGuestWhenTheLeaseCannotBeAsked() async throws {
+        let db = InMemoryRecordDatabase()
+        let flaky = ReadFailingDatabase(db)
+        let transport = ScriptedTransport()
+        let (phone, _, handOvers) = try await phoneAfterAHubAnswered(db, through: flaky, transport: transport)
+        await flaky.setFailing(true)
+        let nonce = phone.willSend("second?")
+        try await eventually("the hand-over") { handOvers.calls.count == 1 }
+        await phone.retry()
+        for _ in 0..<300 { await Task.yield() }
+        // Mutant: the attempt given the log as known for words handed over.
+        XCTAssertTrue(transport.sent.isEmpty, "the phone's guest was given words the hub has")
+        XCTAssertTrue(phone.stoppedOnFailure(nonce))
+        await flaky.setFailing(false)
+        await phone.retry()
+        try await eventually("the turn saved") { phone.said(nonce) }
+        XCTAssertTrue(transport.sent.isEmpty)
     }
 
     /// A hub whose lease names no endpoint is handed nothing, though it answers this phone's

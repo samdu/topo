@@ -145,8 +145,48 @@ extension HubRig {
         _ = try await brain.answer(request(hello))
         // Mutant: words heard beside a reply still owed.
         #expect(await brain.hearAhead("words", nonce: UUID().uuidString, model: .sonnet) == .busy)
+        await brain.landed(turn("mac", 1, .assistant, "echo: hello", parents: [hello.ref]), nonce: request(hello).nonce)
+        // With no process running the model the words were chosen with, none is started for them:
+        // the turn goes by the log, which starts one on the model its pass reads.
+        _ = await brain.shutdown()
+        // Mutant: a hand-over written to no process, or starting one.
+        #expect(await brain.hearAhead("words", nonce: UUID().uuidString, model: .sonnet) == .process)
         #expect(rig.inputs == ["hello"])
-        await brain.shutdown()
+    }
+
+    /// The mind's turn on words heard ahead ends before the pass that binds them asks: that
+    /// request has no frames of its own, so its followers are handed no `.turn` that would wipe
+    /// what they drew; a request for another turn is handed as ever.
+    @Test func aHeardReplyEndedBeforeItsPassIsNotBegunAgain() throws {
+        let cast = ReplyCast()
+        let nonce = UUID().uuidString
+        let person = Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 2), parents: [], role: .person,
+                          text: "w", at: Date(), nonce: nonce)
+        let other = Turn(ref: TurnRef(device: DeviceID("pad"), sequence: 3), parents: [], role: .person,
+                         text: "o", at: Date(), nonce: UUID().uuidString)
+        let frames = Frames()
+        let id = cast.follow(HubMind.mark(of: nonce), frames.hand)
+        cast.beginHeard(nonce)
+        cast.writeHeard(.message)
+        cast.writeHeard(.text("Heard."))
+        cast.endHeard()
+        cast.begin([person])
+        cast.end()
+        // Mutant: the heard lane's turn forgotten at its end.
+        #expect(frames.frames == [.heard(nonce), .message, .text("Heard.")])
+        #expect(frames.words == "Heard.")
+        // Once that request has ended, the same mark is the request lane's again.
+        cast.begin([person])
+        #expect(frames.frames.last == .turn([person.ref]))
+        cast.end()
+        let others = Frames()
+        let otherID = cast.follow(HubMind.mark(of: other.nonce), others.hand)
+        cast.beginHeard(nonce)
+        cast.endHeard()
+        cast.begin([other])
+        #expect(others.frames == [.turn([other.ref])])
+        cast.stop(id)
+        cast.stop(otherID)
     }
 
     @Test func wordsHeardTwiceAreHeardOnce() async throws {

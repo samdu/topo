@@ -28,14 +28,18 @@ public final class ReplyCast: @unchecked Sendable {
     private var current: (marks: Set<String>, turn: ReplyFrame, frames: [ReplyFrame], handedWords: Bool)?
     /// The reply to words heard ahead, while the mind is on them.
     private var heard: (mark: String, turn: ReplyFrame, frames: [ReplyFrame], handedWords: Bool)?
+    /// The mark of words heard ahead whose turn has ended, until the next request's reply ends:
+    /// the request that binds them is answered from what the mind wrote then, with no frames, so
+    /// it hands their followers no `.turn` that would wipe what they drew.
+    private var heardEnded: String?
     private var followers: [UUID: (mark: String, hand: Hand)] = [:]
 
     public init() {}
 
     /// Whether the request lane hands a follower of `mark` anything: not while the heard lane is
-    /// that follower's.
+    /// that follower's, nor once it was, until the request after it ends.
     private func requestLane(_ mark: String, _ marks: Set<String>) -> Bool {
-        marks.contains(mark) && heard?.mark != mark
+        marks.contains(mark) && heard?.mark != mark && heardEnded != mark
     }
 
     /// The mind is asked to answer `answering`: what is written from here is that reply's.
@@ -74,7 +78,11 @@ public final class ReplyCast: @unchecked Sendable {
 
     /// The reply's turn is over, answered or not.
     func end() {
-        lock.withLock { current = nil }
+        lock.withLock {
+            // The request that answered the ended words' turn, or one after it.
+            if let reply = current, let ended = heardEnded, reply.marks.contains(ended) { heardEnded = nil }
+            current = nil
+        }
     }
 
     /// The mind has the person's words said under `nonce`, ahead of their turn: what is written
@@ -113,7 +121,10 @@ public final class ReplyCast: @unchecked Sendable {
 
     /// The mind's turn on words heard ahead is over.
     func endHeard() {
-        lock.withLock { heard = nil }
+        lock.withLock {
+            heardEnded = heard?.mark
+            heard = nil
+        }
     }
 
     private static func appending(_ frame: ReplyFrame, to frames: [ReplyFrame]) -> [ReplyFrame] {
