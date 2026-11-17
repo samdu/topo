@@ -491,7 +491,8 @@ public actor PrimaryLease {
     /// operation an `abandon()` outlived sends nothing more and ends with the request it has out,
     /// which the database answers within `timing.patience`; so does this call, waiting at the gate
     /// as every operation does, and it gives up at that bound and a second more whatever the
-    /// database does. A request that ran out may still be applied by the server: a write built
+    /// database does. A request that ran out, or one a store ended at once when its task was
+    /// cancelled with the stop, may still be applied by the server: a write built
     /// before the abandon, which expires within one duration of it. It writes nothing and changes
     /// nothing held, and `abandon()` itself never waits for it.
     public func settled() async {
