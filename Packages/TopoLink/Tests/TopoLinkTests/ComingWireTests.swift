@@ -25,12 +25,12 @@ import TopoCoreTesting
 
     /// A hub's listener with a key that takes heads-ups when `takes` says so, streams one frame to
     /// a nudge and answers it read; `told` records what reached the owner.
-    private func hubServer(takes: Bool = true, coming: Bool = true) async throws -> (LeaseProbeServer, UInt16, NudgeKey, Told) {
+    private func hubServer(takes: Bool = true, coming: Bool = true, reads: Bool = true) async throws -> (LeaseProbeServer, UInt16, NudgeKey, Told) {
         let told = Told()
         let key = NudgeKey.mint(hub: hub)
         let server = try LeaseProbeServer(advertising: nil, key: key, holds: { _, epoch in epoch == 3 }, nudged: { _, epoch, mark, stream in
             told.add("nudged \(mark)")
-            guard epoch == 3 else { return false }
+            guard epoch == 3, reads else { return false }
             stream?(.text("Hello."))
             return true
         }, coming: coming ? { @Sendable _, epoch, mark in
@@ -62,6 +62,23 @@ import TopoCoreTesting
         #expect(got.all == [.text("Hello.")])
         // Mutant: the nudge handed to the owner before the ticket hears the ref.
         #expect(told.all == ["coming ab12cd34", "saved phone-1a2b3c4d/7", "nudged ab12cd34"])
+    }
+
+    /// The hub's `no` to the saved line (its wait ended first, or its mind stopped) is no answer
+    /// the phone keeps: the nudge goes the usual way, as with no heads-up.
+    @Test func aSavedLineAnsweredNoLeavesTheNudgeToGoTheUsualWay() async throws {
+        let (server, port, key, told) = try await hubServer(reads: false)
+        defer { Task { await server.stop() } }
+        let lease = lease(port)
+        let coming = HubNudge.Coming.begin(for: lease, mark: "ab12cd34", keys: await keys(key, for: lease))
+        // Mutant: any answer to the saved line kept as the nudge's.
+        #expect(await coming.nudged(.init(device: DeviceID("phone-1a2b3c4d"), sequence: 7), stream: nil) == nil)
+        #expect(told.all == ["coming ab12cd34", "saved phone-1a2b3c4d/7", "nudged ab12cd34"])
+        let read = try await hubServer()
+        defer { Task { await read.0.stop() } }
+        let readLease = self.lease(read.1)
+        let taken = HubNudge.Coming.begin(for: readLease, mark: "ab12cd34", keys: await keys(read.2, for: readLease))
+        #expect(await taken.nudged(.init(device: DeviceID("phone-1a2b3c4d"), sequence: 7), stream: nil) == true)
     }
 
     @Test func aHeadsUpTheHubDoesNotTakeLeavesTheNudgeToGoTheUsualWay() async throws {

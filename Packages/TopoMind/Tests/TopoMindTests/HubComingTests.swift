@@ -13,6 +13,7 @@ final class FeedLag: ForwardingDatabase, @unchecked Sendable {
     private var hidden: Set<RecordID> = []
     init(_ inner: any RecordDatabase) { base = inner }
     func hide(_ ref: TurnRef) { _ = lock.withLock { hidden.insert(Turn.recordID(for: ref)) } }
+    func unhide(_ ref: TurnRef) { _ = lock.withLock { hidden.remove(Turn.recordID(for: ref)) } }
     func records(ofType type: String, through base: any RecordDatabase) async throws -> [Record] {
         let all = try await base.records(ofType: type)
         let hidden = lock.withLock { self.hidden }
@@ -113,12 +114,13 @@ func ended(_ marks: Marks, after trigger: String) -> String? {
         await hub.turnOn()
         #expect(await started(hub))
         let lease = try #require(await h.lease())
+        // Mutant: a heads-up taken for a lease this Mac does not hold.
+        #expect(await hub.headsUp(holder: lease.holder, epoch: lease.epoch + 1, mark: "ab12cd34") == nil)
+        #expect(await hub.headsUp(holder: h.phoneID, epoch: lease.epoch, mark: "ab12cd34") == nil)
         gated.close()
         await hub.trigger(.push)
         #expect(await eventually { gated.holding == 1 })
         #expect(await hub.headsUp(holder: lease.holder, epoch: lease.epoch, mark: "ab12cd34") == nil)
-        // And one for a lease this Mac does not hold.
-        #expect(await hub.headsUp(holder: lease.holder, epoch: lease.epoch + 1, mark: "ab12cd34") == nil)
         gated.open()
         #expect(await eventually { await hub.snapshot().passes == 2 })
         #expect(await hub.headsUp(holder: lease.holder, epoch: lease.epoch + 1, mark: "ab12cd34") == nil)
@@ -191,6 +193,61 @@ func ended(_ marks: Marks, after trigger: String) -> String? {
         }
         #expect(marks.all.contains { $0.hasPrefix("hub.pass.waited") && $0.hasSuffix(" other") })
         #expect(h.rig.inputs == ["from the pad"])
+    }
+
+    /// Another trigger whose turn the feed does not show yet holds the heads-up's pass a second
+    /// at most: the pass ends, and that turn is read again by a pass of its own.
+    @Test func anotherTriggerWhoseTurnTheFeedIsBehindOnIsNotHeldBack() async throws {
+        let h = try HubRig()
+        let feed = FeedLag(h.db)
+        let marks = Marks()
+        try await Perf.$observer.withValue({ marks.add($0) }) {
+            let hub = quiet(h, over: feed)
+            await hub.turnOn()
+            #expect(await started(hub))
+            let lease = try #require(await h.lease())
+            _ = try #require(await hub.headsUp(holder: lease.holder, epoch: lease.epoch, mark: "ab12cd34"))
+            #expect(await eventually { marks.all.contains("hub.pass.trigger coming") && marks.all.contains { $0.hasPrefix("hub.pass.read") } })
+            let log = TurnLog(database: h.db)
+            let pad = try await log.writer(for: DeviceID("pad-99887766")).append(.person, "from the pad", continuing: try await log.read())
+            feed.hide(pad.ref)
+            let nudged = Date()
+            let answered = Task { await hub.nudge(holder: lease.holder, epoch: lease.epoch, mark: String(pad.nonce.prefix(8))) }
+            // Mutant: the wait after another trigger left at the heads-up's bound, 30 s on.
+            #expect(await eventually(5) { ended(marks, after: "hub.pass.trigger coming") != nil })
+            #expect(Date().timeIntervalSince(nudged) < 3)
+            feed.unhide(pad.ref)
+            #expect(try await eventually(10) { try await h.replies().count == 1 })
+            #expect(await answered.value)
+            await hub.turnOff()
+        }
+        #expect(marks.all.contains { $0.hasPrefix("hub.pass.waited") && $0.hasSuffix(" other") })
+        #expect(h.rig.inputs == ["from the pad"])
+    }
+
+    /// A push that lands before the phone's word of its save (its turn's own push, ahead of the
+    /// feed) leaves the heads-up standing: the pass reads the feed again and goes on waiting.
+    @Test func aPushAheadOfTheSavedLineLeavesTheHeadsUpStanding() async throws {
+        let h = try HubRig()
+        let feed = FeedLag(h.db)
+        let marks = Marks()
+        try await Perf.$observer.withValue({ marks.add($0) }) {
+            let hub = quiet(h, over: feed)
+            await hub.turnOn()
+            #expect(await started(hub))
+            let lease = try #require(await h.lease())
+            let ticket = try #require(await hub.headsUp(holder: lease.holder, epoch: lease.epoch, mark: "ab12cd34"))
+            #expect(await eventually { marks.all.contains("hub.pass.trigger coming") && marks.all.contains { $0.hasPrefix("hub.pass.read") } })
+            let person = try await phoneSays("hello", h, nonce: "ab12cd34-0000-4000-8000-000000000000", hiddenFrom: feed)
+            await hub.trigger(.push)
+            #expect(await eventually { marks.all.contains { $0.hasPrefix("hub.pass.waited") && $0.hasSuffix(" other") } })
+            ticket.saved(person.ref)
+            #expect(try await eventually { try await h.replies().count == 1 })
+            // Mutant: the timer of the wait the push answered ends the heads-up as it is cancelled.
+            #expect(marks.all.contains { $0.hasPrefix("hub.pass.waited") && $0.hasSuffix(" saved") })
+            await hub.turnOff()
+        }
+        #expect(h.rig.inputs == ["hello"])
     }
 
     @Test func aLeaseTakenDuringTheWaitAsksTheBrainNothing() async throws {

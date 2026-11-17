@@ -6,12 +6,15 @@ import TopoTurn
 /// (`HubMind.headsUp`): the hub's listener says the turn's ref once the phone's `saved` line
 /// comes (`saved`), or that the heads-up ended without one (`end`: the bound, the connection
 /// closed, a line that is not one); the mind ends it too as it stops. Another trigger during the
-/// wait (`interrupt`) has the pass read the log again and wait on. The wait itself is bounded from
-/// the heads-up, and a cancelled wait answers `gone` at once.
+/// wait (`interrupt`) has the pass read the log again and wait on, for `afterOther` at most from
+/// then, so that trigger's turn, which the feed may not show yet, is read again by a pass of its
+/// own no later than a nudge's own read again a second on would be. The wait
+/// itself is bounded from the heads-up, and a cancelled wait answers `gone` at once.
 public final class ComingTurn: @unchecked Sendable {
     /// The turn's mark, as the phone's marks carry it, in lower case.
     public let mark: String
-    private let deadline: ContinuousClock.Instant
+    private var deadline: ContinuousClock.Instant
+    private let afterOther: Duration
     private let lock = NSLock()
     private var ref: TurnRef?
     private var told = false
@@ -19,9 +22,10 @@ public final class ComingTurn: @unchecked Sendable {
     private var interrupted = false
     private var waiter: CheckedContinuation<TurnRunner.Coming, Never>?
 
-    init(mark: String, bound: Duration) {
+    init(mark: String, bound: Duration, afterOther: Duration = .seconds(1)) {
         self.mark = mark
         self.deadline = .now + bound
+        self.afterOther = afterOther
     }
 
     /// The turn is saved as `ref`. Only the first word counts, and none once the heads-up ended.
@@ -55,6 +59,7 @@ public final class ComingTurn: @unchecked Sendable {
     func interrupt() {
         let waiter = lock.withLock { () -> CheckedContinuation<TurnRunner.Coming, Never>? in
             guard ref == nil, !ended else { return nil }
+            deadline = min(deadline, .now + afterOther)
             guard let waiter = self.waiter else {
                 interrupted = true
                 return nil
@@ -69,8 +74,11 @@ public final class ComingTurn: @unchecked Sendable {
     /// heads-up ended, its bound passed, or the waiting task was cancelled.
     func wait() async -> TurnRunner.Coming {
         if let now = answerNow() { return now }
-        let timer = Task { [deadline] in
-            try? await Task.sleep(until: deadline, clock: .continuous)
+        let deadline = lock.withLock { self.deadline }
+        // The bound ends the heads-up only when it passes: a timer cancelled because this wait
+        // was answered ends nothing.
+        let timer = Task {
+            guard (try? await Task.sleep(until: deadline, clock: .continuous)) != nil else { return }
             self.timedOut()
         }
         defer { timer.cancel() }

@@ -320,6 +320,20 @@ public enum HubNudge {
             }
         }
 
+        /// `saved` as the phone's nudge takes it: true once the hub has answered `read`, and nil
+        /// for anything else — the heads-up not taken, the hub's `no` (its wait ended before the
+        /// line came), or the connection gone — so the nudge goes the usual way, as it would have
+        /// with no heads-up.
+        public func nudged(_ ref: TurnRef, stream: (@Sendable (ReplyFrame) async -> Void)?) async -> Bool? {
+            guard let answer = await saved(ref, stream: stream) else { return nil }
+            switch answer {
+            case .read: return true
+            case .no: Perf.mark("turn.coming.answer turn=\(mark) no")
+            case .unreached(let why): Perf.mark("turn.coming.answer turn=\(mark) unreached \(why)")
+            }
+            return nil
+        }
+
         /// Closes the heads-up: the hub's wait for its turn ends, and `saved` is nil from now.
         public func cancel() {
             let opening = lock.withLock { () -> Task<Bool, Never>? in

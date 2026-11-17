@@ -424,8 +424,6 @@ struct TopoApp: App {
 /// The heads-up the harness holds for a turn on the line is the channel's (`HubNudge.Coming`).
 extension HubNudge.Coming: HubHeadsUp {
     func saved(_ ref: TurnRef, frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool? {
-        guard let answer = await saved(ref, stream: frames) else { return nil }
-        if case .unreached(let why) = answer { Perf.mark("nudge.unreached \(why)") }
-        return answer == .read
+        await nudged(ref, stream: frames)
     }
 }

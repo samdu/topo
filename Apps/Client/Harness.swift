@@ -2221,8 +2221,8 @@ protocol HubHeadsUp: AnyObject, Sendable {
     var lease: Lease { get }
     /// The turn is saved as `ref`: the nudge down the heads-up's connection, with the reply's
     /// frames handed to `frames` as the hub streams them, answering true once the hub's pass has
-    /// ended. Nil when the hub did not take the heads-up or its connection went: nothing was said,
-    /// and the nudge goes the usual way.
+    /// ended. Nil for anything else (the hub did not take the heads-up, answered the line `no`, or
+    /// its connection went): the nudge goes the usual way.
     func saved(_ ref: TurnRef, frames: @escaping @Sendable (ReplyFrame) async -> Void) async -> Bool?
     /// Closes the heads-up: the hub's wait for its turn ends.
     func cancel()
