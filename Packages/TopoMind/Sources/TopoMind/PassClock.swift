@@ -8,7 +8,8 @@ import TopoTurn
 /// answered, which a pass makes only when the feed shows something to do), `hub.pass.lease` (the
 /// lease's last write answered before the brain is asked), `hub.pass.asked` (the brain asked, with
 /// `turn=` the milliseconds since the newest turn it answers was said), `hub.pass.written` (the
-/// input on Claude Code's stdin), `hub.pass.received` (its echo: Claude Code took the turn up),
+/// input on Claude Code's stdin), `hub.pass.received` (its echo, which Claude Code writes as the API's first event for the
+/// turn arrives, so not the moment it sent the request),
 /// `hub.pass.begun` (the reply's first message begun, the API's first event), `hub.pass.words`
 /// (the reply's first words), `hub.pass.answered`, `hub.pass.saved` (the reply's batch answered)
 /// — and `hub.pass.end <outcome>`. A pass with nothing to answer marks the trigger, the read and
@@ -65,11 +66,8 @@ final class PassClock: @unchecked Sendable {
         }
     }
 
-    /// A fetch by ID naming a turn answered: the log read's second half, once the read is marked.
-    func probed() {
-        guard lock.withLock({ marked.contains("read") }) else { return }
-        reached("probed")
-    }
+    /// A fetch by ID naming a turn answered: in a pass, the first is the log read's second half.
+    func probed() { reached("probed") }
 
     /// Where the process has the turn the brain was asked: only the first of each in a pass.
     func brain(_ stage: NativeBrain.Stage) {

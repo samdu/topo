@@ -465,6 +465,7 @@ public actor TurnRunner {
     /// caught up with (`TurnLog.probed`). When the feed shows a person's turn to answer, that one
     /// request also fetches the marker of the reply to the heads it shows and the person's choice
     /// of model, so neither is a round trip of its own. `asked` is what it fetched beside the log.
+    /// A pass that then asks for the lease the long way fetches the marker again after its claim.
     private func probe(_ seen: Transcript) async throws -> (transcript: Transcript, fetched: [RecordID: Record], asked: [RecordID]) {
         let unresolved = await brain.unresolved()
         let waits = seen.isComplete && Self.awaitsReply(seen, skipping: unresolved)

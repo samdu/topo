@@ -151,14 +151,16 @@ public actor NativeBrain: Brain {
     /// message begun, its words, a tool call begun (`ReplyCast`). Never a tool's name or input.
     private var writes: (@Sendable (ReplyFrame) -> Void)?
     /// Told where a turn asked of this brain stands with Claude Code: its input written to stdin,
-    /// and its input's echo (the turn taken up). For the hub's pass marks; nothing of the turn.
+    /// and its input's echo. For the hub's pass marks; nothing of the turn.
     private var stages: (@Sendable (Stage) -> Void)?
 
     /// Where a turn asked of the brain stands with the process (`stages(to:)`).
     public enum Stage: Sendable, Equatable {
         /// The input is written to Claude Code's stdin.
         case written
-        /// Claude Code echoed the input: it has taken the turn up.
+        /// Claude Code echoed the input, which 2.1.326 does as the API's first event for the turn
+        /// arrives, a few milliseconds before the reply's first message begins: well after it sent
+        /// the request.
         case received
     }
 
