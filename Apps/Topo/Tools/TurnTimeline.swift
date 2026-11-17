@@ -216,7 +216,9 @@ struct TurnTimeline: Sendable {
         if let write {
             raw.append((write.ms, place(write), .ready, "Claude Code had your words"))
             // Its first word back on the turn: a process still starting (a launch, a resume, a
-            // boot) spends its start here, not in making the request.
+            // boot) spends its start here, not in making the request; except at a boot that owes
+            // the login check (`GuestSession`, `checksLogin`), whose first input is written only
+            // once the process has answered, so that start is spent before Claude Code had the words.
             if let begun = clean.first(where: { $0.name == "turn.guest.init" && $0.ms >= write.ms }) {
                 raw.append((begun.ms, place(begun), .start, "Claude Code started on your words"))
             }
