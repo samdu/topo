@@ -17,7 +17,12 @@ public enum ModelChoice {
 
     /// The choice the record holds, or nil when there is none or it names no choice (`ClaudeModel(setting:)`).
     public static func read(from database: any RecordDatabase) async throws -> ClaudeModel? {
-        try await database.fetch(recordID).flatMap { $0.string("model") }.flatMap(ClaudeModel.init(setting:))
+        said(by: try await database.fetch(recordID))
+    }
+
+    /// The choice `record` holds, the record as fetched by `recordID` (nil when there is none).
+    public static func said(by record: Record?) -> ClaudeModel? {
+        record.flatMap { $0.string("model") }.flatMap(ClaudeModel.init(setting:))
     }
 
     /// Makes the record say `model`, as said by `device`: nothing when it already does, otherwise

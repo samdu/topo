@@ -77,6 +77,7 @@ final class RecordingDatabase: ForwardingDatabase, @unchecked Sendable {
     private var _saved: [[String]] = []
     init(inner: InMemoryRecordDatabase) { self.inner = inner }
     var leaseFetches: Int { lock.withLock { _fetched.count { $0.contains(Lease.recordID) } } }
+    var fetched: [[RecordID]] { lock.withLock { _fetched } }
     var saved: [[String]] { lock.withLock { _saved } }
     func reset() { lock.withLock { _fetched = []; _saved = [] } }
     func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {

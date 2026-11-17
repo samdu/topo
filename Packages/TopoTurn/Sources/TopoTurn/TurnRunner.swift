@@ -444,42 +444,70 @@ public actor TurnRunner {
     /// pass reads the log or renews the lease leaves that pass nothing to claim: it throws
     /// `notPrimary(.contended)` with the brain unasked.
     public func answerPending(since mark: Int?, choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
+        try await answerPending(since: mark, choosingFrom: { _ in await choosing() })
+    }
+
+    /// `answerPending(since:choosing:)`, with `choosingFrom` handed what the person's choice of
+    /// model in the zone says (`ModelChoice`, nil where no device has said), read by ID in the
+    /// request that reads the log's newest turns, so knowing it costs the pass no round trip.
+    public func answerPending(since mark: Int?, choosingFrom: @Sendable (_ said: ClaudeModel?) async -> ClaudeModel) async throws -> Turn? {
         let mark = if let mark { mark } else { await lease.abandons }
-        return try await answering(since: mark, choosing: choosing)
+        return try await answering(since: mark, choosing: choosingFrom)
     }
 
     /// `answerPending(model:)`, with the model asked for only once there is a turn to answer:
     /// `choosing` is called at most once a pass, after the log was read, and never on a pass with
-    /// no person's turn to answer. It is asked beside the lease's renewal and the reply's marker,
-    /// so a pass that finds the reply written or the lease taken may have asked it for nothing.
+    /// no person's turn to answer. It is asked beside the lease's renewal, so a pass that finds
+    /// the lease taken may have asked it for nothing.
     public func answerPending(choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
         try await answerPending(since: nil, choosing: choosing)
     }
 
-    private func answering(since mark: Int, choosing: @Sendable () async -> ClaudeModel) async throws -> Turn? {
-        var transcript = try await log.read()
-        guard transcript.isComplete else { return nil }
+    /// The log read in two halves, as a pass needs it: the zone's change feed, which alone says
+    /// whether anything waits, then the fetch by ID that finds a newest turn the feed has not
+    /// caught up with (`TurnLog.probed`). When the feed shows a person's turn to answer, that one
+    /// request also fetches the marker of the reply to the heads it shows and the person's choice
+    /// of model, so neither is a round trip of its own. `asked` is what it fetched beside the log.
+    /// A pass that then asks for the lease the long way fetches the marker again after its claim.
+    private func probe(_ seen: Transcript) async throws -> (transcript: Transcript, fetched: [RecordID: Record], asked: [RecordID]) {
+        let unresolved = await brain.unresolved()
+        let waits = seen.isComplete && Self.awaitsReply(seen, skipping: unresolved)
+        let also = waits ? [TurnLog.markerID(appendedUnder: Self.replyNonce(for: seen.heads)), ModelChoice.recordID] : []
+        let (transcript, fetched) = try await log.probed(seen, also: also)
+        return (transcript, fetched, also)
+    }
+
+    private func answering(since mark: Int, choosing: @Sendable (ClaudeModel?) async -> ClaudeModel) async throws -> Turn? {
+        // The feed alone says whether anything waits: what the fetch by ID adds is only turns the
+        // feed is behind on, which leave the read incomplete and the pass with nothing to do, so a
+        // pass that finds nothing waiting in the feed asks CloudKit nothing more.
+        let seen = try await log.feed()
+        guard seen.isComplete else { return nil }
         // An owed reply is written whatever the head is: another device may have answered past
         // the turn it belongs to, and nothing else would ever write it.
-        let waiting = Self.awaitsReply(transcript, skipping: await brain.unresolved())
-        if !waiting {
-            guard await brain.owed() != nil else { return nil }
-        }
-        // A lease held fresh with nothing owed is renewed while the reply's marker and the model
-        // are read, rather than read and written before them: one compare-and-set the server
-        // answers, which a claim by another device since this one last wrote refuses, and then
-        // `acquire()` the long way. The brain is asked only once one of the two said primary.
+        let waiting = Self.awaitsReply(seen, skipping: await brain.unresolved())
         let owes = await brain.owed() != nil
+        guard waiting || owes else { return nil }
+        // A lease held fresh with nothing owed is renewed while the rest of the log is read,
+        // rather than after it: one compare-and-set the server answers, sent once the feed shows a
+        // turn to answer, which a claim by another device since this one last wrote refuses, and
+        // then `acquire()` the long way. The brain is asked only once one of the two said primary.
         let fresh = await lease.isPrimary()
         let acquired = owes || !fresh
+        let renewal: Task<Bool, Never>? = acquired ? nil : Task { await self.renewFresh() }
+        var (transcript, fetched, asked) = try await probe(seen)
+        guard transcript.isComplete else { return nil }
         if acquired {
             let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            // A reply another device wrote while the lease was asked for is found by a marker
+            // fetched after the claim: the one fetched with the log is from before it.
+            asked.removeAll { $0 != ModelChoice.recordID }
         }
         let settled = try await settleOwed()
         if settled != nil {
             // The owed reply moved the log; what waits is read again.
-            transcript = try await log.read()
+            (transcript, fetched, asked) = try await probe(try await log.feed())
         }
         let unresolved = await brain.unresolved()
         guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return settled }
@@ -493,26 +521,37 @@ public actor TurnRunner {
         let skipped = await brain.unresolved()
         let answering = transcript.heads.compactMap { transcript[$0] }
             .filter { $0.role == .person && !skipped.contains($0.ref) }
-        // The reply's marker, the renewal and the model are asked at once: none depends on another.
-        async let found = log.turn(appendedUnder: nonce)
-        async let renewed = acquired ? true : renewFresh()
+        // The reply's marker and the choice were fetched with the log's newest turns when the read
+        // saw this transcript's heads waiting; otherwise they are fetched now.
+        let markerID = TurnLog.markerID(appendedUnder: nonce)
+        let found = asked.contains(markerID)
+            ? try await log.turn(marker: fetched[markerID], nonce: nonce)
+            : try await log.turn(appendedUnder: nonce)
         guard !answering.isEmpty else {
             // Settling what was owed can find the waiting turn cut off: nothing is left to answer,
             // unless the reply is there already.
-            if let answered = try await found {
+            if let answered = found {
                 await brain.landed(answered, nonce: nonce)
                 return answered
             }
             return settled
         }
-        async let chosen = choosing()
-        if let answered = try await found {
+        if let answered = found {
             await brain.landed(answered, nonce: nonce)
             return answered
         }
-        guard try await renewed else {
+        let said = asked.contains(ModelChoice.recordID)
+            ? ModelChoice.said(by: fetched[ModelChoice.recordID])
+            : ModelChoice.said(by: try await log.records([ModelChoice.recordID])[ModelChoice.recordID])
+        async let chosen = choosing(said)
+        guard await renewal?.value ?? true else {
             let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            // As above: the marker is asked again once the lease is this device's.
+            if let answered = try await log.turn(appendedUnder: nonce) {
+                await brain.landed(answered, nonce: nonce)
+                return answered
+            }
             return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
         }
         return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)

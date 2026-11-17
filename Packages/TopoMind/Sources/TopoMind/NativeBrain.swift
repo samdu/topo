@@ -150,6 +150,19 @@ public actor NativeBrain: Brain {
     /// Told each piece of a turn's reply as Claude Code writes it, once the turn is its own: a
     /// message begun, its words, a tool call begun (`ReplyCast`). Never a tool's name or input.
     private var writes: (@Sendable (ReplyFrame) -> Void)?
+    /// Told where a turn asked of this brain stands with Claude Code: its input written to stdin,
+    /// and its input's echo. For the hub's pass marks; nothing of the turn.
+    private var stages: (@Sendable (Stage) -> Void)?
+
+    /// Where a turn asked of the brain stands with the process (`stages(to:)`).
+    public enum Stage: Sendable, Equatable {
+        /// The input is written to Claude Code's stdin.
+        case written
+        /// Claude Code echoed the input, which 2.1.326 does as the API's first event for the turn
+        /// arrives, a few milliseconds before the reply's first message begins: well after it sent
+        /// the request.
+        case received
+    }
 
     public init(_ configuration: Configuration) {
         self.configuration = configuration
@@ -234,6 +247,7 @@ public actor NativeBrain: Brain {
             if self.epoch == epoch, ledger.pending?.input == id { ledger.pending = nil; try? save() }
             throw NativeBrainError.failed(String(describing: error))
         }
+        stages?(.written)
         try current(epoch)
         resident?.sent.insert(id)
         return try await listen(id, begun: false, to: process, epoch: epoch, model: model)
@@ -261,6 +275,11 @@ public actor NativeBrain: Brain {
     /// Where the pieces of each reply go as they are written (`writes`); nil for nowhere.
     public func writes(to hand: (@Sendable (ReplyFrame) -> Void)?) {
         writes = hand
+    }
+
+    /// Where each turn's stages go (`Stage`); nil for nowhere.
+    public func stages(to hand: (@Sendable (Stage) -> Void)?) {
+        stages = hand
     }
 
     /// Recorded for `start()`; every request carries its own model, and a process asked with a
@@ -538,6 +557,7 @@ public actor NativeBrain: Brain {
                     guard begun else {
                         if case .received(id) = event {
                             begun = true
+                            stages?(.received)
                             if self.epoch == epoch, ledger.pending?.input == id {
                                 ledger.pending?.state = .received
                                 try? save()
