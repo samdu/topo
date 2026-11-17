@@ -496,6 +496,9 @@ public actor TurnRunner {
         if acquired {
             let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            // A reply another device wrote while the lease was asked for is found by a marker
+            // fetched after the claim: the one fetched with the log is from before it.
+            asked.removeAll { $0 != ModelChoice.recordID }
         }
         let settled = try await settleOwed()
         if settled != nil {
@@ -540,6 +543,11 @@ public actor TurnRunner {
         guard await renewal?.value ?? true else {
             let outcome = try await acquire(since: mark)
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            // As above: the marker is asked again once the lease is this device's.
+            if let answered = try await log.turn(appendedUnder: nonce) {
+                await brain.landed(answered, nonce: nonce)
+                return answered
+            }
             return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
         }
         return try await answer(answering, in: transcript, nonce: nonce, model: await chosen)
