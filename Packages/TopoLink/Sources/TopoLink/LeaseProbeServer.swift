@@ -8,16 +8,17 @@ public enum TopoService {
     public static let type = "_topo._tcp"
 }
 
-/// The wire form of the listener: one line each way over TCP.
-/// `hold <device> <epoch>` asks whether the listener still holds that lease;
-/// `yes` or `no` answers. `moved <device> <epoch> <mark>` says the log moved, to the holder of
-/// that lease (`HubNudge`): the listener runs a pass and answers `read` when the pass that read
-/// after the nudge has ended, or `no` at once when it holds no such lease, has no pass to run or
-/// has too many nudges waiting already. `mark` is one to sixteen letters or digits, the turn's
-/// mark (`Harness.turnMark`'s eight) for the marks on both sides to be paired by, and nothing
-/// else. `moved <device> <epoch> <mark> stream` asks the same and for the reply to the turn the
-/// mark names as the mind writes it: before `read`, a line of JSON per `ReplyFrame`. Anything
-/// else, or silence, is no.
+/// The wire form of the listeners: one line each way, over TCP on the probe's port and over the
+/// nudge's TLS channel on its own (`NudgeTLS`). `hold <device> <epoch>` asks whether the listener
+/// still holds that lease; `yes` or `no` answers, on either. `moved <device> <epoch> <mark>` says
+/// the log moved, to the holder of that lease (`HubNudge`), and is taken on the channel alone: the
+/// listener runs a pass and answers `read` when the pass that read after the nudge has ended, or
+/// `no` at once when it holds no such lease, has no pass to run or has too many nudges waiting
+/// already. On the probe's plain port every `moved` is answered `no` and runs nothing. `mark` is
+/// one to sixteen letters or digits, the turn's mark (`Harness.turnMark`'s eight) for the marks on
+/// both sides to be paired by, and nothing else. `moved <device> <epoch> <mark> stream` asks the
+/// same and for the reply to the turn the mark names as the mind writes it: before `read`, a line
+/// of JSON per `ReplyFrame`. Anything else, or silence, is no.
 enum ProbeWire {
     static func request(_ lease: Lease) -> Data {
         Data("hold \(lease.holder.rawValue) \(lease.epoch)\n".utf8)
@@ -60,13 +61,15 @@ enum ProbeWire {
     struct LineTooLong: Error {}
 }
 
-/// Answers lease probes and advertises the device on the LAN.
+/// Answers lease probes and advertises the device on the LAN, and takes the nudges of the devices
+/// that hold the hub's key on a second listener, the channel (`NudgeKey`, `NudgeTLS`).
 ///
 /// The answer comes from `holds`, which the owner points at its
 /// `PrimaryLease`: true only for the lease it holds right now, epoch
 /// included, so a device that restarted or lost the lease says no and the
-/// asker claims. One listener does both jobs: it is the endpoint the lease
-/// record names, and its Bonjour registration is the device's presence.
+/// asker claims. The probe's listener does both of the first jobs: it is the endpoint the lease
+/// record names, and its Bonjour registration is the device's presence. The channel's listener
+/// is on a port of its own, which the key's record names, and is not advertised.
 public actor LeaseProbeServer {
     public typealias Holds = @Sendable (DeviceID, Int64) async -> Bool
     /// A nudge for the lease `device` at `epoch`, with its mark: true once a pass that read the
@@ -74,7 +77,8 @@ public actor LeaseProbeServer {
     /// mind not answering). Waited for as long as the pass runs, up to `nudgeBound`. With a
     /// `stream`, the nudge asked for its turn's reply as it is written: each frame handed to it is
     /// sent down the connection at once, in the order handed, ahead of the answer. It never waits
-    /// on the phone, so a slow or gone one holds up nothing of the mind's.
+    /// on the phone, so a slow or gone one holds up nothing of the mind's. Only a nudge that came
+    /// over the channel is handed here.
     public typealias Nudged = @Sendable (DeviceID, Int64, String, _ stream: (@Sendable (ReplyFrame) -> Void)?) async -> Bool
 
     /// The most nudges answered at once. One more is answered `no` with no pass asked: as many as
@@ -83,7 +87,7 @@ public actor LeaseProbeServer {
     /// How long a nudge is held for its pass's end before it is answered `no`: a pass is a model's
     /// whole turn, and the phone gives up waiting after `HubNudge.answerBound` anyway.
     public static let nudgeBound: TimeInterval = 600
-    /// How long a connection is given to say its one line.
+    /// How long a connection is given to say its one line, the channel's handshake included.
     public static let requestBound: TimeInterval = 5
     /// The longest line of a streamed reply this sends: a quarter of what the phone reads
     /// (`HubNudge.frameMaximum`), so a line is never near it however the reader's buffer runs.
@@ -91,17 +95,29 @@ public actor LeaseProbeServer {
     static let frameLine = HubNudge.frameMaximum / 4
 
     private let listener: NWListener
+    private let channel: NWListener?
     private let holds: Holds
     private let nudged: Nudged?
     private var nudging = 0
-    private var ready: CheckedContinuation<UInt16, any Error>?
     public private(set) var port: UInt16?
+    /// The channel's port once bound, or nil with no key.
+    public private(set) var securePort: UInt16?
 
     /// - Parameters:
     ///   - advertising: the device ID to register under `TopoService.type`,
     ///     or nil to listen without advertising.
     ///   - port: 0 picks a free one.
-    public init(advertising device: DeviceID?, port: UInt16 = 0, holds: @escaping Holds, nudged: Nudged? = nil) throws {
+    ///   - key: the hub's key, for the channel's listener on a free port of its own; nil, no
+    ///     channel, and so no nudge is taken.
+    public init(advertising device: DeviceID?, port: UInt16 = 0, key: NudgeKey? = nil,
+                holds: @escaping Holds, nudged: Nudged? = nil) throws {
+        try self.init(advertising: device, port: port, key: key, suites: [NudgeTLS.suite], holds: holds, nudged: nudged)
+    }
+
+    /// `suites` is what the channel's listener offers: the one suite but in the suites, which see
+    /// a listener that agrees to another refused.
+    init(advertising device: DeviceID?, port: UInt16 = 0, key: NudgeKey?, suites: [UInt16],
+         holds: @escaping Holds, nudged: Nudged? = nil) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
@@ -109,53 +125,61 @@ public actor LeaseProbeServer {
             listener.service = NWListener.Service(name: device.rawValue, type: TopoService.type)
         }
         self.listener = listener
+        self.channel = try key.map { try NWListener(using: NudgeTLS.parameters($0, suites: suites), on: .any) }
         self.holds = holds
         self.nudged = nudged
     }
 
-    /// Starts listening. Returns the port once bound.
+    /// Starts listening, the channel too. Returns the probe's port once both are bound.
     public func start() async throws -> UInt16 {
         if let port { return port }
-        listener.newConnectionHandler = { [weak self] connection in
+        let bound = try await Self.bind(listener, label: "zone.hexagon.topo.link.listener") { [weak self] connection in
             guard let self else { connection.cancel(); return }
-            Task { await self.serve(connection) }
+            Task { await self.serve(connection, secure: false) }
         }
-        listener.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            Task { await self.stateChanged(state) }
+        if let channel {
+            securePort = try await Self.bind(channel, label: "zone.hexagon.topo.link.channel") { [weak self] connection in
+                guard let self else { connection.cancel(); return }
+                Task { await self.serve(connection, secure: true) }
+            }
         }
-        listener.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.listener"))
-        return try await withCheckedThrowingContinuation { continuation in
-            ready = continuation
-        }
+        port = bound
+        return bound
     }
 
     public func stop() {
         listener.cancel()
+        channel?.cancel()
         port = nil
+        securePort = nil
     }
 
-    private func stateChanged(_ state: NWListener.State) {
-        switch state {
-        case .ready:
-            let bound = listener.port?.rawValue ?? 0
-            port = bound
-            ready?.resume(returning: bound)
-            ready = nil
-        case .failed(let error):
-            ready?.resume(throwing: error)
-            ready = nil
-        case .cancelled:
-            ready?.resume(throwing: CancellationError())
-            ready = nil
-        default:
-            break
+    private static func bind(_ listener: NWListener, label: String,
+                             serve: @escaping @Sendable (NWConnection) -> Void) async throws -> UInt16 {
+        let box = OneShot<UInt16>()
+        listener.newConnectionHandler = serve
+        listener.stateUpdateHandler = { [weak listener] state in
+            switch state {
+            case .ready: box.resume(.success(listener?.port?.rawValue ?? 0))
+            case .failed(let error): box.resume(.failure(error))
+            case .cancelled: box.resume(.failure(CancellationError()))
+            default: break
+            }
         }
+        listener.start(queue: DispatchQueue(label: label))
+        return try await box.value()
     }
 
-    private func serve(_ connection: NWConnection) async {
+    private func serve(_ connection: NWConnection, secure: Bool) async {
         connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.serve"))
         defer { connection.cancel() }
+        // The channel's handshake, within the request's bound: a connection without the key never
+        // gets past it, and one whose handshake agreed anything but the channel's version and suite
+        // is dropped before a byte of it is read.
+        if secure {
+            guard await Self.within(Self.requestBound, { try await connection.waitUntilReady() }) != nil,
+                  NudgeTLS.agreed(connection) else { return }
+        }
         // A connection that says nothing is closed at the bound, so nothing on the network holds
         // a serving task open by connecting.
         let request = await Self.within(Self.requestBound) { try await connection.readLine(maximum: 256) }
@@ -168,7 +192,8 @@ public actor LeaseProbeServer {
             let answer = await holds(device, epoch)
             try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
         case .moved(let device, let epoch, let mark, let stream):
-            guard let nudged, nudging < Self.nudgesAtOnce else {
+            // A nudge in the clear is nobody's: answered no, and nothing runs.
+            guard secure, let nudged, nudging < Self.nudgesAtOnce else {
                 try? await connection.send(ProbeWire.no)
                 return
             }

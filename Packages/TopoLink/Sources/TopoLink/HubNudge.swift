@@ -2,29 +2,32 @@ import Foundation
 import Network
 import TopoCore
 
-/// The phone's word to the hub that holds the lease: the log moved. One `moved` line over TCP to
-/// the endpoint the lease record names (`ProbeWire`), held open until the hub answers: `read`
-/// once the pass that read the log after the nudge has ended, when the reply it wrote (if it
-/// wrote one) is in the log for the phone to read now.
+/// The phone's word to the hub that holds the lease: the log moved. One `moved` line over the
+/// hub's channel (`NudgeTLS`, at the host the lease record names and the port its key's record
+/// names, `ProbeWire`), held open until the hub answers: `read` once the pass that read the log
+/// after the nudge has ended, when the reply it wrote (if it wrote one) is in the log for the
+/// phone to read now.
 ///
-/// It is only ever a hint. It carries the lease it is for and the turn's mark, no words and
-/// nothing secret, and nothing waits on it: with no answer the poll and the push bring the same
-/// turn and the same reply, a few seconds later. Every way it can fail is `unreached`. Asked to,
-/// the hub streams the reply down the same connection before it answers (`ReplyFrame`); what is
-/// streamed is provisional, and the log's reply replaces it.
+/// It is only ever a hint. It carries the lease it is for and the turn's mark, no words, and
+/// nothing waits on it: with no answer the poll and the push bring the same turn and the same
+/// reply, a few seconds later. Every way it can fail is `unreached`, a hub with no key among them.
+/// Asked to, the hub streams the reply down the same connection before it answers (`ReplyFrame`);
+/// what is streamed is provisional, and the log's reply replaces it. The channel is sealed and
+/// both ends prove they hold the hub's key, which only the devices on the Apple ID can read
+/// (`NudgeKey`), so nothing else on the network reads a frame, sends a nudge or poses as the hub.
 public enum HubNudge {
     public enum Answer: Equatable, Sendable {
         /// The hub's pass has ended: read the log.
         case read
         /// The hub has no pass to run for this lease, or too many nudges waiting.
         case no
-        /// No answer: the endpoint could not be reached, closed, or said nothing in time. The
-        /// kind of failure, for a mark.
+        /// No answer: no key, the endpoint could not be reached, the handshake failed, the
+        /// connection closed, or said nothing in time. The kind of failure, for a mark.
         case unreached(String)
     }
 
-    /// How long the connection is given to be made: a LAN round trip is milliseconds, and a phone
-    /// off the hub's network fails at once or waits here.
+    /// How long the connection is given to be made, the channel's handshake included: a LAN
+    /// round trip is milliseconds, and a phone off the hub's network fails at once or waits here.
     public static let connectBound: TimeInterval = 2
     /// How long the answer is waited for: a pass is the model's whole turn.
     public static let answerBound: TimeInterval = 600
@@ -39,20 +42,53 @@ public enum HubNudge {
     /// The longest line of a streamed reply: one frame, a few characters of words as JSON.
     static let frameMaximum = 65_536
 
-    /// Says the log moved to the holder of `lease`, at its endpoint, and waits for its answer.
-    /// With `stream`, asks for the reply to the turn `mark` names as the hub's mind writes it, and
-    /// hands it each frame in order as it arrives, ahead of the answer; a line that is no frame is
-    /// passed over. A connect that failed within `connectBound` is remembered for this endpoint
-    /// (`Unreached`), and the next nudge to it within that while is answered `unreached` at once.
-    public static func send(for lease: Lease, mark: String, connectBound: TimeInterval = connectBound,
-                            answerBound: TimeInterval = answerBound,
+    /// Says the log moved to the holder of `lease`, with the hub's key as `keys` has it from
+    /// `database`, once `reachable` says the hub's host may be asked (the app's local network
+    /// gate; false sends nothing). A hub with no key record is sent nothing (`noKey`), and a
+    /// record that cannot be read likewise (`keyUnread`), with a mark that says why; a handshake
+    /// the hub refused drops the phone's copy of the key, so the next nudge reads the record
+    /// again (a hub that launched since minted another).
+    public static func send(for lease: Lease, mark: String, keys: NudgeKeys, in database: any RecordDatabase,
+                            reachable: @Sendable (_ host: String, _ port: UInt16) async -> Bool = { _, _ in true },
                             stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
-        guard let endpoint = lease.endpoint, let (host, port) = SocketLeaseProbe.parse(endpoint) else {
+        guard let endpoint = lease.endpoint, let (host, _) = hostAndPort(endpoint) else { return .unreached("noEndpoint") }
+        if Unreached.shared.recently(endpoint) { return .unreached("recently") }
+        let key: NudgeKey
+        switch await keys.key(for: lease, in: database) {
+        case .key(let found, let read):
+            Perf.mark("nudge.key \(read ? "read" : "kept")")
+            key = found
+        case .none:
+            Perf.mark("nudge.key none")
+            return .unreached("noKey")
+        case .unread(let kind):
+            Perf.mark("nudge.key unread \(kind)")
+            return .unreached("keyUnread")
+        }
+        guard await reachable(host, key.port) else { return .unreached("gated") }
+        let answer = await send(for: lease, mark: mark, key: key, stream: stream)
+        if answer == .unreached("handshake") || answer == .unreached("agreement") { await keys.failed(key) }
+        return answer
+    }
+
+    /// Says the log moved to the holder of `lease` over the channel `key` opens, and waits for its
+    /// answer. With `stream`, asks for the reply to the turn `mark` names as the hub's mind writes
+    /// it, and hands it each frame in order as it arrives, ahead of the answer; a line that is no
+    /// frame is passed over. A connect that failed within `connectBound` is remembered for this
+    /// endpoint (`Unreached`), and the next nudge to it within that while is answered `unreached`
+    /// at once; a refused handshake is not, since the hub was reached.
+    static func send(for lease: Lease, mark: String, key: NudgeKey, connectBound: TimeInterval = connectBound,
+                     answerBound: TimeInterval = answerBound,
+                     stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
+        guard let endpoint = lease.endpoint, let (host, _) = SocketLeaseProbe.parse(endpoint) else {
             return .unreached("noEndpoint")
+        }
+        guard key.hub == lease.holder, let port = NWEndpoint.Port(rawValue: key.port), key.port != 0 else {
+            return .unreached("noKey")
         }
         guard ProbeWire.isMark(Substring(mark)) else { return .unreached("badMark") }
         if Unreached.shared.recently(endpoint) { return .unreached("recently") }
-        let connection = NWConnection(host: host, port: port, using: .tcp)
+        let connection = NWConnection(host: host, port: port, using: NudgeTLS.parameters(key))
         let stage = Stage()
         // Each bound cancels the connection, which fails whichever step is pending.
         let connecting = Task {
@@ -73,10 +109,13 @@ public enum HubNudge {
             } catch {
                 let kind = Self.kind(error, connection)
                 // A connect that failed or ran out, off the hub's network: not tried again for a
-                // while. Local network access refused is the gate's, not the network's.
+                // while. Local network access refused is the gate's, not the network's, and a
+                // refused handshake is the key's.
                 if kind == "connect" || kind == "connectTimeout" { Unreached.shared.failed(endpoint) }
                 return .unreached(kind)
             }
+            // What the handshake agreed, not what was asked for, admits the hub.
+            guard NudgeTLS.agreed(connection) else { return .unreached("agreement") }
             stage.connected()
             Unreached.shared.reached(endpoint)
             Perf.mark("nudge.connected")
@@ -168,10 +207,11 @@ public enum HubNudge {
     }
 
     /// Why a connection was not made, by kind: denied local network access says so, since it is
-    /// the one a person can change.
+    /// the one a person can change, and a handshake the hub refused, since that is the key.
     private static func kind(_ error: any Error, _ connection: NWConnection) -> String {
         if connection.currentPath?.unsatisfiedReason == .localNetworkDenied { return "localNetworkDenied" }
         if error is CancellationError { return "connectTimeout" }
+        if case .tls? = error as? NWError { return "handshake" }
         return "connect"
     }
 

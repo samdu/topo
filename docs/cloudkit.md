@@ -24,6 +24,7 @@ What the code writes and asks for, and so what each environment's schema has to 
 | topo | `PrimaryLease` | `holder` String, `epoch` Int64, `expiresAt` Date/Time, `endpoint` String | |
 | topo | `Role` | `role` String, `setBy` String, `at` Date/Time | |
 | topo | `ModelChoice` | `model` String, `device` String, `at` Date/Time | |
+| topo | `NudgeKey` | `hub` String, `identity` String, `secret` String, `port` Int64, `mintedAt` Date/Time | |
 | topo | `Device` | `name` String, `kind` String, `publicKey` String, `endpoints` List\<String>, `pairedWith` List\<String>, `registeredAt` Date/Time, `seenAt` Date/Time | |
 | topo | `Surface` | `slot` String, `document` String, `revision` Int64, `updated` Date/Time, `runner` String, `imageNames` List\<String>, `images` List\<Asset>, `cleared` Int64 | `updated` queryable, sortable |
 | board | `Card` | `device` String, `sequence` Int64, `card` String, `owner` String, `body` String, `state` String, `parents` List\<String>, `at` Date/Time, `nonce` String | `device` queryable; `sequence` queryable, sortable |
@@ -47,6 +48,6 @@ The environment is in the key because a change token is the server's, and a Test
 
 A container nothing has written to answers two more ways, both absorbed by the adapter and both invisible until a fresh account takes its first turn: a query on a record type the development schema has never seen fails `unknownItem` rather than returning nothing (answered `[]`), and an empty string list on a first save makes the server refuse the whole atomic batch with "Syntax error in request" (left off the wire, since a list with no elements has no type the schema can be grown from).
 
-`Packages/TopoLink` is the socket layer: the lease probe over TCP (one line each way), the nudge a phone sends the hub when the log moved (`HubNudge`, `docs/hub.md`), the listener that answers both and advertises the device as `_topo._tcp`, and the browse that says who is on the LAN; its tests run on loopback.
+`Packages/TopoLink` is the socket layer: the lease probe over TCP (one line each way), the nudge a phone sends the hub when the log moved, over the hub's channel, TLS on a key the hub keeps in the zone (`HubNudge`, `NudgeKey`, `docs/hub.md`), the listeners that answer them, the probe's advertising the device as `_topo._tcp`, and the browse that says who is on the LAN; its tests run on loopback.
 
 `swift test` from a package directory runs its suite. `TopoTests` drives the phone's `Harness` itself over the in-memory log, with the guest behind a scripted `GuestConversation` (the unsettled line on disk and its relaunch, a failed model call, not-primary and displaced turns, the role-record handover, the answering loop). No automated suite reaches the CloudKit service: `CloudKitMappingTests` covers the adapter's record and error mapping offline, so the account, the schema, partial failures and the zone change feed are exercised only by Womble's manual self-test (`CloudKitSelfTest`) on a signed-in device.

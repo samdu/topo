@@ -19,7 +19,8 @@ import TopoCore
         let ref = TurnRef(device: DeviceID("phone-a"), sequence: 4)
         // Quotes, newlines, slashes and characters of several bytes, which the JSON line grows on.
         let big = String(repeating: "a \"word\"\n/ é 🦑 \u{1}", count: 7_000)
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, _, stream in
+        let key = NudgeKey.mint(hub: DeviceID("mac-hub"))
+        let server = try LeaseProbeServer(advertising: nil, key: key, holds: { _, _ in false }) { _, _, _, stream in
             guard let stream else { return false }
             stream(.turn([ref])); stream(.message); stream(.text(big)); stream(.text(" tail"))
             return true
@@ -29,7 +30,8 @@ import TopoCore
         let got = Got()
         let lease = Lease(holder: DeviceID("mac-hub"), endpoint: "127.0.0.1:\(port)", epoch: 3, expiresAt: Date() + 10)
         // Mutant: the frame sent as one line (`frame.line`).
-        #expect(await HubNudge.send(for: lease, mark: "ab12cd34", stream: { got.add($0) }) == .read)
+        let channel = key.on(port: try #require(await server.securePort))
+        #expect(await HubNudge.send(for: lease, mark: "ab12cd34", key: channel, stream: { got.add($0) }) == .read)
         #expect(got.frames.prefix(2) == [.turn([ref]), .message])
         #expect(got.text == big + " tail")
         #expect(got.frames.count > 4)

@@ -117,7 +117,7 @@ struct MindSection: View {
                 .pickerStyle(.segmented)
                 .help("The model where no device has said one. A turn from the phone is answered with the phone's choice.")
                 Toggle("Stream replies to the phone", isOn: $hub.streams)
-                    .help("A phone on this network sees and hears the reply as it is written, sent in the clear on the network.")
+                    .help("A phone on this network sees and hears the reply as it is written, sealed on the network so only devices on this Apple ID can read it.")
                 if let pinned = ClaudeModel.pinned {
                     Text("Debug build: every turn goes to \(pinned.displayName)").font(.caption2).foregroundStyle(.secondary)
                 }

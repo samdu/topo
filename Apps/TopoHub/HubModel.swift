@@ -60,8 +60,8 @@ final class HubModel {
         didSet { UserDefaults.standard.set(model.rawValue, forKey: Self.modelKey) }
     }
     /// Whether a phone that nudges this Mac is sent its turn's reply as the mind writes it, over
-    /// the LAN in the clear (`ReplyFrame`, `docs/hub.md`, *The reply as it is written*): on by
-    /// default, kept in the hub's defaults under `streamKey`.
+    /// the nudge's channel (`ReplyFrame`, `NudgeKey`, `docs/hub.md`, *The reply as it is written*):
+    /// on by default, kept in the hub's defaults under `streamKey`.
     var streams: Bool {
         didSet { UserDefaults.standard.set(streams, forKey: Self.streamKey) }
     }
@@ -86,6 +86,10 @@ final class HubModel {
     private var hubMind: HubMind?
     private var mindSwitch: MindSwitch?
     private var server: LeaseProbeServer?
+    /// This launch's key for the nudge's channel, at its listener's port, and whether its record
+    /// has been saved: minted once a launch, never logged.
+    private var nudgeKey: NudgeKey?
+    private var nudgeKeySaved = false
     private var loop: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var signals: [DispatchSourceSignal] = []
@@ -343,6 +347,7 @@ final class HubModel {
         }
         status = .up
         while !Task.isCancelled {
+            await saveNudgeKey()
             await followSwitch()
             await refreshLease()
             writeStatus()
@@ -368,7 +373,8 @@ final class HubModel {
         }
         if let ck = database as? CloudKitRecordDatabase { try await ck.ensureZone() }
         if server == nil {
-            let server = try LeaseProbeServer(advertising: device, holds: { [weak self] holder, epoch in
+            let key = NudgeKey.mint(hub: device)
+            let server = try LeaseProbeServer(advertising: device, key: key, holds: { [weak self] holder, epoch in
                 guard let self else { return false }
                 return await self.holds(holder, epoch: epoch)
             }, nudged: { [weak self] holder, epoch, mark, stream in
@@ -376,9 +382,14 @@ final class HubModel {
                 return await self.nudged(holder, epoch: epoch, mark: mark, stream: stream)
             })
             port = try await server.start()
+            nudgeKey = key.on(port: await server.securePort ?? 0)
             self.server = server
-            Self.log.notice("hub \(self.device.rawValue, privacy: .public) listening on \(self.port ?? 0) store \(self.store.rawValue, privacy: .public)")
+            Self.log.notice("hub \(self.device.rawValue, privacy: .public) listening on \(self.port ?? 0), the nudge's channel on \(self.nudgeKey?.port ?? 0), store \(self.store.rawValue, privacy: .public)")
         }
+        // The key's record before the mind is made, so a phone that finds this launch's lease
+        // finds its key. A save that fails holds up nothing: the mind is made all the same, a
+        // phone finds no key or the last launch's and sends no nudge, and the run loop saves it.
+        await saveNudgeKey()
         let endpoints = HubIdentity.addresses().map { "\($0):\(port ?? 0)" }
         let record = try await directory.register(Device(
             id: device, name: name, kind: .mac, publicKey: try HubIdentity.publicKey(),
@@ -394,6 +405,19 @@ final class HubModel {
             }
             await surfaces.start()
             await pages.start()
+        }
+    }
+
+    /// Saves this launch's key for the nudge's channel until a save lands, with the same key each
+    /// time; a failure is logged by its kind, never with the key.
+    private func saveNudgeKey() async {
+        guard !nudgeKeySaved, let nudgeKey else { return }
+        do {
+            try await nudgeKey.save(to: database)
+            nudgeKeySaved = true
+            Self.log.notice("hub nudge key saved")
+        } catch {
+            Self.log.error("hub nudge key not saved (\(NudgeKey.kind(of: error), privacy: .public)), nudges go unanswered until it is")
         }
     }
 

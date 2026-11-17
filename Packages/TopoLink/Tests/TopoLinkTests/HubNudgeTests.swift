@@ -4,9 +4,20 @@ import Testing
 import TopoCore
 @testable import TopoLink
 
-/// The nudge: a `moved` line to the holder of the lease, answered `read` when its pass has ended.
+/// The nudge: a `moved` line to the holder of the lease over its channel, answered `read` when its
+/// pass has ended.
 @Suite struct HubNudgeTests {
     let hub = DeviceID("mac-hub")
+
+    /// A listener with a fresh key of the hub's, started: its probe's port and the key at its
+    /// channel's port.
+    func started(_ nudged: LeaseProbeServer.Nudged? = nil,
+                 holds: @escaping LeaseProbeServer.Holds = { _, _ in false }) async throws -> (LeaseProbeServer, UInt16, NudgeKey) {
+        let key = NudgeKey.mint(hub: hub)
+        let server = try LeaseProbeServer(advertising: nil, key: key, holds: holds, nudged: nudged)
+        let port = try await server.start()
+        return (server, port, key.on(port: try #require(await server.securePort)))
+    }
 
     func lease(epoch: Int64 = 3, port: UInt16) -> Lease {
         Lease(holder: hub, endpoint: "127.0.0.1:\(port)", epoch: epoch, expiresAt: Date() + 10)
@@ -46,13 +57,12 @@ import TopoCore
 
     @Test func aNudgeIsAnsweredReadOnceItsPassHasEnded() async throws {
         let passes = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { device, epoch, mark, _ in
+        let (server, port, key) = try await started { device, epoch, mark, _ in
             guard device == DeviceID("mac-hub"), epoch == 3 else { return false }
             return await passes.nudged(mark, hold: true)
         }
-        let port = try await server.start()
         defer { Task { await server.stop() } }
-        let sent = Task { await HubNudge.send(for: lease(port: port), mark: "ab12cd34") }
+        let sent = Task { await HubNudge.send(for: lease(port: port), mark: "ab12cd34", key: key) }
         try await waitFor { passes.waiting == 1 }
         // Held while the pass runs.
         try await Task.sleep(for: .milliseconds(200))
@@ -60,57 +70,53 @@ import TopoCore
         passes.release()
         #expect(await sent.value == .read)
         // Another lease's nudge asks for no pass.
-        #expect(await HubNudge.send(for: lease(epoch: 4, port: port), mark: "x") == .no)
+        #expect(await HubNudge.send(for: lease(epoch: 4, port: port), mark: "x", key: key) == .no)
         #expect(passes.count == 1)
     }
 
     @Test func aListenerWithNoMindSaysNoAndAProbeStillWorks() async throws {
-        let server = try LeaseProbeServer(advertising: nil) { _, epoch in epoch == 3 }
-        let port = try await server.start()
+        let (server, port, key) = try await started(holds: { _, epoch in epoch == 3 })
         defer { Task { await server.stop() } }
-        #expect(await HubNudge.send(for: lease(port: port), mark: "ab") == .no)
+        #expect(await HubNudge.send(for: lease(port: port), mark: "ab", key: key) == .no)
         #expect(await SocketLeaseProbe().confirms(lease(port: port)))
     }
 
     @Test func moreNudgesThanTheCapAreAnsweredNoAtOnce() async throws {
         let passes = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark, _ in
+        let (server, port, key) = try await started { _, _, mark, _ in
             await passes.nudged(mark, hold: true)
         }
-        let port = try await server.start()
         defer { Task { await server.stop() } }
         let held = (0..<LeaseProbeServer.nudgesAtOnce).map { i in
-            Task { await HubNudge.send(for: lease(port: port), mark: "m\(i)") }
+            Task { await HubNudge.send(for: lease(port: port), mark: "m\(i)", key: key) }
         }
         try await waitFor { passes.waiting == LeaseProbeServer.nudgesAtOnce }
-        #expect(await HubNudge.send(for: lease(port: port), mark: "over") == .no)
+        #expect(await HubNudge.send(for: lease(port: port), mark: "over", key: key) == .no)
         #expect(passes.count == LeaseProbeServer.nudgesAtOnce)
         passes.release()
         for task in held { #expect(await task.value == .read) }
     }
 
     @Test func nobodyListeningIsUnreachedQuickly() async throws {
-        let placeholder = try LeaseProbeServer(advertising: nil) { _, _ in true }
-        let port = try await placeholder.start()
+        let (placeholder, port, key) = try await started(holds: { _, _ in true })
         await placeholder.stop()
         try await Task.sleep(for: .milliseconds(50))
         let began = Date()
-        guard case .unreached = await HubNudge.send(for: lease(port: port), mark: "ab", connectBound: 0.5) else {
+        guard case .unreached = await HubNudge.send(for: lease(port: port), mark: "ab", key: key, connectBound: 0.5) else {
             Issue.record("a closed port answered"); return
         }
         #expect(Date().timeIntervalSince(began) < 2)
-        #expect(await HubNudge.send(for: Lease(holder: hub, endpoint: nil, epoch: 1, expiresAt: Date()), mark: "ab") == .unreached("noEndpoint"))
+        #expect(await HubNudge.send(for: Lease(holder: hub, endpoint: nil, epoch: 1, expiresAt: Date()), mark: "ab", key: key) == .unreached("noEndpoint"))
     }
 
     @Test func aListenerThatNeverAnswersIsGivenUpOnAtTheBound() async throws {
         let passes = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark, _ in
+        let (server, port, key) = try await started { _, _, mark, _ in
             await passes.nudged(mark, hold: true)
         }
-        let port = try await server.start()
         defer { Task { await server.stop(); passes.release() } }
         let began = Date()
-        #expect(await HubNudge.send(for: lease(port: port), mark: "ab", answerBound: 0.5) == .unreached("answer"))
+        #expect(await HubNudge.send(for: lease(port: port), mark: "ab", key: key, answerBound: 0.5) == .unreached("answer"))
         #expect(Date().timeIntervalSince(began) < 2)
     }
 
@@ -142,7 +148,7 @@ import TopoCore
         let ref = TurnRef(device: DeviceID("phone-a"), sequence: 4)
         let words = ["Hel", "lo.\nA line", " with \"quotes\" and ünïcode", "\n\nDone."]
         let gate = Passes()
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, mark, stream in
+        let (server, port, key) = try await started { _, _, mark, stream in
             guard let stream else { return false }
             stream(.turn([ref]))
             stream(.message)
@@ -151,10 +157,9 @@ import TopoCore
             // The pass runs on after the last frame; the answer waits for its end.
             return await gate.nudged(mark, hold: true)
         }
-        let port = try await server.start()
         defer { Task { await server.stop() } }
         let received = Received()
-        let sent = Task { await HubNudge.send(for: lease(port: port), mark: "ab12cd34", stream: { received.add($0) }) }
+        let sent = Task { await HubNudge.send(for: lease(port: port), mark: "ab12cd34", key: key, stream: { received.add($0) }) }
         try await waitFor { received.frames.count == words.count + 3 }
         // Mutant: frames held back to the pass's end, or a line split across reads dropped.
         #expect(received.frames == [.turn([ref]), .message] + words.map(ReplyFrame.text) + [.tool])
@@ -163,12 +168,11 @@ import TopoCore
     }
 
     @Test func aNudgeThatAsksNoStreamIsSentNoFrames() async throws {
-        let server = try LeaseProbeServer(advertising: nil, holds: { _, _ in false }) { _, _, _, stream in
+        let (server, port, key) = try await started { _, _, _, stream in
             stream == nil
         }
-        let port = try await server.start()
         defer { Task { await server.stop() } }
-        #expect(await HubNudge.send(for: lease(port: port), mark: "ab") == .read)
+        #expect(await HubNudge.send(for: lease(port: port), mark: "ab", key: key) == .read)
     }
 
     @Test func framesSurviveTheWire() {
