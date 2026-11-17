@@ -81,6 +81,32 @@ final class EnergyPulseTests: XCTestCase {
         XCTAssertEqual(EnergyPulse.said(footprint: nil), "footprint unread")
     }
 
+    /// A refusal, and an answer too short to reach the footprint, say nothing rather than zero; an
+    /// answer that reaches the footprint and not the peak says the footprint alone; a whole one
+    /// says both, and a peak of zero is none.
+    func testAKernelAnswerIsReadOnlyAsFarAsItReaches() {
+        var info = task_vm_info_data_t()
+        info.phys_footprint = 300
+        info.ledger_phys_footprint_peak = 500
+        let word = MemoryLayout<natural_t>.size
+        let full = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / word)
+        let nowEnd = MemoryLayout<task_vm_info_data_t>.offset(of: \.phys_footprint)! + 8
+        let peakEnd = MemoryLayout<task_vm_info_data_t>.offset(of: \.ledger_phys_footprint_peak)! + 8
+        let short = mach_msg_type_number_t(nowEnd / word - 1)
+        let noPeak = mach_msg_type_number_t(peakEnd / word - 1)
+
+        XCTAssertNil(EnergyPulse.reading(KERN_INVALID_ARGUMENT, count: full, info))
+        XCTAssertNil(EnergyPulse.reading(KERN_SUCCESS, count: short, info))
+        let alone = EnergyPulse.reading(KERN_SUCCESS, count: noPeak, info)
+        XCTAssertEqual(alone?.now, 300)
+        XCTAssertNil(alone?.peak)
+        let whole = EnergyPulse.reading(KERN_SUCCESS, count: full, info)
+        XCTAssertEqual(whole?.now, 300)
+        XCTAssertEqual(whole?.peak, 500)
+        info.ledger_phys_footprint_peak = 0
+        XCTAssertNil(EnergyPulse.reading(KERN_SUCCESS, count: full, info)?.peak)
+    }
+
     /// A rate is over the continuous clock's interval, which a change of the wall clock does not
     /// move.
     func testAnIntervalIsReadInSeconds() {

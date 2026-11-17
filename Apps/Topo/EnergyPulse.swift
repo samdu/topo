@@ -302,6 +302,14 @@ final class EnergyPulse: NSObject, MXMetricManagerSubscriber {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
+        return reading(kr, count: count, info)
+    }
+
+    /// What one `TASK_VM_INFO` answer says: nothing for a refusal or an answer of `count` words
+    /// that ends before `phys_footprint`, and a peak only where the answer reaches past it and
+    /// carries one.
+    static func reading(_ kr: kern_return_t, count: mach_msg_type_number_t,
+                        _ info: task_vm_info_data_t) -> (now: UInt64, peak: UInt64?)? {
         let answered = Int(count) * MemoryLayout<natural_t>.size
         let nowEnd = MemoryLayout<task_vm_info_data_t>.offset(of: \.phys_footprint)! + MemoryLayout<UInt64>.size
         guard kr == KERN_SUCCESS, answered >= nowEnd else { return nil }
