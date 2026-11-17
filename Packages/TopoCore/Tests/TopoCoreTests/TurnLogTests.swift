@@ -629,3 +629,52 @@ import TopoCoreTesting
         }
     }
 }
+
+/// The log read in its two halves, for a reader that wants records beside it in one request.
+@Suite struct TurnLogProbeTests {
+    @Test func theFeedFetchesNothingByID() async throws {
+        let db = CountingFetchDatabase(inner: InMemoryRecordDatabase())
+        let log = TurnLog(database: db)
+        _ = try await log.writer(for: phone).append(.person, "one", parents: [], at: tA)
+        let before = db.fetches
+        let seen = try await log.feed()
+        #expect(seen.ordered.map(\.text) == ["one"])
+        // Mutant: `feed()` as the whole `read()`, probe included.
+        #expect(db.fetches == before)
+    }
+
+    @Test func recordsAskedBesideTheProbeComeInItsOneRequest() async throws {
+        let inner = InMemoryRecordDatabase()
+        let db = CountingFetchDatabase(inner: inner)
+        let log = TurnLog(database: db)
+        _ = try await log.writer(for: phone).append(.person, "one", parents: [], at: tA, nonce: "n1")
+        let wanted = RecordID("choice/model")
+        _ = try await inner.save(Record(type: "ModelChoice", id: wanted, fields: ["model": .string("opus")]))
+        let marker = TurnLog.markerID(appendedUnder: "n1")
+        let absent = RecordID("nothing/here")
+        let seen = try await log.feed()
+        let before = db.fetches
+        let (read, fetched) = try await log.probed(seen, also: [wanted, marker, absent])
+        // Mutant: what is asked beside the probe fetched in a request of its own.
+        #expect(db.fetches == before + 1)
+        #expect(read.free == [.ref("phone", 2)])
+        #expect(fetched[wanted]?.string("model") == "opus")
+        // Only what was asked beside the log comes back, never the probe's own records.
+        #expect(Set(fetched.keys) == [wanted, marker])
+        #expect(try await log.turn(marker: fetched[marker], nonce: "n1")?.text == "one")
+        #expect(try await log.turn(marker: nil, nonce: "n1") == nil)
+    }
+
+    @Test func aProbeThatFindsAHiddenTurnStillAnswersWhatWasAskedBesideIt() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: StaleTailDatabase(inner: inner))
+        let w = try await TurnLog(database: inner).writer(for: phone)
+        let one = try await w.append(.person, "one", parents: [], at: tA)
+        _ = try await w.append(.assistant, "two", parents: [one.ref], at: tA + 1, nonce: "n2")
+        let marker = TurnLog.markerID(appendedUnder: "n2")
+        let (read, fetched) = try await log.probed(try await log.feed(), also: [marker])
+        #expect(!read.isComplete)
+        #expect(read.missing == [.ref("phone", 2)])
+        #expect(fetched[marker] != nil)
+    }
+}

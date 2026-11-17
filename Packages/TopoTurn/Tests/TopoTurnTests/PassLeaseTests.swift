@@ -61,6 +61,52 @@ import TopoCoreTesting
         #expect(db.leaseFetches == 0)
         #expect(db.saved.isEmpty)
         #expect(chose.count == 0)
+        // The zone's change feed alone: mutant, the whole read, its fetch by ID included.
+        #expect(db.fetched.isEmpty)
+    }
+
+    @Test func aPassReadsTheReplysMarkerAndTheChoiceInTheLogsOneFetch() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = RecordingDatabase(inner: store)
+        let brain = ScriptedBrain(.success("hello"), .success("again"))
+        let (runner, lease) = try await makeRunner(database: db, device: "mac-hub", brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        let said = SaidModels()
+        // What was fetched by the time the brain is asked.
+        let asked = SaidFetches()
+        brain.duringAnswer = { asked.add(db.fetched) }
+        try await limbSays("hi", in: store, nonce: "w1")
+        db.reset()
+        #expect(try await runner.answerPending(since: nil, choosingFrom: { said.add($0); return $0 ?? .sonnet })?.text == "hello")
+        // Mutant: the marker, or the choice, fetched in a request of its own.
+        #expect(asked.all.last?.count == 1)
+        let marker = TurnLog.markerID(appendedUnder: TurnRunner.replyNonce(for: [TurnRef(device: DeviceID("watch"), sequence: 1)]))
+        let probe = Set(asked.all.last?.first ?? [])
+        #expect(probe.isSuperset(of: [ModelChoice.recordID, marker]))
+        #expect(said.all == [nil])
+
+        try await ModelChoice.say(.opus, by: DeviceID("watch"), to: store)
+        try await limbSays("and now", in: store, nonce: "w2")
+        db.reset()
+        #expect(try await runner.answerPending(since: nil, choosingFrom: { said.add($0); return $0 ?? .sonnet })?.text == "again")
+        #expect(asked.all.last?.count == 1)
+        #expect(said.all == [nil, .opus])
+        #expect(brain.requests.map(\.model) == [.sonnet, .opus])
+    }
+
+    /// The renewal of a lease held fresh goes out once the feed shows a turn to answer, beside the
+    /// log's fetch by ID rather than after it: the fetch here waits for the renewal to land.
+    @Test func theRenewalIsSentBesideTheLogsFetchByID() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = RenewalFirst(store)
+        let brain = ScriptedBrain(.success("hello"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        try await limbSays("hi", in: store, nonce: "w1")
+        db.arm()
+        #expect(try await runner.answerPending(model: .sonnet)?.text == "hello")
+        // Mutant: the renewal sent once the fetch by ID has answered.
+        #expect(db.order == ["renewal", "probe"])
     }
 
     @Test func aLimbsTurnContinuesTheReadTheRunnerMadeBesideTheLease() async throws {
@@ -81,6 +127,51 @@ import TopoCoreTesting
         // Mutant: the read dropped as the lease answers, so the caller reads the log again.
         #expect(read?.ordered.map(\.text) == ["earlier"])
         #expect(await runner.takeRead() == nil)
+    }
+}
+
+final class SaidFetches: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [[[RecordID]]] = []
+    func add(_ fetched: [[RecordID]]) { lock.withLock { seen.append(fetched) } }
+    var all: [[[RecordID]]] { lock.withLock { seen } }
+}
+
+final class SaidModels: @unchecked Sendable {
+    private let lock = NSLock()
+    private var said: [ClaudeModel?] = []
+    func add(_ model: ClaudeModel?) { lock.withLock { said.append(model) } }
+    var all: [ClaudeModel?] { lock.withLock { said } }
+}
+
+/// Once armed, the next fetch by ID naming a turn waits (2 s at most) for a save of the lease alone
+/// to land, and the order the two landed in is kept.
+final class RenewalFirst: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
+    private let lock = NSLock()
+    private var armed = false
+    private var watching = false
+    private var renewed = false
+    private var _order: [String] = []
+    init(_ base: any RecordDatabase) { self.base = base }
+    func arm() { lock.withLock { armed = true; watching = true; renewed = false; _order = [] } }
+    var order: [String] { lock.withLock { _order } }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        let saved = try await base.save(records)
+        if records.count == 1, records[0].id == Lease.recordID {
+            lock.withLock { if watching, !renewed { renewed = true; _order.append("renewal") } }
+        }
+        return saved
+    }
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
+        let probe = lock.withLock { armed && ids.contains { Turn.ref(ofRecordNamed: $0.name) != nil } }
+        if probe {
+            lock.withLock { armed = false }
+            for _ in 0..<200 where !lock.withLock({ renewed }) { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        let fetched = try await base.fetch(ids)
+        if probe { lock.withLock { _order.append("probe") } }
+        return fetched
     }
 }
 

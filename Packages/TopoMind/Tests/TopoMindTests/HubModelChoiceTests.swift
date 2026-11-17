@@ -48,3 +48,32 @@ final class Marks: @unchecked Sendable {
         }
     }
 }
+
+/// The stages of a pass that answers, each marked once and in the order they happen, from the
+/// trigger to the first words: what the time between the turn landing and the reply's first words
+/// is read off.
+@Suite(.serialized) struct PassMarksTests {
+    @Test func aPassThatAnswersMarksEachStageOnceInOrder() async throws {
+        let h = try HubRig()
+        let marks = Marks()
+        try await Perf.$observer.withValue({ marks.add($0) }) {
+            let configuration = h.configuration
+            let hub = HubMind(database: h.db, device: h.hubID, endpoint: "127.0.0.1:1", probe: Confirming(),
+                              brain: h.brain, login: { await MindLogin.check(configuration) },
+                              model: { .sonnet }, timing: LeaseTiming(duration: 60, heartbeat: 30),
+                              poll: .seconds(3600), answeringPoll: .seconds(3600))
+            await hub.turnOn()
+            #expect(await eventually { let s = await hub.snapshot(); return s.holds && s.lastPass != nil })
+            try await h.phoneSays("hello")
+            await hub.trigger(.push)
+            #expect(try await eventually { try await h.replies().count == 1 })
+            #expect(await eventually { marks.all.contains { $0.hasPrefix("hub.pass.end answered") } })
+            await hub.turnOff()
+        }
+        let names = marks.all.filter { $0.hasPrefix("hub.pass.") }.map { String($0.split(separator: " ")[0].dropFirst(9)) }
+        let pass = Array(names[try #require(names.lastIndex(of: "trigger"))...])
+        // Mutant: a stage of the brain's not handed to the clock (`stages(to:)`, or the frames).
+        #expect(pass == ["trigger", "read", "probed", "model", "lease", "asked", "written", "received", "begun", "words",
+                         "answered", "saved", "end"])
+    }
+}

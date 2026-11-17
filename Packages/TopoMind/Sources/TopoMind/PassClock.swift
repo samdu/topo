@@ -4,15 +4,21 @@ import TopoTurn
 
 /// The stages of one answering pass, as `Perf` marks: `hub.pass.trigger <source>` when the pass
 /// begins, then each stage once, with the milliseconds since the trigger — `hub.pass.read` (the
-/// runner's read of the log answered), `hub.pass.lease` (the lease's write before the brain is
-/// asked), `hub.pass.asked` (the brain asked, with `turn=` the milliseconds since the newest turn
-/// it answers was said), `hub.pass.answered`, `hub.pass.saved` (the reply's batch answered) — and
-/// `hub.pass.end <outcome>`. A pass with nothing to answer marks the trigger, the read and its end.
+/// zone's change feed answered), `hub.pass.probed` (the fetch by ID of the log's newest turns
+/// answered, which a pass makes only when the feed shows something to do), `hub.pass.lease` (the
+/// lease's last write answered before the brain is asked), `hub.pass.asked` (the brain asked, with
+/// `turn=` the milliseconds since the newest turn it answers was said), `hub.pass.written` (the
+/// input on Claude Code's stdin), `hub.pass.received` (its echo: Claude Code took the turn up),
+/// `hub.pass.begun` (the reply's first message begun, the API's first event), `hub.pass.words`
+/// (the reply's first words), `hub.pass.answered`, `hub.pass.saved` (the reply's batch answered)
+/// — and `hub.pass.end <outcome>`. A pass with nothing to answer marks the trigger, the read and
+/// its end.
 ///
 /// The runner's stages are not its own marks, so they are read off the calls it makes: the log's
-/// read and the writes through the database it is given (`TimedDatabase`), and the brain's calls
-/// (`TimedBrain`). One pass runs at a time, so one clock serves them. A mark carries a stage's name,
-/// a trigger's source, an outcome's kind and times, never a word of a turn.
+/// read and the writes through the database it is given (`TimedDatabase`), the brain's calls
+/// (`TimedBrain`), and what the brain says of the process (`NativeBrain.Stage`, `ReplyFrame`). One
+/// pass runs at a time, so one clock serves them. A mark carries a stage's name, a trigger's
+/// source, an outcome's kind and times, never a word of a turn.
 final class PassClock: @unchecked Sendable {
     private let lock = NSLock()
     private var began: ContinuousClock.Instant?
@@ -59,6 +65,29 @@ final class PassClock: @unchecked Sendable {
         }
     }
 
+    /// A fetch by ID naming a turn answered: the log read's second half, once the read is marked.
+    func probed() {
+        guard lock.withLock({ marked.contains("read") }) else { return }
+        reached("probed")
+    }
+
+    /// Where the process has the turn the brain was asked: only the first of each in a pass.
+    func brain(_ stage: NativeBrain.Stage) {
+        switch stage {
+        case .written: reached("written")
+        case .received: reached("received")
+        }
+    }
+
+    /// A piece of the reply as the brain hands it: its first message begun and its first words.
+    func wrote(_ frame: ReplyFrame) {
+        switch frame {
+        case .message: reached("begun")
+        case .text: reached("words")
+        default: break
+        }
+    }
+
     /// The brain is asked: the lease's stage is marked first, then the ask.
     func asked(turnAge: Int?) {
         let lease = lock.withLock { () -> Int? in
@@ -92,7 +121,11 @@ struct TimedDatabase: RecordDatabase {
         return saved
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await base.fetch(ids) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        let fetched = try await base.fetch(ids)
+        if ids.contains(where: { Turn.ref(ofRecordNamed: $0.name) != nil }) { clock.probed() }
+        return fetched
+    }
     func query(_ query: RecordQuery) async throws -> [Record] { try await base.query(query) }
 
     func records(ofType type: String) async throws -> [Record] {

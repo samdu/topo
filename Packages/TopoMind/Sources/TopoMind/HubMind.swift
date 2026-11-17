@@ -191,16 +191,15 @@ public actor HubMind {
     }
 
     /// Ten seconds: the poll while this Mac does not hold the lease (a phone does, or it lapsed). A
-    /// pass with nothing waiting is one read of the log (the zone's change feed and a fetch by ID
-    /// of each device's next sequence number) and touches nothing else. While it holds the lease
-    /// the poll is `standardAnsweringPoll`; on the LAN a phone's nudge starts a pass at once.
+    /// pass with nothing waiting is one request, the zone's change feed, and touches nothing else
+    /// (`TurnRunner.answerPending`). While it holds the lease the poll is `standardAnsweringPoll`;
+    /// on the LAN a phone's nudge starts a pass at once.
     public static let standardPoll: Duration = .seconds(10)
 
     /// Five seconds: the poll while this Mac holds the lease, which off the LAN, with the push at
-    /// APNs' low priority, is how a turn is found. It is the read the phone's loop makes every five
-    /// seconds while its chat is open, in the same private database: two requests (the zone's
-    /// change feed from its token, a fetch by ID of each device's next sequence number), so 0.4
-    /// a second. Apple publishes no per-user rate for the private database; the figure quoted for
+    /// APNs' low priority, is how a turn is found. A pass with nothing waiting is one request (the
+    /// zone's change feed from its token), half the read the phone's loop makes every five seconds
+    /// while its chat is open, in the same private database, so 0.2 a second. Apple publishes no per-user rate for the private database; the figure quoted for
     /// CloudKit is 40 requests a second, and a throttle answers `requestRateLimited` with a retry
     /// after, which fails that pass and no other.
     public static let standardAnsweringPoll: Duration = .seconds(5)
@@ -395,9 +394,11 @@ public actor HubMind {
         }
         do {
             // What the mind writes of a reply goes to the phones that follow its turn.
-            await brain.writes(to: { [cast] in cast.write($0) })
+            // and to the pass's marks, with where the process has the turn.
+            await brain.writes(to: { [cast, clock] in clock.wrote($0); cast.write($0) })
+            await brain.stages(to: { [clock] in clock.brain($0) })
             // The process starts with the model the next turn most likely asks for.
-            await brain.use(model: await chosen(mark: false))
+            await brain.use(model: await startingModel())
             try await brain.start()
         } catch {
             guard current(g) else { return }
@@ -576,7 +577,9 @@ public actor HubMind {
         }
         let outcome: Pass.Outcome
         do {
-            outcome = try await runner.answerPending(since: mark, choosing: { await self.chosen(mark: true) }) == nil ? .nothing : .answered
+            let picker = model
+            outcome = try await runner.answerPending(since: mark, choosingFrom: { Self.chosen(said: $0, picker: picker) }) == nil
+                ? .nothing : .answered
         } catch TurnRunnerError.notPrimary {
             outcome = .elsewhere
         } catch TurnRunnerError.displaced {
@@ -604,19 +607,19 @@ public actor HubMind {
 
     /// The model a turn is answered with: the person's choice in the zone (`ModelChoice`), which
     /// the device they hold says before it hands this Mac a turn, or this Mac's own picker where no
-    /// device has said or the record cannot be read. Read once a pass, only by a pass with a turn
-    /// to answer (`answerPending(choosing:)`), one fetch by ID.
-    private func chosen(mark: Bool) async -> ClaudeModel {
-        let said: ClaudeModel?
-        do {
-            said = try await ModelChoice.read(from: database)
-        } catch {
-            said = nil
-            if mark { Perf.mark("hub.pass.model.unread \(Self.kind(of: error))") }
-        }
-        let model = said ?? self.model()
-        if mark { Perf.mark("hub.pass.model \(model.rawValue) \(said == nil ? "picker" : "chosen")") }
+    /// device has said. A pass is handed the choice by the runner, read in the request that reads
+    /// the log's newest turns, and only by a pass with a turn to answer
+    /// (`answerPending(since:choosingFrom:)`).
+    private static func chosen(said: ClaudeModel?, picker: @Sendable () -> ClaudeModel) -> ClaudeModel {
+        let model = said ?? picker()
+        Perf.mark("hub.pass.model \(model.rawValue) \(said == nil ? "picker" : "chosen")")
         return model
+    }
+
+    /// The model the start gives the process: the choice in the zone, one fetch by ID, or the
+    /// picker where no device has said or the record cannot be read.
+    private func startingModel() async -> ClaudeModel {
+        ((try? await ModelChoice.read(from: database)) ?? nil) ?? model()
     }
 
     /// The mind stops, saying why: the lease let go and the process shut down. The session ends

@@ -83,7 +83,7 @@ public struct Turn: Hashable, Sendable, Identifiable {
                                      markerPrefix: "append/", markerField: "turn")
 
     /// The ref a turn record's name carries, whatever the rest of it holds.
-    static func ref(ofRecordNamed name: String) -> TurnRef? {
+    public static func ref(ofRecordNamed name: String) -> TurnRef? {
         guard name.hasPrefix(recordPrefix) else { return nil }
         return TurnRef(parsing: String(name.dropFirst(recordPrefix.count)))
     }
@@ -263,19 +263,46 @@ public struct TurnLog: Sendable {
     /// none of whose turns the feed returned cannot be probed this way; a
     /// writer checks its own newest turn itself before continuing.
     public func read() async throws -> Transcript {
-        let records = try await database.records(ofType: Turn.recordType)
-        let seen = Self.transcript(from: records)
+        try await probed(try await feed()).transcript
+    }
+
+    /// The first half of `read()`: the turns the zone's change feed holds, with nothing fetched by
+    /// ID, so a newest turn the feed has not caught up with is not yet reported missing. A reader
+    /// that finds nothing in it to act on needs no more; one that does goes on with `probed`.
+    public func feed() async throws -> Transcript {
+        Self.transcript(from: try await database.records(ofType: Turn.recordType))
+    }
+
+    /// The second half of `read()`: `seen`, a `feed()`, with every known device's next sequence
+    /// number fetched by ID and one that exists reported missing, and `also` fetched in the same
+    /// request: records the reader wants as of the same moment, one round trip instead of two.
+    /// Those of `also` that exist are in `fetched`; nothing is fetched when there is nothing to.
+    public func probed(_ seen: Transcript, also: [RecordID] = []) async throws -> (transcript: Transcript, fetched: [RecordID: Record]) {
         var last: [DeviceID: Int64] = [:]
         for ref in seen.turns.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }
         for ref in seen.missing { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }
         let probes = last.map { TurnRef(device: $0.key, sequence: $0.value + 1) }
-        guard !probes.isEmpty else { return seen }
-        let present = try await database.fetch(probes.map(Turn.recordID(for:)))
+        let ids = probes.map(Turn.recordID(for:))
+        let asked = ids + also.filter { !ids.contains($0) }
+        guard !asked.isEmpty else { return (seen, [:]) }
+        let present = try await database.fetch(asked)
         let hidden = probes.filter { present[Turn.recordID(for: $0)] != nil }
         var read = hidden.isEmpty ? seen
             : Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
         read.free = Set(probes).subtracting(hidden)
-        return read
+        return (read, present.filter { also.contains($0.key) })
+    }
+
+    /// Records of the log's zone by ID, for a reader that wants one beside the log and did not
+    /// have it fetched with a read (`probed`'s `also`).
+    public func records(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        try await database.fetch(ids)
+    }
+
+    /// The ID of the marker an append under `nonce` saves: fetched beside other records, its
+    /// presence says the append went through (`turn(marker:nonce:)`).
+    public static func markerID(appendedUnder nonce: String) -> RecordID {
+        Turn.naming.markerID(nonce: nonce)
     }
 
     /// The turn an append under `nonce` wrote, if that append went through:
@@ -283,7 +310,13 @@ public struct TurnLog: Sendable {
     /// by ID. Nil when no such append has landed. `markerWithoutTurn` when
     /// the marker exists and its turn cannot be read.
     public func turn(appendedUnder nonce: String) async throws -> Turn? {
-        guard let marker = try await database.fetch(Turn.naming.markerID(nonce: nonce)) else { return nil }
+        try await turn(marker: try await database.fetch(Turn.naming.markerID(nonce: nonce)), nonce: nonce)
+    }
+
+    /// `turn(appendedUnder:)` with the marker already fetched (`markerID(appendedUnder:)`), nil
+    /// when it was not there: the turn it names is fetched by ID.
+    public func turn(marker: Record?, nonce: String) async throws -> Turn? {
+        guard let marker else { return nil }
         guard let named = marker.string(Turn.naming.markerField),
               let record = try await database.fetch(Turn.naming.recordID(named: named)),
               let turn = Turn(record: record) else {

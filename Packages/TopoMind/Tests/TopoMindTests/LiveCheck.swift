@@ -44,9 +44,24 @@ import TopoTurn
         var log: [Turn] = []
         func ask(_ sequence: Int64, _ text: String) async throws -> String {
             let brain = NativeBrain(configuration)
+            // The process is started first, as the hub's is, so the turn's stages are a warm process's.
+            await brain.use(model: .sonnet)
+            try await brain.start()
             let person = Turn(ref: TurnRef(device: DeviceID("live"), sequence: sequence), parents: log.last.map { [$0.ref] } ?? [],
                               role: .person, text: text, at: Date())
             let began = ContinuousClock.now
+            let stages = Marks()
+            @Sendable func at() -> String { "\((ContinuousClock.now - began) / .milliseconds(1))" }
+            await brain.stages(to: { stages.add("\($0)=\(at())") })
+            await brain.writes(to: { frame in
+                switch frame {
+                case .message: stages.add("message=\(at())")
+                case .text: stages.add("text=\(at())")
+                case .tool: stages.add("tool=\(at())")
+                default: break
+                }
+            })
+            defer { print("LIVE mind turn=\(sequence) stages ms: \(stages.all.joined(separator: " "))") }
             let nonce = TurnRunner.replyNonce(for: [person.ref])
             let reply = try await brain.answer(BrainRequest(context: log, answering: [person], parents: [person.ref],
                                                             nonce: nonce, model: .sonnet))

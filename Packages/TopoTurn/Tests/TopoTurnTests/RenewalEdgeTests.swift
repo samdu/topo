@@ -26,7 +26,7 @@ final class LandsUnanswered: ForwardingDatabase, @unchecked Sendable {
     }
 }
 
-/// The renewal a pass sends beside the reply's marker, at its edges.
+/// The renewal a pass sends beside the log's fetch by ID, at its edges.
 @Suite(.serialized) struct RenewalEdgeTests {
     /// A renewal that lands with its answer lost is asked the long way, finds the lease still this
     /// device's, and the turn is answered once at the same epoch.
