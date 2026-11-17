@@ -119,7 +119,8 @@ enum MascotMapping {
         case .compacted(let compacted):
             // What he carries is what is left after it.
             next.tokens = compacted.post
-        case .text, .writing, .writingBegan, .toolCallBegan, .received, .backgroundTasks, .result, .controlResponse, .compactFailed, .other, .malformed:
+        case .text, .writing, .writingBegan, .toolCallBegan, .received, .backgroundTasks, .result, .controlResponse, .compactFailed,
+             .requestBegan, .requestEnded, .retry, .other, .malformed:
             break
         }
         return next

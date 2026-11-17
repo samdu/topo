@@ -37,9 +37,8 @@ packages:
   # resolves; the iOS app only.
   TopoUserland:
     path: Packages/TopoUserland
-  # The guest's two doors on the app's loopback: the relay Claude Code reaches api.anthropic.com
-  # through (plain HTTP in on 127.0.0.1, TLS out), and the tool service the guest's `topo` calls
-  # (TopoTools). The iOS app only.
+  # The guest's two doors on the app's loopback: the DNS forwarder its resolver asks, and the tool
+  # service the guest's `topo` calls (TopoTools). The iOS app only.
   TopoProxy:
     path: Packages/TopoProxy
   # Topo the octopus, drawn in pixels from the agent's state, on the composer's glass. Sam's own

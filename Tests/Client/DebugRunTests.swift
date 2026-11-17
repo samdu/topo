@@ -24,10 +24,10 @@ final class DebugRunTests: XCTestCase {
 
     /// The userland run's line about its credential: the developer's token named, never shown.
     func testTheUserlandHandOverNamesTheCredentialAndNeverItsValue() {
-        let handed = DebugRun.handOver(port: 4242, developer: ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"])
+        let handed = DebugRun.handOver(developer: ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"])
         XCTAssertEqual(handed.environment, ["CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"])
-        XCTAssertEqual(handed.lines, ["userland: proxy on http://127.0.0.1:4242, credential: the developer's token"])
-        XCTAssertEqual(DebugRun.handOver(port: 4242, developer: [:]).lines, ["userland: proxy on http://127.0.0.1:4242, credential: none"])
+        XCTAssertEqual(handed.lines, ["userland: direct to Anthropic, credential: the developer's token"])
+        XCTAssertEqual(DebugRun.handOver(developer: [:]).lines, ["userland: direct to Anthropic, credential: none"])
     }
 
     /// A tool result as the guest-turn run prints it for `simulator-run.sh --guest-turn`: the tool,

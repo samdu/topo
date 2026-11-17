@@ -1,11 +1,10 @@
 import Foundation
-import TopoProxy
 import TopoTools
 import TopoTurn
 
 /// `topo context`: the mind's hand on its own context. It shows how full the context is and where
 /// it is compacted, sets that threshold on this phone, and asks for a compaction; and it says
-/// whether turns go on a message thread, from what the proxy saw of the last requests, turns that
+/// whether turns go on a message thread, inferred from what the last requests uploaded, turns that
 /// off or on, and renames the variable that asks Claude Code for it. It changes this device's
 /// settings and the guest's own conversation, and nothing of the person's.
 struct ContextTool: Tool {
@@ -17,8 +16,8 @@ struct ContextTool: Tool {
         var compacting = false
         var last: String?
         var threads: MessageThreads.Setting = .standard
-        /// The last requests the proxy saw, oldest first (`ThreadLog`).
-        var sent: [ThreadLog.Sent] = []
+        /// The last requests' uploads, oldest first (`ThreadSampler`).
+        var sent: [ThreadSampler.Note] = []
         var now = Date()
     }
 
@@ -41,9 +40,11 @@ struct ContextTool: Tool {
     topo context compact                compact your context now. It is queued and runs once this turn has ended, so
                                         the answer says only that it is waiting; topo context afterwards says what it did
 
-    topo context threads                whether your turns are sent on a message thread, and the last requests the
-                                        proxy saw: each a create, a continue (only the messages since the last request)
-                                        or none (the whole conversation), its size and its status
+    topo context threads                whether your turns are sent on a message thread, and the last requests, each
+                                        judged by what it uploaded against the context it was sent: a small upload is
+                                        a thread continued (only what was new went), one the size of the context is the
+                                        whole conversation (a thread begun, or none), and anything else can't be told.
+                                        Inferred: nothing of the app's reads a request
     topo context threads <on|off>       send turns on a thread or not. On, the conversation is held on Anthropic's
                                         side, encrypted in memory, up to an hour after its last request, with no way to
                                         delete it sooner, and outside zero data retention; and Claude Code also sends
@@ -59,9 +60,16 @@ struct ContextTool: Tool {
 
     A threshold can only be under Claude Code's own, so 100 is the same as auto.
     A launch that asked for threads under a name Claude Code does not read sends every request whole, and
-    nothing fails: only the requests themselves tell, so after a change check that a turn's requests continue.
-    A none has other causes too: Claude Code sends without a thread once the conversation holds a web search's
-    results or its tools changed, so judge a name by several turns' requests, not one.
+    nothing fails: only the requests themselves tell, so after a change check that a turn's requests go small.
+    A whole upload has other causes too: a thread begun, Claude Code sending without a thread once the
+    conversation holds a web search's results or its tools changed, a thread Anthropic dropped and Claude Code
+    made again, a request carrying a big tool result in a short conversation, or another request that went on
+    the same connection between the two reads. When more than one connection sent between the reads, the
+    size is the largest one's, "at most" the request's, since a request goes out on one connection: small
+    even so is a thread, and larger is can't tell. Can't
+    tell is also a turn's first request after a launch or a login, one after a sub-agent's, one whose reads
+    ran late, and one whose connection closed between them. Sizes are
+    compressed, so very repetitive words read small. Judge by several turns' requests, not one.
     """
 
     func run(_ arguments: [String]) async -> ToolReply {
@@ -121,7 +129,7 @@ struct ContextTool: Tool {
         return .ok(Self.threads(now) + "This holds from this turn's end.\n")
     }
 
-    /// The setting, then each request the proxy saw.
+    /// The setting, then each request, as its upload read.
     static func threads(_ facts: Facts) -> String {
         let setting = facts.threads
         let name = setting.variable == MessageThreads.defaultVariable ? "Claude Code's own name at its pin" : "renamed on this phone"
@@ -136,26 +144,26 @@ struct ContextTool: Tool {
             lines.append("on would send: \(MessageThreads.alsoSent)")
         }
         guard !facts.sent.isEmpty else {
-            lines.append("requests: none through the proxy since this app launched or the last login ended")
+            lines.append("requests: none seen since this app launched or the last login ended")
             return lines.joined(separator: "\n") + "\n"
         }
-        lines.append("requests the proxy saw, oldest first:")
+        lines.append("requests, oldest first, judged by their uploads (inferred, never read):")
         for sent in facts.sent {
             let ago = max(0, Int(facts.now.timeIntervalSince(sent.at).rounded()))
-            let kind = sent.kind == .unread ? "unread (the threads beta, no thread the proxy could read)" : sent.kind.rawValue
-            let status = sent.status == ThreadLog.cancelled ? "cancelled (the client went away before an answer)"
-                : sent.status.map(String.init) ?? "waiting"
-            var line = "  \(ago) s ago  \(kind)  \(sent.bytes) bytes  \(status)"
-            if sent.kind == .continue, sent.status == 404 {
-                line += " (the thread had gone: Anthropic drops one 5 minutes after its last request, and Claude Code makes it again)"
-            }
-            lines.append(line)
+            let upload = sent.bytes.map { "\(sent.shared ? "at most " : "")\(TurnTimeline.size($0)) for \(sent.tokens) tokens" }
+                ?? "upload not told (no read to count it from, or a connection gone between the reads) for \(sent.tokens) tokens"
+            lines.append("  \(ago) s ago  \(Self.kindWords[sent.kind] ?? sent.kind.rawValue)  \(upload)")
         }
-        let onThread = facts.sent.filter { $0.kind == .create || $0.kind == .continue }.count
-        let newest = facts.sent[facts.sent.count - 1].kind.rawValue
-        lines.append((onThread == 0 ? "on a thread: none of these" : "on a thread: \(onThread) of \(facts.sent.count)") + "; the newest: \(newest)")
+        let small = facts.sent.filter { $0.kind == .thread }.count
+        let newest = Self.kindWords[facts.sent[facts.sent.count - 1].kind] ?? ""
+        lines.append((small == 0 ? "small uploads: none of these" : "small uploads: \(small) of \(facts.sent.count)") + "; the newest: \(newest)")
         return lines.joined(separator: "\n") + "\n"
     }
+
+    /// A request's kind in words.
+    static let kindWords: [ThreadSampler.Kind: String] = [
+        .thread: "small upload: on a thread", .whole: "whole conversation", .unknown: "can't tell",
+    ]
 
     static func show(_ facts: Facts) -> String {
         var lines = ["context: \(facts.context.map { "\($0) tokens" } ?? "not known until the next reply")"]

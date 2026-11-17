@@ -5,9 +5,9 @@ import os
 import Security
 import TopoProxy
 
-/// The phone's tool service: the guest's third hole, beside its mounts and the API proxy. An
-/// `NWListener` bound to `127.0.0.1` at a port picked at start, plain HTTP/1.1 through the proxy's
-/// own reader, and one route, `POST /run`, whose body is a call's arguments (`ToolRequest`) and
+/// The phone's tool service: the guest's hole beside its mounts and the DNS forwarder. An
+/// `NWListener` bound to `127.0.0.1` at a port picked at start, plain HTTP/1.1 through `Wire`'s
+/// reader, and one route, `POST /run`, whose body is a call's arguments (`ToolRequest`) and
 /// whose answer is `200 text/plain`: a first line `exit: <status>`, then what the tool said.
 ///
 /// Loopback is not private — any process on the device, and a web page open beside the app, can

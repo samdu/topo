@@ -1,6 +1,5 @@
 import Foundation
 import TopoAuth
-import TopoProxy
 import TopoTools
 import XCTest
 
@@ -323,11 +322,12 @@ final class GuestLoginTests: XCTestCase {
     /// asks for its credential here, and a signed-out cache refuses it.
     func testTheLauncherRefusesALaunchWhileSignedOut() throws {
         let cache = LoginCache(defaults: UserDefaults(suiteName: "launch-\(UUID().uuidString)")!)
-        XCTAssertThrowsError(try GuestResident.launchCredential(port: 4000, cache: cache)) { error in
+        XCTAssertThrowsError(try GuestResident.launchCredential(cache: cache)) { error in
             guard case GuestBridgeError.notReady("signed out") = error else { return XCTFail("\(error)") }
         }
         cache.save(ClaudeLoginStatus(loggedIn: true, authMethod: "claude.ai"))
-        XCTAssertEqual(try GuestResident.launchCredential(port: 4000, cache: cache)["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: 4000))
+        XCTAssertNoThrow(try GuestResident.launchCredential(cache: cache))
+        XCTAssertNil(try GuestResident.launchCredential(cache: cache)["ANTHROPIC_BASE_URL"], "a launch was told a base URL")
     }
 
     private final class Heard: @unchecked Sendable {

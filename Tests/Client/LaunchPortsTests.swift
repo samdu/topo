@@ -1,57 +1,46 @@
 import Darwin
-import TopoProxy
 import TopoTools
 import TopoUserland
 import XCTest
 
 @testable import Topo
 
-/// What each launch of the resident is told of the proxy and the tool service (#369), through
-/// `ClaudeLauncher` as the session launches it: every launch starts both listeners anew and is
-/// told the ports they have now.
+/// What each launch of the resident is told of the tool service (#369), through `ClaudeLauncher`
+/// as the session launches it: every launch starts the listener anew and is told the port it has
+/// now, and nothing else of the app's is between the guest and Anthropic.
 @MainActor
 final class LaunchPortsTests: XCTestCase {
-    func testEachLaunchIsToldListenersStartedForItAndSaysWhich() async throws {
-        let proxy = try APIProxy(log: { _ in })
+    func testEachLaunchIsToldAListenerStartedForItAndSaysWhich() async throws {
         let tools = try ToolService(tools: [])
-        let ports = LaunchPorts(proxy: proxy, tools: tools)
+        let ports = LaunchPorts(tools: tools)
         let said = Said()
-        let made = GuestResident.launchEnvironment(ports: ports, note: { said.add($0) }) { port in
-            ["ANTHROPIC_BASE_URL": APIProxy.baseURL(port: port)]
-        }
+        let made = GuestResident.launchEnvironment(ports: ports, note: { said.add($0) }) { [:] }
         let launcher = ClaudeLauncher(environment: made)
 
         let first = try await launcher.launchEnvironment()
-        let firstProxyPort = await proxy.port
-        let firstProxy = try XCTUnwrap(firstProxyPort)
         let firstToolsPort = await tools.port
         let firstTools = try XCTUnwrap(firstToolsPort)
-        XCTAssertEqual(first["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: firstProxy))
+        XCTAssertNil(first["ANTHROPIC_BASE_URL"], "a launch was told a base URL")
         XCTAssertEqual(first[ToolService.urlVariable], "http://127.0.0.1:\(firstTools)")
         let token = await tools.token
         XCTAssertEqual(first[ToolService.tokenVariable], token)
         let build = try XCTUnwrap(Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
         XCTAssertEqual(first[BuildFacts.buildVariable], build)
-        XCTAssertEqual(said.all, ["guest: the launch is told the proxy at \(firstProxy) and the tools at \(firstTools)"])
+        XCTAssertEqual(said.all, ["guest: the launch is told the tools at \(firstTools)"])
 
-        // Both listeners gone, as iOS takes them from a suspended app, and the old ports held by
-        // others, as a process that took what iOS freed would hold them: the next launch is told
-        // neither.
-        await proxy.stop()
+        // The listener gone, as iOS takes it from a suspended app, and the old port held by
+        // another, as a process that took what iOS freed would hold it: the next launch is not
+        // told it.
         await tools.stop()
-        let squatters = [try Self.squat(firstProxy), try Self.squat(firstTools)].compactMap { $0 }
+        let squatters = [try Self.squat(firstTools)].compactMap { $0 }
         defer { squatters.forEach { close($0) } }
         let next = try await launcher.launchEnvironment()
-        let nextProxyPort = await proxy.port
-        let nextProxy = try XCTUnwrap(nextProxyPort)
         let nextToolsPort = await tools.port
         let nextTools = try XCTUnwrap(nextToolsPort)
-        XCTAssertNotEqual(nextProxy, firstProxy)
         XCTAssertNotEqual(nextTools, firstTools)
-        XCTAssertEqual(next["ANTHROPIC_BASE_URL"], APIProxy.baseURL(port: nextProxy))
+        XCTAssertNil(next["ANTHROPIC_BASE_URL"])
         XCTAssertEqual(next[ToolService.urlVariable], "http://127.0.0.1:\(nextTools)")
-        XCTAssertEqual(said.all.last, "guest: the launch is told the proxy at \(nextProxy) and the tools at \(nextTools)")
-        await proxy.stop()
+        XCTAssertEqual(said.all.last, "guest: the launch is told the tools at \(nextTools)")
         await tools.stop()
     }
 
@@ -59,7 +48,7 @@ final class LaunchPortsTests: XCTestCase {
     /// zone it first read.
     func testTheZoneALaunchStartedInIsKeptAndAChangeIsSeen() async throws {
         let zone = Zone("Europe/London")
-        let ports = LaunchPorts(proxy: try APIProxy(log: { _ in }), tools: try ToolService(tools: []), zone: { zone.value })
+        let ports = LaunchPorts(tools: try ToolService(tools: []), zone: { zone.value })
         XCTAssertFalse(ports.sameZone(), "no launch was told a zone")
         _ = try await ports.ports()
         XCTAssertTrue(ports.sameZone())
@@ -67,7 +56,6 @@ final class LaunchPortsTests: XCTestCase {
         XCTAssertFalse(ports.sameZone(), "a zone change was not seen")
         _ = try await ports.ports()
         XCTAssertTrue(ports.sameZone())
-        await ports.proxy.stop()
         await ports.tools.stop()
     }
 
@@ -77,9 +65,9 @@ final class LaunchPortsTests: XCTestCase {
     func testACallCarriesTheLoginItsLaunchWasStartedUnder() async throws {
         let life = LoginLife()
         let tools = try ToolService(tools: [Carried()])
-        let ports = LaunchPorts(proxy: try APIProxy(log: { _ in }), tools: tools, login: life)
+        let ports = LaunchPorts(tools: tools, login: life)
         let token = await tools.token
-        let first = try await ports.ports().tools
+        let first = try await ports.ports()
         let firstSaid = try await Self.said(port: first, token: token)
         XCTAssertEqual(firstSaid, "current")
         let reclaimed = await ports.reclaim()
@@ -90,10 +78,9 @@ final class LaunchPortsTests: XCTestCase {
         life.began()
         let staleSaid = try await Self.said(port: first, token: token)
         XCTAssertEqual(staleSaid, "stale", "a call of the launch before the sign-in carried the login after it")
-        let next = try await ports.ports().tools
+        let next = try await ports.ports()
         let nextSaid = try await Self.said(port: next, token: token)
         XCTAssertEqual(nextSaid, "current")
-        await ports.proxy.stop()
         await tools.stop()
     }
 
@@ -102,9 +89,9 @@ final class LaunchPortsTests: XCTestCase {
     func testAReclaimAfterTheNextSignInCarriesTheLoginTheLaunchWasStartedUnder() async throws {
         let life = LoginLife()
         let tools = try ToolService(tools: [Carried()])
-        let ports = LaunchPorts(proxy: try APIProxy(log: { _ in }), tools: tools, login: life)
+        let ports = LaunchPorts(tools: tools, login: life)
         let token = await tools.token
-        let first = try await ports.ports().tools
+        let first = try await ports.ports()
         let firstSaid = try await Self.said(port: first, token: token)
         XCTAssertEqual(firstSaid, "current")
         life.runTeardowns()
@@ -113,7 +100,6 @@ final class LaunchPortsTests: XCTestCase {
         XCTAssertTrue(reclaimed)
         let reclaimedSaid = try await Self.said(port: first, token: token)
         XCTAssertEqual(reclaimedSaid, "stale", "a reclaim after the next sign-in carried the login standing at the reclaim")
-        await ports.proxy.stop()
         await tools.stop()
     }
 

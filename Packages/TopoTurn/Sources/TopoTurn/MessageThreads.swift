@@ -10,7 +10,7 @@ import Foundation
 /// Claude Code's traffic beside the turns is let out, which its threads need (`alsoSent`). It
 /// is on unless the person or the mind turns it off. A name Claude Code no longer reads loses
 /// the saving and still lets that traffic out: the resident sends every request whole, and only
-/// `topo context threads`, from what the proxy saw, tells the two apart.
+/// `topo context threads`, from the size of each request's upload, tells the two apart.
 public enum MessageThreads {
     /// What else leaves the phone while threads are on, as measured at Claude Code 2.1.316: the
     /// Settings switch's footer and `topo context threads` say it in these words.
