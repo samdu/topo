@@ -131,6 +131,39 @@ final class SelfProbe: LeaseProbe, @unchecked Sendable {
         #expect(!h.rig.inputs.contains { $0.contains("hello there") }, "the brain was asked after the switch went off")
     }
 
+    /// A heartbeat of the lease's own loop is out when the switch goes off, or the Mac goes to
+    /// sleep: the stop returns only once it has been answered, and nothing moves the record after.
+    @Test(arguments: [false, true])
+    func aStopWaitsForAHeartbeatOut(sleeping: Bool) async throws {
+        let h = try HubRig()
+        let gate = PassGate(h.db)
+        let configuration = h.configuration
+        // No turn is written, so every save of the lease alone is a heartbeat of the loop's.
+        let hub = HubMind(database: gate, device: h.hubID, endpoint: "127.0.0.1:1", probe: Confirming(),
+                          brain: h.brain, login: { await MindLogin.check(configuration) }, model: { .sonnet },
+                          timing: LeaseTiming(duration: 8, heartbeat: 0.2), poll: .seconds(3600), answeringPoll: .seconds(3600))
+        await hub.turnOn()
+        #expect(await eventually { await hub.snapshot().phase == .answering })
+        gate.arm(.leaseSave)
+        #expect(await eventually { gate.holding })
+        let before = await h.leaseTag()
+        let stopped = Ended()
+        let stop = Task {
+            if sleeping { await hub.willSleep() } else { await hub.turnOff() }
+            stopped.set()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        // Mutant: `stop()` that does not wait for the lease to settle returns with the save out.
+        #expect(!stopped.isSet, "the stop returned with a heartbeat out")
+        gate.release()
+        await stop.value
+        let after = await h.leaseTag()
+        #expect(after != before, "the heartbeat out at the stop landed")
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(await h.leaseTag() == after, "the record moved after the stop returned")
+        if sleeping { await hub.turnOff() }
+    }
+
     /// A stop that lands between a pass's look at the lease and its `acquire()` of a lapsed lease:
     /// the lease lapses as soon as it is claimed and heartbeats never run, so every pass asks for
     /// it, and the Mac goes to sleep and wakes again and again while the passes run back to back.
@@ -156,4 +189,12 @@ final class SelfProbe: LeaseProbe, @unchecked Sendable {
         }
         await hub.turnOff()
     }
+}
+
+/// Set once, from any task.
+final class Ended: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func set() { lock.withLock { done = true } }
+    var isSet: Bool { lock.withLock { done } }
 }

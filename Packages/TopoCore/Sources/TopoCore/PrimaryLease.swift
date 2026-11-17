@@ -486,6 +486,22 @@ public actor PrimaryLease {
         heartbeatTask = nil
     }
 
+    /// Returns once every operation called before it has ended: for a caller that has abandoned
+    /// the lease and must not return while a write of it is out (the hub's mind stopping). Each
+    /// operation an `abandon()` outlived sends nothing more and ends with the request it has out,
+    /// which the database answers within `timing.patience`; so does this call, waiting at the gate
+    /// as every operation does, and it gives up at that bound and a second more whatever the
+    /// database does. A request that ran out may still be applied by the server: a write built
+    /// before the abandon, which expires within one duration of it. It writes nothing and changes
+    /// nothing held, and `abandon()` itself never waits for it.
+    public func settled() async {
+        let passing = Task { () async throws in
+            await self.enter()
+            self.leave()
+        }
+        _ = await Self.result(of: passing, within: timing.patience + 1)
+    }
+
     /// Creates the lease record for this device only if none exists: the
     /// atomic first claim, which exactly one of any number of devices
     /// launching together wins. True for the winner. The record is not held

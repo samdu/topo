@@ -385,6 +385,63 @@ import TopoCoreTesting
         #expect(await db.current(Lease.recordID)?.changeTag == before)
     }
 
+    /// A heartbeat the loop sent before an abandon lands after it, as a CloudKit request in flight
+    /// does; `settled()` returns only once it has been answered, and the record it wrote expires
+    /// within one duration of the abandon, since it was built before it.
+    @Test func settledWaitsForAHeartbeatOutAtTheAbandon() async throws {
+        let gate = LandsOnRelease(db)
+        let ticker = Ticker()
+        let h = lease(hub, on: gate, ticker: ticker)
+        _ = try await h.acquire()
+        #expect(await eventually { await ticker.sleeping == 1 })
+        clock.advance(5)
+        gate.holdNextSave()
+        await ticker.tick()
+        #expect(await eventually { gate.holding })
+        let before = await db.current(Lease.recordID)?.changeTag
+        await h.abandon()
+        let abandonedAt = clock.now
+        let settled = Flag()
+        let settling = Task { await h.settled(); _ = settled.set() }
+        for _ in 0..<500 { await Task.yield() }
+        // Mutant: `settled()` that does not wait at the gate returns with the save still out.
+        #expect(!settled.isSet, "settled() returned with a heartbeat still out")
+        #expect(await db.current(Lease.recordID)?.changeTag == before)
+        clock.advance(3)
+        gate.release()
+        await settling.value
+        let landed = try #require(await db.current(Lease.recordID).flatMap(Lease.init(record:)))
+        #expect(await db.current(Lease.recordID)?.changeTag != before, "the heartbeat out at the abandon landed")
+        #expect(landed.expiresAt <= abandonedAt + LeaseTiming.standard.duration)
+        #expect(await h.held == nil)
+    }
+
+    /// A request that is never answered holds `settled()` no longer than the lease's patience and
+    /// a second, whatever the database under it does.
+    @Test func settledGivesUpAtItsBound() async throws {
+        let gate = LandsOnRelease(db)
+        let timing = LeaseTiming(duration: 3, heartbeat: 1)
+        let h = PrimaryLease(database: gate, device: hub, endpoint: "hub.local:1", probe: StubProbe.allDead,
+                             timing: timing, sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        _ = try await h.acquire()
+        gate.holdNextSave()
+        let beat = Task { try? await h.heartbeat() }
+        #expect(await eventually { gate.holding })
+        await h.abandon()
+        let began = ContinuousClock.now
+        let settled = Flag()
+        Task { await h.settled(); _ = settled.set() }
+        // Mutant: `settled()` with no bound of its own waits for the request for ever.
+        while !settled.isSet, ContinuousClock.now - began < .seconds(timing.patience + 3) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let took = ContinuousClock.now - began
+        #expect(settled.isSet, "settled() outlived its bound")
+        #expect(took >= .seconds(timing.patience), "settled() returned with the save out: \(took)")
+        gate.release()
+        _ = await beat.value
+    }
+
     @Test func aBatchWhoseLeaseWasAbandonedWhileItsSaveWasOutLeavesNothingHeld() async throws {
         let slow = LateAnswers(db)
         let h = lease(hub, on: slow)

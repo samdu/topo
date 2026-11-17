@@ -12,7 +12,8 @@ import TopoTurn
 /// each a batch with a heartbeat. Before every pass a lease this Mac does not hold is asked for
 /// with `acquire()`, never taken: a holder this Mac yielded to keeps it until it lapses, so a
 /// phone that took it is not taken from on a timer. Every stop is `abandon()`, which stops the
-/// heartbeats at once and lets the record lapse one duration later; there is no release.
+/// heartbeats at once and lets the record lapse one duration later, and then `settled()`, which
+/// waits for a write of the lease already out; there is no release.
 ///
 /// **Starting**, in this order, so the lease is never held by a mind that cannot answer: Claude
 /// Code's login is asked (`MindLogin`), the resident process is started, the runner made, then the
@@ -243,8 +244,9 @@ public actor HubMind {
         await publish()
     }
 
-    /// The Mac is going to sleep: the loop and the pass under way stop and the lease is let go,
-    /// before the call returns, so nothing is written after the sleep.
+    /// The Mac is going to sleep: the loop and the pass under way stop, the lease is let go and
+    /// any write of it already out is waited for, before the call returns. A write that ran out of
+    /// the lease's patience may still land, and expires within one duration of the abandon.
     public func willSleep() async {
         guard !asleep else { return }
         asleep = true
@@ -354,7 +356,9 @@ public actor HubMind {
     }
 
     /// Stops whatever session runs and waits for it: the lease is abandoned before the wait, so a
-    /// write the session sends after this begins holds nothing and a batch is refused.
+    /// write the session sends after this begins holds nothing and a batch is refused. Then waits
+    /// for any write of the lease already out, the heartbeats' included (`PrimaryLease.settled`),
+    /// so none is answered after this returns.
     private func stop() async {
         generation += 1
         let running = session
@@ -364,6 +368,7 @@ public actor HubMind {
         waiting?.cancel()
         await lease.abandon()
         await running?.value
+        await lease.settled()
         releaseNudges()
     }
 
@@ -620,8 +625,9 @@ public actor HubMind {
     }
 
     /// The model the start gives the process: the choice in the zone, one fetch by ID, or the
-    /// picker where no device has said or the record cannot be read.
-    private func startingModel() async -> ClaudeModel {
+    /// picker where no device has said or the record cannot be read. Internal for the suites, which
+    /// cannot see the model a debug build's process runs with (pinned, `ClaudeModel.effective`).
+    func startingModel() async -> ClaudeModel {
         ((try? await ModelChoice.read(from: database)) ?? nil) ?? model()
     }
 
@@ -630,6 +636,7 @@ public actor HubMind {
     private func halt(_ stop: Stop, _ g: Int) async {
         guard current(g) else { return }
         await lease.abandon()
+        await lease.settled()
         _ = await brain.shutdown()
         guard current(g) else { return }
         if stop == .signedOut { loginState = .signedOut }

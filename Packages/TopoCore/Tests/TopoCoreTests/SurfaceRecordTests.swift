@@ -124,4 +124,5 @@ final class Flag: @unchecked Sendable {
     private var done = false
     /// True the first time only.
     func set() -> Bool { lock.withLock { defer { done = true }; return !done } }
+    var isSet: Bool { lock.withLock { done } }
 }

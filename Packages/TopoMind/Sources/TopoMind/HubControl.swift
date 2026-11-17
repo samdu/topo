@@ -122,11 +122,18 @@ public struct HubStatus: Codable, Sendable, Equatable {
     /// The last pass's outcome, trigger and time.
     public var lastPass: String?
     public var passes: Int
+    /// Whether this launch's key for the nudge's channel is saved (`saved`, or `not saved` and the
+    /// failure's kind); nil with no channel. Never the key.
+    public var nudgeKey: String?
+    /// Connections to the channel whose handshake failed since launch: a count alone.
+    public var handshakesFailed: Int?
 
     public static let fileName = "hub-status.json"
 
     public init(pid: Int32, store: HubLaunch.Store, on: Bool, snapshot: HubMind.Snapshot?, leaseHolder: String?,
-                at: Date = Date()) {
+                nudgeKey: String? = nil, handshakesFailed: Int? = nil, at: Date = Date()) {
+        self.nudgeKey = nudgeKey
+        self.handshakesFailed = handshakesFailed
         self.pid = pid
         self.store = store.rawValue
         self.at = at

@@ -47,7 +47,10 @@ public enum HubNudge {
     /// gate; false sends nothing). A hub with no key record is sent nothing (`noKey`), and a
     /// record that cannot be read likewise (`keyUnread`), with a mark that says why; a handshake
     /// the hub refused drops the phone's copy of the key, so the next nudge reads the record
-    /// again (a hub that launched since minted another).
+    /// again (a hub that launched since minted another), and so does a connect that failed or ran
+    /// out (a hub that launched since listens on another port): the endpoint is then not tried for
+    /// `Unreached.forgetAfter`, so a hub off the network costs a read of its record at most once
+    /// in that while.
     public static func send(for lease: Lease, mark: String, keys: NudgeKeys, in database: any RecordDatabase,
                             reachable: @Sendable (_ host: String, _ port: UInt16) async -> Bool = { _, _ in true },
                             stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
@@ -67,7 +70,11 @@ public enum HubNudge {
         }
         guard await reachable(host, key.port) else { return .unreached("gated") }
         let answer = await send(for: lease, mark: mark, key: key, stream: stream)
-        if answer == .unreached("handshake") || answer == .unreached("agreement") { await keys.failed(key) }
+        switch answer {
+        case .unreached("handshake"), .unreached("agreement"), .unreached("connect"), .unreached("connectTimeout"):
+            await keys.failed(key)
+        default: break
+        }
         return answer
     }
 
@@ -76,7 +83,9 @@ public enum HubNudge {
     /// it, and hands it each frame in order as it arrives, ahead of the answer; a line that is no
     /// frame is passed over. A connect that failed within `connectBound` is remembered for this
     /// endpoint (`Unreached`), and the next nudge to it within that while is answered `unreached`
-    /// at once; a refused handshake is not, since the hub was reached.
+    /// at once; a refused handshake is not, since the hub was reached, and nor is a handshake
+    /// still under way at the bound over a TCP connection that was made (`handshakeTimeout`,
+    /// told by `TCPReached` beneath the channel's TLS).
     static func send(for lease: Lease, mark: String, key: NudgeKey, connectBound: TimeInterval = connectBound,
                      answerBound: TimeInterval = answerBound,
                      stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
@@ -88,8 +97,10 @@ public enum HubNudge {
         }
         guard ProbeWire.isMark(Substring(mark)) else { return .unreached("badMark") }
         if Unreached.shared.recently(endpoint) { return .unreached("recently") }
-        let connection = NWConnection(host: host, port: port, using: NudgeTLS.parameters(key))
         let stage = Stage()
+        let parameters = NudgeTLS.parameters(key)
+        parameters.defaultProtocolStack.applicationProtocols.append(TCPReached.options(telling: stage))
+        let connection = NWConnection(host: host, port: port, using: parameters)
         // Each bound cancels the connection, which fails whichever step is pending.
         let connecting = Task {
             try? await Task.sleep(for: .seconds(connectBound))
@@ -107,7 +118,7 @@ public enum HubNudge {
             do {
                 try await connection.waitUntilReady()
             } catch {
-                let kind = Self.kind(error, connection)
+                let kind = Self.kind(error, connection, stage)
                 // A connect that failed or ran out, off the hub's network: not tried again for a
                 // while. Local network access refused is the gate's, not the network's, and a
                 // refused handshake is the key's.
@@ -208,17 +219,53 @@ public enum HubNudge {
 
     /// Why a connection was not made, by kind: denied local network access says so, since it is
     /// the one a person can change, and a handshake the hub refused, since that is the key.
-    private static func kind(_ error: any Error, _ connection: NWConnection) -> String {
+    private static func kind(_ error: any Error, _ connection: NWConnection, _ stage: Stage) -> String {
         if connection.currentPath?.unsatisfiedReason == .localNetworkDenied { return "localNetworkDenied" }
-        if error is CancellationError { return "connectTimeout" }
+        if error is CancellationError { return stage.tcpReached ? "handshakeTimeout" : "connectTimeout" }
         if case .tls? = error as? NWError { return "handshake" }
         return "connect"
     }
 
-    private final class Stage: @unchecked Sendable {
+    final class Stage: @unchecked Sendable {
         private let lock = NSLock()
-        private var made = false
+        private var made = false, tcp = false
         var isConnecting: Bool { lock.withLock { !made } }
         func connected() { lock.withLock { made = true } }
+        /// Whether TCP connected beneath the channel's handshake (`TCPReached`).
+        var tcpReached: Bool { lock.withLock { tcp } }
+        func reachedTCP() { lock.withLock { tcp = true } }
     }
+}
+
+/// A framer beneath the channel's TLS that hands every byte through untouched and tells the nudge
+/// when TCP has connected: Network.framework starts a framer once the protocol below it is ready,
+/// and the connection's state says nothing of that until the handshake above has finished. A
+/// connect bound that runs out after it is a hub reached whose handshake was slow, not a hub off
+/// the network.
+final class TCPReached: NWProtocolFramerImplementation {
+    static let definition = NWProtocolFramer.Definition(implementation: TCPReached.self)
+    static let label = "zone.hexagon.topo.tcp-reached"
+    private static let stageKey = "stage"
+
+    /// The framer's options for one connection, telling `stage`.
+    static func options(telling stage: HubNudge.Stage) -> NWProtocolFramer.Options {
+        let options = NWProtocolFramer.Options(definition: definition)
+        options[stageKey] = stage
+        return options
+    }
+
+    init(framer: NWProtocolFramer.Instance) {}
+
+    func start(framer: NWProtocolFramer.Instance) -> NWProtocolFramer.StartResult {
+        (framer.options[Self.stageKey] as? HubNudge.Stage)?.reachedTCP()
+        framer.passThroughInput()
+        framer.passThroughOutput()
+        return .ready
+    }
+
+    func handleInput(framer: NWProtocolFramer.Instance) -> Int { 0 }
+    func handleOutput(framer: NWProtocolFramer.Instance, message: NWProtocolFramer.Message, messageLength: Int, isComplete: Bool) {}
+    func wakeup(framer: NWProtocolFramer.Instance) {}
+    func stop(framer: NWProtocolFramer.Instance) -> Bool { true }
+    func cleanup(framer: NWProtocolFramer.Instance) {}
 }

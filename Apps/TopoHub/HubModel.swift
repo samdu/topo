@@ -90,6 +90,10 @@ final class HubModel {
     /// has been saved: minted once a launch, never logged.
     private var nudgeKey: NudgeKey?
     private var nudgeKeySaved = false
+    /// The kind of the last failure to save the key's record, while it is not saved.
+    private(set) var nudgeKeyFailure: String?
+    /// Handshakes the channel's listener has seen fail since launch, as last read.
+    private(set) var handshakesFailed = 0
     private var loop: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var signals: [DispatchSourceSignal] = []
@@ -262,7 +266,8 @@ final class HubModel {
     /// The status a shell reads (`HubStatus`, `scripts/hub-mind.sh status`). A write that fails is
     /// logged and left: the next change writes it again.
     private func writeStatus() {
-        let status = HubStatus(pid: getpid(), store: store, on: mindOn, snapshot: mind, leaseHolder: leaseHolder?.rawValue)
+        let status = HubStatus(pid: getpid(), store: store, on: mindOn, snapshot: mind, leaseHolder: leaseHolder?.rawValue,
+                               nudgeKey: nudgeKeyState, handshakesFailed: nudgeKey == nil ? nil : handshakesFailed)
         do {
             try status.write(in: mindRoot)
         } catch {
@@ -350,6 +355,7 @@ final class HubModel {
             await saveNudgeKey()
             await followSwitch()
             await refreshLease()
+            handshakesFailed = await server?.handshakesFailed ?? 0
             writeStatus()
             await refreshDevices()
             await surfaces.refresh()
@@ -415,10 +421,20 @@ final class HubModel {
         do {
             try await nudgeKey.save(to: database)
             nudgeKeySaved = true
+            nudgeKeyFailure = nil
             Self.log.notice("hub nudge key saved")
         } catch {
+            nudgeKeyFailure = NudgeKey.kind(of: error)
             Self.log.error("hub nudge key not saved (\(NudgeKey.kind(of: error), privacy: .public)), nudges go unanswered until it is")
         }
+    }
+
+    /// Whether this launch's key for the nudge's channel is saved, for the status and the menu:
+    /// `saved`, `not saved` with the last failure's kind, or nil before the channel is made.
+    var nudgeKeyState: String? {
+        guard nudgeKey != nil else { return nil }
+        if nudgeKeySaved { return "saved" }
+        return "not saved" + (nudgeKeyFailure.map { " (\($0))" } ?? "")
     }
 
     /// The mind, made once the probe listener's endpoint is known; it claims nothing until it is

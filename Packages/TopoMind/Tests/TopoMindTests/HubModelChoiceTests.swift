@@ -47,6 +47,31 @@ final class Marks: @unchecked Sendable {
             await hub.turnOff()
         }
     }
+
+    /// The process starts with the choice in the zone, and with the picker where no device has said
+    /// or the record cannot be read.
+    @Test func theStartGivesTheProcessTheChoiceOrThePicker() async throws {
+        let h = try HubRig()
+        // Mutant: the start given the picker whatever the zone says.
+        #expect(await hub(h, picker: .sonnet).startingModel() == .sonnet)
+        try await ModelChoice.say(.opus, by: h.phoneID, to: h.db)
+        #expect(await hub(h, picker: .sonnet).startingModel() == .opus)
+        let configuration = h.configuration
+        let unreadable = HubMind(database: ChoiceUnreadable(base: h.db), device: h.hubID, endpoint: "127.0.0.1:1",
+                                 probe: Confirming(), brain: h.brain, login: { await MindLogin.check(configuration) },
+                                 model: { .fable }, timing: fast)
+        // Mutant: a read that failed answered with the default model rather than the picker.
+        #expect(await unreadable.startingModel() == .fable)
+    }
+}
+
+/// A store whose fetch of the person's choice of model fails, as CloudKit unreachable does.
+struct ChoiceUnreadable: ForwardingDatabase {
+    let base: any RecordDatabase
+    func fetch(_ ids: [RecordID], through base: any RecordDatabase) async throws -> [RecordID: Record] {
+        if ids.contains(ModelChoice.recordID) { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+        return try await base.fetch(ids)
+    }
 }
 
 /// The stages of a pass that answers, each marked once and in the order they happen, from the

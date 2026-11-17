@@ -13,8 +13,9 @@
 #
 # status prints what the menu's mind section says, from the status the hub writes at every change
 # and refresh (hub-status.json in the mind's root): the switch, whether Claude Code is signed in,
-# who holds the lease, the mind's state by kind, the mind's own line (process, model, session) and
-# the last pass. No word of a turn is in it. A status whose pid is not a running TopoHub is said to
+# who holds the lease, the mind's state by kind, the mind's own line (process, model, session),
+# the last pass, and whether the nudge's channel's key is saved and how many handshakes on it failed.
+# No word of a turn is in it, and no key. A status whose pid is not a running TopoHub is said to
 # be a stopped hub's.
 #
 # --memory addresses a hub launched with TOPO_STORE=memory: its switch is memory.mind.on and its
@@ -69,6 +70,9 @@ show() {
   echo "process: $(field mind)"
   echo "last:    $(field lastPass || true)"
   echo "passes:  $(field passes), status at $(field at)"
+  if [ -n "$(field nudgeKey)" ]; then
+    echo "channel: key $(field nudgeKey), $(field handshakesFailed) handshakes failed since launch"
+  fi
 }
 
 kept() {

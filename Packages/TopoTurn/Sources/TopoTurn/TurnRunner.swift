@@ -495,6 +495,23 @@ public actor TurnRunner {
         let fresh = await lease.isPrimary()
         let acquired = owes || !fresh
         let renewal: Task<Bool, Never>? = acquired ? nil : Task { await self.renewFresh() }
+        // Every way out of the pass, a throw and a cancelled pass's included, waits for the renewal
+        // it sent, so no write of the lease this pass made lands after it returns. The renewal is
+        // not cancelled with the pass: its answer, bounded by the lease's patience, is waited for.
+        do {
+            let answered = try await answering(seen, since: mark, renewal: renewal, acquired: acquired, choosing: choosing)
+            _ = await renewal?.value
+            return answered
+        } catch {
+            _ = await renewal?.value
+            throw error
+        }
+    }
+
+    /// The rest of a pass, from the probe beside the renewal it was handed (nil when the lease is
+    /// asked for the long way, `acquired`).
+    private func answering(_ seen: Transcript, since mark: Int, renewal: Task<Bool, Never>?, acquired: Bool,
+                           choosing: @Sendable (ClaudeModel?) async -> ClaudeModel) async throws -> Turn? {
         var (transcript, fetched, asked) = try await probe(seen)
         guard transcript.isComplete else { return nil }
         if acquired {
@@ -576,6 +593,8 @@ public actor TurnRunner {
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
                                    answering: answering, parents: transcript.heads, nonce: nonce, model: model)
         let reply: Reply
+        // A pass that was stopped while it read the log or renewed the lease asks nothing.
+        try Task.checkCancellation()
         do {
             reply = try await brain.answer(request)
         } catch let error where !(error is CancellationError) {

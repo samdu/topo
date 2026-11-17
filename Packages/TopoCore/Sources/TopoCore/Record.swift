@@ -63,3 +63,32 @@ public struct Record: Hashable, Sendable, Codable {
         return nil
     }
 }
+
+/// A record printed — described, dumped, reflected, or as the payload of an error that carries it
+/// (`RecordDatabaseError.serverRecordChanged`) — says every field but a sealed one, whose value is
+/// `<sealed>`: a log line or a failure's message that prints a record whole cannot print a secret
+/// kept in it.
+extension Record: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    /// The fields whose values no description of a record prints: the nudge's key keeps its secret
+    /// under `secret` (`NudgeKey`, `Packages/TopoLink`).
+    public static let sealedFields: Set<String> = ["secret"]
+
+    private var printed: [(name: String, value: String)] {
+        fields.keys.sorted().map { name in
+            (name, Self.sealedFields.contains(name) ? "<sealed>" : String(describing: fields[name]!))
+        }
+    }
+
+    public var description: String {
+        let said = printed.map { "\($0.name): \($0.value)" }.joined(separator: ", ")
+        return "Record(type: \(type), id: \(id), fields: [\(said)], changeTag: \(changeTag ?? "nil"))"
+    }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror {
+        Mirror(self, children: ["type": type, "id": id,
+                                "fields": printed.map { "\($0.name): \($0.value)" },
+                                "changeTag": changeTag as Any])
+    }
+}

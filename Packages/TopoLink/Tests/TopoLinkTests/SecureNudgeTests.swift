@@ -50,6 +50,13 @@ import TopoCoreTesting
         #expect(nudges.count == 0)
         // A handshake that failed is not a hub off the network: the right key is tried at once.
         #expect(await HubNudge.send(for: lease(port), mark: "ab12cd34", key: right) == .read)
+        // The hub counts the failed handshake, and not the one that opened the channel.
+        var failed = await server.handshakesFailed
+        for _ in 0..<200 where failed == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+            failed = await server.handshakesFailed
+        }
+        #expect(failed == 1)
     }
 
     /// Another hub's key is never offered to this hub's endpoint.
@@ -203,6 +210,79 @@ import TopoCoreTesting
         #expect(nudges.count == 2)
     }
 
+    /// The phone kept the last launch's key, whose channel's port is now closed, under an epoch the
+    /// new launch's key record had not reached yet: the refused connect mutes the endpoint and
+    /// drops the copy, so the first nudge after the mute reads the record again and is answered.
+    @Test func aKeyWhosePortIsClosedIsReadAgainOnceTheMuteIsOver() async throws {
+        HubNudge.Unreached.shared.forget()
+        defer { HubNudge.Unreached.shared.forget() }
+        let db = InMemoryRecordDatabase()
+        let keys = NudgeKeys()
+        let (old, _, oldKey, _) = try await hubServer(.mint(hub: hub))
+        try await #require(oldKey).save(to: db)
+        await old.stop()
+        try await Task.sleep(for: .milliseconds(200))
+        let (server, port, liveKey, nudges) = try await hubServer(.mint(hub: hub))
+        defer { Task { await server.stop() } }
+        #expect(await HubNudge.send(for: lease(port), mark: "ab12cd34", keys: keys, in: db) == .unreached("connect"))
+        try await #require(liveKey).save(to: db)
+        // Muted: no read of the record and no connect.
+        #expect(await HubNudge.send(for: lease(port), mark: "ab12cd34", keys: keys, in: db) == .unreached("recently"))
+        HubNudge.Unreached.shared.forget()
+        // Mutant: the copy kept after a refused connect, which is the dead port again.
+        #expect(await HubNudge.send(for: lease(port), mark: "ab12cd34", keys: keys, in: db) == .read)
+        #expect(nudges.count == 1)
+    }
+
+    /// A hub reached whose handshake has not finished at the connect bound is not a hub off the
+    /// network: the endpoint is not muted and the next nudge tries it at once.
+    @Test func aHandshakeSlowerThanTheBoundIsNotAHubOffTheNetwork() async throws {
+        HubNudge.Unreached.shared.forget()
+        defer { HubNudge.Unreached.shared.forget() }
+        let silent = try await SilentListener()
+        defer { silent.stop() }
+        let key = NudgeKey.mint(hub: hub).on(port: silent.port)
+        let endpointLease = Lease(holder: hub, endpoint: "127.0.0.1:\(silent.port)", epoch: 3, expiresAt: Date().addingTimeInterval(60))
+        // Mutant: a bound that runs out said as `connectTimeout` whether or not TCP connected.
+        #expect(await HubNudge.send(for: endpointLease, mark: "ab12cd34", key: key, connectBound: 0.5) == .unreached("handshakeTimeout"))
+        #expect(!HubNudge.Unreached.shared.recently("127.0.0.1:\(silent.port)"))
+    }
+
+    /// A host that never answers runs out as a connect that was not made, and is muted.
+    @Test func aHostThatNeverAnswersRunsOutUnconnected() async throws {
+        HubNudge.Unreached.shared.forget()
+        defer { HubNudge.Unreached.shared.forget() }
+        // TEST-NET-1 (RFC 5737): routed nowhere, so a SYN to it is never answered, or the route refused.
+        let nowhere = Lease(holder: hub, endpoint: "192.0.2.1:4567", epoch: 3, expiresAt: Date().addingTimeInterval(60))
+        let key = NudgeKey.mint(hub: hub).on(port: 4567)
+        let answer = await HubNudge.send(for: nowhere, mark: "ab12cd34", key: key, connectBound: 0.5)
+        // Mutant: every bound that runs out said as a slow handshake.
+        #expect(answer == .unreached("connectTimeout") || answer == .unreached("connect"), "\(answer)")
+        #expect(HubNudge.Unreached.shared.recently("192.0.2.1:4567"))
+    }
+
+    /// A key with no port is no key: nothing is connected to.
+    @Test func aKeyWithNoPortIsNotUsed() async throws {
+        HubNudge.Unreached.shared.forget()
+        let (server, port, _, nudges) = try await hubServer(.mint(hub: hub))
+        defer { Task { await server.stop() } }
+        // Mutant: the port's guard gone, which connects to port 0.
+        #expect(await HubNudge.send(for: lease(port), mark: "ab12cd34", key: NudgeKey.mint(hub: hub)) == .unreached("noKey"))
+        #expect(nudges.count == 0)
+        #expect(!HubNudge.Unreached.shared.recently("127.0.0.1:\(port)"))
+    }
+
+    /// The key's save goes again over the version a conflict names, and gives up after three.
+    @Test func theKeysSaveGoesAgainOverAConflict() async throws {
+        let db = ConflictingSaves(conflicts: 2)
+        let key = NudgeKey.mint(hub: hub).on(port: 4242)
+        // Mutant: a conflict thrown at once.
+        try await key.save(to: db)
+        #expect(try await NudgeKey.read(for: hub, from: db) == key)
+        let always = ConflictingSaves(conflicts: 3)
+        await #expect(throws: NudgeKey.Contended.self) { try await key.save(to: always) }
+    }
+
     /// A connection to the channel that never begins its handshake is closed at the bound.
     @Test func silenceOnTheChannelIsClosedAtTheBound() async throws {
         let (server, _, key, _) = try await hubServer(.mint(hub: hub))
@@ -226,6 +306,12 @@ import TopoCoreTesting
         var elsewhere = key.record(changeTag: nil)
         elsewhere.fields["hub"] = .string("mac-other")
         #expect(NudgeKey(record: elsewhere) == nil)
+        // Mutant: an identity that is not sixteen lowercase hex digits taken.
+        for identity in ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdeg"] {
+            var named = key.record(changeTag: nil)
+            named.fields["identity"] = .string(identity)
+            #expect(NudgeKey(record: named) == nil, "\(identity)")
+        }
     }
 
     /// A failure is said by its kind: a conflict's error carries the record, which is the secret.
@@ -246,6 +332,25 @@ import TopoCoreTesting
             #expect(!said.contains(secret))
             #expect(said.contains(key.identity))
         }
+    }
+
+    /// The key's record printed as a whole, and an error that carries it, as a generic log line
+    /// would print them, say every field but the secret.
+    @Test func noPrintOfTheKeysRecordSaysTheSecret() {
+        let key = NudgeKey.mint(hub: hub).on(port: 4242)
+        let secret = key.secret.base64EncodedString()
+        let record = key.record(changeTag: "t")
+        let conflict = RecordDatabaseError.serverRecordChanged(record.id, server: record)
+        var dumped = "", dumpedError = ""
+        dump(record, to: &dumped)
+        dump(conflict, to: &dumpedError)
+        // Mutant: `Record` printed by Swift's default, every field whole.
+        for said in [String(describing: record), String(reflecting: record), "\(record)", dumped,
+                     String(describing: conflict), String(reflecting: conflict), "\(conflict)", dumpedError] {
+            #expect(!said.contains(secret), "\(said)")
+            #expect(said.contains(key.identity))
+        }
+        #expect(NudgeKey(record: record) == key, "the secret is in the record all the same")
     }
 }
 
@@ -395,4 +500,53 @@ final class Relay: @unchecked Sendable {
         listener.cancel()
         tap.lock.withLock { tap.connections.forEach { $0.cancel() } }
     }
+}
+
+/// A TCP listener on a local port that takes every connection and never says a byte: a hub whose
+/// channel's handshake does not finish.
+final class SilentListener: @unchecked Sendable {
+    private final class Held: @unchecked Sendable {
+        private let lock = NSLock()
+        private var connections: [NWConnection] = []
+        func keep(_ connection: NWConnection) { lock.withLock { connections.append(connection) } }
+    }
+    private let listener: NWListener
+    private let held = Held()
+    let port: UInt16
+    init() async throws {
+        let listener = try NWListener(using: .tcp, on: .any)
+        self.listener = listener
+        let box = OneShot<UInt16>()
+        listener.newConnectionHandler = { [held] connection in
+            held.keep(connection)
+            connection.start(queue: DispatchQueue(label: "test.silent"))
+        }
+        listener.stateUpdateHandler = { [weak listener] state in
+            if case .ready = state { box.resume(.success(listener?.port?.rawValue ?? 0)) }
+            if case .failed(let error) = state { box.resume(.failure(error)) }
+        }
+        listener.start(queue: DispatchQueue(label: "test.silent.listener"))
+        port = try await box.value()
+    }
+    func stop() { listener.cancel() }
+}
+
+/// A store whose first `conflicts` saves of a record lose to another writer between the read and
+/// the save, as `serverRecordChanged` with that writer's version.
+final class ConflictingSaves: RecordDatabase, @unchecked Sendable {
+    private let inner = InMemoryRecordDatabase()
+    private let lock = NSLock()
+    private var left: Int
+    init(conflicts: Int) { left = conflicts }
+    func save(_ records: [Record]) async throws -> [Record] {
+        let lose = lock.withLock { () -> Bool in defer { left -= 1 }; return left > 0 }
+        if lose, let record = records.first {
+            let saved = try await inner.save([Record(type: record.type, id: record.id, fields: [:], changeTag: try await inner.fetch(record.id)?.changeTag)])
+            throw RecordDatabaseError.serverRecordChanged(record.id, server: saved[0])
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }

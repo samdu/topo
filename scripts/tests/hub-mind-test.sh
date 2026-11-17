@@ -47,7 +47,7 @@ mkdir -p "$root"
 write() {
   local on=false phase=off
   [ "$(cat "$DEFAULTS_DIR/zone.hexagon.topo.hub.$key" 2>/dev/null)" = 1 ] && on=true phase=answering
-  printf '{"pid": %d, "store": "memory", "at": "2026-11-15T19:00:00Z", "on": %s, "phase": "%s", "login": "signed in (claude.ai, max)", "holds": %s, "mind": "Claude Code on this Mac, pid 7, model m", "lastPass": "answered by push at 2026-11-15T19:00:00Z", "passes": 3, "words": "octarine"}\n' \
+  printf '{"pid": %d, "store": "memory", "at": "2026-11-15T19:00:00Z", "on": %s, "phase": "%s", "login": "signed in (claude.ai, max)", "holds": %s, "mind": "Claude Code on this Mac, pid 7, model m", "lastPass": "answered by push at 2026-11-15T19:00:00Z", "passes": 3, "nudgeKey": "not saved (unavailable)", "handshakesFailed": 2, "words": "octarine"}\n' \
     $$ "$on" "$phase" "$on" > "$root/hub-status.json.tmp"
   mv "$root/hub-status.json.tmp" "$root/hub-status.json"
 }
@@ -83,7 +83,8 @@ out="$("$script" on 2>&1)"; code=$?
 is "on with a hub succeeds" "$code" 0
 is "on keeps mind.on" "$(kept mind.on)" 1
 for want in "hub:     running, pid $hub_pid" "switch:  on" "login:   signed in (claude.ai, max)" "lease:   this Mac" "mind:    answering" \
-            "process: Claude Code on this Mac, pid 7, model m" "last:    answered by push"; do
+            "process: Claude Code on this Mac, pid 7, model m" "last:    answered by push" \
+            "channel: key not saved (unavailable), 2 handshakes failed since launch"; do
   case "$out" in *"$want"*) ok "status shows '$want'" ;; *) fail "status lacks '$want': $out" ;; esac
 done
 case "$out" in *octarine*) fail "status printed a field the menu does not show" ;; *) ok "status prints nothing else" ;; esac

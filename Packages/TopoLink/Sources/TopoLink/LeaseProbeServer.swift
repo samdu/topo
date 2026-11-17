@@ -102,6 +102,10 @@ public actor LeaseProbeServer {
     public private(set) var port: UInt16?
     /// The channel's port once bound, or nil with no key.
     public private(set) var securePort: UInt16?
+    /// Connections to the channel whose handshake did not finish within `requestBound` or agreed
+    /// anything but the channel's version and suite, since the listener was made: a count, and
+    /// nothing of who they were.
+    public private(set) var handshakesFailed = 0
 
     /// - Parameters:
     ///   - advertising: the device ID to register under `TopoService.type`,
@@ -178,7 +182,11 @@ public actor LeaseProbeServer {
         // is dropped before a byte of it is read.
         if secure {
             guard await Self.within(Self.requestBound, { try await connection.waitUntilReady() }) != nil,
-                  NudgeTLS.agreed(connection) else { return }
+                  NudgeTLS.agreed(connection) else {
+                handshakesFailed += 1
+                Perf.mark("hub.channel.handshakeFailed n=\(handshakesFailed)")
+                return
+            }
         }
         // A connection that says nothing is closed at the bound, so nothing on the network holds
         // a serving task open by connecting.

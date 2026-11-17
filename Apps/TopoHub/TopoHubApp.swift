@@ -122,6 +122,14 @@ struct MindSection: View {
                     Text("Debug build: every turn goes to \(pinned.displayName)").font(.caption2).foregroundStyle(.secondary)
                 }
                 phaseLine
+                if let key = hub.nudgeKeyState, key != "saved" {
+                    Text("The channel's key is \(key): a phone on this network finds the turn by the poll")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if hub.handshakesFailed > 0 {
+                    Text("\(hub.handshakesFailed) handshakes on the channel failed since launch")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 if let mind = hub.mind {
                     Text(mind.mind).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                     if let pass = mind.lastPass {

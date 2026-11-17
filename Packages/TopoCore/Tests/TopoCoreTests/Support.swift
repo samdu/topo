@@ -528,3 +528,25 @@ struct AsksTheHolder: LeaseProbe {
         return held.holder == lease.holder && held.epoch == lease.epoch
     }
 }
+
+/// A database whose next save is held unsent until `release`, and then reaches the store: a
+/// CloudKit request in flight, which lands whatever became of the call that sent it.
+final class LandsOnRelease: ForwardingDatabase, @unchecked Sendable {
+    let base: any RecordDatabase
+    private let lock = NSLock()
+    private var holdNext = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var held = false
+    init(_ inner: any RecordDatabase) { base = inner }
+    func holdNextSave() { lock.withLock { holdNext = true } }
+    var holding: Bool { lock.withLock { held } }
+    func release() {
+        let w = lock.withLock { () -> CheckedContinuation<Void, Never>? in defer { waiter = nil; held = false }; return waiter }
+        w?.resume()
+    }
+    func save(_ records: [Record], through base: any RecordDatabase) async throws -> [Record] {
+        let hold = lock.withLock { () -> Bool in defer { holdNext = false }; return holdNext }
+        if hold { await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in lock.withLock { waiter = c; held = true } } }
+        return try await base.save(records)
+    }
+}
