@@ -17,7 +17,7 @@ final class Frames: @unchecked Sendable {
         var messages: [String] = []
         for frame in frames {
             switch frame {
-            case .turn: messages = []
+            case .turn, .heard: messages = []
             case .message: messages.append("")
             case .text(let more):
                 if messages.isEmpty { messages.append("") }

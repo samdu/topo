@@ -18,7 +18,12 @@ public enum TopoService {
 /// one to sixteen letters or digits, the turn's mark (`Harness.turnMark`'s eight) for the marks on
 /// both sides to be paired by, and nothing else. `moved <device> <epoch> <mark> stream` asks the
 /// same and for the reply to the turn the mark names as the mind writes it: before `read`, a line
-/// of JSON per `ReplyFrame`. Anything else, or silence, is no.
+/// of JSON per `ReplyFrame`. `hear <device> <epoch> <nonce> <model> <length>`, then exactly
+/// `length` bytes of UTF-8, hands the holder of that lease the person's words before their turn is
+/// saved (`HubNudge.hear`), on the channel alone: `heard` once its mind has them, `no` otherwise.
+/// The nonce is the one the person's turn will be saved under, a UUID; the model is the person's
+/// choice, a model's alias or id; the words are at most `HubNudge.hearMaximum` bytes. Anything
+/// else, or silence, is no.
 enum ProbeWire {
     static func request(_ lease: Lease) -> Data {
         Data("hold \(lease.holder.rawValue) \(lease.epoch)\n".utf8)
@@ -28,9 +33,16 @@ enum ProbeWire {
         Data("moved \(lease.holder.rawValue) \(lease.epoch) \(mark)\(stream ? " stream" : "")\n".utf8)
     }
 
+    /// The line that hands the person's words over, and the words after it, as one write.
+    static func hear(_ lease: Lease, nonce: String, model: String, words: String) -> Data {
+        let body = Data(words.utf8)
+        return Data("hear \(lease.holder.rawValue) \(lease.epoch) \(nonce) \(model) \(body.count)\n".utf8) + body
+    }
+
     enum Request: Equatable {
         case hold(DeviceID, Int64)
         case moved(DeviceID, Int64, mark: String, stream: Bool)
+        case hear(DeviceID, Int64, nonce: String, model: String, length: Int)
     }
 
     static func parse(_ line: String) -> Request? {
@@ -42,7 +54,22 @@ enum ProbeWire {
            let epoch = Int64(parts[2]), isMark(parts[3]) {
             return .moved(DeviceID(String(parts[1])), epoch, mark: String(parts[3]), stream: parts.count == 5)
         }
+        if parts.count == 6, parts[0] == "hear", let epoch = Int64(parts[2]), isNonce(parts[3]), isModel(parts[4]),
+           let length = Int(parts[5]), (1...HubNudge.hearMaximum).contains(length) {
+            return .hear(DeviceID(String(parts[1])), epoch, nonce: String(parts[3]), model: String(parts[4]), length: length)
+        }
         return nil
+    }
+
+    /// A nonce words may be handed over under: a UUID as the phone mints one, which no reply's
+    /// nonce (`answer/` and a digest) can be taken for.
+    static func isNonce(_ nonce: Substring) -> Bool {
+        nonce.count == 36 && UUID(uuidString: String(nonce)) != nil
+    }
+
+    /// A model's alias or id: one to forty letters, digits, dots and hyphens.
+    static func isModel(_ model: Substring) -> Bool {
+        (1...40).contains(model.count) && model.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") }
     }
 
     static func parseRequest(_ line: String) -> (DeviceID, Int64)? {
@@ -57,6 +84,7 @@ enum ProbeWire {
     static let yes = Data("yes\n".utf8)
     static let no = Data("no\n".utf8)
     static let read = Data("read\n".utf8)
+    static let heard = Data("heard\n".utf8)
 
     struct LineTooLong: Error {}
 }
@@ -80,6 +108,12 @@ public actor LeaseProbeServer {
     /// on the phone, so a slow or gone one holds up nothing of the mind's. Only a nudge that came
     /// over the channel is handed here.
     public typealias Nudged = @Sendable (DeviceID, Int64, String, _ stream: (@Sendable (ReplyFrame) -> Void)?) async -> Bool
+    /// The person's words handed over for the lease `device` at `epoch` before their turn is saved,
+    /// under the turn's nonce, with the model they chose: true once the mind has them, false when
+    /// it does not take them (no such lease held, the mind not answering or busy). Only words that
+    /// came over the channel, whole, are handed here, and the answer is waited for within
+    /// `requestBound`.
+    public typealias Heard = @Sendable (DeviceID, Int64, _ nonce: String, _ model: String, _ words: String) async -> Bool
 
     /// The most nudges answered at once. One more is answered `no` with no pass asked: as many as
     /// this already wait for a pass that will read after them, and a pass's end answers them all.
@@ -98,6 +132,7 @@ public actor LeaseProbeServer {
     private let channel: NWListener?
     private let holds: Holds
     private let nudged: Nudged?
+    private let heard: Heard?
     private var nudging = 0
     public private(set) var port: UInt16?
     /// The channel's port once bound, or nil with no key.
@@ -114,14 +149,15 @@ public actor LeaseProbeServer {
     ///   - key: the hub's key, for the channel's listener on a free port of its own; nil, no
     ///     channel, and so no nudge is taken.
     public init(advertising device: DeviceID?, port: UInt16 = 0, key: NudgeKey? = nil,
-                holds: @escaping Holds, nudged: Nudged? = nil) throws {
-        try self.init(advertising: device, port: port, key: key, suites: [NudgeTLS.suite], holds: holds, nudged: nudged)
+                holds: @escaping Holds, nudged: Nudged? = nil, heard: Heard? = nil) throws {
+        try self.init(advertising: device, port: port, key: key, suites: [NudgeTLS.suite], holds: holds, nudged: nudged,
+                      heard: heard)
     }
 
     /// `suites` is what the channel's listener offers: the one suite but in the suites, which see
     /// a listener that agrees to another refused.
     init(advertising device: DeviceID?, port: UInt16 = 0, key: NudgeKey?, suites: [UInt16],
-         holds: @escaping Holds, nudged: Nudged? = nil) throws {
+         holds: @escaping Holds, nudged: Nudged? = nil, heard: Heard? = nil) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
@@ -132,6 +168,7 @@ public actor LeaseProbeServer {
         self.channel = try key.map { try NWListener(using: NudgeTLS.parameters($0, suites: suites), on: .any) }
         self.holds = holds
         self.nudged = nudged
+        self.heard = heard
     }
 
     /// Starts listening, the channel too. Returns the probe's port once both are bound.
@@ -190,8 +227,11 @@ public actor LeaseProbeServer {
         }
         // A connection that says nothing is closed at the bound, so nothing on the network holds
         // a serving task open by connecting.
-        let request = await Self.within(Self.requestBound) { try await connection.readLine(maximum: 256) }
-        guard let line = request, let parsed = ProbeWire.parse(line) else {
+        // Read through one buffer, so what follows the request's line on the wire (the words a
+        // `hear` carries) is not lost with the read that found its newline.
+        let reader = NWConnection.Lines(connection)
+        let request = await Self.within(Self.requestBound) { try await reader.next(maximum: 256) }
+        guard let line = request ?? nil, let parsed = ProbeWire.parse(line) else {
             try? await connection.send(ProbeWire.no)
             return
         }
@@ -218,6 +258,22 @@ public actor LeaseProbeServer {
             let read = await Self.within(Self.nudgeBound) { await nudged(device, epoch, mark, handed) }
             nudging -= 1
             try? await connection.send(read == true ? ProbeWire.read : ProbeWire.no)
+        case .hear(let device, let epoch, let nonce, let model, let length):
+            // Words in the clear are nobody's: answered no, unread, and nothing runs.
+            guard secure, let heard, nudging < Self.nudgesAtOnce else {
+                try? await connection.send(ProbeWire.no)
+                return
+            }
+            nudging += 1
+            defer { nudging -= 1 }
+            // The words whole, within the request's bound and as UTF-8, or nothing is handed over.
+            guard let body = await Self.within(Self.requestBound, { try await reader.bytes(length) }) ?? nil,
+                  let words = String(data: body, encoding: .utf8) else {
+                try? await connection.send(ProbeWire.no)
+                return
+            }
+            let taken = await Self.within(Self.requestBound) { await heard(device, epoch, nonce, model, words) }
+            try? await connection.send(taken == true ? ProbeWire.heard : ProbeWire.no)
         }
     }
 
@@ -312,6 +368,20 @@ extension NWConnection {
         private var buffer = Data()
         private var ended = false
         init(_ connection: NWConnection) { self.connection = connection }
+
+        /// Exactly `count` bytes, after whatever the last line left in the buffer: nil when the
+        /// stream ends first. Called from one task at a time.
+        func bytes(_ count: Int) async throws -> Data? {
+            while buffer.count < count {
+                if ended { return nil }
+                let (chunk, complete) = try await connection.receiveSome(maximum: 65_536)
+                if let chunk { buffer.append(chunk) }
+                if complete { ended = true }
+            }
+            let taken = Data(buffer.prefix(count))
+            buffer = Data(buffer.dropFirst(count))
+            return taken
+        }
 
         /// The next line without its newline, or nil at the end of the stream; a line longer than
         /// `maximum` bytes throws. Called from one task at a time.

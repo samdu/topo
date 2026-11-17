@@ -70,13 +70,16 @@ public enum HubNudge {
         }
         guard await reachable(host, key.port) else { return .unreached("gated") }
         let answer = await send(for: lease, mark: mark, key: key, stream: stream)
-        switch answer {
-        case .unreached("handshake"), .unreached("agreement"), .unreached("handshakeTimeout"),
-             .unreached("connect"), .unreached("connectTimeout"):
-            await keys.failed(key)
-        default: break
-        }
+        if case .unreached(let kind) = answer, dropsKey(kind) { await keys.failed(key) }
         return answer
+    }
+
+    /// Whether a connection that failed this way drops the phone's copy of the key: a handshake
+    /// the hub refused or that did not agree (a hub launched since minted another), one still under
+    /// way at the bound, and a connect that failed or ran out (a hub launched since listens on
+    /// another port). A nudge and a hand-over drop it alike.
+    static func dropsKey(_ kind: String) -> Bool {
+        ["handshake", "agreement", "handshakeTimeout", "connect", "connectTimeout"].contains(kind)
     }
 
     /// Says the log moved to the holder of `lease` over the channel `key` opens, and waits for its
@@ -158,6 +161,107 @@ public enum HubNudge {
                     if Task.isCancelled { return .unreached("cancelled") }
                     await stream(frame)
                 }
+            }
+        } onCancel: {
+            connection.cancel()
+        }
+    }
+
+    /// What became of the person's words handed to a hub ahead of their turn's save (`hear`).
+    public enum Handed: Equatable, Sendable {
+        /// The hub's mind has them.
+        case heard
+        /// The hub did not take them, and nothing of them reached its mind.
+        case no
+        /// No answer, by kind of failure. With `sent` false nothing left this phone; with it true
+        /// the words went and may have reached the mind.
+        case unknown(String, sent: Bool)
+    }
+
+    /// The most bytes of words handed over: past it the turn goes by the log alone.
+    public static let hearMaximum = 65_536
+    /// How long the hub's answer to a hand-over is waited for: its mind takes the words or does
+    /// not within its own request bound (`LeaseProbeServer.requestBound`).
+    public static let hearBound: TimeInterval = 5
+
+    /// Whether the words under `nonce` can be handed over at all: a UUID nonce, a model's name,
+    /// and words of one to `hearMaximum` bytes.
+    public static func canHear(_ words: String, nonce: String, model: String) -> Bool {
+        ProbeWire.isNonce(Substring(nonce)) && ProbeWire.isModel(Substring(model))
+            && (1...hearMaximum).contains(words.utf8.count)
+    }
+
+    /// Hands the person's words, said under `nonce` with `model` chosen, to the holder of `lease`
+    /// over the channel `key` opens, before their turn is saved, and waits for its answer. Nothing
+    /// is read from CloudKit and nothing asks for local network access: `key` is the one kept
+    /// (`NudgeKeys.kept(for:)`), and a phone that has not been allowed to reach the hub does not
+    /// call this. A connect that failed is remembered as the nudge's are (`Unreached`), and an
+    /// endpoint remembered so is not tried; a handshake slower than the bound over a TCP connection
+    /// that was made mutes nothing (`TCPReached`), so the nudge after the save still goes. A
+    /// failure that drops a nudge's copy of the key (`dropsKey`) drops it from `keys` too, so the
+    /// nudge after the save reads the record again.
+    public static func hear(_ words: String, nonce: String, model: String, for lease: Lease, key: NudgeKey,
+                            keys: NudgeKeys? = nil,
+                            connectBound: TimeInterval = connectBound, answerBound: TimeInterval = hearBound) async -> Handed {
+        let handed = await hearing(words, nonce: nonce, model: model, for: lease, key: key,
+                                   connectBound: connectBound, answerBound: answerBound)
+        if case .unknown(let kind, _) = handed, dropsKey(kind) { await keys?.failed(key) }
+        return handed
+    }
+
+    private static func hearing(_ words: String, nonce: String, model: String, for lease: Lease, key: NudgeKey,
+                                connectBound: TimeInterval, answerBound: TimeInterval) async -> Handed {
+        guard let endpoint = lease.endpoint, let (host, _) = SocketLeaseProbe.parse(endpoint) else {
+            return .unknown("noEndpoint", sent: false)
+        }
+        guard key.hub == lease.holder, let port = NWEndpoint.Port(rawValue: key.port), key.port != 0 else {
+            return .unknown("noKey", sent: false)
+        }
+        guard canHear(words, nonce: nonce, model: model) else { return .unknown("shape", sent: false) }
+        if Unreached.shared.recently(endpoint) { return .unknown("recently", sent: false) }
+        let stage = Stage()
+        let parameters = NudgeTLS.parameters(key)
+        parameters.defaultProtocolStack.applicationProtocols.append(TCPReached.options(telling: stage))
+        let connection = NWConnection(host: host, port: port, using: parameters)
+        let connecting = Task {
+            try? await Task.sleep(for: .seconds(connectBound))
+            if stage.isConnecting { connection.cancel() }
+        }
+        var answering: Task<Void, Never>?
+        defer {
+            connecting.cancel()
+            answering?.cancel()
+            connection.cancel()
+        }
+        return await withTaskCancellationHandler {
+            connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.hear"))
+            do {
+                try await connection.waitUntilReady()
+            } catch {
+                let kind = Self.kind(error, connection, stage)
+                if kind == "connect" || kind == "connectTimeout" { Unreached.shared.failed(endpoint) }
+                return .unknown(kind, sent: false)
+            }
+            guard NudgeTLS.agreed(connection) else { return .unknown("agreement", sent: false) }
+            stage.connected()
+            Unreached.shared.reached(endpoint)
+            do {
+                try await connection.send(ProbeWire.hear(lease, nonce: nonce, model: model, words: words))
+            } catch {
+                return .unknown("send", sent: true)
+            }
+            Perf.mark("turn.heard.sent turn=\(String(nonce.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(8)).lowercased())")
+            answering = Task {
+                try? await Task.sleep(for: .seconds(answerBound))
+                connection.cancel()
+            }
+            guard let line = try? await NWConnection.Lines(connection).next(maximum: 16) else {
+                return .unknown("answer", sent: true)
+            }
+            switch line.trimmingCharacters(in: .whitespacesAndNewlines) {
+            case "heard": return .heard
+            case "no": return .no
+            default: return .unknown("answer", sent: true)
             }
         } onCancel: {
             connection.cancel()
