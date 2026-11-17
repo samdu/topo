@@ -629,6 +629,23 @@ func settle() async {
         #expect(status?.summary == "claude.ai, max")
     }
 
+    /// The `account` of 2.1.316's `initialize` answer, read as `auth status` would say it. The
+    /// signed-out shape is the one a scratch home's `claude` answered on the simulator.
+    @Test func theInitializeAnswerConfirmsOnlyAClaudeAISubscribersLogin() {
+        let subscriber = ClaudeLoginStatus(initialize: "Claude Max", tokenSource: nil, apiProvider: "firstParty")
+        #expect(subscriber.isClaudeAI)
+        #expect(subscriber.subscriptionType == nil, "the plan's display name is not auth status's")
+        let signedOut = ClaudeLoginStatus(initialize: nil, tokenSource: "none", apiProvider: "firstParty")
+        #expect(!signedOut.loggedIn)
+        let developer = ClaudeLoginStatus(initialize: nil, tokenSource: "CLAUDE_CODE_OAUTH_TOKEN", apiProvider: "firstParty")
+        #expect(developer.loggedIn && !developer.isClaudeAI)
+        #expect(developer.authMethod == "oauth_token")
+        #expect(!ClaudeLoginStatus(initialize: "Claude Max", tokenSource: nil, apiProvider: "bedrock").loggedIn)
+        #expect(!ClaudeLoginStatus(initialize: nil, tokenSource: "ANTHROPIC_API_KEY", apiProvider: "firstParty").loggedIn)
+        #expect(!ClaudeLoginStatus(initialize: "", tokenSource: nil, apiProvider: nil).loggedIn)
+        #expect(!ClaudeLoginStatus(initialize: nil, tokenSource: nil, apiProvider: nil).loggedIn)
+    }
+
     @Test func aTokenFromTheEnvironmentIsNotClaudeAI() {
         let status = ClaudeLoginStatus.parse(#"{"loggedIn": true, "authMethod": "oauth_token"}"#)
         #expect(status?.isClaudeAI == false)

@@ -328,6 +328,8 @@ public actor GuestSession {
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
+    /// Told the login each process's `initialize` answer names, once a process, as it answers.
+    private let answered: (@Sendable (StreamEvent.Account?) -> Void)?
     /// The id of the `initialize` request each launch writes first, whose answer marks the process
     /// ready.
     static let readyRequest = "topo-ready"
@@ -444,8 +446,10 @@ public actor GuestSession {
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 signedIn: @escaping @Sendable () -> Bool = { true },
                 requests: (@Sendable (RequestMoment) -> Void)? = nil,
+                answered: (@Sendable (StreamEvent.Account?) -> Void)? = nil,
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.requests = requests
+        self.answered = answered
         self.launcher = launcher
         self.freezer = freezer
         self.signedIn = signedIn
@@ -973,10 +977,11 @@ public actor GuestSession {
             default: break
             }
             // An answer to a control request is the app's own and no turn's.
-            if case .controlResponse(let id) = event {
+            if case .controlResponse(let id, let account) = event {
                 if id == Self.readyRequest, !resident.ready {
                     resident.ready = true
                     Perf.mark("resident.ready \(resident.resumed == nil ? "fresh" : "resume") cpu=\(Perf.cpu())")
+                    answered?(account)
                 }
                 continue
             }

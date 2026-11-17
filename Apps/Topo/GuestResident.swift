@@ -48,8 +48,16 @@ final class GuestResident {
     /// The tools the service answers with: the app's own, set before the first start
     /// (`TopoApp`). A start before they are set answers `topo help` with none.
     var toolTable: [any Tool] = []
-    /// Asked once the guest is up and before any process starts: the sign-in's `refresh`.
+    /// The sign-in's `refresh`, which asks `auth status`: once the guest is up and before any
+    /// process starts while the cache says signed out, and otherwise only when the first process's
+    /// `initialize` answer does not confirm the login (`residentAnswered`).
     var booted: (@MainActor () async -> Void)?
+    /// Whether a login counts as signed in, by the sign-in's own rule (`SignIn.accepts`).
+    var confirms: (@MainActor (ClaudeLoginStatus) -> Bool)?
+    /// Whether this process has had its login checked: by `auth status` at the boot, or by the
+    /// first `initialize` answer and, when that did not confirm it, `auth status` after it. Once a
+    /// process, so an answer that never confirms does not end the resident again and again.
+    private var loginChecked = false
     /// Whether a conversation behind the lock holds the resident up (`GuestLifecycle.conversing`):
     /// the app's `Conversation`, set before the first start (`TopoApp`).
     var conversing: @MainActor (_ beginning: Bool) -> Bool = { _ in false }
@@ -136,8 +144,9 @@ final class GuestResident {
     /// lifecycle from the foreground it is in now. A start that fails is not kept: the next call
     /// tries again from the step that failed (the kernel's own boot is once per process, and its
     /// answer is `Userland.bootGuest`'s to keep). Once the guest is up, and before any process
-    /// starts, `booted` asks Claude Code whether it is still signed in (`SignIn.refresh`); a launch
-    /// while it is not is refused. `log` hears the session's and the tool service's lines, and each way
+    /// starts, `booted` asks Claude Code whether it is still signed in (`SignIn.refresh`) when the
+    /// cache says it is not; a launch while it is not is refused. When the cache says signed in,
+    /// the first process's `initialize` answer is the check (`residentAnswered`). `log` hears the session's and the tool service's lines, and each way
     /// out's outcome.
     func start(userland: Userland = .shared, log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
         try await starting.value { @MainActor in
@@ -146,7 +155,12 @@ final class GuestResident {
             Perf.mark("guest.tools.ready")
             guard let tools = self.tools else { throw CancellationError() }
             let ports = LaunchPorts(tools: tools)
-            await self.booted?()
+            if LoginCache.standard.isSignedIn, self.confirms != nil {
+                Perf.mark("guest.login.deferred")
+            } else {
+                await self.booted?()
+                self.loginChecked = true
+            }
             let made = Self.launchEnvironment(ports: ports) { try Self.launchCredential() }
             let launcher = ClaudeLauncher {
                 // The zone written before every launch, so a process started on the foreground
@@ -160,7 +174,10 @@ final class GuestResident {
                                        memory: self.memoryAtStart(log: log), compactAt: Self.compactAt,
                                        threads: MessageThreads.Setting(defaults: .standard).launched,
                                        signedIn: { LoginCache.standard.isSignedIn },
-                                       requests: { ThreadSampler.shared.heard($0) }, log: log)
+                                       requests: { ThreadSampler.shared.heard($0) },
+                                       answered: { account in
+                                           Task { @MainActor in await GuestResident.shared.residentAnswered(account) }
+                                       }, log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in Self.note("background: \(outcome)") })
@@ -171,6 +188,30 @@ final class GuestResident {
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
         }
+    }
+
+    /// The login a process's `initialize` answer names, at the first answer since the boot when
+    /// the boot asked nothing: a login the sign-in's rule takes is confirmed and nothing is asked;
+    /// any other answer, or none, is checked by `auth status` as the boot would have (`booted`),
+    /// which ends the resident while it runs and, finding the login gone, clears the cache so no
+    /// process starts again. `initialize` and `auth status` read the same thing in Claude Code
+    /// 2.1.316: whether a credential is stored, with nothing asked of the network.
+    func residentAnswered(_ account: StreamEvent.Account?) async {
+        guard !loginChecked else { return }
+        loginChecked = true
+        let status = account.map {
+            ClaudeLoginStatus(initialize: $0.subscriptionType, tokenSource: $0.tokenSource, apiProvider: $0.apiProvider)
+        }
+        if let status, confirms?(status) == true {
+            Perf.mark("guest.login.confirmed")
+            return
+        }
+        Perf.mark("guest.login.unconfirmed")
+        // What the answer said of the login's kind: a plan's name, a token's source, a provider;
+        // the account's email and organisation are never read.
+        let said = account.map { "tokenSource=\($0.tokenSource ?? "-") apiProvider=\($0.apiProvider ?? "-") subscription=\($0.subscriptionType == nil ? "none" : "named")" } ?? "no account"
+        Self.log("login: the resident's initialize did not confirm the login (\(said)); asking auth status")
+        await booted?()
     }
 
     /// The home mounted, the tool service listening, `topo`, its skill and the GitHub shims written

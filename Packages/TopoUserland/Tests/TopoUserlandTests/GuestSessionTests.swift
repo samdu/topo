@@ -96,6 +96,37 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"control_response"}"#), [.other("control_response")])
     }
 
+    /// The `initialize` answer's `account` is the login the process started with: its kind is
+    /// read, and the answer reaches the session's hook once a process, at its first answer.
+    func testTheReadyAnswerHandsTheProcesssLoginToTheHookOnce() async throws {
+        let answer = #"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{"account":{"email":"someone@example.com","subscriptionType":"Claude Max","apiProvider":"firstParty"}}}}"#
+        XCTAssertEqual(StreamJSON.events(in: answer),
+                       [.controlResponse(id: "topo-ready", account: .init(subscriptionType: "Claude Max", apiProvider: "firstParty"))])
+        let signedOut = #"{"type":"control_response","response":{"subtype":"success","request_id":"topo-ready","response":{"account":{"tokenSource":"none","apiProvider":"firstParty"}}}}"#
+        XCTAssertEqual(StreamJSON.events(in: signedOut),
+                       [.controlResponse(id: "topo-ready", account: .init(tokenSource: "none", apiProvider: "firstParty"))])
+
+        let heard = Heard()
+        let session = GuestSession(launcher: launcher, store: store, turnBound: bound, sleep: clock.sleep,
+                                   answered: { heard.add($0) })
+        await session.foreground()
+        try await session.ready()
+        let process = try XCTUnwrap(launcher.last)
+        process.emit(answer)
+        process.emit(answer)
+        await eventually("heard") { heard.all.count == 1 }
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(heard.all, [.init(subscriptionType: "Claude Max", apiProvider: "firstParty")],
+                       "the hook heard a process's answer more than once")
+    }
+
+    private final class Heard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var accounts: [StreamEvent.Account?] = []
+        var all: [StreamEvent.Account?] { lock.withLock { accounts } }
+        func add(_ account: StreamEvent.Account?) { lock.withLock { accounts.append(account) } }
+    }
+
     /// On a cold start the turn waits while Claude Code starts, and the answer to `initialize` is
     /// the first line it writes: that answer takes neither the turn's first-line mark nor its count
     /// of lines, so the turn's own first line is still marked.

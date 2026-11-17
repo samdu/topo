@@ -70,6 +70,24 @@ public struct ClaudeLoginStatus: Codable, Equatable, Sendable {
         return try? JSONDecoder().decode(ClaudeLoginStatus.self, from: Data(output[start...end].utf8))
     }
 
+    /// The login a resident's `initialize` answer names (its `account`), read as `auth status`
+    /// would have said it, for confirming the login at a boot: a Claude.ai subscriber's has a
+    /// plan's name and no token source; a token in Claude Code's environment names its variable;
+    /// anything else (`none`, an API key, a provider other than Anthropic's) confirms nothing and
+    /// reads as signed out. The plan's name is the one Claude Code shows, not `auth status`'s, so
+    /// none is kept.
+    public init(initialize subscriptionType: String?, tokenSource: String?, apiProvider: String?) {
+        if let apiProvider, apiProvider != "firstParty" {
+            self.init(loggedIn: false)
+        } else if let tokenSource, tokenSource.hasPrefix("CLAUDE_CODE_OAUTH_TOKEN") {
+            self.init(loggedIn: true, authMethod: "oauth_token")
+        } else if tokenSource == nil, let subscriptionType, !subscriptionType.isEmpty {
+            self.init(loggedIn: true, authMethod: "claude.ai")
+        } else {
+            self.init(loggedIn: false)
+        }
+    }
+
     /// The diagnostics row: the method and the subscription, never a token.
     public var summary: String {
         guard loggedIn else { return "signed out" }
@@ -79,8 +97,8 @@ public struct ClaudeLoginStatus: Codable, Equatable, Sendable {
 
 /// Whether this device is signed in, kept for the callers that ask before any guest is up (the
 /// role at launch, the memory, the sign-in screen's first frame). It holds the fact and the
-/// subscription, no token, and is refreshed from `auth status` at every guest boot and after a
-/// login or a logout.
+/// subscription, no token, saved from `auth status` after a login and at a boot that asks it, and
+/// cleared at a logout or at a boot that finds the login gone.
 public struct LoginCache: @unchecked Sendable {
     public let defaults: UserDefaults
     public static let key = "zone.hexagon.topo.claude-login"
