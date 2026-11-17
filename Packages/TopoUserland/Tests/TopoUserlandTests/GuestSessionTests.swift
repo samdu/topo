@@ -983,6 +983,33 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(launcher.resumed, ["KEPT", "KEPT"], "the login forgot the conversation")
     }
 
+    /// A hold taken inside a hold returns, and a `ready()` waiting through both gets its process
+    /// only once the outer one lets go: the boot's fallback holds the resident off across the whole
+    /// of `refresh`, whose `auth status` takes a hold of its own.
+    func testAHoldInsideAHoldReturnsAndNothingStartsUntilTheOuterLetsGo() async throws {
+        let (session, _) = try await resident()
+        let launcher = launcher!
+        let afterInner = Launches()
+        let release = Launches()
+        let outer = Task {
+            await session.withoutResident {
+                await session.withoutResident {}
+                await settle()
+                afterInner.set(launcher.processes.count)
+                while release.value == nil { await Task.yield() }
+            }
+        }
+        await eventually("the inner hold returned") { afterInner.value != nil }
+        let waiting = Task { try await session.ready() }
+        await settle()
+        XCTAssertEqual(launcher.processes.count, 1, "a process started while the outer hold stood")
+        release.set(1)
+        await outer.value
+        try await waiting.value
+        XCTAssertEqual(afterInner.value, 1, "the inner hold's end started a process")
+        XCTAssertEqual(launcher.processes.count, 2, "the ready() that waited through both holds got no process")
+    }
+
     /// With nobody waiting, a login leaves nothing resident: the next `ready()` starts one.
     func testALoginWithNobodyWaitingStartsNothing() async throws {
         let (session, _) = try await resident()
