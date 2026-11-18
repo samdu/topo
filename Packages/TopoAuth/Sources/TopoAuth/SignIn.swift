@@ -132,8 +132,13 @@ public final class SignIn {
         }
     }
 
-    /// Asks `auth status` again, at a guest's boot: a login that has gone (a logout, an expired
-    /// refresh) puts the screen back on the sign-in. A status that could not be read changes
+    /// Whether `status` counts as signed in, by the rule the sign-in itself keeps.
+    public func accepts(_ status: ClaudeLoginStatus) -> Bool { accept(status) }
+
+    /// Asks `auth status` again, at a guest's boot or after a first process's `initialize` answer
+    /// that did not confirm the login (`GuestResident.residentAnswered`): a login whose credential has gone (a logout,
+    /// a file removed) puts the screen back on the sign-in. `auth status` reads only whether a
+    /// credential is stored, and asks nothing of the network. A status that could not be read changes
     /// nothing, nor one read across a sign-in or a sign-out that began since, nor one read while a
     /// sign-out's logout has yet to run. It never waits on the queue: a start in the queue boots
     /// the guest, and the boot calls this.

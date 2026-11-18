@@ -6,7 +6,12 @@ import os
 /// A clock the test moves by hand: every sleep waits until `advance` passes its deadline, and a
 /// cancelled sleep throws, as `Task.sleep` does.
 actor ManualClock {
-    private var now: Duration = .zero
+    private var now: Duration = .zero {
+        didSet { let moved = now; mirror.withLock { $0 = moved } }
+    }
+    private nonisolated let mirror = OSAllocatedUnfairLock(initialState: Duration.zero)
+    /// How far it has been moved, read without the actor: a session's `uptime` on this clock.
+    nonisolated var uptime: @Sendable () -> Duration { { [mirror] in mirror.withLock { $0 } } }
     private var sleepers: [UUID: (deadline: Duration, continuation: CheckedContinuation<Void, Error>)] = [:]
 
     nonisolated var sleep: Sleep { { [self] duration in try await self.sleep(for: duration) } }
@@ -267,5 +272,38 @@ enum Transcripts {
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Transcripts/\(name).jsonl")
         return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
+    }
+}
+
+/// The logins a session's check hook heard, in order.
+final class Accounts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var accounts: [StreamEvent.Account?] = []
+    var all: [StreamEvent.Account?] { lock.withLock { accounts } }
+    func add(_ account: StreamEvent.Account?) { lock.withLock { accounts.append(account) } }
+}
+
+/// A gate a test opens: `wait` suspends until it is open.
+final class Gate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func open() {
+        let woken = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            opened = true
+            defer { waiting = [] }
+            return waiting
+        }
+        woken.forEach { $0.resume() }
+    }
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock { () -> Bool in
+                if opened { return true }
+                waiting.append(continuation)
+                return false
+            }
+            if now { continuation.resume() }
+        }
     }
 }

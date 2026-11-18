@@ -68,14 +68,31 @@ public enum StreamEvent: Sendable, Equatable {
     /// The turn's end, answered or failed.
     case result(TurnResult)
     /// Claude Code's answer to a control request of the app's, by the request's id: the answer to
-    /// `StreamJSON.initialize` comes once it reads stdin, which is when it is ready for a turn.
-    case controlResponse(id: String)
+    /// `StreamJSON.initialize` comes once it reads stdin, which is when it is ready for a turn, and
+    /// carries the login the process started with (`account`); nil for an answer that names none.
+    case controlResponse(id: String, account: Account? = nil)
     /// A well-formed event of a kind the app does not read — a hook's lines, a rate-limit notice,
     /// a `user` message carrying no tool result — named by its `type` and `subtype`.
     case other(String)
     /// A line that is not an event: not JSON, not an object, or an object with no `type`. It is
     /// reported and never read as anything.
     case malformed(String)
+
+    /// The login a process started with, as its `initialize` answer's `account` says it: the
+    /// fields that say what kind of login it is, never the email or the organisation.
+    public struct Account: Sendable, Equatable {
+        /// Set for a Claude.ai subscriber's login: the plan's name as Claude Code shows it.
+        public let subscriptionType: String?
+        /// Where the token came from, when it is not a Claude.ai login: `none` with no token.
+        public let tokenSource: String?
+        public let apiProvider: String?
+
+        public init(subscriptionType: String? = nil, tokenSource: String? = nil, apiProvider: String? = nil) {
+            self.subscriptionType = subscriptionType
+            self.tokenSource = tokenSource
+            self.apiProvider = apiProvider
+        }
+    }
 
     /// A compaction as Claude Code reports it.
     public struct Compacted: Sendable, Equatable {
@@ -217,7 +234,11 @@ public enum StreamJSON {
             guard let response = object["response"] as? [String: Any], let id = response["request_id"] as? String else {
                 return [.other("control_response")]
             }
-            return [.controlResponse(id: id)]
+            let account = ((response["response"] as? [String: Any])?["account"] as? [String: Any]).map {
+                StreamEvent.Account(subscriptionType: $0["subscriptionType"] as? String,
+                                    tokenSource: $0["tokenSource"] as? String, apiProvider: $0["apiProvider"] as? String)
+            }
+            return [.controlResponse(id: id, account: account)]
         case ("result", _):
             return [.result(result(object, subtype: subtype))]
         case ("stream_event", _):

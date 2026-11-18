@@ -46,8 +46,9 @@ struct TopoApp: App {
         // so a launch can be the relaunch that comes back to a row it never finished sending.
         DebugRun.seedOutbox()
         #endif
-        // The sign-in is Claude Code's own, in the guest; each boot of the guest asks it again
-        // whether it is still signed in, before any process starts.
+        // The sign-in is Claude Code's own, in the guest; each boot of the guest checks it is
+        // still signed in: by the first process's own answer when the cache says so, by
+        // `auth status` before any process starts when it does not.
         #if DEBUG
         let accept = DebugRun.accepts()
         #else
@@ -59,6 +60,7 @@ struct TopoApp: App {
         // What the login's requests uploaded goes with it.
         LoginLife.shared.onEnd { ThreadSampler.shared.clear() }
         GuestResident.shared.booted = { await signIn.refresh() }
+        GuestResident.shared.confirms = { signIn.accepts($0) }
         Harness.recordsWhere = { await AppRecords.recordsWhere() }
         let harness = Harness.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
         let mascot = Mascot()
