@@ -29,7 +29,7 @@ Run what you were given and nothing else. If the command is not one of the above
 
 Start every command in a tmux session of its own, so it holds the microphone grant and login keychain a run on buddybox needs (`docs/testing.md`) and outlives you. It takes two Bash calls.
 
-First, make the run's own directory and take the deadline. `mktemp` picks a name no other run has, even one started in the same second. `<topic>` is made from nothing the engineer typed: `pr<number>` or `scratch`, a hyphen, then one of `validate`, `hold`, `publish`, `build` or `test`.
+First, make the run's own directory and take the deadline. `mktemp` picks a name no other run has, even one started in the same second. `<topic>` is built from the PR number's digits and fixed words only: `pr<number>` or `scratch`, a hyphen, then one of `validate`, `hold`, `publish`, `build` or `test`.
 
 ```sh
 d=~/Library/Logs/topo-buildbot; mkdir -p "$d"
@@ -47,7 +47,7 @@ cat > "$r/cmd.sh" <<'<name>'
 <command>
 <name>
 cat > "$r/run.sh" <<'BUILDBOT_RUN'
-r=$(dirname "$0")
+r=$(dirname "$0"); echo $$ > "$r/pid"
 cd "$(cat "$r/worktree")" || { echo "buildbot: cannot cd to the worktree" > "$r/log"; echo 125 > "$r/log.exit.part"; mv "$r/log.exit.part" "$r/log.exit"; exit; }
 bash "$r/cmd.sh" > "$r/log" 2>&1 &
 p=$!
@@ -66,14 +66,14 @@ git -C "$(cat "$r/worktree")" rev-parse --short HEAD; tmux -N new-session -d -s 
 Do not tail the log while it runs: every line you read is context you carry to the end. Wait on the exit file in bounded steps, each one Bash call, and none longer than 110 s or the time left before the deadline. A call still running at the Bash tool's default timeout of 120 s is moved to the background, and its completion later wakes the engineer, which re-reads the engineer's whole context for nothing. Never use `run_in_background`.
 
 ```sh
-D=<deadline>; L='<run>/log'; N='=<name>'; s=$(( D - $(date +%s) )); [ $s -gt 110 ] && s=110; [ $s -gt 0 ] && timeout $s bash -c "until [ -s '$L.exit' ] || ! tmux has-session -t '$N' 2>/dev/null; do sleep 5; done"; tmux has-session -t "$N" 2>/dev/null && a=alive || a=gone; [ -s "$L.exit" ] && echo "exit $(cat "$L.exit"), session $a" || { [ $(date +%s) -lt $D ] && echo "still running, session $a" || echo "limit reached, session $a"; }
+D=<deadline>; R='<run>'; N='=<name>'; up() { tmux has-session -t "$N" 2>/dev/null || { [ -s "$R/pid" ] && kill -0 "$(cat "$R/pid")" 2>/dev/null; }; }; s=$(( D - $(date +%s) )); [ $s -gt 110 ] && s=110; e=$(( $(date +%s) + s )); while [ ! -s "$R/log.exit" ] && [ $(date +%s) -lt $e ] && up; do sleep 2; done; up && a=alive || a=gone; [ -s "$R/log.exit" ] && echo "exit $(cat "$R/log.exit"), run $a" || { [ $(date +%s) -lt $D ] && echo "still running, run $a" || echo "limit reached, run $a"; }
 ```
 
-Repeat while it says `still running, session alive`. Then:
+The run is alive while its session stands or its wrapper's pid (`<run>/pid`) is still running: a wrapper passing a hangup on outlives its session for as long as the command takes to clean up. Repeat while it says `still running, run alive`. Then:
 
 - `exit <code>` ends the wait; read the result.
 - `limit reached` ends it too: the verdict is `stuck`, naming the session and the run so you can be sent back to attach, and you kill nothing.
-- `still running, session gone` means the wrapper ended without writing a code. Run the step once more, since a run can end between its reads. Still no code means the run did not finish (killed, or the Mac restarted): read the log's last 30 lines and report `stuck`.
+- `still running, run gone` means the wrapper ended without writing a code. Run the step once more, since a run can end between its reads. Still no code means the run did not finish (killed, or the Mac restarted): read the log's last 30 lines and report `stuck`.
 
 A validation can wait for the slot for hours, so a long wait is normal: say nothing about it.
 
