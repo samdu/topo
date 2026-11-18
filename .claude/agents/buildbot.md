@@ -46,10 +46,10 @@ tmux -N new-session -d -s "$t" -c "$W" -e BB_LOG="$d/$t.log" "bash '$d/$t.sh'" &
 
 ## Waiting
 
-Do not tail the log while it runs: every line you read is context you carry to the end. Wait on the exit file in bounded steps of under three minutes, each one Bash call: a call still running at 180 s is moved to the background, and its completion later wakes the engineer, which re-reads the engineer's whole context for nothing. Never use `run_in_background`.
+Do not tail the log while it runs: every line you read is context you carry to the end. Wait on the exit file in bounded steps of under two minutes, each one Bash call: a call still running at the Bash tool's default timeout of 120 s is moved to the background, and its completion later wakes the engineer, which re-reads the engineer's whole context for nothing. Never use `run_in_background`.
 
 ```sh
-timeout 170 bash -c 'until [ -s <exit file> ]; do sleep 20; done'; cat <exit file> 2>/dev/null || { echo still running; tmux has-session -t "=<session>" 2>/dev/null || echo session gone; }
+timeout 110 bash -c 'until [ -s <exit file> ]; do sleep 20; done'; cat <exit file> 2>/dev/null || { echo still running; tmux has-session -t "=<session>" 2>/dev/null || echo session gone; }
 ```
 
 Repeat until the exit file has a code, or until the time limit has passed since the start (or the attach): then the verdict is `stuck`, naming the tmux session and the log so you can be sent back to attach to it, and you kill nothing. A validation can wait up to three hours for the slot before it runs a suite, so a long wait is normal: say nothing about it. If the session is gone and there is no exit file, the run ended without finishing (killed, or the Mac restarted): read the log's last 30 lines and report `stuck`.
