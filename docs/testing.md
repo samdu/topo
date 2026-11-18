@@ -32,7 +32,7 @@ A run that may take `topo_ui` needs the microphone grant, which only a shell in 
 ssh buddybox 'tmux -N new-session -d -s validate-<topic> -c <worktree> "scripts/validate-and-push.sh > <log> 2>&1"'
 ```
 
-An engineer has the `buildbot` agent (`.claude/agents/buildbot.md`) start the run this way and wait on it, so the log is read in the agent's context and the engineer's carries only the verdict: the result, or the failing step with its error and file:line, and the logs' path.
+An engineer has the `buildbot` agent (`.claude/agents/buildbot.md`) start the run in a tmux session of its own in the same way (`-N`, named `bb-<topic>-<time>`) and wait on it, so the log is read in the agent's context and the engineer's carries only the verdict: the result, or the failing step with its error and file:line, and the logs' path.
 
 `-N` makes `new-session` fail rather than start a server when none is running, so this never starts one over ssh (a server started there has neither the grant nor the login keychain); a check first (`tmux ls`) would not, since the server can end between the check and the command. A bare `tmux new-window` puts the run's window in whichever session tmux used last, which is another session's, and a `kill-session` of that session ends the validation with it.
 
