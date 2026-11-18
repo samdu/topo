@@ -34,14 +34,14 @@ tmux -N new-session -d -s "$t" -c <worktree> "<command> > $d/$t.log 2>&1; echo \
 echo "$d/$t.log"
 ```
 
-`-N` fails rather than starts a server when none runs. If `new-session` fails, that is the verdict (`refused`, with tmux's words); do not start the command some other way. A `swift test` or a single `xcodebuild` may run in the foreground instead, with `> log 2>&1` and the Bash tool's timeout at 600000.
+`-N` fails rather than starts a server when none runs. If `new-session` fails, that is the verdict (`refused`, with tmux's words); do not start the command some other way. A `swift test` or a single `xcodebuild` goes the same way: nothing you run waits in the foreground longer than the step below.
 
 ## Waiting
 
-Do not tail the log while it runs: every line you read is context you carry to the end. Wait on the exit file in bounded steps, each one Bash call with the tool's timeout at 600000:
+Do not tail the log while it runs: every line you read is context you carry to the end. Wait on the exit file in bounded steps of under three minutes, each one Bash call: a call still running at 180 s is moved to the background, and its completion later wakes the engineer, which re-reads the engineer's whole context for nothing. Never use `run_in_background`.
 
 ```sh
-timeout 580 bash -c 'until [ -s <exit file> ]; do sleep 20; done'; cat <exit file> 2>/dev/null || { echo still running; tmux has-session -t "=<session>" 2>/dev/null || echo session gone; }
+timeout 170 bash -c 'until [ -s <exit file> ]; do sleep 20; done'; cat <exit file> 2>/dev/null || { echo still running; tmux has-session -t "=<session>" 2>/dev/null || echo session gone; }
 ```
 
 Repeat until the exit file has a code. A validation can wait up to three hours for the slot before it runs a suite, so a long wait is normal: say nothing about it. If the session is gone and there is no exit file, the run ended without finishing (killed, or the Mac restarted): read the log's last 30 lines and report `stuck`.
