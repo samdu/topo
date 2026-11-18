@@ -36,7 +36,7 @@ d=~/Library/Logs/topo-buildbot; mkdir -p "$d"
 r=$(mktemp -d "$d/bb-<topic>-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX") && echo "run $r name $(basename "$r") deadline $(( $(date +%s) + <limit> ))"
 ```
 
-Then write the worktree, the command and the wrapper into the run's directory, and start the session. The worktree and the command go through quoted heredocs, exactly as given, so no shell and no tmux format reparses them. Their delimiter is the run's name (`<name>`, the directory's last part), which no command or path holds; if either does, refuse rather than pick another. The wrapper is fixed text. It goes into the worktree and runs the command in a process group of its own, in a shell that waits out a hangup rather than dying of it, with every step and both streams into one log. A hangup it is sent goes on to the whole group. It writes the exit code, in one rename, to `log.exit` only once the command has returned and nothing of its group is left:
+Then write the worktree, the command and the wrapper into the run's directory, and start the session. The worktree and the command go through quoted heredocs, exactly as given, so no shell and no tmux format reparses them. Their delimiter is the run's name (`<name>`, the directory's last part), which no command or path holds; if either does, refuse rather than pick another. The wrapper is fixed text. It goes into the worktree and runs the command in a process group of its own, with no terminal on its input and in a shell that waits out a hangup rather than dying of it, with every step and both streams into one log. A hangup it is sent goes on to the whole group. It writes the exit code, in one rename, to `log.exit` only once the command has returned and nothing of its group is left:
 
 ```sh
 r='<run>'
@@ -50,11 +50,11 @@ cat > "$r/run.sh" <<'BUILDBOT_RUN'
 r=$(dirname "$0"); echo $$ > "$r/pid"
 cd "$(cat "$r/worktree")" || { echo "buildbot: cannot cd to the worktree" > "$r/log"; echo 125 > "$r/log.exit.part"; mv "$r/log.exit.part" "$r/log.exit"; exit; }
 set -m
-bash -c 'trap : HUP; . "$1"' buildbot "$r/cmd.sh" > "$r/log" 2>&1 &
+bash -c 'trap : HUP; . "$0"' "$r/cmd.sh" < /dev/null > "$r/log" 2>&1 &
 p=$!
 trap 'kill -HUP -- -$p 2>/dev/null' HUP TERM
 wait $p; s=$?
-while kill -0 $p 2>/dev/null; do wait $p; s=$?; done
+while jobs -rp | grep -qx "$p"; do wait $p; s=$?; done
 while kill -0 -- -$p 2>/dev/null; do sleep 1; done
 echo $s > "$r/log.exit.part" && mv "$r/log.exit.part" "$r/log.exit"
 BUILDBOT_RUN
@@ -68,7 +68,7 @@ git -C "$(cat "$r/worktree")" rev-parse --short HEAD; tmux -N new-session -d -s 
 Do not tail the log while it runs: every line you read is context you carry to the end. Wait on the exit file in bounded steps, each one Bash call, and none longer than 110 s or the time left before the deadline. A call still running at the Bash tool's default timeout of 120 s is moved to the background, and its completion later wakes the engineer, which re-reads the engineer's whole context for nothing. Never use `run_in_background`.
 
 ```sh
-D=<deadline>; R='<run>'; N='=<name>'; up() { tmux has-session -t "$N" 2>/dev/null || { [ -s "$R/pid" ] && ps -o args= -p "$(cat "$R/pid")" 2>/dev/null | grep -qF "$R/run.sh"; }; }; s=$(( D - $(date +%s) )); [ $s -gt 110 ] && s=110; e=$(( $(date +%s) + s )); while [ ! -s "$R/log.exit" ] && [ $(date +%s) -lt $e ] && up; do sleep 2; done; up && a=alive || a=gone; [ -s "$R/log.exit" ] && echo "exit $(cat "$R/log.exit"), run $a" || { [ $(date +%s) -lt $D ] && echo "still running, run $a" || echo "limit reached, run $a"; }
+D=<deadline>; R='<run>'; N='=<name>'; up() { tmux has-session -t "$N" 2>/dev/null || { [ -s "$R/pid" ] && [ "$(ps -o args= -p "$(cat "$R/pid")" 2>/dev/null)" = "bash $R/run.sh" ]; }; }; s=$(( D - $(date +%s) )); [ $s -gt 110 ] && s=110; e=$(( $(date +%s) + s )); while [ ! -s "$R/log.exit" ] && [ $(date +%s) -lt $e ] && up; do z=$(( e - $(date +%s) )); [ $z -gt 2 ] && z=2; [ $z -gt 0 ] && sleep $z; done; up && a=alive || a=gone; [ -s "$R/log.exit" ] && echo "exit $(cat "$R/log.exit"), run $a" || { [ $(date +%s) -lt $D ] && echo "still running, run $a" || echo "limit reached, run $a"; }
 ```
 
 The run is alive while its session stands or its wrapper (`<run>/pid`, checked to still be this run's `run.sh`) is still running: after a hangup the wrapper outlives its session for as long as the command takes to clean up. Repeat while it says `still running, run alive`. Then:
