@@ -36,7 +36,7 @@ d=~/Library/Logs/topo-buildbot; mkdir -p "$d"
 r=$(mktemp -d "$d/bb-<topic>-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX") && echo "run $r name $(basename "$r") deadline $(( $(date +%s) + <limit> ))"
 ```
 
-Then write the worktree and the command into files through quoted heredocs, and start the session. Each heredoc's delimiter is the run's name (`<name>`, the directory's last part), which no command or path holds. If either does, refuse rather than pick another. The command is written exactly as given, so no shell reparses it. The whole of it, every step of a compound command, writes into one log, and its exit code goes into the file beside it:
+Then write the worktree and the command into files through quoted heredocs, and start the session. Each heredoc's delimiter is the run's name (`<name>`, the directory's last part), which no command or path holds. If either does, refuse rather than pick another. The command is written exactly as given and alone in its file, so no shell reparses it, and nothing it does (an `exit`, a `set -e`, a quote left open) can stop its exit code being written. The session runs it through a fixed wrapper: the whole of it, every step of a compound command, writes into one log, and its exit code goes into the file beside it:
 
 ```sh
 r='<run>'
@@ -44,12 +44,9 @@ cat > "$r/worktree" <<'<name>'
 <worktree>
 <name>
 cat > "$r/cmd.sh" <<'<name>'
-{
 <command>
-} > "$BB_LOG" 2>&1
-echo $? > "$BB_LOG.exit"
 <name>
-W=$(cat "$r/worktree"); git -C "$W" rev-parse --short HEAD && tmux -N new-session -d -s "<name>" -c "$W" -e BB_LOG="$r/log" "bash '$r/cmd.sh'" && echo "session <name> log $r/log"
+W=$(cat "$r/worktree"); git -C "$W" rev-parse --short HEAD && tmux -N new-session -d -s "<name>" -c "$W" "bash '$r/cmd.sh' > '$r/log' 2>&1; echo \$? > '$r/log.exit'" && echo "session <name> log $r/log"
 ```
 
 `-N` fails rather than starts a server when none runs. If `new-session` fails, that is the verdict (`refused`, with tmux's words); do not start the command some other way. The log is `<run>/log` and the exit file `<run>/log.exit`. Nothing you run waits in the foreground longer than the step below.
@@ -62,7 +59,7 @@ Do not tail the log while it runs: every line you read is context you carry to t
 D=<deadline>; L='<run>/log'; s=$(( D - $(date +%s) )); [ $s -gt 110 ] && s=110; [ $s -gt 0 ] && timeout $s bash -c "until [ -s '$L.exit' ]; do sleep 5; done"; cat "$L.exit" 2>/dev/null || { [ $(date +%s) -lt $D ] && echo still running || echo limit reached; tmux has-session -t "=<name>" 2>/dev/null && echo session alive || echo session gone; }
 ```
 
-Repeat until the exit file has a code. `limit reached` ends the wait: the verdict is `stuck`, naming the session and the run so you can be sent back to attach, and you kill nothing. On an attach, take the deadline from the time of the attach. A validation can wait up to three hours for the slot before it runs a suite, so a long wait is normal: say nothing about it. If the session is gone and there is no exit file, the run ended without finishing (killed, or the Mac restarted): read the log's last 30 lines and report `stuck`.
+Repeat until the exit file has a code. `limit reached` ends the wait: the verdict is `stuck`, naming the session and the run so you can be sent back to attach, and you kill nothing. On an attach, take the deadline from the time of the attach. A validation can wait up to three hours for the slot before it runs a suite, so a long wait is normal: say nothing about it. If the session is gone and there is no exit file, read the exit file once more, since a run can end between the two reads. Still none means the run ended without finishing (killed, or the Mac restarted): read the log's last 30 lines and report `stuck`.
 
 ## Reading the result
 
