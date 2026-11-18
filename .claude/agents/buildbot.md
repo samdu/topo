@@ -13,7 +13,7 @@ You run one command for a Topo engineer on buddybox and report how it ended. The
 - The worktree (an absolute path on buddybox) and the branch or PR.
 - The command, exactly as it is to run: `scripts/validate-and-push.sh` with its flags, `scripts/validate-and-push.sh --hold -- <command>`, `~/github/experiments/ota/publish-topo.sh --dev <PR>`, the build check (`scripts/build-ish.sh && scripts/fetch-phonon.sh && xcodebuild -scheme Topo -destination 'generic/platform=iOS Simulator' build`), or another `xcodebuild` or `swift test` in the worktree.
 - Optionally, a time limit. Without one it is five hours for `validate-and-push.sh` (its wait for the slot alone can be three) and ninety minutes for anything else.
-- Optionally, a run of yours to attach to, by the tmux session and log path an earlier verdict of yours named. Then you start nothing; you wait on its `<log>.exit` and read it, and the time limit counts from the attach. A run that was not started by you has no exit file, so it is not one you attach to: say so (`refused`) and run nothing.
+- Optionally, a run of yours to attach to, by the session and log an earlier verdict of yours named. Then you start nothing: you wait on its `<log>.exit` as below, which a run still going has not written yet, read it, and the time limit counts from the attach. A run is yours when its log is `~/Library/Logs/topo-buildbot/bb-*.log` with its `.sh` beside it; any other is refused, and you run nothing.
 
 Run what you were given and nothing else. If the command is not one of the above, or the brief is missing the worktree, say so in the verdict and run nothing.
 
@@ -31,14 +31,15 @@ Start every command in a tmux session of its own, so it holds the microphone gra
 
 ```sh
 W='<worktree>'; git -C "$W" rev-parse --short HEAD
-t=bb-<topic>-$(date -u +%Y%m%dT%H%M%SZ); d=~/Library/Logs/topo-buildbot; mkdir -p "$d"
+t=bb-<topic>-$(date -u +%Y%m%dT%H%M%SZ)  # <topic>: lowercase letters, digits and hyphens
+d=~/Library/Logs/topo-buildbot; mkdir -p "$d"
 cat > "$d/$t.sh" <<'BUILDBOT_CMD'
 {
 <command>
 } > "$BB_LOG" 2>&1
 echo $? > "$BB_LOG.exit"
 BUILDBOT_CMD
-tmux -N new-session -d -s "$t" -c "$W" -e BB_LOG="$d/$t.log" "bash $d/$t.sh" && echo "session $t log $d/$t.log"
+tmux -N new-session -d -s "$t" -c "$W" -e BB_LOG="$d/$t.log" "bash '$d/$t.sh'" && echo "session $t log $d/$t.log"
 ```
 
 `-N` fails rather than starts a server when none runs. If `new-session` fails, that is the verdict (`refused`, with tmux's words); do not start the command some other way. The exit file is `<log>.exit`. Nothing you run waits in the foreground longer than the step below.
@@ -72,6 +73,7 @@ Your final message is all the engineer sees. Keep it under 25 lines, in this sha
 ```
 VERDICT: pass | fail | stuck | refused
 ran: <command> at <short sha> in <worktree>
+session: <tmux session>, and whether it is still alive
 <pass: one line per suite and status, or the build number and each device line>
 <fail: the failing step or suite; then the error excerpt verbatim, at most 15 lines; then file:line for each distinct error>
 log: <path to the log you read, and the run's log directory if the script named one>
