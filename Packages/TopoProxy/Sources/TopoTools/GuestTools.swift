@@ -472,7 +472,8 @@ public enum GuestTools {
 
     Give each Thing a sub-agent of its own. Hand the work of making, changing or fixing a Thing to one sub-agent with your Agent tool: one Thing to a sub-agent, never two Things in one, and never the Thing's work in your own conversation.
 
-    - That keeps you free to talk with the person while the work runs, and keeps the Thing's work in a context window it shares with no other Thing and none of your conversation.
+    - Start it in the background (`run_in_background`), so you can keep talking with the person while the work runs; its result comes back to you when it is done. The Thing's work stays in a context window it shares with no other Thing and none of your conversation.
+    - It runs only while you do: behind another app, iOS can end you and it with you, as you were told of your time. When a Thing will take more than a minute or two, tell the person to keep Topo open while it is made.
     - Brief the sub-agent with what the person asked for, in their words, what the Thing is for and where its files are. It reads the rest itself.
     - When it is done, check what it says it did, then tell the person about the Thing. The sub-agents are yours to manage: they need not hear about them unless they ask.
     """
