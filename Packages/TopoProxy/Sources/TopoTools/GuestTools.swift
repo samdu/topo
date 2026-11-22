@@ -27,6 +27,8 @@ public enum GuestTools {
     public static let doccToMarkdownPath = ".topo/docc2md.jq"
     /// The skill that says when to read Apple's documentation, and how.
     public static let appleDocsSkillPath = ".claude/skills/apple-docs/SKILL.md"
+    /// The skill that says how a Thing is built and looked after: one sub-agent to a Thing.
+    public static let thingsSkillPath = ".claude/skills/things/SKILL.md"
 
     /// `BROWSER` for Claude Code's login: hands the URL it is given to `topo open-url`. Set in the
     /// login's environment alone, and not linked onto the path.
@@ -97,7 +99,7 @@ public enum GuestTools {
     /// is replaced by the file rather than written through.
     public static func install(home: URL) throws {
         let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh), (browserPath, browser), (appleDocPath, appleDoc)]
-        let plain = [(skillPath, skill), (appleDocsSkillPath, appleDocsSkill), (doccToMarkdownPath, try doccToMarkdown)]
+        let plain = [(skillPath, skill), (appleDocsSkillPath, appleDocsSkill), (thingsSkillPath, thingsSkill), (doccToMarkdownPath, try doccToMarkdown)]
         for (path, text) in scripts { try place(Data(text.utf8), at: path, mode: 0o755, under: home) }
         for (path, text) in plain { try place(Data(text.utf8), at: path, mode: 0o644, under: home) }
     }
@@ -455,6 +457,24 @@ public enum GuestTools {
     - `topo voice earcons` says whether this phone sounds the spoken exchange's cues (on unless turned off): a short tone as the microphone opens, as their words go, as a reply read aloud ends, and when a spoken turn fails. `topo voice earcons on` or `off` changes it, from the next cue; they have the same switch in Settings.
     - `topo context` says how full your own context is, the model's window and the tokens at which it is compacted by itself. `topo context threshold <auto|25–100>` sets that on this phone, from the end of the turn you set it in; `topo context compact` compacts it now, once the turn you ask in has ended, and `topo context` afterwards says what that did. When the person asks you to compact, or to compact sooner or later, do it here and say what you set.
     - `topo look` shows the look this phone is wearing: each field you can tune, its value, its range and where the value came from. `topo look set <part.field> <value>` changes it on this phone at once, and the person can undo it from Settings › Reset; `topo look reset` undoes it yourself. After a change, say in a few words what you changed.
+    """
+
+    /// The skill for Things, the tools the mind makes for the person: each one's work goes to a
+    /// sub-agent of its own, so the resident stays free to talk while it runs and no Thing's work
+    /// shares a context window with another's. Nothing of it is shown to the person.
+    public static let thingsSkill = """
+    ---
+    name: things
+    description: How to make and look after a Thing, a tool you build for the person that keeps working after the chat has moved on: a widget, a control, a Live Activity, a page, a script, a scheduled job. Use it whenever the person asks you to make a Thing, or to change, fix or extend one they have.
+    ---
+
+    # things
+
+    Give each Thing a sub-agent of its own. Hand the work of making, changing or fixing a Thing to one sub-agent with your Agent tool: one Thing to a sub-agent, never two Things in one, and never the Thing's work in your own conversation.
+
+    - That keeps you free to talk with the person while the work runs, and keeps the Thing's work in a context window it shares with no other Thing and none of your conversation.
+    - Brief the sub-agent with what the person asked for, in their words, what the Thing is for and where its files are. It reads the rest itself.
+    - When it is done, check what it says it did, then tell the person about the Thing. The sub-agents are yours to manage: they need not hear about them unless they ask.
     """
 
     /// `apple-doc`: a developer.apple.com page as Markdown. Every page on that site has a JSON

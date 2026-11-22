@@ -93,7 +93,7 @@ final class GuestToolsInstallTests: XCTestCase {
             let mode = try FileManager.default.attributesOfItem(atPath: home.appendingPathComponent(path).path)[.posixPermissions] as? Int
             XCTAssertEqual(mode, 0o755, path)
         }
-        for path in [GuestTools.skillPath, GuestTools.appleDocsSkillPath, GuestTools.doccToMarkdownPath] {
+        for path in [GuestTools.skillPath, GuestTools.appleDocsSkillPath, GuestTools.thingsSkillPath, GuestTools.doccToMarkdownPath] {
             let mode = try FileManager.default.attributesOfItem(atPath: home.appendingPathComponent(path).path)[.posixPermissions] as? Int
             XCTAssertEqual(mode, 0o644, path)
         }
