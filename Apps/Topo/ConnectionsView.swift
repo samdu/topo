@@ -230,10 +230,13 @@ struct GitHubCodeSign: View {
                 // At most `signScale` times the engine's picture, and never wider than the page:
                 // the code on the sign is what the person reads, so none of it is cut off. The
                 // jump is inside that frame too (`drawnScale`).
+                // Over GitHub's page the window is measured from the sign, so the picture is
+                // the size it is drawn at rather than a size it may shrink from.
+                let wide = CGFloat(Topo.width) * (scale ?? look.settings.signScale)
+                let tall = CGFloat(Topo.height - (cut?.sky ?? 0)) * (scale ?? look.settings.signScale)
                 picture(cut?.image)
                     .scaleEffect(Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
-                    .frame(maxWidth: CGFloat(Topo.width) * (scale ?? look.settings.signScale),
-                           maxHeight: CGFloat(Topo.height - (cut?.sky ?? 0)) * (scale ?? look.settings.signScale))
+                    .frame(minWidth: overPage ? wide : nil, maxWidth: wide, minHeight: overPage ? tall : nil, maxHeight: tall)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("GitHub code \(code)")
