@@ -314,8 +314,8 @@ enum LookDocument {
         r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
         r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
         // Over GitHub's page the sign covers what is under it, so it is no larger than on the
-        // Connections page; it stands under the browser's bar, which ends some 60 points under
-        // the safe area's top on a phone, so the bar's close button is never under it; and it
+        // Connections page; it stands under the browser's bar, which ends some 80 points under
+        // the safe area's top on a phone with the browser over Settings and Connections, so the bar's close button is never under it; and it
         // stays on the screen at any top, the window that holds it kept inside the screen
         // (`AboveSheetsWindow.frame`).
         r.bounded("signOverPageScale", &value.signOverPageScale, in: 0.5...2)

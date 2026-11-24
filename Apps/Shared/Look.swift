@@ -524,8 +524,8 @@ struct Look: Equatable, Sendable {
         /// under the top of the screen's safe area it stands, which is below the browser's own bar,
         /// so its close button and the page's address stay in sight.
         var signOverPageScale: CGFloat = 1
-        var signOverPageTop: CGFloat = 72
-        static let signOverPageTopRange: ClosedRange<Double> = 64...400
+        var signOverPageTop: CGFloat = 84
+        static let signOverPageTopRange: ClosedRange<Double> = 80...400
     }
     /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
     /// carries two flanks and, set into the middle of it, the microphone in its well. With the
