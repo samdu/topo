@@ -275,6 +275,7 @@
 		5CB7BFF3728369F54465A139 /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
 		5D1CA22207CAE02C962F417D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176612C66B66529BC2738F9 /* RootView.swift */; };
 		5DA10A48FE9413B461E8AA28 /* Earcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C42E3C3D44A89CDFA4F36B9 /* Earcons.swift */; };
+		5DB03A25C058126C6AB53D7B /* AboveSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78DBBA58ABE656E0B2C76ED1 /* AboveSheets.swift */; };
 		5E1111510510B24B236906B5 /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		5E44A45639FF7DC5F752FBB1 /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		5EE7759BD3F6736F8E5DD61C /* TopoUserland in Frameworks */ = {isa = PBXBuildFile; productRef = C397A5056727C7C66CD989BC /* TopoUserland */; };
@@ -1050,6 +1051,7 @@
 		771746CA069BC2B3B60EC32C /* GuestClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClock.swift; sourceTree = "<group>"; };
 		77906425CE9467DCBC47C566 /* ActivityToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityToolTests.swift; sourceTree = "<group>"; };
 		78251DBFCA77E7486D47E3C0 /* LogTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTool.swift; sourceTree = "<group>"; };
+		78DBBA58ABE656E0B2C76ED1 /* AboveSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboveSheets.swift; sourceTree = "<group>"; };
 		791AFF899CC4AD0FE665C550 /* tracker-lock-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "tracker-lock-dark.png"; sourceTree = "<group>"; };
 		79516B161850167DD385786F /* bloop_error.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = bloop_error.wav; sourceTree = "<group>"; };
 		7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestPidfdTests.swift; sourceTree = "<group>"; };
@@ -1431,6 +1433,7 @@
 		1EEF1582D416825D6A84D402 /* Topo */ = {
 			isa = PBXGroup;
 			children = (
+				78DBBA58ABE656E0B2C76ED1 /* AboveSheets.swift */,
 				812584BC461473D31058017B /* ActivityKeeper.swift */,
 				FE3F8893AE0658B5AFD3928C /* AlarmKitScheduler.swift */,
 				B47094841EAC83FE03AD69D6 /* AppRecords.swift */,
@@ -3327,6 +3330,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8C031FE613E8A808216E049D /* AboutView.swift in Sources */,
+				5DB03A25C058126C6AB53D7B /* AboveSheets.swift in Sources */,
 				CC1BB7C2FF4CA8DFAD2E8157 /* Acknowledgements.swift in Sources */,
 				35A13060991707C182C92CE6 /* ActivityDocument.swift in Sources */,
 				035913A8EBB44FBF8920D19B /* ActivityKeeper.swift in Sources */,

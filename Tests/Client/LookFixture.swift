@@ -148,7 +148,7 @@ enum LookFixture {
       "settings": { "tint": ["#336699", "#99CCFF"], "codeFont": { "style": "largeTitle", "weight": "black" }, "broadcastButton": 60,
                     "signScale": 2, "signSpacing": 10, "signFont": { "style": "caption", "weight": "medium" },
                     "signInk": ["#404850", "#B0B8C0"], "copiedInk": ["#205080", "#80C0F0"], "copiedBump": 1.15,
-                    "copiedPause": 1.5 },
+                    "copiedPause": 1.5, "signOverPageScale": 1.25, "signOverPageTop": 90 },
       "composer": {
         "widthFraction": 0.55,
         "typingWidthFraction": 0.7,

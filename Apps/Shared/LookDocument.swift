@@ -313,6 +313,11 @@ enum LookDocument {
         r.colour("copiedInk", &value.copiedInk)
         r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
         r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
+        // Over GitHub's page the sign covers what is under it, so it is no larger than on the
+        // Connections page; and it stands somewhere on the screen at any top, the window that
+        // holds it kept inside the screen (`AboveSheetsWindow.frame`).
+        r.bounded("signOverPageScale", &value.signOverPageScale, in: 0.5...2)
+        r.bounded("signOverPageTop", &value.signOverPageTop, in: 0...400)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {

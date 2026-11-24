@@ -246,8 +246,7 @@ final class Connections {
     /// having closed the sheet, copies and opens again.
     func copyCodeAndOpenGitHub(after confirmation: Duration = .zero) {
         guard case let .waiting(code) = github else { return }
-        copy(code.userCode)
-        codeCopied = true
+        copyCode()
         opening?.cancel()
         let generation = generation
         opening = Task { [weak self] in
@@ -255,8 +254,17 @@ final class Connections {
                 do { try await Task.sleep(for: confirmation) } catch { return }
             }
             guard let self, generation == self.generation, case let .waiting(now) = self.github, now == code else { return }
-            self.openBrowser(code.verificationURL)
+            self.openBrowser(code.verificationURL, for: code)
         }
+    }
+
+    /// The code shown, put on the pasteboard and nothing more: the sign's tap while GitHub's page
+    /// is already up over the screen (`codeOverPage`), where opening it again would load the page
+    /// again under the person.
+    func copyCode() {
+        guard case let .waiting(code) = github else { return }
+        copy(code.userCode)
+        codeCopied = true
     }
 
     /// The in-app browser's sheet is up over the screen, which then draws nothing moving.
@@ -264,20 +272,37 @@ final class Connections {
     /// Which opening `browserShowing` is about, so a sheet's dismissal after another opened
     /// over it says nothing.
     private var browserOpening = 0
+    /// The code whose device page the sheet has shown, from the moment the system took the sheet
+    /// until it goes, the app closes it, or another page opens in its place.
+    private var pageShownFor: GitHubDeviceFlow.Code?
 
-    private func openBrowser(_ url: URL) {
+    /// The code to hold up over GitHub's page: the one this connect is still waiting on, while the
+    /// sheet up is that code's device page. Nil for any other page (the revoke page, 1Password's),
+    /// a sheet asked for and not yet shown, and from the moment the connect stops waiting.
+    var codeOverPage: String? {
+        guard case let .waiting(code) = github, browserShowing, pageShownFor == code else { return nil }
+        return code.userCode
+    }
+
+    private func openBrowser(_ url: URL, for code: GitHubDeviceFlow.Code? = nil) {
         browserOpening += 1
         let opening = browserOpening
         browserShowing = true
-        browser.open(url) { [weak self] in
+        pageShownFor = nil
+        browser.open(url) { [weak self] up in
+            guard let self, self.browserOpening == opening else { return }
+            self.pageShownFor = up ? code : nil
+        } dismissed: { [weak self] in
             guard let self, self.browserOpening == opening else { return }
             self.browserShowing = false
+            self.pageShownFor = nil
         }
     }
 
     private func closeBrowser() {
         browserOpening += 1
         browserShowing = false
+        pageShownFor = nil
         browser.close()
     }
 
@@ -479,8 +504,10 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
 /// The in-app browser, as `Connections` uses it.
 @MainActor
 protocol Browser {
-    /// Shows `url` in a sheet; `dismissed` is called once it has gone, closed or put away.
-    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void)
+    /// Shows `url` in a sheet; `shown` says whether the system has it over the screen (true once
+    /// it is taken, false if it is refused after that), and `dismissed` is called once it has
+    /// gone, closed or put away.
+    func open(_ url: URL, shown: @escaping @MainActor (Bool) -> Void, dismissed: @escaping @MainActor () -> Void)
     func close()
 }
 
@@ -492,8 +519,8 @@ final class WebAuthBrowser: Browser {
 
     init() {}
 
-    func open(_ url: URL, dismissed: @escaping @MainActor () -> Void) {
-        web.open(url, onDismiss: dismissed)
+    func open(_ url: URL, shown: @escaping @MainActor (Bool) -> Void, dismissed: @escaping @MainActor () -> Void) {
+        web.open(url, onShown: shown, onDismiss: dismissed)
     }
 
     func close() {

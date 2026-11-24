@@ -9,6 +9,7 @@ struct ConnectionsView: View {
     @Environment(Connections.self) private var connections
     @Environment(\.dismiss) private var dismiss
     @Environment(\.look) private var look
+    @Environment(Mascot.self) private var mascot
     @State private var confirmingDisconnect = false
     @State private var confirmingOnePasswordDisconnect = false
 
@@ -28,11 +29,28 @@ struct ConnectionsView: View {
                     }
                 }
             }
+            // While GitHub's page for that code is up in the browser's sheet, which covers the
+            // sign at the foot, he holds it up over the page too: a tap there copies the code
+            // and opens nothing, since the page is already the one it is for.
+            .background(AboveSheets(content: overPage, top: look.settings.signOverPageTop,
+                                    width: CGFloat(Topo.width) * look.settings.signOverPageScale))
             .navigationTitle("Connections")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .tint(look.settings.tint)
+    }
+
+    /// The sign over GitHub's page, carrying what the window above the sheet does not inherit.
+    private var overPage: (some View)? {
+        connections.codeOverPage.map { code in
+            GitHubCodeSign(code: code, copied: connections.codeCopied, scale: look.settings.signOverPageScale,
+                           hint: "Copies the code", identifier: "github-code-sign-over-page") { _ in
+                connections.copyCode()
+            }
+            .environment(mascot)
+            .environment(\.look, look)
+        }
     }
 
     /// What the GitHub row offers in each state. A failure keeps Disconnect beside Try again, since
@@ -170,6 +188,11 @@ struct GitHubCodeSign: View {
     let copied: Bool
     /// GitHub's page is over him: no frame is drawn until it goes.
     var covered = false
+    /// Points an art pixel: the Connections page's or, over GitHub's page, that one's.
+    var scale: CGFloat?
+    /// What the tap does, said to VoiceOver, and the name a test finds the sign by.
+    var hint = "Copies the code and opens GitHub"
+    var identifier = "github-code-sign"
     let tapped: (Duration) -> Void
     @Environment(\.look) private var look
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -201,13 +224,13 @@ struct GitHubCodeSign: View {
                 // jump is inside that frame too (`drawnScale`).
                 picture
                     .scaleEffect(Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
-                    .frame(maxWidth: CGFloat(Topo.width) * look.settings.signScale,
-                           maxHeight: CGFloat(Topo.height) * look.settings.signScale)
+                    .frame(maxWidth: CGFloat(Topo.width) * (scale ?? look.settings.signScale),
+                           maxHeight: CGFloat(Topo.height) * (scale ?? look.settings.signScale))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("GitHub code \(code)")
-            .accessibilityHint("Copies the code and opens GitHub")
-            .accessibilityIdentifier("github-code-sign")
+            .accessibilityHint(hint)
+            .accessibilityIdentifier(identifier)
             .sensoryFeedback(.success, trigger: copied) { _, now in now }
             Group {
                 if copied {

@@ -520,6 +520,11 @@ struct Look: Equatable, Sendable {
         var copiedBump: CGFloat = 1.08
         var copiedPause: CGFloat = 0.9
         static let copiedPauseRange: ClosedRange<Double> = 0...3
+        /// The same sign held over GitHub's page while it is up: points an art pixel, and how far
+        /// under the top of the screen's safe area it stands, which is below the browser's own bar,
+        /// so its close button and the page's address stay in sight.
+        var signOverPageScale: CGFloat = 1
+        var signOverPageTop: CGFloat = 72
     }
     /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
     /// carries two flanks and, set into the middle of it, the microphone in its well. With the

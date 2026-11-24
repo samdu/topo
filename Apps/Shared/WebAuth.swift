@@ -26,7 +26,7 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: Sheet?
     private var current: UUID?
     /// A sheet asked for that the system would not present yet, shown at the next activation.
-    private var waiting: (url: URL, onDismiss: @MainActor () -> Void)?
+    private var waiting: (url: URL, onShown: @MainActor (Bool) -> Void, onDismiss: @MainActor () -> Void)?
     /// Whether the sheet asked for has been tried again since the system refused it.
     private var retried = false
     private nonisolated(unsafe) var observer: NSObjectProtocol?
@@ -57,24 +57,27 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
-    func open(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
+    /// Opens `url` in the sheet. `onShown` says whether the sheet is over the app: true once the
+    /// system has taken it (for one asked for while the app was not active, at the activation that
+    /// shows it), false when the system refuses it after all and it waits again.
+    func open(_ url: URL, onShown: @escaping @MainActor (Bool) -> Void = { _ in }, onDismiss: @escaping @MainActor () -> Void) {
         close()
         retried = false
         guard isActive() else {
-            waiting = (url, onDismiss)
+            waiting = (url, onShown, onDismiss)
             return
         }
-        present(url, onDismiss: onDismiss)
+        present(url, onShown: onShown, onDismiss: onDismiss)
     }
 
     /// The app is active: a sheet that was waiting for that is shown.
     func activated() {
         guard let waiting, isActive() else { return }
         self.waiting = nil
-        present(waiting.url, onDismiss: waiting.onDismiss)
+        present(waiting.url, onShown: waiting.onShown, onDismiss: waiting.onDismiss)
     }
 
-    private func present(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
+    private func present(_ url: URL, onShown: @escaping @MainActor (Bool) -> Void, onDismiss: @escaping @MainActor () -> Void) {
         // Only the sheet still open reports its ending: one closed or replaced by the caller
         // (the sign-in opening its second authorization) is not the person closing the browser.
         let id = UUID()
@@ -87,25 +90,28 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
                 self.current = nil
                 switch ending {
                 case .dismissed: onDismiss()
-                case .refused: self.refused(url, onDismiss: onDismiss)
+                case .refused: self.refused(url, onShown: onShown, onDismiss: onDismiss)
                 }
             }
         }
         let session = makeSheet?(url, ended) ?? system(url, ended)
         self.session = session
         current = id
-        if !session.begin() {
+        if session.begin() {
+            onShown(true)
+        } else {
             self.session = nil
             current = nil
-            refused(url, onDismiss: onDismiss)
+            refused(url, onShown: onShown, onDismiss: onDismiss)
         }
     }
 
     /// The system would not present the sheet: it waits for the app's next activation. Refused
     /// while the app says it is active, it is tried once more and then waits, since nothing says
     /// when a system that keeps refusing would stop. It is never the person's dismissal.
-    private func refused(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
-        waiting = (url, onDismiss)
+    private func refused(_ url: URL, onShown: @escaping @MainActor (Bool) -> Void, onDismiss: @escaping @MainActor () -> Void) {
+        onShown(false)
+        waiting = (url, onShown, onDismiss)
         guard isActive(), !retried else { return }
         retried = true
         Task { @MainActor [weak self] in self?.activated() }
