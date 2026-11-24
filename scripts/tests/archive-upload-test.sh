@@ -371,11 +371,14 @@ after() {
   grep -q 'Nothing was built' "$work/out" && fail "$name: the refusal says nothing was built: $(cat "$work/out")"
   git -C "$tree" checkout -q Distribution/asset-packs.json; served
 }
-after ear-unchanged 'serves version 1 (READY_FOR_TESTING), a version listed before the upload'
+after ear-unchanged 'serves version 1 (READY_FOR_TESTING), a version listed before the upload, its highest is 1, and 0 version(s) are new'
 listing 2 READY_FOR_TESTING 1 > "$work/packs/parakeet-ultra.after"
-after ear-not-served 'serves version 1 (READY_FOR_TESTING), a version listed before the upload, and its highest is 2'
+after ear-not-served 'serves version 1 (READY_FOR_TESTING), a version listed before the upload, its highest is 2, and 1 version(s) are new'
 listing 3 READY_FOR_TESTING 2 > "$work/packs/parakeet-ultra.after"
-after ear-overtaken 'serves version 2 (READY_FOR_TESTING), a new one, and its highest is 3'
+after ear-overtaken 'serves version 2 (READY_FOR_TESTING), a new one, its highest is 3, and 2 version(s) are new'
+# Another upload landing between the listings, served and highest, is not taken for this one's.
+listing 3 READY_FOR_TESTING > "$work/packs/parakeet-ultra.after"
+after ear-raced 'serves version 3 (READY_FOR_TESTING), a new one, its highest is 3, and 2 version(s) are new'
 echo fail > "$work/packs/parakeet-ultra.after"
 after ear-unread-after "parakeet-ultra: App Store Connect's versions of the pack could not be read: ERROR: could not list"
 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-local" --ear \
@@ -415,7 +418,19 @@ refused ear-unready 'parakeet-ultra: version 1 on App Store Connect is PROCESSIN
 echo fail > "$work/packs/parakeet-ultra"
 refused ear-unread "parakeet-ultra: App Store Connect's versions of the pack could not be read"
 echo 'not json' > "$work/packs/parakeet-ultra"
-refused ear-garbled "parakeet-ultra: App Store Connect's listing of the pack names no internal beta version"
+refused ear-garbled "parakeet-ultra: App Store Connect's listing of the pack is not one document naming an internal beta version"
+# A whole listing followed by damage is not one document.
+{ listing 1 READY_FOR_TESTING; echo 'not json'; } > "$work/packs/parakeet-ultra"
+refused ear-trailing "parakeet-ultra: App Store Connect's listing of the pack is not one document naming an internal beta version"
+# Two whole listings are not one.
+{ listing 1 READY_FOR_TESTING; listing 1 READY_FOR_TESTING; } > "$work/packs/parakeet-ultra"
+refused ear-twice "parakeet-ultra: App Store Connect's listing of the pack is not one document naming an internal beta version"
+# A listing with no internal beta version, whose versions carry no ids, names none.
+printf '{"assetPackVersions":[{"version":"1","internalBetaReleaseState":"READY_FOR_TESTING","state":"READY_FOR_TESTING"}]}\n' > "$work/packs/parakeet-ultra"
+refused ear-no-ids "parakeet-ultra: App Store Connect's listing of the pack is not one document naming an internal beta version"
+listing 1 FAILED > "$work/packs/parakeet-ultra"
+refused ear-failed 'parakeet-ultra: version 1 on App Store Connect FAILED'
+grep -q 'Run instead: scripts/archive-upload.sh --validate --upload --ear$' "$work/out" || fail "a FAILED version does not name --ear: $(cat "$work/out")"
 served
 # Readiness is the internal beta release's, whatever the version's own state says.
 listing 1 READY_FOR_TESTING 1 WAITING_FOR_REVIEW > "$work/packs/parakeet-ultra"
@@ -436,13 +451,23 @@ refused ear-unrecorded 'parakeet-ultra: the bundle scripts/ear-bundle.sh pins (e
 printf 'not json {\n' > "$tree/Distribution/asset-packs.json"
 git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am 'garbled record'
 git -C "$tree" update-ref refs/remotes/origin/main HEAD
-refused record-garbled 'Distribution/asset-packs.json is missing or not a JSON object'
+refused record-garbled 'Distribution/asset-packs.json is missing or not one JSON object'
 : > "$work/record-both"
 if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/record-both" --upload --ear --voice; then
     fail "an upload of both packs over a garbled record went on"
 fi
 grep -q '^xcodebuild\|upload-\|build-ish' "$work/record-both" && fail "an upload of both packs over a garbled record built something: $(cat "$work/record-both")"
-grep -q 'Distribution/asset-packs.json is missing or not a JSON object' "$work/out" || fail "a garbled record with both flags is not said: $(cat "$work/out")"
+grep -q 'Distribution/asset-packs.json is missing or not one JSON object' "$work/out" || fail "a garbled record with both flags is not said: $(cat "$work/out")"
+# Two documents are not one record, with both packs' flags too.
+printf '{}\n{}\n' > "$tree/Distribution/asset-packs.json"
+git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am 'two records'
+git -C "$tree" update-ref refs/remotes/origin/main HEAD
+: > "$work/record-two"
+if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/record-two" --upload --ear --voice; then
+    fail "an upload of both packs over a record of two documents went on"
+fi
+grep -q '^xcodebuild\|upload-\|build-ish' "$work/record-two" && fail "an upload over a record of two documents built something: $(cat "$work/record-two")"
+grep -q 'Distribution/asset-packs.json is missing or not one JSON object' "$work/out" || fail "a record of two documents is not said: $(cat "$work/out")"
 printf '%s\n' "$record" > "$tree/Distribution/asset-packs.json"
 git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am 'record'
 git -C "$tree" update-ref refs/remotes/origin/main HEAD

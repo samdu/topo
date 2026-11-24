@@ -139,18 +139,28 @@ pack_listing() { # pack_listing <pack>: altool's JSON of its versions, empty whe
   xcrun altool --list-asset-pack-versions --apple-id "$apple_id" --asset-pack-identifier "$1" \
     --apiKey "$key_id" --apiIssuer "$issuer" --output-format json 2>"$listing_err"
 }
-pack_served() { # pack_served <listing>: "<version> <internal beta release state> <highest version> <id>" of the internal beta version, or nothing
-  jq -r '(.assetPack.relationships.internalBetaVersion.data.id) as $id
+# A listing is read whole or not at all: one JSON document, its internal beta version named by an
+# id that exactly one listed version carries, every version with an id; jq fails on anything else.
+pack_served() { # pack_served <listing>: "<version> <internal beta release state> <highest version> <id>" of the internal beta version
+  jq -rs 'if length != 1 then error("not one document") else .[0] end
+    | (.assetPack.relationships.internalBetaVersion.data.id) as $id
     | ([.assetPackVersions[].version | tonumber] | max) as $top
-    | .assetPackVersions[] | select(.assetPackVersionID == $id) | "\(.version) \(.internalBetaReleaseState) \($top) \($id)"' <<<"$1" 2>/dev/null || true
+    | [.assetPackVersions[] | select(.assetPackVersionID == $id)]
+    | if length != 1 then error("internal beta version not listed once") else .[0] end
+    | "\(.version) \(.internalBetaReleaseState) \($top) \($id)"' <<<"$1" 2>/dev/null
 }
-pack_read() { # pack_read <pack> <what has happened>: sets version, state, top and id, or refuses; 1 where it has no version
+pack_ids() { # pack_ids <listing>: the id of every version it lists
+  jq -rs 'if length != 1 then error("not one document") else .[0] end
+    | .assetPackVersions[] | .assetPackVersionID
+    | if type == "string" and . != "" then . else error("a version with no id") end' <<<"$1" 2>/dev/null
+}
+pack_read() { # pack_read <pack> <what has happened>: sets version, state, top, id and ids, or refuses; 1 where it has no version
   local listing served
   listing="$(pack_listing "$1")" \
     || refuse "$1: App Store Connect's versions of the pack could not be read: $(sed '/^[[:space:]]*$/d' "$listing_err" | tail -1)" "$2"
   [ -n "$listing" ] || return 1
-  served="$(pack_served "$listing")"
-  [ -n "$served" ] || refuse "$1: App Store Connect's listing of the pack names no internal beta version it lists." "$2"
+  served="$(pack_served "$listing")" && ids="$(pack_ids "$listing")" && [ -n "$served" ] \
+    || refuse "$1: App Store Connect's listing of the pack is not one document naming an internal beta version it lists once, every version with an id." "$2"
   read -r version state top id <<<"$served"
 }
 pack_check() { # pack_check <pack> <flag> <script>
@@ -180,15 +190,19 @@ pack_known() { # pack_known <pack>: the ids of the versions App Store Connect li
   listing="$(pack_listing "$1")" \
     || refuse "$1: App Store Connect's versions of the pack could not be read before its upload: $(sed '/^[[:space:]]*$/d' "$listing_err" | tail -1)" \
               "The archive was built; neither the pack nor the build was uploaded."
-  [ -z "$listing" ] || jq -r '.assetPackVersions[].assetPackVersionID' <<<"$listing" 2>/dev/null \
+  [ -z "$listing" ] || pack_ids "$listing" \
     || refuse "$1: App Store Connect's listing of the pack before its upload is not one this reads." "The archive was built; neither the pack nor the build was uploaded."
 }
 pack_record() { # pack_record <pack> <script> <ids listed before its upload>: the version just uploaded, into the record
   local pack="$1" bundle after="The pack was uploaded and the build was not; the pack's new version is not recorded. Read it with altool --list-asset-pack-versions and record it in Distribution/asset-packs.json if it is this pin's."
   bundle="$("$root/scripts/$2" pin)" || refuse "$pack: scripts/$2 pin failed." "$after"
   pack_read "$pack" "$after" || refuse "$pack: App Store Connect lists no version of the pack after its upload." "$after"
-  ! grep -qxF "$id" <<<"$3" && [ "$version" = "$top" ] && [ "$state" = READY_FOR_TESTING ] \
-    || refuse "$pack: after its upload App Store Connect serves version $version ($state), $(grep -qxF "$id" <<<"$3" && echo "a version listed before the upload" || echo "a new one"), and its highest is $top." "$after"
+  # Exactly one version is new since the listing before the upload, so it is this upload's; with
+  # two, another upload landed between the listings and which bundle each holds is unknown.
+  local new
+  new="$(grep -vxF -f <(printf '%s\n' "$3") <<<"$ids" || true)"
+  [ "$new" = "$id" ] && [ "$version" = "$top" ] && [ "$state" = READY_FOR_TESTING ] \
+    || refuse "$pack: after its upload App Store Connect serves version $version ($state), $(grep -qxF "$id" <<<"$3" && echo "a version listed before the upload" || echo "a new one"), its highest is $top, and $(grep -c . <<<"$new" || true) version(s) are new since the listing before it." "$after"
   jq --arg p "$pack" --arg v "$version" --arg b "$bundle" '.[$p] = { version: $v, bundle: $b }' "$packs" > "$packs.new"
   mv "$packs.new" "$packs"
   echo "==> $pack: version $version recorded in Distribution/asset-packs.json; commit it before the next upload"
@@ -196,8 +210,8 @@ pack_record() { # pack_record <pack> <script> <ids listed before its upload>: th
 if [ "$upload" = yes ]; then
   listing_err="$(mktemp)"
   trap 'rm -rf "$keys"; rm -f "$listing_err"' EXIT
-  jq -e 'type == "object"' "$packs" >/dev/null 2>&1 \
-    || refuse "Distribution/asset-packs.json is missing or not a JSON object, so no pack's version can be judged. Nothing was built."
+  jq -se 'length == 1 and (.[0] | type == "object")' "$packs" >/dev/null 2>&1 \
+    || refuse "Distribution/asset-packs.json is missing or not one JSON object, so no pack's version can be judged. Nothing was built."
   [ "$ear" = yes ] || pack_check parakeet-ultra --ear ear-bundle.sh
   [ "$voice" = yes ] || pack_check phonon-40m-en --voice phonon-bundles.sh
 fi
