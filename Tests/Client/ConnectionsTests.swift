@@ -298,68 +298,6 @@ final class ConnectionsTests: XCTestCase {
         github.release(.token)
     }
 
-    /// With GitHub's page up in a sheet presented on the app's window, the sign is drawn over it,
-    /// in a window above the app's, carrying the code: the topmost thing a touch on the sign
-    /// reaches is that window, and a touch beside it reaches the page. The sheet here is a
-    /// full-screen page standing in for the system's, which only a device or a simulator with
-    /// network reaches; the window goes with the page.
-    func testTheSignIsDrawnOverGitHubsPageAndTakesTheTouch() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let app = UIWindow(windowScene: scene)
-        let sheet = SheetBrowser(window: app)
-        let connections = Connections(store: store, flow: github, copy: { _ in }, browser: sheet, leftBehind: .isolated())
-        app.rootViewController = UIHostingController(rootView: ConnectionsView().environment(connections).environment(Mascot()))
-        app.makeKeyAndVisible()
-        defer { app.isHidden = true }
-        func above() -> AboveSheetsWindow? {
-            scene.windows.compactMap { $0 as? AboveSheetsWindow }.first { !$0.isHidden }
-        }
-        func until(_ what: String, _ done: () -> Bool) async throws {
-            let deadline = Date().addingTimeInterval(5)
-            while !done() {
-                guard Date() < deadline else { return XCTFail("never \(what)") }
-                try await Task.sleep(for: .milliseconds(50))
-            }
-        }
-
-        connections.connectGitHub()
-        await github.reach(.token)
-        try await until("drawn the page") { app.rootViewController?.view.window != nil }
-        XCTAssertNil(above(), "a window stood over the screen with no page up")
-        connections.copyCodeAndOpenGitHub()
-        try await until("put the page up") { sheet.page.view.window === app }
-        try await until("held the sign over the page") { above() != nil }
-        let window = try XCTUnwrap(above())
-        XCTAssertGreaterThan(window.windowLevel, app.windowLevel, "the sign's window is under the page's")
-        XCTAssertTrue(scene.coordinateSpace.bounds.contains(window.frame), "the sign stands past the screen's edge")
-
-        /// The window a touch at `point` reaches: the topmost shown window whose hit test takes it.
-        func reached(_ point: CGPoint) -> UIWindow? {
-            scene.windows.filter { !$0.isHidden }.sorted { $0.windowLevel > $1.windowLevel }
-                .first { $0.hitTest($0.convert(point, from: nil), with: nil) != nil }
-        }
-        let sign = CGPoint(x: window.frame.midX, y: window.frame.midY)
-        XCTAssertTrue(reached(sign) === window, "a touch on the sign reaches \(String(describing: reached(sign)))")
-        let beside = CGPoint(x: window.frame.midX, y: window.frame.maxY + 40)
-        XCTAssertTrue(reached(beside) === app, "a touch beside the sign is not the page's")
-        let hit = app.hitTest(app.convert(beside, from: nil), with: nil)
-        XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch beside the sign does not reach the page")
-
-        // What the window draws: the sign, which is no blank.
-        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-        }
-        let attachment = XCTAttachment(image: image)
-        attachment.name = "sign-over-page"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        XCTAssertGreaterThan(try colours(image), 8, "the sign over the page is drawn as a blank")
-
-        connections.cancelGitHub()
-        try await until("taken the sign away with the page") { above() == nil }
-        github.release(.token)
-    }
-
     /// The sign hands its tap the look's pause: the compiled 0.9 seconds, or a document's.
     func testTheSignsTapWaitsTheLooksPause() {
         XCTAssertEqual(GitHubCodeSign.pause(Look().settings), .milliseconds(900))
@@ -762,6 +700,70 @@ final class GitHubToolTests: XCTestCase {
 /// (more than a background's worth of colours) and to differ from one another.
 @MainActor
 final class ConnectionsScreenshots: XCTestCase {
+    /// With GitHub's page up in a sheet presented on the app's window, the sign is drawn over it,
+    /// in a window above the app's, carrying the code: the topmost thing a touch on the sign
+    /// reaches is that window, and a touch beside it reaches the page. The sheet here is a
+    /// full-screen page standing in for the system's, which only a device or a simulator with
+    /// network reaches; the window goes with the page.
+    func testTheSignIsDrawnOverGitHubsPageAndTakesTheTouch() async throws {
+        let store = InMemoryConnectionStore()
+        let github = HeldGitHub()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let app = UIWindow(windowScene: scene)
+        let sheet = SheetBrowser(window: app)
+        let connections = Connections(store: store, flow: github, copy: { _ in }, browser: sheet, leftBehind: .isolated())
+        app.rootViewController = UIHostingController(rootView: ConnectionsView().environment(connections).environment(Mascot()))
+        app.makeKeyAndVisible()
+        defer { app.isHidden = true }
+        func above() -> AboveSheetsWindow? {
+            scene.windows.compactMap { $0 as? AboveSheetsWindow }.first { !$0.isHidden }
+        }
+        func until(_ what: String, _ done: () -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(5)
+            while !done() {
+                guard Date() < deadline else { return XCTFail("never \(what)") }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        }
+
+        connections.connectGitHub()
+        await github.reach(.token)
+        try await until("drawn the page") { app.rootViewController?.view.window != nil }
+        XCTAssertNil(above(), "a window stood over the screen with no page up")
+        connections.copyCodeAndOpenGitHub()
+        try await until("put the page up") { sheet.page.view.window === app }
+        try await until("held the sign over the page") { above() != nil }
+        let window = try XCTUnwrap(above())
+        XCTAssertGreaterThan(window.windowLevel, app.windowLevel, "the sign's window is under the page's")
+        XCTAssertTrue(scene.coordinateSpace.bounds.contains(window.frame), "the sign stands past the screen's edge")
+
+        /// The window a touch at `point` reaches: the topmost shown window whose hit test takes it.
+        func reached(_ point: CGPoint) -> UIWindow? {
+            scene.windows.filter { !$0.isHidden }.sorted { $0.windowLevel > $1.windowLevel }
+                .first { $0.hitTest($0.convert(point, from: nil), with: nil) != nil }
+        }
+        let sign = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        XCTAssertTrue(reached(sign) === window, "a touch on the sign reaches \(String(describing: reached(sign)))")
+        let beside = CGPoint(x: window.frame.midX, y: window.frame.maxY + 40)
+        XCTAssertTrue(reached(beside) === app, "a touch beside the sign is not the page's")
+        let hit = app.hitTest(app.convert(beside, from: nil), with: nil)
+        XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch beside the sign does not reach the page")
+
+        // What the window draws: the sign, which is no blank.
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "sign-over-page"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(try colours(image), 8, "the sign over the page is drawn as a blank")
+
+        connections.cancelGitHub()
+        try await until("taken the sign away with the page") { above() == nil }
+        github.release(.token)
+    }
+
     func testTheScreenInEachState() async throws {
         let store = InMemoryConnectionStore()
         let github = HeldGitHub()
