@@ -33,15 +33,6 @@ final class MuteTests: XCTestCase {
         super.tearDown()
     }
 
-    private func settle(_ what: String, file: StaticString = #filePath, line: UInt = #line,
-                        until condition: @escaping @MainActor () -> Bool) async {
-        for _ in 0..<3_000 {
-            if condition() { return }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(condition(), "waited half a minute for \(what)", file: file, line: line)
-    }
-
     /// Muted when the chat appeared and unmuted after: the open microphone's next turn is marked
     /// spoken, its reply waited for, with no relaunch between.
     func testAnUnmuteReachesTheOpenMicrophonesNextTurn() async throws {
@@ -135,11 +126,16 @@ final class MuteTests: XCTestCase {
         }
         defer { sending.cancel() }
         await settle("the send to begin") { began.set }
-        let marked = defaults.stringArray(forKey: "topo.harness.spoken")?.count ?? 0
+        // The words are on the line under one nonce whether or not the reply is to be read.
+        let owed = harness.owed
+        XCTAssertEqual(owed.map(\.text), ["what time is it"], "the send put nothing on the line")
+        let nonce = try XCTUnwrap(owed.first?.nonce)
+        let marked = defaults.stringArray(forKey: "topo.harness.spoken") ?? []
         if readsAloud {
-            XCTAssertEqual(marked, 1, "an unmuted turn was not marked spoken: its reply would not be read aloud")
+            XCTAssertEqual(marked, [nonce], "an unmuted turn was not marked spoken: its reply would not be read aloud")
+            XCTAssertEqual(speaker.awaiting, [nonce], "an unmuted turn's reply is not waited for")
         } else {
-            XCTAssertEqual(marked, 0, "a muted turn was marked spoken: a reply nobody hears is waited for")
+            XCTAssertEqual(marked, [], "a muted turn was marked spoken: a reply nobody hears is waited for")
             XCTAssertTrue(speaker.awaiting.isEmpty, "a muted turn's reply is waited for")
         }
         speaker.endAllWaits("the test is done")
