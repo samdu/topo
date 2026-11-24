@@ -6,7 +6,8 @@ import UIKit
 /// window can be drawn over. The window is the size of what it holds at its ideal height, at
 /// `top` points under the app window's safe area and centred, `width` points wide at most: a touch
 /// anywhere else reaches the sheet under it, so nothing of the sheet is taken from the person but
-/// what the content covers. Nil content, or this view leaving the screen, takes the window away.
+/// what the content covers. Nil content, or this view being torn down, takes the window away; the
+/// view merely leaving its window under a presentation does not.
 ///
 /// SwiftUI presents nothing over a presentation it did not make (`.overlay`, `.sheet` and
 /// `.fullScreenCover` all join the window's own presentation stack, under the system's sheet), and

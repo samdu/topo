@@ -813,6 +813,28 @@ final class ConnectionsScreenshots: XCTestCase {
         XCTAssertTrue(try drawn(image, rows: 0..<foot),
                       "nothing is drawn in the window's first \(foot) points: the sky over his head is in it")
 
+        // The screen turns under the page and back, landscape to portrait being the turn whose
+        // safe area changes most: each time the sign stands where it is placed from the safe area
+        // of the moment, centred.
+        func placed(_ why: String) async throws {
+            try await until("placed the sign \(why)") {
+                guard let window = above() else { return false }
+                let bounds = scene.coordinateSpace.bounds
+                let top = max(0, min(app.safeAreaInsets.top + Look().settings.signOverPageTop, bounds.height - window.frame.height))
+                return abs(window.frame.minY - top) <= 1 && abs(window.frame.midX - bounds.midX) <= 1
+            }
+        }
+        for (orientation, why) in [(UIInterfaceOrientationMask.landscapeRight, "in landscape"), (.portrait, "back in portrait")] {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { error in
+                XCTFail("the screen would not turn \(why): \(error)")
+            }
+            try await until("turned the screen \(why)") {
+                let bounds = scene.coordinateSpace.bounds
+                return orientation == .portrait ? bounds.height > bounds.width : bounds.width > bounds.height
+            }
+            try await placed(why)
+        }
+
         // GitHub answers with the page still up: the sign goes, the page stays until the app
         // closes it.
         github.release(.token)
