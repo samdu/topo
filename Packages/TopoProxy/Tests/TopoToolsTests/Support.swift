@@ -115,7 +115,7 @@ final class TestPorts: @unchecked Sendable {
 
 /// One raw request on a fresh connection, and the status and body that came back — or nil status
 /// when the connection closed with nothing said.
-func exchange(port: UInt16, _ head: String, body: Data = Data(), host: NWEndpoint.Host = "127.0.0.1")
+func exchange(port: UInt16, _ head: String, body: Data = Data())
     async throws -> (status: Int?, body: String) {
     let current = Current()
     let watchdog = Task {
@@ -123,7 +123,7 @@ func exchange(port: UInt16, _ head: String, body: Data = Data(), host: NWEndpoin
         if !Task.isCancelled { current.cancel() }
     }
     defer { watchdog.cancel(); current.cancel() }
-    let inbound = await connect(host: host, port: port, current: current)
+    let inbound = try await connect(port: port, current: current)
     var data = Data(head.utf8)
     data.append(body)
     try await inbound.send(data)
@@ -139,37 +139,48 @@ func exchange(port: UInt16, _ head: String, body: Data = Data(), host: NWEndpoin
     return (status, String(decoding: bodyData, as: UTF8.self))
 }
 
-/// A client connection to `port`, started, from a local port bound before the connect. Left to
-/// the connect, the system gives every connection to one destination the same local port, and
-/// when that pair is still held in TIME_WAIT by an earlier connection — whenever a listener is
-/// handed a port the run connected to before, since the suites free and take ports by the hundred
-/// from the range clients draw theirs from — the connect is refused as in use, again on every new
-/// connection, for the 30 s TIME_WAIT lasts, and Network waits for the network to change rather
-/// than failing. A port bound first is drawn at random; one that still makes a held pair is
-/// refused the same way and drawn again on a new connection (`restart()` would keep the port).
-/// Nothing has been sent by then, so the request is still made once. Any other state is the
-/// connection's to settle, as the caller would see it.
-private func connect(host: NWEndpoint.Host, port: UInt16, current: Current) async -> Inbound {
+/// A client connection to `127.0.0.1:port`, started, from a local port bound before the
+/// connect. Left to the connect, a connection whose pair with `port` is still held in TIME_WAIT
+/// by an earlier one — a listener handed a port number the run connected to before — is refused
+/// as in use, and every new connection to `port` is then given the same local port and refused
+/// the same way for the 30 s TIME_WAIT lasts, while Network waits for the network to change
+/// rather than failing (#474). Bound first, the local port is the system's next free one; one
+/// that still makes a held pair is refused the same way, and a new connection draws another
+/// (`restart()` would keep the port). Nothing is sent before it is ready, so the request is made
+/// once. A connection that waits for anything else throws what it waits on, as a send queued on
+/// it would have: a refusal is ECONNREFUSED at once, not the watchdog's cancel.
+private func connect(port: UInt16, current: Current) async throws -> Inbound {
     for attempt in 1...50 {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
-        let connection = NWConnection(host: host, port: NWEndpoint.Port(rawValue: port)!, using: parameters)
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: parameters)
+        guard current.set(connection) else { throw NWError.posix(.ECANCELED) }
         let inbound = Inbound(connection, limit: 1 << 20)
-        guard current.set(connection) else { return inbound }
         inbound.start(queue: DispatchQueue(label: "test.tools.client"))
         // Read rather than heard: the handler is Inbound's, and one put in front of it after the
         // start misses a state reported before it was in place. A watchdog's cancel ends the wait.
         var state = connection.state
-        while case .setup = state { try? await Task.sleep(for: .milliseconds(2)); state = connection.state }
-        while case .preparing = state { try? await Task.sleep(for: .milliseconds(2)); state = connection.state }
-        guard case .waiting(.posix(.EADDRINUSE)) = state, attempt < 50 else { return inbound }
-        connection.cancel()
+        while state == .setup || state == .preparing {
+            try await Task.sleep(for: .milliseconds(2))
+            state = connection.state
+        }
+        switch state {
+        case .waiting(.posix(.EADDRINUSE)) where attempt < 50:
+            connection.cancel()
+        case .waiting(let error):
+            connection.cancel()
+            throw error
+        case .cancelled:
+            throw NWError.posix(.ECANCELED)
+        default:
+            return inbound
+        }
     }
-    fatalError("unreachable")
+    throw NWError.posix(.EADDRINUSE)
 }
 
 /// The connection an exchange is on, so its watchdog cancels the one it is making now; once
-/// cancelled, none is made after.
+/// cancelled, none is made after, and the exchange throws.
 private final class Current: @unchecked Sendable {
     private let lock = NSLock()
     private var connection: NWConnection?
