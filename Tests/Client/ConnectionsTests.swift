@@ -738,15 +738,18 @@ final class ConnectionsScreenshots: XCTestCase {
         XCTAssertGreaterThan(window.windowLevel, app.windowLevel, "the sign's window is under the page's")
         XCTAssertTrue(scene.coordinateSpace.bounds.contains(window.frame), "the sign stands past the screen's edge")
 
-        /// The window a touch at `point` reaches: the topmost shown window whose hit test takes it.
-        func reached(_ point: CGPoint) -> UIWindow? {
-            scene.windows.filter { !$0.isHidden }.sorted { $0.windowLevel > $1.windowLevel }
+        /// The window over the page's that a touch at `point` reaches, if any: the topmost shown
+        /// window above the app's whose hit test takes it. The test host's own windows stand at
+        /// the app's level, beside it, and are none of this.
+        func over(_ point: CGPoint) -> UIWindow? {
+            scene.windows.filter { !$0.isHidden && $0.windowLevel > app.windowLevel }
+                .sorted { $0.windowLevel > $1.windowLevel }
                 .first { $0.hitTest($0.convert(point, from: nil), with: nil) != nil }
         }
         let sign = CGPoint(x: window.frame.midX, y: window.frame.midY)
-        XCTAssertTrue(reached(sign) === window, "a touch on the sign reaches \(String(describing: reached(sign)))")
+        XCTAssertTrue(over(sign) === window, "a touch on the sign reaches \(String(describing: over(sign)))")
         let beside = CGPoint(x: window.frame.midX, y: window.frame.maxY + 40)
-        XCTAssertTrue(reached(beside) === app, "a touch beside the sign is not the page's")
+        XCTAssertNil(over(beside), "a touch beside the sign is taken over the page")
         let hit = app.hitTest(app.convert(beside, from: nil), with: nil)
         XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch beside the sign does not reach the page")
 
