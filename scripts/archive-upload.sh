@@ -21,6 +21,9 @@
 # bundle has changed, since a build uses the pack's current version. The ear's
 # weights are the pack `parakeet-ultra` the same way, and `--ear`
 # packages it (scripts/ear-bundle.sh) and, with `--upload`, sends it.
+# `--upload` without one of them is refused before anything is built unless
+# App Store Connect serves the version of that pack Distribution/asset-packs.json
+# records for the bundle its script pins, and the refusal names the flag to add.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,7 +49,7 @@ for argument in "$@"; do
     --validate) validate=yes ;;
     --voice) voice=yes ;;
     --ear) ear=yes ;;
-    -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $argument" >&2; exit 2 ;;
   esac
 done
@@ -126,6 +129,68 @@ MISSING
   exit 1
 fi
 
+# Every TestFlight build is served each pack's internal beta version, whichever build it is, so a
+# build uploaded without a pack gets whatever version App Store Connect has. No content of a
+# version can be read back (`ba-package` makes a different .aar of the same files each time), so
+# Distribution/asset-packs.json records which bundle each pack's version was uploaded from: the
+# sha256 of the bundle.json it carries, which `<script> pin` prints without fetching. An upload is
+# refused, before anything is built, unless for each pack not uploaded with it the pin names the
+# recorded bundle and App Store Connect's internal beta version is the recorded one, ready for
+# testing. A pack uploaded with the build is recorded after its upload, read back from App Store
+# Connect, which numbers it; the record is then a change to commit before the next upload.
+packs="$root/Distribution/asset-packs.json"
+refuse() { printf '%s\n' "$@" >&2; exit 1; }
+pack_listing() { # pack_listing <pack>: altool's JSON of its versions, empty where it has none
+  xcrun altool --list-asset-pack-versions --apple-id "$apple_id" --asset-pack-identifier "$1" \
+    --apiKey "$key_id" --apiIssuer "$issuer" --output-format json 2>/dev/null
+}
+pack_served() { # pack_served <listing>: "<version> <state> <highest version>", or nothing
+  jq -r '(.assetPack.relationships.internalBetaVersion.data.id) as $id
+    | ([.assetPackVersions[].version | tonumber] | max) as $top
+    | .assetPackVersions[] | select(.assetPackVersionID == $id) | "\(.version) \(.state) \($top)"' <<<"$1" 2>/dev/null || true
+}
+pack_read() { # pack_read <pack>: sets version, state and top from App Store Connect, or refuses
+  local listing served
+  listing="$(pack_listing "$1")" || refuse "$1: App Store Connect's versions of the pack could not be read (altool --list-asset-pack-versions failed); nothing was built."
+  [ -n "$listing" ] || return 1
+  served="$(pack_served "$listing")"
+  [ -n "$served" ] || refuse "$1: App Store Connect's listing of the pack names no internal beta version it lists; nothing was built."
+  read -r version state top <<<"$served"
+}
+pack_check() { # pack_check <pack> <flag> <script>
+  local pack="$1" flag="$2" script="$3" bundle recorded recorded_bundle
+  local instead="scripts/archive-upload.sh --validate --upload $flag"
+  bundle="$("$root/scripts/$script" pin)"
+  recorded="$(jq -r --arg p "$pack" '.[$p].version // empty' "$packs" 2>/dev/null || true)"
+  recorded_bundle="$(jq -r --arg p "$pack" '.[$p].bundle // empty' "$packs" 2>/dev/null || true)"
+  [ -n "$recorded" ] && [ "$bundle" = "$recorded_bundle" ] \
+    || refuse "$pack: the bundle scripts/$script pins ($bundle) is not the one Distribution/asset-packs.json records${recorded:+ version $recorded} as uploaded from, so a build uploaded without the pack would be served another bundle. Nothing was built." \
+              "Run instead: $instead"
+  pack_read "$pack" \
+    || refuse "$pack: App Store Connect has no version of the pack, so a fresh install of this build would have none. Nothing was built." \
+              "Run instead: $instead"
+  [ "$version" = "$recorded" ] \
+    || refuse "$pack: App Store Connect serves version $version (the highest is $top) and Distribution/asset-packs.json records version $recorded as this pin's. Nothing was built." \
+              "If version $version was uploaded from this pin, record it and commit that; otherwise run instead: $instead"
+  [ "$state" = READY_FOR_TESTING ] \
+    || refuse "$pack: version $version on App Store Connect is $state, not READY_FOR_TESTING. Nothing was built; run this again once it is."
+  echo "==> $pack: version $version on App Store Connect is this pin's"
+}
+pack_record() { # pack_record <pack> <script>: the version just uploaded, into the record
+  local pack="$1" bundle
+  bundle="$("$root/scripts/$2" pin)"
+  pack_read "$pack" || refuse "$pack: App Store Connect lists no version of the pack after its upload; the build was not uploaded."
+  [ "$version" = "$top" ] && [ "$state" = READY_FOR_TESTING ] \
+    || refuse "$pack: after its upload App Store Connect serves version $version ($state) and its highest is $top; the build was not uploaded."
+  jq --arg p "$pack" --arg v "$version" --arg b "$bundle" '.[$p] = { version: $v, bundle: $b }' "$packs" > "$packs.new"
+  mv "$packs.new" "$packs"
+  echo "==> $pack: version $version recorded in Distribution/asset-packs.json; commit it before the next upload"
+}
+if [ "$upload" = yes ]; then
+  [ "$ear" = yes ] || pack_check parakeet-ultra --ear ear-bundle.sh
+  [ "$voice" = yes ] || pack_check phonon-40m-en --voice phonon-bundles.sh
+fi
+
 # The packages resolve into build/packages, kept for the pins they were resolved from and made
 # afresh for any other, never into the derived data Xcode shares between builds: Xcode 27.2
 # carries the package traits of the last resolution into the next, so a state that last saw one
@@ -187,12 +252,14 @@ if [ "$upload" = yes ] && [ "$voice" = yes ]; then
   echo "==> uploading the voice's asset pack"
   xcrun altool --upload-asset-pack "$out/phonon/phonon-40m-en.aar" --apple-id "$apple_id" --wait \
     --apiKey "$key_id" --apiIssuer "$issuer"
+  pack_record phonon-40m-en phonon-bundles.sh
 fi
 
 if [ "$upload" = yes ] && [ "$ear" = yes ]; then
   echo "==> uploading the ear's asset pack"
   xcrun altool --upload-asset-pack "$out/ear/parakeet-ultra.aar" --apple-id "$apple_id" --wait \
     --apiKey "$key_id" --apiIssuer "$issuer"
+  pack_record parakeet-ultra ear-bundle.sh
 fi
 
 if [ "$upload" = yes ]; then

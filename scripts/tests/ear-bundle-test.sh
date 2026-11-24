@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Holds scripts/ear-bundle.sh to its pin, offline, against a file URL standing in for the
 # repository: every file the pin names is fetched and written with the pin beside it as the
-# bundle's bundle.json; one not at the size or the sha256 the pin names is refused and not kept,
+# bundle's bundle.json, whose digest `pin` prints; one not at the size or the sha256 the pin names is refused and not kept,
 # and no bundle.json is written for a bundle that was refused. The committed pin names the
 # Parakeet Ultra files FluidAudio loads for `.ultra` and nothing else.
 #
@@ -36,6 +36,8 @@ if fetches "$work/whole"; then
   [ "$(cat "$work/whole/parakeet-ultra/Encoder.mlmodelc/weights/weight.bin" 2>/dev/null)" = encoder ] \
     || fail "a pinned file was not fetched: $(cat "$work/log")"
   cmp -s "$work/pin.json" "$work/whole/parakeet-ultra/bundle.json" || fail "the bundle's bundle.json is not the pin"
+  [ "$(EAR_BUNDLE_PIN="$work/pin.json" "$root/scripts/ear-bundle.sh" pin)" = "$(digest "$work/whole/parakeet-ultra/bundle.json")" ] \
+    || fail "pin does not print the digest of the bundle.json the bundle carries"
 else
   fail "a whole bundle at its pin was refused: $(cat "$work/log")"
 fi
@@ -71,4 +73,4 @@ inventory="$(printf '%s\n' \
 [ "$(jq '[.files[] | select((.sha256 | test("^[0-9a-f]{64}$")) and .size > 0)] | length' "$committed")" = \
   "$(jq '.files | length' "$committed")" ] || fail "a pinned file has no whole digest or no size"
 
-[ "$failures" = 0 ] && echo "ear-bundle.sh admits no file but at its pin's size and digest, and its pin is Ultra's" || { echo "$failures failure(s)"; exit 1; }
+[ "$failures" = 0 ] && echo "ear-bundle.sh admits no file but at its pin's size and digest, pin names the bundle.json it writes, and its pin is Ultra's" || { echo "$failures failure(s)"; exit 1; }

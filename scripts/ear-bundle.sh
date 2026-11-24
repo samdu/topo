@@ -7,6 +7,7 @@
 #
 #   scripts/ear-bundle.sh [directory]
 #   scripts/ear-bundle.sh package [directory]   # ... and the asset pack for App Store Connect
+#   scripts/ear-bundle.sh pin                   # the sha256 of the bundle.json the pack carries, fetching nothing
 #
 # What this makes is what the install page's builds embed (scripts/embed-bundles.sh), what a debug
 # launch's `TOPO_DEBUG_EAR` folder holds beside the spotter (scripts/fetch-ear-models.sh) and what
@@ -20,6 +21,9 @@ name=parakeet-ultra
 repo="$(jq -r .repo "$pin")"
 revision="$(jq -r .revision "$pin")"
 base="${EAR_REPO_URL:-https://huggingface.co/$repo/resolve/$revision}"
+
+# The pin is written into the bundle as its bundle.json unchanged, so its digest names the bundle.
+if [ "${1-}" = pin ]; then shasum -a 256 "$pin" | cut -d' ' -f1; exit 0; fi
 
 package=no
 if [ "${1-}" = package ]; then package=yes; shift; fi
