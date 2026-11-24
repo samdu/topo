@@ -74,6 +74,9 @@ final class AboveSheetsWindow: UIWindow {
         super.init(windowScene: windowScene)
         windowLevel = .normal + 1
         host.view.backgroundColor = .clear
+        // The window stands clear of the screen's edges where it is placed; the insets it would
+        // inherit while it is still the scene's size are space measured into the content.
+        host.safeAreaRegions = []
         backgroundColor = .clear
         rootViewController = host
         // What the content measures follows the text size, and where it stands the screen's
